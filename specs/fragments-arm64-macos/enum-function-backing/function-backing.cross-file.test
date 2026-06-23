@@ -1,0 +1,79 @@
+// Test: function-backing.cross-file
+// --- file: api/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+export function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.tripleOp.rawValue
+	return f(14)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @api.doubleFn(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, x0
+    arm64.mov x2, #2
+    arm64.mul x3, x1, x2
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @api.tripleFn(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, x0
+    arm64.mov x2, #3
+    arm64.mul x3, x1, x2
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #1
+  inlined___enum_Op_fnRaw_0_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne inlined___enum_Op_fnRaw_3_0
+  inlined___enum_Op_fnRaw_1_0:
+    arm64.adrp+add x0, __fnref_api.doubleFn
+    arm64.mov x19, x0
+    arm64.b inline_cont_main_0
+  inlined___enum_Op_fnRaw_3_0:
+    arm64.adrp+add x0, __fnref_api.tripleFn
+    arm64.mov x19, x0
+  inline_cont_main_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #14
+    arm64.blr x19
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2defa6802d224c6a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

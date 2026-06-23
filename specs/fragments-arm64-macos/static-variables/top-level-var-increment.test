@@ -1,0 +1,57 @@
+// Test: top-level-var-increment
+
+typealias Integer = int(i64.min to i64.max)
+
+var total = 10
+
+function add(n Integer)
+	total = total + n
+end 'add'
+
+function main() returns ExitCode
+	add(5)
+	add(27)
+	return total
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_total
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #5
+    arm64.adrp_add_rdata x0, __data_total
+    arm64.ldr x0, [x29, #16]
+    arm64.add x3, x1, x2
+    arm64.str x3, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_total
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #27
+    arm64.adrp_add_rdata x0, __data_total
+    arm64.ldr x0, [x29, #16]
+    arm64.add x3, x1, x2
+    arm64.str x3, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_total
+    arm64.ldr x1, [x29, #16]
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e8a4bb171c93875b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

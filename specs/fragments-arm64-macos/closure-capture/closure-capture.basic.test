@@ -1,0 +1,63 @@
+// Test: closure-capture.basic
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let offset = 7
+	let result = apply(function(n Integer) gives n + offset, x: 10)
+	return result
+end 'main'
+---
+ExitCode: 17
+---
+// CompiledIR
+module {
+  func @main$closure_0(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.mov x2, x0
+    arm64.ldr x3, [x1, #0] (8b)
+    arm64.ldr x1, [x3, #0] (8b)
+    arm64.add x3, x1, x2
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #16]
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.add x0, x29, #16
+    arm64.ldr x0, [x29, #40]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #10
+    arm64.adrp+add x20, main$closure_0
+    arm64.mov x1, x19
+    arm64.blr x20
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f0b068ebe73002a8
+    arm64.ldr x19, [x29, #48]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

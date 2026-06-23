@@ -358,6 +358,73 @@ function scratchOrdForClass(emitter CopyEmitter, isFloat bool) returns RegOrdina
 	return emitter.gprCycleBreakOrd()
 end 'scratchOrdForClass'
 
+// True iff a CallArgKind is the `none` sentinel. Used by the ApplyColoring
+// walk to recognize result-capture ops (which classify as a regToReg) from
+// everything else.
+export function callArgKindIsNone(kind CallArgKind) returns bool
+	return match kind 'check'
+		none gives true
+		regToReg gives false
+		spillReload gives false
+		stackWrite gives false
+	end 'check'
+end 'callArgKindIsNone'
+
+// ============================================================
+// Call-result capture sequencing
+// ============================================================
+
+// Sequentialize the post-call RESULT-CAPTURE region. A two-result call
+// (`tryCall`: primary value in the return reg, secondary error-flag/witness in
+// the second return reg) lowers to two INDEPENDENT capture moves —
+// `mov vResult, retReg0` and `mov vFlag, retReg1`. After coloring, the colorer
+// can legitimately assign the two virtual dests into a SWAP
+// (vResult→retReg1, vFlag→retReg0) or a CHAIN (vResult→retReg1, vFlag→someReg),
+// which naive sequential movs cannot realize: the first mov clobbers a source
+// the second still reads (the array-sort `try get(j) otherwise` miscompile —
+// `mov x1, x0; mov x0, x1` collapsed the value+flag into one register, so the
+// bounds check read the element value instead of the OOB flag and panicked on
+// in-bounds data).
+//
+// This mirrors `sequentializeCallArgSetup` but for the REVERSE direction: the
+// sources are the FIXED return registers and the dests are the colored virtual
+// regs. It is pure reg-to-reg (no spillReload/stackWrite), so it feeds the
+// shared parallel-copy sequencer directly — which breaks swaps via the per-class
+// cycle-break scratch. Identity captures (a hint-coalesced result that already
+// landed in its own return reg) drop out and emit nothing, preserving the
+// zero-cost hot path the return-reg hints aim for.
+export function sequentializeCallResultCapture(module TargetModule, kinds CallArgKindArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
+	if kinds.count() == 0 'empty'
+		return
+	end 'empty'
+
+	logTrace(LogCategory.ir, message: function() gives "result-capture-resolve: block {dstBlock.id} captures={kinds.count()}")
+
+	var moves = CopyMoveArray.create()
+	for kind in kinds 'build'
+		match kind 'k'
+			regToReg(srcOrd, dstOrd, isFloat) then appendResultCaptureMove(moves, srcOrd: srcOrd, dstOrd: dstOrd, isFloat: isFloat)
+			spillReload to none then break 'k'
+		end 'k'
+	end 'build'
+
+	if moves.count() == 0 'allIdentity'
+		return
+	end 'allIdentity'
+
+	let emitter = regTarget.makeCopyEmitter(module, dstBlock: dstBlock, desc: state.desc)
+	sequentializeParallelCopy(moves, emitter: emitter)
+end 'sequentializeCallResultCapture'
+
+// Append a result-capture move unless it is an identity (the capture's dest was
+// hint-coalesced into its own return register, so no copy is needed).
+function appendResultCaptureMove(moves CopyMoveArray, srcOrd RegOrdinal, dstOrd RegOrdinal, isFloat bool)
+	if srcOrd == dstOrd 'identity'
+		return
+	end 'identity'
+	moves.push(CopyMove.create(srcOrd, dstOrd: dstOrd, isFloat: isFloat))
+end 'appendResultCaptureMove'
+
 // ============================================================
 // Call-arg setup sequencing
 // ============================================================

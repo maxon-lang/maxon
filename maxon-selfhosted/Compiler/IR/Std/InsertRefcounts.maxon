@@ -4889,33 +4889,34 @@ function applyPlansForBlock(ctx RcContext, blockRef BlockRef)
 	end 'apply'
 end 'applyPlansForBlock'
 
-// Selection sort of an RcInsertion array by descending `pos`. Stable enough for
-// the same-position tie rule (equal positions retain their relative order, so
-// applying them in sequence at the same index reverses them — see the caller's
-// note). The arrays are tiny (a handful of refcount ops per block).
+// STABLE insertion sort of an RcInsertion array by descending `pos`. Stability
+// is REQUIRED, not incidental: equal-pos entries must retain their relative queue
+// order so that applying them descending reverses each same-pos group (an op
+// queued before another at the same pos lands above it — see the caller's note,
+// and `planAddressTakenSlotReleaseBeforeStore`'s load/decref pairing that depends
+// on it). The previous selection sort SWAPPED a far max-pos element into an
+// earlier slot, which could reorder an equal-pos pair sitting between them — that
+// flipped a planned load/decref into decref/load (a use-before-def the arm64
+// backend then emitted verbatim, decref'ing a stale register → SIGSEGV). A
+// strict-comparison insertion sort never moves an equal-pos entry past its peer.
+// The arrays are tiny (a handful of refcount ops per block).
 function sortInsertionsDescending(arr RcInsertionArray)
 	let n = arr.count()
-	var i = 0
+	var i = 1
 	while i < n 'outer'
-		var bestIdx = i
-		var bestPos = (try arr.get(i) otherwise panic("sortInsertionsDescending: get({i}) OOB")).pos
-		var j = i + 1
-		while j < n 'inner'
-			let cand = try arr.get(j) otherwise panic("sortInsertionsDescending: get({j}) OOB")
-			if cand.pos > bestPos 'newBest'
-				bestPos = cand.pos
-				bestIdx = j
-			end 'newBest'
-			j = j + 1
+		let key = copyInsertion(try arr.get(i) otherwise panic("sortInsertionsDescending: get({i}) OOB"))
+		var j = i - 1
+		// Shift every entry with STRICTLY smaller pos one slot to the right; stop at
+		// the first entry whose pos is >= key.pos so equal-pos ties keep their order.
+		while j >= 0 'inner'
+			let cur = copyInsertion(try arr.get(j) otherwise panic("sortInsertionsDescending: get({j}) OOB"))
+			if cur.pos >= key.pos 'stop'
+				break
+			end 'stop'
+			try arr.set(j + 1, value: cur) otherwise panic("sortInsertionsDescending: set({j + 1}) OOB")
+			j = j - 1
 		end 'inner'
-		if bestIdx != i 'swap'
-			// Snapshot both slots into fresh value copies before any `set` so
-			// neither read borrows `arr` across a mutation.
-			let aSnap = copyInsertion(try arr.get(i) otherwise panic("sortInsertionsDescending: swap get(i) OOB"))
-			let bSnap = copyInsertion(try arr.get(bestIdx) otherwise panic("sortInsertionsDescending: swap get(bestIdx) OOB"))
-			try arr.set(i, value: bSnap) otherwise panic("sortInsertionsDescending: swap set(i) OOB")
-			try arr.set(bestIdx, value: aSnap) otherwise panic("sortInsertionsDescending: swap set(bestIdx) OOB")
-		end 'swap'
+		try arr.set(j + 1, value: key) otherwise panic("sortInsertionsDescending: set({j + 1}) OOB")
 		i = i + 1
 	end 'outer'
 end 'sortInsertionsDescending'

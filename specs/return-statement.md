@@ -66,3 +66,49 @@ end 'main'
 1
 ```
 
+
+<!-- test: dead-code-after-return -->
+```maxon
+function pick() returns ExitCode
+	return 1
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/return-statement/dead-code-after-return.test:4:2: unreachable code after 'return'
+```
+
+
+<!-- test: return-in-if-then-reachable -->
+```maxon
+function classify(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 0
+end 'classify'
+
+function main() returns ExitCode
+	return classify(5)
+end 'main'
+```
+```exitcode
+1
+```
+
+
+<!-- test: tail-return-is-last -->
+```maxon
+function main() returns ExitCode
+	let x = 7
+	return x
+end 'main'
+```
+```exitcode
+7
+```
+

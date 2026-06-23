@@ -221,6 +221,21 @@ public interface IEmitterBackend {
   /// </summary>
   void FullBarrier();
 
+  /// <summary>
+  /// Load-acquire from [baseReg + offset]: the load is ordered before all subsequent
+  /// memory accesses on this core (LDAR on ARM64; a plain load on x86, whose TSO model
+  /// already gives every load acquire semantics). Pairs with StoreRelease on the same
+  /// location for lockless single-word publish/observe (e.g. mspan owning_p routing).
+  /// </summary>
+  void LoadAcquire(VReg dest, VReg baseReg, int offset);
+
+  /// <summary>
+  /// Store-release to [baseReg + offset]: all prior memory accesses on this core are
+  /// ordered before this store becomes visible (STLR on ARM64; a plain store on x86 TSO).
+  /// Pairs with LoadAcquire on the same location.
+  /// </summary>
+  void StoreRelease(VReg baseReg, int offset, VReg src);
+
   // ---- Labels & data ----
 
   void DefineLabel(string label);

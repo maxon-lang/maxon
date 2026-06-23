@@ -1,0 +1,106 @@
+// Test: interface-param-declared-after-consumer
+typealias Num = int(0 to 100)
+
+function run(q OpQuery) returns Num
+	return q.value()
+end 'run'
+
+type X64Query implements OpQuery
+	export var v as Num
+
+	export static function make(v Num) returns X64Query
+		return X64Query{v: v}
+	end 'make'
+
+	export function value() returns Num
+		return self.v
+	end 'value'
+end 'X64Query'
+
+interface OpQuery
+	function value() returns Num
+end 'OpQuery'
+
+function main() returns ExitCode
+	let q = X64Query.make(7)
+	return run(q)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @run(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x1, [x29, #24]
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x2
+    arm64.ldr x16, [x1, #24] (8b)
+    arm64.blr x16
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6341ffdc407e1364
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @X64Query.value(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldrb x0, [x1, #0] (1b)
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_37c5ee0e15a03519
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #7
+    arm64.str x0, [x19, #0] (1b)
+    arm64.adrp_add_rdata x0, __witness_X64Query_OpQuery
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl run
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_8bbb93a88989c8b2
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

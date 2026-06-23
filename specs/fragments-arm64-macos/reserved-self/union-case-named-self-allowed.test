@@ -1,0 +1,96 @@
+// Test: union-case-named-self-allowed
+typealias Tally = int(0 to 125)
+
+union Node
+	leaf(value Tally)
+	self
+end 'Node'
+
+function pick(n Node) returns Tally
+	return match n 'm'
+		leaf(v) gives v
+		self gives 7
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Node.self)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @pick(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne m_0.next0
+    arm64.b m_0.case0
+  m_0.merge:
+    arm64.mov x1, #125
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  m_0.case0:
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.mov x0, x1
+    arm64.b m_0.merge
+  m_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_3_0
+  m_0.case1:
+    arm64.mov x0, #7
+    arm64.b m_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b034306817d71405
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_3_0:
+    arm64.mov x0, x3
+    arm64.b m_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl pick
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_43f6b6dae753479c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

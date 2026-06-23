@@ -1,0 +1,564 @@
+// Test: managed-array-grow-then-reassign
+typealias Integer = int(i64.min to i64.max)
+
+export union Tag
+		label(name String)
+		index(n Integer)
+end 'Tag'
+
+type Entry
+		export var tag as Tag
+
+		static function create(tag Tag) returns Self
+			return Self{tag: tag}
+		end 'create'
+end 'Entry'
+
+typealias EntryArray = Array with Entry
+
+type Store
+		export var entries as EntryArray
+
+		static function create(entries EntryArray) returns Self
+			return Self{entries: entries}
+		end 'create'
+end 'Store'
+
+function addEntry(store Store, entry Entry)
+		store.entries.push(entry)
+end 'addEntry'
+
+function replaceAll(store Store)
+		store.entries = EntryArray.create()
+end 'replaceAll'
+
+function main() returns ExitCode
+		var store = Store.create(EntryArray.create())
+		// Push enough to trigger multiple reallocations (initial cap is usually 4)
+		addEntry(store, entry: Entry.create(Tag.label("entry zero long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry one long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry two long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry three long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry four long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry five long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry six long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry seven long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(Tag.label("entry eight long enough for heap allocation")))
+		replaceAll(store)
+		return store.entries.count()
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x0, [x29, #16]
+    arm64.adrp+add x19, __destruct_Store
+    arm64.mov x20, #8
+    arm64.mov x21, #0
+    arm64.bl Array.create
+    arm64.mov x22, x0
+    arm64.mov x0, x20
+    arm64.mov x1, x19
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.str x21, [x19, #0] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.adrp+add x20, stdlib.__destruct___ManagedMemory
+    arm64.mov x21, #48
+    arm64.mov x23, #0
+    arm64.adrp_add_rdata x0, __istr_480
+    arm64.ldr x24, [x29, #16]
+    arm64.mov x25, #42
+    arm64.mov x26, #-2
+    arm64.mov x27, #1
+    arm64.adrp+add x28, __destruct_String
+    arm64.mov x0, #16
+    arm64.adrp+add x0, __destruct_Tag
+    arm64.str x0, [x29, #24]
+    arm64.mov x0, #16
+    arm64.mov x0, #0
+    arm64.adrp+add x0, __destruct_Entry
+    arm64.str x0, [x29, #32]
+    arm64.mov x0, #8
+    arm64.mov x0, #0
+    arm64.str x22, [x19, #0] (8b)
+    arm64.mov x0, x1
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.mov x1, x20
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x24, [x20, #0] (8b)
+    arm64.str x25, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.mov x0, #16
+    arm64.mov x1, x28
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #24]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #8
+    arm64.ldr x1, [x29, #32]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp+add x24, stdlib.__destruct___ManagedMemory
+    arm64.adrp_add_rdata x0, __istr_481
+    arm64.ldr x25, [x29, #16]
+    arm64.mov x28, #41
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #24]
+    arm64.adrp+add x0, __destruct_Tag
+    arm64.str x0, [x29, #32]
+    arm64.mov x0, #16
+    arm64.mov x0, #0
+    arm64.adrp+add x0, __destruct_Entry
+    arm64.str x0, [x29, #40]
+    arm64.mov x0, #8
+    arm64.mov x0, #0
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.mov x0, x21
+    arm64.mov x1, x24
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x25, [x20, #0] (8b)
+    arm64.str x28, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #24]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #32]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #8
+    arm64.ldr x1, [x29, #40]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp+add x24, stdlib.__destruct___ManagedMemory
+    arm64.adrp_add_rdata x0, __istr_482
+    arm64.ldr x25, [x29, #16]
+    arm64.mov x28, #41
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #24]
+    arm64.adrp+add x0, __destruct_Tag
+    arm64.str x0, [x29, #32]
+    arm64.mov x0, #16
+    arm64.mov x0, #0
+    arm64.adrp+add x0, __destruct_Entry
+    arm64.str x0, [x29, #40]
+    arm64.mov x0, #8
+    arm64.mov x0, #0
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.mov x0, x21
+    arm64.mov x1, x24
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x25, [x20, #0] (8b)
+    arm64.str x28, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #24]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #32]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #8
+    arm64.ldr x1, [x29, #40]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp+add x24, stdlib.__destruct___ManagedMemory
+    arm64.adrp_add_rdata x0, __istr_483
+    arm64.ldr x25, [x29, #16]
+    arm64.mov x28, #43
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #24]
+    arm64.adrp+add x0, __destruct_Tag
+    arm64.str x0, [x29, #32]
+    arm64.mov x0, #16
+    arm64.mov x0, #0
+    arm64.adrp+add x0, __destruct_Entry
+    arm64.str x0, [x29, #40]
+    arm64.mov x0, #8
+    arm64.mov x0, #0
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.mov x0, x21
+    arm64.mov x1, x24
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x25, [x20, #0] (8b)
+    arm64.str x28, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #24]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #32]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #8
+    arm64.ldr x1, [x29, #40]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp+add x24, stdlib.__destruct___ManagedMemory
+    arm64.adrp_add_rdata x0, __istr_484
+    arm64.ldr x25, [x29, #16]
+    arm64.mov x28, #42
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #24]
+    arm64.adrp+add x0, __destruct_Tag
+    arm64.str x0, [x29, #32]
+    arm64.mov x0, #16
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.mov x0, x21
+    arm64.mov x1, x24
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x25, [x20, #0] (8b)
+    arm64.str x28, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #24]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.mov x0, #16
+    arm64.ldr x1, [x29, #32]
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_Entry
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x21
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_485
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #42
+    arm64.str x0, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.adrp+add x1, __destruct_Tag
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_Entry
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x21
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_486
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #41
+    arm64.str x0, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.adrp+add x1, __destruct_Tag
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_Entry
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x21
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_487
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #43
+    arm64.str x0, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x27, [x22, #8] (8b)
+    arm64.adrp+add x1, __destruct_Tag
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_Entry
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x20, [x22, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl Array.push
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x21
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_488
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #43
+    arm64.str x0, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.str x27, [x20, #24] (8b)
+    arm64.str x23, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x21, #0] (8b)
+    arm64.str x27, [x21, #8] (8b)
+    arm64.adrp+add x1, __destruct_Tag
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x21, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_Entry
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x21, #0] (8b)
+    arm64.str x20, [x21, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x20, x0
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.str x20, [x19, #0] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Entry
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_472b0220af865bf1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

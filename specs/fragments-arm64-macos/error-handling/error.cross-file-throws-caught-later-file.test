@@ -1,0 +1,112 @@
+// Test: error.cross-file-throws-caught-later-file
+// --- file: app.maxon
+// The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER
+// this file. The single-pass parser parses `app.maxon` first, so without a
+// project-wide throws-clause prescan the `(e)` binding here can't recover
+// `risky`'s error union — it falls back to `integer` and the `match e` below
+// reports E3005 "match scrutinee must be an enum-typed value". Seeding every
+// file's `throws` clause before any body is parsed keeps `e` typed as `Woe`.
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			tooBig(by) then result = by
+			negative then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export union Woe implements Error
+	tooBig(by Code)
+	negative
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.tooBig(7)
+	end 'big'
+	return n
+end 'risky'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #9
+    arm64.mov x19, #0
+  inlined_risky_0_0:
+    arm64.mov x1, #5
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.b.le inlined_risky_2_0
+  inlined_risky_1_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #7
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_risky_2_0:
+    arm64.mov x1, #0
+    arm64.mov x20, x1
+  inline_cont_main_0:
+    arm64.cmp x20, x19
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_12_0
+  try_0.otherwise:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next0
+    arm64.b check_0.case0
+  check_0.merge:
+    arm64.mov x1, x19
+    arm64.b try_0.merge
+  check_0.case0:
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.b check_0.merge
+  check_0.next0:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  check_0.case1:
+    arm64.mov x0, #1
+    arm64.b check_0.merge
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_994c23b3b64fd85b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_12_0:
+    arm64.mov x1, x0
+    arm64.mov x0, x19
+    arm64.b try_0.merge
+  __phi_trampoline_5_0:
+    arm64.mov x0, x19
+    arm64.b check_0.merge
+  }
+}
+---

@@ -1,0 +1,54 @@
+// Test: function-param-return
+typealias Score = int(0 to 100)
+
+function double(s Score) returns Score
+	return s * 2
+end 'double'
+
+function main() returns ExitCode
+	return double(21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @double(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x2, #2
+    arm64.mul x0, x1, x2
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_5e3b999f6ec939ef
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #21
+    arm64.bl double
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_ae26c3032deba4dd
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,35 @@
+// Test: arm-panic.expression-hit
+function main() returns ExitCode
+	let x = 1
+	let result = match x 'eval'
+		1 panic("got the bad one")
+		2 gives 20
+		3 gives 30
+		default gives 0
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at arm-panic.expression-hit.test:5: got the bad one
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __panic_msg_d19b53aa95ba5819
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

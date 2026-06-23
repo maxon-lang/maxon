@@ -142,9 +142,26 @@ export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
 	return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'
 
-// Patch an ARM64 ADR instruction (imm21, byte-scaled) to point to a target address.
+// Assert a signed PC-relative displacement fits in `bits` two's-complement bits.
+// `byteOff` arrives as a u64 (MachineWord is unsigned), so a negative displacement
+// shows up as a value near u64.max; check both the small-positive and the
+// wrapped-large-negative ends of the encodable window and panic loudly otherwise —
+// a relocation that overflowed its instruction's reach is a hard link-time error,
+// never a silent address truncation.
+function assertSignedReach(byteOff MachineWord, bits MachineWord, what String, codeOffset CodeOffset, targetAddr MachineWord)
+	let posMax = (1 shl (bits - 1)) - 1  // largest positive displacement
+	let negMin = u64.max - (1 shl (bits - 1)) + 1  // smallest (most negative) two's-complement value, unsigned-wrapped
+	if byteOff > posMax and byteOff < negMin 'overflow'
+		panic("{what}: displacement out of ±{1 shl (bits - 1)} byte range (codeOffset={codeOffset}, target={targetAddr}, disp={byteOff}) — relocation overflow")
+	end 'overflow'
+end 'assertSignedReach'
+
+// Patch an ARM64 ADR instruction (imm21, byte-scaled, ±1 MiB) to point to a target
+// address. Guards the ±1 MiB reach so an overflow is a loud link error, not a wrong
+// address. Used by the small-reach single-ADR data/symdata/covdata global accessors.
 export function patchArm64Adr(code ByteArray, codeOffset CodeOffset, instrAddr MachineWord, targetAddr MachineWord)
 	let byteOff = targetAddr - instrAddr
+	assertSignedReach(byteOff, bits: 21, what: "patchArm64Adr", codeOffset: codeOffset, targetAddr: targetAddr)
 	let immlo = byteOff and 0x3
 	let immhi = (byteOff shr 2) and 0x7FFFF
 	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64Adr: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
@@ -153,12 +170,54 @@ export function patchArm64Adr(code ByteArray, codeOffset CodeOffset, instrAddr M
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64Adr'
 
-// Patch an ARM64 LDR-literal instruction (imm19, word-scaled) to point to a target address.
+// Patch an ARM64 LDR-literal instruction (imm19, word-scaled, ±1 MiB) to point to a
+// target address. Guards the ±1 MiB reach like patchArm64Adr.
 export function patchArm64LdrLiteral(code ByteArray, codeOffset CodeOffset, instrAddr MachineWord, targetAddr MachineWord)
 	let byteOff = targetAddr - instrAddr
+	assertSignedReach(byteOff, bits: 21, what: "patchArm64LdrLiteral", codeOffset: codeOffset, targetAddr: targetAddr)
 	let wordOff = byteOff / 4
 	let imm19 = wordOff and 0x7FFFF
 	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64LdrLiteral: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
 	let patched = (origInsn and 0xFF00001F) or (imm19 shl 5)
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64LdrLiteral'
+
+// Patch an ARM64 ADRP instruction (imm21, 4 KiB-page-scaled, ±4 GiB) to the page of
+// `targetAddr`. The companion within-page byte offset goes into the FOLLOWING
+// ADD/LDR/STR via patchArm64PageOff. Together they give data-global access ±4 GiB of
+// reach — the import GOT path (patchRelocationsMachO) uses this exact ADRP shape.
+// The ±4 GiB page reach is guarded so any future code-to-data blowup is a loud link
+// error rather than a silent wrong page.
+export function patchArm64Adrp(code ByteArray, codeOffset CodeOffset, instrAddr MachineWord, targetAddr MachineWord)
+	let instrPage = instrAddr and not 0xFFF
+	let targetPage = targetAddr and not 0xFFF
+	let pageOff = targetPage - instrPage
+	// ADRP's imm21 is scaled by the 4 KiB page, so its byte reach is 21+12 = 33 bits.
+	assertSignedReach(pageOff, bits: 33, what: "patchArm64Adrp", codeOffset: codeOffset, targetAddr: targetAddr)
+	let pageOffShifted = pageOff shr 12
+	let immlo = pageOffShifted and 0x3
+	let immhi = (pageOffShifted shr 2) and 0x7FFFF
+	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64Adrp: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let rd = origInsn and 0x1F
+	let patched = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
+	patchDword(code, offset: codeOffset, value: patched)
+end 'patchArm64Adrp'
+
+// Patch the within-page byte offset of `targetAddr` into the imm12 of an ADD/LDR/STR
+// that follows an ADRP (see patchArm64Adrp). The instruction's own opcode picks the
+// imm12 scale: an ADD-immediate (top byte 0x91) carries the raw byte offset; an
+// unsigned-offset LDR/STR Xn (0xF9...) carries byteOffset/8. The 4 KiB within-page
+// offset always fits the 12-bit field for both scales (0xFFF unscaled, 0xFFF*8 =
+// 0x7FF8 scaled covers the whole page), so no range guard is needed.
+export function patchArm64PageOff(code ByteArray, codeOffset CodeOffset, targetAddr MachineWord)
+	let pageOffset = targetAddr and 0xFFF
+	let origInsn = try readDword(code, offset: codeOffset) otherwise panic("patchArm64PageOff: codeOffset {codeOffset} past end of emitted code (count={code.count()}) — emitter bug")
+	let topByte = (origInsn shr 24) and 0xFF
+	let scale = 8 if topByte == 0xF9 else 1  // 0xF9 = LDR/STR Xn (scaled by 8); 0x91 = ADD imm (unscaled)
+	if topByte != 0xF9 and topByte != 0x91 'badOpcode'
+		panic("patchArm64PageOff: instruction at codeOffset {codeOffset} is neither ADD-imm (0x91) nor LDR/STR Xn (0xF9) — opcode top byte 0x{topByte} — emitter/reloc mismatch")
+	end 'badOpcode'
+	let imm12 = (pageOffset / scale) and 0xFFF
+	let patched = (origInsn and 0xFFC003FF) or (imm12 shl 10)
+	patchDword(code, offset: codeOffset, value: patched)
+end 'patchArm64PageOff'

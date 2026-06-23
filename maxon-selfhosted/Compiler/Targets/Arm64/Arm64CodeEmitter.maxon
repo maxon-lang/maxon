@@ -57,7 +57,7 @@ end 'blockOffsetMapSet'
 
 // --- Instruction emit helper ---
 
-function arm64EmitInsn(code ByteArray, insn MachineWord)
+export function arm64EmitInsn(code ByteArray, insn MachineWord)
 	code.push(insn and 0xFF)
 	code.push((insn shr 8) and 0xFF)
 	code.push((insn shr 16) and 0xFF)
@@ -70,7 +70,15 @@ end 'arm64EmitInsn'
 
 // --- Instruction helpers ---
 
-// STP X29, X30, [SP, #-frameSize]! (pre-indexed, 64-bit)
+// Largest frame the pre/post-indexed STP/LDP frame-record form can encode. The
+// imm7 field is signed and scaled by 8: the LDP post-index reaches +504 (63*8)
+// and the STP pre-index reaches -512 (-64*8). Use the smaller bound for both so
+// a single threshold governs the symmetric prologue/epilogue forms; frames above
+// it route through the ADD/SUB-immediate path (see arm64EmitStackAlloc).
+let ARM64_FRAME_PAIR_INDEX_MAX = 504
+
+// STP X29, X30, [SP, #-frameSize]! (pre-indexed, 64-bit). Caller must ensure
+// frameSize <= ARM64_FRAME_PAIR_INDEX_MAX — beyond that the imm7 field overflows.
 export function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
 	let imm7 = (0 - frameSize) / 8 and 0x7F
 	let insn = 0xA9800000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
@@ -118,14 +126,14 @@ function arm64EmitFpLdpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, 
 end 'arm64EmitFpLdpOffset'
 
 // STR Xt, [Xn, #offset] (single GPR store, unsigned offset)
-function arm64EmitStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+export function arm64EmitStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
 	let imm12 = (offset / 8) and 0xFFF
 	let insn = 0xF9000000 or (imm12 shl 10) or (baseReg shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrRegOffset'
 
 // LDR Xt, [Xn, #offset] (single GPR load, unsigned offset)
-function arm64EmitLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+export function arm64EmitLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
 	let imm12 = (offset / 8) and 0xFFF
 	let insn = 0xF9400000 or (imm12 shl 10) or (baseReg shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
@@ -287,7 +295,7 @@ function arm64EmitOrr(code ByteArray, rd MachineWord, rn MachineWord, rm Machine
 end 'arm64EmitOrr'
 
 // EOR Xd, Xn, Xm
-function arm64EmitEor(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+export function arm64EmitEor(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
 	arm64EmitRRR(code, opcode: 0xCA000000, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitEor'
 
@@ -307,13 +315,13 @@ function arm64EmitLsrv(code ByteArray, rd MachineWord, rn MachineWord, rm Machin
 end 'arm64EmitLsrv'
 
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn * Xm
-function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
+export function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
 	let insn = 0x9B008000 or (rm shl 16) or (ra shl 10) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitMsub'
 
 // UDIV Xd, Xn, Xm
-function arm64EmitUdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+export function arm64EmitUdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
 	arm64EmitRRR(code, opcode: 0x9AC00800, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitUdiv'
 
@@ -325,27 +333,55 @@ function arm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm Machine
 end 'arm64EmitRem'
 
 // MOV Xd, Xn => ORR Xd, XZR, Xn
-function arm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
+export function arm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
 	// ORR Xd, XZR, Xn: 0xAA0003E0 | (rn << 16) | rd
 	let insn = 0xAA0003E0 or (rn shl 16) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitMovRegReg'
 
-// STUR Xt, [X29, #offset] — store to signed byte offset from frame pointer
+// Store a spilled register to [X29 + byteOffset]. Spill offsets are positive and
+// 8-byte aligned (see `computeStackOffset`). Small offsets use the unscaled STUR
+// (simm9, signed -256..255); LARGER frames MUST use the scaled unsigned STR
+// (imm12 * 8, range 0..32760) — STUR's 9-bit field silently truncates any offset
+// >= 256, so a frame past ~256 bytes (e.g. a function with many string/int
+// interpolations) would spill to the WRONG slot and corrupt live data. The
+// reload path mirrors this exactly.
 function arm64EmitSpillToStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
-	// STUR Xt, [Xn, #simm9]: 0xF8000000 | (imm9 << 12) | (Xn << 5) | Xt
-	let imm9 = byteOffset and 0x1FF
-	let insn = 0xF8000000 or (imm9 shl 12) or (29 shl 5) or rt
-	arm64EmitInsn(code, insn: insn)
+	if byteOffset < 256 'fitsSimm9'
+		// STUR Xt, [X29, #simm9]: 0xF8000000 | (imm9 << 12) | (Xn << 5) | Xt
+		let insn = 0xF8000000 or ((byteOffset and 0x1FF) shl 12) or (29 shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'fitsSimm9' else 'scaled'
+		// STR Xt, [X29, #imm12*8] (scaled unsigned offset)
+		arm64EmitStrRegOffset(code, rt: rt, baseReg: 29, offset: byteOffset)
+	end 'scaled'
 end 'arm64EmitSpillToStack'
 
-// LDUR Xt, [X29, #offset] — load from signed byte offset from frame pointer
+// Reload a spilled register from [X29 + byteOffset]. See `arm64EmitSpillToStack`
+// for the simm9-vs-scaled offset rationale.
 function arm64EmitReloadFromStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
-	// LDUR Xt, [Xn, #simm9]: 0xF8400000 | (imm9 << 12) | (Xn << 5) | Xt
-	let imm9 = byteOffset and 0x1FF
-	let insn = 0xF8400000 or (imm9 shl 12) or (29 shl 5) or rt
-	arm64EmitInsn(code, insn: insn)
+	if byteOffset < 256 'fitsSimm9'
+		// LDUR Xt, [X29, #simm9]: 0xF8400000 | (imm9 << 12) | (Xn << 5) | Xt
+		let insn = 0xF8400000 or ((byteOffset and 0x1FF) shl 12) or (29 shl 5) or rt
+		arm64EmitInsn(code, insn: insn)
+	end 'fitsSimm9' else 'scaled'
+		// LDR Xt, [X29, #imm12*8] (scaled unsigned offset)
+		arm64EmitLdrRegOffset(code, rt: rt, baseReg: 29, offset: byteOffset)
+	end 'scaled'
 end 'arm64EmitReloadFromStack'
+
+// LDR Xt, [X29, #incomingOffset] — load an incoming overflow stack param.
+// The caller wrote it into its outgoing-arg area, which sits just above this
+// frame at `[x29 + (frameSize - outgoingArgSize) + argIndex*8]`. Uses the LDR
+// unsigned-offset form (scaled imm12, up to 32760) rather than the LDUR simm9
+// the spill reload uses — incoming-arg offsets routinely exceed the 256-byte
+// signed range.
+function arm64EmitLoadIncomingArg(code ByteArray, rt MachineWord, argIndex MachineWord, tracker Arm64StackTracker)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(tracker.currentStackSize, outgoingArgSize: outgoing)
+	let incomingOffset = frameSize - outgoing + argIndex * 8
+	arm64EmitLdrRegOffset(code, rt: rt, baseReg: 29, offset: incomingOffset)
+end 'arm64EmitLoadIncomingArg'
 
 // STR Xt, [SP, #offset] — store to unsigned byte offset from stack pointer
 function arm64EmitStrSpOffset(code ByteArray, rt MachineWord, byteOffset MachineWord)
@@ -427,7 +463,7 @@ export function arm64EmitBranch(code ByteArray)
 end 'arm64EmitBranch'
 
 // BL (branch and link) with imm26 placeholder (patched later)
-function arm64EmitBranchLink(code ByteArray)
+export function arm64EmitBranchLink(code ByteArray)
 	code.append(b"\x00\x00\x00\x94")
 end 'arm64EmitBranchLink'
 
@@ -461,19 +497,19 @@ export function arm64EmitLdrImm(code ByteArray, rt MachineWord, rn MachineWord, 
 end 'arm64EmitLdrImm'
 
 // STRB Wt, [Xn, #offset] (unsigned offset, unscaled byte)
-function arm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+export function arm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
 	let insn = 0x39000000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrb'
 
 // LDRB Wt, [Xn, #offset]
-function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+export function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
 	let insn = 0x39400000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdrb'
 
 // ADR Xd, #offset (PC-relative, +/- 1MB range)
-function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
+export function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
 	let immlo = offset and 0x3
 	let immhi = (offset shr 2) and 0x7FFFF
 	let insn = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
@@ -481,25 +517,100 @@ function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
 end 'arm64EmitAdr'
 
 // SUB Xd, Xn, #imm12 (immediate)
-function arm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+export function arm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
 	let insn = 0xD1000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitSubImm'
 
 // ADD Xd, Xn, #imm12 (immediate)
-function arm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+export function arm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
 	let insn = 0x91000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitAddImm'
 
+// SUB SP, SP, #imm12 [, LSL #12] — `sh` selects the optional 12-bit left shift
+// (the ADD/SUB-immediate `sh` field at bit 22). Used by the stack-adjust helpers
+// to reach frame sizes past the single-imm12 4095-byte limit without a scratch
+// register (SP cannot be a shifted-register ADD/SUB operand).
+function arm64EmitSubSpImmShifted(code ByteArray, imm12 MachineWord, sh MachineWord)
+	let insn = 0xD1000000 or (sh shl 22) or ((imm12 and 0xFFF) shl 10) or (31 shl 5) or 31
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitSubSpImmShifted'
+
+// ADD SP, SP, #imm12 [, LSL #12] — see `arm64EmitSubSpImmShifted`.
+function arm64EmitAddSpImmShifted(code ByteArray, imm12 MachineWord, sh MachineWord)
+	let insn = 0x91000000 or (sh shl 22) or ((imm12 and 0xFFF) shl 10) or (31 shl 5) or 31
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitAddSpImmShifted'
+
+// Allocate `amount` bytes of stack (SP -= amount). `amount` is 16-byte aligned
+// and non-zero. ADD/SUB-immediate reach only 12 bits (0..4095) per instruction,
+// so split into a high (<<12) and low part — covering any frame up to 0xFFFFFF
+// (16 MiB) — instead of silently truncating a large frame to a wrong, unaligned
+// value (the imm7 pre-indexed STP could not encode these at all).
+function arm64EmitStackAlloc(code ByteArray, amount StackSize)
+	if amount > 0xFFFFFF 'tooLarge'
+		panic("arm64EmitStackAlloc: frame size exceeds 16 MiB encodable range")
+	end 'tooLarge'
+	let high = (amount shr 12) and 0xFFF
+	let low = amount and 0xFFF
+	if high > 0 'hasHigh'
+		arm64EmitSubSpImmShifted(code, imm12: high, sh: 1)
+	end 'hasHigh'
+	if low > 0 'hasLow'
+		arm64EmitSubSpImmShifted(code, imm12: low, sh: 0)
+	end 'hasLow'
+end 'arm64EmitStackAlloc'
+
+// ADD Xd, Xn, #imm for an immediate that may exceed the 12-bit ADD field.
+// The single-instruction arm64EmitAddImm masks imm to 12 bits, silently
+// truncating any value >= 0x1000 — which corrupts the computed address of a
+// stack slot whose byte offset reaches 0x1000 (slot index >= ~510, hit by
+// functions with large frames like mrt_executable_path's 4 KiB path buffer).
+// Splits into a high (<<12) and low part exactly like arm64EmitStackAlloc.
+// `rd` doubles as the intermediate, so this is safe even when rd == rn.
+function arm64EmitAddImmWide(code ByteArray, rd MachineWord, rn MachineWord, imm MachineWord)
+	if imm > 0xFFFFFF 'tooLarge'
+		panic("arm64EmitAddImmWide: immediate exceeds 24-bit encodable range")
+	end 'tooLarge'
+	let high = (imm shr 12) and 0xFFF
+	let low = imm and 0xFFF
+	if high == 0 'smallImm'
+		arm64EmitAddImm(code, rd: rd, rn: rn, imm12: low)
+		return
+	end 'smallImm'
+	// ADD rd, rn, #high, lsl #12 — sh field (bit 22) set, mirroring the
+	// shifted SUB/ADD-SP helpers above.
+	let insnHigh = 0x91400000 or (high shl 10) or (rn shl 5) or rd
+	arm64EmitInsn(code, insn: insnHigh)
+	if low > 0 'hasLow'
+		arm64EmitAddImm(code, rd: rd, rn: rd, imm12: low)
+	end 'hasLow'
+end 'arm64EmitAddImmWide'
+
+// Free `amount` bytes of stack (SP += amount). Mirror of `arm64EmitStackAlloc`.
+function arm64EmitStackFree(code ByteArray, amount StackSize)
+	if amount > 0xFFFFFF 'tooLarge'
+		panic("arm64EmitStackFree: frame size exceeds 16 MiB encodable range")
+	end 'tooLarge'
+	let high = (amount shr 12) and 0xFFF
+	let low = amount and 0xFFF
+	if high > 0 'hasHigh'
+		arm64EmitAddSpImmShifted(code, imm12: high, sh: 1)
+	end 'hasHigh'
+	if low > 0 'hasLow'
+		arm64EmitAddSpImmShifted(code, imm12: low, sh: 0)
+	end 'hasLow'
+end 'arm64EmitStackFree'
+
 // CBZ Xn, #offset (compare and branch if zero)
-function arm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
+export function arm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
 	let insn = 0xB4000000 or ((imm19 and 0x7FFFF) shl 5) or rn
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCbz'
 
 // CBNZ Xn, #offset (compare and branch if not zero)
-function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
+export function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
 	let insn = 0xB5000000 or ((imm19 and 0x7FFFF) shl 5) or rn
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCbnz'
@@ -511,17 +622,24 @@ function arm64EmitCbnzW(code ByteArray, rn MachineWord, imm19 MachineWord)
 end 'arm64EmitCbnzW'
 
 // LDAXR Xt, [Xn] — load-acquire exclusive register, 64-bit.
-function arm64EmitLdaxr(code ByteArray, rt MachineWord, rn MachineWord)
+export function arm64EmitLdaxr(code ByteArray, rt MachineWord, rn MachineWord)
 	let insn = 0xC85FFC00 or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdaxr'
 
 // STLXR Ws, Xt, [Xn] — store-release exclusive register, 64-bit. Ws receives
 // the success status (0 = success, 1 = failure).
-function arm64EmitStlxr(code ByteArray, rs MachineWord, rt MachineWord, rn MachineWord)
+export function arm64EmitStlxr(code ByteArray, rs MachineWord, rt MachineWord, rn MachineWord)
 	let insn = 0xC800FC00 or (rs shl 16) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStlxr'
+
+// STLR Xt, [Xn] — store-release register, 64-bit. Publishes Xt with release
+// ordering (no exclusive monitor, no status register).
+export function arm64EmitStlr(code ByteArray, rt MachineWord, rn MachineWord)
+	let insn = 0xC89FFC00 or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStlr'
 
 // ADD Xd, Xn, #imm12 helper writes the immediate-form ADD using the standard
 // sf=1 encoding. (arm64EmitAddImm above already does this — alias kept for clarity.)
@@ -562,17 +680,46 @@ end 'arm64PatchCondBranch'
 
 export typealias Arm64LabelOffsetMap = Map with (String, Arm64Offset)
 
+// Strip a leading `stdlib.` namespace prefix, giving the bare symbol that a
+// runtime.std (Std-IR) call site references. Returns the input unchanged when
+// there is no such prefix. Mirrors the x64 backend's stripStdlibPrefix.
+function arm64StripStdlibPrefix(name String) returns String
+	let prefix = "stdlib."
+	if not name.startsWith(prefix) 'noPrefix'
+		return name
+	end 'noPrefix'
+	var idx = name.startIndex()
+	for _ in 0 upto prefix.byteLength() 'advance'
+		idx = try name.indexAfter(idx) otherwise return name
+	end 'advance'
+	return name.slice(idx, endIndex: name.endIndex())
+end 'arm64StripStdlibPrefix'
+
 export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, name String, offset Arm64Offset)
 	logTrace(LogCategory.codegen, message: function() gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 	labelOffsetMap.upsert(name, value: offset)
+	// Bare alias for a `stdlib.`-qualified definition so a bare call site (from
+	// runtime.std Std-IR, which has no namespace form — e.g. mrt_start's call to
+	// `__slab_init` or a refcount pass's `__mm_decref`) resolves to the
+	// Maxon-phase Internals function recorded under its `stdlib.`-qualified name.
+	// Mirrors the x64 backend's recordLabel.
+	if name.startsWith("stdlib.") 'qualified'
+		labelOffsetMap.upsert(arm64StripStdlibPrefix(name), value: offset)
+	end 'qualified'
 end 'arm64RecordLabel'
 
 export function arm64LookupLabel(labelOffsetMap Arm64LabelOffsetMap, name String) returns Arm64Offset
 	let offset = try labelOffsetMap.get(name) otherwise 'missing'
-		logError(LogCategory.codegen, message: function() gives "ARM64 unresolved label '{name}'")
-		return 0
+		// Bare callee -> `stdlib.`-qualified def fallback: a bare call may target a
+		// function whose definition was recorded only under its `stdlib.`-qualified
+		// name. Mirrors the x64 backend's lookupLabel.
+		let qualifiedOffset = try labelOffsetMap.get("stdlib.{name}") otherwise 'stillMissing'
+			logError(LogCategory.codegen, message: function() gives "ARM64 unresolved label '{name}'")
+			return 0
+		end 'stillMissing'
+		return qualifiedOffset
 	end 'missing'
 	return offset
 end 'arm64LookupLabel'
@@ -938,16 +1085,50 @@ end 'arm64EmitI64ToString'
 
 // --- Prologue/Epilogue for user functions ---
 
-function arm64ComputeFrameSize(stackSize StackSize) returns StackSize
-	let raw = 16 + stackSize
+// Total frame size = saved frame record (16) + the var/spill/callee-save area
+// (`stackSize`) + the outgoing-stack-arg area reserved at the bottom, rounded
+// up to the 16-byte sp alignment. `outgoingArgSize` is 0 for the vast majority
+// of functions (those that never pass >8 GPR args).
+function arm64ComputeFrameSize(stackSize StackSize, outgoingArgSize StackSize) returns StackSize
+	let raw = 16 + stackSize + outgoingArgSize
 	let aligned = (raw + 15) and not 15
 	return aligned
 end 'arm64ComputeFrameSize'
 
+// Frame layout (low → high address). When `outgoingArgSize == 0` the bottom
+// outgoing-arg block is empty and the prologue collapses to the original
+// pre-indexed form, leaving every existing function's encoding unchanged:
+//
+//   [sp + 0 .. outgoingArgSize)         outgoing call args (written by THIS fn's calls)
+//   [sp + outgoingArgSize]              saved x29   = [x29 + 0]
+//   [sp + outgoingArgSize + 8]          saved x30   = [x29 + 8]
+//   [x29 + 16 .. )                      var/spill/callee-save area
+//   [x29 + (frameSize - outgoingArgSize) .. )   incoming args (caller's outgoing area)
+//
+// x29 always points at the saved frame record, so `[x29 + 16 + slot]` slot
+// addressing and the callee-save base are independent of outgoingArgSize.
 function arm64EmitPrologue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
-	let frameSize = arm64ComputeFrameSize(stackSize)
-	arm64EmitStpPreIndex(code, frameSize: frameSize)
-	arm64EmitMovFpSp(code)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(stackSize, outgoingArgSize: outgoing)
+	if outgoing == 0 'noOutgoing'
+		if frameSize <= ARM64_FRAME_PAIR_INDEX_MAX 'compactFrame'
+			arm64EmitStpPreIndex(code, frameSize: frameSize)
+			arm64EmitMovFpSp(code)
+		end 'compactFrame' else 'largeFrame'
+			// Frame exceeds the STP pre-indexed imm7 reach (±512 scaled). Adjust
+			// SP with ADD/SUB-immediate (which the helper splits across the imm12
+			// limit), store the frame record at the new SP, then point x29 at it.
+			arm64EmitStackAlloc(code, amount: frameSize)
+			arm64EmitStpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: 0)
+			arm64EmitMovFpSp(code)
+		end 'largeFrame'
+	end 'noOutgoing' else 'withOutgoing'
+		// Reserve the whole frame, then place the frame record ABOVE the
+		// outgoing-arg block and point x29 at it.
+		arm64EmitStackAlloc(code, amount: frameSize)
+		arm64EmitStpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: outgoing)
+		arm64EmitAddImm(code, rd: 29, rn: 31, imm12: outgoing)
+	end 'withOutgoing'
 	// Save callee-saved registers after frame setup.
 	// They are stored at the end of the frame, after the var+spill area.
 	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
@@ -955,11 +1136,24 @@ function arm64EmitPrologue(code ByteArray, stackSize StackSize, tracker Arm64Sta
 end 'arm64EmitPrologue'
 
 function arm64EmitEpilogue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
-	let frameSize = arm64ComputeFrameSize(stackSize)
+	let outgoing = tracker.outgoingArgSize
+	let frameSize = arm64ComputeFrameSize(stackSize, outgoingArgSize: outgoing)
 	// Restore callee-saved registers before frame teardown.
 	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
 	arm64EmitCalleeSavedRestores(code, tracker: tracker, baseOffset: calleeSaveBase)
-	arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	if outgoing == 0 'noOutgoing'
+		if frameSize <= ARM64_FRAME_PAIR_INDEX_MAX 'compactFrame'
+			arm64EmitLdpPostIndex(code, frameSize: frameSize)
+		end 'compactFrame' else 'largeFrame'
+			// Mirror the large-frame prologue: reload the frame record from SP,
+			// then free the frame with ADD-immediate (split across the imm12 limit).
+			arm64EmitLdpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: 0)
+			arm64EmitStackFree(code, amount: frameSize)
+		end 'largeFrame'
+	end 'noOutgoing' else 'withOutgoing'
+		arm64EmitLdpOffset(code, rt1: 29, rt2: 30, baseReg: 31, offset: outgoing)
+		arm64EmitStackFree(code, amount: frameSize)
+	end 'withOutgoing'
 	arm64EmitRet(code)
 end 'arm64EmitEpilogue'
 
@@ -1076,9 +1270,14 @@ export type Arm64StackTracker
 	export var currentStackSize as StackSize
 	export var calleeSavedGprs as RegIntArray
 	export var calleeSavedFps as RegIntArray
+	// Bytes reserved at the bottom of the frame for outgoing (>8th GPR) call
+	// args. Zero for the overwhelming majority of functions; non-zero only when
+	// some call site passes more than 8 GPR args. Drives the prologue/epilogue
+	// frame layout and the incoming-arg load offset.
+	export var outgoingArgSize as StackSize
 
 	export static function create() returns Arm64StackTracker
-		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.create(), calleeSavedFps: RegIntArray.create()}
+		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.create(), calleeSavedFps: RegIntArray.create(), outgoingArgSize: 0}
 	end 'create'
 end 'Arm64StackTracker'
 
@@ -1121,6 +1320,7 @@ export function emitArm64PerFunction(module TargetModule, globalData GlobalDataT
 
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
+		stackTracker.outgoingArgSize = func.outgoingArgSize
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -1280,6 +1480,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		movRegReg(dest, src) then arm64EmitMovRegReg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		spillToStack(offset, src) then arm64EmitSpillToStack(code, rt: resolveArm64Gpr(src).rawValue, byteOffset: offset)
 		reloadFromStack(dest, offset) then arm64EmitReloadFromStack(code, rt: resolveArm64Gpr(dest).rawValue, byteOffset: offset)
+		loadIncomingArg(dest, argIndex) then arm64EmitLoadIncomingArg(code, rt: resolveArm64Gpr(dest).rawValue, argIndex: argIndex, tracker: stackTracker)
 		branchLinkReg(reg) then arm64EmitBlr(code, rn: resolveArm64Gpr(reg).rawValue)
 		subSpImm(value) then arm64EmitSubImm(code, rd: 31, rn: 31, imm12: value)
 		addSpImm(value) then arm64EmitAddImm(code, rd: 31, rn: 31, imm12: value)
@@ -1396,7 +1597,8 @@ end 'arm64EmitSyscallOp'
 function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray)
 	let argCount = argSlots.count()
 
-	// Load args into x0-x3 (first 4)
+	// Load args into x0-x7 (AAPCS64 integer arg registers). mmap needs all six
+	// of x0-x5; functions like _NSGetExecutablePath use two.
 	if argCount >= 1 'arg0'
 		let slot0 = try argSlots.get(0) otherwise panic("arm64EmitIatCallOp.arg0: argCount >= 1 just checked but get(0) failed")
 		arm64EmitLdrSlot(code, rt: 0, slotIndex: slot0)
@@ -1417,6 +1619,18 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 		let slot4 = try argSlots.get(4) otherwise panic("arm64EmitIatCallOp.arg4: argCount >= 5 just checked but get(4) failed")
 		arm64EmitLdrSlot(code, rt: 4, slotIndex: slot4)
 	end 'arg4'
+	if argCount >= 6 'arg5'
+		let slot5 = try argSlots.get(5) otherwise panic("arm64EmitIatCallOp.arg5: argCount >= 6 just checked but get(5) failed")
+		arm64EmitLdrSlot(code, rt: 5, slotIndex: slot5)
+	end 'arg5'
+	if argCount >= 7 'arg6'
+		let slot6 = try argSlots.get(6) otherwise panic("arm64EmitIatCallOp.arg6: argCount >= 7 just checked but get(6) failed")
+		arm64EmitLdrSlot(code, rt: 6, slotIndex: slot6)
+	end 'arg6'
+	if argCount >= 8 'arg7'
+		let slot7 = try argSlots.get(7) otherwise panic("arm64EmitIatCallOp.arg7: argCount >= 8 just checked but get(7) failed")
+		arm64EmitLdrSlot(code, rt: 7, slotIndex: slot7)
+	end 'arg7'
 
 	// Load IAT slot address via ADRP + LDR, then BLR
 	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
@@ -1428,25 +1642,22 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitIatCallOp'
 
-// sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
-// `__data_cov_*` globals live in .covdata; other `__data_*` globals and the
-// slab/MM allocator globals (`__slab_*` and `__mm_*` registered by
-// `registerSlabAndMmGlobalsForDataSection`) live in the writable .data heap
-// arena; everything else resolves against .rdata. The .covdata check must come
-// first because its prefix is a superset of __data_.
+// sys.globalAddr: ADRP X0, page(label) ; ADD X0, X0, #pageoff(label) — patched by
+// the binary writer after layout. The ADRP+ADD pair has ±4 GiB reach; the single
+// ADR it replaced reached only ±1 MiB and silently truncated a global's address once
+// a program's code-to-data distance exceeded that window (the same hazard the
+// green-thread runtime accessors hit at multi-M scale). The label's output section
+// (writable .data heap arena vs read-only .rdata vs .covdata) is decided by the
+// shared classifyGlobalLabel so the data-section global set matches the x64 backend
+// and never silently drops a mutable-global prefix into read-only .rdata.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
-	// Record relocation at this instruction offset
-	var relocKind = RdataRelocKind.arm64Adr
-	if name.startsWith("__data_cov_") 'isCovData'
-		relocKind = RdataRelocKind.covdataArm64Adr
-	end 'isCovData' else if name.startsWith("__data_") 'isDataSection'
-		relocKind = RdataRelocKind.dataSectionArm64Adr
-	end 'isDataSection' else if name.startsWith("__slab_") or name.startsWith("__mm_") 'isAllocatorGlobal'
-		relocKind = RdataRelocKind.dataSectionArm64Adr
-	end 'isAllocatorGlobal'
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))
-	// Emit placeholder ADR X0, #0
-	arm64EmitAdr(code, rd: 0, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	// ADRP X0, page(label) — page reloc on this instruction.
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 0)
+	// ADD X0, X0, #pageoff(label) — within-page reloc on the following instruction.
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 0)
 
 	// Store to resultSlot
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
@@ -1471,7 +1682,7 @@ end 'arm64EmitLoadIndirectOp'
 // LDR Wt, [Xn, #imm12] (unsigned 32-bit) zero-extends to Xt automatically.
 // LDRSW Xt, [Xn, #imm12] sign-extends to 64 bits. imm12 is scaled by 4
 // for both encodings.
-function arm64EmitLoadWordWidth(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord, signed bool)
+export function arm64EmitLoadWordWidth(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord, signed bool)
 	let base = 0xB9800000 if signed else 0xB9400000
 	let insn = base or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
@@ -1510,8 +1721,10 @@ end 'arm64EmitLeaFuncAddrOp'
 // sys.stackAddr: ADD Xd, X29, #offset to get address of a stack slot
 function arm64EmitStackAddrOp(code ByteArray, resultSlot VarSlot, targetSlot VarSlot)
 	let offset = 16 + targetSlot * 8
-	// ADD X0, X29, #offset
-	arm64EmitAddImm(code, rd: 0, rn: 29, imm12: offset)
+	// ADD X0, X29, #offset — wide form: `offset` reaches past 0xFFF for
+	// high slot indices (e.g. mrt_executable_path's slot-522 path buffer),
+	// which a plain 12-bit ADD would truncate.
+	arm64EmitAddImmWide(code, rd: 0, rn: 29, imm: offset)
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitStackAddrOp'
 
@@ -1594,7 +1807,7 @@ end 'arm64EmitCset'
 // CSEL Xd, Xn, Xm, cond
 // Encoding: 1001 1010 100m mmmm cccc 00nn nnnd dddd
 //         = 0x9A800000 | (Rm << 16) | (cond << 12) | (Rn << 5) | Rd
-function arm64EmitCsel(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, cond MachineWord)
+export function arm64EmitCsel(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, cond MachineWord)
 	let insn = 0x9A800000 or (rm shl 16) or ((cond and 0xF) shl 12) or (rn shl 5) or rd
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCsel'
@@ -1793,7 +2006,7 @@ function arm64EmitStrQword(code ByteArray, rt MachineWord, rn MachineWord, offse
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrQword'
 
-function arm64EmitStrWord(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+export function arm64EmitStrWord(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
 	let insn = 0xB9000000 or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStrWord'
@@ -1876,22 +2089,30 @@ function arm64EmitAtomicDecMem(code ByteArray, addrReg Arm64VReg)
 end 'arm64EmitAtomicDecMem'
 
 // atomicXaddMem(resultReg, addrReg, valReg):
-//   .loop:
-//     LDAXR x16, [Xaddr]            ; x16 = prev (preserved across loop)
-//     ADD   x17, x16, Xval          ; x17 = new
-//     STLXR w18, x17, [Xaddr]       ; w18 = status (separate from x16/x17)
-//     CBNZ  w18, .loop
-//     MOV   Xresult, x16            ; result = prior value
+//   LDR x16, [Xaddr]              ; x16 = prev
+//   ADD x17, x16, Xval           ; x17 = new
+//   STR x17, [Xaddr]             ; *addr = new
+//   MOV Xresult, x16             ; result = prior value
+//
+// A non-atomic load-add-store (mirrors the C# bootstrap's `AtomicXadd`). The
+// LL/SC form this replaced needed a THIRD scratch register beyond the x16/x17
+// the inc/dec/cas emitters use, and reached for x18 — but x18 is the reserved
+// platform register on arm64-macos (the Apple ABI forbids touching it), so
+// clobbering it corrupted thread state and silently corrupted the heap (the
+// slab allocator double-allocated slots). Refcount xadd runs under the
+// cooperative green-thread model where this counter has a single writer at a
+// time, so true atomicity is unnecessary here — same trade-off the bootstrap
+// makes. Only x16/x17 (outside the regalloc pool) are scratched, so no
+// implicit defs need tracking, matching inc/dec/cas.
 function arm64EmitAtomicXaddMem(code ByteArray, resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg)
 	let rd = resolveArm64Gpr(resultReg).rawValue
 	let rn = resolveArm64Gpr(addrReg).rawValue
 	let rv = resolveArm64Gpr(valReg).rawValue
-	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitLdrImm(code, rt: 16, rn: rn, imm12: 0)
 	arm64EmitAdd(code, rd: 17, rn: 16, rm: rv)
-	arm64EmitStlxr(code, rs: 18, rt: 17, rn: rn)
-	// CBNZ W18, -3 instructions back to LDAXR.
-	arm64EmitCbnzW(code, rn: 18, imm19: 0x7FFFD)
-	// MOV Xresult, X16 (ORR Xresult, XZR, X16)
+	arm64EmitStrRegOffset(code, rt: 17, baseReg: rn, offset: 0)
+	// MOV Xresult, X16 (ORR Xresult, XZR, X16) — result = prior value. Emitted
+	// last, so rd aliasing rn/rv is harmless (both are dead by here).
 	arm64EmitMovRegReg(code, rd: rd, rn: 16)
 end 'arm64EmitAtomicXaddMem'
 
@@ -1930,33 +2151,40 @@ end 'arm64EmitAtomicCasMem'
 // leaFromStack: ADD Xd, X29, #stackOffset (PC-neutral address materialization).
 function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset MachineWord)
 	let rd = resolveArm64Gpr(dest).rawValue
-	arm64EmitAddImm(code, rd: rd, rn: 29, imm12: stackOffset and 0xFFF)
+	// Wide ADD: a plain 12-bit immediate truncates `stackOffset` past 0xFFF,
+	// producing a wrong slot address in large frames (see arm64EmitStackAddrOp).
+	arm64EmitAddImmWide(code, rd: rd, rn: 29, imm: stackOffset)
 end 'arm64EmitLeaFromStackOp'
 
-// leaRdata: ADRP+ADD materialization of an rdata label address.
-// Uses placeholder ADRP + ADD (imm12=0); the binary writer patches both fields
-// via the rdata relocation.
+// leaRdata: ADRP+ADD materialization of an rdata label address with ±4 GiB reach.
+// The single-ADR form reached only ±1 MiB. ADRP page reloc on the ADRP, within-page
+// reloc on the ADD; the writer patches both fields.
 function arm64EmitLeaRdataOp(code ByteArray, dest Arm64VReg, rdataLabel String, rdataRelocs RdataRelocationArray)
 	let rd = resolveArm64Gpr(dest).rawValue
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.arm64Adr))
-	arm64EmitAdr(code, rd: rd, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(rdataLabel)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: adrpKind))
+	arm64EmitAdrp(code, rd: rd)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: rd, rn: rd, imm12: 0)
 end 'arm64EmitLeaRdataOp'
 
 // globalLoad / globalStore for GPR values. Phase D1 wires these up so the
 // Linux `osGetArgc` / `osGetArgv` lowerings can read `__mrt_argc` / `__mrt_argv`
-// inline. Both emit an ADR + LDR/STR pair: the ADR materialises the global's
-// runtime address into the dest/src register (the linker patches the ADR
-// imm21 via the rdata relocation), and the second instruction does the
-// actual load or store with a zero offset. ADR's ±1MB PC-relative range is
-// sufficient for compile-verify on Linux/macOS targets where this is wired in.
+// inline. Both emit an ADRP + LDR/STR pair: the ADRP+within-page-offset materialises
+// the global's runtime address with ±4 GiB reach (the single-ADR form this replaced
+// reached only ±1 MiB and could truncate at scale). The LDR/STR folds the within-page
+// offset directly into its imm12 via the dataSectionArm64PageOff reloc (scaled by 8
+// for an LDR/STR Xn), so no separate ADD is needed.
 function arm64EmitGlobalLoadOp(code ByteArray, dest Arm64VReg, name String, size MachineWord, rdataRelocs RdataRelocationArray)
 	if size != 8 'sizeOk'
 		panic("arm64EmitGlobalLoadOp: only 8-byte global loads supported (name={name}, size={size})")
 	end 'sizeOk'
 	let rd = resolveArm64Gpr(dest).rawValue
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: arm64RelocKindForLabel(name)))
-	arm64EmitAdr(code, rd: rd, offset: 0)
-	arm64EmitLdrImm(code, rt: rd, rn: rd, imm12: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: rd)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitLdrRegOffset(code, rt: rd, baseReg: rd, offset: 0)
 end 'arm64EmitGlobalLoadOp'
 
 function arm64EmitGlobalStoreOp(code ByteArray, name String, src Arm64VReg, size MachineWord, rdataRelocs RdataRelocationArray)
@@ -1966,8 +2194,10 @@ function arm64EmitGlobalStoreOp(code ByteArray, name String, src Arm64VReg, size
 	let rs = resolveArm64Gpr(src).rawValue
 	// Use x16 (scratch IP0) as the address holder so the source register
 	// stays intact for the store.
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: arm64RelocKindForLabel(name)))
-	arm64EmitAdr(code, rd: 16, offset: 0)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 16)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
 	arm64EmitStrRegOffset(code, rt: rs, baseReg: 16, offset: 0)
 end 'arm64EmitGlobalStoreOp'
 
@@ -1975,18 +2205,28 @@ end 'arm64EmitGlobalStoreOp'
 // x64 `relocKindForLabel` logic — `__data_cov_` covdata first, then `__data_`,
 // then the allocator/runtime mutable-global prefixes (`__slab_`, `__mm_`,
 // `__mrt_`), with everything else falling through to read-only .rdata.
-function arm64RelocKindForLabel(label String) returns RdataRelocKind
-	if label.startsWith("__data_cov_") 'isCovData'
-		return RdataRelocKind.covdataArm64Adr
-	end 'isCovData'
-	if label.startsWith("__data_") 'isDataSection'
-		return RdataRelocKind.dataSectionArm64Adr
-	end 'isDataSection'
-	if label.startsWith("__slab_") or label.startsWith("__mm_") or label.startsWith("__mrt_") 'isMutableGlobal'
-		return RdataRelocKind.dataSectionArm64Adr
-	end 'isMutableGlobal'
-	return RdataRelocKind.arm64Adr
+export function arm64RelocKindForLabel(label String) returns RdataRelocKind
+	// Section class is shared with the x64 backend via classifyGlobalLabel so the
+	// writable-.data global set (incl. __sched_/__gt_/__at_/__subp_/__io_, which an
+	// earlier hand-maintained list here omitted) stays consistent across targets.
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives RdataRelocKind.covdataArm64Adr
+		dataSection gives RdataRelocKind.dataSectionArm64Adr
+		rdata gives RdataRelocKind.arm64Adr
+	end 'cls'
 end 'arm64RelocKindForLabel'
+
+// The (ADRP-page, within-page) reloc-kind pair for a global label's output section.
+// Twin of arm64RelocKindForLabel for the ±4 GiB ADRP+ADD/LDR/STR sequence: the page
+// reloc patches the ADRP, the page-off reloc patches the following ADD/LDR/STR. Shares
+// classifyGlobalLabel so the section choice stays identical to the single-ADR path.
+export function arm64AdrpPageOffKindsForLabel(label String) returns (RdataRelocKind, RdataRelocKind)
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives (RdataRelocKind.covdataArm64Adrp, RdataRelocKind.covdataArm64PageOff)
+		dataSection gives (RdataRelocKind.dataSectionArm64Adrp, RdataRelocKind.dataSectionArm64PageOff)
+		rdata gives (RdataRelocKind.arm64Adrp, RdataRelocKind.arm64PageOff)
+	end 'cls'
+end 'arm64AdrpPageOffKindsForLabel'
 
 function arm64EmitGlobalLoadFloatOp(code ByteArray, dest Arm64FpVReg, name String, precision FloatPrecision)
 	let precisionName = match precision 'p'
@@ -2010,12 +2250,20 @@ end 'arm64EmitGlobalStoreFloatOp'
 // IP0) to hold the global address — x0/x1 are preserved so subsequent ABI
 // code still sees them if a future revision needs to.
 function arm64EmitStashEntryArgvOp(code ByteArray, rdataRelocs RdataRelocationArray)
-	// str x0, [adrp+__mrt_argc]
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__mrt_argc", kind: arm64RelocKindForLabel("__mrt_argc")))
-	arm64EmitAdr(code, rd: 16, offset: 0)
-	arm64EmitStrRegOffset(code, rt: 0, baseReg: 16, offset: 0)
-	// str x1, [adrp+__mrt_argv]
-	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__mrt_argv", kind: arm64RelocKindForLabel("__mrt_argv")))
-	arm64EmitAdr(code, rd: 16, offset: 0)
-	arm64EmitStrRegOffset(code, rt: 1, baseReg: 16, offset: 0)
+	// STR x0, [ADRP+ADD __mrt_argc] — ±4 GiB-reach store address (the single-ADR
+	// form reached only ±1 MiB and could truncate at scale, like sys.globalAddr).
+	arm64EmitStashOneEntryGlobal(code, rdataRelocs: rdataRelocs, name: "__mrt_argc", src: 0)
+	// STR x1, [ADRP+ADD __mrt_argv].
+	arm64EmitStashOneEntryGlobal(code, rdataRelocs: rdataRelocs, name: "__mrt_argv", src: 1)
 end 'arm64EmitStashEntryArgvOp'
+
+// ADRP x16, page(name) ; ADD x16, x16, #pageoff(name) ; STR Xsrc, [x16] — store `src`
+// into an 8-byte global through an x16-based ±4 GiB-reach address.
+function arm64EmitStashOneEntryGlobal(code ByteArray, rdataRelocs RdataRelocationArray, name String, src MachineWord)
+	let (adrpKind, pageOffKind) = arm64AdrpPageOffKindsForLabel(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: adrpKind))
+	arm64EmitAdrp(code, rd: 16)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: pageOffKind))
+	arm64EmitAddImm(code, rd: 16, rn: 16, imm12: 0)
+	arm64EmitStrRegOffset(code, rt: src, baseReg: 16, offset: 0)
+end 'arm64EmitStashOneEntryGlobal'

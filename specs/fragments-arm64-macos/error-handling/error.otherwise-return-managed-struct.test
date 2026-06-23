@@ -1,0 +1,123 @@
+// Test: error.otherwise-return-managed-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: when a try call returns a heap-managed struct and the otherwise
+// branch returns early, the uninitialized __try_result_ slot must not be
+// decref'd on the error path (would crash mm_decref with garbage pointer).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(flag bool) returns Box throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return Box.create(7)
+end 'makeBox'
+
+function getBoxValue(flag bool) returns Integer
+	let box = try makeBox(flag) otherwise return -1
+	return box.value
+end 'getBoxValue'
+
+function main() returns ExitCode
+	let good = getBoxValue(false)
+	if good == 7 'g'
+		let bad = getBoxValue(true)
+		if bad == -1 'b'
+			return 0
+		end 'b'
+	end 'g'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @makeBox(x0: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.cmp x0, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #7
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+  inlined_getBoxValue_0_0:
+    arm64.bl makeBox
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_getBoxValue_3_0
+  inlined_getBoxValue_1_0:
+    arm64.mov x0, #-1
+    arm64.b inline_cont_main_0
+  inlined_getBoxValue_3_0:
+    arm64.ldr x19, [x0, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+  inline_cont_main_0:
+    arm64.mov x1, #7
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne g_0.after
+  g_0:
+    arm64.mov x0, #1
+  inlined_getBoxValue_0_1:
+    arm64.bl makeBox
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_getBoxValue_3_1
+  inlined_getBoxValue_1_1:
+    arm64.mov x0, #-1
+    arm64.b inline_cont_main_1
+  inlined_getBoxValue_3_1:
+    arm64.ldr x19, [x0, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+  inline_cont_main_1:
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne g_0.after
+  b_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  g_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

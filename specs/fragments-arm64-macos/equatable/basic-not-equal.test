@@ -1,0 +1,89 @@
+// Test: basic-not-equal
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point implements Equatable
+	export var x as Integer
+	export var y as Integer
+
+	function equals(other Point) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	let b = Point.create(3, y: 4)
+	if a.equals(b) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Point.equals(x0: i64, x1: i64) -> i1 {
+  entry:
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.ldr x3, [x0, #0] (8b)
+    arm64.mov x4, #0
+    arm64.cmp x3, x2
+    arm64.cset x2, eq
+    arm64.b.ne __phi_trampoline_0_0
+  shortAnd.rhs:
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.cmp x1, x2
+    arm64.cset x0, eq
+  shortAnd.merge:
+    arm64.ret
+  __phi_trampoline_0_0:
+    arm64.mov x0, x4
+    arm64.b shortAnd.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #3
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #4
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Point.equals
+    arm64.mov x21, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.cmp x21, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

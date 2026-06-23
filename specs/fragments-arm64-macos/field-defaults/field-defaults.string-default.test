@@ -1,0 +1,132 @@
+// Test: field-defaults.string-default
+type Person
+	export var name as String = "anon"
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Person'
+
+function main() returns ExitCode
+	let p = Person.create()
+	print("{p.name}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+anon
+```
+---
+// CompiledIR
+module {
+  func @Person.__field_init_name() -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #4
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.adrp+add x1, __destruct_Person
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.bl Person.__field_init_name
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x20, [x1, #8] (8b)
+    arm64.ldr x21, [x1, #0] (8b)
+    arm64.mov x22, #0
+    arm64.add x0, x20, x22
+    arm64.mov x1, #1
+    arm64.add x23, x0, x22
+    arm64.add x0, x23, x1
+    arm64.bl mrt_alloc
+    arm64.mov x24, x0
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #64]
+    arm64.str x24, [x29, #16]
+    arm64.str x0, [x29, #64]
+    arm64.str x22, [x29, #24]
+    arm64.memcpy
+    arm64.add x25, x24, x22
+    arm64.str x25, [x29, #32]
+    arm64.str x21, [x29, #40]
+    arm64.str x20, [x29, #48]
+    arm64.memcpy
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x25, x20
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x22, [x29, #24]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x22, [x19, #40] (8b)
+    arm64.str x24, [x19, #0] (8b)
+    arm64.str x23, [x19, #8] (8b)
+    arm64.str x23, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.ldr x21, [x19, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

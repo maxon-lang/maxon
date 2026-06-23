@@ -1,0 +1,65 @@
+// Test: conditional-extensions.type-extension
+type Box uses Item
+	export var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+extension Box where Item is Equatable
+	function matches(other Item) returns bool
+		return item == other
+	end 'matches'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	if b.matches(42) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Box_Int
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #40] (8b)
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.mov x2, #42
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.ldr x16, [x3, #24] (8b)
+    arm64.blr x16
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.cmp x20, #0
+    arm64.b.eq yes_0.after
+  yes_0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  yes_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

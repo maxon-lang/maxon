@@ -1,0 +1,123 @@
+// Test: async-await.stack-growth
+typealias Integer = int(i64.min to i64.max)
+
+function deepRecurse(n Integer) returns Integer
+		if n == 0 'base'
+				return 0
+		end 'base'
+		return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function yieldAndRecurse() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return deepRecurse(100)
+end 'yieldAndRecurse'
+
+function main() returns ExitCode
+		let p = async yieldAndRecurse()
+		let result = await p
+		return result
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @deepRecurse(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne base_0.after
+  base_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  base_0.after:
+    arm64.mov x0, #1
+    arm64.sub x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl deepRecurse
+    arm64.mov x1, x0
+    arm64.mov x2, #1
+    arm64.add x0, x1, x2
+    arm64.epilogue
+    arm64.ret
+  }
+  func @yieldAndRecurse() -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #11
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl FilePath.init
+    arm64.mov x19, x0
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, x1
+    arm64.bl mrt_file_exists
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #100
+    arm64.bl deepRecurse
+    arm64.mov x1, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #24
+    arm64.bl __slab_alloc
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x2, #8] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x2, #16] (8b)
+    arm64.mov x1, #0
+    arm64.adrp+add x0, yieldAndRecurse
+    arm64.bl __gt_spawn
+    arm64.bl __gt_await
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_40096cb182526902
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

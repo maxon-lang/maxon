@@ -1,0 +1,66 @@
+// Test: method-call-on-same-type-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+type Foo
+	var x as Integer
+	
+	function bar() returns Integer
+		return x
+	end 'bar'
+	
+	function callBarOn(other Foo) returns Integer
+		return other.bar()
+	end 'callBarOn'
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Foo'
+
+function main() returns ExitCode
+	let f1 = Foo.create(10)
+	let f2 = Foo.create(42)
+	return f1.callBarOn(f2)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_75da5484fe4326b5
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

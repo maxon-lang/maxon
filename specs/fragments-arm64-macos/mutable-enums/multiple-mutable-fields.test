@@ -1,0 +1,135 @@
+// Test: multiple-mutable-fields
+typealias Integer = int(i64.min to i64.max)
+
+union Pair
+	empty
+	values(a Integer, b Integer)
+end 'Pair'
+
+function main() returns ExitCode
+	var p = Pair.values(1, b: 2)
+	match p 'update-a'
+		values(a, _) then a = 10
+		empty then return 0
+	end 'update-a'
+	match p 'update-b'
+		values(_, b) then b = 32
+		empty then return 0
+	end 'update-b'
+	match p 'read'
+		values(a, b) then return a + b
+		empty then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.mov x2, #1
+    arm64.mov x20, #0
+    arm64.cmp x1, x2
+    arm64.cset x0, eq
+    arm64.b.ne update-a_0.next0
+    arm64.b update-a_0.case0
+  update-a_0.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne update-b_0.next0
+    arm64.b update-b_0.case0
+  update-a_0.case0:
+    arm64.ldr x0, [x19, #8] (8b)
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #8] (8b)
+    arm64.b update-a_0.merge
+  update-a_0.next0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne update-a_0.merge
+  update-a_0.case1:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  update-b_0.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne read_0.next0
+    arm64.b read_0.case0
+  update-b_0.case0:
+    arm64.ldr x0, [x19, #16] (8b)
+    arm64.mov x0, #32
+    arm64.str x0, [x19, #16] (8b)
+    arm64.b update-b_0.merge
+  update-b_0.next0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne update-b_0.merge
+  update-b_0.case1:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  read_0.case0:
+    arm64.ldr x20, [x19, #16] (8b)
+    arm64.ldr x21, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x21, x20
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  read_0.next0:
+    arm64.ldr x21, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.cmp x21, x20
+    arm64.cset x0, eq
+    arm64.b.ne read_0.next1
+  read_0.case1:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  read_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_245fd5b7702f970c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -2493,6 +2493,81 @@ func mrt_file_size 1 i64
     std errorReturn v16 v17
 end
 
+// mrt_strip_trailing_dir_glob(cstr) -> cstr. stdlib Directory.list / openSearch
+// build the search pattern as "<dir><sep>*"; on POSIX targets <sep> is '/', so
+// the pattern ends in "/*". POSIX open() needs the bare directory path, so this
+// truncates a trailing "/*" by writing a NUL over the '/'. Windows patterns end
+// in "\*" (separator differs), so they never match and are left intact to drive
+// FindFirstFileW. The cstr is the fresh, owned buffer from mrt_cstr_from_mm, so
+// truncating it in place is safe. Returns the same pointer.
+//
+// Slot usage:
+//   slot 0 = cstr
+//   slot 1 = scan index / length
+func mrt_strip_trailing_dir_glob 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std constI64 0
+    std storeSlot 1 v1
+    std br scan
+
+  block scan:
+    v2 = std loadSlot 0
+    v3 = std loadSlot 1
+    v4 = std loadByte v2 v3
+    v5 = std constI64 0
+    v6 = std cmpI64Eq v4 v5
+    std condBr v6 check incr
+
+  block incr:
+    v7 = std loadSlot 1
+    v8 = std constI64 1
+    v9 = std addI64 v7 v8
+    std storeSlot 1 v9
+    std br scan
+
+  block check:
+    // Need len >= 2 to hold a trailing "/*".
+    v10 = std loadSlot 1
+    v11 = std constI64 2
+    v12 = std cmpI64Lt v10 v11
+    std condBr v12 done test_star
+
+  block test_star:
+    v13 = std loadSlot 0
+    v14 = std loadSlot 1
+    v15 = std constI64 1
+    v16 = std subI64 v14 v15
+    v17 = std loadByte v13 v16
+    v18 = std constI64 42
+    v19 = std cmpI64Eq v17 v18
+    std condBr v19 test_slash done
+
+  block test_slash:
+    v20 = std loadSlot 0
+    v21 = std loadSlot 1
+    v22 = std constI64 2
+    v23 = std subI64 v21 v22
+    v24 = std loadByte v20 v23
+    v25 = std constI64 47
+    v26 = std cmpI64Eq v24 v25
+    std condBr v26 do_strip done
+
+  block do_strip:
+    v27 = std loadSlot 0
+    v28 = std loadSlot 1
+    v29 = std constI64 2
+    v30 = std subI64 v28 v29
+    v31 = std constI64 0
+    std storeByte v27 v30 v31
+    std br done
+
+  block done:
+    v32 = std loadSlot 0
+    std ret v32
+end
+
 // mrt_directory_open_search(pattern) throws -> __ManagedDirectory ptr.
 // On Linux directory enumeration uses opendir/readdir-equivalent (open +
 // getdents64). We allocate a 40-byte handle block:
@@ -2518,6 +2593,10 @@ func mrt_directory_open_search 1 i64
 
     v1 = std call mrt_cstr_from_mm v0
     std storeSlot 1 v1
+
+    // Drop the stdlib-appended "/*" glob suffix (POSIX wants the bare dir path;
+    // Windows "\*" patterns are left intact). In-place truncation on the owned cstr.
+    v27 = std call mrt_strip_trailing_dir_glob v1
 
     // open(path, O_RDONLY|O_DIRECTORY = 0|65536 = 65536).
     v2 = std loadSlot 1
@@ -2781,6 +2860,16 @@ func mrt_directory_next 1 i64
     v20 = std andI64 v18 v19
     std storeSlot 5 v20
 
+    // A zero-length record can never advance the cursor (cursor += reclen would
+    // stall), so a malformed/zero reclen would spin the check_buffer -> read_entry
+    // loop forever. Treat reclen == 0 as end-of-iteration. This also bounds the
+    // loop if a getdents buffer ever reports more bytes than it filled (the
+    // trailing region of a freshly mmap'd buffer reads back as zero).
+    v43 = std constI64 0
+    v44 = std cmpI64Eq v20 v43
+    std condBr v44 done_no_more read_entry_body
+
+  block read_entry_body:
     // Compute entry name ptr = base + cursor + 19.
     v21 = std constI64 19
     v22 = std addI64 v17 v21
@@ -2835,6 +2924,100 @@ func mrt_directory_next 1 i64
     std storeIndirect v0 32 v41
     v42 = std constI64 0
     std errorReturn v41 v42
+end
+
+// mrt_macos_dirent_relayout(buf, nbytes) -> nbytes. macOS-only helper invoked
+// from the arm64-macos osDirGetdents64 lowering (and kept alive for that target
+// by seedRuntimeBackendEdges). ___getdirentries64 fills `buf` with BSD dirent
+// records (d_reclen u16@16, d_namlen u16@18, d_type u8@20, d_name@21), but the
+// shared mrt_directory_next parser reads names at the Linux dirent64 offset
+// (d_name@19). For each record this shifts the name (namlen+1 bytes, incl. the
+// NUL) two bytes left from +21 to +19, leaving d_reclen (the record stride)
+// untouched. dest < src so the forward byte copy is overlap-safe. Returns the
+// byte count unchanged.
+//
+// Slot usage:
+//   slot 0 = buf
+//   slot 1 = nbytes
+//   slot 2 = cursor
+//   slot 3 = record ptr (buf + cursor)
+//   slot 4 = reclen
+//   slot 5 = namlen
+//   slot 6 = copy index i
+func mrt_macos_dirent_relayout 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    std storeSlot 2 v2
+    std br loop_head
+
+  block loop_head:
+    v3 = std loadSlot 2
+    v4 = std loadSlot 1
+    v5 = std cmpI64Lt v3 v4
+    std condBr v5 read_rec done
+
+  block read_rec:
+    v6 = std loadSlot 0
+    v7 = std loadSlot 2
+    v8 = std addI64 v6 v7
+    std storeSlot 3 v8
+
+    // reclen = u16 @ rec+16
+    v9 = std loadIndirect v8 16
+    v10 = std constI64 0xFFFF
+    v11 = std andI64 v9 v10
+    std storeSlot 4 v11
+
+    // namlen = byte @ rec+18 (NAME_MAX 255 fits one byte).
+    v12 = std constI64 18
+    v13 = std loadByte v8 v12
+    std storeSlot 5 v13
+
+    v14 = std constI64 0
+    std storeSlot 6 v14
+    std br copy_head
+
+  block copy_head:
+    v15 = std loadSlot 6
+    v16 = std loadSlot 5
+    v17 = std cmpI64Le v15 v16
+    std condBr v17 copy_body advance
+
+  block copy_body:
+    v18 = std loadSlot 3
+    v19 = std loadSlot 6
+    v20 = std constI64 21
+    v21 = std addI64 v19 v20
+    v22 = std loadByte v18 v21
+    v23 = std constI64 19
+    v24 = std addI64 v19 v23
+    std storeByte v18 v24 v22
+    v25 = std constI64 1
+    v26 = std addI64 v19 v25
+    std storeSlot 6 v26
+    std br copy_head
+
+  block advance:
+    // Defensive: a zero reclen would loop forever; bail to EOF instead.
+    v27 = std loadSlot 4
+    v28 = std constI64 0
+    v29 = std cmpI64Eq v27 v28
+    std condBr v29 done bump
+
+  block bump:
+    v30 = std loadSlot 2
+    v31 = std loadSlot 4
+    v32 = std addI64 v30 v31
+    std storeSlot 2 v32
+    std br loop_head
+
+  block done:
+    v33 = std loadSlot 1
+    std ret v33
 end
 
 // mrt_directory_filename(self) -> __ManagedMemory. Reads the NUL-
@@ -3146,63 +3329,55 @@ end
 
 // mrt_executable_path(): returns a __ManagedMemory holding the UTF-8 bytes
 // of the running executable's path. On error (osGetExecutablePath returned a
-// negative errno-style value) produces an empty MM. The stack buffer holds
-// up to 4096 bytes — well past PATH_MAX on every supported system.
+// negative errno-style value) produces an empty MM.
+//
+// The scratch buffer is the managed-mem's own HEAP data region (4096+1 bytes),
+// NOT a stack buffer. A stack buffer would have to be addressed via the
+// runtime's x64-centric "stack addresses go DOWN as the slot index goes up"
+// convention, which is inverted on arm64 (slots grow UP from x29) — so a
+// stackAddr-based 4 KB buffer writes off the wrong end there. mrt_cov_dump
+// uses the same heap-buffer approach for the same reason. Writing the path
+// straight into the result mm's heap buffer and then setting its length is
+// architecture-neutral and avoids a second alloc + memcpy.
 //
 // Slot usage:
-//   slot 0 = osGetExecutablePath return value (bytes written or -errno)
-//   slot 1 = mm pointer
-//   slot 2 = mm[0] buffer pointer
-//   slots 11..522 = 512-qword (4096-byte) UTF-8 path buffer
+//   slot 0 = mm pointer
+//   slot 1 = mm[0] buffer pointer
+//   slot 2 = osGetExecutablePath return value (bytes written or -errno)
 func mrt_executable_path 0 i64
   block entry:
-    // Stack-allocate the path buffer at slot 522 (low-address end of a
-    // 4096-byte region extending toward slot 11; the slot allocator reserves
-    // the frame).
-    v0 = std stackAddr 522
-    v1 = std constI64 4096
-    v2 = std osGetExecutablePath v0 v1
+    // __managed_mem_create(4096 + 1, 1): a heap buffer with NUL headroom.
+    v0 = std constI64 4097
+    v1 = std constI64 1
+    v2 = std call __managed_mem_create v0 v1
     std storeSlot 0 v2
 
-    // Error path: result < 0 → return empty MM.
-    v3 = std constI64 0
-    v4 = std cmpI64Lt v2 v3
-    std condBr v4 err_path ok_path
+    // buf = mm[0]; write the path directly into it.
+    v3 = std loadIndirect v2 0
+    std storeSlot 1 v3
+    v4 = std constI64 4096
+    v5 = std osGetExecutablePath v3 v4
+    std storeSlot 2 v5
+
+    // Error path: result < 0 → return the buffer as an empty MM (length 0).
+    v6 = std constI64 0
+    v7 = std cmpI64Lt v5 v6
+    std condBr v7 err_path ok_path
 
   block ok_path:
-    // __managed_mem_create(bytes + 1, 1). The +1 reserves NUL space; memcpy
-    // below copies only `bytes` data bytes.
-    v5 = std loadSlot 0
-    v6 = std constI64 1
-    v7 = std addI64 v5 v6
-    v8 = std constI64 1
-    v9 = std call __managed_mem_create v7 v8
-    std storeSlot 1 v9
-
-    // dst = mm[0].
-    v10 = std loadSlot 1
-    v11 = std loadIndirect v10 0
-    std storeSlot 2 v11
-
-    // memcpy(dst, stackBuf, bytes).
-    v12 = std loadSlot 2
-    v13 = std stackAddr 522
-    v14 = std loadSlot 0
-    std memcpy v12 v13 v14
-
-    // Store length = bytes at mm[8].
-    v15 = std loadSlot 0
-    v16 = std loadSlot 1
-    std storeIndirect v16 8 v15
-
-    v17 = std loadSlot 1
-    std ret v17
+    // Set the managed-mem length = actual path bytes (mm[8]).
+    v8 = std loadSlot 0
+    v9 = std loadSlot 2
+    std storeIndirect v8 8 v9
+    v10 = std loadSlot 0
+    std ret v10
 
   block err_path:
-    v18 = std constI64 1
-    v19 = std constI64 1
-    v20 = std call __managed_mem_create v18 v19
-    std ret v20
+    v11 = std loadSlot 0
+    v12 = std constI64 0
+    std storeIndirect v11 8 v12
+    v13 = std loadSlot 0
+    std ret v13
 end
 
 // mrt_cov_hit(siteId): increments __data_cov_counters[siteId].
@@ -3228,23 +3403,36 @@ end
 // mrt_cov_dump(): writes the coverage file when MAXON_COV_OUT is set.
 // File format: 4-byte magic "MCOV" | 4-byte numSites (u32 LE) | numSites*8 bytes of counters (u64 LE).
 //
+// The MAXON_COV_OUT path is read into a managed-mem HEAP buffer (256+1 bytes),
+// NOT a stack buffer. A stackAddr-based buffer would have to be addressed via
+// the runtime's x64-centric "stack addresses go DOWN as the slot index goes up"
+// convention, which is inverted on arm64 (slots grow UP from x29), so a forward
+// osGetEnv fill from the buffer's slot would overrun off the wrong end there.
+// The heap buffer is architecture-neutral. cov_dump runs exactly once from
+// mrt_start_with_coverage, immediately before osExit, so the MM is intentionally
+// NOT released — the process is exiting and the OS reclaims it.
+//
 // Slot usage:
 //   slot 0 = bytes written by osGetEnv (path length)
 //   slot 1 = fd returned by osOpenWrite
 //   slot 2 = numSites (masked to u32)
-//   slots 10..41 = 256-byte path buffer (32 qword slots)
+//   slot 10 = managed-mem pointer for the path buffer
+//   slot 11 = mm[0] heap-data pointer (the actual 256-byte path buffer)
 //   slot 50 = 8-byte header buffer
 func mrt_cov_dump 0 void
   block entry:
+    // __managed_mem_create(256 + 1, 1): heap path buffer with NUL headroom.
+    v100 = std constI64 257
+    v101 = std constI64 1
+    v102 = std call __managed_mem_create v100 v101
+    std storeSlot 10 v102
+    // buf = mm[0]: osGetEnv writes the env value directly into this heap region.
+    v103 = std loadIndirect v102 0
+    std storeSlot 11 v103
+
     v0 = std globalAddr __cov_env_name
     v1 = std constI64 13
-    // Slots 10..41 reserve 256 bytes. Stack addresses go DOWN as slot index
-    // goes up, so the LOWEST address of the buffer is at slot 41. Passing
-    // stackAddr 41 as the ptr makes osGetEnv write FORWARD through slots
-    // 41..10; using stackAddr 10 here would write OFF THE TOP of the buffer
-    // into the saved frame and return address (works for ≤8-byte strings,
-    // crashes on longer paths).
-    v2 = std stackAddr 41
+    v2 = std loadSlot 11
     v3 = std constI64 256
     v4 = std osGetEnv v0 v1 v2 v3
     std storeSlot 0 v4
@@ -3253,7 +3441,7 @@ func mrt_cov_dump 0 void
     std condBr v6 done doOpen
 
   block doOpen:
-    v7 = std stackAddr 41
+    v7 = std loadSlot 11
     v8 = std loadSlot 0
     v9 = std osOpenWrite v7 v8
     std storeSlot 1 v9
@@ -4183,6 +4371,25 @@ func __gt_is_complete 1 i64
     v0 = std param 0 i64
     v1 = std constI64 0
     std ret v1
+end
+
+// maxon_gt_set_single_threaded() -> void. Pins the green-thread scheduler to a
+// single M by setting both __sched_max_procs and __sched_num_procs to 1. The
+// parallel spec dispatcher calls this (it is an I/O multiplexer — parallelism is
+// the worker subprocesses, not in-process Ms). Portable .std body so it links on
+// every host: harmless on the arm64-macos runtime (already single-M by
+// construction — __gt_init hardwires num_procs=1, nothing reads max_procs), and
+// it forces single-M on the multi-M x64 runtime. Mirrors the C# bootstrap's
+// maxon_gt_set_single_threaded (ARM64CodeEmitter.Runtime.cs / X86CodeEmitter.Runtime.cs).
+func maxon_gt_set_single_threaded 0 void
+  block entry:
+    v0 = std constI64 1
+    v1 = std globalAddr __sched_max_procs
+    std storeIndirect v1 0 v0
+    v2 = std globalAddr __sched_num_procs
+    std storeIndirect v2 0 v0
+    v3 = std constI64 0
+    std ret v3
 end
 
 // __gt_init() -> void. Signature-only stub: the real body is the hand-emitted

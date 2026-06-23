@@ -48,7 +48,9 @@ Use `panic` for invariant violations and unreachable code paths — situations t
 <!-- test: panic.basic -->
 ```maxon
 function main() returns ExitCode
-		panic("something went wrong")
+		if true 'check'
+				panic("something went wrong")
+		end 'check'
 		return 0
 end 'main'
 ```
@@ -56,7 +58,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at panic.basic.test:3: something went wrong
+panic at panic.basic.test:4: something went wrong
 Stack trace:
   in main
   in mrt_start

@@ -1,0 +1,110 @@
+// Test: if-try-else-with-error-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	first
+	second
+end 'MyError'
+
+function mayFail(which Integer) returns Integer throws MyError
+	if which == 1 'check1'
+		throw MyError.first
+	end 'check1'
+	if which == 2 'check2'
+		throw MyError.second
+	end 'check2'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	if try mayFail(1) 'check'
+		result = 100
+	end 'check' else (e) 'err'
+		match e 'kind'
+			first then result = 50
+			second then result = 60
+		end 'kind'
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+  inlined_mayFail_0_0:
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne inlined_mayFail_2_0
+  inlined_mayFail_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_mayFail_2_0:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne inlined_mayFail_4_0
+  inlined_mayFail_3_0:
+    arm64.mov x1, #2
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_mayFail_4_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inline_cont_main_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne err_0
+  check_0:
+    arm64.mov x0, #100
+    arm64.b check_0.merge
+  err_0:
+    arm64.mov x0, #1
+    arm64.mov x3, #0
+    arm64.sub x4, x1, x0
+    arm64.cmp x4, x3
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next0
+    arm64.b kind_0.case0
+  kind_0.merge:
+    arm64.b check_0.merge
+  kind_0.case0:
+    arm64.mov x0, #50
+    arm64.b kind_0.merge
+  kind_0.next0:
+    arm64.mov x0, #1
+    arm64.cmp x4, x0
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  kind_0.case1:
+    arm64.mov x0, #60
+    arm64.b kind_0.merge
+  check_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_300e8d1060ed21d5
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_5_0:
+    arm64.mov x0, x2
+    arm64.b kind_0.merge
+  }
+}
+---

@@ -1,0 +1,141 @@
+// Test: match-enum-typed-binding-pass-to-function
+enum Direction
+		north
+		south
+		east
+		west
+end 'Direction'
+
+union Move
+		walk(dir Direction)
+		stay
+end 'Move'
+
+function directionValue(d Direction) returns ExitCode
+		match d 'check'
+				north then return 1
+				south then return 2
+				east then return 3
+				west then return 4
+		end 'check'
+end 'directionValue'
+
+function main() returns ExitCode
+		let m = Move.walk(Direction.east)
+		match m 'act'
+				walk(dir) then return directionValue(dir)
+				stay then return 0
+		end 'act'
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @directionValue(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next0
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  check_0.next0:
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next1
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  check_0.next1:
+    arm64.mov x0, #2
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next2
+  check_0.case2:
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  check_0.next2:
+    arm64.mov x0, #3
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next3
+  check_0.case3:
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  check_0.next3:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne act_0.next0
+  act_0.case0:
+    arm64.ldr x0, [x19, #8] (8b)
+    arm64.bl directionValue
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  act_0.next0:
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #1
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne act_0.next1
+  act_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  act_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c8524d66db4d2fa6
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,199 @@
+// Test: many-call-crossing
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function add2(a Integer, b Integer) returns Integer
+	return a + b
+end 'add2'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 6 working values live across the loop body. Each `ident`-produced
+	// value is opaque to the constant folder, so all 6 land in the live
+	// set crossing the helper calls below. The body's reg-reg ALU mix
+	// is the fold-eligible shape that Phase 3's tryFoldReadFromSlot
+	// rewrites into `*Mem` variants when its source operand spills.
+	let v1 = ident(seed + 1)
+	let v2 = ident(seed + 2)
+	let v3 = ident(seed + 3)
+	let v4 = ident(seed + 4)
+	let v5 = ident(seed + 5)
+	let v6 = ident(seed + 6)
+
+	var total = 0
+	var i = 0
+	while i < 4 'loop'
+		// Each iteration's ALU mix uses every v_i. Spilled-source uses
+		// of these reg-reg forms are exactly the fold-eligible shape for
+		// Phase 3.
+		total = total + add2(v1, b: v2)
+		total = total + (v3 xor v4)
+		total = total + (v5 and v6)
+		total = total + (v1 + v3 + v5)
+		total = total + (v2 or v4 or v6)
+		i = i + 1
+	end 'loop'
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 116
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.bl CommandLine.args
+    arm64.mov x19, x0
+    arm64.mov x20, #1
+    arm64.mov x21, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x23, #0
+    arm64.b __rc_edge_15_0
+  inline_cont_main_0:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_16_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x21, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.str x20, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.str x20, [x19, #24] (8b)
+    arm64.str x21, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x22, #0] (8b)
+    arm64.str x20, [x22, #8] (8b)
+    arm64.mov x19, x22
+  try_0.merge:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__int_fromString
+    arm64.mov x22, x0
+    arm64.mov x23, x1
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x23, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x0, x21
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x0, x22
+  try_1.merge:
+    arm64.mov x1, #4
+    arm64.mov x2, #2
+    arm64.mov x3, #3
+    arm64.mov x4, #6
+    arm64.add x5, x0, x1
+    arm64.add x1, x0, x2
+    arm64.mov x2, #5
+    arm64.add x6, x0, x3
+    arm64.add x3, x0, x20
+    arm64.add x7, x0, x4
+    arm64.orr x4, x1, x5
+    arm64.add x8, x0, x2
+    arm64.add x0, x3, x6
+    arm64.orr x2, x4, x7
+    arm64.add x4, x0, x8
+    arm64.and x0, x8, x7
+    arm64.eor x7, x6, x5
+    arm64.mov x5, x21
+    arm64.mov x6, x21
+  loop_0.header:
+    arm64.mov x8, #4
+    arm64.cmp x6, x8
+    arm64.cset x8, lt
+    arm64.b.ge loop_0.exit
+  loop_0:
+    arm64.add x8, x3, x1
+    arm64.add x9, x5, x8
+    arm64.add x5, x9, x7
+    arm64.add x8, x5, x0
+    arm64.add x5, x8, x4
+    arm64.add x8, x6, x20
+    arm64.add x6, x5, x2
+    arm64.mov x5, x6
+    arm64.mov x6, x8
+    arm64.b loop_0.header
+  loop_0.exit:
+    arm64.mov x1, #255
+    arm64.mov x2, #255
+    arm64.and x0, x5, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.cmp x0, x21
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c40b97d05091cfaf
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_15_0:
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.mov x1, x23
+    arm64.b inline_cont_main_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c40b97d05091cfaf
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_16_0:
+    arm64.mov x19, x0
+    arm64.b try_0.merge
+  }
+}
+---

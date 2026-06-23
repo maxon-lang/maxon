@@ -1,0 +1,43 @@
+// Test: multi-div
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
+	let r1 = a / b
+	let r2 = c / d
+	return trunc(r1 + r2)
+end 'multiDiv'
+
+function main() returns ExitCode
+	return multiDiv(10, b: 2, c: 20, d: 4)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #4
+    arm64.mov x1, #20
+    arm64.mov x2, #2
+    arm64.mov x3, #10
+    arm64.sdiv x4, x1, x0
+    arm64.sdiv x1, x3, x2
+    arm64.mov x2, #255
+    arm64.add x0, x1, x4
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e9fdc724772ca5be
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

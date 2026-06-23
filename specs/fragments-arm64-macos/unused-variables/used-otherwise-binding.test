@@ -1,0 +1,77 @@
+// Test: used-otherwise-binding
+
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Score throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var x = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'kind'
+			failed then x = 42
+		end 'kind'
+	end 'handler'
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @mayFail() -> u8 {
+  entry:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl mayFail
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.cmp x1, x2
+    arm64.cset x2, ne
+    arm64.b.eq __phi_trampoline_0_0
+  try_0.otherwise:
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+    arm64.sub x4, x1, x0
+    arm64.cmp x4, x2
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.merge
+    arm64.b kind_0.case0
+  kind_0.merge:
+    arm64.mov x0, #0
+    arm64.mov x1, x0
+    arm64.mov x0, x3
+    arm64.b try_0.merge
+  kind_0.case0:
+    arm64.mov x3, #42
+    arm64.b kind_0.merge
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_38f4ed4fa15fb62f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_0_0:
+    arm64.mov x1, x0
+    arm64.mov x0, x3
+    arm64.b try_0.merge
+  }
+}
+---

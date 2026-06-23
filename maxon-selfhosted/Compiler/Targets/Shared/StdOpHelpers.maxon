@@ -94,9 +94,17 @@ export function determineJumpKindInBlock(module MirModule, block IrBlock) return
 end 'determineJumpKindInBlock'
 
 // Determine the jump kind, optionally verifying the comparison defines condId.
-// If condId >= 0, only a comparison that defines condId is accepted.
+// If condId >= 0, the fused comparison jumpKind is returned ONLY when the last
+// comparison before the branch (first found scanning back — intervening
+// cset/mov/orr leave the flags from that compare intact) is the op that produced
+// condId. If condId came from a later combinator instead (e.g. an or-pattern's
+// `(x==a) | (x==b) | (x==c)`), the stale compare flags do NOT reflect condId, so
+// a fused flags-branch would test the wrong thing — fall back to boolTest, which
+// emits an explicit `cmp condId, #0`. On x64 the combining `or` sets ZF so the
+// fused branch is correct there; arm64's `orr` leaves NZCV untouched, which is
+// why the pinned-condId form is needed for the arm64 lowering.
 // If condId < 0, the first comparison found (scanning backward) is used.
-function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
+export function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueId) returns JumpKind
 	var j = block.opRefs.count() - 1
 	while j >= 0 'scanBack'
 		let opIdx = try block.opRefs.get(j) otherwise 'skipBack'
@@ -107,15 +115,13 @@ function determineJumpKindForCond(module MirModule, block IrBlock, condId ValueI
 			j = j - 1
 			continue
 		end 'notCmp'
-		// If condId specified, verify this comparison defines it
+		// This is the last flag-setting comparison before the branch. When condId
+		// is pinned, the fused branch is valid only if THIS compare produced it;
+		// otherwise the live flags belong to a different value -> boolTest.
 		if condId >= 0 'checkResultId'
-			let defId = try getCmpResultIdFromOpIdx(module, opIdx: opIdx) otherwise 'noResultId'
-				j = j - 1
-				continue
-			end 'noResultId'
+			let defId = try getCmpResultIdFromOpIdx(module, opIdx: opIdx) otherwise return JumpKind.boolTest
 			if defId != condId 'wrongCmp'
-				j = j - 1
-				continue
+				return JumpKind.boolTest
 			end 'wrongCmp'
 		end 'checkResultId'
 		return kind
@@ -195,19 +201,17 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 	return slotIdx
 end 'computeParamSlotIndex'
 
-// Compute the `[rbp + offset]` byte offset for an overflow stack param. The
-// caller has already determined that this param doesn't fit in the per-domain
-// register file. Counts how many preceding params overflowed (i.e., didn't
-// fit) and adds the X64 stack-arg base offset (saved RBP + return address).
-// `gprRegCount` / `fpRegCount` are the per-domain register-file sizes — same
-// thresholds the caller-side packing in `emitDirectCall` uses.
-export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTypeArray) returns StackSize
-	let baseOffset = 0x10 as StackSize
+// Compute the overflow-arg index — the 0-based position of `paramIndex` among
+// only the stack-passed (register-overflowing) params. The caller-side packing
+// (`emitDirectCall`/`emitArm64DirectCall`) and the callee-side param lowering
+// both consult this so their slot assignments agree. `gprRegCount` / `fpRegCount`
+// are the per-domain register-file sizes (x64: 7/8, arm64: 8/8). Counts how many
+// preceding params overflowed before this one. Panics if the param itself fits
+// in a register — callers must check before calling.
+export function computeOverflowArgIndex(paramIndex VarSlot, paramTypes StdTypeArray, gprRegCount VarSlot, fpRegCount VarSlot) returns VarSlot
 	var overflowIdx = 0
 	var gprIdx = 0
 	var fpIdx = 0
-	let gprRegCount = 7
-	let fpRegCount = 8
 	var i = 0
 	while i <= paramIndex 'walk'
 		let pt = try paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
@@ -226,13 +230,23 @@ export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTyp
 		end 'isGpr'
 		if not fitsInReg 'overflowSlot'
 			if i == paramIndex 'thisParam'
-				return baseOffset + overflowIdx * 8
+				return overflowIdx
 			end 'thisParam'
 			overflowIdx = overflowIdx + 1
 		end 'overflowSlot'
 		i = i + 1
 	end 'walk'
-	panic("computeOverflowStackOffset: paramIndex {paramIndex} fits in a register; caller must check before calling")
+	panic("computeOverflowArgIndex: paramIndex {paramIndex} fits in a register; caller must check before calling")
+end 'computeOverflowArgIndex'
+
+// Compute the `[rbp + offset]` byte offset for an overflow stack param on x64.
+// The caller has already determined that this param doesn't fit in the
+// per-domain register file. The X64 stack-arg base offset (0x10 = saved RBP +
+// return address) plus the overflow index scaled by 8.
+export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTypeArray) returns StackSize
+	let baseOffset = 0x10 as StackSize
+	let overflowIdx = computeOverflowArgIndex(paramIndex, paramTypes: paramTypes, gprRegCount: 7, fpRegCount: 8)
+	return baseOffset + overflowIdx * 8
 end 'computeOverflowStackOffset'
 
 // Look up a callee's parameter types from the MIR-phase function list,
@@ -349,6 +363,32 @@ export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSl
 	end 'eachBlock'
 	return loaded
 end 'scanLoadedSlots'
+
+// Slots whose ADDRESS is taken via `stackSlotAddr`. The stdlib runtime helpers
+// use such a slot as the base of a multi-slot SCRATCH BUFFER addressed by
+// pointer arithmetic (e.g. `mrt_i64_to_string`'s 21-byte decimal buffer at
+// `stackAddr 2`, spanning slots 2..4). Callers must reserve the buffer's full
+// footprint so other slots/spills don't alias it — see the arm64 backend's
+// escaped-slot reservation.
+export function scanEscapedSlots(module MirModule, func IrFunction) returns VarSlotArray
+	var escaped = VarSlotArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			match mirOp 'checkMir'
+				stackSlotAddr(_, slotId) then escaped.push(slotId)
+				loadSlot then break 'checkMir'
+				storeSlot then break 'checkMir'
+				movImm to store then break 'checkMir'
+				globalAddr to loadByte then break 'checkMir'
+				osAllocPages to osLockRelease then break 'checkMir'
+				tryCall to errorReturn then break 'checkMir'
+			end 'checkMir'
+		end 'eachOp'
+	end 'eachBlock'
+	return escaped
+end 'scanEscapedSlots'
 
 // ============================================================
 // Diverging block detection (MIR phase)

@@ -1,0 +1,31 @@
+// Test: trunc.positive
+function main() returns ExitCode
+	let x = 7.9
+	let y = trunc(x)
+	return y
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr d0, [rdata+__float_4620580627691444634]
+    arm64.mov x1, #255
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1b9dd8b416b3b1cc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

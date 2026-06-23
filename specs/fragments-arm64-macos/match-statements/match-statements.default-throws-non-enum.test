@@ -1,0 +1,199 @@
+// Test: match-statements.default-throws-non-enum
+typealias Integer = int(0 to 100)
+
+enum StringError
+	notFound
+end 'StringError'
+
+function classify(s String) returns Integer throws StringError
+	return match s 'check'
+		"a" gives 1
+		"b" gives 2
+		default throws StringError.notFound
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	let a = try classify("a") otherwise 0
+	let c = try classify("c") otherwise 99
+	if a == 1 and c == 99 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @classify(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x19, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x1, [x29, #16]
+    arm64.str x1, [x20, #0] (8b)
+    arm64.mov x22, #1
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x1, #-2
+    arm64.str x1, [x20, #16] (8b)
+    arm64.str x22, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.str x20, [x23, #0] (8b)
+    arm64.str x22, [x23, #8] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x23
+    arm64.bl String.equals
+    arm64.mov x20, x0
+    arm64.mov x0, x23
+    arm64.bl mm_drop
+    arm64.cmp x20, #0
+    arm64.b.eq check_0.next0
+    arm64.mov x0, x22
+    arm64.b check_0.merge
+  check_0.merge:
+    arm64.mov x1, x21
+    arm64.epilogue
+    arm64.ret
+  check_0.next0:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x22, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.str x20, [x23, #0] (8b)
+    arm64.str x22, [x23, #8] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x23
+    arm64.bl String.equals
+    arm64.mov x20, x0
+    arm64.mov x0, x23
+    arm64.bl mm_drop
+    arm64.cmp x20, #0
+    arm64.b.eq check_0.case2
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.b check_0.merge
+  check_0.case2:
+    arm64.mov x0, x21
+    arm64.mov x1, x22
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x21, #1
+    arm64.str x21, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.str x21, [x19, #24] (8b)
+    arm64.str x20, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.str x19, [x22, #0] (8b)
+    arm64.str x21, [x22, #8] (8b)
+    arm64.mov x0, x22
+    arm64.bl classify
+    arm64.mov x19, x0
+    arm64.mov x23, x1
+    arm64.mov x0, x22
+    arm64.bl mm_drop
+    arm64.cmp x23, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x19, x20
+    arm64.b try_0.merge
+  try_0.ok:
+  try_0.merge:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x22, x0
+    arm64.str x20, [x22, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_480
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x21, [x22, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x22, #16] (8b)
+    arm64.str x21, [x22, #24] (8b)
+    arm64.str x20, [x22, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.str x22, [x23, #0] (8b)
+    arm64.str x21, [x23, #8] (8b)
+    arm64.mov x0, x23
+    arm64.bl classify
+    arm64.mov x22, x0
+    arm64.mov x24, x1
+    arm64.mov x0, x23
+    arm64.bl mm_drop
+    arm64.cmp x24, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, #99
+    arm64.mov x22, x0
+  try_1.merge:
+    arm64.cmp x19, x21
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_6_0
+  shortAnd.rhs:
+    arm64.mov x0, #99
+    arm64.cmp x22, x0
+    arm64.cset x0, eq
+  shortAnd.merge:
+    arm64.cmp x0, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_6_0:
+    arm64.mov x0, x20
+    arm64.b shortAnd.merge
+  }
+}
+---

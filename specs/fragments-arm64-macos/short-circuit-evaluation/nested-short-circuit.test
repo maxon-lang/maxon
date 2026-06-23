@@ -1,0 +1,105 @@
+// Test: nested-short-circuit
+var calls = 0
+
+function a() returns bool
+	calls = calls + 1
+	return true
+end 'a'
+
+function b() returns bool
+	calls = calls + 10
+	return false
+end 'b'
+
+function c() returns bool
+	calls = calls + 100
+	return true
+end 'c'
+
+function main() returns ExitCode
+	let inner = b() or c()
+	let result = a() and inner
+	if result 'r'
+		return calls as ExitCode
+	end 'r'
+	return 99
+end 'main'
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #10
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.add x3, x1, x2
+    arm64.str x3, [x0, #0] (8b)
+  shortOr.rhs:
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #100
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.add x3, x1, x2
+    arm64.str x3, [x0, #0] (8b)
+    arm64.mov x0, #1
+    arm64.mov x1, x0
+  shortOr.merge:
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x3, #1
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x0, [x29, #16]
+    arm64.add x4, x2, x3
+    arm64.str x4, [x0, #0] (8b)
+  shortAnd.merge:
+    arm64.cmp x1, #0
+    arm64.b.eq r_0.after
+  r_0:
+    arm64.adrp_add_rdata x0, __data_calls
+    arm64.ldr x1, [x29, #16]
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b623061be9b7fd0e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  r_0.after:
+    arm64.mov x0, #99
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b623061be9b7fd0e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

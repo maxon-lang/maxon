@@ -1,0 +1,105 @@
+// Test: enum-struct-field-match-direct
+typealias SmallInt = int(0 to u8.max)
+
+union Shape
+		circle(radius SmallInt)
+		square(side SmallInt)
+end 'Shape'
+
+type Drawing
+		export var shape as Shape
+
+		static function create(shape Shape) returns Self
+			return Self{shape: shape}
+		end 'create'
+end 'Drawing'
+
+function isCircle(d Drawing) returns bool
+		match d.shape 'ms'
+				circle then return true
+				square then return false
+		end 'ms'
+end 'isCircle'
+
+function main() returns ExitCode
+		let d = Drawing.create(Shape.circle(10))
+		if isCircle(d) 'ok'
+				return 1
+		end 'ok'
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @isCircle(x0: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne ms_0.next0
+  ms_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  ms_0.next0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne ms_0.next1
+  ms_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  ms_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp+add x1, __destruct_Drawing
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl isCircle
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.cmp x19, #0
+    arm64.b.eq ok_0.after
+  ok_0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  ok_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

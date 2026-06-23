@@ -1,0 +1,62 @@
+// Test: default-panic.expression
+function main() returns ExitCode
+	let x = 3
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+		3 gives 30
+		default panic("unexpected value")
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #3
+    arm64.b eval_0.next0
+  eval_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  eval_0.next0:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne eval_0.next1
+  eval_0.case1:
+    arm64.mov x0, #20
+    arm64.b eval_0.merge
+  eval_0.next1:
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne eval_0.case3
+  eval_0.case2:
+    arm64.mov x0, #30
+    arm64.b eval_0.merge
+  eval_0.case3:
+    arm64.adrp_add_rdata x0, __panic_msg_b25cf922d36b95dc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_3eb2dd18603172b1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

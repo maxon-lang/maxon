@@ -1,0 +1,178 @@
+// Test: top-level-var-array-cross-function
+
+typealias Integer = int(i64.min to i64.max)
+
+var scores = [10, 20, 30]
+
+function getTotal() returns Integer
+	let a = try scores.get(0) otherwise 0
+	let b = try scores.get(1) otherwise 0
+	let c = try scores.get(2) otherwise 0
+	return a + b + c
+end 'getTotal'
+
+function setScore(index Integer, value Integer)
+	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
+end 'setScore'
+
+function main() returns ExitCode
+	setScore(1, value: 12)
+	return getTotal()
+end 'main'
+---
+ExitCode: 52
+---
+// CompiledIR
+module {
+  func @getTotal() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __data_scores
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x19, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x19
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_getTotal_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_getTotal_0:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x20, x19
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.mov x20, x0
+  try_0.merge:
+    arm64.adrp_add_rdata x0, __data_scores
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_getTotal_1
+  inlined_Array.get_3_1:
+    arm64.mov x1, #0
+  inline_cont_getTotal_1:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x21, x19
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x21, x0
+  try_1.merge:
+    arm64.adrp_add_rdata x0, __data_scores
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #2
+  inlined_Array.get_0_2:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_2
+  inlined_Array.get_1_2:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_getTotal_2
+  inlined_Array.get_3_2:
+    arm64.mov x1, #0
+  inline_cont_getTotal_2:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_2.ok
+    arm64.b try_2.merge
+  try_2.ok:
+    arm64.mov x19, x0
+  try_2.merge:
+    arm64.add x1, x20, x21
+    arm64.add x0, x1, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @setScore(x0: i64, x1: i64) {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.mov x3, x1
+    arm64.adrp_add_rdata x0, __data_scores
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+  inlined_Array.set_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_setScore_0
+  inlined_Array.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_setScore_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.adrp_add_rdata x0, __panic_msg_d567f1dd2300fed1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #12
+    arm64.mov x19, #1
+    arm64.mov x0, x19
+    arm64.bl setScore
+    arm64.bl getTotal
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1078f34c774f7609
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

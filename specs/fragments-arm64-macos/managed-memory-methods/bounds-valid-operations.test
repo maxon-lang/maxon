@@ -1,0 +1,239 @@
+// Test: bounds-valid-operations
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	let arr = IntArray.create()
+	try arr.managed.grow(8) otherwise panic("grow OOB")
+	try arr.managed.setLength(4) otherwise panic("setLength OOB")
+	try arr.managed.set(0, 10) otherwise panic("set OOB")
+	try arr.managed.set(1, 20) otherwise panic("set OOB")
+	try arr.managed.set(2, 30) otherwise panic("set OOB")
+	try arr.managed.set(3, 40) otherwise panic("set OOB")
+	let v0 = try arr.managed.get(0) otherwise panic("get OOB")
+	let v1 = try arr.managed.get(1) otherwise panic("get OOB")
+	let v2 = try arr.managed.get(2) otherwise panic("get OOB")
+	let v3 = try arr.managed.get(3) otherwise panic("get OOB")
+	let sum = v0 + v1 + v2 + v3
+	return sum
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #8
+    arm64.bl stdlib.__managed_mem_grow
+    arm64.mov x20, #0
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_62f7e3768d641819
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #4
+    arm64.bl stdlib.__managed_mem_set_length
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_4c24458b78cee5a6
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x2, #10
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_26c127ac34951443
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_2.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x2, #20
+    arm64.mov x1, #1
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_3.merge
+  try_3.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_6dfc5a16d5ed7f76
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_3.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x2, #30
+    arm64.mov x1, #2
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_4.merge
+  try_4.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_6dad413b780c4c59
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_4.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x2, #40
+    arm64.mov x1, #3
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_5.merge
+  try_5.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_c63a2f8185448190
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_5.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_6.merge
+  try_6.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_6b2c1af70a73ebaf
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_6.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_7.merge
+  try_7.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_ad8f0dd830074e3e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_7.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x23, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_8.merge
+  try_8.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_f8d65929e4f48bc1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_8.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #3
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x24, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_9.merge
+  try_9.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_a75938166e4e23d8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_9.merge:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.add x0, x21, x22
+    arm64.add x1, x0, x23
+    arm64.mov x2, #255
+    arm64.add x0, x1, x24
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_8875157c5e394e7a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,197 @@
+// Test: subprocess-timeout-kill
+function main() returns ExitCode
+	// `ping 127.0.0.1 -n 30` (Windows) / `sleep 30` (POSIX) waits ~30 seconds;
+	// we kill it after 200ms.
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("ping")
+	argv.push("127.0.0.1")
+	argv.push("-n")
+	argv.push("30")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 1)
+	var argv = StringArray.create()
+	argv.push("30")
+	#endif
+	let cwd = Directory.currentPath()
+	var sawTimeout = false
+	try Subprocess.run(exe, arguments: argv, workingDirectory: cwd, timeoutMs: 200) otherwise (e) 'handler'
+		match e 'kind'
+			timeout then sawTimeout = true
+			executableNotFound then sawTimeout = false
+			spawnFailed then sawTimeout = false
+			ioFailed then sawTimeout = false
+			inputTooLarge then sawTimeout = false
+		end 'kind'
+	end 'handler'
+	if sawTimeout 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x21, #1
+    arm64.str x21, [x19, #24] (8b)
+    arm64.str x20, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x22, #0] (8b)
+    arm64.str x21, [x22, #8] (8b)
+  inlined_FilePath.from_0_0:
+    arm64.mov x0, x22
+    arm64.bl FilePath.create
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x2, ne
+    arm64.b.eq inlined_FilePath.from_2_0
+  inlined_FilePath.from_1_0:
+    arm64.mov x0, #0
+    arm64.mov x19, x0
+    arm64.b inline_cont_main_0
+  inlined_FilePath.from_2_0:
+    arm64.mov x1, #0
+    arm64.mov x19, x0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.adrp+add x1, __destruct_Executable
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, #8
+    arm64.sub x1, x22, x0
+    arm64.atomic_inc [x1]
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x19, [x22, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_String
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x23, x0
+    arm64.str x20, [x23, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x23, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x23, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x23, #16] (8b)
+    arm64.str x21, [x23, #24] (8b)
+    arm64.str x20, [x23, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x24, x0
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_incref
+    arm64.str x23, [x24, #0] (8b)
+    arm64.str x21, [x24, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_String
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x24
+    arm64.bl Array.push
+    arm64.bl Directory.currentPath
+    arm64.mov x2, x0
+    arm64.mov x3, #200
+    arm64.mov x0, x22
+    arm64.mov x1, x19
+    arm64.bl Subprocess.run$Executable$StringArray$FilePath$int
+    arm64.cmp x1, x20
+    arm64.cset x2, ne
+    arm64.b.eq __phi_trampoline_3_0
+  try_1.otherwise:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #3
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next0
+    arm64.mov x0, x21
+    arm64.b kind_0.merge
+  kind_0.merge:
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.b try_1.merge
+  kind_0.next0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next1
+    arm64.mov x0, x20
+    arm64.b kind_0.merge
+  kind_0.next1:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.cmp x0, x21
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next2
+    arm64.mov x0, x20
+    arm64.b kind_0.merge
+  kind_0.next2:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #2
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next3
+    arm64.mov x0, x20
+    arm64.b kind_0.merge
+  kind_0.next3:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x0, #4
+    arm64.mov x0, x20
+    arm64.b kind_0.merge
+  try_1.merge:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x19, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_3_0:
+    arm64.mov x19, x20
+    arm64.b try_1.merge
+  }
+}
+---

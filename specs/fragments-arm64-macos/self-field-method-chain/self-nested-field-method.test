@@ -1,0 +1,107 @@
+// Test: self-nested-field-method
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Inner
+		export var values as IntArray
+
+		function total() returns Integer
+				return self.values.count()
+		end 'total'
+
+		static function create(values IntArray) returns Self
+			return Self{values: values}
+		end 'create'
+end 'Inner'
+
+type Outer
+		export var inner as Inner
+
+		function getInnerCount() returns Integer
+				return self.inner.values.count()
+		end 'getInnerCount'
+
+		static function create(inner Inner) returns Self
+			return Self{inner: inner}
+		end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+		let inner = Inner.create([1, 2, 3])
+		let outer = Outer.create(inner)
+		return outer.getInnerCount()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.adrp_add_rdata x0, __rdata_arr_main_0
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #8
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #32] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.init
+    arm64.mov x19, x0
+    arm64.adrp+add x1, __destruct_Inner
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.adrp+add x1, __destruct_Outer
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6e2b483d96d9a227
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

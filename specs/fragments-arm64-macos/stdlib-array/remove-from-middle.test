@@ -1,0 +1,178 @@
+// Test: remove-from-middle
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let removed = try arr.remove(1) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 20 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 2 'cnt'
+		return 2
+	end 'cnt'
+
+	let v0 = try arr.get(0) otherwise -1
+	if v0 != 10 'c0'
+		return 3
+	end 'c0'
+
+	let v1 = try arr.get(1) otherwise -1
+	if v1 != 30 'c1'
+		return 4
+	end 'c1'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #10
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #20
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #30
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl Array.remove
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.cmp x1, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #99
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, #20
+    arm64.cmp x20, x0
+    arm64.cset x0, ne
+    arm64.b.eq val_0.after
+  val_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  val_0.after:
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_0_0
+  cnt_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x21
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, #-1
+  try_1.merge:
+    arm64.mov x1, #10
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq c0_0.after
+  c0_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  c0_0.after:
+    arm64.mov x1, #1
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x20, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Array.get_3_1:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x20
+  inline_cont_main_1:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, #-1
+  try_2.merge:
+    arm64.mov x1, #30
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq c1_0.after
+  c1_0:
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  c1_0.after:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

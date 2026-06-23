@@ -1,0 +1,30 @@
+// Test: float.equals
+function main() returns ExitCode
+	let a = 3.14
+	let b = 3.14
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.ldr d0, [rdata+__float_4614253070214989087]
+    arm64.ldr d1, [rdata+__float_4614253070214989087]
+    arm64.fcmp d1, d0
+    arm64.cset x0, eq
+    arm64.b.ne eq_0.after
+  eq_0:
+    arm64.mov x0, #1
+    arm64.ret
+  eq_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

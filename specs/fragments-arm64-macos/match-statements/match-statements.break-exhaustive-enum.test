@@ -1,0 +1,109 @@
+// Test: match-statements.break-exhaustive-enum
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+	var result = 0
+	match c 'check'
+		empty then break 'check'
+		value(n) then result = n
+	end 'check'
+	return result
+end 'process'
+
+function main() returns ExitCode
+	let a = process(Container.empty)
+	let b = process(Container.value(42))
+	if a == 0 and b == 42 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @process(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, x0
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next0
+    arm64.mov x0, x3
+    arm64.b check_0.merge
+  check_0.merge:
+    arm64.ret
+  check_0.next0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_3_0
+  check_0.case1:
+    arm64.ldr x0, [x1, #8] (8b)
+    arm64.b check_0.merge
+  __phi_trampoline_3_0:
+    arm64.mov x0, x3
+    arm64.b check_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl process
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl process
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne shortAnd.merge
+  shortAnd.rhs:
+    arm64.mov x0, #42
+    arm64.cmp x21, x0
+    arm64.cset x0, eq
+    arm64.mov x1, x0
+  shortAnd.merge:
+    arm64.cmp x1, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,96 @@
+// Test: logical-or-and-on-bool-fields
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @consume(x0: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.eq isTrue_0.after
+  isTrue_0:
+    arm64.mov x0, #1
+    arm64.ret
+  isTrue_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (1b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #1] (1b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #2] (1b)
+    arm64.ldrsb x0, [x19, #1] (1b)
+    arm64.ldrsb x1, [x19, #0] (1b)
+    arm64.orr x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl consume
+    arm64.mov x20, x0
+    arm64.ldrsb x0, [x19, #2] (1b)
+    arm64.ldrsb x1, [x19, #0] (1b)
+    arm64.and x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl consume
+    arm64.mov x21, x0
+    arm64.ldrsb x22, [x19, #1] (1b)
+    arm64.ldrsb x23, [x19, #1] (1b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.orr x0, x23, x22
+    arm64.bl consume
+    arm64.mov x1, x0
+    arm64.mov x0, #2
+    arm64.mov x2, #4
+    arm64.mul x3, x21, x0
+    arm64.mul x0, x20, x2
+    arm64.add x2, x0, x3
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_862706fb44f96402
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,83 @@
+// Test: multiple-struct-returns
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function step1() returns Value
+	return Value.create(1)
+end 'step1'
+
+function step2(v Value) returns Value
+	return Value.create(v.n + 10)
+end 'step2'
+
+function step3(v Value) returns Value
+	return Value.create(v.n + 100)
+end 'step3'
+
+function main() returns ExitCode
+	let v1 = step1()
+	let v2 = step2(v1)
+	let v3 = step3(v2)
+	return v3.n
+end 'main'
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, #10
+    arm64.add x1, x20, x0
+    arm64.str x1, [x21, #0] (8b)
+    arm64.ldr x20, [x21, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, #100
+    arm64.add x1, x20, x0
+    arm64.str x1, [x22, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.ldr x20, [x22, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x22
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b246dafece9cfab3
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

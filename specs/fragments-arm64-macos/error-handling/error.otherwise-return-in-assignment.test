@@ -1,0 +1,94 @@
+// Test: error.otherwise-return-in-assignment
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: success path still yields a value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function maybeFail(flag bool) returns Integer throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'maybeFail'
+
+function runIt(flag bool) returns Integer
+	let value = try maybeFail(flag) otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let good = runIt(false)
+	if good == 42 'checkGood'
+		let bad = runIt(true)
+		if bad == -1 'checkBad'
+			return 7
+		end 'checkBad'
+	end 'checkGood'
+	return 0
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #0
+  inlined_runIt_4_0:
+    arm64.cmp x0, #0
+    arm64.b.eq inlined_runIt_6_0
+  inlined_runIt_5_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inlined_runIt_7_0
+  inlined_runIt_6_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inlined_runIt_7_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inline_cont_main_0
+  inlined_runIt_1_0:
+    arm64.mov x0, #-1
+  inline_cont_main_0:
+    arm64.mov x1, #42
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne checkGood_0.after
+  checkGood_0:
+    arm64.mov x0, #1
+  inlined_runIt_4_1:
+    arm64.cmp x0, #0
+    arm64.b.eq inlined_runIt_6_1
+  inlined_runIt_5_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inlined_runIt_7_1
+  inlined_runIt_6_1:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inlined_runIt_7_1:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inline_cont_main_1
+  inlined_runIt_1_1:
+    arm64.mov x0, #-1
+  inline_cont_main_1:
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne checkGood_0.after
+  checkBad_0:
+    arm64.mov x0, #7
+    arm64.ret
+  checkGood_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

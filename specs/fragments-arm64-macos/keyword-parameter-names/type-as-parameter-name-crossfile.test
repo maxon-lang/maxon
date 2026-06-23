@@ -1,0 +1,25 @@
+// Test: type-as-parameter-name-crossfile
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
+
+// --- file: api/helper.maxon
+export function identity(type StdType) returns StdType
+	return type
+end 'identity'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return identity(42)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #42
+    arm64.ret
+  }
+}
+---

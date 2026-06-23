@@ -1,0 +1,92 @@
+// Test: self-return-type
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Movable
+	function move(dx Integer, dy Integer) returns Self
+end 'Movable'
+
+type Point implements Movable
+	export var x as Integer
+	export var y as Integer
+
+	function move(dx Integer, dy Integer) returns Point
+		return Point{x: x + dx, y: y + dy}
+	end 'move'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(10, y: 20)
+	let p2 = p.move(5, dy: 10)
+	return p2.x + p2.y
+end 'main'
+---
+ExitCode: 45
+---
+// CompiledIR
+module {
+  func @Point.move(x0: i64, x1: i64, x2: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.mov x21, x2
+    arm64.mov x1, #0
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.add x2, x1, x20
+    arm64.str x2, [x22, #0] (8b)
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.add x2, x1, x21
+    arm64.str x2, [x22, #8] (8b)
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #20
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x2, #10
+    arm64.mov x1, #5
+    arm64.mov x0, x19
+    arm64.bl Point.move
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.ldr x19, [x20, #8] (8b)
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #255
+    arm64.add x0, x21, x19
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_5edcc5e8a6eacfd8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

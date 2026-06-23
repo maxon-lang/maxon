@@ -1,0 +1,82 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) and 125
+end 'main'
+---
+ExitCode: 72
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+  loop_0.header:
+    arm64.mov x4, #20
+    arm64.cmp x0, x4
+    arm64.cset x4, lt
+    arm64.b.ge loop_0.exit
+  loop_0:
+    arm64.mov x4, #2
+    arm64.msub x5, x0, x4
+    arm64.mov x4, #0
+    arm64.cmp x5, x4
+    arm64.cset x4, eq
+    arm64.b.ne odd_0
+    arm64.b even_0
+  loop_0.exit:
+    arm64.add x0, x3, x2
+    arm64.mov x2, #125
+    arm64.add x3, x0, x1
+    arm64.mov x1, #255
+    arm64.and x0, x3, x2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  even_0:
+    arm64.mov x4, #1
+    arm64.add x5, x1, x4
+    arm64.add x1, x3, x0
+    arm64.b even_0.merge
+  odd_0:
+    arm64.add x4, x2, x0
+    arm64.mov x2, x4
+    arm64.mov x5, x1
+    arm64.mov x1, x3
+  even_0.merge:
+    arm64.mov x3, #1
+    arm64.add x4, x0, x3
+    arm64.mov x3, x1
+    arm64.mov x1, x5
+    arm64.mov x0, x4
+    arm64.b loop_0.header
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e449517a4b4af179
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+
+```
+---
+---

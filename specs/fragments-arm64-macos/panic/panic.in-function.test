@@ -1,0 +1,41 @@
+// Test: panic.in-function
+function fail()
+		panic("failure in helper")
+end 'fail'
+
+function main() returns ExitCode
+		fail()
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.in-function.test:3: failure in helper
+Stack trace:
+  in fail
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @fail() {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __panic_msg_71860a6f21262144
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl fail
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

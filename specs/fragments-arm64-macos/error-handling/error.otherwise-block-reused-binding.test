@@ -1,0 +1,137 @@
+// Test: error.otherwise-block-reused-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: two sibling `try ... otherwise (e) 'label' ... end 'label'`
+// blocks reusing the same binding name `e` but with different error types
+// (one associated-value enum, one simple enum). Without per-block scoping,
+// the first block's managed-type registration of `e` persists and the
+// function epilogue incorrectly decrefs the second block's integer `e`.
+union AssocError implements Error
+	withCode(code Integer)
+	plain
+end 'AssocError'
+
+enum SimpleError implements Error
+	broken
+end 'SimpleError'
+
+function mayFailAssoc() returns Integer throws AssocError
+	throw AssocError.withCode(7)
+end 'mayFailAssoc'
+
+function mayFailSimple() returns Integer throws SimpleError
+	throw SimpleError.broken
+end 'mayFailSimple'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFailAssoc() otherwise (e) 'handler1'
+		match e 'check1'
+			withCode(code) then result = result + code
+			plain then result = result + 1
+		end 'check1'
+	end 'handler1'
+	try mayFailSimple() otherwise (e) 'handler2'
+		match e 'check2'
+			broken then result = result + 35
+		end 'check2'
+	end 'handler2'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #7
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x20, #0
+    arm64.mov x21, #0
+    arm64.cmp x19, x21
+    arm64.cset x0, ne
+    arm64.b.eq __rc_edge_0_0
+  try_0.otherwise:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.cmp x0, x21
+    arm64.cset x0, eq
+    arm64.b.ne check1_0.next0
+    arm64.b check1_0.case0
+  check1_0.merge:
+    arm64.mov x1, x21
+    arm64.b try_0.merge
+  check1_0.case0:
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.add x0, x20, x21
+    arm64.b check1_0.merge
+  check1_0.next0:
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #1
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  check1_0.case1:
+    arm64.mov x0, #1
+    arm64.add x1, x21, x0
+    arm64.mov x0, x1
+    arm64.b check1_0.merge
+  try_0.merge:
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x1, x21
+    arm64.cset x3, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x2, #1
+    arm64.sub x3, x1, x2
+    arm64.cmp x3, x21
+    arm64.cset x1, eq
+    arm64.b.ne check2_0.merge
+    arm64.b check2_0.case0
+  check2_0.merge:
+    arm64.mov x2, x21
+    arm64.b try_1.merge
+  check2_0.case0:
+    arm64.mov x1, #35
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.b check2_0.merge
+  try_1.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_0_0:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x21
+    arm64.mov x1, x20
+    arm64.b try_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_781df5d61eac8cce
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_5_0:
+    arm64.mov x0, x21
+    arm64.b check1_0.merge
+  }
+}
+---

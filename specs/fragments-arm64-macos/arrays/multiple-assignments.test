@@ -1,0 +1,230 @@
+// Test: multiple-assignments
+function main() returns ExitCode
+	var arr = [0, 0, 0]
+	try arr.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try arr.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try arr.set(2, value: 3) otherwise panic("test invariant: set OOB")
+	let a = try arr.get(0) otherwise 0
+	let b = try arr.get(1) otherwise 0
+	let c = try arr.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.adrp_add_rdata x0, __rdata_arr_main_0
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #8
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #32] (8b)
+    arm64.mov x20, #0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.init
+    arm64.mov x19, x0
+    arm64.mov x2, #1
+  inlined_Array.set_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_5c8c81a1bddeab7f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x2, #2
+    arm64.mov x1, #1
+  inlined_Array.set_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_1
+  inlined_Array.set_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Array.set_3_1:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_1:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_ba28693204416ff8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.mov x2, #3
+    arm64.mov x1, #2
+  inlined_Array.set_0_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_2
+  inlined_Array.set_1_2:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_2
+  inlined_Array.set_3_2:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_2:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_0_0
+  try_2.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_e84e00db59289de9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_3
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_main_3:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_3.ok
+    arm64.mov x21, x20
+    arm64.b try_3.merge
+  try_3.ok:
+    arm64.mov x21, x0
+  try_3.merge:
+    arm64.mov x1, #1
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_4
+  inlined_Array.get_3_1:
+    arm64.mov x1, #0
+  inline_cont_main_4:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_4.ok
+    arm64.mov x22, x20
+    arm64.b try_4.merge
+  try_4.ok:
+    arm64.mov x22, x0
+  try_4.merge:
+    arm64.mov x1, #2
+  inlined_Array.get_0_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x23, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_2
+  inlined_Array.get_1_2:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_5
+  inlined_Array.get_3_2:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x23
+  inline_cont_main_5:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_5.ok
+    arm64.b try_5.merge
+  try_5.ok:
+    arm64.mov x20, x0
+  try_5.merge:
+    arm64.add x1, x21, x22
+    arm64.mov x2, #255
+    arm64.add x0, x1, x20
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_61facf7df0cd291f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,99 @@
+// Test: union-cases.match-exhaustive
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+function describe(k Shape.unionCases) returns Integer
+	match k 'tag'
+		circle then return 100
+		square then return 200
+		point then return 300
+	end 'tag'
+end 'describe'
+
+function main() returns ExitCode
+	let c = Shape.unionCases.circle
+	let s = Shape.unionCases.square
+	let p = Shape.unionCases.point
+	let total = describe(c) + describe(s) + describe(p)
+	if total == 600 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @describe(x0: u8) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne tag_0.next0
+  tag_0.case0:
+    arm64.mov x0, #100
+    arm64.epilogue
+    arm64.ret
+  tag_0.next0:
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne tag_0.next1
+  tag_0.case1:
+    arm64.mov x0, #200
+    arm64.epilogue
+    arm64.ret
+  tag_0.next1:
+    arm64.mov x0, #2
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne tag_0.next2
+  tag_0.case2:
+    arm64.mov x0, #300
+    arm64.epilogue
+    arm64.ret
+  tag_0.next2:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.bl describe
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.bl describe
+    arm64.mov x20, x0
+    arm64.mov x0, #2
+    arm64.bl describe
+    arm64.add x1, x19, x20
+    arm64.mov x2, #600
+    arm64.add x3, x1, x0
+    arm64.cmp x3, x2
+    arm64.cset x0, eq
+    arm64.b.ne check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

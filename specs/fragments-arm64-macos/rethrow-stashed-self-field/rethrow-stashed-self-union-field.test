@@ -1,0 +1,173 @@
+// Test: rethrow-stashed-self-union-field
+typealias N = int(0 to i64.max)
+
+union Inner implements Error
+	exhausted
+end 'Inner'
+
+union Outer implements Error
+	first(line N, column N)
+	second(line N, column N)
+end 'Outer'
+
+type Holder
+	var pending as Outer
+
+	static function create() returns Holder
+		return Self{pending: Outer.first(0, column: 0)}
+	end 'create'
+
+	function inner() throws Inner
+		pending = Outer.second(1, column: 1)
+		throw Inner.exhausted
+	end 'inner'
+
+	function outer() throws Outer
+		try inner() otherwise 'innerErr'
+			throw pending
+		end 'innerErr'
+	end 'outer'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	try h.outer() otherwise (e) 'fail'
+		match e 'kind'
+			first then return 1
+			second then return 0
+		end 'kind'
+	end 'fail'
+	return 2
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Holder.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp+add x1, __destruct_Holder
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Holder.inner(x0: i64) {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x2, #24
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x1, #1
+    arm64.str x1, [x20, #0] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x20, #8] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x20, #16] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, x1
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x0
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Holder.outer(x0: i64) {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Holder.inner
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x1, x0
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x1, x0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl Holder.create
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Holder.outer
+    arm64.mov x20, x1
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x19, #0
+    arm64.cmp x20, x19
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next0
+  kind_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  kind_0.next0:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne kind_0.next1
+  kind_0.case1:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  kind_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x20, [x29, #16]
+    arm64.mov x0, x20
+    arm64.bl mrt_panic
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

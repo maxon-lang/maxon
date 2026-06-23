@@ -161,6 +161,7 @@ public partial class RuntimeEmitter {
   /// </summary>
   private void EmitInlineTrace(string tagLabel, string uniquePrefix, int ptrSlot, int scopeSlot,
       bool printRc = true, int rcSubtract = 0, int? sizeSlot = null) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress managed alloc/incref/decref/realloc lines
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, tagLabel);
     _b.Call("mm_trace_print_tag");
@@ -172,6 +173,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "mm_free TypeName #N [scope]\n"</summary>
   private void EmitInlineTraceFree(string uniquePrefix, int ptrSlot, int scopeSlot) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress managed free lines
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_free");
     _b.Call("mm_trace_print_tag");
@@ -281,6 +283,7 @@ public partial class RuntimeEmitter {
   /// </summary>
   private void EmitInlineTraceFromPackedId(string tagLabel, string uniquePrefix,
       int packedIdSlot, int scopeSlot, int? sizeSlot = null) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress managed alloc/realloc lines
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, tagLabel);
     _b.Call("mm_trace_print_tag");
@@ -1456,6 +1459,7 @@ public partial class RuntimeEmitter {
   public void EmitMmTraceTransfer() {
     // Slots: 0=ptr, 1=scope
     _b.FunctionStart("mm_trace_transfer", 2, 0x30);
+    if (Compiler.MmTraceRawOnly) { _b.FunctionEnd(); return; } // raw-only: no transfer output
     _b.LoadLocal(VReg.Scratch0, 0); // ptr
     var nullLabel = UniqueLabel("mm_trace_transfer_null");
     _b.JumpIfZero(VReg.Scratch0, nullLabel);

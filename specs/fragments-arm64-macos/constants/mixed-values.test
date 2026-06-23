@@ -1,0 +1,69 @@
+// Test: mixed-values
+enum Priority
+	low
+	medium
+	high = 10
+	critical
+end 'Priority'
+
+function main() returns ExitCode
+	let result = match Priority.critical 'check'
+		low gives 0
+		medium gives 1
+		high gives 10
+		critical gives 11
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.mov x1, #11
+    arm64.b check_0.next0
+  check_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0.next0:
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x2, eq
+    arm64.b.ne check_0.next1
+  check_0.case1:
+    arm64.mov x0, #1
+    arm64.b check_0.merge
+  check_0.next1:
+    arm64.mov x2, #10
+    arm64.cmp x1, x2
+    arm64.cset x2, eq
+    arm64.b.ne check_0.next2
+  check_0.case2:
+    arm64.mov x0, #10
+    arm64.b check_0.merge
+  check_0.next2:
+    arm64.mov x2, #11
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne check_0.merge
+  check_0.case3:
+    arm64.mov x0, #11
+    arm64.b check_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2dd3451771baba5c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

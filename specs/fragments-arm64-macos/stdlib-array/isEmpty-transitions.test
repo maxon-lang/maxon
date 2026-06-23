@@ -1,0 +1,106 @@
+// Test: isEmpty-transitions
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+
+	if arr.isEmpty() == false 'e1'
+		return 1
+	end 'e1'
+
+	arr.push(42)
+
+	if arr.isEmpty() == true 'e2'
+		return 2
+	end 'e2'
+
+	_ = try arr.pop() otherwise 0
+
+	if arr.isEmpty() == false 'e3'
+		return 3
+	end 'e3'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x1, eq
+    arm64.mov x20, #0
+    arm64.cmp x1, x20
+    arm64.cset x0, eq
+    arm64.b.ne e1_0.after
+  e1_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  e1_0.after:
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #42
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.mov x0, #0
+    arm64.mov x2, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne e2_0.after
+  e2_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  e2_0.after:
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.pop
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x0, x20
+    arm64.b try_0.merge
+  try_0.ok:
+  try_0.merge:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x21, [x0, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.cmp x21, x0
+    arm64.cset x0, eq
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne e3_0.after
+  e3_0:
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  e3_0.after:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

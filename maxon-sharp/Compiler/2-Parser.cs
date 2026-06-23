@@ -7015,9 +7015,38 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private bool ParseBodyUntilEnd() {
     bool wasDeadCode = false;
     bool parsedAny = false;
+    // The keyword of the previous statement if it was a function-terminating
+    // statement (`return`/`throw`/`panic`) in this same straight-line block;
+    // null otherwise. If the loop then finds another statement (rather than
+    // `end`), that statement is unreachable dead code (E3071).
+    string? lastTerminatorKeyword = null;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
+      // Conditional-compilation directives (`#if`/`#else`/`#endif`) are not real
+      // statements — they mark which branch's tokens flow through here. Process
+      // them transparently without the dead-code check and without disturbing the
+      // terminator state, so a `return` immediately before a closing `#endif`
+      // (the common `#if os(...) return a #else return b #endif` shape) is not
+      // misreported as preceding dead code.
+      if (Check(TokenType.HashIf) || Check(TokenType.HashElse) || Check(TokenType.HashEndif)) {
+        ParseStatement();
+        parsedAny = true;
+        SkipNewlines();
+        continue;
+      }
+      // A real statement follows a `return`/`throw`/`panic` in the same block —
+      // control can never reach it, so it is dead code. Point at this first
+      // unreachable statement and stop (throw-and-unwind: first error wins).
+      // EOF is not a statement: a terminator at the very end of a truncated body
+      // is the "expected 'end'" case (E2007), handled in ParseStatement — don't
+      // pre-empt it here.
+      if (lastTerminatorKeyword != null && Current().Type != TokenType.Eof) {
+        var unreachable = Current();
+        throw new CompileError(ErrorCode.SemanticUnreachableCode,
+          $"unreachable code after '{lastTerminatorKeyword}'",
+          unreachable.Line, unreachable.Column);
+      }
       // After exhaustive match/if-else where all branches terminate, _currentBlock
       // becomes null. Create a dead block so subsequent unreachable code can still
       // be parsed for syntax validation without crashing.
@@ -7032,6 +7061,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var deadLabel = $"__dead_{_blockCounter++}";
         _currentBlock = _currentFunction!.Body.AddBlock(deadLabel);
       }
+      // Record whether THIS statement is a straight-line terminator before
+      // parsing it, so the next iteration can reject any code that follows.
+      lastTerminatorKeyword = Check(TokenType.Return) ? "return"
+        : Check(TokenType.Throw) ? "throw"
+        : Check(TokenType.Panic) ? "panic"
+        : null;
       ParseStatement();
       parsedAny = true;
       SkipNewlines();
@@ -9443,6 +9478,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", ["i64"], false),
+    // === Scheduler control ===
+    ["gtSetSingleThreaded"] = RuntimeCallIntrinsic(
+      "Pins the green-thread scheduler to a single OS thread (caps worker threads to 1) "
+      + "so async work never spawns extra Ms. For I/O-multiplexing dispatchers whose "
+      + "parallelism is process-level.\n\n`__Builtins.gtSetSingleThreaded()`",
+      "maxon_gt_set_single_threaded", [], false),
     // === Non-blocking promise readiness check ===
     ["gtIsComplete"] = RuntimeCallIntrinsic(
       "Returns 1 if the green thread (raw promise inner pointer) has reached completed status, 0 otherwise. Non-blocking peek used by dispatchers that need to find the first-ready promise out of N concurrent ones without head-of-line blocking. Pass `promise.inner` from a `Promise with X`.\n\n`__Builtins.gtIsComplete(gt_ptr) returns int`",

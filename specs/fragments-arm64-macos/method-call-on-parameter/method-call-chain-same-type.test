@@ -1,0 +1,87 @@
+// Test: method-call-chain-same-type
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+	
+	function get() returns Integer
+		return n
+	end 'get'
+	
+	function add(other Value) returns Integer
+		return n + other.get()
+	end 'add'
+	
+	function multiply(other Value) returns Integer
+		return n * other.get()
+	end 'multiply'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(5)
+	let b = Value.create(3)
+	let c = Value.create(2)
+	// a.add(b) = 5 + 3 = 8
+	// a.multiply(c) = 5 * 2 = 10
+	// total = 8 + 10 = 18
+	return a.add(b) + a.multiply(c)
+end 'main'
+---
+ExitCode: 18
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #5
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #3
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, #2
+    arm64.str x0, [x21, #0] (8b)
+    arm64.ldr x22, [x20, #0] (8b)
+    arm64.ldr x23, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.ldr x20, [x21, #0] (8b)
+    arm64.ldr x24, [x19, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mul x1, x24, x20
+    arm64.add x2, x23, x22
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b6ff960038c0a407
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

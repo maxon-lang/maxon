@@ -1,0 +1,39 @@
+// Test: args-with-one-arg
+function main() returns ExitCode
+	let args = CommandLine.args()
+	return args.count()
+end 'main'
+---
+Args: hello
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl CommandLine.args
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_String
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1e4bfce7f01d2635
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

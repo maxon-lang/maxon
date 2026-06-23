@@ -1,0 +1,78 @@
+// Test: byte-element-type
+
+typealias Byte = int(0 to u8.max)
+
+interface ByteSource uses Element
+	function getByte() returns Element
+end 'ByteSource'
+
+type SingleByte implements ByteSource with Byte
+	let b as Byte
+
+	function getByte() returns Byte
+		return b
+	end 'getByte'
+
+	static function create(b Byte) returns Self
+		return Self{b: b}
+	end 'create'
+end 'SingleByte'
+
+function main() returns ExitCode
+	let s = SingleByte.create(42 as Byte)
+	let b = s.getByte()
+	return b
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @SingleByte.getByte(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldrb x0, [x1, #0] (1b)
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_64d149f767b59637
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (1b)
+    arm64.mov x0, x19
+    arm64.bl SingleByte.getByte
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_76b72caab3e8d3d2
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

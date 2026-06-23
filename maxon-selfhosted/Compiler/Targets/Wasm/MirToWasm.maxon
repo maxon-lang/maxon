@@ -332,6 +332,7 @@ let initialMemoryPages = 16
 
 typealias GlobalDataOffsetMap = Map with (String, Wasm32Offset)
 typealias FuncNameIndexMap = Map with (String, Wasm32Index)
+
 // Phase 6: external-library "own function names" emit filter.
 typealias StringSet = Set with String
 
@@ -801,7 +802,7 @@ end 'computeNeededStdlibFunctionsWasm'
 function patchFuncAbs64InRdataForWasm(globalData GlobalDataTable, funcSigs WasmFuncSigs)
 	for reloc in globalData.pendingRdataRelocs 'eachReloc'
 		match reloc.kind 'k'
-			ripRelDisp32 to covdataArm64Adr then break 'k'
+			ripRelDisp32 to covdataArm64PageOff then break 'k'
 			funcAbs64InRdata(funcName, rdataLabel, offsetInLabel) then patchOneFuncAbs64InRdataWasm(globalData, funcName: funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel, funcSigs: funcSigs)
 		end 'k'
 	end 'eachReloc'

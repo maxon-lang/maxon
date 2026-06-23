@@ -1,0 +1,40 @@
+// Test: ternary-expression.with-bools
+function main() returns ExitCode
+	let x = true if true else false
+	let result = 1 if x else 0
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+  ternary.merge:
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.cmp x0, #0
+    arm64.b.eq ternary.else
+    arm64.mov x0, x2
+    arm64.b ternary.merge
+  ternary.else:
+    arm64.mov x0, x1
+  ternary.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2bde71c65121be62
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

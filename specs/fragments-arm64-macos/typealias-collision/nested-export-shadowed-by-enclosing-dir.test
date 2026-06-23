@@ -1,0 +1,24 @@
+// Test: nested-export-shadowed-by-enclosing-dir
+// --- file: Compiler/types.maxon
+export typealias Tally = int(0 to 100)
+
+// --- file: Compiler/Coverage/types.maxon
+export typealias Tally = int(0 to 200)
+
+// --- file: Compiler/main.maxon
+function main() returns ExitCode
+	let x = 42 as Tally
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #42
+    arm64.ret
+  }
+}
+---

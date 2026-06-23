@@ -1,0 +1,113 @@
+// Test: closure-capture.map-with-capture
+
+typealias Integer = int(i64.min to i64.max)
+
+type Level
+	export var rawValue as Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
+end 'Level'
+
+function main() returns ExitCode
+	let level = Level.create(5)
+	let arr = [1, 2, 3]
+	let result = arr.map(function(_ Integer) gives level.rawValue)
+	return result.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main$closure_0(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.ldr x1, [x2, #0] (8b)
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x19, #0
+    arm64.str x19, [x29, #16]
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #5
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x0, [x29, #16]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.str x20, [x29, #16]
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.adrp_add_rdata x0, __rdata_arr_main_0
+    arm64.ldr x0, [x29, #40]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #8
+    arm64.str x0, [x20, #24] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #32] (8b)
+    arm64.str x19, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #48]
+    arm64.mov x0, x20
+    arm64.bl Array.init
+    arm64.mov x20, x0
+    arm64.mov x0, #8
+    arm64.mov x1, x19
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.add x0, x29, #16
+    arm64.ldr x0, [x29, #56]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x3, [x29, #64]
+    arm64.adrp+add x1, main$closure_0
+    arm64.mov x0, x20
+    arm64.mov x2, x19
+    arm64.bl Array.map
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #72]
+    arm64.mov x0, x21
+    arm64.bl Array.count
+    arm64.mov x19, x0
+    arm64.ldr x0, [x29, #16]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c1cb4e3f87aa4bf3
+    arm64.ldr x19, [x29, #80]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,107 @@
+// Test: rdata-global-var-array-cow-preserves-original
+typealias Integer = int(i64.min to i64.max)
+
+var globalArr = [10, 20, 30]
+
+function readFirst() returns Integer
+	return try globalArr.get(0) otherwise 0
+end 'readFirst'
+
+function main() returns ExitCode
+	try globalArr.set(0, value: 99) otherwise panic("test invariant: set OOB")
+	return readFirst()
+end 'main'
+---
+ExitCode: 99
+RequiredRdata: ```
+i64[] 10, 20, 30
+```
+---
+// CompiledIR
+module {
+  func @readFirst() -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_globalArr
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_readFirst_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_readFirst_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_globalArr
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #99
+    arm64.mov x3, #0
+  inlined_Array.set_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x3
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.adrp_add_rdata x0, __panic_msg_9c1c15ebc0d1a0ae
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.bl readFirst
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7c9e35e8aedc440b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

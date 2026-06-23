@@ -1,0 +1,60 @@
+// Test: return-float-range-check
+typealias Float = float(f64.min to f64.max)
+typealias Pct = float(0.0 to 100.0)
+
+function clampedPct(x Float) returns Pct
+	return x
+end 'clampedPct'
+
+function main() returns ExitCode
+	return trunc(clampedPct(42.5))
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @clampedPct(d0: f64) -> f64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr d1, [rdata+__float_4636737291354636288]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ls
+    arm64.b.hi __range_panic_0
+    arm64.b __range_check_lo_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_a4acf4e29789f2dd
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __range_check_lo_0:
+    arm64.ldr d1, [rdata+__float_0]
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.b.pl __range_ok_0
+    arm64.b __range_panic_0
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr d0, [rdata+__float_4631178160564600832]
+    arm64.bl clampedPct
+    arm64.mov x1, #255
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e516158241e08272
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

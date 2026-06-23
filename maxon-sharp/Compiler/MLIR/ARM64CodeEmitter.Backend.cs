@@ -293,29 +293,58 @@ public partial class ARM64CodeEmitter {
       }
     }
 
+    // ARM64 has no plain-RMW atomicity (unlike x86's LOCK INC/DEC/XADD): a
+    // LDR/ADD/STR sequence is NOT atomic, so under the multi-OS-thread GMP
+    // scheduler concurrent refcount inc/dec lose updates -> premature free /
+    // leak -> heap corruption. These use an LDAXR/STLXR exclusive loop (the same
+    // acquire/release primitive AtomicCAS uses). Internal scratch: X16=addr,
+    // X17=value, X14=tmp, W15=store-exclusive status — none are VReg-mapped
+    // (VRegs are X0-X5/X9-X12), so callers see only X16/X17 clobbered.
+
+    /// X16 = baseAddr + offset (the exclusive-monitor address, kept across retries).
+    private void EmitAtomicAddr(ARM64Register baseReg, int offset) {
+      if (offset != 0)
+        _e.EmitAddSubImm(ARM64Register.X16, baseReg, offset, isAdd: true);
+      else if (baseReg != ARM64Register.X16)
+        _e.EmitMovRegReg(ARM64Register.X16, baseReg);
+    }
+
     public void AtomicInc(VReg baseAddr, int offset) {
-      var reg = R(baseAddr);
-      EmitLoad64(ARM64Register.X16, reg, offset);
-      _e.EmitAddSubImm(ARM64Register.X16, ARM64Register.X16, 1, isAdd: true);
-      EmitStore64(ARM64Register.X16, reg, offset);
+      EmitAtomicAddr(R(baseAddr), offset);
+      var retry = $"__ainc_retry_{_e._uniqueLabelCounter++}";
+      _e.DefineLabel(retry);
+      _e.EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17)); // LDAXR X17, [X16]
+      _e.EmitAddSubImm(ARM64Register.X17, ARM64Register.X17, 1, isAdd: true);            // ADD X17, X17, #1
+      _e.EmitWord(0xC800FC00 | (15u << 16) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17)); // STLXR W15, X17, [X16]
+      _e._condBranchFixups.Add((_e._code.Count, retry));
+      _e.EmitWord(0x35000000 | 15u);                                                     // CBNZ W15, retry
     }
 
     public void AtomicDec(VReg baseAddr, int offset) {
-      var reg = R(baseAddr);
-      EmitLoad64(ARM64Register.X16, reg, offset);
-      // SUBS sets zero flag so callers can branch on refcount == 0
-      _e.EmitWord(0xF1000000 | (1u << 10) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X16));
-      EmitStore64(ARM64Register.X16, reg, offset);
+      EmitAtomicAddr(R(baseAddr), offset);
+      var retry = $"__adec_retry_{_e._uniqueLabelCounter++}";
+      _e.DefineLabel(retry);
+      _e.EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17)); // LDAXR X17, [X16]
+      // SUBS X17, X17, #1 — sets NZCV so callers branch on (new refcount == 0).
+      // STLXR/CBNZ below leave NZCV untouched, so the flags survive to the caller.
+      _e.EmitWord(0xF1000000 | (1u << 10) | (Reg(ARM64Register.X17) << 5) | Reg(ARM64Register.X17));
+      _e.EmitWord(0xC800FC00 | (15u << 16) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17)); // STLXR W15, X17, [X16]
+      _e._condBranchFixups.Add((_e._code.Count, retry));
+      _e.EmitWord(0x35000000 | 15u);                                                     // CBNZ W15, retry
     }
 
     public void AtomicXadd(VReg baseAddr, int offset, VReg val) {
       // old = [base+offset]; [base+offset] = old + val; val = old
-      var reg = R(baseAddr);
       var vr = R(val);
-      EmitLoad64(ARM64Register.X16, reg, offset);
-      _e.EmitAluRegReg(0x8B000000, ARM64Register.X17, ARM64Register.X16, vr);
-      EmitStore64(ARM64Register.X17, reg, offset);
-      _e.EmitMovRegReg(vr, ARM64Register.X16);
+      EmitAtomicAddr(R(baseAddr), offset);
+      var retry = $"__axadd_retry_{_e._uniqueLabelCounter++}";
+      _e.DefineLabel(retry);
+      _e.EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17)); // LDAXR X17, [X16] (old)
+      _e.EmitAluRegReg(0x8B000000, ARM64Register.X14, ARM64Register.X17, vr);            // ADD X14, X17, val
+      _e.EmitWord(0xC800FC00 | (15u << 16) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X14)); // STLXR W15, X14, [X16]
+      _e._condBranchFixups.Add((_e._code.Count, retry));
+      _e.EmitWord(0x35000000 | 15u);                                                     // CBNZ W15, retry
+      _e.EmitMovRegReg(vr, ARM64Register.X17);                                            // val = old
     }
 
     public void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired) {
@@ -378,6 +407,26 @@ public partial class ARM64CodeEmitter {
     }
 
     public void FullBarrier() => _e.EmitDmbIsh();
+
+    // LDAR/STLR take a bare [Xn] address (no offset form), so fold a non-zero
+    // offset into X16 (a scratch not used by the VReg map: X0-X5 / X9-X12).
+    public void LoadAcquire(VReg dest, VReg baseReg, int offset) {
+      var addr = R(baseReg);
+      if (offset != 0) {
+        _e.EmitAddSubImm(ARM64Register.X16, R(baseReg), offset, isAdd: true);
+        addr = ARM64Register.X16;
+      }
+      _e.EmitWord(0xC8DFFC00u | (Reg(addr) << 5) | Reg(R(dest))); // LDAR Xt, [Xn]
+    }
+
+    public void StoreRelease(VReg baseReg, int offset, VReg src) {
+      var addr = R(baseReg);
+      if (offset != 0) {
+        _e.EmitAddSubImm(ARM64Register.X16, R(baseReg), offset, isAdd: true);
+        addr = ARM64Register.X16;
+      }
+      _e.EmitWord(0xC89FFC00u | (Reg(addr) << 5) | Reg(R(src))); // STLR Xt, [Xn]
+    }
 
     // ---- Labels & data ----
 

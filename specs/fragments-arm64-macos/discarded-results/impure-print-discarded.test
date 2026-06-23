@@ -1,0 +1,76 @@
+// Test: impure-print-discarded
+
+typealias Integer = int(i64.min to i64.max)
+
+function computeAndPrint(x Integer) returns Integer
+	print("computing")
+	return x * 2
+end 'computeAndPrint'
+
+function main() returns ExitCode
+	_ = computeAndPrint(5)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+computing
+```
+---
+// CompiledIR
+module {
+  func @computeAndPrint(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x1, [x29, #16]
+    arm64.str x1, [x20, #0] (8b)
+    arm64.mov x1, #9
+    arm64.str x1, [x20, #8] (8b)
+    arm64.mov x1, #-2
+    arm64.str x1, [x20, #16] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x20, #24] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.str x20, [x21, #0] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x21, #8] (8b)
+    arm64.ldr x1, [x21, #0] (8b)
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.ldr x20, [x1, #0] (8b)
+    arm64.mov x0, x20
+    arm64.mov x1, x2
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x1, #2
+    arm64.mul x2, x19, x1
+    arm64.mov x0, x2
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #5
+    arm64.bl computeAndPrint
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

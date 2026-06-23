@@ -1,0 +1,314 @@
+// Test: no-leak.if-let-try-union-map
+typealias TypeNameId = int(0 to u64.max)
+typealias Integer = int(0 to 100)
+
+union MaxonType
+	boolean
+	integer
+	named(id TypeNameId)
+end 'MaxonType'
+
+union ReturnType
+	void
+	value(inner MaxonType)
+end 'ReturnType'
+
+typealias TypeMap = Map with (String, ReturnType)
+
+function dispatch(m TypeMap, key String) returns MaxonType
+	var resultType = MaxonType.integer
+	if let rt = try m.get(key) 'haveRT'
+		resultType = match rt 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+	end 'haveRT'
+	return resultType
+end 'dispatch'
+
+function decode(t MaxonType) returns Integer
+	return match t 'unwrap'
+		named(id) gives id as Integer
+		boolean gives 1
+		integer gives 2
+	end 'unwrap'
+end 'decode'
+
+function main() returns ExitCode
+	var m = TypeMap.create()
+	m.upsert("a", value: ReturnType.value(MaxonType.named(42)))
+	let t = dispatch(m, key: "a")
+	return decode(t)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @dispatch(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.mov x2, #0
+    arm64.mov x3, #16
+    arm64.mov x0, x3
+    arm64.mov x1, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x2, #1
+    arm64.str x2, [x21, #0] (8b)
+    arm64.mov x2, #0
+    arm64.str x2, [x21, #8] (8b)
+    arm64.adrp_add_rdata x0, __witness_String_Equatable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_String_Hashable
+    arm64.ldr x3, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_String_ReturnType
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Map.get
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.mov x20, #0
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_0_0
+  haveRT_0:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_decref
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne unwrap_0.next0
+    arm64.b unwrap_0.case0
+  unwrap_0.merge:
+    arm64.b haveRT_0.after
+  unwrap_0.case0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x21, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x21, #8] (8b)
+    arm64.mov x0, x21
+    arm64.b unwrap_0.merge
+  unwrap_0.next0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne __rc_edge_4_0
+  unwrap_0.case1:
+    arm64.ldr x21, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b __rc_edge_5_0
+  haveRT_0.after:
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_4_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.b unwrap_0.merge
+  __rc_edge_5_0:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x21
+    arm64.b unwrap_0.merge
+  __phi_trampoline_0_0:
+    arm64.mov x0, x21
+    arm64.b haveRT_0.after
+  }
+  func @decode(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #2
+    arm64.mov x3, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne unwrap_0.next0
+    arm64.b unwrap_0.case0
+  unwrap_0.merge:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  unwrap_0.case0:
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.mov x0, #100
+    arm64.cmp x1, x0
+    arm64.cset x0, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, lt
+    arm64.b.ge __phi_trampoline_10_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_bba25544ca656c6e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  unwrap_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne unwrap_0.next1
+  unwrap_0.case1:
+    arm64.mov x0, #1
+    arm64.b unwrap_0.merge
+  unwrap_0.next1:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  unwrap_0.case2:
+    arm64.mov x0, #2
+    arm64.b unwrap_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_bb80cfce2c4fbeb9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_10_0:
+    arm64.mov x0, x1
+    arm64.b unwrap_0.merge
+  __phi_trampoline_5_0:
+    arm64.mov x0, x3
+    arm64.b unwrap_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp+add x1, __destruct_Map
+    arm64.mov x0, #40
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #8
+    arm64.sub x1, x19, x0
+    arm64.atomic_inc [x1]
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #16] (8b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_483
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x22, #1
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x22, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x23, #0] (8b)
+    arm64.str x22, [x23, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #42
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_ReturnType
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x24, x0
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x24, #0] (8b)
+    arm64.str x20, [x24, #8] (8b)
+    arm64.adrp_add_rdata x0, __witness_String_Equatable
+    arm64.ldr x5, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_String_Hashable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Map_String_ReturnType
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x23
+    arm64.mov x2, x24
+    arm64.bl Map.upsert
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_483
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x22, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x22, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x21, #0] (8b)
+    arm64.str x22, [x21, #8] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl dispatch
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.bl decode
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7cd1ceebd97acefd
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

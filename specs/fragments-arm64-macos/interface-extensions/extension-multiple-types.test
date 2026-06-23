@@ -1,0 +1,89 @@
+// Test: extension-multiple-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function val() returns Integer
+end 'Valued'
+
+extension Valued
+	function valPlusTen() returns Integer
+		return self.val() + 10
+	end 'valPlusTen'
+end 'Valued'
+
+type TypeA implements Valued
+	let a as Integer
+	function val() returns Integer
+		return a
+	end 'val'
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'TypeA'
+
+type TypeB implements Valued
+	var b as Integer
+	function val() returns Integer
+		return b * 2
+	end 'val'
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
+end 'TypeB'
+
+function main() returns ExitCode
+	let ta = TypeA.create(5)
+	let tb = TypeB.create(10)
+	return ta.valPlusTen() + tb.valPlusTen()
+end 'main'
+---
+ExitCode: 45
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #5
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #2
+    arm64.mul x20, x21, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #10
+    arm64.mov x1, #10
+    arm64.add x2, x20, x0
+    arm64.add x3, x22, x1
+    arm64.mov x1, #255
+    arm64.add x0, x3, x2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_33fb233c3e9b9d1d
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

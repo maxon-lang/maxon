@@ -1,0 +1,512 @@
+// Test: subprocess-async-parallel
+typealias SubP = Promise with CollectedOutput
+typealias SubPArray = Array with SubP
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 7)
+	#endif
+	let count = 4
+	var promises = SubPArray.create()
+
+	let start = Clock.nowMs()
+	var i = 0
+	while i < count 'spawn'
+		var argv = StringArray.create()
+		#if os(Windows)
+		argv.push("/c")
+		argv.push("ping")
+		argv.push("127.0.0.1")
+		argv.push("-n")
+		argv.push("2")
+		#else
+		argv.push("1")
+		#endif
+		promises.push(async Subprocess.run(exe, arguments: argv))
+		i = i + 1
+	end 'spawn'
+	for p in promises 'drain'
+		let r = try await p otherwise return 2
+		if not r.succeeded() 'check-success'
+			return 3
+		end 'check-success'
+	end 'drain'
+	let elapsed = Clock.elapsedMs(start)
+
+	// Sequential: ~4200ms. Parallel: ~2000-2200ms. 3500ms catches a
+	// regression to sequential dispatch (e.g. if subprocess_wait_internal
+	// stops yielding to the scheduler or work-stealing breaks).
+	if elapsed >= 3500 'check-parallel'
+		return 4
+	end 'check-parallel'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #48]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x21, #1
+    arm64.str x21, [x19, #24] (8b)
+    arm64.str x20, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x22, #0] (8b)
+    arm64.str x21, [x22, #8] (8b)
+  inlined_FilePath.from_0_0:
+    arm64.mov x0, x22
+    arm64.bl FilePath.create
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x2, ne
+    arm64.b.eq inlined_FilePath.from_2_0
+  inlined_FilePath.from_1_0:
+    arm64.mov x0, #0
+    arm64.mov x19, x0
+    arm64.b inline_cont_main_0
+  inlined_FilePath.from_2_0:
+    arm64.mov x1, #0
+    arm64.mov x19, x0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #7
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.adrp+add x1, __destruct_Executable
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, #8
+    arm64.sub x1, x22, x0
+    arm64.atomic_inc [x1]
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #0] (8b)
+    arm64.str x19, [x22, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_SubP
+    arm64.ldr x0, [x29, #48]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.bl Clock.nowMs
+    arm64.mov x23, x0
+    arm64.mov x24, #4
+    arm64.mov x25, x20
+  spawn_0.header:
+    arm64.cmp x25, x24
+    arm64.cset x0, lt
+    arm64.b.ge spawn_0.exit
+  spawn_0:
+    arm64.adrp+add x26, __destruct_Array
+    arm64.mov x0, #8
+  inlined_stdlib.__mm_alloc_0_0:
+    arm64.mov x1, #1
+    arm64.mov x27, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge __phi_trampoline_34_0
+  inlined_stdlib.__mm_alloc_1_0:
+    arm64.mov x0, #1
+    arm64.mov x28, x0
+  inlined_stdlib.__mm_alloc_2_0:
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #48]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.add x1, x28, x0
+    arm64.mov x0, x1
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, x0
+    arm64.str x27, [x1, #0] (8b)
+    arm64.mov x0, #8
+    arm64.add x2, x1, x0
+    arm64.str x26, [x2, #0] (8b)
+    arm64.mov x0, #16
+    arm64.add x2, x1, x0
+    arm64.str x28, [x2, #0] (8b)
+    arm64.mov x0, #24
+    arm64.add x2, x1, x0
+    arm64.str x27, [x2, #0] (8b)
+    arm64.mov x2, #32
+    arm64.add x0, x1, x2
+    arm64.mov x26, x0
+  inline_cont_main_1:
+    arm64.mov x0, #8
+    arm64.sub x1, x26, x0
+    arm64.atomic_inc [x1]
+    arm64.adrp+add x27, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+  inlined_stdlib.__mm_alloc_0_1:
+    arm64.mov x1, #1
+    arm64.mov x28, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge inlined_stdlib.__mm_alloc_2_1
+  inlined_stdlib.__mm_alloc_1_1:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_1:
+    arm64.str x0, [x29, #56]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #48]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #56]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, x0
+    arm64.str x28, [x1, #0] (8b)
+    arm64.mov x0, #8
+    arm64.add x2, x1, x0
+    arm64.str x27, [x2, #0] (8b)
+    arm64.mov x0, #16
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #56]
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #24
+    arm64.add x2, x1, x0
+    arm64.str x28, [x2, #0] (8b)
+    arm64.mov x2, #32
+    arm64.add x0, x1, x2
+  inline_cont_main_2:
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.atomic_inc [x2]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #16] (8b)
+    arm64.mov x1, #8
+    arm64.str x1, [x0, #24] (8b)
+    arm64.mov x1, #-1
+    arm64.str x1, [x0, #32] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #40] (8b)
+    arm64.str x0, [x26, #0] (8b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x27, x0
+    arm64.str x20, [x27, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x0, [x29, #48]
+    arm64.str x0, [x27, #0] (8b)
+    arm64.str x21, [x27, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x27, #16] (8b)
+    arm64.str x21, [x27, #24] (8b)
+    arm64.str x20, [x27, #32] (8b)
+    arm64.adrp+add x28, __destruct_String
+    arm64.mov x0, #16
+  inlined_stdlib.__mm_alloc_0_2:
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge inlined_stdlib.__mm_alloc_2_2
+  inlined_stdlib.__mm_alloc_1_2:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_2:
+    arm64.str x0, [x29, #56]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #48]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #56]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0] (8b)
+    arm64.mov x1, #8
+    arm64.add x2, x0, x1
+    arm64.str x28, [x2, #0] (8b)
+    arm64.mov x1, #16
+    arm64.add x2, x0, x1
+    arm64.ldr x1, [x29, #56]
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #24
+    arm64.add x2, x0, x1
+    arm64.mov x1, #0
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #32
+    arm64.add x28, x0, x1
+    arm64.mov x2, x28
+  inline_cont_main_1:
+    arm64.str x2, [x29, #56]
+    arm64.mov x0, x28
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x29, #56]
+    arm64.str x27, [x1, #0] (8b)
+    arm64.str x21, [x1, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_String
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x26
+    arm64.bl Array.push
+    arm64.mov x0, #40
+    arm64.bl __slab_alloc
+    arm64.mov x27, x0
+    arm64.mov x0, #2
+    arm64.str x0, [x27, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x27, #8] (8b)
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x22, [x27, #16] (8b)
+    arm64.str x26, [x27, #24] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x27, #32] (8b)
+    arm64.mov x1, #2
+    arm64.adrp+add x0, Subprocess.run$Executable$StringArray
+    arm64.mov x2, x27
+    arm64.bl __gt_spawn
+    arm64.mov x1, x0
+    arm64.adrp_add_rdata x0, __layout_Array_SubP
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.add x0, x25, x21
+    arm64.mov x1, #3
+    arm64.mov x25, x0
+    arm64.b spawn_0.header
+  spawn_0.exit:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __layout_Array_SubP
+    arm64.ldr x1, [x29, #48]
+  inlined_Array.createIterator_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl ArrayIterator.create
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x2, ne
+    arm64.b.eq inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
+    arm64.mov x0, #0
+    arm64.mov x22, x0
+    arm64.b inline_cont_main_3
+  inlined_Array.createIterator_2_0:
+    arm64.mov x1, #0
+    arm64.mov x22, x0
+  inline_cont_main_3:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq drain_0
+    arm64.b __rc_edge_29_0
+  inlined_ArrayIterator.advance_0_0:
+    arm64.ldr x0, [x22, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x2, [x0, #16] (8b)
+    arm64.mov x3, #1
+    arm64.add x4, x1, x3
+    arm64.sub x3, x4, x1
+    arm64.cmp x4, x2
+    arm64.cset x2, lt
+    arm64.mul x4, x2, x3
+    arm64.mov x3, #1
+    arm64.mov x5, #1
+    arm64.sub x6, x3, x2
+    arm64.mul x2, x6, x5
+    arm64.add x3, x1, x4
+    arm64.str x3, [x0, #8] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_30_0
+  inlined_ArrayIterator.advance_1_0:
+    arm64.mov x1, #1
+  inline_cont_main_4:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq drain_0
+    arm64.b __rc_edge_33_0
+  drain_0:
+    arm64.ldr x0, [x22, #0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    arm64.mov x1, #24
+    arm64.add x2, x0, x1
+    arm64.mov x1, #8
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.add x2, x0, x1
+    arm64.ldr x4, [x2, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x3, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    arm64.mov x0, #3
+    arm64.lsrv x2, x4, x0
+    arm64.mov x0, #0
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #16]
+    arm64.str x0, [x29, #24]
+    arm64.ldrb w0, [x0, #0]
+    arm64.ldr x0, [x29, #48]
+    arm64.mov x1, #7
+    arm64.and x2, x4, x1
+    arm64.mov x1, #1
+    arm64.lsrv x3, x0, x2
+    arm64.and x0, x3, x1
+    arm64.b inline_cont_main_6
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    arm64.mul x0, x4, x3
+    arm64.add x2, x1, x0
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    arm64.mov x0, #1
+    arm64.cmp x3, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    arm64.mov x0, #0
+    arm64.str x2, [x29, #32]
+    arm64.str x0, [x29, #40]
+    arm64.ldrb w0, [x0, #0]
+    arm64.ldr x0, [x29, #48]
+    arm64.b inline_cont_main_5
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    arm64.mov x0, #2
+    arm64.cmp x3, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    arm64.ldrh x0, [x2, #0] (2b)
+    arm64.b inline_cont_main_5
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    arm64.mov x0, #4
+    arm64.cmp x3, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    arm64.ldr x0, [x2, #0] (4b)
+    arm64.b inline_cont_main_5
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    arm64.ldr x0, [x2, #0] (8b)
+  inline_cont_main_5:
+  inline_cont_main_6:
+    arm64.bl __gt_await
+    arm64.mov x24, x0
+    arm64.mov x0, x1
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+    arm64.b try_1.otherwise
+  drain_0.exit:
+    arm64.mov x0, x23
+    arm64.bl Clock.elapsedMs
+    arm64.mov x1, #3500
+    arm64.cmp x0, x1
+    arm64.cset x0, ge
+    arm64.b.lt check-parallel_0.after
+    arm64.b check-parallel_0
+  try_1.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.ldr x0, [x24, #0] (8b)
+  inlined_TerminationStatus.isSuccess_0_0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+    arm64.mov x25, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne inlined_TerminationStatus.isSuccess_3_0
+    arm64.b inlined_TerminationStatus.isSuccess_2_0
+  inlined_TerminationStatus.isSuccess_1_0:
+    arm64.b inline_cont_main_7
+  inlined_TerminationStatus.isSuccess_2_0:
+    arm64.ldr x25, [x0, #8] (8b)
+    arm64.mov x0, x24
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.cmp x25, x0
+    arm64.cset x0, eq
+    arm64.b inlined_TerminationStatus.isSuccess_1_0
+  inlined_TerminationStatus.isSuccess_3_0:
+    arm64.ldr x26, [x0, #0] (8b)
+    arm64.mov x0, x24
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.cmp x26, x0
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_45_0
+  inlined_TerminationStatus.isSuccess_4_0:
+    arm64.mov x0, #0
+    arm64.b inlined_TerminationStatus.isSuccess_1_0
+  inline_cont_main_7:
+    arm64.eor x1, x0, x21
+    arm64.cmp x1, #0
+    arm64.b.eq inlined_ArrayIterator.advance_0_0
+  check-success_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  check-parallel_0:
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  check-parallel_0.after:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_29_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b drain_0.exit
+  __rc_edge_33_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b drain_0.exit
+  __phi_trampoline_34_0:
+    arm64.mov x28, x0
+    arm64.b inlined_stdlib.__mm_alloc_2_0
+  __phi_trampoline_30_0:
+    arm64.mov x1, x0
+    arm64.b inline_cont_main_4
+  __phi_trampoline_45_0:
+    arm64.mov x0, x25
+    arm64.b inlined_TerminationStatus.isSuccess_1_0
+  }
+}
+---

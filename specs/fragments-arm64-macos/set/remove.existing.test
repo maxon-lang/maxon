@@ -1,0 +1,98 @@
+// Test: remove.existing
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(2)
+	if removed 'check'
+		return s.count()
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.adrp_add_rdata x0, __rdata_arr_main_0
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #8
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #32] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.init
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x3, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Set_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Set.init
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x4, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x3, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Set_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #2
+    arm64.mov x0, x20
+    arm64.bl Set.remove
+    arm64.cmp x0, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.adrp_add_rdata x0, __witness_int_Equatable
+    arm64.ldr x3, [x29, #16]
+    arm64.adrp_add_rdata x0, __witness_int_Hashable
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp_add_rdata x0, __layout_Set_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x20
+    arm64.bl Set.count
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0.after:
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_74fbc23c4d416ae6
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,112 @@
+// Test: union-backing-mixed-cases
+typealias Cost = int(0 to 100)
+typealias ID = int(i64.min to i64.max)
+
+type CostMeta
+	export let cost as Cost
+
+	static function create(cost Cost) returns Self
+		return Self{cost: cost}
+	end 'create'
+end 'CostMeta'
+
+union Action
+	load(dest ID) = CostMeta.create(4)
+	store(src ID) = CostMeta.create(3)
+	nop = CostMeta.create(0)
+end 'Action'
+
+function main() returns ExitCode
+	let op = Action.nop
+	match op 'handle'
+		load(d) then return d
+		store(s) then return s
+		nop then return 1
+	end 'handle'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne handle_0.next0
+  handle_0.case0:
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  handle_0.next0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne handle_0.next1
+  handle_0.case1:
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_1
+    arm64.b __range_panic_1
+  handle_0.next1:
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #2
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne handle_0.next2
+  handle_0.case2:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  handle_0.next2:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_4deb6ecb9d3194ec
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  __range_panic_1:
+    arm64.adrp_add_rdata x0, __panic_msg_4deb6ecb9d3194ec
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

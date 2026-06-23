@@ -1,0 +1,150 @@
+// Test: param-mutating-method-is-impure
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function removeFirst(arr IntArray, value Integer) returns bool
+	var i = 0
+	while i < arr.count() 'scan'
+		let cur = try arr.get(i) otherwise panic("oob")
+		if cur == value 'hit'
+			_ = try arr.remove(i) otherwise panic("remove failed")
+			return true
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return false
+end 'removeFirst'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(2)
+	a.push(5)
+	_ = removeFirst(a, value: 2)
+	return a.count()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @removeFirst(x0: i64, x1: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.mov x21, #0
+    arm64.mov x22, x21
+  scan_0.header:
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.cmp x22, x0
+    arm64.cset x0, lt
+    arm64.b.ge scan_0.exit
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x22
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_removeFirst_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_removeFirst_0:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+    arm64.b try_0.otherwise
+  scan_0.exit:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.otherwise:
+    arm64.adrp_add_rdata x0, __panic_msg_e96049aa06d659cc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.b.ne hit_0.after
+  hit_0:
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x22
+    arm64.bl Array.remove
+    arm64.mov x0, x1
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.adrp_add_rdata x0, __panic_msg_8003276c9421f443
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  hit_0.after:
+    arm64.mov x0, #1
+    arm64.add x1, x22, x0
+    arm64.mov x22, x1
+    arm64.b scan_0.header
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #2
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #5
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.mov x1, #2
+    arm64.mov x0, x19
+    arm64.bl removeFirst
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_5380187719303d10
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

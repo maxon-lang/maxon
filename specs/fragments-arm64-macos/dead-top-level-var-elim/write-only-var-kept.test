@@ -1,0 +1,40 @@
+// Test: write-only-var-kept
+var writeOnly = 0
+var verifier = 17
+
+function main() returns ExitCode
+	writeOnly = 99
+	return verifier - 17
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_writeOnly
+    arm64.ldr x0, [x29, #16]
+    arm64.mov x1, #99
+    arm64.str x1, [x0, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_verifier
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #17
+    arm64.mov x3, #255
+    arm64.sub x0, x1, x2
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_79f5649ab2f0ee97
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -419,6 +419,86 @@ function classifyX64StackWrite(offset RegInt, srcReg X64VReg, coloring ColoringR
 	return CallArgKind.stackWrite(offset, srcOrd: srcOrd)
 end 'classifyX64StackWrite'
 
+// Classify a single X64Op as a post-call RESULT-CAPTURE move (the INVERSE of
+// call-arg setup: a fixed return-register SOURCE moved into a virtual DEST).
+// Recognizes `mov virtual(resultId), r8/rdx` and `movxmm virtual(fpResultId),
+// xmm0`. Anything else returns CallArgKind.none. The arm list mirrors
+// classifyX64CallArgSetup so the match stays exhaustive over X64Op.
+function classifyX64CallResultCapture(x64Op X64Op, coloring ColoringResult) returns CallArgKind
+	return match x64Op 'classify'
+		movRspOffsetReg gives CallArgKind.none
+		movRegReg(destReg, srcReg) gives classifyX64ResultMovForCall(destReg, srcReg: srcReg, coloring: coloring)
+		reloadFromStack gives CallArgKind.none
+		movXmmXmm(dest, src, _) gives classifyX64ResultFpMovForCall(dest, src: src, coloring: coloring)
+		reloadXmmFromStack gives CallArgKind.none
+		prologue to addRspImm gives CallArgKind.none
+		loadRegRbpOffset to memcpyOp gives CallArgKind.none
+		cmpRegReg to spillToStack gives CallArgKind.none
+		xorRegRegSelf to xchgRegReg gives CallArgKind.none
+		spillXmmToStack gives CallArgKind.none
+		movXmmRipRel to imulRegImm gives CallArgKind.none
+	end 'classify'
+end 'classifyX64CallResultCapture'
+
+// A result capture has a VIRTUAL dest (the SSA result id); a physical dest is a
+// call-arg mov instead, handled by the arg classifier.
+function classifyX64ResultMovForCall(destReg X64VReg, srcReg X64VReg, coloring ColoringResult) returns CallArgKind
+	return match destReg 'pickDest'
+		physical gives CallArgKind.none
+		virtual gives buildX64ResultCapture(destReg, srcReg: srcReg, coloring: coloring)
+	end 'pickDest'
+end 'classifyX64ResultMovForCall'
+
+// The source must be a fixed RETURN register (r8 = value, rdx = error-flag /
+// witness). A virtual source is the void-result receiver alias, not a return-reg
+// capture, so it returns none and substitutes raw.
+function buildX64ResultCapture(destReg X64VReg, srcReg X64VReg, coloring ColoringResult) returns CallArgKind
+	return match srcReg 'pickSrc'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64ResultCaptureFromPhys(reg, destReg: destReg, coloring: coloring)
+	end 'pickSrc'
+end 'buildX64ResultCapture'
+
+function buildX64ResultCaptureFromPhys(srcPhys X64Register, destReg X64VReg, coloring ColoringResult) returns CallArgKind
+	if not isX64ReturnGpr(srcPhys) 'notReturn'
+		return CallArgKind.none
+	end 'notReturn'
+	let srcOrd = x64RegToOrdinal(srcPhys)
+	let dstOrd = colorGpr(destReg, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: false)
+end 'buildX64ResultCaptureFromPhys'
+
+// r8 = primary return (value), rdx = secondary return (error flag / interface
+// witness). These are the only GPRs a two-result call leaves live for capture.
+function isX64ReturnGpr(reg X64Register) returns bool
+	let ord = x64RegToOrdinal(reg)
+	return ord == x64RegToOrdinal(X64Register.r8) or ord == x64RegToOrdinal(X64Register.rdx)
+end 'isX64ReturnGpr'
+
+function classifyX64ResultFpMovForCall(dest X64FpVReg, src X64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		physical gives CallArgKind.none
+		virtual gives buildX64ResultFpCapture(dest, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyX64ResultFpMovForCall'
+
+function buildX64ResultFpCapture(dest X64FpVReg, src X64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match src 'pickSrc'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildX64ResultFpCaptureFromPhys(reg, dest: dest, coloring: coloring)
+	end 'pickSrc'
+end 'buildX64ResultFpCapture'
+
+function buildX64ResultFpCaptureFromPhys(srcReg X64XmmRegister, dest X64FpVReg, coloring ColoringResult) returns CallArgKind
+	// xmm0 is the sole FP return register; a two-result call never returns an FP
+	// error flag, so the FP value capture can only be from xmm0.
+	if srcReg != X64XmmRegister.xmm0 'notReturnFp'
+		return CallArgKind.none
+	end 'notReturnFp'
+	let dstOrd = colorFp(dest, coloring: coloring)
+	return CallArgKind.regToReg(srcReg.rawValue, dstOrd: dstOrd, isFloat: true)
+end 'buildX64ResultFpCaptureFromPhys'
+
 // Extract virtual value ID from an X64VReg, or -1 if physical.
 function x64VRegId(vreg X64VReg) returns RegInt
 	return match vreg 'getId'
@@ -2898,6 +2978,11 @@ export type X64RegAllocTarget implements RegAllocTarget
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return classifyX64CallArgSetup(x64Op, coloring: coloring)
 	end 'classifyCallArgSetup'
+
+	function classifyCallResultCapture(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		return classifyX64CallResultCapture(x64Op, coloring: coloring)
+	end 'classifyCallResultCapture'
 
 	function emitSlotToSlotMove(module TargetModule, ops OpIndexList, srcStackOffset RegInt, destStackOffset RegInt, regClass RegInt)
 		if regClass == 1 'fp'

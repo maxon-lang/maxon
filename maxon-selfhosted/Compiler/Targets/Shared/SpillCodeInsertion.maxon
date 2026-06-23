@@ -53,8 +53,15 @@ type SpillInsertState
 	// predecessor's memory-routed phi already wrote the value into the
 	// dest slot. Populated in Pass A, consulted in Pass B.
 	export var suppressedBlockArgStores as BoolArray
+	// Frame-layout parameters for `computeStackOffset`, copied from the target
+	// descriptor. `spillsGrowDown` true (x64) → spills live below the frame
+	// pointer at negative offsets; false (arm64) → the frame pointer is at the
+	// BOTTOM of the frame and spills live at positive offsets above the var
+	// area, starting at `spillBase`.
+	export var spillsGrowDown as bool
+	export var spillBase as RegInt
 
-	static function create(varSlotCount RegInt) returns SpillInsertState
+	static function create(varSlotCount RegInt, spillsGrowDown bool, spillBase RegInt) returns SpillInsertState
 		return Self{
 			spillSlots: RegIntArray.create(),
 			spillRegClass: RegIntArray.create(),
@@ -66,7 +73,9 @@ type SpillInsertState
 			rematMintedIds: BoolArray.create(),
 			rematMintedValue: RegIntArray.create(),
 			pendingBranchReloads: OpIndexListArray.create(),
-			suppressedBlockArgStores: BoolArray.create()
+			suppressedBlockArgStores: BoolArray.create(),
+			spillsGrowDown: spillsGrowDown,
+			spillBase: spillBase
 		}
 	end 'create'
 end 'SpillInsertState'
@@ -91,7 +100,7 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 		return
 	end 'noWork'
 
-	var state = SpillInsertState.create(func.varSlotCount)
+	var state = SpillInsertState.create(func.varSlotCount, spillsGrowDown: desc.spillsGrowDown, spillBase: desc.initialSpillBase)
 
 	// Build spill slot and reg class maps from the spill decision.
 	buildSpillMaps(state, spillDecision: spillDecision)
@@ -564,12 +573,24 @@ function buildSpillMaps(state SpillInsertState, spillDecision SpillDecision)
 	end 'copyEach'
 end 'buildSpillMaps'
 
-// Convert an abstract spill slot offset (0, 8, 16, ...) to an actual stack offset.
-// On x64: spill slots are below the variable area, growing downward from RBP.
-// Stack layout: [rbp-8..rbp-varArea] = variable slots, [below that] = spill slots.
+// Convert an abstract spill slot offset (0, 8, 16, ...) to an actual stack offset
+// relative to the frame pointer.
+//
+// x64 (`spillsGrowDown`): RBP is at the TOP of the locals, spills live below it
+// at negative offsets. Layout: [rbp-8..rbp-varArea] = variable slots, [below
+// that] = spill slots.
+//
+// arm64 (not `spillsGrowDown`): x29 is at the BOTTOM of the frame (= sp), so
+// every frame object is at a POSITIVE offset. The var area occupies
+// [spillBase .. spillBase+varArea); spills follow it. A negative offset here
+// would place the slot below sp, where a callee's `stp x29,x30,[sp,#-N]!`
+// frame-record save clobbers it across every call (the String.replace hang).
 function computeStackOffset(state SpillInsertState, slotOffset RegInt) returns RegInt
 	let varArea = state.varSlotCount * 8
-	return 0 - varArea - slotOffset - 8
+	if state.spillsGrowDown 'growDown'
+		return 0 - varArea - slotOffset - 8
+	end 'growDown'
+	return state.spillBase + varArea + slotOffset
 end 'computeStackOffset'
 
 // Allocate a fresh value ID for a reload destination. Both call sites

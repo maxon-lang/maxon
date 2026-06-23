@@ -1,0 +1,270 @@
+// Test: propagate-throw-through-local-struct
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+enum InnerErr implements Error
+	gone
+end 'InnerErr'
+
+type Lex
+	var pendingError as OuterErr
+	var hasPending as bool
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unexpectedEof(0, column: 0), hasPending: false}
+	end 'create'
+
+	function bump() throws InnerErr
+		hasPending = true
+		pendingError = OuterErr.unterminatedString(7, column: 13)
+		throw InnerErr.gone
+	end 'bump'
+
+	function run() returns N throws OuterErr
+		try bump() otherwise 'inner'
+			if hasPending 'hp'
+				throw pendingError
+			end 'hp'
+			throw OuterErr.unexpectedEof(0, column: 0)
+		end 'inner'
+		return 0
+	end 'run'
+end 'Lex'
+
+function outer() returns N throws OuterErr
+	var lex = Lex.create()
+	return try lex.run()
+end 'outer'
+
+function main() returns ExitCode
+	let v = try outer() otherwise (e) 'fail'
+		match e 'kind'
+			unterminatedString(line, column) then return (line + column)
+			unexpectedEof(line, column) then return (line + column + 100)
+		end 'kind'
+	end 'fail'
+	return (v + 200)
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @Lex.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp+add x1, __destruct_Lex
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (1b)
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Lex.bump(x0: i64) {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x19, x0
+    arm64.mov x1, #1
+    arm64.str x1, [x19, #8] (1b)
+    arm64.mov x1, #0
+    arm64.mov x2, #24
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #0] (8b)
+    arm64.mov x1, #7
+    arm64.str x1, [x20, #8] (8b)
+    arm64.mov x1, #13
+    arm64.str x1, [x20, #16] (8b)
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, x1
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x0
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Lex.run(x0: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Lex.bump
+    arm64.mov x0, x1
+    arm64.mov x20, #0
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.ldrsb x0, [x19, #8] (1b)
+    arm64.cmp x0, #0
+    arm64.b.eq hp_0.after
+  hp_0:
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  hp_0.after:
+    arm64.mov x1, #0
+    arm64.mov x0, #24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.str x20, [x19, #8] (8b)
+    arm64.str x20, [x19, #16] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.mov x1, x19
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, x20
+    arm64.mov x1, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @outer() -> u64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl Lex.create
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl Lex.run
+    arm64.mov x20, x0
+    arm64.mov x21, x1
+    arm64.mov x0, #0
+    arm64.cmp x21, x0
+    arm64.cset x0, ne
+    arm64.b.eq try_0.cont
+  try_0.err:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.mov x1, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.cont:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl outer
+    arm64.mov x16, x0
+    arm64.mov x0, x1
+    arm64.mov x1, x16
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x2, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne kind_0.next0
+  kind_0.case0:
+    arm64.ldr x1, [x0, #16] (8b)
+    arm64.ldr x2, [x0, #8] (8b)
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  kind_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne kind_0.next1
+  kind_0.case1:
+    arm64.ldr x1, [x0, #16] (8b)
+    arm64.ldr x2, [x0, #8] (8b)
+    arm64.mov x3, #100
+    arm64.add x4, x2, x1
+    arm64.mov x1, #255
+    arm64.add x0, x4, x3
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_1
+    arm64.b __range_panic_1
+  kind_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x2, #200
+    arm64.mov x3, #255
+    arm64.add x0, x1, x2
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_2
+    arm64.b __range_panic_2
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_49dcbbafae96d55c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __range_panic_1:
+    arm64.adrp_add_rdata x0, __panic_msg_49dcbbafae96d55c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue
+    arm64.ret
+  __range_panic_2:
+    arm64.adrp_add_rdata x0, __panic_msg_49dcbbafae96d55c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_2:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

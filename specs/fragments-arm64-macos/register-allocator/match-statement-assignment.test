@@ -1,0 +1,53 @@
+// Test: match-statement-assignment
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	match x 'process'
+		1 then result = 100
+		2 then result = 200
+		default then result = 0
+	end 'process'
+	return result and 125
+end 'main'
+---
+ExitCode: 72
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+    arm64.b process_0.next0
+  process_0.merge:
+    arm64.mov x2, #125
+    arm64.mov x3, #255
+    arm64.and x0, x1, x2
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  process_0.next0:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne process_0.case2
+  process_0.case1:
+    arm64.mov x1, #200
+    arm64.b process_0.merge
+  process_0.case2:
+    arm64.mov x1, #0
+    arm64.b process_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_388127f7ac41c7d7
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+
+```
+---
+---

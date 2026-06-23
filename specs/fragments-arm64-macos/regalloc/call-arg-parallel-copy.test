@@ -1,0 +1,225 @@
+// Test: call-arg-parallel-copy
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 33
+---
+// CompiledIR
+module {
+  func @combine6(x0: i64, x1: i64, x2: i64, x3: i64, x4: i64, x5: i64) -> i64 {
+  entry:
+    arm64.mov x6, x0
+    arm64.mov x7, #1
+    arm64.eor x8, x4, x5
+    arm64.eor x4, x2, x3
+    arm64.eor x2, x6, x1
+    arm64.add x1, x8, x7
+    arm64.add x3, x2, x4
+    arm64.add x2, x3, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl CommandLine.args
+    arm64.mov x19, x0
+    arm64.mov x1, #1
+    arm64.mov x20, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x22, #0
+    arm64.b __rc_edge_12_0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_13_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.str x20, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x21, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x21, #8] (8b)
+    arm64.mov x19, x21
+  try_0.merge:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__int_fromString
+    arm64.mov x21, x0
+    arm64.mov x22, x1
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x22, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x0, x20
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x0, x21
+  try_1.merge:
+    arm64.mov x1, #11
+    arm64.mov x2, #22
+    arm64.mov x3, #33
+    arm64.mov x4, #44
+    arm64.mov x5, #55
+    arm64.mov x6, #66
+    arm64.mov x7, #0
+    arm64.add x8, x0, x1
+    arm64.mov x1, #0
+    arm64.add x9, x0, x2
+    arm64.mov x2, #0
+    arm64.add x10, x0, x3
+    arm64.mov x3, #0
+    arm64.add x11, x0, x4
+    arm64.mov x4, #0
+    arm64.add x12, x0, x5
+    arm64.mov x5, #0
+    arm64.add x13, x0, x6
+    arm64.add x19, x8, x7
+    arm64.add x21, x9, x1
+    arm64.add x22, x10, x2
+    arm64.add x23, x11, x3
+    arm64.add x24, x12, x4
+    arm64.add x25, x13, x5
+    arm64.mov x0, x25
+    arm64.mov x1, x24
+    arm64.mov x2, x23
+    arm64.mov x3, x22
+    arm64.mov x4, x21
+    arm64.mov x5, x19
+    arm64.bl combine6
+    arm64.mov x26, x0
+    arm64.mov x0, x22
+    arm64.mov x1, x19
+    arm64.mov x2, x21
+    arm64.mov x3, x25
+    arm64.mov x4, x23
+    arm64.mov x5, x24
+    arm64.bl combine6
+    arm64.add x1, x26, x0
+    arm64.add x0, x1, x19
+    arm64.add x1, x0, x21
+    arm64.add x0, x1, x22
+    arm64.add x1, x0, x23
+    arm64.add x0, x1, x24
+    arm64.mov x1, #127
+    arm64.add x2, x0, x25
+    arm64.mov x3, #255
+    arm64.and x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.cmp x0, x20
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f1b865570888721e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_12_0:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.mov x1, x22
+    arm64.b inline_cont_main_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f1b865570888721e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_13_0:
+    arm64.mov x19, x0
+    arm64.b try_0.merge
+  }
+}
+---

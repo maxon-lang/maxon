@@ -1,0 +1,123 @@
+// Test: nested-calls
+typealias Integer = int(i64.min to i64.max)
+typealias SmallInt = int(0 to 100)
+
+function validate(n Integer) returns SmallInt
+	return n as SmallInt
+end
+
+function process(n Integer) returns SmallInt
+	return validate(n)
+end
+
+function caller(n Integer) returns SmallInt
+	return process(n)
+end
+
+function main() returns ExitCode
+	return caller(999)
+end
+---
+ExitCode: 1
+Stderr: ```
+panic at nested-calls.test:6: Range check failed: value outside typealias 'SmallInt'
+Stack trace:
+  in validate
+  in process
+  in caller
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @validate(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_da88907bc4f0513c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_da88907bc4f0513c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @process(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl validate
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7a25710bef444732
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @caller(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl process
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6a7dbe7872a50ace
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #999
+    arm64.bl caller
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_b8514b11bed3c3bb
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

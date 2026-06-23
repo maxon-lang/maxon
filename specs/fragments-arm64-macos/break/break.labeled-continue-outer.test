@@ -1,0 +1,78 @@
+// Test: break.labeled-continue-outer
+function main() returns ExitCode
+	var x = 0
+	var count = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			count = count + 1
+			if y == 2 'check'
+				continue 'outer'
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return count
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+  outer_0.header:
+    arm64.mov x2, #3
+    arm64.cmp x1, x2
+    arm64.cset x2, lt
+    arm64.b.ge outer_0.exit
+  outer_0:
+    arm64.mov x2, #1
+    arm64.mov x3, #0
+    arm64.add x4, x1, x2
+    arm64.b inner_0.header
+  outer_0.exit:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  inner_0.header:
+    arm64.mov x1, #5
+    arm64.cmp x3, x1
+    arm64.cset x1, lt
+    arm64.b.ge __phi_trampoline_4_0
+  inner_0:
+    arm64.mov x1, #1
+    arm64.mov x2, #1
+    arm64.mov x5, #2
+    arm64.add x6, x0, x1
+    arm64.add x0, x3, x2
+    arm64.cmp x0, x5
+    arm64.cset x1, eq
+    arm64.b.ne __phi_trampoline_5_0
+    arm64.mov x1, x4
+    arm64.mov x0, x6
+    arm64.b outer_0.header
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f0d60446dbf5800e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_4_0:
+    arm64.mov x1, x4
+    arm64.b outer_0.header
+  __phi_trampoline_5_0:
+    arm64.mov x3, x0
+    arm64.mov x0, x6
+    arm64.b inner_0.header
+  }
+}
+---

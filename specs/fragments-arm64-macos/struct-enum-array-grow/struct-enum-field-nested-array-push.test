@@ -1,0 +1,128 @@
+// Test: struct-enum-field-nested-array-push
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export union Instruction
+		load(slot Integer)
+		store(slot Integer)
+		nop
+end 'Instruction'
+
+export type Function
+		export var name as Integer
+		export var body as IntArray
+		export var terminator as Instruction
+		export var hasTerminator as bool
+
+		static function create(name Integer, body IntArray, terminator Instruction, hasTerminator bool) returns Self
+			return Self{name: name, body: body, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'Function'
+
+function main() returns ExitCode
+		var f = Function.create(1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
+		var i = 0
+		while i < 20 'fill'
+				f.body.push(i)
+				i = i + 1
+		end 'fill'
+		return f.body.count()
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @Function.create(x0: i64, x1: i64, x2: i64, x3: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.mov x21, x2
+    arm64.mov x22, x3
+    arm64.adrp+add x1, __destruct_Function
+    arm64.mov x2, #32
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x23, #8] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x23, #16] (8b)
+    arm64.str x19, [x23, #0] (8b)
+    arm64.str x20, [x23, #8] (8b)
+    arm64.str x21, [x23, #16] (8b)
+    arm64.str x22, [x23, #24] (1b)
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #99
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x3, #1
+    arm64.mov x0, #1
+    arm64.mov x1, x19
+    arm64.mov x2, x20
+    arm64.bl Function.create
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.mov x20, x0
+  fill_0.header:
+    arm64.mov x0, #20
+    arm64.cmp x20, x0
+    arm64.cset x0, lt
+    arm64.b.ge fill_0.exit
+  fill_0:
+    arm64.ldr x21, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x21
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.mov x0, #1
+    arm64.add x1, x20, x0
+    arm64.mov x20, x1
+    arm64.b fill_0.header
+  fill_0.exit:
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2c628d9e38675916
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

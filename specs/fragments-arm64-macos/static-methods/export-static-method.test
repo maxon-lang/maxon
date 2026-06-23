@@ -1,0 +1,63 @@
+// Test: export-static-method
+
+typealias Integer = int(i64.min to i64.max)
+
+type Factory
+	export var id as Integer
+
+	export static function create(val Integer) returns Factory
+		return Factory{id: val}
+	end 'create'
+
+	export static function zero() returns Factory
+		return Factory.create(0)
+	end 'zero'
+end 'Factory'
+
+function main() returns ExitCode
+	let f1 = Factory.create(100)
+	let f2 = Factory.zero()
+	return f1.id + f2.id
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #100
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x22, x21
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_92367800a0813126
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

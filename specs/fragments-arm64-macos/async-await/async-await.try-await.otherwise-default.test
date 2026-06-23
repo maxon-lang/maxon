@@ -1,0 +1,145 @@
+// Test: async-await.try-await.otherwise-default
+typealias Integer = int(i64.min to i64.max)
+
+enum TestError implements Error
+		failed
+end 'TestError'
+
+function mayFail(succeed bool) returns Integer throws TestError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				return 42
+		end 'ok'
+		throw TestError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+		let p1 = async mayFail(true)
+		let r1 = try await p1 otherwise 0
+		let p2 = async mayFail(false)
+		let r2 = try await p2 otherwise 80
+		return r1 + r2
+end 'main'
+---
+ExitCode: 122
+---
+// CompiledIR
+module {
+  func @mayFail(x0: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x1, [x29, #16]
+    arm64.str x1, [x20, #0] (8b)
+    arm64.mov x1, #11
+    arm64.str x1, [x20, #8] (8b)
+    arm64.mov x1, #-2
+    arm64.str x1, [x20, #16] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x20, #24] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x21, #0] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x21, #8] (8b)
+    arm64.mov x0, x21
+    arm64.bl FilePath.init
+    arm64.mov x20, x0
+    arm64.ldr x1, [x20, #0] (8b)
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.mov x0, x2
+    arm64.bl mrt_file_exists
+    arm64.mov x1, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.cmp x19, #0
+    arm64.b.eq ok_0.after
+  ok_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+    arm64.epilogue
+    arm64.ret
+  ok_0.after:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #32
+    arm64.bl __slab_alloc
+    arm64.mov x2, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x19, #0
+    arm64.str x19, [x2, #8] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x2, #16] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x2, #24] (8b)
+    arm64.mov x1, #1
+    arm64.adrp+add x0, mayFail
+    arm64.bl __gt_spawn
+    arm64.bl __gt_await
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x20, x19
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.mov x20, x0
+  try_0.merge:
+    arm64.mov x0, #32
+    arm64.bl __slab_alloc
+    arm64.mov x2, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x2, #0] (8b)
+    arm64.str x19, [x2, #8] (8b)
+    arm64.str x19, [x2, #16] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x2, #24] (8b)
+    arm64.mov x1, #1
+    arm64.adrp+add x0, mayFail
+    arm64.bl __gt_spawn
+    arm64.bl __gt_await
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, #80
+  try_1.merge:
+    arm64.mov x1, #255
+    arm64.add x2, x20, x0
+    arm64.cmp x2, x1
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_79cee658eeb23dce
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,171 @@
+// Test: clone
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	arr.push(true)
+	arr.push(false)
+	var copy = arr.clone()
+	try copy.set(0, value: false) otherwise panic("test invariant: set OOB")
+	let orig = try arr.get(0) otherwise false
+	let cloned = try copy.get(0) otherwise true
+	var sum = 0
+	if orig 'o'
+		sum = sum + 1
+	end 'o'
+	if cloned 'c'
+		sum = sum + 10
+	end 'c'
+	return sum
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #1
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x20, #0
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.clone
+    arm64.mov x21, x0
+  inlined_Array.set_0_0:
+    arm64.ldr x0, [x21, #0] (8b)
+    arm64.mov x1, x20
+    arm64.mov x2, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.set_3_0
+  inlined_Array.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_0_0
+  try_0.otherwise:
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_9e8e0959ddadc225
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Array.get_3_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x22
+  inline_cont_main_1:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x19, x20
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x19, x0
+  try_1.merge:
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x21, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_2
+  inlined_Array.get_3_1:
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, x22
+  inline_cont_main_2:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, #1
+  try_2.merge:
+    arm64.cmp x19, #0
+    arm64.b.eq o_0.after
+  o_0:
+    arm64.mov x1, #1
+    arm64.add x2, x20, x1
+    arm64.mov x20, x2
+  o_0.after:
+    arm64.cmp x0, #0
+    arm64.b.eq __phi_trampoline_11_0
+  c_0:
+    arm64.mov x0, #10
+    arm64.add x1, x20, x0
+    arm64.mov x0, x1
+  c_0.after:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_96f869d35bf5aec7
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_11_0:
+    arm64.mov x0, x20
+    arm64.b c_0.after
+  }
+}
+---

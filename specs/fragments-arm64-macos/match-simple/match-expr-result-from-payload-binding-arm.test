@@ -1,0 +1,146 @@
+// Test: match-expr-result-from-payload-binding-arm
+typealias Idx = int(0 to 100)
+
+union Op
+	none
+	alloc(name ByteArray)
+end 'Op'
+
+function firstByte(b ByteArray) returns Idx
+	return try b.get(0) otherwise 0 as Idx
+end 'firstByte'
+
+function nameOf(op Op) returns Idx
+	let n = match op 'pick'
+		alloc(name) gives name
+		default panic("none")
+	end 'pick'
+	return firstByte(n)
+end 'nameOf'
+
+function main() returns ExitCode
+	var b = ByteArray.create()
+	b.push(65)
+	return nameOf(Op.alloc(b))
+end 'main'
+---
+ExitCode: 65
+---
+// CompiledIR
+module {
+  func @firstByte(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x0, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_firstByte_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_firstByte_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_a9dee59232dd2f91
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @nameOf(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne pick_0.case1
+    arm64.b pick_0.case0
+  pick_0.merge:
+    arm64.mov x0, x1
+    arm64.bl firstByte
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  pick_0.case0:
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.b pick_0.merge
+  pick_0.case1:
+    arm64.adrp_add_rdata x0, __panic_msg_905d8b968c3fa0a1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_630ea4e9348d8cc9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Array_Byte
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Byte
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #65
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp+add x1, __destruct_Op
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl nameOf
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6563f5cad3281f13
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

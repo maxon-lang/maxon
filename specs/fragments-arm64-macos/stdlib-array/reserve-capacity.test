@@ -1,0 +1,72 @@
+// Test: reserve-capacity
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.reserve(100)
+
+	if arr.capacity() < 100 'cap'
+		return 1
+	end 'cap'
+
+	if arr.count() != 0 'cnt'
+		return 2
+	end 'cnt'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #100
+    arm64.mov x0, x19
+    arm64.bl Array.reserve
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.capacity
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x0, lt
+    arm64.b.ge cap_0.after
+  cap_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  cap_0.after:
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #0
+    arm64.cmp x20, x0
+    arm64.cset x0, ne
+    arm64.b.eq cnt_0.after
+  cnt_0:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  cnt_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

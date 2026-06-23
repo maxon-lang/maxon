@@ -323,7 +323,7 @@ export function concatX64FunctionChunks(project Project, chunks FunctionCodeChun
 	let startOffset = lookupLabel(funcLabelOffsetMap, name: "mrt_start")
 
 	var rdataOffsetMap = RdataOffsetMap.create()
-	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+	let rdata = buildRdataSection(globalData, map: rdataOffsetMap, funcPtrAlign: rdataFuncPtrAlignment(os))
 	let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 	let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
 	rdataRelocs.append(globalData.pendingRdataRelocs)
@@ -2094,49 +2094,15 @@ end 'emitLeaRipRelOp'
 // in the writable .data section, not read-only .rdata. Everything else
 // resolves against .rdata.
 function relocKindForLabel(label String) returns RdataRelocKind
-	if label.startsWith("__data_cov_") 'isCovData'
-		return RdataRelocKind.covdataRipRelDisp32
-	end 'isCovData'
-	if label.startsWith("__data_") 'isDataSection'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isDataSection'
-	if label.startsWith("__slab_") or label.startsWith("__mm_") 'isAllocatorGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isAllocatorGlobal'
-	// Phase B3: the lazy-init argv cache globals used by hand-rolled
-	// `mrt_win32_get_argc` / `mrt_win32_get_argv` are mutable counters and
-	// pointers — they live in writable .data alongside the slab/MM globals.
-	if label.startsWith("__mrt_") 'isMrtGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isMrtGlobal'
-	// Tier 4 green-thread runtime state (`__gt_current_p`, run-queue head/tail,
-	// init flag) are mutable .data globals, same as the slab/MM globals.
-	if label.startsWith("__gt_") 'isGtGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isGtGlobal'
-	// Tier 4 multi-thread scheduler globals (`__sched_*`: the P array, counters,
-	// flags, CRITICAL_SECTIONs, TLS index) and the async-trace counter/critical
-	// section / tag strings (`__at_*`) are mutable (or, for tag strings, simply
-	// addressed by the runtime) and live in writable .data.
-	if label.startsWith("__sched_") or label.startsWith("__at_") 'isSchedOrTraceGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isSchedOrTraceGlobal'
-	// Tier 4 subprocess runtime state (`__subp_last_error`, the FormatMessageA
-	// scratch buffer, the streaming-pipe sequence counter) and its addressed
-	// string constants (`__subp_err_*`, `__subp_nul_*`, `__subp_pipe_name_*`)
-	// all live in writable .data — the mutable ones are written by the runtime,
-	// the strings are merely LEA'd (same model as the `__at_` tag strings).
-	if label.startsWith("__subp_") 'isSubprocessGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isSubprocessGlobal'
-	// Tier 4 async-I/O IOCP machinery state (`__io_iocp`, the thread HANDLEs, the
-	// two queue head/tail + CRITICAL_SECTION + Event slots, the ConnectEx pointer)
-	// plus the addressed `__io_panic_msg` string — all registered in writable .data
-	// by `registerSlabAndMmGlobalsForDataSection`, same model as the `__subp_` set.
-	if label.startsWith("__io_") 'isIoGlobal'
-		return RdataRelocKind.dataSectionRipRelDisp32
-	end 'isIoGlobal'
-	return RdataRelocKind.ripRelDisp32
+	// Section class (which prefixes are writable-.data globals) is shared with the
+	// arm64 backend via classifyGlobalLabel — see its doc for the full set
+	// (__data_/__slab_/__mm_/__mrt_/__gt_/__sched_/__at_/__subp_/__io_ are .data;
+	// __data_cov_ is .covdata; everything else .rdata).
+	return match classifyGlobalLabel(label) 'cls'
+		covData gives RdataRelocKind.covdataRipRelDisp32
+		dataSection gives RdataRelocKind.dataSectionRipRelDisp32
+		rdata gives RdataRelocKind.ripRelDisp32
+	end 'cls'
 end 'relocKindForLabel'
 
 // --- LEA func addr: lea dest, [rip+funcName] ---
@@ -2200,6 +2166,19 @@ function emitRepStosqOp(code ByteArray)
 	code.push(0x48)
 	code.push(0xAB)
 end 'emitRepStosqOp'
+
+// --- MFENCE: full StoreLoad memory barrier ---
+// Encoding: 0F AE F0. The green-thread await/trampoline waiter/status handshake is
+// Dekker-style (store one location, then load the other on each side). x64 TSO still
+// permits StoreLoad reordering, so without this fence the completer could load
+// gt.waiter before its `status = completed` store is globally visible while the
+// awaiter loads status before its `waiter = self` store is visible — the lost-wakeup
+// double-miss. Mirrors the arm64 DMB ISH (arm64GtDmbIsh). Clobbers nothing.
+function emitMfenceOp(code ByteArray)
+	code.push(0x0F)
+	code.push(0xAE)
+	code.push(0xF0)
+end 'emitMfenceOp'
 
 // --- LOCK INC qword ptr [addr] ---
 // Encoding: F0 REX.W FF /0 ModRM
@@ -6774,6 +6753,11 @@ function emitX64GtTrampoline(code ByteArray, relocations RelocationArray, callFi
 
 	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusCompleted)
 	helperStoreIndirect(code, base: X64Register.r12, disp: GtOffStatus, src: X64Register.rax)
+	// Dekker StoreLoad barrier: order `gt.status = completed` before the waiter LOAD
+	// below. Pairs with the awaiter's MFENCE — if it has published its waiter we are
+	// guaranteed to observe it; otherwise it observes our status on its recheck.
+	// Closes the lost-wakeup race. See emitMfenceOp.
+	emitMfenceOp(code)
 	// Stash gt.waiter into P.pendingWaiter — we must NOT context-switch directly to
 	// the waiter (it may be suspended on another OS thread; cross-thread RSP/RBP swap
 	// corrupts both stacks). The scheduler's __gt_process_pending_waiter re-enqueues
@@ -7001,8 +6985,9 @@ end 'emitX64RtOsLockRelease'
 // own spin-recheck (Step B.4 adds a SetEvent wake). Internal ABI; no args/result.
 function emitX64GtProcessPendingWaiter(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_process_pending_waiter", offset: code.count())
-	var state = Win32HelperState.create(2, outgoingBytes: 32, localBytes: 0)
-	helperPrologue(code, frameSize: 32)
+	// localBytes 16 → slot 0 holds `w` across the ioYielded spin + the __gt_enqueue BL.
+	var state = Win32HelperState.create(3, outgoingBytes: 32, localBytes: 16)
+	helperPrologue(code, frameSize: 48)
 	helperMarkBlock(state, code: code, blockId: 0)
 	// w = P.pendingWaiter; if null → done
 	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
@@ -7016,7 +7001,26 @@ function emitX64GtProcessPendingWaiter(code ByteArray, callFixups CallFixupArray
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStackBase)
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz done
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.r10)  // home w across the spin / BL
+
+	// ioYielded GATE (multi-worker): spin until w.ioYielded == 1 before re-enqueueing.
+	// The awaiter cleared its own ioYielded=0 in __gt_await right before publishing
+	// promise.waiter=self, and __gt_context_switch sets it back to 1 only AFTER saving the
+	// awaiter's RSP/callee-saved block to w.sp. Enqueueing w while ioYielded==0 (registers
+	// still in-flight on its original worker's stack) lets another worker dequeue+
+	// context_switch-to w and restore a garbage register block. This is the await/
+	// trampoline analogue of the C# __io_complete_gt spin gate. The await idle path
+	// guarantees the awaiter always reaches a context_switch (it switches back to its
+	// worker's scheduler when it has nothing to run), so this spin always terminates.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r10)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffIoYielded)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz spin
+	emitMfenceOp(code)  // pairs with __gt_context_switch's ioYielded=1 store on the awaiter's worker
+
 	// regular GT: w.status = ready ; __gt_enqueue(w)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r10)
 	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusReady)
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rax)
 	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.r10)
@@ -7039,7 +7043,7 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	// return-to-free-list path (free_full / free_done). frameSize 80 keeps slots
 	// 0..5 clear of the 32-byte outgoing-arg region (rsp = rbp-80, outgoing at
 	// rbp-80..rbp-48), so slot 4 (saved threw) survives the free-list call.
-	var state = Win32HelperState.create(10, outgoingBytes: 32, localBytes: 48)
+	var state = Win32HelperState.create(11, outgoingBytes: 32, localBytes: 48)
 	helperPrologue(code, frameSize: 80)
 	// slot 0 = promise ; slot 1 = result ; slot 2 = yielded flag (0=immediate, 1=yielded)
 	// slot 3 = the dequeued GT we run in the loop (named for the resume-point ioYielded set)
@@ -7057,13 +7061,29 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	// We have to wait → record this as an await-with-yield for the trace.
 	helperMovRegImm(code, dest: X64Register.rax, value: 1)
 	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)
-	// self = P->currentGt ; self.status = waiting ; promise.waiter = self
+	// self = P->currentGt ; self.ioYielded = 0 ; self.status = waiting ; promise.waiter = self
+	//
+	// ioYielded=0 (cleared BEFORE publishing promise.waiter=self) is the re-enqueue gate
+	// that stops the completer from resuming us on a second worker thread while our
+	// register context is still on this stack and unsaved. __gt_process_pending_waiter
+	// spin-waits until self.ioYielded==1 (which __gt_context_switch sets only AFTER saving
+	// our RSP/callee-saved block to self.sp) before it __gt_enqueue's us. Without this
+	// gate a sibling GT that completes on another worker between this store and the loop's
+	// first context_switch could re-enqueue+resume `self` mid-flight, restoring a garbage
+	// register block. The await idle path always reaches a context_switch (it switches
+	// back to its worker's scheduler when it has nothing to run), so the gate terminates.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.r11, base: X64Register.r11, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r11, disp: GtOffIoYielded, src: X64Register.rax)
 	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusWaiting)
 	helperStoreIndirect(code, base: X64Register.r11, disp: GtOffStatus, src: X64Register.rax)
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r10)
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffWaiter, src: X64Register.r11)
+	// Dekker StoreLoad barrier: force `promise.waiter = self` (and ioYielded=0) to global
+	// visibility before the loop's recheck LOAD of promise.status. Pairs with the
+	// trampoline's MFENCE so the lost-wakeup double-miss is impossible. See emitMfenceOp.
+	emitMfenceOp(code)
 
 	// block 1 (loop): re-enqueue any deferred waiter, then g = dequeue(); if null →
 	// recheck; else run g. process_pending_waiter handles a GT that completed on this
@@ -7081,7 +7101,7 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_timer_check")
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
 	helperTestReg(code, reg: X64Register.r8)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz recheck
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz idle (switch-back / spin)
 	// Save the dequeued GT we're about to run into slot 3 — context_switch clobbers
 	// r8, and on resume we set THIS GT's ioYielded from the slot (the C# resume-point
 	// discipline: name the GT we switched to via a local, never a shared per-P field).
@@ -7100,6 +7120,31 @@ function emitX64GtAwait(code ByteArray, relocations RelocationArray, callFixups 
 	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
 	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
 	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
+
+	// block 10 (idle): __gt_dequeue found no runnable GT on this worker. A worker-
+	// dispatched GT (stackBase!=0) switches back to its worker's scheduler (P.mainThread)
+	// instead of spinning on its own stack — the textbook GMP "a blocked GT yields its M"
+	// move. This fixes both multi-worker failure modes: (1) LIVENESS — spinning here pins
+	// the worker to one awaiter, stranding a sibling GT that becomes runnable only on this
+	// P's local/runnext (unstealable by the >=2 steal guard); returning to the scheduler
+	// lets this worker run it, park, or be woken to re-dispatch us. (2) SAFETY —
+	// __gt_context_switch saves our context and sets self.ioYielded=1, releasing the
+	// __gt_process_pending_waiter gate; without ever switching, ioYielded stays 0 and that
+	// gate would deadlock. The parked main thread (stackBase==0) has no scheduler GT to
+	// switch to, so it spin-rechecks (block 2) as before.
+	helperMarkBlock(state, code: code, blockId: 10)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r11, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r11, disp: POffCurrentGt)  // self
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz main → spin-recheck
+	// Worker GT: context_switch(from=self, to=&P.mainThread) back to the scheduler.
+	emitMovRegRegOp(code, dest: X64Register.rcx, src: X64Register.r10)  // from = self
+	emitX64GtLoadCurrentP(code, dest: X64Register.rdx, rdataRelocs: rdataRelocs)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	// Resumed by a worker re-dispatching us once our awaited child completed; fall into
+	// recheck (it reloads promise from slot 0).
 
 	// block 2 (recheck): if promise.status != completed → loop.
 	helperMarkBlock(state, code: code, blockId: 2)
@@ -8527,6 +8572,11 @@ function emitX64SchedWorkerLoop(code ByteArray, relocations RelocationArray, cal
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
 	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
 	helperStoreIndirect(code, base: X64Register.rax, disp: POffStatus, src: X64Register.rcx)
+	// Clear idleFlag too: a worker that exits via the shutdown re-check in the park
+	// path still has idleFlag=1 published, which would mislead a later enqueue's
+	// idle-worker scan into signalling a dead P's wakeEvent. Matches the arm64
+	// worker-exit teardown.
+	helperStoreIndirect(code, base: X64Register.rax, disp: POffIdleFlag, src: X64Register.rcx)
 	code.append(b"\x48\x31\xc0")  // xor rax, rax (thread exit code 0)
 	helperFinalize(state, code: code)
 	helperEpilogue(code)

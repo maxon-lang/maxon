@@ -1,0 +1,359 @@
+// Test: nested-enum-array-push-get
+typealias Integer = int(i64.min to i64.max)
+
+union CfOp
+		br(target Integer)
+		condBr(cond Integer)
+end 'CfOp'
+
+union IrOp
+		cf(op CfOp)
+		arith(value Integer)
+end 'IrOp'
+
+typealias IrOpArray = Array with IrOp
+
+function checkFirst(ops IrOpArray) returns Integer
+		let first = try ops.get(0) otherwise IrOp.arith(0)
+		match first 'checkFirst'
+				arith(v) then return v
+				cf then return 99
+		end 'checkFirst'
+end 'checkFirst'
+
+function checkMid(ops IrOpArray) returns Integer
+		let mid = try ops.get(2) otherwise IrOp.arith(0)
+		match mid 'checkMid'
+				cf then return 1
+				arith then return 0
+		end 'checkMid'
+end 'checkMid'
+
+function main() returns ExitCode
+		var ops = IrOpArray.create()
+		ops.push(IrOp.arith(10))
+		ops.push(IrOp.arith(20))
+		ops.push(IrOp.cf(CfOp.br(99)))
+		ops.push(IrOp.arith(30))
+		ops.push(IrOp.arith(40))
+
+		if ops.count() != 5 'badCount'
+				return 1
+		end 'badCount'
+
+		// First element must still be arith(10), not overwritten
+		let v = checkFirst(ops)
+		if v != 10 'wrong'
+				return 2
+		end 'wrong'
+
+		// Middle element must be cf variant
+		let m = checkMid(ops)
+		if m != 1 'wrongMid'
+				return 3
+		end 'wrongMid'
+
+		return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @checkFirst(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, x0
+    arm64.mov x19, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x19
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x20, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_checkFirst_0
+  inlined_Array.get_3_0:
+    arm64.mov x21, #0
+    arm64.b __rc_edge_11_0
+  inline_cont_checkFirst_0:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_12_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+  try_0.merge:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne checkFirst_0.next0
+  checkFirst_0.case0:
+    arm64.ldr x21, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  checkFirst_0.next0:
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x21, x19
+    arm64.cset x0, eq
+    arm64.b.ne checkFirst_0.next1
+  checkFirst_0.case1:
+    arm64.mov x0, #99
+    arm64.epilogue
+    arm64.ret
+  checkFirst_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x20, [x29, #16]
+    arm64.mov x0, x20
+    arm64.bl mrt_panic
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_11_0:
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x20
+    arm64.mov x1, x21
+    arm64.b inline_cont_checkFirst_0
+  __phi_trampoline_12_0:
+    arm64.mov x20, x0
+    arm64.b try_0.merge
+  }
+  func @checkMid(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, x0
+    arm64.mov x2, #2
+    arm64.mov x19, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x20, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_checkMid_0
+  inlined_Array.get_3_0:
+    arm64.mov x21, #0
+    arm64.b __rc_edge_11_0
+  inline_cont_checkMid_0:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_12_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+  try_0.merge:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.b.ne checkMid_0.next0
+  checkMid_0.case0:
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  checkMid_0.next0:
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.cmp x21, x0
+    arm64.cset x0, eq
+    arm64.b.ne checkMid_0.next1
+  checkMid_0.case1:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  checkMid_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x20, [x29, #16]
+    arm64.mov x0, x20
+    arm64.bl mrt_panic
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_11_0:
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x20
+    arm64.mov x1, x21
+    arm64.b inline_cont_checkMid_0
+  __phi_trampoline_12_0:
+    arm64.mov x20, x0
+    arm64.b try_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #10
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #20
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #99
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x21, #0] (8b)
+    arm64.str x20, [x21, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #30
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #40
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x1, #5
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq badCount_0.after
+  badCount_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  badCount_0.after:
+    arm64.mov x0, x19
+    arm64.bl checkFirst
+    arm64.mov x1, #10
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq wrong_0.after
+  wrong_0:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  wrong_0.after:
+    arm64.mov x0, x19
+    arm64.bl checkMid
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #1
+    arm64.cmp x20, x0
+    arm64.cset x0, ne
+    arm64.b.eq wrongMid_0.after
+  wrongMid_0:
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  wrongMid_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

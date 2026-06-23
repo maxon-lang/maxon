@@ -1,0 +1,98 @@
+// Test: interface-method-via-extended-interface
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function ping(payload Integer) returns Integer
+end 'Base'
+
+interface Extended extends Base
+	function other() returns Integer
+end 'Extended'
+
+type Impl implements Extended
+	let n as Integer
+
+	function ping(payload Integer) returns Integer
+		return n
+	end 'ping'
+
+	function other() returns Integer
+		return n + 1
+	end 'other'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callPing(b Base) returns Integer
+	return b.ping(7)
+end 'callPing'
+
+function main() returns ExitCode
+	let i = Impl.create(5)
+	return callPing(i)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Impl.ping(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @callPing(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x2, [x29, #24]
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x3, #7
+    arm64.mov x0, x1
+    arm64.mov x1, x3
+    arm64.ldr x16, [x2, #24] (8b)
+    arm64.blr x16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #5
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __witness_Impl_Base
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl callPing
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_46c22deccbe22552
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

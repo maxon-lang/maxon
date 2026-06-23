@@ -1,0 +1,43 @@
+// Test: default-values.bytestring-default-omitted
+typealias Integer = int(i64.min to i64.max)
+
+function checkLen(data ByteArray = b"hello") returns Integer
+	return data.count()
+end 'checkLen'
+
+function main() returns ExitCode
+	return checkLen()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl __main.__paramDefault_default-values.bytestring-default-omitted_0
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Byte
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_800fc131e0375640
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

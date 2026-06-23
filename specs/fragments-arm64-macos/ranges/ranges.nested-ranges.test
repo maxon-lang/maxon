@@ -1,0 +1,67 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #3
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+    arm64.mov x16, x2
+    arm64.mov x2, x0
+    arm64.mov x0, x16
+  outer_0.header:
+    arm64.cmp x2, x1
+    arm64.cset x3, le
+    arm64.b.gt outer_0.exit
+  outer_0:
+    arm64.mov x3, #3
+    arm64.mov x4, #1
+    arm64.b inner_0.header
+  outer_0.step:
+    arm64.mov x3, #1
+    arm64.add x4, x2, x3
+    arm64.mov x2, x4
+    arm64.b outer_0.header
+  outer_0.exit:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  inner_0.header:
+    arm64.cmp x4, x3
+    arm64.cset x5, le
+    arm64.b.gt outer_0.step
+  inner_0:
+    arm64.mul x5, x2, x4
+    arm64.add x6, x0, x5
+  inner_0.step:
+    arm64.mov x0, #1
+    arm64.add x5, x4, x0
+    arm64.mov x0, x6
+    arm64.mov x4, x5
+    arm64.b inner_0.header
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_9164fc057d855335
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

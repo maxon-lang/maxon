@@ -2119,6 +2119,17 @@ export type Parser
 	function parseStatements(func IrFunction, block IrBlock, lastWasReturn bool) returns IrBlock throws ParserError
 		lastWasReturn = false
 
+		// Tracks whether the immediately-preceding statement in THIS straight-line
+		// block was a function-terminating statement (`return`/`throw`/`panic`).
+		// If the loop then finds another statement (rather than `end`), that
+		// statement is unreachable dead code (E3071). Distinct from
+		// `lastWasReturn`, which also covers `break`/`continue` and is consumed
+		// by callers for control-flow tracking — only return/throw/panic are
+		// dead-code terminators here.
+		var lastWasTerminator = false
+		// The keyword of the most recent terminator, used in the E3071 message.
+		var deadCodeTerminatorName = ""
+
 		// Stream-style dispatch: each helper exits past its last-consumed token.
 		while skipOptionalNewlines() 'body'
 			let stmtPrevPos = cursor.index()
@@ -2133,7 +2144,19 @@ export type Parser
 				continue
 			end 'stmtDirective'
 
+			// A real statement follows a `return`/`throw`/`panic` in the same
+			// block — control can never reach it. Reject the dead code, pointing
+			// at this first unreachable statement, and stop parsing the body.
+			if lastWasTerminator 'deadCode'
+				reportCompileError(project, code: ErrorCode.semanticUnreachableCode, message: "unreachable code after '{deadCodeTerminatorName}'", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+				// Skip the remaining unreachable statements to this block's `end`
+				// so the caller's end-consumption doesn't emit a cascade error.
+				skipUnreachableToBlockEnd()
+				break
+			end 'deadCode'
+
 			lastWasReturn = false
+			lastWasTerminator = false
 
 			// Keep the parser's currentBlock tracker pointed at the block
 			// statement-level helpers should emit into. Expression-internal
@@ -2149,6 +2172,8 @@ export type Parser
 				end 'noRetLine'
 				try parseReturnStatement(block)
 				lastWasReturn = true
+				lastWasTerminator = true
+				deadCodeTerminatorName = "return"
 			end 'isReturn' else if stmtToken.kind == TokenKind.at 'isAnnotated'
 				try parseAnnotatedDecl(block)
 				block = currentBlock
@@ -2158,9 +2183,13 @@ export type Parser
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.panic 'isPanic'
 				try parsePanicStatement(block)
 				lastWasReturn = true
+				lastWasTerminator = true
+				deadCodeTerminatorName = "panic"
 			end 'isPanic' else if stmtToken.kind == TokenKind.throw 'isThrow'
 				try parseThrowStatement(block)
 				lastWasReturn = true
+				lastWasTerminator = true
+				deadCodeTerminatorName = "throw"
 			end 'isThrow' else if stmtToken.kind == TokenKind.try and isTryBlockForm() 'isTryBlock'
 				// Block-form `try 'label' ... end 'label' otherwise (e) 'h' ... end 'h'`:
 				// a leading char-literal label after `try` disambiguates the
@@ -16853,6 +16882,44 @@ export type Parser
 			try cursor.advance() otherwise return
 		end 'sync'
 	end 'synchronizeToTopLevel'
+
+	// Dead-code recovery (E3071). Cursor is parked at the first unreachable
+	// statement that follows a `return`/`throw`/`panic` in the current
+	// straight-line block body. Walk past the remaining unreachable tokens —
+	// tracking nested block openers so a nested `if`/`while`/`for`/`match`/
+	// block-`try` doesn't bleed out — and stop AT the `end` that closes THIS
+	// block (depth returns to 0). Leaving the cursor on that `end` lets the
+	// caller's `skipEndAndLabel` consume it without a spurious "Expected 'end'"
+	// cascade. No IR is emitted for the skipped statements.
+	function skipUnreachableToBlockEnd()
+		var depth = 0
+		while not at(TokenKind.eof) 'walk'
+			let kind = cursor.current().kind
+			if kind == TokenKind.end 'maybeClose'
+				if depth == 0 'matched'
+					return
+				end 'matched'
+				depth = depth - 1
+			end 'maybeClose' else if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match 'opener'
+				depth = depth + 1
+			end 'opener' else if kind == TokenKind.try and isTryBlockForm() 'tryOpener'
+				// Only block-form `try 'label' ... end` opens a balanced block; the
+				// single-line `try expr otherwise ...` form carries no `end`.
+				depth = depth + 1
+			end 'tryOpener' else if kind == TokenKind.else 'elseReopen'
+				// `end 'x' else ...`: the preceding `end` decremented depth; `else`
+				// reopens a block. `else if` is still one block, so the trailing
+				// `if` is skipped to avoid double-counting.
+				depth = depth + 1
+				try cursor.advance() otherwise return
+				if at(TokenKind.if) 'elseIf'
+					try cursor.advance() otherwise return
+				end 'elseIf'
+				continue
+			end 'elseReopen'
+			try cursor.advance() otherwise return
+		end 'walk'
+	end 'skipUnreachableToBlockEnd'
 
 	// --- Emission helpers ---
 

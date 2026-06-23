@@ -1,0 +1,38 @@
+// Test: duplicate-block-identifiers.multiple-nested
+function main() returns ExitCode
+	var x = 0
+	if true 'outer'
+		x = 1
+		while true 'inner'
+			x = 2
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+  inner_0.exit:
+  outer_0.after:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_528e11f090f5e6dc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

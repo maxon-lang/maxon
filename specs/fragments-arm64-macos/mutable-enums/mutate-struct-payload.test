@@ -1,0 +1,136 @@
+// Test: mutate-struct-payload
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+union Shape
+	nothing
+	located(pos Point)
+end 'Shape'
+
+function main() returns ExitCode
+	var s = Shape.located(Point.create(1, y: 2))
+	match s 'update'
+		located(pos) then pos = Point.create(10, y: 32)
+		nothing then return 0
+	end 'update'
+	match s 'read'
+		located(pos) then return pos.x + pos.y
+		nothing then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp+add x1, __destruct_Shape
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.ldr x1, [x20, #0] (8b)
+    arm64.mov x2, #1
+    arm64.mov x19, #0
+    arm64.cmp x1, x2
+    arm64.cset x0, eq
+    arm64.b.ne update_0.next0
+    arm64.b update_0.case0
+  update_0.merge:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne read_0.next0
+    arm64.b read_0.case0
+  update_0.case0:
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #10
+    arm64.str x0, [x21, #0] (8b)
+    arm64.mov x0, #32
+    arm64.str x0, [x21, #8] (8b)
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.str x21, [x20, #8] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b update_0.merge
+  update_0.next0:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.b.ne update_0.merge
+  update_0.case1:
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  read_0.case0:
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.ldr x19, [x0, #8] (8b)
+    arm64.ldr x21, [x0, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x21, x19
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  read_0.next0:
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.cmp x21, x19
+    arm64.cset x0, eq
+    arm64.b.ne read_0.next1
+  read_0.case1:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  read_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x20, [x29, #16]
+    arm64.mov x0, x20
+    arm64.bl mrt_panic
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c0355e8676566c3a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

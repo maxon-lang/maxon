@@ -1,0 +1,64 @@
+// Test: try-otherwise-value-flow.fallback-path-returns-otherwise-value
+enum E
+	bad
+end 'E'
+
+function alwaysThrows(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+	return x
+end 'alwaysThrows'
+
+function main() returns ExitCode
+	let v = try alwaysThrows(5) otherwise 99
+	return v
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @alwaysThrows(x0: u8) -> u8 {
+  entry:
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x0, ge
+    arm64.b.lt always_0.after
+  always_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.ret
+  always_0.after:
+    arm64.mov x1, #0
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #5
+    arm64.bl alwaysThrows
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #99
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_afee9935128f2cb5
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

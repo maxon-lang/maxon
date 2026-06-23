@@ -1,0 +1,23 @@
+// Test: force-segfault
+function main() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic: nil pointer or invalid memory access
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl maxon_force_segfault
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

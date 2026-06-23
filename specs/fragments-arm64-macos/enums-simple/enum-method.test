@@ -1,0 +1,64 @@
+// Test: enum-method
+enum Direction
+	north
+	south
+
+	function isNorth() returns bool
+		let result = match self 'check'
+			north gives true
+			south gives false
+		end 'check'
+		return result
+	end 'isNorth'
+end 'Direction'
+
+function main() returns ExitCode
+	let d = Direction.north
+	if d.isNorth() 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #0
+  inlined_Direction.isNorth_0_0:
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne inlined_Direction.isNorth_3_0
+    arm64.b inlined_Direction.isNorth_2_0
+  inlined_Direction.isNorth_1_0:
+    arm64.b inline_cont_main_0
+  inlined_Direction.isNorth_2_0:
+    arm64.mov x0, #1
+    arm64.b inlined_Direction.isNorth_1_0
+  inlined_Direction.isNorth_3_0:
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_6_0
+  inlined_Direction.isNorth_4_0:
+    arm64.mov x0, #0
+    arm64.b inlined_Direction.isNorth_1_0
+  inline_cont_main_0:
+    arm64.cmp x0, #0
+    arm64.b.eq test_0.after
+  test_0:
+    arm64.mov x0, #1
+    arm64.ret
+  test_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  __phi_trampoline_6_0:
+    arm64.mov x0, x2
+    arm64.b inlined_Direction.isNorth_1_0
+  }
+}
+---

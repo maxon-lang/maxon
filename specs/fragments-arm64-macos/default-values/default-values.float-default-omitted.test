@@ -1,0 +1,110 @@
+// Test: default-values.float-default-omitted
+typealias Number = float(f64.min to f64.max)
+
+function scale(factor Number = 2.5) returns ExitCode
+	print("{factor}")
+	return 0
+end 'scale'
+
+function main() returns ExitCode
+	return scale()
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+2.5
+```
+---
+// CompiledIR
+module {
+  func @scale(d0: f64) -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.fmov d8, d0
+    arm64.mov x0, #32
+    arm64.bl mrt_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.fmov d0, d8
+    arm64.bl mrt_f64_to_string
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.add x0, x20, x21
+    arm64.mov x1, #1
+    arm64.add x22, x0, x21
+    arm64.add x0, x22, x1
+    arm64.bl mrt_alloc
+    arm64.mov x23, x0
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #64]
+    arm64.str x23, [x29, #16]
+    arm64.str x0, [x29, #64]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x4, x23, x21
+    arm64.str x4, [x29, #32]
+    arm64.str x19, [x29, #40]
+    arm64.str x20, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x4, x20
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_decref
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x21, [x19, #40] (8b)
+    arm64.str x23, [x19, #0] (8b)
+    arm64.str x22, [x19, #8] (8b)
+    arm64.str x22, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.str x21, [x20, #8] (8b)
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x22
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr d0, [rdata+__float_4612811918334230528]
+    arm64.bl scale
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d780116b12ae86ed
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

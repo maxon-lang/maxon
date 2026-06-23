@@ -1,0 +1,73 @@
+// Test: lazy-static.multiple-fields
+typealias Count = int(0 to u64.max)
+
+type Cache
+	static var a = Cache.buildA()
+	static var b = Cache.buildB()
+	export var n as Count
+
+	static function buildA() returns Cache
+		return Cache{n: 10}
+	end 'buildA'
+
+	static function buildB() returns Cache
+		return Cache{n: 20}
+	end 'buildB'
+
+	export static function sum() returns Count
+		return Cache.a.n + Cache.b.n
+	end 'sum'
+end 'Cache'
+
+function main() returns ExitCode
+	return Cache.sum()
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Cache.sum() -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_Cache.b
+    arm64.ldr x1, [x29, #16]
+    arm64.adrp_add_rdata x0, __data_Cache.a
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.mov x1, #-1
+    arm64.add x0, x2, x3
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1071998218daa1f3
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl Cache.sum
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_5bfea45a97435444
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1635,7 +1635,9 @@ public partial class RuntimeEmitter {
     // mcentral_get_span.
     _b.LoadCurrentP(VReg.Scratch1);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch1, POffId);
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
+    // Store-release pairs with the load-acquire of owning_p in __slab_free so a
+    // cross-P free on ARM64 (weak memory) observes a coherent owner, not a stale one.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
 
     // --- Build intrusive free list ---
     // free_list = page_base
@@ -1763,7 +1765,9 @@ public partial class RuntimeEmitter {
     _b.LoadCurrentP(VReg.Scratch3);
     _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
     _b.LoadLocal(VReg.Scratch0, 2); // span
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+    // Store-release (see __slab_free's load-acquire): publishes the new owner to
+    // lockless cross-P readers, not just to threads that take the mcentral lock.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
 
     _b.LockRelease(MspanPoolLockLabel);
 
@@ -1794,7 +1798,9 @@ public partial class RuntimeEmitter {
     // violation crash loudly rather than corrupt freed memory.
     _b.LoadLocal(VReg.Scratch0, 0); // span_ptr
     _b.MovRegImm(VReg.Scratch3, (long)(uint)MspanOwningPSentinel);
-    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+    // Store-release (see __slab_free's load-acquire): a lockless cross-P free must
+    // observe the sentinel (and skip-into-panic) rather than a stale prior owner.
+    _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
 
     // Get class_index from span; compute class_offset = class_index * 8
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffClassIndex);
@@ -1838,13 +1844,16 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch1, 1); // class_offset
     _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // mcache_slot_addr
 
-    // If *mcache_slot == span_ptr, clear it
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0);
+    // If *mcache_slot == span_ptr, clear it. Acquire/release so the victim P's
+    // load-acquire of its slot observes this clear. The ownership gate in
+    // __slab_alloc is the actual safety net for the compare-then-clear window:
+    // even if a stale span survives here, the gate rejects it (owning_p != self).
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0);
     _b.LoadLocal(VReg.Scratch2, 0); // span_ptr
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.JumpIf(Condition.NotEqual, evictNext);
     _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreRelease(VReg.Scratch0, 0, VReg.Scratch1);
 
     _b.DefineLabel(evictNext);
     _b.LoadLocal(VReg.Scratch0, 2);
@@ -1979,6 +1988,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "sl_alloc [TypeName #N] size=S class=C\n"</summary>
   private void EmitInlineTraceSlabAlloc(string uniquePrefix, int sizeSlot, int classSlot) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress slab traces
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_alloc");
     _b.Call("mm_trace_print_tag");
@@ -1997,6 +2007,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "os_alloc [TypeName #N] size=N\n"</summary>
   private void EmitInlineTraceOsAlloc(string uniquePrefix, VReg sizeReg) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress os-alloc traces
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0);
     _b.Call("mm_trace_print_indent");
@@ -2013,6 +2024,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "os_free [TypeName #N] size=N\n"</summary>
   private void EmitInlineTraceOsFree(string uniquePrefix, VReg sizeReg) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress os-free traces
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0);
     _b.Call("mm_trace_print_indent");
@@ -2029,6 +2041,7 @@ public partial class RuntimeEmitter {
 
   /// <summary>Emit: indent + "sl_free [TypeName #N] size=N class=C\n"</summary>
   private void EmitInlineTraceSlabFree(string uniquePrefix, int sizeSlot, int classSlot) {
+    if (Compiler.MmTraceRawOnly) return; // raw-only: suppress slab traces
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_free");
     _b.Call("mm_trace_print_tag");
@@ -2144,13 +2157,35 @@ public partial class RuntimeEmitter {
     // MspanPoolLock that serialised alloc against cross-P free is no longer
     // needed on the fast path.
     _b.LoadLocal(VReg.Scratch0, 3);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
+    // Acquire: pairs with the StoreRelease publishers of *mcache_slot (slow-path
+    // refill, eviction clear) so observing a span pointer also observes that
+    // span's field stores.
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
     var slowPath = UniqueLabel("slab_alloc_slow_path");
     _b.JumpIfZero(VReg.Scratch1, slowPath);
 
     // Check if span has free slots
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.JumpIfZero(VReg.Scratch2, slowPath);
+
+    // Ownership gate (the core multi-M fix): only pop from a span THIS P still
+    // owns. A span returned to mcentral (owning_p = sentinel) or handed to
+    // another P keeps free_count != 0, so the emptiness check above does NOT
+    // catch a recycled span; a lock-free pop from it would corrupt a span
+    // another P owns. owning_p is load-acquire (pairs with its StoreRelease
+    // writers). On x86 TSO this whole gate is plain loads + a compare.
+    //
+    // owning_p == self is STABLE across the non-atomic pop below: every writer
+    // of this span's free_list/free_count — this fast-path pop, the remote-free
+    // drain push, the local-free push, and return_span's sentinel-stamp — runs
+    // on the OWNING P, and a P is bound to exactly one M (OS thread) at a time.
+    // So once the gate observes self-ownership, no other thread can mutate this
+    // span before the pop completes; the single-writer invariant holds.
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, MspanOffOwningP);
+    _b.LoadCurrentP(VReg.Scratch3);
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.NotEqual, slowPath);
 
     // Fast path: pop from free list.
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
@@ -2202,26 +2237,36 @@ public partial class RuntimeEmitter {
     // Re-probe the cached span — drain may have refilled it (or evicted it via
     // __slab_mcentral_return_span if it reached full).
     _b.LoadLocal(VReg.Scratch0, 3);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot (acquire)
     var stillEmpty = UniqueLabel("slab_alloc_still_empty");
     _b.JumpIfZero(VReg.Scratch1, stillEmpty);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.JumpIfZero(VReg.Scratch2, stillEmpty);
-    // Cached span has slots again — jump back to the fast path.
+    // The re-probe must apply the SAME ownership gate as the fast path, else a
+    // non-owned-but-non-empty cached span would bounce fast-path(gate-reject) ->
+    // slow-path -> re-probe(retry) forever. Not owned -> refill via mcentral.
+    _b.LoadAcquire(VReg.Scratch2, VReg.Scratch1, MspanOffOwningP);
+    _b.LoadCurrentP(VReg.Scratch3);
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.NotEqual, stillEmpty);
+    // Cached span has slots again and we still own it — jump back to fast path.
     _b.Jump(retryLabel);
 
     _b.DefineLabel(stillEmpty);
     // No slots in cache. Clear the mcache slot (idempotent — may already be NULL).
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreRelease(VReg.Scratch0, 0, VReg.Scratch1);
 
     _b.LoadLocal(VReg.Arg0, 1); // class_index
     _b.Call("__slab_mcentral_get_span");
     _b.StoreLocal(4, VReg.Scratch0);
 
     _b.LoadLocal(VReg.Scratch1, 3);
-    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // *mcache_slot = new_span
+    // Release: publish the span pointer after its lock-initialised fields, so a
+    // cross-P LoadAcquire of this slot (or the eviction's read) sees both.
+    _b.StoreRelease(VReg.Scratch1, 0, VReg.Scratch0); // *mcache_slot = new_span
 
     _b.Jump(retryLabel);
   }
@@ -2471,7 +2516,12 @@ public partial class RuntimeEmitter {
     // we force them down the remote path: they are by construction not the
     // owning P of any span, so a CAS-push onto the owner's queue is correct.
     _b.LoadLocal(VReg.Scratch0, 1); // span_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffOwningP);
+    // Load-acquire: on ARM64 a plain load could read a stale owning_p (the previous
+    // owner, or a value from before the span was sentinel-stamped), misrouting the
+    // free onto the wrong P's queue and corrupting that span's free_count. Pairs with
+    // the StoreRelease publishers in mspan_alloc / mcentral_get_span / return_span.
+    // No-op vs LoadIndirect on x86 (TSO already orders every load as acquire).
+    _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, MspanOffOwningP);
     _b.StoreLocal(4, VReg.Scratch1); // owning_p (saved for the remote-path target lookup)
     _b.LoadCurrentP(VReg.Scratch2);
     var localPath = UniqueLabel("slab_free_local");

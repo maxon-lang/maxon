@@ -1,0 +1,71 @@
+// Test: if-try-else-block
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	if try mayFail(false) 'check'
+		result = 1
+	end 'check' else 'err'
+		result = 2
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+  inlined_mayFail_0_0:
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.eq inlined_mayFail_2_0
+  inlined_mayFail_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_mayFail_2_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #42
+  inline_cont_main_0:
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne err_0
+  check_0:
+    arm64.mov x0, #1
+    arm64.b check_0.merge
+  err_0:
+    arm64.mov x0, #2
+  check_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c9cc68d204d138e6
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

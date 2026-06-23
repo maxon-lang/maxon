@@ -1,0 +1,27 @@
+// Test: nested-calls-in-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function sum_three(a Integer, b Integer, c Integer) returns Integer
+	return add(add(a, b: b), b: c)
+end 'sum_three'
+
+function main() returns ExitCode
+	return sum_three(1, b: 2, c: 3)
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #6
+    arm64.ret
+  }
+}
+---

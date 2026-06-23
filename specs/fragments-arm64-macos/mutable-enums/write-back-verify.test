@@ -1,0 +1,117 @@
+// Test: write-back-verify
+typealias Integer = int(i64.min to i64.max)
+
+union Wrapper
+	none
+	some(n Integer)
+end 'Wrapper'
+
+function readValue(w Wrapper) returns Integer
+	match w 'r'
+		some(n) then return n
+		none then return 0
+	end 'r'
+end 'readValue'
+
+function main() returns ExitCode
+	var w = Wrapper.some(5)
+	match w 'mutate'
+		some(n) then n = 99
+		none then return 0
+	end 'mutate'
+	return readValue(w)
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @readValue(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne r_0.next0
+  r_0.case0:
+    arm64.ldr x0, [x1, #8] (8b)
+    arm64.epilogue
+    arm64.ret
+  r_0.next0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne r_0.next1
+  r_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  r_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #5
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne mutate_0.next0
+    arm64.b mutate_0.case0
+  mutate_0.merge:
+    arm64.mov x0, x19
+    arm64.bl readValue
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  mutate_0.case0:
+    arm64.ldr x0, [x19, #8] (8b)
+    arm64.mov x0, #99
+    arm64.str x0, [x19, #8] (8b)
+    arm64.b mutate_0.merge
+  mutate_0.next0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne mutate_0.merge
+  mutate_0.case1:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_5493bd3225a3da25
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

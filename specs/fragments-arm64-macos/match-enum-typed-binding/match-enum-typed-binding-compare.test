@@ -1,0 +1,159 @@
+// Test: match-enum-typed-binding-compare
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+union Pixel
+		colored(c Color)
+		transparent
+end 'Pixel'
+
+function isGreen(p Pixel) returns ExitCode
+		match p 'check'
+				colored(c) then return checkColor(c)
+				transparent then return 0
+		end 'check'
+end 'isGreen'
+
+function checkColor(c Color) returns ExitCode
+		let result = match c 'g'
+				green gives 1
+				red gives 0
+				blue gives 0
+		end 'g'
+		return result
+end 'checkColor'
+
+function main() returns ExitCode
+		let p = Pixel.colored(Color.green)
+		return isGreen(p)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @isGreen(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne check_0.next0
+  check_0.case0:
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.mov x0, x1
+    arm64.bl checkColor
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.next1
+  check_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  check_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7c5413959b134f7a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @checkColor(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne g_0.next0
+    arm64.b g_0.case0
+  g_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  g_0.case0:
+    arm64.mov x0, #1
+    arm64.b g_0.merge
+  g_0.next0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne g_0.next1
+  g_0.case1:
+    arm64.mov x0, #0
+    arm64.b g_0.merge
+  g_0.next1:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  g_0.case2:
+    arm64.mov x0, #0
+    arm64.b g_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e6ef86070b29107f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_5_0:
+    arm64.mov x0, x2
+    arm64.b g_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl isGreen
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e85d2c8eef20f0f7
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

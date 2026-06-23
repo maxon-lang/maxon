@@ -1,0 +1,152 @@
+// Test: cross-file-range-no-false-overlap
+// --- file: ops.maxon
+export union WideOp
+	call
+	ret
+	param
+	extra
+end 'WideOp'
+
+export union NarrowOp
+	ret
+	call
+	param
+end 'NarrowOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op NarrowOp) returns Code
+	return match op 'check'
+		ret gives 1
+		call to param gives 2
+	end 'check'
+end 'classify'
+
+function describeWide(op WideOp) returns Code
+	return match op 'check'
+		call to extra gives 9
+	end 'check'
+end 'describeWide'
+
+function main() returns ExitCode
+	let narrow = classify(NarrowOp.call)
+	let wide = describeWide(WideOp.ret)
+	if wide == 9 'wideOk'
+		return narrow
+	end 'wideOk'
+	return 99
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @classify(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne check_0.next0
+    arm64.b check_0.case0
+  check_0.merge:
+    arm64.mov x1, #125
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.b check_0.merge
+  check_0.next0:
+    arm64.mov x1, #2
+    arm64.mov x3, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, le
+    arm64.cmp x0, x3
+    arm64.cset x0, ge
+    arm64.ands x3, x0, x1
+    arm64.b.eq __phi_trampoline_3_0
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.b check_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c8f8d7592c6e7d11
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_3_0:
+    arm64.mov x0, x2
+    arm64.b check_0.merge
+  }
+  func @describeWide(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #3
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, le
+    arm64.cmp x0, x2
+    arm64.cset x0, ge
+    arm64.and x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x2, #0
+    arm64.b.eq check_0.merge
+    arm64.b check_0.case0
+  check_0.merge:
+    arm64.mov x1, #125
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0.case0:
+    arm64.mov x0, #9
+    arm64.b check_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_692aa3b6476ef93c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #1
+    arm64.bl classify
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.bl describeWide
+    arm64.mov x1, #9
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne wideOk_0.after
+  wideOk_0:
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  wideOk_0.after:
+    arm64.mov x0, #99
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7ed597bfa9f2eee8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

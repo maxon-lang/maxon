@@ -1,0 +1,94 @@
+// Test: extension-with-substitution-dependent-closure
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagger
+	function tag() returns Integer
+end 'Tagger'
+
+extension Tagger
+	export function callTag() returns Integer
+		let inner = function() gives tag() * 2
+		return inner()
+	end 'callTag'
+end 'Tagger'
+
+type Three implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 3
+	end 'tag'
+end 'Three'
+
+type Seven implements Tagger
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+	export function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Seven'
+
+function main() returns ExitCode
+	let a = Three.make()
+	let b = Seven.make()
+	let sum = a.callTag() + b.callTag()
+	return sum
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #0
+    arm64.adrp+add x19, Tagger.callTag$closure_0$Three
+    arm64.blr x19
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.adrp+add x20, Tagger.callTag$closure_0$Seven
+    arm64.blr x20
+    arm64.mov x1, x0
+    arm64.mov x2, #255
+    arm64.add x0, x19, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e71fd81cb60a8a68
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Tagger.callTag$closure_0$Three(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, #6
+    arm64.mov x0, x1
+    arm64.ret
+  }
+  func @Tagger.callTag$closure_0$Seven(x0: i64) -> i64 {
+  entry:
+    arm64.mov x1, #14
+    arm64.mov x0, x1
+    arm64.ret
+  }
+}
+---

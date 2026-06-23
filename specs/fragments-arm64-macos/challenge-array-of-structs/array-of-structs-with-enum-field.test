@@ -1,0 +1,241 @@
+// Test: array-of-structs-with-enum-field
+// Regression test: structs with enum fields stored correctly in arrays
+// Previously, 8-byte structs were stored by pointer instead of by value
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+type Item
+	export var color as Color
+
+	static function create(color Color) returns Self
+		return Self{color: color}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var items = ItemArray.create()
+	items.push(Item.create(Color.red))
+	items.push(Item.create(Color.green))
+	items.push(Item.create(Color.blue))
+
+	// Verify enum values are stored correctly (not pointers)
+	let item0 = try items.get(0) otherwise Item.create(Color.blue)
+	let item1 = try items.get(1) otherwise Item.create(Color.blue)
+	let item2 = try items.get(2) otherwise Item.create(Color.red)
+
+	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
+	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25
+end 'main'
+---
+ExitCode: 55
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x21, #0
+    arm64.str x21, [x20, #0] (1b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (1b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #0] (1b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x21
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x20, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x22, #0
+    arm64.b __rc_edge_12_0
+  inline_cont_main_0:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_13_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #0] (1b)
+  try_0.merge:
+    arm64.mov x1, #1
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x22, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Array.get_3_1:
+    arm64.mov x23, #0
+    arm64.b __rc_edge_16_0
+  inline_cont_main_1:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_17_0
+  try_1.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #2
+    arm64.str x0, [x22, #0] (1b)
+  try_1.merge:
+    arm64.mov x1, #2
+  inlined_Array.get_0_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x23, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_2
+  inlined_Array.get_1_2:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_2
+  inlined_Array.get_3_2:
+    arm64.mov x24, #0
+    arm64.b __rc_edge_20_0
+  inline_cont_main_2:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_21_0
+  try_2.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.str x21, [x19, #0] (1b)
+  try_2.merge:
+    arm64.ldrb x21, [x20, #0] (1b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldrb x20, [x22, #0] (1b)
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldrb x22, [x19, #0] (1b)
+    arm64.mov x0, #5
+    arm64.mul x23, x20, x0
+    arm64.mov x20, #25
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mul x1, x22, x20
+    arm64.add x2, x21, x23
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_12_0:
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.b inline_cont_main_0
+  __rc_edge_16_0:
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x22
+    arm64.mov x1, x23
+    arm64.b inline_cont_main_1
+  __rc_edge_20_0:
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x23
+    arm64.mov x1, x24
+    arm64.b inline_cont_main_2
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_22fd4c049d32a36a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_13_0:
+    arm64.mov x20, x0
+    arm64.b try_0.merge
+  __phi_trampoline_17_0:
+    arm64.mov x22, x0
+    arm64.b try_1.merge
+  __phi_trampoline_21_0:
+    arm64.mov x19, x0
+    arm64.b try_2.merge
+  }
+}
+---

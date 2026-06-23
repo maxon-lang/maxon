@@ -69,9 +69,23 @@ export type Arm64OpQuery implements TargetOpQuery
 	// --- Physical register reads ---
 
 	function getExplicitPhysReads(module TargetModule, packed OpIndex) returns RegMask
-		// ARM64 has no special physical register reads to track.
-		let count = module.arm64Ops.count() + packed
-		return 0 * count
+		// A `movRegReg` whose source is a physical register reads that register —
+		// the canonical case is param materialization (`lowerParamArm64` emits
+		// `movRegReg(virtual, physical(ccReg))` to copy an incoming arg register
+		// into the param's vreg). LiveRangeBuilder needs this so each param
+		// register's pseudo-range extends to the move that consumes it; otherwise
+		// the allocator may color a later value onto a param register that is
+		// still live, and that value's def clobbers the param before its own
+		// materialization move reads it (e.g. arg1's `dtor` destroyed by arg0's
+		// home-copy in `mrt_alloc_with_dtor`). Mirrors x64's getExplicitPhysReads.
+		let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		if a64Op.rawValue.pattern == OpPattern.movRegReg 'isMovReg'
+			return match a64Op 'extract'
+				movRegReg(_, srcReg) gives arm64PhysRegMask(srcReg)
+				default panic("getExplicitPhysReads: unexpected movRegReg pattern")
+			end 'extract'
+		end 'isMovReg'
+		return 0
 	end 'getExplicitPhysReads'
 
 	// ARM64 variable shifts (LSLV/LSRV/ASRV) take their count in an ordinary

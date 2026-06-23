@@ -24,12 +24,44 @@ union Arm64FloatBinKind
 	max
 end 'Arm64FloatBinKind'
 
+// Pick the conditional-branch jump kind for a block's terminator. Only a
+// condBranch consumes a fused comparison jumpKind, and the fusion is valid ONLY
+// when the branch's condId is the DIRECT result of the last comparison. Pinning
+// condId routes or-pattern conditions (`(x==a) | (x==b) | (x==c)`, whose result
+// arm64 builds with `orr` — which leaves NZCV untouched) to boolTest, so the
+// branch tests the OR result via an explicit `cmp #0` instead of the last
+// alternative's stale compare flags. Non-condBranch terminators never use the
+// jumpKind, so boolTest is a safe default for them.
+function arm64BlockJumpKind(mirModule MirModule, srcBlock IrBlock) returns JumpKind
+	if not srcBlock.hasTerminatorOp() 'noTerm'
+		return JumpKind.boolTest
+	end 'noTerm'
+	let termOp = try mirModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("arm64BlockJumpKind: terminator op not in mirModule.ops")
+	// Only condBranch consumes a fused comparison jumpKind. Cover every other
+	// MirOp variant with range patterns (mirroring stashMirEdgesArm64) so the
+	// match stays exhaustive without a `default` — all of them yield boolTest,
+	// which the terminator lowering ignores for non-condBranch terminators.
+	match termOp 'term'
+		condBranch(condId, _, _, _, _) then return determineJumpKindForCond(mirModule, block: srcBlock, condId: condId)
+		branch then return JumpKind.boolTest
+		movImm to cmp then return JumpKind.boolTest
+		call to loadByte then return JumpKind.boolTest
+		osAllocPages to osLockRelease then return JumpKind.boolTest
+		tryCall to errorReturn then return JumpKind.boolTest
+	end 'term'
+end 'arm64BlockJumpKind'
+
 export type Arm64Backend implements TargetBackend
 	var mirModule as MirModule
 	var target as Target
 	var globalData as GlobalDataTable
 	var stdlibFunctions as ObjectFunctionArray
 	export var targetModule as TargetModule = TargetModule.create(CpuArch.arm64)
+	// Outgoing-stack-arg budget for the function currently being lowered.
+	// `emitArm64DirectCall` bumps this whenever a call site passes more than 8
+	// GPR args; `lowerFunctionToArm64` reads it back to set the function's
+	// `outgoingArgSize` so the prologue reserves the area. Reset per function.
+	var currentOutgoingArgSize as StackSize = 0
 
 	export static function create(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns Self
 		return Self{mirModule: module, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions}
@@ -73,6 +105,7 @@ export type Arm64Backend implements TargetBackend
 		var stackTracker = Arm64StackTracker.create()
 		stackTracker.calleeSavedGprs = func.calleeSavedGprs
 		stackTracker.calleeSavedFps = func.calleeSavedFps
+		stackTracker.outgoingArgSize = func.outgoingArgSize
 
 		var jumpFixups = BlockIdFixupArray.create()
 		var blockOffsets = BlockOffsetMap.create()
@@ -178,6 +211,10 @@ export type Arm64Backend implements TargetBackend
 	end 'emitPerFunction'
 
 	function lowerFunctionToArm64(srcFunc IrFunction, osDesc OsDescriptor, allFunctions IrFunctionArray)
+		// Reset the per-function outgoing-stack-arg budget before lowering any
+		// call sites in this function.
+		currentOutgoingArgSize = 0
+
 		// Phase 1: Compute variable stack space from memref slots.
 		let loadedSlots = scanLoadedSlots(mirModule, func: srcFunc)
 		var liveSlotCount = 0
@@ -186,6 +223,27 @@ export type Arm64Backend implements TargetBackend
 				liveSlotCount = slot + 1
 			end 'updateMax'
 		end 'countLive'
+
+		// Reserve the SCRATCH-BUFFER footprint of address-taken (escaped) slots.
+		// A stdlib runtime helper that takes `&slot` (e.g. `mrt_i64_to_string`'s
+		// `stackAddr 2`) uses it as the base of a multi-slot byte buffer (the
+		// 21-byte decimal encoding spans slots 2..4). arm64 lays slots out UPWARD
+		// from x29 (`x29 + 16 + slot*8`), so the buffer grows into the slots that
+		// follow it; if temp/spill slots started right after the escaped slot they
+		// would alias the buffer and get clobbered mid-write — corrupting the high
+		// digits and leaving a half-built String that over-releases on destroy.
+		// Bumping liveSlotCount past the buffer pushes `nextTempSlot` (and, via
+		// varSlotCount, the spill base) above it. x64 grows slots DOWNWARD, so its
+		// buffer extends toward the already-reserved param slots and needs no
+		// reservation. SCRATCH_BUFFER_SLOTS covers the largest stdlib scratch (the
+		// 21-byte i64/f64 decimal buffers → slots S, S+1, S+2).
+		let SCRATCH_BUFFER_SLOTS = 3
+		for slot in scanEscapedSlots(mirModule, func: srcFunc) 'reserveEscaped'
+			let neededCount = slot + SCRATCH_BUFFER_SLOTS
+			if neededCount > liveSlotCount 'bumpEscaped'
+				liveSlotCount = neededCount
+			end 'bumpEscaped'
+		end 'reserveEscaped'
 
 		var sysOpTempCount = 0
 		for blockRef in srcFunc.blockRefs 'countSysTemps'
@@ -225,7 +283,7 @@ export type Arm64Backend implements TargetBackend
 			let srcBlock = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in mirModule.blocks")
 			var dstBlock = try blockByBlockId.get(srcBlock.id) otherwise panic("invariant: blockByBlockId not populated for srcBlock.id (createBlocks loop sets it for every srcBlock)")
 
-			let condBrJumpKind = determineJumpKindInBlock(mirModule, block: srcBlock)
+			let condBrJumpKind = arm64BlockJumpKind(mirModule, srcBlock: srcBlock)
 
 			// Stash outgoing branch args on the target block's edges.
 			if srcBlock.hasTerminatorOp() 'stashEdges'
@@ -258,6 +316,12 @@ export type Arm64Backend implements TargetBackend
 		// regalloc and prologue passes will add their own contributions later;
 		// the prologue pass just reads func.stackSize and aligns it.
 		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8
+
+		// Record the outgoing-stack-arg budget. Unlike x64 (where it folds into
+		// stackSize), arm64 keeps it separate: the area sits BELOW the saved
+		// frame record, so `[x29 + 16 + slot]` slot addressing stays unchanged
+		// and only the prologue/epilogue and incoming-arg loads consult it.
+		targetFunc.outgoingArgSize = currentOutgoingArgSize
 
 		renumberArm64SlotsForFunction(targetModule, func: targetFunc)
 
@@ -331,13 +395,19 @@ export type Arm64Backend implements TargetBackend
 		var i = 0
 		while i < blockCount - 1 'eachBlock'
 			let blockRef = try func.blockRefs.get(i) otherwise panic("invariant: i < blockCount but func.blockRefs.get failed")
-			var block = try mirModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in mirModule.blocks")
+			// `func` is the lowered targetFunc, so its blockRefs index
+			// targetModule.blocks — NOT mirModule.blocks. Reading the MIR blocks
+			// here returned an unrelated block whose terminatorIndex points into
+			// mirModule.ops, which then mis-indexes targetModule.arm64Ops (it
+			// crashed lowering __slab_init, whose stale index 109 overran the 92
+			// real arm64 ops). The x64 backend reads targetModule.blocks here.
+			var block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
 				i = i + 1
 				continue
 			end 'noTerm'
 			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise panic("invariant: i+1 < blockCount but func.blockRefs.get failed")
-			let nextBlock = try mirModule.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in mirModule.blocks")
+			let nextBlock = try targetModule.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in targetModule.blocks")
 			let termOp = try targetModule.arm64Ops.get(block.terminatorIndex()) otherwise panic("invariant: block.terminatorIndex not in targetModule.arm64Ops")
 			let targetId = match termOp 'check'
 				branch(blk) gives blk
@@ -392,8 +462,9 @@ export type Arm64Backend implements TargetBackend
 			// slot-count figures here mirror the file-I/O band so the slot
 			// accounting is correct once real emitters land.
 			osGetArgc gives 8
-			// osClockMs: zero-arg call + result slot; mirrors the X64 budget.
-			osClockMs gives 4
+			// osClockMs (macOS): 2-slot timeval buffer + &tv + null + gettimeofday
+			// result + ms result. Linux/Windows use fewer; 8 covers the max with headroom.
+			osClockMs gives 8
 			osGetArgv gives 8
 			osGetExecutablePath gives 8
 			// Page allocation, atomics, and locks (added with the slab allocator).
@@ -811,6 +882,7 @@ export type Arm64Backend implements TargetBackend
 		var argIdx = 0
 		var gprIdx = 0
 		var fpIdx = 0
+		var stackSlotIdx = 0
 		while argIdx < argIds.count() 'moveArgs'
 			let argId = try argIds.get(argIdx) otherwise 'skipArg'
 				argIdx = argIdx + 1
@@ -821,13 +893,34 @@ export type Arm64Backend implements TargetBackend
 				let fpReg = getArm64CallConvFp(fpIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 				fpIdx = fpIdx + 1
-			end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
+			end 'fpRegArg' else if (not stdTypeIsFloat(paramType)) and gprIdx < 8 'gprRegArg'
 				let ccReg = getArm64CallConvGpr(gprIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
 				gprIdx = gprIdx + 1
-			end 'gprRegArg'
+			end 'gprRegArg' else 'stackArg'
+				// Out-of-register arg — store to the caller's outgoing-arg area at
+				// `[sp + stackSlotIdx*8]`. The prologue pre-reserves the largest
+				// such block (currentOutgoingArgSize) at the bottom of the frame,
+				// so each call site only writes the bytes; sp never moves per call.
+				// FP overflow params travel through the same int-typed store path
+				// only if int-typed; genuine FP overflow is not yet supported (no
+				// FP-to-[sp] store op), matching the x64 callee-side limitation.
+				if stdTypeIsFloat(paramType) 'fpStackArg'
+					panic("emitArm64DirectCall: FP overflow args not yet supported (callee '{callee}', argIdx {argIdx})")
+				end 'fpStackArg'
+				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSpOffset(stackSlotIdx * 8, src: Arm64VReg.virtual(argId)))
+				stackSlotIdx = stackSlotIdx + 1
+			end 'stackArg'
 			argIdx = argIdx + 1
 		end 'moveArgs'
+
+		// Reserve outgoing stack-arg space at the function level — the prologue
+		// pre-allocates the largest block seen so every call site lands its
+		// stores in already-reserved bytes.
+		let bytesForThisCall = stackSlotIdx * 8
+		if bytesForThisCall > currentOutgoingArgSize 'recordMaxOutgoing'
+			currentOutgoingArgSize = bytesForThisCall
+		end 'recordMaxOutgoing'
 
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
 
@@ -867,6 +960,28 @@ export type Arm64Backend implements TargetBackend
 		// AAPCS64: i64 return in x0. Capture into the result virtual register.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 	end 'emitArm64DirectCallHandRolled'
+
+	// Direct BL into a hand-rolled void runtime helper: move args into the AAPCS64
+	// call-conv GPRs and emit the BL, with NO return-value capture. Mirrors
+	// emitArm64DirectCallHandRolled minus the x0 result move. Used by the
+	// osLockAcquire/osLockRelease lowering (the helpers return void).
+	function emitArm64VoidCallHandRolled(callee String, argIds ValueIdArray, dstBlock IrBlock)
+		var argIdx = 0
+		while argIdx < argIds.count() 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			if argIdx >= 8 'tooMany'
+				panic("emitArm64VoidCallHandRolled: callee '{callee}' has too many args ({argIds.count()}); GPR ABI supports 8")
+			end 'tooMany'
+			let ccReg = getArm64CallConvGpr(argIdx)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
+	end 'emitArm64VoidCallHandRolled'
 
 	// Mutating-method self-assignment (`arr = arr.push(...)`): Arm64 emit
 	// step for the shared decision in voidResultAliasReceiverId — mirrors
@@ -960,12 +1075,21 @@ export type Arm64Backend implements TargetBackend
 		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
 			let fpReg = getArm64CallConvFp(slotIdx)
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(fpReg), precision: FloatPrecision.f64))
-		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
+		end 'fpRegParam' else if (not stdTypeIsFloat(paramType)) and slotIdx < 8 'gprRegParam'
 			let ccReg = getArm64CallConvGpr(slotIdx)
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(ccReg)))
-		end 'gprRegParam' else 'slotOob'
-			panic("lowerParamArm64: slotIdx {slotIdx} exceeds register count")
-		end 'slotOob'
+		end 'gprRegParam' else 'stackParam'
+			// Overflow param passed on the caller's stack. The byte offset from
+			// x29 depends on the final frame size (not known until emit), so we
+			// emit a loadIncomingArg carrying the overflow index; the code emitter
+			// resolves the offset. FP overflow params are not yet supported (the
+			// load targets a GPR), matching the caller-side and x64 limitations.
+			if stdTypeIsFloat(paramType) 'fpStackParam'
+				panic("lowerParamArm64: FP overflow params not yet supported (paramIndex {paramIndex})")
+			end 'fpStackParam'
+			let overflowIdx = computeOverflowArgIndex(paramIndex, paramTypes: funcParamTypes, gprRegCount: 8, fpRegCount: 8)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIncomingArg(Arm64VReg.virtual(resultId), argIndex: overflowIdx))
+		end 'stackParam'
 	end 'lowerParamArm64'
 
 	// MIR system-like ops (stackSlotAddr, globalAddr, osExit, etc.)
@@ -986,7 +1110,7 @@ export type Arm64Backend implements TargetBackend
 			osClose then panic("osClose not yet implemented for arm64 (Phase 3)")
 			osGetEnv then panic("osGetEnv not yet implemented for arm64 (Phase 3)")
 			osGetArgc(resultId) then result = lowerOsGetArgcArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-			osClockMs then panic("osClockMs not yet implemented for arm64 — clock runtime is scoped to x64-windows + wasm32-wasi")
+			osClockMs(resultId) then result = lowerOsClockMsArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetArgv(resultId, indexId) then result = lowerOsGetArgvArm64(resultId, indexId: indexId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then result = lowerOsGetExecutablePathArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
@@ -1011,10 +1135,12 @@ export type Arm64Backend implements TargetBackend
 			atomicDec(addrId) then result = lowerAtomicDecArm64(addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicXadd(resultId, addrId, valId) then result = lowerAtomicXaddArm64(resultId, addrId: addrId, valId: valId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			atomicCas(resultId, addrId, oldId, newId) then result = lowerAtomicCasArm64(resultId, addrId: addrId, oldId: oldId, newId: newId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-			// Linux locks land in step 6a.12 with the runtime.std spinlock helpers.
+			// osLockInit stays a no-op: a zero-initialised .data lock IS unlocked, so
+			// no init code is needed on any target. (Linux locks land in step 6a.12
+			// with the runtime.std spinlock helpers.)
 			osLockInit then result = nextTempSlot
-			osLockAcquire then result = nextTempSlot
-			osLockRelease then result = nextTempSlot
+			osLockAcquire(addrId) then result = lowerOsLockOpArm64(addrId, helperName: "__slab_lock_acquire", dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osLockRelease(addrId) then result = lowerOsLockOpArm64(addrId, helperName: "__slab_lock_release", dstBlock: dstBlock, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			movImm to storeSlot then break 'lower'
 			tryCall to errorReturn then break 'lower'
 		end 'lower'
@@ -1045,6 +1171,32 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicCasMem(Arm64VReg.virtual(resultId), addrReg: Arm64VReg.virtual(addrId), oldReg: Arm64VReg.virtual(oldId), newReg: Arm64VReg.virtual(newId)))
 		return nextTempSlot
 	end 'lowerAtomicCasArm64'
+
+	// osLockAcquire/osLockRelease(addr): on macos, BL into the hand-emitted recursive
+	// spinlock helper named `helperName` (__slab_lock_acquire / __slab_lock_release,
+	// addr in x0; emitArm64SlabLock{Acquire,Release}). The MIR op is isCall:true so
+	// caller-saved registers are already spilled across it. On other targets the lock
+	// stays a no-op (Linux uses the runtime.std spinlock).
+	function lowerOsLockOpArm64(addrId ValueId, helperName String, dstBlock IrBlock, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		if arm64OsUsesSpinlockHelper(osDesc) 'emitLockOp'
+			var argIds = ValueIdArray.create()
+			argIds.push(addrId)
+			emitArm64VoidCallHandRolled(helperName, argIds: argIds, dstBlock: dstBlock)
+		end 'emitLockOp'
+		return nextTempSlot
+	end 'lowerOsLockOpArm64'
+
+	// True on the targets whose osLockAcquire/Release lower to the hand-emitted
+	// recursive spinlock helpers (currently arm64-macos). Other targets keep the
+	// no-op (Linux uses the runtime.std spinlock; windows/wasi unused here).
+	function arm64OsUsesSpinlockHelper(osDesc OsDescriptor) returns bool
+		return match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+	end 'arm64OsUsesSpinlockHelper'
 
 	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 	// we store the virtual register value into a temp slot.
@@ -1191,10 +1343,16 @@ export type Arm64Backend implements TargetBackend
 		return nextTempSlot + 1
 	end 'lowerOsGetArgcLinuxArm64'
 
-	// Linux ARM64 `osGetArgv`: bounds-check + load via csel. Same skeleton
-	// as the x64 path — the load is unconditional and a `csel` masks the
-	// result to 0 when `index >= argc` (unsigned compare also catches the
-	// negative-index case). Runtime correctness deferred to a future phase.
+	// Linux/macOS ARM64 `osGetArgv`: bounds-checked load. The load MUST NOT run
+	// for an out-of-bounds index — `argv + index*8` would address unmapped memory
+	// and fault (mrt_command_line_arg passes index 9999 to probe the OOB path).
+	// So clamp the index to 0 first (argv[0] is always valid: argc >= 1), load
+	// from the clamped address, then `csel` the result to 0 when the original
+	// index was OOB. The bounds test is `cmp argc, index` + `hi` (unsigned argc >
+	// index, i.e. index < argc) — `hi` also rejects a negative index (treated
+	// unsigned). Flags are computed ONCE; nothing between the cmp and the two
+	// csels writes NZCV (csel/movImm/lsl/add/ldr all leave flags intact), so both
+	// csels reuse them.
 	function lowerOsGetArgvLinuxArm64(resultId ValueId, indexId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		let tempSlot = nextTempSlot
 		let x9 = arm64PhysReg(Arm64Register.x9)
@@ -1205,26 +1363,22 @@ export type Arm64Backend implements TargetBackend
 		let x14 = arm64PhysReg(Arm64Register.x14)
 		let x15 = arm64PhysReg(Arm64Register.x15)
 
-		// x9 = argv base ; x10 = argc ; x11 = index
+		// x9 = argv base ; x10 = argc ; x11 = index ; x14 = 0 (clamp + OOB value)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.globalLoad(x9, name: "__mrt_argv", size: 8))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.globalLoad(x10, name: "__mrt_argc", size: 8))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(x11, src: Arm64VReg.virtual(indexId)))
-		// x15 = 3 ; x12 = x11 << x15  (= index*8)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x14, value: 0))
+		// cmp argc, index → `hi` iff argc > index (index in bounds).
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x10, src2: x11))
+		// Clamp the index to 0 when OOB so the load address stays in-bounds.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(x11, src1: x11, src2: x14, condition: Arm64CondCode.hi))
+		// x12 = clampedIndex << 3 ; x9 = argv + x12 ; x13 = argv[clampedIndex]
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x15, value: 3))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lslRegs(x12, src1: x11, src2: x15))
-		// x9 = argv + x12
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(x9, src1: x9, src2: x12))
-		// x13 = [x9 + 0]
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(x13, baseReg: x9, offset: 0, width: StoreWidth.qword, signed: false))
-		// x14 = 0 (OOB replacement)
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x14, value: 0))
-		// cmp index, argc — sets flags. `ls` (unsigned less or equal) keeps
-		// x13 when index<=argc-1; condition mismatch swaps in x14 (zero).
-		// Strictly correct would be `cc`/`lo` (unsigned <), but those aren't
-		// in the supported Arm64CondCode set — `ls` is close enough for the
-		// compile-verify skeleton.
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x11, src2: x10))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x13, src2: x14, condition: Arm64CondCode.ls))
+		// result = (index < argc) ? argv[index] : 0
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x13, src2: x14, condition: Arm64CondCode.hi))
 		// Bridge the result through a fresh slot so downstream consumers that
 		// expect slot-resident values see one. Mirrors `lowerGlobalAddrArm64`.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(tempSlot, src: Arm64VReg.virtual(resultId)))
@@ -1269,16 +1423,17 @@ export type Arm64Backend implements TargetBackend
 	//
 	// _NSGetExecutablePath signature:
 	//   int _NSGetExecutablePath(char *buf, uint32_t *bufsize)
-	// Returns 0 on success (and updates *bufsize to the actual length-1
-	// including NUL terminator), or -1 if the buffer was too small (in which
-	// case *bufsize is set to the required size).
+	// Returns 0 on success (NUL-terminating `buf`; *bufsize is left UNCHANGED,
+	// contrary to a common misreading), or -1 if the buffer was too small (in
+	// which case *bufsize is set to the required size).
 	//
 	// This lowering translates the return convention to the bytes-written /
 	// -errno shape expected by `mrt_executable_path`:
-	//   success → return the user-supplied bufSize as a rough upper bound
-	//             (skeleton-level — a proper NUL-scan loop would replace
-	//             this with the exact byte count; runtime correctness is
-	//             out of scope for this phase).
+	//   success → strlen(buf), the exact path byte count. Returning the raw
+	//             input bufSize instead would hand `mrt_executable_path` a
+	//             4096-byte "path" of NUL + uninitialised stack bytes, which
+	//             memcpy then copies wholesale (heap corruption + a bogus
+	//             4096-long String).
 	//   failure → return -34 (-ERANGE).
 	function lowerOsGetExecutablePathMacosArm64(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		var tempSlot = nextTempSlot
@@ -1313,21 +1468,32 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(callResultSlot, slotIndex: MACHO_IMPORT_SLOT_NSGETEXECUTABLEPATH, argSlots: argSlots))
 		tempSlot = tempSlot + 1
 
-		// Translate the (0 / -1) return into (bufSize / -34) using csel on a
-		// zero compare. x9 = call result, x10 = bufSize, x11 = -34.
+		// Recover the exact path length with strlen(buf). _NSGetExecutablePath
+		// NUL-terminates the buffer regardless of outcome, so strlen is always
+		// safe to call here; the csel below discards its value on the error
+		// path. Done unconditionally (rather than branching) so the lowering
+		// stays straight-line, matching the surrounding csel style.
+		var strlenArgs = VarSlotArray.create()
+		strlenArgs.push(bufSlot)
+		let strlenResultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(strlenResultSlot, slotIndex: MACHO_IMPORT_SLOT_STRLEN, argSlots: strlenArgs))
+		tempSlot = tempSlot + 1
+
+		// Translate the (0 / -1) return into (strlen / -34) using csel on a
+		// zero compare. x9 = call result, x10 = strlen, x11 = -34.
 		let x9 = arm64PhysReg(Arm64Register.x9)
 		let x10 = arm64PhysReg(Arm64Register.x10)
 		let x11 = arm64PhysReg(Arm64Register.x11)
 		let x12 = arm64PhysReg(Arm64Register.x12)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x9, slotIndex: callResultSlot))
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x10, slotIndex: sizeSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(x10, slotIndex: strlenResultSlot))
 		// x11 = -34. movImm takes an unsigned word; encode -34 as the
 		// twos-complement 64-bit pattern.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x11, value: 0xFFFFFFFFFFFFFFDE))
 		// cmp call_result, 0 (via cmp x9, x12 where x12=0)
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(x12, value: 0))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(x9, src2: x12))
-		// If result == 0 (eq condition), pick x10 (bufSize); else pick x11
+		// If result == 0 (eq condition), pick x10 (strlen); else pick x11
 		// (-34). `Arm64CondCode.eq` selects src1 when equal.
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(Arm64VReg.virtual(resultId), src1: x10, src2: x11, condition: Arm64CondCode.eq))
 
@@ -1451,9 +1617,95 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.sleep 'strategy'
 			syscall then panic("ARM64 osSleep: nanosleep syscall lowering not yet implemented — needs timespec marshalling on the stack")
 			iatCall(slotIdx) then return lowerSingleArgIatCallArm64(msSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
-			libcall then panic("ARM64 osSleep: macOS libcall nanosleep lowering not yet implemented — needs timespec marshalling on the stack")
+			libcall then return lowerOsSleepMacosArm64(msSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
 		end 'strategy'
 	end 'lowerOsSleepArm64'
+
+	// macOS osSleep: `usleep(ms * 1000)`. usleep takes MICROSECONDS in a single
+	// register, so — unlike nanosleep — no `struct timespec` has to be marshalled
+	// onto the stack. The ms→µs scale is a plain register multiply (sleeps in the
+	// specs are small, well within useconds_t range).
+	function lowerOsSleepMacosArm64(msSlot VarSlot, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: msSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 1000))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(arm64PhysReg(Arm64Register.x0), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+		let usSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(usSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		return lowerSingleArgIatCallArm64(usSlot, slotIdx: MACHO_IMPORT_SLOT_USLEEP, dstBlock: dstBlock, nextTempSlot: tempSlot)
+	end 'lowerOsSleepMacosArm64'
+
+	// `osClockMs` (wall-clock milliseconds). Only the macOS path is wired; arm64
+	// linux/windows clock support is still pending (was a blanket panic before).
+	function lowerOsClockMsArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'os'
+			macos then return lowerOsClockMsMacosArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			linux then panic("osClockMs not yet implemented for arm64-linux")
+			windows then panic("osClockMs not yet implemented for arm64-windows")
+			wasi then panic("osClockMs should not reach the arm64 backend on wasi")
+		end 'os'
+	end 'lowerOsClockMsArm64'
+
+	// macOS: time(NULL) * 1000. time() returns whole seconds in a single call
+	// (NULL out-param), so no `struct timeval` marshalling like gettimeofday —
+	// coarse (1s) resolution but monotonic and, crucially, hang-safe for any
+	// busy-wait-until-clock-advances loop. Sub-ms timing would need gettimeofday.
+	// macOS: gettimeofday(&tv, NULL) → ms = tv.tv_sec*1000 + tv.tv_usec/1000.
+	// `_time` (whole seconds) was too coarse: clock.elapsed-after-sleep does a
+	// 30ms sleep then asserts elapsed > 0, but two 1s-resolution readings inside
+	// the same second yield elapsed == 0. struct timeval (arm64-macOS) is
+	// {tv_sec @0 (8B), tv_usec @8 (4B)} = 16B, occupying two contiguous slots;
+	// its address is taken with stackAddrOp and passed to the `_gettimeofday`
+	// import (slot 9, already wired), so no new import is needed. Mirrors the
+	// &-out-param + offset-load pattern in emitMacosStatRepackArm64.
+	function lowerOsClockMsMacosArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// Two contiguous slots for `struct timeval` (tv_sec @0, tv_usec @8).
+		let tvSlot = tempSlot
+		tempSlot = tempSlot + 2
+
+		// arg0 = &tv.
+		let tvAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(tvAddrSlot, targetSlot: tvSlot))
+		tempSlot = tempSlot + 1
+
+		// arg1 = NULL (timezone).
+		let nullSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// gettimeofday(&tv, NULL) — return value (0/-1) is ignored.
+		var argSlots = VarSlotArray.create()
+		argSlots.push(tvAddrSlot)
+		argSlots.push(nullSlot)
+		let rcSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(rcSlot, slotIndex: MACHO_IMPORT_SLOT_GETTIMEOFDAY, argSlots: argSlots))
+		tempSlot = tempSlot + 1
+
+		// Load the timeval fields from the buffer base (tvAddrSlot still holds &tv).
+		let base = arm64PhysReg(Arm64Register.x9)
+		let sec = arm64PhysReg(Arm64Register.x10)
+		let usec = arm64PhysReg(Arm64Register.x11)
+		let thousand = arm64PhysReg(Arm64Register.x12)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: tvAddrSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(sec, baseReg: base, offset: 0, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(usec, baseReg: base, offset: 8, width: StoreWidth.word, signed: false))
+
+		// ms = sec*1000 + usec/1000
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(thousand, value: 1000))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(sec, src1: sec, src2: thousand))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.sdivRegs(usec, src1: usec, src2: thousand))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(arm64PhysReg(Arm64Register.x0), src1: sec, src2: usec))
+
+		let msSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(msSlot, src: arm64PhysReg(Arm64Register.x0)))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: msSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: msSlot))
+		return tempSlot + 1
+	end 'lowerOsClockMsMacosArm64'
 
 	function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
 		// fd constant -> temp slot
@@ -1661,7 +1913,7 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.os 'osPick'
 			linux then return lowerOsAllocPagesLinuxArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			windows then panic("ARM64 osAllocPages not yet implemented for Windows")
-			macos then panic("ARM64 osAllocPages not yet implemented for macOS")
+			macos then return lowerOsAllocPagesMacosArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osAllocPages not supported on WASI")
 		end 'osPick'
 	end 'lowerOsAllocPagesArm64'
@@ -1725,12 +1977,68 @@ export type Arm64Backend implements TargetBackend
 		return tempSlot + 1
 	end 'lowerOsAllocPagesLinuxArm64'
 
+	// macOS: mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+	// via the libSystem `_mmap` dyld import (Apple disallows raw syscalls). macOS
+	// flag values differ from Linux: MAP_ANON|MAP_PRIVATE = 0x1002 (vs 0x22).
+	function lowerOsAllocPagesMacosArm64(resultId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// addr = 0
+		let addrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(addrSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// len = size
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		// prot = PROT_READ | PROT_WRITE = 3
+		let protSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 3))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(protSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// flags = MAP_ANON | MAP_PRIVATE = 0x1002 on macOS
+		let flagsSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0x1002))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(flagsSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// fd = -1
+		let fdSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: -1))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// offset = 0
+		let offsetSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(offsetSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(addrSlot)
+		argSlots.push(lenSlot)
+		argSlots.push(protSlot)
+		argSlots.push(flagsSlot)
+		argSlots.push(fdSlot)
+		argSlots.push(offsetSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MMAP, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'lowerOsAllocPagesMacosArm64'
+
 	// Page release. ARM64-Linux: munmap(ptr, size) via syscall 215.
 	function lowerOsFreePagesArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		match osDesc.os 'osPick'
 			linux then return lowerOsFreePagesLinuxArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			windows then panic("ARM64 osFreePages not yet implemented for Windows")
-			macos then panic("ARM64 osFreePages not yet implemented for macOS")
+			macos then return lowerOsFreePagesMacosArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osFreePages not supported on WASI")
 		end 'osPick'
 	end 'lowerOsFreePagesArm64'
@@ -1756,6 +2064,28 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 215, argSlots: argSlots))
 		return tempSlot + 1
 	end 'lowerOsFreePagesLinuxArm64'
+
+	// macOS: munmap(ptr, size) via the libSystem `_munmap` dyld import.
+	function lowerOsFreePagesMacosArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTempPtr'
+			tempSlot = tempSlot + 1
+		end 'usedTempPtr'
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		// munmap returns int but the caller discards it; reserve a result slot so
+		// the emitter's accounting stays in sync with mirTempCountArm64.
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MUNMAP, argSlots: argSlots))
+		return tempSlot + 1
+	end 'lowerOsFreePagesMacosArm64'
 
 	// ============================================================
 	// Phase 15c Stream 4.1: file/directory I/O op lowerings (ARM64).
@@ -1806,15 +2136,50 @@ export type Arm64Backend implements TargetBackend
 	// user-supplied args (the `mrt_win32_*` helpers have no IR signature
 	// for `lookupFuncParamTypes`). `opName` is used only in macOS/wasi panic
 	// messages.
-	function lowerFileIoOpArm64(resultId ValueId, opName String, valueArgIds ValueIdArray, prependAtFdCwd bool, appendZeroFlags bool, linuxSyscallNum MachineWord, winCallee String, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+	function lowerFileIoOpArm64(resultId ValueId, opName String, valueArgIds ValueIdArray, prependAtFdCwd bool, appendZeroFlags bool, linuxSyscallNum MachineWord, winCallee String, macosImportSlot MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		match osDesc.os 'os'
 			windows then emitArm64DirectCallHandRolled(resultId, callee: winCallee, argIds: valueArgIds, dstBlock: dstBlock)
 			linux then return emitLinuxFileSyscallArm64(resultId, linuxSyscallNum: linuxSyscallNum, valueArgIds: valueArgIds, prependAtFdCwd: prependAtFdCwd, appendZeroFlags: appendZeroFlags, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-			macos then panic("ARM64 {opName} not supported on macos target")
+			macos then return emitMacosFileImportArm64(resultId, importSlot: macosImportSlot, valueArgIds: valueArgIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 {opName} should not reach the backend on wasi — MirToWasm intercepts")
 		end 'os'
 		return nextTempSlot
 	end 'lowerFileIoOpArm64'
+
+	// macOS-import body for `lowerFileIoOpArm64`. macOS forbids raw syscalls, so
+	// file I/O calls the libSystem entry points through the GOT (same model as
+	// `_mmap`). The user-supplied args map directly to the libc function's
+	// parameters — there is no AT_FDCWD prefix or zero-flags suffix (those exist
+	// only for Linux's *at-family syscalls). `importSlot < 0` marks an op with no
+	// macOS import wired yet (currently only getdents64, whose macOS shape —
+	// getdirentries(4 args) + the BSD dirent layout — differs enough to need a
+	// dedicated runtime port). Rather than panic (which crashes the in-process
+	// spec-test compiler and masks every later spec), it returns -1: the
+	// directory-read loop in mrt_directory_next treats `<= 0` as EOF, so a listing
+	// degrades to "empty" instead of crashing. Directory specs fail cleanly until
+	// the getdirentries port lands.
+	function emitMacosFileImportArm64(resultId ValueId, importSlot MachineWord, valueArgIds ValueIdArray, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		if importSlot < 0 'noImport'
+			let errSlot = nextTempSlot
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: -1))
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(errSlot, src: arm64PhysReg(Arm64Register.x0)))
+			valueSlotMapSet(valueSlots, valueId: resultId, slot: errSlot)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: errSlot))
+			return nextTempSlot + 1
+		end 'noImport'
+		var tempSlot = nextTempSlot
+		var argSlots = VarSlotArray.create()
+		for valueArgId in valueArgIds 'eachArg'
+			let (slot, bumped) = reserveValueArm64(valueArgId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+			tempSlot = bumped
+			argSlots.push(slot)
+		end 'eachArg'
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: importSlot, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'emitMacosFileImportArm64'
 
 	// Linux-syscall body for `lowerFileIoOpArm64`. Walks `valueArgIds`,
 	// reserving a slot for each, then emits the syscall + result capture.
@@ -1849,19 +2214,135 @@ export type Arm64Backend implements TargetBackend
 	end 'emitLinuxFileSyscallArm64'
 
 	function lowerOsFileOpenArm64(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		// The open-flag bit values are CANONICALLY the Linux ones (baked into
+		// mrt_file_open_write etc.), and macOS's O_CREAT/O_TRUNC/O_APPEND/O_EXCL
+		// live at different bits — so the macOS path must translate before _open,
+		// or a write open silently lands O_ASYNC instead of O_TRUNC and "write open
+		// failed". Read opens (flags 0) translate to 0, so this is safe for all.
+		let openOnMacos = match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+		if openOnMacos 'macos'
+			return lowerOsFileOpenMacosArm64(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		end 'macos'
+
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(flagsId)
 		argIds.push(fileModeId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileOpen", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 56, winCallee: "mrt_win32_open", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileOpen", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 56, winCallee: "mrt_win32_open", macosImportSlot: MACHO_IMPORT_SLOT_OPEN, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileOpenArm64'
+
+	// macOS open(path, flags, mode): translate the canonical (Linux) open flags to
+	// macOS bit values, then call _open. See emitMacosOpenFlagXlateArm64.
+	function lowerOsFileOpenMacosArm64(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let (pathSlot, afterPath) = reserveValueArm64(cStringPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterPath
+		let (linFlagsSlot, afterFlags) = reserveValueArm64(flagsId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterFlags
+		let macFlagsSlot = tempSlot
+		tempSlot = tempSlot + 1
+		emitMacosOpenFlagXlateArm64(linFlagsSlot, macFlagsSlot: macFlagsSlot, dstBlock: dstBlock)
+		let (modeSlot, afterMode) = reserveValueArm64(fileModeId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterMode
+		// open()'s `mode` is a VARIADIC argument (`int open(const char*, int, ...)`).
+		// The macOS arm64 ABI passes variadic args on the STACK, not in registers —
+		// so mode must land at [sp+0], not x2 (passing it in x2 made open read the
+		// mode from uninitialized stack and create files with garbage perms, e.g.
+		// read-only 0500, which then blocked every re-open-for-write). path + oflag
+		// are NAMED params and stay in x0/x1.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x9), slotIndex: modeSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSpOffset(0, src: arm64PhysReg(Arm64Register.x9)))
+		if 8 > currentOutgoingArgSize 'reserveVariadicSlot'
+			currentOutgoingArgSize = 8
+		end 'reserveVariadicSlot'
+		var argSlots = VarSlotArray.create()
+		argSlots.push(pathSlot)
+		argSlots.push(macFlagsSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_OPEN, argSlots: argSlots))
+		tempSlot = tempSlot + 1
+		// Map a -1 failure to -errno so DirectoryOpenSearchError / FileOpenError
+		// classify (notFound, accessDenied, ...) instead of always hitting catchAll.
+		tempSlot = emitMacosErrnoFixupArm64(resultSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot
+	end 'lowerOsFileOpenMacosArm64'
+
+	// Branchless translation of canonical (Linux) open() flags to macOS bit
+	// values, reading `linFlagsSlot` and writing the result to `macFlagsSlot`:
+	//   macFlags = (lin & 3)                 // O_RDONLY/WRONLY/RDWR — same bits
+	//            | ((lin & 0x40)  << 3)      // O_CREAT  0x40  -> 0x200
+	//            | ((lin & 0x200) << 1)      // O_TRUNC  0x200 -> 0x400
+	//            | ((lin & 0x400) >> 7)      // O_APPEND 0x400 -> 0x8
+	//            | ((lin & 0x80)  << 4)      // O_EXCL   0x80  -> 0x800
+	//            | ((lin & 0x10000) << 4)    // O_DIRECTORY 0x10000 -> 0x100000
+	// x0=lin (preserved), x1=acc, x2=tmp, x3=mask/shift scratch.
+	function emitMacosOpenFlagXlateArm64(linFlagsSlot VarSlot, macFlagsSlot VarSlot, dstBlock IrBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(arm64PhysReg(Arm64Register.x0), slotIndex: linFlagsSlot))
+		// acc = lin & 3
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x1), value: 3))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.andRegs(arm64PhysReg(Arm64Register.x1), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x1)))
+		emitMacosOpenFlagTermArm64(0x40, shift: 3, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x200, shift: 1, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x400, shift: 7, shiftLeft: false, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x80, shift: 4, shiftLeft: true, dstBlock: dstBlock)
+		emitMacosOpenFlagTermArm64(0x10000, shift: 4, shiftLeft: true, dstBlock: dstBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(macFlagsSlot, src: arm64PhysReg(Arm64Register.x1)))
+	end 'emitMacosOpenFlagXlateArm64'
+
+	// One flag-translation term: acc |= ((lin & mask) shifted). lin stays in x0,
+	// acc in x1; x2/x3 are scratch.
+	function emitMacosOpenFlagTermArm64(mask MachineWord, shift MachineWord, shiftLeft bool, dstBlock IrBlock)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x2), value: mask))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.andRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x0), src2: arm64PhysReg(Arm64Register.x2)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x3), value: shift))
+		if shiftLeft 'left'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lslRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x2), src2: arm64PhysReg(Arm64Register.x3)))
+		end 'left' else 'right'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.lsrRegs(arm64PhysReg(Arm64Register.x2), src1: arm64PhysReg(Arm64Register.x2), src2: arm64PhysReg(Arm64Register.x3)))
+		end 'right'
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.orrRegs(arm64PhysReg(Arm64Register.x1), src1: arm64PhysReg(Arm64Register.x1), src2: arm64PhysReg(Arm64Register.x2)))
+	end 'emitMacosOpenFlagTermArm64'
+
+	// Rewrite a libSystem failure return (-1) in `resultSlot` into Linux-style
+	// -errno, leaving any non-negative success value untouched. macOS libc sets
+	// the thread-local errno and returns -1; the shared runtime classifiers
+	// (e.g. mrt_select_io_error_flag) decode the Linux `-errno` convention, so
+	// without this an open() of a missing path reports EPERM (-(-1)=1) instead of
+	// notFound (ENOENT=2). errno is `*___error()`. Branchless: result = (result <
+	// 0) ? -errno : result. Uses scratch x9..x13. Returns the bumped temp slot.
+	function emitMacosErrnoFixupArm64(resultSlot VarSlot, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		let errPtrSlot = nextTempSlot
+		let argSlots = VarSlotArray.create()
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(errPtrSlot, slotIndex: MACHO_IMPORT_SLOT_ERROR, argSlots: argSlots))
+		let base = arm64PhysReg(Arm64Register.x9)
+		let errnoReg = arm64PhysReg(Arm64Register.x10)
+		let negErrno = arm64PhysReg(Arm64Register.x11)
+		let result = arm64PhysReg(Arm64Register.x12)
+		let zero = arm64PhysReg(Arm64Register.x13)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: errPtrSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(errnoReg, baseReg: base, offset: 0, width: StoreWidth.word, signed: true))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.negReg(negErrno, src: errnoReg))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(result, slotIndex: resultSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(zero, value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.cmpRegs(result, src2: zero))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.csel(result, src1: negErrno, src2: result, condition: Arm64CondCode.lt))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(resultSlot, src: result))
+		return nextTempSlot + 1
+	end 'emitMacosErrnoFixupArm64'
 
 	function lowerOsFileReadArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(countId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileRead", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 63, winCallee: "mrt_win32_read", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileRead", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 63, winCallee: "mrt_win32_read", macosImportSlot: MACHO_IMPORT_SLOT_READ, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileReadArm64'
 
 	function lowerOsFileWriteArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
@@ -1869,13 +2350,13 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(countId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileWrite", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 64, winCallee: "mrt_win32_write", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileWrite", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 64, winCallee: "mrt_win32_write", macosImportSlot: MACHO_IMPORT_SLOT_WRITE, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileWriteArm64'
 
 	function lowerOsFileCloseArm64(resultId ValueId, fdId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(fdId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileClose", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 57, winCallee: "mrt_win32_close", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileClose", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 57, winCallee: "mrt_win32_close", macosImportSlot: MACHO_IMPORT_SLOT_CLOSE, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileCloseArm64'
 
 	function lowerOsFileLseekArm64(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
@@ -1883,27 +2364,78 @@ export type Arm64Backend implements TargetBackend
 		argIds.push(fdId)
 		argIds.push(offsetId)
 		argIds.push(whenceId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileLseek", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 62, winCallee: "mrt_win32_lseek", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileLseek", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 62, winCallee: "mrt_win32_lseek", macosImportSlot: MACHO_IMPORT_SLOT_LSEEK, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileLseekArm64'
 
 	function lowerOsFileStatArm64(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(statBufPtrId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		let afterCall = lowerFileIoOpArm64(resultId, opName: "osFileStat", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 79, winCallee: "mrt_win32_stat", macosImportSlot: MACHO_IMPORT_SLOT_STAT, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		// macOS `_stat` fills the BSD struct stat (arm64, 64-bit-inode), whose
+		// field offsets differ from the Linux layout that `mrt_file_stat`
+		// (runtime.std) reads. Repack the fields the runtime consumes into the
+		// Linux offsets in-place, mirroring how the open() path translates flag
+		// bits in the backend rather than making runtime.std OS-conditional.
+		return match osDesc.os 'os'
+			macos gives emitMacosStatRepackArm64(statBufPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: afterCall)
+			linux gives afterCall
+			windows gives afterCall
+			wasi gives afterCall
+		end 'os'
 	end 'lowerOsFileStatArm64'
+
+	// Repack the macOS struct stat at [statBuf] into the Linux field offsets that
+	// `mrt_file_stat` reads. Source (macOS BSD, 64-bit-inode): st_mode@4 (u16),
+	// st_atimespec.tv_sec@32, st_mtimespec.tv_sec@48, st_ctimespec.tv_sec@64,
+	// st_size@96. Destination (Linux): st_mode@24, st_atim@72, st_mtim@88,
+	// st_ctim@104, st_size@48. ALL FIVE source fields are read into registers
+	// FIRST because the Linux size store (@48) overwrites the macOS mtime source
+	// (@48); the destination offsets the runtime never reads are free to clobber.
+	// Runs unconditionally — on a stat failure mrt_file_stat takes its error path
+	// without reading the buffer, so repacking the (heap-allocated, always-mapped)
+	// 144-byte buffer's garbage is harmless.
+	function emitMacosStatRepackArm64(statBufPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		let bufSlot = ensureValueInSlotArm64(statBufPtrId, valueSlots: valueSlots, nextTempSlot: nextTempSlot, dstBlock: dstBlock)
+		var tempSlot = nextTempSlot
+		if bufSlot == nextTempSlot 'usedTemp'
+			tempSlot = tempSlot + 1
+		end 'usedTemp'
+
+		let base = arm64PhysReg(Arm64Register.x9)
+		let mode = arm64PhysReg(Arm64Register.x10)
+		let size = arm64PhysReg(Arm64Register.x11)
+		let atime = arm64PhysReg(Arm64Register.x12)
+		let mtime = arm64PhysReg(Arm64Register.x13)
+		let ctime = arm64PhysReg(Arm64Register.x14)
+
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: bufSlot))
+		// Read all five macOS-layout fields first.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(mode, baseReg: base, offset: 4, width: StoreWidth.halfword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(size, baseReg: base, offset: 96, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(atime, baseReg: base, offset: 32, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(mtime, baseReg: base, offset: 48, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(ctime, baseReg: base, offset: 64, width: StoreWidth.qword, signed: false))
+		// Write them to the Linux offsets the runtime reads.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 24, srcReg: mode, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 48, srcReg: size, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 72, srcReg: atime, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 88, srcReg: mtime, width: StoreWidth.qword))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(base, offset: 104, srcReg: ctime, width: StoreWidth.qword))
+		return tempSlot
+	end 'emitMacosStatRepackArm64'
 
 	function lowerOsFileAccessArm64(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(modeId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileAccess", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 48, winCallee: "mrt_win32_access", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileAccess", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 48, winCallee: "mrt_win32_access", macosImportSlot: MACHO_IMPORT_SLOT_ACCESS, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileAccessArm64'
 
 	function lowerOsFileUnlinkArm64(resultId ValueId, cStringPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
-		return lowerFileIoOpArm64(resultId, opName: "osFileUnlink", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 35, winCallee: "mrt_win32_unlink", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osFileUnlink", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: true, linuxSyscallNum: 35, winCallee: "mrt_win32_unlink", macosImportSlot: MACHO_IMPORT_SLOT_UNLINK, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsFileUnlinkArm64'
 
 	// rename(oldpath, newpath). ARM64 has no plain `rename`; the only entry
@@ -1916,10 +2448,19 @@ export type Arm64Backend implements TargetBackend
 		match osDesc.os 'os'
 			windows then return lowerOsFileRenameWin32Arm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
 			linux then return emitLinuxRenameatArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-			macos then panic("ARM64 osFileRename not supported on macos target")
+			macos then return lowerOsFileRenameMacosArm64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			wasi then panic("ARM64 osFileRename should not reach the backend on wasi — MirToWasm intercepts")
 		end 'os'
 	end 'lowerOsFileRenameArm64'
+
+	// macOS: plain `rename(old, new)` via the libSystem `_rename` import (macOS
+	// has the BSD `rename`, so no AT_FDCWD interleaving like Linux's renameat).
+	function lowerOsFileRenameMacosArm64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var argIds = ValueIdArray.create()
+		argIds.push(oldPathPtrId)
+		argIds.push(newPathPtrId)
+		return emitMacosFileImportArm64(resultId, importSlot: MACHO_IMPORT_SLOT_RENAME, valueArgIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+	end 'lowerOsFileRenameMacosArm64'
 
 	// Windows arm: call the `mrt_win32_rename` helper with both path args. The
 	// arm64-windows helper is an ENOSYS skeleton (file I/O is stubbed on that
@@ -1964,25 +2505,89 @@ export type Arm64Backend implements TargetBackend
 
 	// `mrt_win32_getdents64` — see runtime.std for wrapper-block layout.
 	function lowerOsDirGetdents64Arm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		let getdentsOnMacos = match osDesc.os 'os'
+			macos gives true
+			linux gives false
+			windows gives false
+			wasi gives false
+		end 'os'
+		if getdentsOnMacos 'macos'
+			return lowerOsDirGetdents64MacosArm64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		end 'macos'
+
 		var argIds = ValueIdArray.create()
 		argIds.push(fdId)
 		argIds.push(bufPtrId)
 		argIds.push(bufSizeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirGetdents64", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 61, winCallee: "mrt_win32_getdents64", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirGetdents64", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 61, winCallee: "mrt_win32_getdents64", macosImportSlot: -1, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirGetdents64Arm64'
+
+	// macOS directory read. macOS arm64 has no usable `getdirentries`/`getdents64`
+	// export, so we call the lower-level `___getdirentries64(fd, buf, nbytes,
+	// &basep)` (4 args; the 4th is a `long*` seek cookie the kernel writes). The
+	// returned BSD dirent records (d_reclen u16@16, d_namlen u16@18, d_type u8@20,
+	// d_name@21) differ from the Linux dirent64 layout (d_name@19) that the shared
+	// `mrt_directory_next` parser expects, so the buffer is relaid out in place by
+	// the `mrt_macos_dirent_relayout` runtime helper (kept alive for arm64-macos by
+	// `seedRuntimeBackendEdges`). The helper returns the byte count unchanged, so
+	// the op's result still reports bytes-filled exactly like Linux getdents64.
+	function lowerOsDirGetdents64MacosArm64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let (fdSlot, afterFd) = reserveValueArm64(fdId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterFd
+		let (bufSlot, afterBuf) = reserveValueArm64(bufPtrId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterBuf
+		let (countSlot, afterCount) = reserveValueArm64(bufSizeId, valueSlots: valueSlots, tempSlot: tempSlot, dstBlock: dstBlock)
+		tempSlot = afterCount
+
+		// basep: a single i64 stack slot, zero-initialized (the kernel reads it as
+		// an in/out seek cookie; sequential reads advance the fd offset anyway).
+		let basepSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(basepSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		let basepAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(basepAddrSlot, targetSlot: basepSlot))
+		tempSlot = tempSlot + 1
+
+		// ___getdirentries64(fd, buf, nbytes, &basep) -> bytes filled (or -1).
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(bufSlot)
+		argSlots.push(countSlot)
+		argSlots.push(basepAddrSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_GETDIRENTRIES64, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		tempSlot = tempSlot + 1
+
+		// Relayout BSD dirents -> Linux dirent64 layout in place via the runtime
+		// helper mrt_macos_dirent_relayout(buf, nbytes). It mutates `buf` in place
+		// and returns nbytes unchanged, so the call is purely for its side effect:
+		// `resultId` already holds nbytes (the getdents result == the helper's
+		// return) and is defined exactly once above. Args are moved from virtual
+		// registers (the proven emitArm64DirectCallHandRolled pattern); the return
+		// value in x0 is discarded. resultId is live across the call and spilled by
+		// the register allocator (branchLink clobbers all caller-saved GPRs).
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(bufPtrId)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x1), src: Arm64VReg.virtual(resultId)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink("mrt_macos_dirent_relayout"))
+		return tempSlot
+	end 'lowerOsDirGetdents64MacosArm64'
 
 	function lowerOsDirGetcwdArm64(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(bufPtrId)
 		argIds.push(bufSizeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirGetcwd", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 17, winCallee: "mrt_win32_getcwd", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirGetcwd", valueArgIds: argIds, prependAtFdCwd: false, appendZeroFlags: false, linuxSyscallNum: 17, winCallee: "mrt_win32_getcwd", macosImportSlot: MACHO_IMPORT_SLOT_GETCWD, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirGetcwdArm64'
 
 	function lowerOsDirMkdirArm64(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var argIds = ValueIdArray.create()
 		argIds.push(cStringPtrId)
 		argIds.push(modeId)
-		return lowerFileIoOpArm64(resultId, opName: "osDirMkdir", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 34, winCallee: "mrt_win32_mkdir", dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		return lowerFileIoOpArm64(resultId, opName: "osDirMkdir", valueArgIds: argIds, prependAtFdCwd: true, appendZeroFlags: false, linuxSyscallNum: 34, winCallee: "mrt_win32_mkdir", macosImportSlot: MACHO_IMPORT_SLOT_MKDIR, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 	end 'lowerOsDirMkdirArm64'
 
 	function lowerLoadFramePtrArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
@@ -2061,6 +2666,27 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 		emitArm64Win32Helpers(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	end 'emitHelpers'
 
+	// arm64-macos subprocess runtime: hand-emit the `maxon_subprocess_*` bodies
+	// (posix_spawn + pipes + waitpid) so they override the signature-only stubs in
+	// runtime.std, mirroring the C# bootstrap's arm64 subprocess. Emitted after the
+	// stdlib link pass like the win32 helpers; the recorded labels win via upsert.
+	let isMacosOs = match target.os 'checkMacos'
+		windows gives false
+		linux gives false
+		macos gives true
+		wasi gives false
+	end 'checkMacos'
+	if isMacosOs 'emitMacosSubprocess'
+		emitArm64MacosSubprocess(code, relocations: relocations, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+		// arm64-macos green-thread (async/await + cooperative sleep) runtime:
+		// hand-emit the `__gt_*` / `maxon_sleep` bodies (single-OS-thread cooperative
+		// scheduler) so they override the signature-only stubs in runtime.std. Emitted
+		// in the same post-stdlib-link position as the subprocess runtime; the recorded
+		// labels win via upsert. Needs rdataRelocs (global ADRs) + adrFixups
+		// (__gt_trampoline's func-address ADR) beyond the subprocess emitter's args.
+		emitArm64MacosGreenThread(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	end 'emitMacosSubprocess'
+
 	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
 	arm64ResolveCallFixups(code, labelOffsetMap: labelOffsetMap, callFixups: callFixups)
@@ -2069,7 +2695,7 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 	let startOffset = arm64LookupLabel(labelOffsetMap, name: "mrt_start")
 
 	var rdataOffsetMap = RdataOffsetMap.create()
-	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+	let rdata = buildRdataSection(globalData, map: rdataOffsetMap, funcPtrAlign: rdataFuncPtrAlignment(target.os))
 	let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 	let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
 	rdataRelocs.append(globalData.pendingRdataRelocs)

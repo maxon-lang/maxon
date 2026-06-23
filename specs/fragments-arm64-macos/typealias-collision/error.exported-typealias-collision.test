@@ -1,0 +1,18 @@
+// Test: error.exported-typealias-collision
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 50 as Score
+	return x
+end 'main'
+---
+MaxoncStderr: ```
+error E3063: specs/fragments/typealias-collision/error.exported-typealias-collision.test:10:11: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
+```
+---
+---

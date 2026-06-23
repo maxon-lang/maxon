@@ -1,0 +1,238 @@
+// Test: pass-to-function
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias Vec3 = Vector with 3 Integer
+
+function sum(v Vec3) returns Integer
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	let c = try v.get(2) otherwise 0
+	return a + b + c
+end 'sum'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
+	return sum(v)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @sum(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.mov x20, #0
+  inlined_Vector.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Vector.get_3_0
+  inlined_Vector.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_sum_0
+  inlined_Vector.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_sum_0:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x21, x20
+    arm64.b try_0.merge
+  try_0.ok:
+    arm64.mov x21, x0
+  try_0.merge:
+    arm64.mov x1, #1
+  inlined_Vector.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Vector.get_3_1
+  inlined_Vector.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_sum_1
+  inlined_Vector.get_3_1:
+    arm64.mov x1, #0
+  inline_cont_sum_1:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_1.ok
+    arm64.mov x22, x20
+    arm64.b try_1.merge
+  try_1.ok:
+    arm64.mov x22, x0
+  try_1.merge:
+    arm64.mov x1, #2
+  inlined_Vector.get_0_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Vector.get_3_2
+  inlined_Vector.get_1_2:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_sum_2
+  inlined_Vector.get_3_2:
+    arm64.mov x1, #0
+  inline_cont_sum_2:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq try_2.ok
+    arm64.b try_2.merge
+  try_2.ok:
+    arm64.mov x20, x0
+  try_2.merge:
+    arm64.add x1, x21, x22
+    arm64.add x0, x1, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Vector_N3_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Vector.create
+    arm64.mov x19, x0
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #8
+    arm64.str x0, [x20, #24] (8b)
+    arm64.mov x0, #24
+    arm64.bl mrt_alloc
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #3
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x2, #10
+    arm64.mov x20, #0
+  inlined_Vector.set_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x20
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.set_3_0
+  inlined_Vector.set_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Vector.set_3_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_66886560db0405ce
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x2, #20
+    arm64.mov x1, #1
+  inlined_Vector.set_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.set_3_1
+  inlined_Vector.set_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Vector.set_3_1:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_1:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_513685949d4b9665
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.mov x2, #12
+    arm64.mov x1, #2
+  inlined_Vector.set_0_2:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_set
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Vector.set_3_2
+  inlined_Vector.set_1_2:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_2
+  inlined_Vector.set_3_2:
+    arm64.mov x1, #0
+    arm64.mov x0, #0
+  inline_cont_main_2:
+    arm64.cmp x1, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_bb2f85f4cf4645c8
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_2.merge:
+    arm64.mov x0, x19
+    arm64.bl sum
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_52d41777c7e1b273
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

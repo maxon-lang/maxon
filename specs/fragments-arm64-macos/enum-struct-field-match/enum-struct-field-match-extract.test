@@ -1,0 +1,117 @@
+// Test: enum-struct-field-match-extract
+typealias SmallInt = int(0 to u8.max)
+
+union Value
+		number(n SmallInt)
+		empty
+end 'Value'
+
+type Container
+		export var item as Value
+
+		static function create(item Value) returns Self
+			return Self{item: item}
+		end 'create'
+end 'Container'
+
+function getNumber(c Container) returns SmallInt
+		let v = c.item
+		match v 'mv'
+				number(n) then return n
+				empty then return 0
+		end 'mv'
+end 'getNumber'
+
+function main() returns ExitCode
+		let c = Container.create(Value.number(42))
+		return getNumber(c)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @getNumber(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x0, eq
+    arm64.b.ne mv_0.next0
+  mv_0.case0:
+    arm64.ldr x0, [x1, #8] (8b)
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  mv_0.next0:
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne mv_0.next1
+  mv_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  mv_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_ccd0fbb77c846232
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp+add x1, __destruct_Container
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl getNumber
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_295149989bf4c1f9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

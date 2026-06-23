@@ -1,0 +1,28 @@
+// Test: error.unused-exported-enum
+// --- file: api/status.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum LocalStatus
+	idle
+	running
+	done
+end 'LocalStatus'
+
+function statusOrdinal(s LocalStatus) returns Integer
+	return s.ordinal
+end 'statusOrdinal'
+
+export function entry() returns Integer
+	return statusOrdinal(LocalStatus.idle)
+end 'entry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+MaxoncStderr: ```
+error E3092: specs/fragments/unused-export/error.unused-exported-enum.test/api/status.maxon:1:13: exported type 'LocalStatus' is never referenced outside its declaring file
+```
+---
+---

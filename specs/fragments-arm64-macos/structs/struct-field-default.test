@@ -1,0 +1,81 @@
+// Test: struct-field-default
+type Counter
+	export var value = 0
+	export var step = 1
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function create(value CounterValue, step CounterStep) returns Self
+		return Self{value: value, step: step}
+	end 'create'
+end 'Counter'
+
+typealias CounterValue = int(0 to u64.max)
+typealias CounterStep = int(0 to u64.max)
+
+function main() returns ExitCode
+	let c1 = Counter.create()
+	let c2 = Counter.create(40, step: 1)
+	let c3 = Counter.create(10, step: 2)
+	return c1.value + c2.value + c3.step
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #40
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x21, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x21, #8] (8b)
+    arm64.ldr x22, [x20, #0] (8b)
+    arm64.ldr x23, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.ldr x20, [x21, #8] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.add x1, x23, x22
+    arm64.mov x2, #255
+    arm64.add x0, x1, x20
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7da10f240eca6d41
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

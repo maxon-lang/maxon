@@ -1,0 +1,83 @@
+// Test: non-exported-same-name-different-range
+// --- file: a.maxon
+typealias Limit = int(0 to 500)
+
+export function clampA(x Limit) returns Limit
+	return x
+end 'clampA'
+
+// --- file: b.maxon
+typealias Limit = int(0 to 2000)
+
+export function clampB(x Limit) returns Limit
+	return x
+end 'clampB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = clampA(40)
+	let b = clampB(60)
+	return a + b
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @clampA(x0: u16) -> u16 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #500
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2e698cf0dc45265f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @clampB(x0: u16) -> u16 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #500
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2e698cf0dc45265f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #40
+    arm64.bl clampA
+    arm64.mov x19, x0
+    arm64.mov x0, #60
+    arm64.bl clampB
+    arm64.mov x1, x0
+    arm64.mov x2, #255
+    arm64.add x0, x19, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_81579191394750be
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -232,8 +232,13 @@ function findWasmOptPath() returns FilePath
 	var candidates = StringArrayArray.create()
 	let exe = ["vendor", "wasm-opt", "wasm-opt.exe"]
 	let noExt = ["vendor", "wasm-opt", "wasm-opt"]
-	candidates.push(exe)
+	// Prefer the extensionless native binary first: on macOS/Linux the vendored
+	// host tool is `wasm-opt` (a Windows `wasm-opt.exe` can't exec here, and
+	// running it via Subprocess hangs rather than failing cleanly). On Windows
+	// the extensionless name doesn't exist, so the lookup falls through to the
+	// `.exe` — identical behaviour there.
 	candidates.push(noExt)
+	candidates.push(exe)
 	return findFileUpward(candidates)
 end 'findWasmOptPath'
 
@@ -282,8 +287,10 @@ function findWasmToolsPath() returns FilePath
 	var candidates = StringArrayArray.create()
 	let exe = ["vendor", "wasm-tools", "wasm-tools.exe"]
 	let noExt = ["vendor", "wasm-tools", "wasm-tools"]
-	candidates.push(exe)
+	// Prefer the extensionless native binary first (see findWasmOptPath): the
+	// macOS/Linux host tool is `wasm-tools`; Windows falls through to the `.exe`.
 	candidates.push(noExt)
+	candidates.push(exe)
 	return findFileUpward(candidates)
 end 'findWasmToolsPath'
 
@@ -458,12 +465,16 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// mid-run (a cancelled or never-awaited `async`), and the leak gate would
 	// count the GT's in-flight allocations as leaks. Applied before
 	// patchMrtStartGlobalCleanup so the drain executes first (before-osExit
-	// insertions land in application order). x64-Windows only — the wasm
+	// insertions land in application order). x64-Windows and arm64-macOS have a
+	// native cooperative GT runtime whose threads need draining; the wasm
 	// scheduler runs main itself as a GT (`__sched_run` returns only once
-	// every GT is done), and other targets have no preemptive GT runtime.
-	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinGtCleanup'
+	// every GT is done), and the remaining targets have no GT runtime.
+	// `__gt_cleanup` is idempotent (a no-op when the scheduler never initialised —
+	// guarded by __gt_init_done), so a non-async program pays nothing.
+	let nativeGtRuntime = (project.target.cpu == CpuArch.x64 and project.target.os == Os.windows) or (project.target.cpu == CpuArch.arm64 and project.target.os == Os.macos)
+	if nativeGtRuntime 'nativeGtCleanup'
 		patchMrtStartCallGtCleanup(augmented)
-	end 'x64WinGtCleanup'
+	end 'nativeGtCleanup'
 	// Release every module-global holding a MANAGED value at program exit, so a
 	// `let g = Box.create(7)` (or any container/string global) is freed EXACTLY
 	// once rather than left as a 1-per-global leak. Mirrors the C# bootstrap's
@@ -481,14 +492,17 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	if project.target.cpu == CpuArch.wasm32 'wasmBootstrap'
 		patchMrtStartWasmBootstrap(augmented)
 	end 'wasmBootstrap'
-	// On x64-Windows, install the CPU-fault handler (the vectored exception handler
-	// registered at the tail of __gt_init) for EVERY program — not just async ones —
-	// so a hardware fault in straight-line code prints a clean diagnostic and exits 1
-	// instead of a silent 0xC0000005. Mirrors the C# bootstrap, which calls __gt_init
-	// unconditionally from _start. The call is idempotent (guarded by __gt_init_done),
-	// so an async program that later spawns just observes the flag and skips re-init.
-	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinFaultHandler'
+	// Install the CPU-fault handler (registered at the tail of __gt_init: a vectored
+	// exception handler on x64-Windows, a sigaction handler on arm64-macOS) for EVERY
+	// program — not just async ones — so a hardware fault in straight-line code prints
+	// a clean panic diagnostic and exits 1 instead of a silent crash. Mirrors the C#
+	// bootstrap, which calls __gt_init unconditionally from _start. The call is
+	// idempotent (guarded by __gt_init_done), so an async program that later spawns
+	// just observes the flag and skips re-init.
+	if nativeGtRuntime 'nativeGtFaultHandler'
 		patchMrtStartCallGtInit(augmented)
+	end 'nativeGtFaultHandler'
+	if project.target.cpu == CpuArch.x64 and project.target.os == Os.windows 'x64WinFaultHandler'
 		// Bring up the IOCP async-I/O subsystem (completion thread + sync worker)
 		// right after the scheduler, and tear it down before osExit — mirroring the
 		// C# bootstrap, which calls __io_init / __io_shutdown unconditionally from
@@ -932,6 +946,34 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		seedRuntimeReachName("__gt_cancel", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'win32Helpers'
 
+	// arm64-macOS green-thread runtime (emitArm64MacosGreenThread, emitted
+	// unconditionally after the stdlib link pass). Mirrors the win32 block above:
+	//   * `patchMrtStartCallGtCleanup` injects `call __gt_cleanup` into mrt_start
+	//     AFTER this walk (the nativeGtRuntime gate now includes arm64-macOS), so
+	//     its edge is invisible here — seed it (and `__gt_cancel`, reached only from
+	//     `p.cancel()`) so their signature stubs survive the filter behind the
+	//     hand-emitted bodies' labels.
+	//   * The hand-rolled `__gt_trace_emit` BLs `__diag_print_tag` / `__diag_print_i64`
+	//     (guarded by `__at_trace_enabled`), reached by no other edge in a non-trace
+	//     program — seed them or the fixups resolve to .text+0.
+	//   * `__gt_init` is lazily BL'd from `__gt_spawn` / `maxon_sleep`; seed it so its
+	//     stub is in `allFunctions` even before those are reached (the per-function
+	//     `backendSynthesizedRuntimeEdges` seed below pulls in the rest of the family
+	//     once any green-thread root is reached).
+	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'arm64MacosGt'
+		seedRuntimeReachName("__gt_init", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__gt_cleanup", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__gt_cancel", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_tag", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_i64", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The hand-rolled CPU-fault diagnostic (`emitArm64GtFaultDiagnostic`) BLs these
+		// two `.std` helpers to render its panic line, and no other call edge reaches
+		// them in a non-fault, non-trace program — seed them or the fixups resolve to
+		// .text+0 ("Unresolved label"). Mirrors the x64-Windows leg above (919-920).
+		seedRuntimeReachName("mrt_write_cstr_stderr", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeReachName("__diag_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'arm64MacosGt'
+
 	// Seed the argv-cache teardown helper for whichever backend builds a cache.
 	// `patchMrtStartFreeArgvCache` injects `call <helper>` into mrt_start AFTER
 	// this walk, so the edge is invisible here; seed the signature-only stub so
@@ -1009,7 +1051,7 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		if let func = try runtimeMap.get(name) 'isRuntime'
 			collectRuntimeReachFromFunc(runtime, func: func, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		end 'isRuntime'
-		seedRuntimeBackendEdges(name, cpu: cpu, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		seedRuntimeBackendEdges(name, target: target, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		i = i + 1
 	end 'walk'
 
@@ -1166,12 +1208,67 @@ end 'appendCalleeFromStdSystemOp'
 // their caller does. Native (x64-windows / x64-linux / arm64-macos)
 // emits the bodies as written, so the IR walk catches every edge and
 // this hook is a no-op there.
-function seedRuntimeBackendEdges(funcName String, cpu CpuArch, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	match cpu 'arch'
-		x64 to arm64 then return
+function seedRuntimeBackendEdges(funcName String, target Target, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+	match target.cpu 'arch'
+		x64 to arm64 then seedNativeBackendEdges(funcName, target: target, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		wasm32 then seedRuntimeBackendEdgesWasm(funcName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'arch'
 end 'seedRuntimeBackendEdges'
+
+function seedNativeBackendEdges(funcName String, target Target, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+	for callee in backendSynthesizedRuntimeEdges(funcName, target: target) 'edge'
+		seedRuntimeReachName(callee, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'edge'
+end 'seedNativeBackendEdges'
+
+// Backend-synthesized runtime call edges that no Std-IR `call` op records: a
+// per-arch lowering emits a `bl`/`call` into these helpers, so the callee has no
+// IR-level caller for any reachability walk to follow. On arm64-macos the
+// osDirGetdents64 lowering branches into `mrt_macos_dirent_relayout` after the
+// ___getdirentries64 import (Linux/Windows arm64 lower it without that call, so
+// the edge is macOS-gated). EVERY reachability closure must add these or the
+// callee compiles/links as a 0-byte signature stub: the runtime DCE filter
+// (seedNativeBackendEdges) AND the v80 lazy-codegen needed-closure
+// (lazyNeededClosure) both consume this. Native only — wasm edges live in
+// seedRuntimeBackendEdgesWasm (wasm always merges the full runtime, so its lazy
+// path never strands a helper).
+export function backendSynthesizedRuntimeEdges(funcName String, target Target) returns StringArray
+	var edges = StringArray.create()
+	let isMacos = match target.os 'os'
+		macos gives true
+		windows gives false
+		linux gives false
+		wasi gives false
+	end 'os'
+	if target.cpu == CpuArch.arm64 and isMacos and funcName == "mrt_directory_next" 'dirRelayout'
+		edges.push("mrt_macos_dirent_relayout")
+	end 'dirRelayout'
+	// arm64-macos subprocess runtime: the hand-emitted maxon_subprocess_spawn /
+	// wait_collect / result-stream-copy bodies (Arm64MacosSubprocess.maxon) BL
+	// directly into the slab allocator + managed-mem helper. Those call fixups are
+	// appended AFTER the stdlib link pass, so the reachability/lazy closures can't
+	// see them — seed the edge here off maxon_subprocess_spawn (itself reachable
+	// whenever a program calls Subprocess.run). EVERY closure consumes this.
+	if target.cpu == CpuArch.arm64 and isMacos and funcName == "maxon_subprocess_spawn" 'macosSubprocess'
+		for name in arm64MacosSubprocessRuntimeNames() 'eachSeed'
+			edges.push(name)
+		end 'eachSeed'
+	end 'macosSubprocess'
+	// arm64-macos green-thread runtime: the hand-emitted __gt_* / maxon_sleep bodies
+	// (Arm64MacosGreenThread.maxon) BL into each other + the slab allocator / mm_decref
+	// / trace printers. Those call fixups are appended AFTER the stdlib link pass, so
+	// the reachability/lazy closures can't see them — seed the whole family off any
+	// green-thread root reachable from a program that uses async / sleep (__gt_spawn,
+	// __gt_await — `try await` also lowers to __gt_await — maxon_sleep) or the
+	// post-walk-injected __gt_init / __gt_cleanup. EVERY closure consumes this.
+	let isGtRoot = funcName == "__gt_spawn" or funcName == "__gt_await" or funcName == "maxon_sleep" or funcName == "__gt_init" or funcName == "__gt_cleanup"
+	if target.cpu == CpuArch.arm64 and isMacos and isGtRoot 'macosGreenThread'
+		for name in arm64MacosGreenThreadRuntimeNames() 'eachGtSeed'
+			edges.push(name)
+		end 'eachGtSeed'
+	end 'macosGreenThread'
+	return edges
+end 'backendSynthesizedRuntimeEdges'
 
 function seedRuntimeBackendEdgesWasm(funcName String, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
 	// MirToWasm's emitWasm* helpers synthesize calls into other runtime

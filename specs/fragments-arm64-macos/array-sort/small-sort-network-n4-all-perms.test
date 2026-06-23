@@ -1,0 +1,467 @@
+// Test: small-sort-network-n4-all-perms
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function isSorted(a IntArray) returns bool
+	let n = a.count()
+	if n <= 1 'trivial'
+		return true
+	end 'trivial'
+	var i = 1
+	while i < n 'scan'
+		let prev = try a.get(i - 1) otherwise return false
+		let curr = try a.get(i) otherwise return false
+		if prev > curr 'oop'
+			return false
+		end 'oop'
+		i = i + 1
+	end 'scan'
+	return true
+end 'isSorted'
+
+// Build the k-th permutation of [0,1,2,3] using factoriadic decomposition.
+function nthPerm4(k Integer) returns IntArray
+	var pool = IntArray.create()
+	pool.push(0)
+	pool.push(1)
+	pool.push(2)
+	pool.push(3)
+	var result = IntArray.create()
+	var remaining = k
+	let divs = [6, 2, 1, 1]
+	for i in 0 upto 4 'pick'
+		let d = try divs.get(i) otherwise panic("divs OOB")
+		let idx = trunc(remaining / d)
+		remaining = remaining mod d
+		let v = try pool.get(idx) otherwise panic("pool OOB")
+		result.push(v)
+		try pool.remove(idx) otherwise panic("pool.remove OOB")
+	end 'pick'
+	return result
+end 'nthPerm4'
+
+function main() returns ExitCode
+	var k = 0
+	var failed = 0
+	while k < 24 'eachPerm'
+		var perm = nthPerm4(k)
+		perm.sort(ascending)
+		if not isSorted(perm) 'bad'
+			failed = failed + 1
+		end 'bad'
+		k = k + 1
+	end 'eachPerm'
+	print("{failed}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+0
+```
+---
+// CompiledIR
+module {
+  func @ascending(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.mov x0, x2
+    arm64.bl int.compare
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d062ed70dacbfe16
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @isSorted(x0: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x21, #1
+    arm64.mov x22, #0
+    arm64.cmp x20, x21
+    arm64.cset x1, le
+    arm64.b.gt __phi_trampoline_0_0
+  trivial_0:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  scan_0.header:
+    arm64.cmp x23, x20
+    arm64.cset x1, lt
+    arm64.b.ge scan_0.exit
+  scan_0:
+    arm64.sub x1, x23, x21
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.mov x24, x0
+    arm64.b inline_cont_isSorted_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+    arm64.mov x24, x0
+  inline_cont_isSorted_0:
+    arm64.cmp x1, x22
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_0_1
+    arm64.b try_0.otherwise
+  scan_0.exit:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.otherwise:
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, x23
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.mov x2, x0
+    arm64.b inline_cont_isSorted_1
+  inlined_Array.get_3_1:
+    arm64.mov x1, #0
+    arm64.mov x2, x0
+  inline_cont_isSorted_1:
+    arm64.cmp x1, x22
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.cmp x24, x2
+    arm64.cset x0, gt
+    arm64.b.le oop_0.after
+  oop_0:
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  oop_0.after:
+    arm64.add x0, x23, x21
+    arm64.mov x23, x0
+    arm64.b scan_0.header
+  __phi_trampoline_0_0:
+    arm64.mov x23, x21
+    arm64.b scan_0.header
+  }
+  func @nthPerm4(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x1
+    arm64.bl Array.create
+    arm64.mov x20, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x21, #0
+    arm64.mov x0, x20
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #1
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #2
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #3
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x1
+    arm64.bl Array.create
+    arm64.mov x22, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.adrp_add_rdata x0, __rdata_arr_nthPerm4_0
+    arm64.ldr x1, [x29, #16]
+    arm64.str x1, [x23, #0] (8b)
+    arm64.mov x1, #4
+    arm64.str x1, [x23, #8] (8b)
+    arm64.mov x1, #-2
+    arm64.str x1, [x23, #16] (8b)
+    arm64.mov x1, #8
+    arm64.str x1, [x23, #24] (8b)
+    arm64.mov x1, #-2
+    arm64.str x1, [x23, #32] (8b)
+    arm64.str x21, [x23, #40] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Int
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x23
+    arm64.bl Array.init
+    arm64.mov x23, x0
+    arm64.mov x24, #4
+    arm64.mov x25, x21
+  pick_0.header:
+    arm64.cmp x25, x24
+    arm64.cset x0, lt
+    arm64.b.ge pick_0.exit
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x23, #0] (8b)
+    arm64.mov x1, x25
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_nthPerm4_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_nthPerm4_0:
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+    arm64.b try_0.otherwise
+  pick_0.step:
+    arm64.mov x0, #1
+    arm64.add x1, x25, x0
+    arm64.mov x19, x26
+    arm64.mov x25, x1
+    arm64.b pick_0.header
+  pick_0.exit:
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.epilogue
+    arm64.ret
+  try_0.otherwise:
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_ddd5b5579a0bd253
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.msub x26, x19, x0
+    arm64.sdiv x27, x19, x0
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, x27
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.mov x2, x0
+    arm64.b inline_cont_nthPerm4_1
+  inlined_Array.get_3_1:
+    arm64.mov x1, #0
+    arm64.mov x2, x0
+  inline_cont_nthPerm4_1:
+    arm64.cmp x1, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_51d44b9ab7db3533
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x3, [x29, #16]
+    arm64.mov x0, x22
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x20
+    arm64.mov x1, x27
+    arm64.bl Array.remove
+    arm64.mov x0, x1
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq pick_0.step
+  try_2.otherwise:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp_add_rdata x0, __panic_msg_f63069c0a15d7734
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.mov x19, #0
+    arm64.mov x20, #1
+    arm64.mov x21, x19
+    arm64.mov x22, x19
+  eachPerm_0.header:
+    arm64.mov x0, #24
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.b.ge eachPerm_0.exit
+  eachPerm_0:
+    arm64.mov x0, x21
+    arm64.bl nthPerm4
+    arm64.mov x23, x0
+    arm64.ldr x0, [x23, #0] (8b)
+    arm64.ldr x2, [x0, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x5, [x29, #72]
+    arm64.adrp+add x3, __fnref_ascending
+    arm64.mov x1, #0
+    arm64.mov x0, x23
+    arm64.mov x4, x19
+    arm64.bl Array.driftsortRange
+    arm64.mov x0, x23
+    arm64.bl isSorted
+    arm64.mov x24, x0
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.eor x0, x24, x20
+    arm64.cmp x0, #0
+    arm64.b.eq bad_0.after
+    arm64.b bad_0
+  eachPerm_0.exit:
+    arm64.mov x0, #21
+    arm64.bl mrt_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x22
+    arm64.mov x1, x23
+    arm64.bl mrt_i64_to_string
+    arm64.mov x24, x0
+    arm64.add x0, x24, x19
+    arm64.add x25, x0, x20
+    arm64.add x0, x25, x20
+    arm64.bl mrt_alloc
+    arm64.mov x26, x0
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #72]
+    arm64.str x26, [x29, #16]
+    arm64.str x0, [x29, #72]
+    arm64.str x19, [x29, #24]
+    arm64.memcpy
+    arm64.add x4, x26, x19
+    arm64.str x4, [x29, #32]
+    arm64.str x23, [x29, #40]
+    arm64.str x24, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_9
+    arm64.ldr x0, [x29, #72]
+    arm64.add x1, x4, x24
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #72]
+    arm64.str x20, [x29, #64]
+    arm64.memcpy
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_decref
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x23, x0
+    arm64.str x19, [x23, #40] (8b)
+    arm64.str x26, [x23, #0] (8b)
+    arm64.str x25, [x23, #8] (8b)
+    arm64.str x25, [x23, #16] (8b)
+    arm64.str x20, [x23, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x23, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x24, x0
+    arm64.str x23, [x24, #0] (8b)
+    arm64.str x19, [x24, #8] (8b)
+    arm64.ldr x23, [x24, #0] (8b)
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x23, #8] (8b)
+    arm64.ldr x25, [x23, #0] (8b)
+    arm64.mov x0, x25
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x24
+    arm64.bl mm_drop
+    arm64.mov x0, x23
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  bad_0:
+    arm64.add x0, x22, x20
+    arm64.mov x22, x0
+  bad_0.after:
+    arm64.add x0, x21, x20
+    arm64.mov x21, x0
+    arm64.b eachPerm_0.header
+  }
+}
+---

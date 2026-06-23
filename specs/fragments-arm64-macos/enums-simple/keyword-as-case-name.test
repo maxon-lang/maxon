@@ -1,0 +1,51 @@
+// Test: keyword-as-case-name
+enum TokenType
+	function
+	return
+	end
+	if
+	else
+	let
+	var
+	identifier
+end 'TokenType'
+
+function main() returns ExitCode
+	let t = TokenType.function
+	let result = match t 'check'
+		function gives 1
+		return gives 0
+		end gives 0
+		if gives 0
+		else gives 0
+		let gives 0
+		var gives 0
+		identifier gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+  check_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_c6547af420c7d25b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

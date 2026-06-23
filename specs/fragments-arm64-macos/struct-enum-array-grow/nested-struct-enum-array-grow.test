@@ -1,0 +1,194 @@
+// Test: nested-struct-enum-array-grow
+typealias Integer = int(i64.min to i64.max)
+
+export union CfOp
+		br(target Integer)
+		condBr(cond Integer)
+end 'CfOp'
+
+export union IrOp
+		cf(op CfOp)
+		arith(value Integer)
+end 'IrOp'
+
+typealias IrOpArray = Array with IrOp
+
+export type IrBlock
+		export var id as Integer
+		export var ops as IrOpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
+
+		static function create(id Integer, ops IrOpArray, terminator IrOp, hasTerminator bool) returns Self
+			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'IrBlock'
+
+typealias DepArray = Array with Integer
+
+export type Database
+		export var block as IrBlock
+		export var deps as DepArray
+
+		static function create(block IrBlock, deps DepArray) returns Self
+			return Self{block: block, deps: deps}
+		end 'create'
+end 'Database'
+
+function main() returns ExitCode
+		let block = IrBlock.create(0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		var db = Database.create(block, deps: DepArray.create())
+		db.deps.push(1)
+		db.deps.push(2)
+		db.deps.push(3)
+		db.deps.push(4)
+		db.deps.push(5)
+		return db.deps.count()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @IrBlock.create(x0: i64, x1: i64, x2: i64, x3: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.mov x21, x2
+    arm64.mov x22, x3
+    arm64.adrp+add x1, __destruct_IrBlock
+    arm64.mov x2, #32
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x23, #8] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x23, #16] (8b)
+    arm64.str x19, [x23, #0] (8b)
+    arm64.str x20, [x23, #8] (8b)
+    arm64.str x21, [x23, #16] (8b)
+    arm64.str x22, [x23, #24] (1b)
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  }
+  func @Database.create(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, x0
+    arm64.mov x20, x1
+    arm64.adrp+add x1, __destruct_Database
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x21, #0] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x21, #8] (8b)
+    arm64.str x19, [x21, #0] (8b)
+    arm64.str x20, [x21, #8] (8b)
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_IrOp
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
+    arm64.adrp+add x1, __destruct_IrOp
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x21, #0] (8b)
+    arm64.str x20, [x21, #8] (8b)
+    arm64.mov x3, #0
+    arm64.mov x0, #0
+    arm64.mov x1, x19
+    arm64.mov x2, x21
+    arm64.bl IrBlock.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x1, x0
+    arm64.mov x0, x19
+    arm64.bl Database.create
+    arm64.mov x19, x0
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #1
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #2
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #3
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #4
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #5
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl Array.count
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_438e37d4cc0ebc33
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

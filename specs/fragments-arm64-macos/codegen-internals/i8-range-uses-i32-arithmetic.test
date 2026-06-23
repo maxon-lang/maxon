@@ -1,0 +1,36 @@
+// Test: i8-range-uses-i32-arithmetic
+typealias Tiny = int(0 to 100)
+
+function main() returns ExitCode
+	let a = 21 as Tiny
+	let b = 3 as Tiny
+	return a / b
+end 'main'
+---
+ExitCode: 7
+RequiredIRSelfhosted: ```
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #3
+    arm64.mov x2, #21
+    arm64.sdiv x0, x2, x1
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_771a87d3fb99fca9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+
+```
+---
+---

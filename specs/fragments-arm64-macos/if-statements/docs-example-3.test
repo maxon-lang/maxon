@@ -1,0 +1,33 @@
+// Test: docs-example-3
+function main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #2
+  case1_0.else:
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne default_0
+  case2_0:
+    arm64.mov x0, #2
+    arm64.ret
+  default_0:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

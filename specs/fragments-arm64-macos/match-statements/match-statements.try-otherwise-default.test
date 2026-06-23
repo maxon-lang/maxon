@@ -1,0 +1,91 @@
+// Test: match-statements.try-otherwise-default
+enum Err implements Error
+	bad
+end 'Err'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function leaf() returns Score throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then return try leaf() otherwise 42
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	return dispatch(1)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @leaf() -> u8 {
+  entry:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @dispatch(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne k_0.case1
+  k_0.case0:
+    arm64.bl leaf
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #42
+  try_0.merge:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  k_0.case1:
+    arm64.adrp_add_rdata x0, __panic_msg_fe66c40428c72f5a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e00fefe1d7fda948
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+    arm64.bl dispatch
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_40bb7d3f3a07616e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

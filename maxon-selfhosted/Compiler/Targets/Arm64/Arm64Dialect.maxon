@@ -171,15 +171,30 @@ export union Arm64Op
 	// StdSystemOp lowering
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
 	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
-	globalAddr(resultSlot VarSlot, name String) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
-	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
-	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
-	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
-	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
+	// Slot-based ops (`isCall: false`) materialize their operands into fixed
+	// in-pool scratch GPRs in the code emitter. Unlike the atomic ops below —
+	// which scratch only out-of-pool x16/x17/x18 — these touch x0..x3, so they
+	// MUST declare those clobbers in `implicitGprDefs` (bit i = xi). Without
+	// it the allocator may keep a live value in one of those registers across
+	// the op and see it silently destroyed (e.g. `globalAddr`'s `adr x0`
+	// clobbering a value the allocator had colored to x0). `isCall` ops get
+	// caller-saved protection from the colorer's call-awareness instead.
+	globalAddr(resultSlot VarSlot, name String) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 1}  // adr x0
+	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 1}  // add x0
+	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 7}  // x0,x1,x2
+	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 3}  // x0,x1
+	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 15}  // x0,x1,x2,x3
 	// Register allocator ops
 	movRegReg(dest Arm64VReg, src Arm64VReg) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.movRegReg, implicitGprReads: 0, implicitGprDefs: 0}
 	spillToStack(offset MachineWord, src Arm64VReg) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
 	reloadFromStack(dest Arm64VReg, offset MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
+	// Load an incoming overflow (>8th GPR) parameter from the caller's outgoing
+	// stack-arg area. `argIndex` is the 0-based position among stack-passed
+	// params; the code emitter resolves it to `[x29 + (frameSize - outgoingArgSize)
+	// + argIndex*8]` — a frame-size-dependent offset only known at emit time,
+	// which is why this can't reuse `reloadFromStack` (whose offset is baked at
+	// lowering). Pure def, like reloadFromStack.
+	loadIncomingArg(dest Arm64VReg, argIndex MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Call support ops
 	branchLinkReg(reg Arm64VReg) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.callIndirect, implicitGprReads: 0, implicitGprDefs: 65535}
 	subSpImm(value StackSize) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
@@ -231,10 +246,11 @@ export union Arm64Op
 	sxtw(dest Arm64VReg, src Arm64VReg) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.defUse, implicitGprReads: 0, implicitGprDefs: 0}
 	// Null-safe load
 	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
-	// Atomic memory ops emitted as ARMv8 LL/SC sequences. Scratch registers
-	// x16, x17 (and x18 for atomicXaddMem) are outside the regalloc pool so
-	// no implicit defs need to be tracked. The full LL/SC retry loop is
-	// emitted inline by the code emitter using a hardcoded backward branch.
+	// Atomic memory ops. inc/dec/cas expand to ARMv8 LL/SC retry loops scratching
+	// only x16/x17; xadd is a plain load-add-store (mirrors the bootstrap) also
+	// using only x16/x17. All scratch is outside the regalloc pool, so no implicit
+	// defs need tracking. NB: x18 must NEVER be scratched — it is the reserved
+	// platform register on arm64-macos and clobbering it corrupts thread state.
 	atomicIncMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicDecMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
 	atomicXaddMem(resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.threeAddr, implicitGprReads: 0, implicitGprDefs: 0}
@@ -309,6 +325,7 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		movRegReg(dest, src) gives "arm64.mov {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
 		spillToStack(offset, src) gives "arm64.str {arm64VRegToString(src)}, [x29, #{offset}]"
 		reloadFromStack(dest, offset) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #{offset}]"
+		loadIncomingArg(dest, argIndex) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #incoming_arg({argIndex})]"
 		branchLinkReg(reg) gives "arm64.blr {arm64VRegToString(reg)}"
 		subSpImm(value) gives "arm64.sub sp, sp, #{value}"
 		addSpImm(value) gives "arm64.add sp, sp, #{value}"

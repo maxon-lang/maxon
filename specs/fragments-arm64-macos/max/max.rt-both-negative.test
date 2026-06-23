@@ -1,0 +1,183 @@
+// Test: max.rt-both-negative
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let a = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+	let b = try float.fromString(try args.get(2) otherwise "") otherwise 0.0
+	return trunc(max(a, b)) + 10
+end 'main'
+---
+Args: -2.0 -8.0
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.bl CommandLine.args
+    arm64.mov x19, x0
+    arm64.mov x1, #1
+    arm64.mov x20, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x22, #0
+    arm64.b __rc_edge_15_0
+  inline_cont_main_0:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_16_0
+  try_0.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x21, x0
+    arm64.str x20, [x21, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x21, #0] (8b)
+    arm64.str x20, [x21, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x21, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x21, #24] (8b)
+    arm64.str x20, [x21, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x21, [x22, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #8] (8b)
+    arm64.mov x21, x22
+  try_0.merge:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__float_fromString
+    arm64.mov x22, x1
+    arm64.fmov d8, d0
+    arm64.mov x0, x21
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x22, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.ldr d0, [rdata+__float_0]
+    arm64.fmov d8, d0
+  try_1.merge:
+    arm64.mov x1, #2
+  inlined_Array.get_0_1:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_1
+  inlined_Array.get_3_1:
+    arm64.mov x22, #0
+    arm64.b __rc_edge_19_0
+  inline_cont_main_1:
+    arm64.cmp x1, x20
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_20_0
+  try_2.otherwise:
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.str x20, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.str x20, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x21, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x21, #8] (8b)
+    arm64.mov x19, x21
+  try_2.merge:
+    arm64.mov x0, x19
+    arm64.bl stdlib.__float_fromString
+    arm64.mov x21, x1
+    arm64.fmov d9, d0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.cmp x21, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_3.merge
+  try_3.otherwise:
+    arm64.ldr d0, [rdata+__float_0]
+    arm64.fmov d9, d0
+  try_3.merge:
+    arm64.fmax d0, d8, d9
+    arm64.mov x1, #10
+    arm64.fcvtzs x2, d0
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  __rc_edge_15_0:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x21
+    arm64.mov x1, x22
+    arm64.b inline_cont_main_0
+  __rc_edge_19_0:
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.mov x1, x22
+    arm64.b inline_cont_main_1
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1609face127a7628
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_16_0:
+    arm64.mov x21, x0
+    arm64.b try_0.merge
+  __phi_trampoline_20_0:
+    arm64.mov x19, x0
+    arm64.b try_2.merge
+  }
+}
+---

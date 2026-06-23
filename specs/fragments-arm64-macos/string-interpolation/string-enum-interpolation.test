@@ -1,0 +1,97 @@
+// Test: string-enum-interpolation
+enum Status
+	active = "Active"
+	inactive = "Inactive"
+	pending = "Pending"
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.active
+	print("Status: {s}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Status: Active
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.adrp_add_rdata x0, __istr_332
+    arm64.ldr x1, [x29, #72]
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #72]
+    arm64.mov x19, #1
+    arm64.sub x2, x0, x1
+    arm64.mul x0, x2, x19
+    arm64.mov x2, #16
+    arm64.add x20, x1, x0
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x21, [x29, #72]
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc
+    arm64.mov x22, x0
+    arm64.mov x23, #0
+    arm64.sub x0, x21, x20
+    arm64.mul x1, x0, x23
+    arm64.mov x4, #8
+    arm64.adrp_add_rdata x0, __istr_484
+    arm64.ldr x2, [x29, #72]
+    arm64.add x5, x20, x1
+    arm64.adrp_add_rdata x0, __istr_480
+    arm64.ldr x6, [x29, #80]
+    arm64.str x22, [x29, #16]
+    arm64.str x2, [x29, #72]
+    arm64.str x4, [x29, #24]
+    arm64.memcpy
+    arm64.sub x0, x6, x5
+    arm64.mul x1, x0, x23
+    arm64.mov x6, #6
+    arm64.add x0, x5, x1
+    arm64.add x5, x22, x4
+    arm64.str x5, [x29, #32]
+    arm64.str x0, [x29, #40]
+    arm64.str x6, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_9
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x6
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x19, [x29, #64]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x23, [x20, #40] (8b)
+    arm64.str x22, [x20, #0] (8b)
+    arm64.mov x0, #15
+    arm64.str x0, [x20, #8] (8b)
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x19, [x20, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.str x20, [x19, #0] (8b)
+    arm64.str x23, [x19, #8] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x20, [x0, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,68 @@
+// Test: conformance-multiple-interfaces
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Readable
+	function read() returns Integer
+end 'Readable'
+
+interface Writable
+	function write(value Integer)
+end 'Writable'
+
+type Buffer implements Readable, Writable
+	var data as Integer
+
+	function read() returns Integer
+		return data
+	end 'read'
+
+	function write(value Integer)
+		data = value
+	end 'write'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Buffer'
+
+function main() returns ExitCode
+	var buf = Buffer.create(0)
+	buf.write(42)
+	return buf.read()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_a3be54734fc1ba06
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

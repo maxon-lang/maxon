@@ -1,0 +1,48 @@
+// Test: tuple-partial-discard
+
+typealias Small = int(0 to 100)
+
+function makePair() returns (Small, Small)
+	return (10, 20)
+end 'makePair'
+
+function main() returns ExitCode
+	let (a, _) = makePair()
+	return a
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #20
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldrb x0, [x19, #8] (1b)
+    arm64.ldrb x20, [x19, #0] (1b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_25f63119c0847c83
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

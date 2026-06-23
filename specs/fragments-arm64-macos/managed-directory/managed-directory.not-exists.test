@@ -1,0 +1,60 @@
+// Test: managed-directory.not-exists
+function main() returns ExitCode
+	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".managed)
+	if not exists 'check'
+		return 42
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #25
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.bl mrt_directory_exists
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #1
+    arm64.eor x1, x19, x0
+    arm64.cmp x1, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x0, #42
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

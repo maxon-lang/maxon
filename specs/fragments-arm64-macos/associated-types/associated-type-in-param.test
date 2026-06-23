@@ -1,0 +1,84 @@
+// Test: associated-type-in-param
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Accumulator uses Item
+	function add(item Item) returns Self
+	function total() returns Integer
+end 'Accumulator'
+
+type IntSum implements Accumulator with Integer
+	let sum as Integer
+
+	function add(item Integer) returns IntSum
+		return IntSum{sum: sum + item}
+	end 'add'
+
+	function total() returns Integer
+		return sum
+	end 'total'
+
+	static function create(sum Integer) returns Self
+		return Self{sum: sum}
+	end 'create'
+end 'IntSum'
+
+function main() returns ExitCode
+	var acc = IntSum.create(0)
+	acc = acc.add(10)
+	acc = acc.add(32)
+	return acc.total()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.mov x1, #10
+    arm64.add x2, x0, x1
+    arm64.str x2, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x1, #32
+    arm64.add x2, x0, x1
+    arm64.str x2, [x21, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.ldr x20, [x21, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_14b664d3563b6779
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

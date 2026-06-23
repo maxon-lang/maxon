@@ -1,0 +1,48 @@
+// Test: enum-exhaustive.multiple-ranges
+enum Priority
+		low
+		medium
+		high
+		critical
+end 'Priority'
+
+function main() returns ExitCode
+	let p = Priority.high
+	match p 'check'
+		low to medium then return 1
+		high to critical then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+  check_0.next0:
+    arm64.mov x1, #3
+    arm64.mov x2, #2
+    arm64.cmp x0, x1
+    arm64.cset x1, le
+    arm64.cmp x0, x2
+    arm64.cset x0, ge
+    arm64.ands x2, x0, x1
+    arm64.b.eq check_0.next1
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  check_0.next1:
+    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,31 @@
+// Test: negate-int
+function main() returns ExitCode
+	let x = -42
+	let y = -x
+	if y == 42 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #-42
+    arm64.mov x1, #42
+    arm64.neg x2, x0
+    arm64.cmp x2, x1
+    arm64.cset x0, eq
+    arm64.b.ne check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.ret
+  }
+}
+---

@@ -178,6 +178,7 @@ function classifyArm64CallArgSetup(a64Op Arm64Op, coloring ColoringResult) retur
 	return match a64Op 'classify'
 		movRegReg(dest, src) gives classifyArm64MovForCall(dest, src: src, coloring: coloring)
 		reloadFromStack(dest, offset) gives classifyArm64Reload(dest, offset: offset)
+		loadIncomingArg gives CallArgKind.none
 		strToSpOffset(offset, src) gives classifyArm64StackWrite(offset, src: src, coloring: coloring)
 		fmovRegReg(dest, src, _) gives classifyArm64FpMovForCall(dest, src: src, coloring: coloring)
 		reloadFpFromStack(dest, offset, _) gives classifyArm64FpReload(dest, offset: offset)
@@ -195,6 +196,85 @@ function classifyArm64MovForCall(dest Arm64VReg, src Arm64VReg, coloring Colorin
 		physical(reg) gives buildArm64CallArgRegToReg(reg, src: src, coloring: coloring)
 	end 'pickDest'
 end 'classifyArm64MovForCall'
+
+// Classify a single Arm64Op as a post-call RESULT-CAPTURE move (the INVERSE of
+// call-arg setup: a fixed return-register SOURCE moved into a virtual DEST).
+// Recognizes `mov virtual(resultId), x0/x1` and `fmov virtual(fpResultId), d0`.
+// Anything else returns CallArgKind.none. The arm list mirrors
+// classifyArm64CallArgSetup so the match stays exhaustive over Arm64Op.
+function classifyArm64CallResultCapture(a64Op Arm64Op, coloring ColoringResult) returns CallArgKind
+	return match a64Op 'classify'
+		movRegReg(dest, src) gives classifyArm64ResultMovForCall(dest, src: src, coloring: coloring)
+		reloadFromStack to loadIncomingArg gives CallArgKind.none
+		strToSpOffset gives CallArgKind.none
+		fmovRegReg(dest, src, _) gives classifyArm64ResultFpMovForCall(dest, src: src, coloring: coloring)
+		reloadFpFromStack gives CallArgKind.none
+		prologue to memcpyOp gives CallArgKind.none
+		spillToStack gives CallArgKind.none
+		branchLinkReg to addSpImm gives CallArgKind.none
+		spillFpToStack gives CallArgKind.none
+		fmovToFloat to xorRegImm gives CallArgKind.none
+	end 'classify'
+end 'classifyArm64CallResultCapture'
+
+// A result capture has a VIRTUAL dest (the SSA result id); a physical dest is a
+// call-arg mov instead, handled by the arg classifier.
+function classifyArm64ResultMovForCall(dest Arm64VReg, src Arm64VReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		physical gives CallArgKind.none
+		virtual gives buildArm64ResultCapture(dest, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyArm64ResultMovForCall'
+
+// The source must be a fixed RETURN register (x0 = value, x1 = error-flag /
+// witness). A virtual source is the void-result receiver alias (`mov vResult,
+// vReceiver`), not a return-reg capture, so it returns none and substitutes raw.
+function buildArm64ResultCapture(dest Arm64VReg, src Arm64VReg, coloring ColoringResult) returns CallArgKind
+	return match src 'pickSrc'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64ResultCaptureFromPhys(reg, dest: dest, coloring: coloring)
+	end 'pickSrc'
+end 'buildArm64ResultCapture'
+
+function buildArm64ResultCaptureFromPhys(srcReg Arm64Register, dest Arm64VReg, coloring ColoringResult) returns CallArgKind
+	if not isArm64ReturnGpr(srcReg) 'notReturn'
+		return CallArgKind.none
+	end 'notReturn'
+	let srcOrd = arm64RegToOrdinal(srcReg)
+	let dstOrd = colorArm64Gpr(dest, coloring: coloring)
+	return CallArgKind.regToReg(srcOrd, dstOrd: dstOrd, isFloat: false)
+end 'buildArm64ResultCaptureFromPhys'
+
+// x0 = primary return (value), x1 = secondary return (error flag / interface
+// witness). These are the only GPRs a two-result call leaves live for capture.
+function isArm64ReturnGpr(reg Arm64Register) returns bool
+	let ord = arm64RegToOrdinal(reg)
+	return ord == arm64RegToOrdinal(Arm64Register.x0) or ord == arm64RegToOrdinal(Arm64Register.x1)
+end 'isArm64ReturnGpr'
+
+function classifyArm64ResultFpMovForCall(dest Arm64FpVReg, src Arm64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match dest 'pickDest'
+		physical gives CallArgKind.none
+		virtual gives buildArm64ResultFpCapture(dest, src: src, coloring: coloring)
+	end 'pickDest'
+end 'classifyArm64ResultFpMovForCall'
+
+function buildArm64ResultFpCapture(dest Arm64FpVReg, src Arm64FpVReg, coloring ColoringResult) returns CallArgKind
+	return match src 'pickSrc'
+		virtual gives CallArgKind.none
+		physical(reg) gives buildArm64ResultFpCaptureFromPhys(reg, dest: dest, coloring: coloring)
+	end 'pickSrc'
+end 'buildArm64ResultFpCapture'
+
+function buildArm64ResultFpCaptureFromPhys(srcReg Arm64FloatRegister, dest Arm64FpVReg, coloring ColoringResult) returns CallArgKind
+	// d0 is the sole FP return register; a two-result call never returns an FP
+	// error flag, so the FP value capture can only be from d0.
+	if srcReg != Arm64FloatRegister.d0 'notReturnFp'
+		return CallArgKind.none
+	end 'notReturnFp'
+	let dstOrd = colorArm64Fp(dest, coloring: coloring)
+	return CallArgKind.regToReg(srcReg.rawValue, dstOrd: dstOrd, isFloat: true)
+end 'buildArm64ResultFpCaptureFromPhys'
 
 function buildArm64CallArgRegToReg(destPhys Arm64Register, src Arm64VReg, coloring ColoringResult) returns CallArgKind
 	if not isArm64CallConvGpr(destPhys) 'notArgSlot'
@@ -282,6 +362,7 @@ function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		movRegReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		spillToStack(_, src) gives isVirtualArm64Gpr(src)
 		reloadFromStack(dest, _) gives isVirtualArm64Gpr(dest)
+		loadIncomingArg(dest, _) gives isVirtualArm64Gpr(dest)
 		branchLinkReg(reg) gives isVirtualArm64Gpr(reg)
 		subSpImm to addSpImm gives false
 		strToSpOffset(_, src) gives isVirtualArm64Gpr(src)
@@ -381,6 +462,7 @@ function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		movRegReg(_, src) then incUse(counts, id: arm64VRegId(src))
 		spillToStack(_, src) then incUse(counts, id: arm64VRegId(src))
 		reloadFromStack then break 'scan'
+		loadIncomingArg then break 'scan'
 		branchLinkReg(reg) then incUse(counts, id: arm64VRegId(reg))
 		subSpImm to addSpImm then break 'scan'
 		strToSpOffset(_, src) then incUse(counts, id: arm64VRegId(src))
@@ -547,6 +629,7 @@ function noteArm64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		ldrFromSlot(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		reloadFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIncomingArg(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		globalLoad(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		leaFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		leaRdata(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
@@ -558,7 +641,7 @@ end 'noteArm64SingleDef'
 
 // Physical-GPR mask of one vreg operand: a physical register contributes its
 // ordinal bit; a virtual contributes 0. Mirror of the x64 `x64PhysRegMask`.
-function arm64PhysRegMask(vreg Arm64VReg) returns RegMask
+export function arm64PhysRegMask(vreg Arm64VReg) returns RegMask
 	return match vreg 'check'
 		physical(reg) gives 1 shl arm64RegToOrdinal(reg)
 		virtual gives 0
@@ -587,6 +670,7 @@ function arm64PhysMaskSingleDef(op Arm64Op) returns RegMask
 	return match op 'extract'
 		ldrFromSlot(dest, _) gives arm64PhysRegMask(dest)
 		reloadFromStack(dest, _) gives arm64PhysRegMask(dest)
+		loadIncomingArg(dest, _) gives arm64PhysRegMask(dest)
 		globalLoad(dest, _, _) gives arm64PhysRegMask(dest)
 		leaFromStack(dest, _) gives arm64PhysRegMask(dest)
 		leaRdata(dest, _) gives arm64PhysRegMask(dest)
@@ -733,6 +817,7 @@ function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opIdx RegIn
 		movRegReg(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		spillToStack(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		reloadFromStack then break 'scan'
+		loadIncomingArg then break 'scan'
 		branchLinkReg(reg) then recordLastUse(positions, id: arm64VRegId(reg), opIdx: opIdx)
 		subSpImm to addSpImm then break 'scan'
 		strToSpOffset(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
@@ -881,6 +966,7 @@ function arm64OpGprDest(op Arm64Op) returns Arm64VReg
 	return match op 'getDest'
 		ldrFromSlot(dest, _) gives dest
 		reloadFromStack(dest, _) gives dest
+		loadIncomingArg(dest, _) gives dest
 		globalLoad(dest, _, _) gives dest
 		leaFromStack(dest, _) gives dest
 		leaRdata(dest, _) gives dest
@@ -895,6 +981,7 @@ function arm64OpWithPhysDest(op Arm64Op, d RegOrdinal) returns Arm64Op
 	return match op 'rebuild'
 		ldrFromSlot(_, slotIndex) gives Arm64Op.ldrFromSlot(dp, slotIndex: slotIndex)
 		reloadFromStack(_, offset) gives Arm64Op.reloadFromStack(dp, offset: offset)
+		loadIncomingArg(_, argIndex) gives Arm64Op.loadIncomingArg(dp, argIndex: argIndex)
 		globalLoad(_, name, size) gives Arm64Op.globalLoad(dp, name: name, size: size)
 		leaFromStack(_, stackOffset) gives Arm64Op.leaFromStack(dp, stackOffset: stackOffset)
 		leaRdata(_, rdataLabel) gives Arm64Op.leaRdata(dp, rdataLabel: rdataLabel)
@@ -1595,6 +1682,7 @@ function remapA64SingleDef(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
 		ldrFromSlot(dest, slotIndex) gives Arm64Op.ldrFromSlot(remapArm64Gpr(dest, remap: remap), slotIndex: slotIndex)
 		reloadFromStack(dest, offset) gives Arm64Op.reloadFromStack(remapArm64Gpr(dest, remap: remap), offset: offset)
+		loadIncomingArg(dest, argIndex) gives Arm64Op.loadIncomingArg(remapArm64Gpr(dest, remap: remap), argIndex: argIndex)
 		globalLoad(dest, name, size) gives Arm64Op.globalLoad(remapArm64Gpr(dest, remap: remap), name: name, size: size)
 		leaFromStack(dest, stackOffset) gives Arm64Op.leaFromStack(remapArm64Gpr(dest, remap: remap), stackOffset: stackOffset)
 		leaRdata(dest, rdataLabel) gives Arm64Op.leaRdata(remapArm64Gpr(dest, remap: remap), rdataLabel: rdataLabel)
@@ -2137,6 +2225,11 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 		return classifyArm64CallArgSetup(arm64Op, coloring: coloring)
 	end 'classifyCallArgSetup'
+
+	function classifyCallResultCapture(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return classifyArm64CallResultCapture(arm64Op, coloring: coloring)
+	end 'classifyCallResultCapture'
 
 	// Slot-to-slot move via x16, the arm64 indirect-call scratch register
 	// (also reserved for register-allocator use). Mirrors the x64 impl.

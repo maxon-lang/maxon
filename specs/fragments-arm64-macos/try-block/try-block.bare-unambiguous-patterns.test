@@ -1,0 +1,185 @@
+// Test: try-block.bare-unambiguous-patterns
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.kaboom
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(true)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            kaboom then sum = 11
+            splat  then sum = 22
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 22
+---
+// CompiledIR
+module {
+  func @callA(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callA.c_0
+    arm64.b callA.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #5
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @callB(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callB.c_0
+    arm64.b callB.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #6
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.bl callA
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_0
+    arm64.b main.try_block_err_0
+  try_block_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #1
+    arm64.bl callB
+    arm64.str x0, [x29, #-48]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_1
+    arm64.b main.try_block_throw_0
+  try_block_continue_1:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.mov x2, x1
+    arm64.mov x3, x0
+    arm64.add x4, x2, x3
+    arm64.mov x5, x4
+    arm64.str x5, [x29, #-8]
+    arm64.b main.try_block_after_0
+  try_block_throw_0:
+    arm64.b main.try_block_err_0
+  try_block_err_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-56]
+    arm64.b main.k_0.cmp0
+  k_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-56]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.k_0.case0
+    arm64.b main.k_0.cmp1
+  k_0.case0:
+    arm64.mov x0, #11
+    arm64.str x0, [x29, #-8]
+    arm64.b main.k_0.merge
+  k_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-56]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.k_0.case1
+    arm64.b main.k_0.merge
+  k_0.case1:
+    arm64.mov x0, #22
+    arm64.str x0, [x29, #-8]
+    arm64.b main.k_0.merge
+  k_0.merge:
+    arm64.b main.try_block_after_0
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=144
+    arm64.ret
+  }
+}
+---

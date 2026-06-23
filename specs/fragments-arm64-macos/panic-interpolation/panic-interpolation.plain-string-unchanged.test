@@ -1,0 +1,32 @@
+// Test: panic-interpolation.plain-string-unchanged
+function main() returns ExitCode
+		if true 'check'
+				panic("simple message")
+		end 'check'
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic-interpolation.plain-string-unchanged.test:4: simple message
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __panic_msg_c5757b4200e82f04
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

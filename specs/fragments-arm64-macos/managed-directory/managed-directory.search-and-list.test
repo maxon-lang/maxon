@@ -1,0 +1,1187 @@
+// Test: managed-directory.search-and-list
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let wr = try __ManagedFile.openWrite(path) otherwise 'f'
+			throw TestFileError.openFailed
+		end 'f'
+		return TestFile{file: wr}
+	end 'openWrite'
+end 'TestFile'
+
+export enum TestDirError implements Error
+	searchFailed
+end 'TestDirError'
+
+type TestDir
+	export var dir as __ManagedDirectory
+
+	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
+		let handle = try __ManagedDirectory.openSearch(pattern) otherwise 'fail'
+			throw TestDirError.searchFailed
+		end 'fail'
+		return TestDir{dir: handle}
+	end 'search'
+end 'TestDir'
+
+function createFile(path String, content String) throws TestFileError
+	var f = try TestFile.openWrite(path.managed)
+	try f.file.write(content.managed) otherwise 'err'
+		f.file.close()
+		panic("write failed")
+	end 'err'
+	f.file.close()
+end 'createFile'
+
+function main() returns ExitCode
+	// Create a temp directory (may already exist from previous run)
+	let dirPath = "test_managed_dir_search"
+	if not __ManagedDirectory.exists(dirPath.managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.managed) otherwise 'createFail'
+			print("create failed")
+			return 1
+		end 'createFail'
+	end 'needCreate'
+
+	try createFile("{dirPath}/file1.txt", content: "a") otherwise 'c1Err'
+		return 5
+	end 'c1Err'
+	try createFile("{dirPath}/file2.txt", content: "b") otherwise 'c2Err'
+		return 5
+	end 'c2Err'
+
+	// Search the directory
+	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
+		print("search failed")
+		return 2
+	end 'searchFail'
+
+	var fileCount = 0
+	var nameManaged = dir.dir.filename()
+	var name = String.init(nameManaged)
+	if name != "." and name != ".." 'notDot1'
+		fileCount = fileCount + 1
+	end 'notDot1'
+	while (try dir.dir.next() otherwise return 3) != 0 'loop'
+		nameManaged = dir.dir.filename()
+		name = String.init(nameManaged)
+		if name != "." and name != ".." 'notDot2'
+			fileCount = fileCount + 1
+		end 'notDot2'
+	end 'loop'
+	dir.dir.close()
+
+	// Clean up
+	try __ManagedFile.delete("{dirPath}/file1.txt".managed) otherwise 'del1Err'
+		return 4
+	end 'del1Err'
+	try __ManagedFile.delete("{dirPath}/file2.txt".managed) otherwise 'del2Err'
+		return 4
+	end 'del2Err'
+
+	if fileCount == 2 'checkCount'
+		return 42
+	end 'checkCount'
+	print("unexpected count: {fileCount}")
+	return 3
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @TestFile.openWrite(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_file_open_write
+    arm64.mov x19, x1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl __managed_file_wrap
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.cmp x19, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #1
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.adrp+add x1, __destruct_TestFile
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.str x21, [x19, #0] (8b)
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.epilogue
+    arm64.ret
+  }
+  func @TestDir.search(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_directory_open_search
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.mov x20, #0
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x1, #1
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.adrp+add x1, __destruct_TestDir
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x21, #0] (8b)
+    arm64.str x19, [x21, #0] (8b)
+    arm64.mov x0, x21
+    arm64.mov x1, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @createFile(x0: i64, x1: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x2, x0
+    arm64.mov x19, x1
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.mov x0, x3
+    arm64.bl TestFile.openWrite
+    arm64.mov x20, x0
+    arm64.mov x0, x1
+    arm64.mov x21, #0
+    arm64.cmp x0, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_0.cont
+  try_0.err:
+    arm64.mov x1, x0
+    arm64.epilogue
+    arm64.ret
+  try_0.cont:
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x2, [x19, #0] (8b)
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl mrt_file_write
+    arm64.cmp x1, x21
+    arm64.cset x1, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl mrt_file_close
+    arm64.mov x0, #-1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __panic_msg_bff95b5a6ea937bc
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+    arm64.mov x0, x21
+  try_1.merge:
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl mrt_file_close
+    arm64.mov x0, #-1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x21
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=432
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x19, #48
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x21, #0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_480
+    arm64.ldr x0, [x29, #312]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #23
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x22, #-2
+    arm64.str x22, [x20, #16] (8b)
+    arm64.mov x23, #1
+    arm64.str x23, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x24, #16
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x25, x0
+    arm64.str x20, [x25, #0] (8b)
+    arm64.str x23, [x25, #8] (8b)
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.bl mrt_directory_exists
+    arm64.eor x1, x0, x23
+    arm64.mov x20, #-1
+    arm64.cmp x1, #0
+    arm64.b.eq needCreate_0.after
+  needCreate_0:
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.bl mrt_directory_create
+    arm64.mov x0, x1
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq needCreate_0.after
+  try_0.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_481
+    arm64.ldr x0, [x29, #312]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.mov x0, #13
+    arm64.str x0, [x26, #8] (8b)
+    arm64.str x22, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x21, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x27, x0
+    arm64.str x26, [x27, #0] (8b)
+    arm64.str x23, [x27, #8] (8b)
+    arm64.ldr x0, [x27, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x26, [x0, #0] (8b)
+    arm64.mov x0, x26
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x27
+    arm64.bl mm_drop
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  needCreate_0.after:
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.ldr x26, [x0, #8] (8b)
+    arm64.ldr x27, [x0, #0] (8b)
+    arm64.mov x28, #10
+    arm64.add x0, x26, x21
+    arm64.add x1, x0, x28
+    arm64.str x1, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #328]
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #312]
+    arm64.ldr x4, [x29, #328]
+    arm64.str x4, [x29, #16]
+    arm64.str x0, [x29, #312]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x4, x21
+    arm64.str x5, [x29, #32]
+    arm64.str x27, [x29, #40]
+    arm64.str x26, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_482
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x26
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x28, [x29, #64]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.ldr x0, [x29, #320]
+    arm64.str x0, [x26, #8] (8b)
+    arm64.str x0, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x20, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x27, x0
+    arm64.str x26, [x27, #0] (8b)
+    arm64.str x21, [x27, #8] (8b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_483
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.str x23, [x26, #8] (8b)
+    arm64.str x22, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x21, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x28, x0
+    arm64.str x26, [x28, #0] (8b)
+    arm64.str x23, [x28, #8] (8b)
+    arm64.mov x0, x27
+    arm64.mov x1, x28
+    arm64.bl createFile
+    arm64.mov x26, x1
+    arm64.mov x0, x28
+    arm64.bl mm_drop
+    arm64.mov x0, x27
+    arm64.bl mm_drop
+    arm64.cmp x26, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_1.merge
+  try_1.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.mov x0, #5
+    arm64.epilogue
+    arm64.ret
+  try_1.merge:
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.ldr x26, [x0, #8] (8b)
+    arm64.ldr x27, [x0, #0] (8b)
+    arm64.mov x28, #10
+    arm64.add x0, x26, x21
+    arm64.add x1, x0, x28
+    arm64.str x1, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #328]
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x4, [x29, #328]
+    arm64.str x4, [x29, #72]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x4, x21
+    arm64.str x5, [x29, #80]
+    arm64.str x27, [x29, #88]
+    arm64.str x26, [x29, #96]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_484
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x26
+    arm64.str x1, [x29, #104]
+    arm64.str x0, [x29, #16]
+    arm64.str x28, [x29, #112]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.ldr x0, [x29, #320]
+    arm64.str x0, [x26, #8] (8b)
+    arm64.str x0, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x20, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x27, x0
+    arm64.str x26, [x27, #0] (8b)
+    arm64.str x21, [x27, #8] (8b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_485
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.str x23, [x26, #8] (8b)
+    arm64.str x22, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x21, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x28, x0
+    arm64.str x26, [x28, #0] (8b)
+    arm64.str x23, [x28, #8] (8b)
+    arm64.mov x0, x27
+    arm64.mov x1, x28
+    arm64.bl createFile
+    arm64.mov x26, x1
+    arm64.mov x0, x28
+    arm64.bl mm_drop
+    arm64.mov x0, x27
+    arm64.bl mm_drop
+    arm64.cmp x26, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_2.merge
+  try_2.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.mov x0, #5
+    arm64.epilogue
+    arm64.ret
+  try_2.merge:
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.ldr x26, [x0, #8] (8b)
+    arm64.ldr x27, [x0, #0] (8b)
+    arm64.mov x28, #2
+    arm64.add x0, x26, x21
+    arm64.add x1, x0, x28
+    arm64.str x1, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #328]
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x4, [x29, #328]
+    arm64.str x4, [x29, #120]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x4, x21
+    arm64.str x5, [x29, #128]
+    arm64.str x27, [x29, #136]
+    arm64.str x26, [x29, #144]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_486
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x26
+    arm64.str x1, [x29, #152]
+    arm64.str x0, [x29, #16]
+    arm64.str x28, [x29, #160]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.ldr x0, [x29, #320]
+    arm64.str x0, [x26, #8] (8b)
+    arm64.str x0, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x20, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x27, x0
+    arm64.str x26, [x27, #0] (8b)
+    arm64.str x21, [x27, #8] (8b)
+    arm64.ldr x26, [x27, #0] (8b)
+    arm64.mov x0, x26
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x26
+    arm64.bl TestDir.search
+    arm64.mov x28, x0
+    arm64.mov x0, x1
+    arm64.str x0, [x29, #320]
+    arm64.mov x0, x27
+    arm64.bl mm_drop
+    arm64.mov x0, x26
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x29, #320]
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_3.merge
+  try_3.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x26, x0
+    arm64.str x21, [x26, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_487
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x26, #0] (8b)
+    arm64.mov x0, #13
+    arm64.str x0, [x26, #8] (8b)
+    arm64.str x22, [x26, #16] (8b)
+    arm64.str x23, [x26, #24] (8b)
+    arm64.str x21, [x26, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x27, x0
+    arm64.str x26, [x27, #0] (8b)
+    arm64.str x23, [x27, #8] (8b)
+    arm64.ldr x0, [x27, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x26, [x0, #0] (8b)
+    arm64.mov x0, x26
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x27
+    arm64.bl mm_drop
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  try_3.merge:
+    arm64.ldr x0, [x28, #0] (8b)
+    arm64.bl mrt_directory_filename
+    arm64.bl String.init
+    arm64.mov x26, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x27, x0
+    arm64.str x21, [x27, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_111
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x27, #0] (8b)
+    arm64.str x23, [x27, #8] (8b)
+    arm64.str x22, [x27, #16] (8b)
+    arm64.str x23, [x27, #24] (8b)
+    arm64.str x21, [x27, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.str x0, [x29, #320]
+    arm64.ldr x1, [x29, #320]
+    arm64.str x27, [x1, #0] (8b)
+    arm64.str x23, [x1, #8] (8b)
+    arm64.mov x0, x26
+    arm64.bl String.equals
+    arm64.mov x27, x0
+    arm64.ldr x0, [x29, #320]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #320]
+    arm64.eor x0, x27, x23
+    arm64.cmp x0, #0
+    arm64.b.eq __rc_edge_14_0
+  shortAnd.rhs:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x27, x0
+    arm64.str x21, [x27, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_112
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x27, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x27, #8] (8b)
+    arm64.str x22, [x27, #16] (8b)
+    arm64.str x23, [x27, #24] (8b)
+    arm64.str x21, [x27, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.str x0, [x29, #320]
+    arm64.ldr x1, [x29, #320]
+    arm64.str x27, [x1, #0] (8b)
+    arm64.str x23, [x1, #8] (8b)
+    arm64.mov x0, x26
+    arm64.bl String.equals
+    arm64.mov x27, x0
+    arm64.ldr x0, [x29, #320]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #320]
+    arm64.mov x0, x26
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.eor x0, x27, x23
+  shortAnd.merge:
+    arm64.cmp x0, #0
+    arm64.b.eq __phi_trampoline_16_0
+  notDot1_0:
+    arm64.add x0, x21, x23
+  notDot1_0.after:
+    arm64.mov x27, x0
+  loop_0.header:
+    arm64.ldr x0, [x28, #0] (8b)
+    arm64.bl mrt_directory_next
+    arm64.str x0, [x29, #320]
+    arm64.mov x0, x1
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_4.merge
+  try_4.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.mov x0, x28
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  try_4.merge:
+    arm64.ldr x0, [x29, #320]
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq loop_0.exit
+  loop_0:
+    arm64.ldr x0, [x28, #0] (8b)
+    arm64.bl mrt_directory_filename
+    arm64.str x0, [x29, #320]
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #328]
+    arm64.mov x0, #16
+  inlined_stdlib.__mm_alloc_0_0:
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge inlined_stdlib.__mm_alloc_2_0
+  inlined_stdlib.__mm_alloc_1_0:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_0:
+    arm64.str x0, [x29, #336]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #16]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #336]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #0] (8b)
+    arm64.mov x0, #8
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #16
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #336]
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #24
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x2, #32
+    arm64.add x0, x1, x2
+  inline_cont_main_0:
+    arm64.str x0, [x29, #344]
+    arm64.mov x0, #8
+    arm64.ldr x1, [x29, #344]
+    arm64.sub x2, x1, x0
+    arm64.atomic_inc [x2]
+    arm64.adrp+add x0, stdlib.__destruct___ManagedMemory
+    arm64.str x0, [x29, #328]
+    arm64.mov x0, #48
+  inlined_stdlib.__mm_alloc_0_1:
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge inlined_stdlib.__mm_alloc_2_1
+  inlined_stdlib.__mm_alloc_1_1:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_1:
+    arm64.str x0, [x29, #336]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #16]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #336]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #0] (8b)
+    arm64.mov x0, #8
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #16
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #336]
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x0, #24
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x2, #0] (8b)
+    arm64.mov x2, #32
+    arm64.add x0, x1, x2
+  inline_cont_main_1:
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.atomic_inc [x2]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #16] (8b)
+    arm64.mov x1, #8
+    arm64.str x1, [x0, #24] (8b)
+    arm64.mov x1, #-1
+    arm64.str x1, [x0, #32] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #40] (8b)
+    arm64.ldr x1, [x29, #344]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x29, #320]
+    arm64.ldr x1, [x29, #344]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.bl stdlib.scanIsAscii
+    arm64.ldr x1, [x29, #344]
+    arm64.str x0, [x1, #8] (1b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.str x0, [x29, #320]
+    arm64.ldr x1, [x29, #320]
+    arm64.str x21, [x1, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_111
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.str x23, [x1, #8] (8b)
+    arm64.str x22, [x1, #16] (8b)
+    arm64.str x23, [x1, #24] (8b)
+    arm64.str x21, [x1, #32] (8b)
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #328]
+  inlined_stdlib.__mm_alloc_0_2:
+    arm64.mov x0, #1
+    arm64.mov x1, #0
+    arm64.cmp x24, x0
+    arm64.cset x0, lt
+    arm64.b.ge __phi_trampoline_37_0
+  inlined_stdlib.__mm_alloc_1_2:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_2:
+    arm64.str x0, [x29, #336]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #16]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #336]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0] (8b)
+    arm64.mov x1, #8
+    arm64.add x2, x0, x1
+    arm64.ldr x1, [x29, #328]
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #16
+    arm64.add x2, x0, x1
+    arm64.ldr x1, [x29, #336]
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #24
+    arm64.add x2, x0, x1
+    arm64.mov x1, #0
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #32
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #328]
+    arm64.ldr x0, [x29, #328]
+  inline_cont_main_0:
+    arm64.str x0, [x29, #336]
+    arm64.ldr x0, [x29, #328]
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.ldr x1, [x29, #336]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.str x23, [x1, #8] (8b)
+    arm64.ldr x0, [x29, #344]
+    arm64.bl String.equals
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #336]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #336]
+    arm64.ldr x0, [x29, #320]
+    arm64.eor x1, x0, x23
+    arm64.cmp x1, #0
+    arm64.b.eq __rc_edge_40_0
+    arm64.b shortAnd.rhs
+  loop_0.exit:
+    arm64.ldr x0, [x28, #0] (8b)
+    arm64.bl mrt_directory_close
+    arm64.mov x0, x28
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.str x1, [x29, #320]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.str x1, [x29, #328]
+    arm64.mov x0, #10
+    arm64.ldr x0, [x29, #320]
+    arm64.add x1, x0, x21
+    arm64.mov x0, #10
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #336]
+    arm64.ldr x0, [x29, #336]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #344]
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x4, [x29, #344]
+    arm64.str x4, [x29, #168]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x4, x21
+    arm64.str x5, [x29, #176]
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x29, #184]
+    arm64.ldr x4, [x29, #320]
+    arm64.str x4, [x29, #192]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_482
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x4
+    arm64.str x1, [x29, #200]
+    arm64.str x0, [x29, #16]
+    arm64.mov x0, #10
+    arm64.str x0, [x29, #208]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.str x21, [x0, #40] (8b)
+    arm64.ldr x1, [x29, #344]
+    arm64.str x1, [x0, #0] (8b)
+    arm64.ldr x1, [x29, #336]
+    arm64.str x1, [x0, #8] (8b)
+    arm64.str x1, [x0, #16] (8b)
+    arm64.str x23, [x0, #24] (8b)
+    arm64.str x20, [x0, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.str x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.ldr x1, [x29, #328]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.str x21, [x1, #8] (8b)
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x0, [x29, #320]
+    arm64.bl mrt_file_delete
+    arm64.mov x0, x1
+    arm64.str x0, [x29, #336]
+    arm64.ldr x0, [x29, #328]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x29, #336]
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_5.merge
+    arm64.b try_5.otherwise
+  shortAnd.rhs:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.str x0, [x29, #320]
+    arm64.ldr x1, [x29, #320]
+    arm64.str x21, [x1, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_112
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8] (8b)
+    arm64.str x22, [x1, #16] (8b)
+    arm64.str x23, [x1, #24] (8b)
+    arm64.str x21, [x1, #32] (8b)
+    arm64.adrp+add x0, __destruct_String
+    arm64.str x0, [x29, #328]
+  inlined_stdlib.__mm_alloc_0_3:
+    arm64.mov x0, #1
+    arm64.mov x1, #0
+    arm64.cmp x24, x0
+    arm64.cset x0, lt
+    arm64.b.ge __phi_trampoline_41_0
+  inlined_stdlib.__mm_alloc_1_3:
+    arm64.mov x0, #1
+  inlined_stdlib.__mm_alloc_2_3:
+    arm64.str x0, [x29, #336]
+    arm64.adrp_add_rdata x0, __mm_alloc_count
+    arm64.ldr x0, [x29, #16]
+    arm64.atomic_inc [x0]
+    arm64.mov x0, #32
+    arm64.ldr x1, [x29, #336]
+    arm64.add x2, x1, x0
+    arm64.mov x0, x2
+    arm64.bl stdlib.__slab_alloc
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0] (8b)
+    arm64.mov x1, #8
+    arm64.add x2, x0, x1
+    arm64.ldr x1, [x29, #328]
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #16
+    arm64.add x2, x0, x1
+    arm64.ldr x1, [x29, #336]
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #24
+    arm64.add x2, x0, x1
+    arm64.mov x1, #0
+    arm64.str x1, [x2, #0] (8b)
+    arm64.mov x1, #32
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #328]
+    arm64.ldr x0, [x29, #328]
+  inline_cont_main_2:
+    arm64.str x0, [x29, #336]
+    arm64.ldr x0, [x29, #328]
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.ldr x1, [x29, #336]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.str x23, [x1, #8] (8b)
+    arm64.ldr x0, [x29, #344]
+    arm64.bl String.equals
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #336]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #336]
+    arm64.ldr x0, [x29, #344]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x29, #320]
+    arm64.eor x1, x0, x23
+  shortAnd.merge:
+    arm64.cmp x1, #0
+    arm64.b.eq notDot2_0.after
+  notDot2_0:
+    arm64.add x0, x27, x23
+    arm64.mov x27, x0
+  notDot2_0.after:
+    arm64.b loop_0.header
+  try_5.otherwise:
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  try_5.merge:
+    arm64.ldr x0, [x25, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.str x1, [x29, #320]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.str x1, [x29, #328]
+    arm64.mov x0, #10
+    arm64.ldr x0, [x29, #320]
+    arm64.add x1, x0, x21
+    arm64.mov x0, #10
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #336]
+    arm64.ldr x0, [x29, #336]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #344]
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x4, [x29, #344]
+    arm64.str x4, [x29, #216]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.add x0, x4, x21
+    arm64.str x0, [x29, #352]
+    arm64.ldr x0, [x29, #352]
+    arm64.str x0, [x29, #224]
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x29, #232]
+    arm64.ldr x0, [x29, #320]
+    arm64.str x0, [x29, #240]
+    arm64.memcpy
+    arm64.mov x0, x25
+    arm64.bl mm_drop
+    arm64.adrp_add_rdata x0, __istr_484
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x29, #320]
+    arm64.ldr x2, [x29, #352]
+    arm64.add x3, x2, x1
+    arm64.str x3, [x29, #248]
+    arm64.str x0, [x29, #16]
+    arm64.mov x0, #10
+    arm64.str x0, [x29, #256]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.str x21, [x0, #40] (8b)
+    arm64.ldr x1, [x29, #344]
+    arm64.str x1, [x0, #0] (8b)
+    arm64.ldr x1, [x29, #336]
+    arm64.str x1, [x0, #8] (8b)
+    arm64.str x1, [x0, #16] (8b)
+    arm64.str x23, [x0, #24] (8b)
+    arm64.str x20, [x0, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.str x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.ldr x1, [x29, #328]
+    arm64.str x0, [x1, #0] (8b)
+    arm64.str x21, [x1, #8] (8b)
+    arm64.ldr x0, [x1, #0] (8b)
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x0, [x29, #320]
+    arm64.bl mrt_file_delete
+    arm64.mov x0, x1
+    arm64.str x0, [x29, #336]
+    arm64.ldr x0, [x29, #328]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #328]
+    arm64.ldr x0, [x29, #320]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x29, #336]
+    arm64.cmp x0, x21
+    arm64.cset x0, ne
+    arm64.b.eq try_6.merge
+  try_6.otherwise:
+    arm64.mov x0, #4
+    arm64.epilogue
+    arm64.ret
+  try_6.merge:
+    arm64.mov x0, #2
+    arm64.cmp x27, x0
+    arm64.cset x0, eq
+    arm64.b.ne checkCount_0.after
+  checkCount_0:
+    arm64.mov x0, #42
+    arm64.epilogue
+    arm64.ret
+  checkCount_0.after:
+    arm64.mov x0, #21
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #320]
+    arm64.mov x0, x27
+    arm64.ldr x1, [x29, #320]
+    arm64.bl mrt_i64_to_string
+    arm64.mov x27, x0
+    arm64.mov x0, #18
+    arm64.add x1, x27, x0
+    arm64.add x0, x1, x21
+    arm64.str x0, [x29, #328]
+    arm64.ldr x0, [x29, #328]
+    arm64.add x1, x0, x23
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.str x0, [x29, #336]
+    arm64.mov x4, #18
+    arm64.adrp_add_rdata x0, __istr_488
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x5, [x29, #336]
+    arm64.str x5, [x29, #264]
+    arm64.str x0, [x29, #16]
+    arm64.str x4, [x29, #272]
+    arm64.memcpy
+    arm64.add x6, x5, x4
+    arm64.str x6, [x29, #280]
+    arm64.ldr x4, [x29, #320]
+    arm64.str x4, [x29, #288]
+    arm64.str x27, [x29, #296]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x6, x27
+    arm64.str x1, [x29, #304]
+    arm64.str x0, [x29, #16]
+    arm64.str x21, [x29, #24]
+    arm64.memcpy
+    arm64.mov x0, x4
+    arm64.bl stdlib.__mm_decref
+    arm64.ldr x0, [x29, #320]
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, x19
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x27, x0
+    arm64.str x21, [x27, #40] (8b)
+    arm64.ldr x0, [x29, #336]
+    arm64.str x0, [x27, #0] (8b)
+    arm64.ldr x0, [x29, #328]
+    arm64.str x0, [x27, #8] (8b)
+    arm64.str x0, [x27, #16] (8b)
+    arm64.str x23, [x27, #24] (8b)
+    arm64.str x20, [x27, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, x24
+    arm64.bl stdlib.__mm_alloc
+    arm64.str x0, [x29, #320]
+    arm64.ldr x0, [x29, #320]
+    arm64.str x27, [x0, #0] (8b)
+    arm64.str x21, [x0, #8] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.ldr x27, [x1, #0] (8b)
+    arm64.mov x0, x27
+    arm64.mov x1, x2
+    arm64.bl mrt_write_stdout
+    arm64.ldr x0, [x29, #320]
+    arm64.bl mm_drop
+    arm64.ldr x0, [x29, #320]
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_14_0:
+    arm64.mov x0, x26
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x21
+    arm64.b shortAnd.merge
+  __rc_edge_40_0:
+    arm64.ldr x0, [x29, #344]
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x21
+    arm64.b shortAnd.merge
+  __phi_trampoline_16_0:
+    arm64.mov x0, x21
+    arm64.b notDot1_0.after
+  __phi_trampoline_37_0:
+    arm64.mov x0, x24
+    arm64.b inlined_stdlib.__mm_alloc_2_2
+  __phi_trampoline_41_0:
+    arm64.mov x0, x24
+    arm64.b inlined_stdlib.__mm_alloc_2_3
+  }
+}
+---

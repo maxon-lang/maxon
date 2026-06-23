@@ -1,0 +1,53 @@
+// Test: managed-memory-scope-cleanup-generates-free
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	if true 'outer'
+		var outer_arr = IntArray.create()
+		outer_arr.push(100)
+		if true 'inner'
+			var inner_arr = IntArray.create()
+			inner_arr.push(200)
+		end 'inner'
+	end 'outer'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #100
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+  inner_0:
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #200
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+  outer_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

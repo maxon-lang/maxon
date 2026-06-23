@@ -1,0 +1,195 @@
+// Test: release-on-error-propagation-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(flag)
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 77
+---
+// CompiledIR
+module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #20
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @failingLookup() -> i64 {
+  entry:
+    arm64.mov x0, #1
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @compute(flag: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.bl Wrapper.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, gt
+    arm64.cmp x3, #0
+    arm64.b.ne compute.positive_0
+    arm64.b compute.positive_0.after
+  positive_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #2
+    arm64.mul x3, x1, x2
+    arm64.mov x0, x3
+    arm64.bl Wrapper.create
+    arm64.str x0, [x29, #-16]
+    arm64.bl failingLookup
+    arm64.str x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne compute.propagate_error_0
+    arm64.b compute.try_continue_0
+  propagate_error_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq compute.__skip_guarded_22
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_22
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq compute.__skip_guarded_24
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_24
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=96
+    arm64.ret
+  try_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.add x3, x0, x2
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x3, [x29, #-40]
+    arm64.cmp x4, #0
+    arm64.b.eq compute.__skip_guarded_31
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_31
+    arm64.ldr x5, [x29, #-8]
+    arm64.cmp x5, #0
+    arm64.b.eq compute.__skip_guarded_33
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_33
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=96
+    arm64.ret
+  positive_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq compute.__skip_guarded_37
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_37
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #5
+    arm64.bl compute
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.mov x0, #77
+    arm64.epilogue stack_size=48
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    arm64.b __destruct_Wrapper.done
+  done:
+    arm64.ret
+  }
+}
+---

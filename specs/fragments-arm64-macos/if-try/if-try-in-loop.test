@@ -1,0 +1,86 @@
+// Test: if-try-in-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(n Integer) returns Integer throws MyError
+	if n < 3 'check'
+		throw MyError.failed
+	end 'check'
+	return n
+end 'mayFail'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		if let val = try mayFail(i) 'check'
+			sum = sum + val
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, x0
+    arm64.mov x0, x1
+  loop_0.header:
+    arm64.mov x1, #5
+    arm64.cmp x2, x1
+    arm64.cset x1, lt
+    arm64.b.ge loop_0.exit
+  inlined_mayFail_0_0:
+    arm64.mov x1, #3
+    arm64.cmp x2, x1
+    arm64.cset x1, lt
+    arm64.b.ge inlined_mayFail_2_0
+  inlined_mayFail_1_0:
+    arm64.mov x1, #1
+    arm64.mov x3, #0
+    arm64.b inline_cont_main_0
+  inlined_mayFail_2_0:
+    arm64.mov x1, #0
+    arm64.mov x3, x2
+  inline_cont_main_0:
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x1, eq
+    arm64.b.ne check_0.after
+    arm64.b check_0
+  loop_0.exit:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  check_0:
+    arm64.add x1, x0, x3
+    arm64.mov x0, x1
+  check_0.after:
+    arm64.mov x1, #1
+    arm64.add x3, x2, x1
+    arm64.mov x2, x3
+    arm64.b loop_0.header
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f0a3ba9b5b462aea
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,210 @@
+// Test: error.otherwise-return-string
+
+// Regression: try returning String + otherwise return <string literal>.
+// Mirrors the shape of the original maxonOpIdxToString segfault in the
+// self-hosted compiler.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function wrap(flag bool) returns String
+	let s = try tryIt(flag) otherwise return "??"
+	return s
+end 'wrap'
+
+function main() returns ExitCode
+	let a = wrap(false)
+	let b = wrap(true)
+	if a == "ok" 'x'
+		if b == "??" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @tryIt(x0: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.cmp x0, #0
+    arm64.b.eq c_0.after
+  c_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  c_0.after:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_148
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+  func @wrap(x0: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl tryIt
+    arm64.mov x19, x0
+    arm64.mov x0, x1
+    arm64.mov x20, #0
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x21, x0
+    arm64.str x20, [x21, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x21, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x21, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x21, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x21, #24] (8b)
+    arm64.str x20, [x21, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.str x21, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  try_0.merge:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x19, #0
+    arm64.mov x0, x19
+    arm64.bl wrap
+    arm64.mov x20, x0
+    arm64.mov x21, #1
+    arm64.mov x0, x21
+    arm64.bl wrap
+    arm64.mov x22, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x23, x0
+    arm64.str x19, [x23, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_148
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x23, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x23, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x23, #16] (8b)
+    arm64.str x21, [x23, #24] (8b)
+    arm64.str x19, [x23, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x24, x0
+    arm64.str x23, [x24, #0] (8b)
+    arm64.str x21, [x24, #8] (8b)
+    arm64.mov x0, x20
+    arm64.mov x1, x24
+    arm64.bl String.equals
+    arm64.mov x23, x0
+    arm64.mov x0, x20
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x24
+    arm64.bl mm_drop
+    arm64.cmp x23, #0
+    arm64.b.eq __rc_edge_0_0
+  x_0:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #2
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.str x21, [x20, #24] (8b)
+    arm64.str x19, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x23, x0
+    arm64.str x20, [x23, #0] (8b)
+    arm64.str x21, [x23, #8] (8b)
+    arm64.mov x0, x22
+    arm64.mov x1, x23
+    arm64.bl String.equals
+    arm64.mov x20, x0
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x23
+    arm64.bl mm_drop
+    arm64.cmp x20, #0
+    arm64.b.eq x_0.after
+  y_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  x_0.after:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  __rc_edge_0_0:
+    arm64.mov x0, x22
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b x_0.after
+  }
+}
+---

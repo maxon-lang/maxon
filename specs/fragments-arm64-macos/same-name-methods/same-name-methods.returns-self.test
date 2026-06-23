@@ -1,0 +1,69 @@
+// Test: same-name-methods.returns-self
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var count as Integer
+
+	static function create(count Integer) returns Counter
+		return Counter{count: count}
+	end 'create'
+
+	static function reset() returns Counter
+		return Counter{count: 0}
+	end 'reset'
+
+	function reset()
+		count = 0
+	end 'reset'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.reset()
+	var c2 = Counter.create(42)
+	c2.reset()
+	return c.count + c2.count
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x21, [x20, #0] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x22, x21
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d24a0f6513457716
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,89 @@
+// Test: int-backed-union-match
+union Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function classify(s Status) returns ExitCode
+	return match s 'm'
+		ok gives 0
+		notFound gives 4
+		serverError gives 5
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Status.notFound)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @classify(x0: u16) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #200
+    arm64.mov x2, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne m_0.next0
+    arm64.b m_0.case0
+  m_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  m_0.case0:
+    arm64.mov x0, #0
+    arm64.b m_0.merge
+  m_0.next0:
+    arm64.mov x1, #404
+    arm64.cmp x0, x1
+    arm64.cset x1, eq
+    arm64.b.ne m_0.next1
+  m_0.case1:
+    arm64.mov x0, #4
+    arm64.b m_0.merge
+  m_0.next1:
+    arm64.mov x1, #500
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_5_0
+  m_0.case2:
+    arm64.mov x0, #5
+    arm64.b m_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1b5d6d0e7b2567bb
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_5_0:
+    arm64.mov x0, x2
+    arm64.b m_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #404
+    arm64.bl classify
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_523ecc190885c59f
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

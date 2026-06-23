@@ -54,7 +54,8 @@ public class MachOWriter {
 
   public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null,
     byte[]? ucddata = null, byte[]? symdata = null,
-    byte[]? got = null, IReadOnlyList<string>? importNames = null) {
+    byte[]? got = null, IReadOnlyList<string>? importNames = null,
+    IReadOnlyList<CoffSymbol>? coffSymbols = null) {
     Logger.Debug(LogCategory.Pe, $"Writing Mach-O file: {path}");
 
     rdata ??= [];
@@ -122,6 +123,35 @@ public class MachOWriter {
     var mainCmdSize = 24u;
     var buildVersionCmdSize = 24u;
     var codeSignatureCmdSize = 16u;
+
+    // --- Build symbol table (nlist_64) + string table for debugging ---
+    // Each function symbol resolves a __text address back to its name so lldb
+    // backtraces are legible. n_value is the static (pre-slide) VM address of the
+    // function: TextSegmentVMAddr + textSectionOffset + codeOffset.
+    byte[] symtabData = [];
+    byte[] strtabData = [0]; // strtab[0] is always the empty string
+    uint nsyms = 0;
+    if (coffSymbols != null && coffSymbols.Count > 0) {
+      var symStream = new MemoryStream();
+      var symW = new BinaryWriter(symStream);
+      var strStream = new MemoryStream();
+      strStream.WriteByte(0);
+      foreach (var sym in coffSymbols) {
+        var strx = (uint)strStream.Position;
+        var nameBytes = Encoding.ASCII.GetBytes(sym.Name);
+        strStream.Write(nameBytes, 0, nameBytes.Length);
+        strStream.WriteByte(0);
+        ulong vmAddr = MachOLayout.TextSegmentVMAddr + textSectionOffset + (uint)sym.CodeOffset;
+        symW.Write(strx);       // n_strx
+        symW.Write((byte)0x0e); // n_type = N_SECT (defined in a section)
+        symW.Write((byte)1);    // n_sect = __text (first section, 1-based)
+        symW.Write((ushort)0);  // n_desc
+        symW.Write(vmAddr);     // n_value
+      }
+      symtabData = symStream.ToArray();
+      strtabData = strStream.ToArray();
+      nsyms = (uint)coffSymbols.Count;
+    }
 
     // --- Build chained fixups data for __LINKEDIT ---
     byte[] chainedFixupsData = [];
@@ -214,8 +244,11 @@ public class MachOWriter {
     var chainedFixupsSize = (uint)chainedFixupsData.Length;
     var exportsTrieOff = AlignUp(chainedFixupsOff + chainedFixupsSize, 8u);
     var exportsTrieSize = (uint)exportsTrieData.Length;
-    var strtabOff = AlignUp(exportsTrieOff + exportsTrieSize, 4u);
-    var strtabSize = 4u;
+    // Symbol table (nlist_64) is 8-byte aligned; string table follows it.
+    var symtabOff = AlignUp(exportsTrieOff + exportsTrieSize, 8u);
+    var symtabSize = (uint)symtabData.Length;
+    var strtabOff = AlignUp(symtabOff + symtabSize, 4u);
+    var strtabSize = (uint)strtabData.Length;
 
     // Code signature follows the string table, aligned to 16 bytes
     var codeSignatureOff = AlignUp(strtabOff + strtabSize, 16u);
@@ -289,15 +322,23 @@ public class MachOWriter {
     // === LC_SYMTAB ===
     writer.Write(LC_SYMTAB);
     writer.Write(symtabCmdSize);
-    writer.Write(strtabOff);
-    writer.Write(0u);
-    writer.Write(strtabOff);
-    writer.Write(strtabSize);
+    writer.Write(symtabOff);  // symoff
+    writer.Write(nsyms);      // nsyms
+    writer.Write(strtabOff);  // stroff
+    writer.Write(strtabSize); // strsize
 
     // === LC_DYSYMTAB ===
+    // All emitted symbols are local defined symbols (N_SECT, no N_EXT), so they
+    // occupy the local range [0, nsyms); the extdef/undef ranges are empty.
     writer.Write(LC_DYSYMTAB);
     writer.Write(dysymtabCmdSize);
-    for (int i = 0; i < 18; i++) writer.Write(0u);
+    writer.Write(0u);     // ilocalsym
+    writer.Write(nsyms);  // nlocalsym
+    writer.Write(nsyms);  // iextdefsym
+    writer.Write(0u);     // nextdefsym
+    writer.Write(nsyms);  // iundefsym
+    writer.Write(0u);     // nundefsym
+    for (int i = 0; i < 12; i++) writer.Write(0u); // toc/modtab/extref/indirect/reloc
 
     // === LC_LOAD_DYLINKER ===
     writer.Write(LC_LOAD_DYLINKER);
@@ -390,10 +431,14 @@ public class MachOWriter {
     }
     if (exportsTrieData.Length > 0) {
       writer.Write(exportsTrieData);
-      currentPos = (uint)ms.Position;
-      if (currentPos < strtabOff) writer.Write(new byte[strtabOff - currentPos]);
     }
-    writer.Write(new byte[strtabSize]);
+    // Symbol table, then string table.
+    currentPos = (uint)ms.Position;
+    if (currentPos < symtabOff) writer.Write(new byte[symtabOff - currentPos]);
+    writer.Write(symtabData);
+    currentPos = (uint)ms.Position;
+    if (currentPos < strtabOff) writer.Write(new byte[strtabOff - currentPos]);
+    writer.Write(strtabData);
 
     // Pad to code signature offset
     currentPos = (uint)ms.Position;

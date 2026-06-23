@@ -1,0 +1,107 @@
+// Test: try-call-inside-loop-body
+typealias Integer = int(i64.min to i64.max)
+
+union BoxError
+	negative
+end 'BoxError'
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function peek(b Box) returns Integer throws BoxError
+	if b.value < 0 'neg'
+		throw BoxError.negative
+	end 'neg'
+	return b.value
+end 'peek'
+
+function main() returns ExitCode
+	@heap let boxed = Box.create(7)
+	var total = 0
+	for _ in 0 upto 3 'loop'
+		let alias = boxed
+		let n = try peek(alias) otherwise 0
+		total = total + n
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 21
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #7
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x2, #3
+    arm64.mov x0, #0
+    arm64.mov x20, x0
+    arm64.mov x3, x0
+  loop_0.header:
+    arm64.cmp x3, x2
+    arm64.cset x1, lt
+    arm64.b.ge loop_0.exit
+  inlined_peek_0_0:
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x1, lt
+    arm64.b.ge inlined_peek_2_0
+  inlined_peek_1_0:
+    arm64.mov x1, #1
+    arm64.mov x4, #0
+    arm64.b inline_cont_main_0
+  inlined_peek_2_0:
+    arm64.ldr x1, [x19, #0] (8b)
+    arm64.mov x4, #0
+    arm64.mov x16, x1
+    arm64.mov x1, x4
+    arm64.mov x4, x16
+  inline_cont_main_0:
+    arm64.cmp x1, x0
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x1, x0
+    arm64.b try_0.merge
+  loop_0.step:
+    arm64.mov x1, #1
+    arm64.add x5, x3, x1
+    arm64.mov x20, x4
+    arm64.mov x3, x5
+    arm64.b loop_0.header
+  loop_0.exit:
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  try_0.ok:
+    arm64.mov x1, x4
+  try_0.merge:
+    arm64.add x4, x20, x1
+    arm64.b loop_0.step
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2309f3aa1be95597
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

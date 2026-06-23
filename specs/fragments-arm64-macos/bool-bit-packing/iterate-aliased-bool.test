@@ -1,0 +1,284 @@
+// Test: iterate-aliased-bool
+// Regression: iterating an Array<bool> via for-in loads each element from the
+// bit-packed buffer and branches on it. The get path has to return a real bool
+// (i1), not a raw i64 {0,1} value, or cond_br fails to lower (StdI64→StdBool cast).
+// Also exercises the ForLoopIteratorElisionPass bool path: the optimized loop
+// reads directly from __ManagedMemory with EmitBitGetAsBool.
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	arr.push(false)
+	arr.push(true)
+	arr.push(true)
+	// Iterate and count trues via boolean composition, not just `if v`.
+	// The `not v` path stresses the StdBool typing — `not` is defined on i1.
+	var trueCount = 0
+	var consecutiveTrue = 0
+	var maxRun = 0
+	for v in arr 'scan'
+		if v 'hit'
+			trueCount = trueCount + 1
+			consecutiveTrue = consecutiveTrue + 1
+			if consecutiveTrue > maxRun 'grow'
+				maxRun = consecutiveTrue
+			end 'grow'
+		end 'hit'
+		if not v 'miss'
+			consecutiveTrue = 0
+		end 'miss'
+	end 'scan'
+	// Expect 6 trues, longest run of 2.
+	return trueCount * 10 + maxRun
+end 'main'
+---
+ExitCode: 62
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x0, [x29, #48]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x20, #1
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x21, #0
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x2, [x29, #48]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_Array_Bool
+    arm64.ldr x1, [x29, #48]
+  inlined_Array.createIterator_0_0:
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.bl ArrayIterator.create
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x2, ne
+    arm64.b.eq inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
+    arm64.mov x0, #0
+    arm64.mov x2, x0
+    arm64.b inline_cont_main_0
+  inlined_Array.createIterator_2_0:
+    arm64.mov x1, #0
+    arm64.mov x2, x0
+  inline_cont_main_0:
+    arm64.cmp x1, x21
+    arm64.cset x0, ne
+    arm64.b.eq __phi_trampoline_14_0
+    arm64.b __rc_edge_14_0
+  inlined_ArrayIterator.advance_0_0:
+    arm64.ldr x0, [x2, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x3, [x0, #16] (8b)
+    arm64.mov x5, #1
+    arm64.add x6, x1, x5
+    arm64.sub x5, x6, x1
+    arm64.cmp x6, x3
+    arm64.cset x3, lt
+    arm64.mul x6, x3, x5
+    arm64.mov x5, #1
+    arm64.mov x7, #1
+    arm64.sub x8, x5, x3
+    arm64.mul x3, x8, x7
+    arm64.add x5, x1, x6
+    arm64.str x5, [x0, #8] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x3, x0
+    arm64.cset x1, ne
+    arm64.b.eq __phi_trampoline_15_0
+  inlined_ArrayIterator.advance_1_0:
+    arm64.mov x1, #1
+  inline_cont_main_1:
+    arm64.cmp x1, x21
+    arm64.cset x0, ne
+    arm64.b.eq __phi_trampoline_18_0
+    arm64.b __rc_edge_18_0
+  scan_0:
+    arm64.ldr x0, [x2, #0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    arm64.mov x1, #24
+    arm64.add x6, x0, x1
+    arm64.mov x1, #8
+    arm64.ldr x7, [x6, #0] (8b)
+    arm64.add x6, x0, x1
+    arm64.ldr x8, [x6, #0] (8b)
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x7, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    arm64.mov x0, #3
+    arm64.lsrv x6, x8, x0
+    arm64.mov x0, #0
+    arm64.add x7, x1, x6
+    arm64.str x7, [x29, #16]
+    arm64.str x0, [x29, #24]
+    arm64.ldrb w0, [x0, #0]
+    arm64.ldr x0, [x29, #48]
+    arm64.mov x1, #7
+    arm64.and x6, x8, x1
+    arm64.mov x1, #1
+    arm64.lsrv x7, x0, x6
+    arm64.and x0, x7, x1
+    arm64.b inline_cont_main_3
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    arm64.mul x0, x8, x7
+    arm64.add x6, x1, x0
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    arm64.mov x0, #1
+    arm64.cmp x7, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    arm64.mov x0, #0
+    arm64.str x6, [x29, #32]
+    arm64.str x0, [x29, #40]
+    arm64.ldrb w0, [x0, #0]
+    arm64.ldr x0, [x29, #48]
+    arm64.b inline_cont_main_2
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    arm64.mov x0, #2
+    arm64.cmp x7, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    arm64.ldrh x0, [x6, #0] (2b)
+    arm64.b inline_cont_main_2
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    arm64.mov x0, #4
+    arm64.cmp x7, x0
+    arm64.cset x0, eq
+    arm64.b.ne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    arm64.ldr x0, [x6, #0] (4b)
+    arm64.b inline_cont_main_2
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    arm64.ldr x0, [x6, #0] (8b)
+  inline_cont_main_2:
+  inline_cont_main_3:
+    arm64.cmp x0, #0
+    arm64.b.eq __phi_trampoline_22_0
+    arm64.b hit_0
+  scan_0.exit:
+    arm64.mov x0, #10
+    arm64.mul x2, x21, x0
+    arm64.mov x3, #255
+    arm64.add x0, x2, x1
+    arm64.cmp x0, x3
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  hit_0:
+    arm64.add x1, x4, x20
+    arm64.add x4, x3, x20
+    arm64.cmp x1, x5
+    arm64.cset x3, gt
+    arm64.b.le grow_0.after
+  grow_0:
+    arm64.mov x5, x1
+  grow_0.after:
+    arm64.mov x22, x4
+    arm64.mov x4, x1
+    arm64.mov x23, x5
+  hit_0.after:
+    arm64.eor x1, x0, x20
+    arm64.cmp x1, #0
+    arm64.b.eq miss_0.after
+  miss_0:
+    arm64.mov x4, x21
+  miss_0.after:
+    arm64.b inlined_ArrayIterator.advance_0_0
+  __rc_edge_14_0:
+    arm64.mov x0, x2
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x21
+    arm64.b scan_0.exit
+  __rc_edge_18_0:
+    arm64.mov x0, x2
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x21, x22
+    arm64.mov x1, x23
+    arm64.b scan_0.exit
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_201abdb40f13a79b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_14_0:
+    arm64.mov x3, x21
+    arm64.mov x4, x21
+    arm64.mov x5, x21
+    arm64.b scan_0
+  __phi_trampoline_15_0:
+    arm64.mov x1, x0
+    arm64.b inline_cont_main_1
+  __phi_trampoline_18_0:
+    arm64.mov x3, x22
+    arm64.mov x5, x23
+    arm64.b scan_0
+  __phi_trampoline_22_0:
+    arm64.mov x22, x3
+    arm64.mov x23, x5
+    arm64.b hit_0.after
+  }
+}
+---

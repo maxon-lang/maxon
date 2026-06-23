@@ -1,0 +1,90 @@
+// Test: field-defaults.literal-overrides-default
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray = IntArray.create()
+
+	export static function createWith(items IntArray) returns Self
+		return Self{items: items}
+	end 'createWith'
+end 'Bag'
+
+function main() returns ExitCode
+	var pre = IntArray.create()
+	pre.push(7)
+	let b = Bag.createWith(pre)
+	let v = try b.items.get(0) otherwise 0
+	return v
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #7
+    arm64.mov x0, x19
+    arm64.bl Array.push
+    arm64.adrp+add x1, __destruct_Bag
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.mov x19, #0
+  inlined_Array.get_0_0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x0, x1
+    arm64.mov x1, x19
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x21, x0
+    arm64.mov x0, x1
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_main_0
+  inlined_Array.get_3_0:
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #0
+    arm64.mov x0, x21
+  inline_cont_main_0:
+    arm64.cmp x1, x19
+    arm64.cset x1, ne
+    arm64.b.eq try_0.ok
+    arm64.mov x0, x19
+    arm64.b try_0.merge
+  try_0.ok:
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_40f01fe2571df556
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

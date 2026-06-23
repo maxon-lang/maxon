@@ -1,0 +1,59 @@
+// Test: div-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+function divLoop(n Integer) returns Integer
+	var sum = 0
+	var i = 1
+	while i <= n 'loop'
+		sum = sum + trunc(50 / i)
+		i = i + 1
+	end 'loop'
+	return sum
+end 'divLoop'
+
+function main() returns ExitCode
+	return divLoop(5)
+end 'main'
+---
+ExitCode: 113
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #5
+  inlined_divLoop_0_0:
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+  inlined_divLoop_1_0:
+    arm64.cmp x0, x1
+    arm64.cset x3, le
+    arm64.b.gt inline_cont_main_0
+  inlined_divLoop_2_0:
+    arm64.mov x3, #50
+    arm64.sdiv x4, x3, x0
+    arm64.mov x3, #1
+    arm64.add x5, x0, x3
+    arm64.add x0, x2, x4
+    arm64.mov x2, x0
+    arm64.mov x0, x5
+    arm64.b inlined_divLoop_1_0
+  inline_cont_main_0:
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_9dd03b67ab5b7064
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

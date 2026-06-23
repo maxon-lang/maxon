@@ -1,0 +1,207 @@
+// Test: pdq-all-equal
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for _ in 0 upto 35 'fill'
+		a.push(7)
+	end 'fill'
+	Log.startCapture()
+	a.sortUnstable(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "pdq.equalElements") 'e'
+		print("equal-path-fired\n")
+	end 'e'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+equal-path-fired
+```
+---
+// CompiledIR
+module {
+  func @ascending(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.mov x0, x2
+    arm64.bl int.compare
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_987aaca853a10d82
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.mov x20, #35
+    arm64.mov x21, #0
+    arm64.mov x22, x21
+  fill_0.header:
+    arm64.cmp x22, x20
+    arm64.cset x0, lt
+    arm64.b.ge fill_0.exit
+  fill_0:
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x1, #7
+    arm64.mov x0, x19
+    arm64.bl Array.push
+  fill_0.step:
+    arm64.mov x0, #1
+    arm64.add x1, x22, x0
+    arm64.mov x22, x1
+    arm64.b fill_0.header
+  fill_0.exit:
+    arm64.adrp_add_rdata x0, __data_captured
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.ldr x20, [x1, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl stdlib.__managed_mem_walk_elements
+    arm64.mov x0, #8
+    arm64.add x1, x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #0] (8b)
+    arm64.adrp_add_rdata x0, __data_capturing
+    arm64.ldr x0, [x29, #16]
+    arm64.mov x1, #1
+    arm64.str x1, [x0, #0] (8b)
+    arm64.ldr x0, [x19, #0] (8b)
+    arm64.ldr x2, [x0, #8] (8b)
+    arm64.mov x1, #0
+    arm64.adrp_add_rdata x0, __layout_Array_Integer
+    arm64.ldr x7, [x29, #16]
+    arm64.adrp+add x5, __fnref_ascending
+  inlined_Array.pdqsortRange_0_0:
+    arm64.mov x0, #32
+    arm64.sub x3, x2, x1
+    arm64.mov x4, #0
+    arm64.cmp x3, x0
+    arm64.cset x0, le
+    arm64.b.gt __phi_trampoline_7_0
+  inlined_Array.pdqsortRange_1_0:
+    arm64.mov x0, x19
+    arm64.mov x3, x5
+    arm64.mov x4, x21
+    arm64.mov x5, x7
+    arm64.bl Array.smallSortRange
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.b inline_cont_main_0
+  inlined_Array.pdqsortRange_3_0:
+    arm64.mov x6, #1
+    arm64.cmp x3, x6
+    arm64.cset x6, gt
+    arm64.b.le inlined_Array.pdqsortRange_5_0
+  inlined_Array.pdqsortRange_4_0:
+    arm64.mov x6, #2
+    arm64.sdiv x8, x3, x6
+    arm64.mov x3, #1
+    arm64.add x6, x0, x3
+    arm64.mov x0, x6
+    arm64.mov x3, x8
+    arm64.b inlined_Array.pdqsortRange_3_0
+  inlined_Array.pdqsortRange_5_0:
+    arm64.mov x3, #2
+    arm64.mul x6, x0, x3
+    arm64.mov x0, x19
+    arm64.mov x3, x6
+    arm64.mov x6, x21
+    arm64.bl Array.pdqsortRecurse
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+  inline_cont_main_0:
+    arm64.bl Log.stopCapture
+    arm64.mov x19, x0
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.str x21, [x20, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_442
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #17
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #24] (8b)
+    arm64.str x21, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.str x20, [x22, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x22, #8] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x22
+    arm64.bl Log.fired
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x22
+    arm64.bl mm_drop
+    arm64.cmp x20, #0
+    arm64.b.eq e_0.after
+  e_0:
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x21, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #17
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.str x21, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.ldr x0, [x20, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x19, [x0, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+  e_0.after:
+    arm64.mov x0, x21
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_7_0:
+    arm64.mov x0, x4
+    arm64.b inlined_Array.pdqsortRange_3_0
+  }
+}
+---

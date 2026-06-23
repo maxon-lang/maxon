@@ -14,6 +14,7 @@ static class BuildCache {
     public string TargetArch { get; init; } = "";
     public string TargetOs { get; init; } = "";
     public bool MmTrace { get; init; }
+    public bool MmTraceRawOnly { get; init; }
     public bool MmDebug { get; init; }
     public bool AsyncTrace { get; init; }
     public bool DebugStream { get; init; }
@@ -55,6 +56,7 @@ static class BuildCache {
     if (manifest.CompilerModified != GetCompilerModifiedTicks()) return false;
     if (manifest.TargetArch != target.Arch || manifest.TargetOs != target.Os) return false;
     if (manifest.MmTrace != Compiler.Compiler.MmTrace) return false;
+    if (manifest.MmTraceRawOnly != Compiler.Compiler.MmTraceRawOnly) return false;
     if (manifest.MmDebug != Compiler.Compiler.MmDebug) return false;
     if (manifest.AsyncTrace != Compiler.Compiler.AsyncTrace) return false;
     if (manifest.DebugStream != Compiler.Compiler.DebugStream) return false;
@@ -102,6 +104,7 @@ static class BuildCache {
       TargetArch = target.Arch,
       TargetOs = target.Os,
       MmTrace = Compiler.Compiler.MmTrace,
+      MmTraceRawOnly = Compiler.Compiler.MmTraceRawOnly,
       MmDebug = Compiler.Compiler.MmDebug,
       AsyncTrace = Compiler.Compiler.AsyncTrace,
       DebugStream = Compiler.Compiler.DebugStream,

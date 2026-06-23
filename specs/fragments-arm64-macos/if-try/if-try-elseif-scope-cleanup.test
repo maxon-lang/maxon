@@ -1,0 +1,84 @@
+// Test: if-try-elseif-scope-cleanup
+enum MyError implements Error
+	failed
+end 'MyError'
+
+typealias Int = int(i64.min to i64.max)
+
+function mayFail() returns Int throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function helper(x Int) returns Int throws MyError
+	if x == 1 'case1'
+		return 10
+	end 'case1' else if x == 2 'case2'
+		let r = try mayFail()
+		return r
+	end 'case2' else 'default'
+		return 30
+	end 'default'
+end 'helper'
+
+function main() returns ExitCode
+	return try helper(3) otherwise 99
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @helper(x0: i64) -> i64 {
+  entry:
+    arm64.mov x2, x0
+    arm64.mov x0, #1
+    arm64.cmp x2, x0
+    arm64.cset x0, eq
+    arm64.b.ne case1_0.else
+  case1_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #10
+    arm64.ret
+  case1_0.else:
+    arm64.mov x0, #2
+    arm64.cmp x2, x0
+    arm64.cset x0, eq
+    arm64.b.ne default_0
+  case2_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+  try_0.err:
+    arm64.mov x0, #0
+    arm64.ret
+  default_0:
+    arm64.mov x1, #0
+    arm64.mov x0, #30
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #3
+    arm64.bl helper
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #99
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e5c3abe97e95a0ce
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

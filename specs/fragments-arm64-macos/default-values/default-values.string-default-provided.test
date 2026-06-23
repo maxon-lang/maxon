@@ -1,0 +1,135 @@
+// Test: default-values.string-default-provided
+function greet(name String = "World") returns ExitCode
+	print("Hello, {name}!")
+	return 0
+end 'greet'
+
+function main() returns ExitCode
+	return greet("Maxon")
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Hello, Maxon!
+```
+---
+// CompiledIR
+module {
+  func @greet(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #0] (8b)
+    arm64.ldr x19, [x2, #8] (8b)
+    arm64.ldr x20, [x2, #0] (8b)
+    arm64.mov x1, #7
+    arm64.mov x21, #1
+    arm64.add x2, x19, x1
+    arm64.mov x1, #1
+    arm64.add x22, x2, x21
+    arm64.add x2, x22, x1
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc
+    arm64.mov x23, x0
+    arm64.mov x4, #7
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x1, [x29, #72]
+    arm64.str x23, [x29, #16]
+    arm64.str x1, [x29, #72]
+    arm64.str x4, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x23, x4
+    arm64.str x5, [x29, #32]
+    arm64.str x20, [x29, #40]
+    arm64.str x19, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_480
+    arm64.ldr x1, [x29, #16]
+    arm64.add x2, x5, x19
+    arm64.str x2, [x29, #56]
+    arm64.str x1, [x29, #16]
+    arm64.str x21, [x29, #64]
+    arm64.memcpy
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.str x1, [x19, #40] (8b)
+    arm64.str x23, [x19, #0] (8b)
+    arm64.str x22, [x19, #8] (8b)
+    arm64.str x22, [x19, #16] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x19, #24] (8b)
+    arm64.mov x1, #-1
+    arm64.str x1, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.str x1, [x20, #8] (8b)
+    arm64.ldr x1, [x20, #0] (8b)
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.ldr x19, [x1, #0] (8b)
+    arm64.mov x0, x19
+    arm64.mov x1, x2
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x1, #0
+    arm64.mov x0, x1
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #40] (8b)
+    arm64.adrp_add_rdata x0, __istr_481
+    arm64.ldr x0, [x29, #16]
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #5
+    arm64.str x0, [x19, #8] (8b)
+    arm64.mov x0, #-2
+    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl greet
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_7b4a8831a79aebe9
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

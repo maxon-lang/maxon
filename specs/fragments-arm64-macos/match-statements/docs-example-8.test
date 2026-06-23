@@ -1,0 +1,119 @@
+// Test: docs-example-8
+typealias Score = int(i64.min to i64.max)
+
+function charType(c Character) returns Score
+	match c 'classify'
+		'a' to 'z' then return 1  // lowercase
+		'A' to 'Z' then return 2  // uppercase
+		'0' to '9' then return 3  // digit
+		default then return 0    // other
+	end 'classify'
+end 'charType'
+
+function main() returns ExitCode
+	return charType('G')
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @charType(x0: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl Character.codepoint
+    arm64.mov x1, x0
+    arm64.mov x0, #122
+    arm64.mov x2, #97
+    arm64.cmp x1, x0
+    arm64.cset x0, le
+    arm64.cmp x1, x2
+    arm64.cset x2, ge
+    arm64.ands x3, x2, x0
+    arm64.b.eq classify_0.next0
+  classify_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  classify_0.next0:
+    arm64.mov x0, #90
+    arm64.mov x2, #65
+    arm64.cmp x1, x0
+    arm64.cset x0, le
+    arm64.cmp x1, x2
+    arm64.cset x2, ge
+    arm64.ands x3, x2, x0
+    arm64.b.eq classify_0.next1
+  classify_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue
+    arm64.ret
+  classify_0.next1:
+    arm64.mov x0, #57
+    arm64.mov x2, #48
+    arm64.cmp x1, x0
+    arm64.cset x0, le
+    arm64.cmp x1, x2
+    arm64.cset x1, ge
+    arm64.ands x2, x1, x0
+    arm64.b.eq classify_0.case3
+  classify_0.case2:
+    arm64.mov x0, #3
+    arm64.epilogue
+    arm64.ret
+  classify_0.case3:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #1
+    arm64.bl mrt_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #71
+    arm64.str x0, [x19, #0] (1b)
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #40] (8b)
+    arm64.str x19, [x20, #0] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_Character
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.str x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl charType
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e08664c8c1d04717
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

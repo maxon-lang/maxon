@@ -1,0 +1,256 @@
+// Test: inner-alias-interpolation
+// --- file: types.maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export var value as Integer
+	export static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type GenericModule uses Op
+	typealias OpArray = Array with Op
+
+	export var ops as OpArray
+	export var items as ItemArray
+
+	export static function create() returns Self
+		return Self{
+			ops: OpArray.create(),
+			items: ItemArray.create()
+		}
+	end 'create'
+
+	export function pushOp(op Op)
+		self.ops.push(op)
+	end 'pushOp'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function itemCount() returns Count
+		return self.items.count()
+	end 'itemCount'
+end 'GenericModule'
+
+export typealias IntModule = GenericModule with Integer
+
+// --- file: main.maxon
+typealias ExitCode = int(0 to 125)
+
+function main() returns ExitCode
+	var m = IntModule.create()
+	m.pushOp(10)
+	m.pushOp(20)
+	print("ops={m.opCount()} items={m.itemCount()}\n")
+	if m.opCount() == 2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+ops=2 items=0
+```
+---
+// CompiledIR
+module {
+  func @GenericModule.opCount(x0: i64, x1: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.ldr x3, [x2, #0] (8b)
+    arm64.mov x0, x3
+    arm64.bl Array.count
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d0c3cb329d41cbba
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @GenericModule.itemCount(x0: i64, x1: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x2
+    arm64.bl Array.count
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_fb8f0d634692f86e
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=192
+    arm64.adrp+add x1, __destruct_GenericModule
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x0, [x29, #112]
+    arm64.bl Array.create
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_Array_Item
+    arm64.ldr x0, [x29, #112]
+    arm64.bl Array.create
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x2, [x29, #112]
+    arm64.mov x1, #10
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x2, [x29, #112]
+    arm64.mov x1, #20
+    arm64.mov x0, x20
+    arm64.bl Array.push
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x1, [x29, #112]
+    arm64.mov x0, x19
+    arm64.bl GenericModule.opCount
+    arm64.mov x20, x0
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x1, [x29, #112]
+    arm64.mov x0, x19
+    arm64.bl GenericModule.itemCount
+    arm64.mov x21, x0
+    arm64.mov x0, #21
+    arm64.bl mrt_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x20
+    arm64.mov x1, x22
+    arm64.bl mrt_i64_to_string
+    arm64.mov x20, x0
+    arm64.mov x0, #21
+    arm64.bl mrt_alloc
+    arm64.mov x23, x0
+    arm64.mov x0, x21
+    arm64.mov x1, x23
+    arm64.bl mrt_i64_to_string
+    arm64.mov x21, x0
+    arm64.mov x0, #4
+    arm64.mov x24, #7
+    arm64.add x1, x20, x0
+    arm64.add x0, x1, x24
+    arm64.mov x25, #1
+    arm64.add x1, x0, x21
+    arm64.mov x0, #1
+    arm64.add x26, x1, x25
+    arm64.add x1, x26, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.mov x27, x0
+    arm64.mov x4, #4
+    arm64.adrp_add_rdata x0, __istr_478
+    arm64.ldr x0, [x29, #112]
+    arm64.str x27, [x29, #16]
+    arm64.str x0, [x29, #112]
+    arm64.str x4, [x29, #24]
+    arm64.memcpy
+    arm64.add x5, x27, x4
+    arm64.str x5, [x29, #32]
+    arm64.str x22, [x29, #40]
+    arm64.str x20, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_479
+    arm64.ldr x0, [x29, #16]
+    arm64.add x4, x5, x20
+    arm64.str x4, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x24, [x29, #64]
+    arm64.memcpy
+    arm64.add x5, x4, x24
+    arm64.str x5, [x29, #72]
+    arm64.str x23, [x29, #80]
+    arm64.str x21, [x29, #88]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_9
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x5, x21
+    arm64.str x1, [x29, #96]
+    arm64.str x0, [x29, #16]
+    arm64.str x25, [x29, #104]
+    arm64.memcpy
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_decref
+    arm64.mov x0, x23
+    arm64.bl stdlib.__mm_decref
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #40] (8b)
+    arm64.str x27, [x20, #0] (8b)
+    arm64.str x26, [x20, #8] (8b)
+    arm64.str x26, [x20, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x20, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.str x20, [x21, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x21, #8] (8b)
+    arm64.ldr x0, [x21, #0] (8b)
+    arm64.ldr x1, [x0, #8] (8b)
+    arm64.ldr x20, [x0, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.adrp_add_rdata x0, __layout_GenericModule_Integer
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl GenericModule.opCount
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #2
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.b.ne check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

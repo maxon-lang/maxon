@@ -1,0 +1,62 @@
+// Test: ranges.continue-in-range
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 10 'loop'
+				if i mod 2 == 0 'skip'
+						continue
+				end 'skip'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #10
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+    arm64.mov x16, x2
+    arm64.mov x2, x0
+    arm64.mov x0, x16
+  loop_0.header:
+    arm64.cmp x2, x1
+    arm64.cset x3, le
+    arm64.b.gt loop_0.exit
+  loop_0:
+    arm64.mov x3, #2
+    arm64.msub x4, x2, x3
+    arm64.mov x3, #0
+    arm64.cmp x4, x3
+    arm64.cset x3, eq
+    arm64.b.ne skip_0.after
+  loop_0.step:
+    arm64.mov x3, #1
+    arm64.add x4, x2, x3
+    arm64.mov x2, x4
+    arm64.b loop_0.header
+  loop_0.exit:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  skip_0.after:
+    arm64.add x3, x0, x2
+    arm64.mov x0, x3
+    arm64.b loop_0.step
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d1a5a8c719a05ba7
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

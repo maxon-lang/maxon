@@ -1,0 +1,86 @@
+// Test: literal-field-init-with-try-otherwise
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var a as Integer
+	export var b as Integer
+
+	export static function create(a Integer, b Integer) returns Inner
+		return Self{a: a, b: b}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var found as bool
+	export var inner as Inner
+
+	export static function miss() returns Outer
+		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
+	end 'miss'
+end 'Outer'
+
+function parseB() returns Integer throws Inner
+	return 7
+end 'parseB'
+
+function main() returns ExitCode
+	let o = Outer.miss()
+	return o.inner.b
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Outer.miss() -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp+add x1, __destruct_Outer
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x20, #0
+    arm64.str x20, [x19, #8] (8b)
+    arm64.str x20, [x19, #0] (1b)
+    arm64.mov x21, #7
+  try_0.merge:
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_incref
+    arm64.str x20, [x22, #0] (8b)
+    arm64.str x21, [x22, #8] (8b)
+    arm64.str x22, [x19, #8] (8b)
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl Outer.miss
+    arm64.mov x1, x0
+    arm64.ldr x2, [x1, #8] (8b)
+    arm64.ldr x19, [x2, #8] (8b)
+    arm64.mov x0, x1
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_229237ff869aa703
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

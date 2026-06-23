@@ -1,0 +1,98 @@
+// Test: function-backing.two-args
+
+typealias Integer = int(i64.min to i64.max)
+
+function addFn(a Integer, b Integer) returns Integer
+	return a + b
+end 'addFn'
+
+function subFn(a Integer, b Integer) returns Integer
+	return a - b
+end 'subFn'
+
+enum BinOp
+	add = addFn
+	sub = subFn
+end 'BinOp'
+
+function main() returns ExitCode
+	let addF = BinOp.add.rawValue
+	let subF = BinOp.sub.rawValue
+	return addF(30, 15) - subF(5, 2)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @addFn(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.mov x2, x0
+    arm64.add x3, x2, x1
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @subFn(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.mov x2, x0
+    arm64.sub x3, x2, x1
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #0
+  inlined___enum_BinOp_fnRaw_0_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne inlined___enum_BinOp_fnRaw_3_0
+  inlined___enum_BinOp_fnRaw_1_0:
+    arm64.adrp+add x0, __fnref_addFn
+    arm64.mov x19, x0
+    arm64.b inline_cont_main_0
+  inlined___enum_BinOp_fnRaw_3_0:
+    arm64.adrp+add x0, __fnref_subFn
+    arm64.mov x19, x0
+  inline_cont_main_0:
+    arm64.mov x0, #1
+    arm64.mov x2, #0
+  inlined___enum_BinOp_fnRaw_0_1:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne inlined___enum_BinOp_fnRaw_3_1
+  inlined___enum_BinOp_fnRaw_1_1:
+    arm64.adrp+add x0, __fnref_addFn
+    arm64.mov x20, x0
+    arm64.b inline_cont_main_1
+  inlined___enum_BinOp_fnRaw_3_1:
+    arm64.adrp+add x0, __fnref_subFn
+    arm64.mov x20, x0
+  inline_cont_main_1:
+    arm64.mov x1, #15
+    arm64.mov x0, #30
+    arm64.blr x19
+    arm64.mov x19, x0
+    arm64.mov x2, #0
+    arm64.mov x1, #2
+    arm64.mov x0, #5
+    arm64.blr x20
+    arm64.mov x1, x0
+    arm64.mov x2, #255
+    arm64.sub x0, x19, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_9a26da8f213cffb3
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

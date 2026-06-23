@@ -1,0 +1,103 @@
+// Test: error.binding-success-no-block
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test that error binding block is skipped on success
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+	counter = counter + 1
+	if shouldFail 'check'
+		throw MyError.failed
+	end 'check'
+	return 100
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail(false) otherwise (e) 'handler'
+		match e 'kind'
+			failed then result = 99
+		end 'kind'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @mayFail(x0: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, x0
+    arm64.adrp_add_rdata x0, __data_counter
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x3, #1
+    arm64.adrp_add_rdata x0, __data_counter
+    arm64.ldr x0, [x29, #16]
+    arm64.add x4, x2, x3
+    arm64.str x4, [x0, #0] (8b)
+    arm64.cmp x1, #0
+    arm64.b.eq check_0.after
+  check_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  check_0.after:
+    arm64.mov x1, #0
+    arm64.mov x0, #100
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x19, #0
+    arm64.mov x0, x19
+    arm64.bl mayFail
+    arm64.cmp x1, x19
+    arm64.cset x2, ne
+    arm64.b.eq __phi_trampoline_0_0
+  try_0.otherwise:
+    arm64.mov x0, #1
+    arm64.sub x2, x1, x0
+    arm64.cmp x2, x19
+    arm64.cset x0, eq
+    arm64.b.ne __phi_trampoline_1_0
+    arm64.b kind_0.case0
+  kind_0.merge:
+    arm64.mov x1, x19
+    arm64.b try_0.merge
+  kind_0.case0:
+    arm64.mov x0, #99
+    arm64.b kind_0.merge
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_607603da33936efd
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_0_0:
+    arm64.mov x1, x0
+    arm64.mov x0, x19
+    arm64.b try_0.merge
+  __phi_trampoline_1_0:
+    arm64.mov x0, x19
+    arm64.b kind_0.merge
+  }
+}
+---

@@ -1,0 +1,113 @@
+// Test: ternary-expression.logical-op-condition
+type Flags
+	export let a as bool
+	export let b as bool
+
+	export static function make(a bool, b bool) returns Flags
+		return Flags{a: a, b: b}
+	end 'make'
+end 'Flags'
+
+function pick(f Flags) returns ExitCode
+	let either = f.a or f.b
+	let both = f.a and f.b
+	let one = 4 if either else 0
+	let two = 1 if both else 0
+	return (one + two) as ExitCode
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Flags.make(true, b: false))
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @pick(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.ldrsb x1, [x0, #1] (1b)
+    arm64.ldrsb x2, [x0, #0] (1b)
+    arm64.ldrsb x3, [x0, #1] (1b)
+    arm64.ldrsb x4, [x0, #0] (1b)
+    arm64.mov x0, #0
+    arm64.mov x5, #4
+    arm64.and x6, x2, x1
+    arm64.orr x1, x4, x3
+    arm64.cmp x1, #0
+    arm64.b.eq ternary.else
+    arm64.b ternary.merge
+  ternary.else:
+    arm64.mov x5, x0
+  ternary.merge:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.cmp x6, #0
+    arm64.b.eq ternary.else
+    arm64.b ternary.merge
+  ternary.else:
+    arm64.mov x1, x0
+  ternary.merge:
+    arm64.mov x2, #255
+    arm64.add x0, x5, x1
+    arm64.cmp x0, x2
+    arm64.cset x1, gt
+    arm64.b.le __cast_check_lo_0
+    arm64.b __cast_panic_0
+  __cast_check_lo_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x1, lt
+    arm64.b.ge __cast_ok_0
+  __cast_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_4d9813e62b96ab4c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __cast_ok_0:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_4d9813e62b96ab4c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (1b)
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #1] (1b)
+    arm64.mov x0, x19
+    arm64.bl pick
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_6b880b0346a2b25b
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

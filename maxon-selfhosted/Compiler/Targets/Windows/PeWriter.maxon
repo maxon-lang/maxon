@@ -716,7 +716,7 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataRva - ripAtReloc)
 			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataRva + reloc.rdataOffset - ripAtReloc)
 			covdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: covdataRva + reloc.rdataOffset - ripAtReloc)
-			arm64Adr to covdataArm64Adr then break 'kind'
+			arm64Adr to covdataArm64PageOff then break 'kind'
 			funcAbs64InRdata then break 'kind'
 		end 'kind'
 	end 'patch'
@@ -732,6 +732,12 @@ function patchRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationA
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: symdataRva)
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: dataRva + reloc.rdataOffset)
 			covdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: covdataRva + reloc.rdataOffset)
+			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: rdataRva + reloc.rdataOffset)
+			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: rdataRva + reloc.rdataOffset)
+			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: dataRva + reloc.rdataOffset)
+			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataRva + reloc.rdataOffset)
+			covdataArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: covdataRva + reloc.rdataOffset)
+			covdataArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: covdataRva + reloc.rdataOffset)
 			funcAbs64InRdata then break 'patchKind'
 		end 'patchKind'
 	end 'patch'

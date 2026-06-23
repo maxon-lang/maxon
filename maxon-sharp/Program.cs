@@ -88,6 +88,9 @@ class Program {
         dumpStages = true;
       } else if (arg == "--mm-trace") {
         Compiler.Compiler.MmTrace = true;
+      } else if (arg == "--mm-trace-raw") {
+        Compiler.Compiler.MmTrace = true;
+        Compiler.Compiler.MmTraceRawOnly = true;
       } else if (arg == "--mm-debug") {
         Compiler.Compiler.MmDebug = true;
       } else if (arg == "--async-trace") {

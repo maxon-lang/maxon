@@ -1,0 +1,141 @@
+// Test: default-values.mixed-defaults
+typealias Integer = int(i64.min to i64.max)
+
+function process(label String = "result", value Integer = 42) returns ExitCode
+	print("{label}: {value}")
+	return 0
+end 'process'
+
+function main() returns ExitCode
+	return process()
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+result: 42
+```
+---
+// CompiledIR
+module {
+  func @process(x0: i64, x1: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=160
+    arm64.mov x2, x0
+    arm64.mov x19, x1
+    arm64.ldr x1, [x2, #0] (8b)
+    arm64.ldr x20, [x1, #8] (8b)
+    arm64.ldr x21, [x1, #0] (8b)
+    arm64.mov x1, #21
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.mov x22, x0
+    arm64.mov x0, x19
+    arm64.mov x1, x22
+    arm64.bl mrt_i64_to_string
+    arm64.mov x19, x0
+    arm64.mov x23, #0
+    arm64.mov x24, #2
+    arm64.add x1, x20, x23
+    arm64.add x2, x1, x24
+    arm64.add x1, x2, x19
+    arm64.mov x2, #1
+    arm64.add x25, x1, x23
+    arm64.add x1, x25, x2
+    arm64.mov x0, x1
+    arm64.bl mrt_alloc
+    arm64.mov x26, x0
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x1, [x29, #104]
+    arm64.str x26, [x29, #16]
+    arm64.str x1, [x29, #104]
+    arm64.str x23, [x29, #24]
+    arm64.memcpy
+    arm64.add x4, x26, x23
+    arm64.str x4, [x29, #32]
+    arm64.str x21, [x29, #40]
+    arm64.str x20, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_342
+    arm64.ldr x1, [x29, #16]
+    arm64.add x5, x4, x20
+    arm64.str x5, [x29, #56]
+    arm64.str x1, [x29, #16]
+    arm64.str x24, [x29, #64]
+    arm64.memcpy
+    arm64.add x4, x5, x24
+    arm64.str x4, [x29, #72]
+    arm64.str x22, [x29, #80]
+    arm64.str x19, [x29, #88]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x1, [x29, #16]
+    arm64.add x2, x4, x19
+    arm64.str x2, [x29, #96]
+    arm64.str x1, [x29, #16]
+    arm64.str x23, [x29, #24]
+    arm64.memcpy
+    arm64.mov x0, x22
+    arm64.bl stdlib.__mm_decref
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x2, #48
+    arm64.mov x0, x2
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x23, [x19, #40] (8b)
+    arm64.str x26, [x19, #0] (8b)
+    arm64.str x25, [x19, #8] (8b)
+    arm64.str x25, [x19, #16] (8b)
+    arm64.mov x1, #1
+    arm64.str x1, [x19, #24] (8b)
+    arm64.mov x1, #-1
+    arm64.str x1, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x2, #16
+    arm64.mov x0, x2
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.str x19, [x20, #0] (8b)
+    arm64.str x23, [x20, #8] (8b)
+    arm64.ldr x19, [x20, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.ldr x21, [x19, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, x0
+    arm64.mov x0, x23
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.bl __main.__paramDefault_default-values.mixed-defaults_0
+    arm64.mov x19, x0
+    arm64.mov x1, #42
+    arm64.mov x0, x19
+    arm64.bl process
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_cf6a877544e617c1
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

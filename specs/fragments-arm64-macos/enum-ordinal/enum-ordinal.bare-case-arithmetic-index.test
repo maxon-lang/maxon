@@ -1,0 +1,122 @@
+// Test: enum-ordinal.bare-case-arithmetic-index
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @lookup(x0: i64, x1: u64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+  inlined_Array.get_0_0:
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x0, x2
+    arm64.bl stdlib.__managed_mem_get
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    arm64.mov x1, #1
+    arm64.mov x0, #0
+    arm64.b inline_cont_lookup_0
+  inlined_Array.get_3_0:
+    arm64.mov x1, #0
+  inline_cont_lookup_0:
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #0
+  try_0.merge:
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_f8f95e909c9cdfa3
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.adrp_add_rdata x0, __layout_Array_Idx
+    arm64.ldr x0, [x29, #16]
+    arm64.bl Array.create
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.mov x20, x0
+  fill_0.header:
+    arm64.mov x0, #100
+    arm64.cmp x20, x0
+    arm64.cset x0, lt
+    arm64.b.ge fill_0.exit
+  fill_0:
+    arm64.adrp_add_rdata x0, __layout_Array_Idx
+    arm64.ldr x2, [x29, #16]
+    arm64.mov x0, x19
+    arm64.mov x1, x20
+    arm64.bl Array.push
+    arm64.mov x0, #1
+    arm64.add x1, x20, x0
+    arm64.mov x20, x1
+    arm64.b fill_0.header
+  fill_0.exit:
+    arm64.mov x1, #4
+    arm64.mov x0, x19
+    arm64.bl lookup
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_62e1d8ffde0f4622
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

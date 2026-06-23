@@ -1,0 +1,78 @@
+// Test: try-otherwise-value-flow.propagation-success
+enum E
+	bad
+end 'E'
+
+function double(x ExitCode) returns ExitCode throws E
+	return x * 2
+end 'double'
+
+function wrap() returns ExitCode throws E
+	let v = try double(5)
+	return v
+end 'wrap'
+
+function main() returns ExitCode
+	let v = try wrap() otherwise 99
+	return v
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @double(x0: u8) -> u8 {
+  entry:
+    arm64.mov x1, x0
+    arm64.mov x2, #2
+    arm64.mul x3, x1, x2
+    arm64.mov x1, #0
+    arm64.mov x0, x3
+    arm64.ret
+  }
+  func @wrap() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #5
+    arm64.bl double
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.b.eq try_0.cont
+  try_0.err:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  try_0.cont:
+    arm64.mov x1, #0
+    arm64.mov x0, x2
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl wrap
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.b.eq try_0.merge
+  try_0.otherwise:
+    arm64.mov x0, #99
+  try_0.merge:
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_66946e49a8e1ebf0
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,3221 @@
+// =============================================================================
+// ARM64 macOS green-thread (async/await + cooperative sleep) runtime — hand-rolled
+// machine code emitters.
+//
+// Ports the proven-correct green-thread runtime into the self-hosted arm64-macOS
+// backend, overriding the signature-only `__gt_*` / `maxon_sleep` stubs in
+// runtime.std (`arm64RecordLabel` upserts → last write wins), exactly like
+// `emitArm64MacosSubprocess` overrides the `maxon_subprocess_*` stubs and like
+// `emitArm64Win32Helpers` does on arm64-windows.
+//
+// TWO references shaped this file:
+//   * The OS-specific structure (struct field offsets, status values, scheduler
+//     control flow) follows the C# bootstrap's PROVEN-CORRECT same-platform
+//     arm64-macOS runtime (maxon-sharp/Compiler/MLIR/ARM64CodeEmitter.Runtime.cs,
+//     EmitGtInit/Spawn/Trampoline/ContextSwitch/Await/Yield/Cancel/Cleanup/
+//     TimerAdd/TimerCheck) and the shared GtLayout.cs offset constants.
+//   * The self-hosted ABI specifics — the arg-buffer layout `[count | managed_mask
+//     | arg0 | …]` (lowerAsyncCallReal), the managed-arg decref-by-mask loop in the
+//     trampoline, `__slab_alloc`/`__slab_free`/`mm_decref` for the GT struct + arg
+//     buffer, and the `__gt_trace_emit`/`__gt_current_trace_id` trace factoring —
+//     mirror the self-hosted x64 runtime in X64Backend.maxon (emitX64Gt*), which
+//     is already re-derived against the self-hosted compiler. The struct offsets
+//     are IDENTICAL across the two (GtLayout is authoritative); see the X64Backend
+//     GtOff*/POff* block (copied verbatim there) — we re-declare the subset used
+//     here with the same values.
+//
+// MULTI-M GMP MODEL. This is a Go-style GMP scheduler matching the C# arm64
+// reference and the self-hosted x64 runtime. __gt_init creates ncpu ProcContexts
+// (Ps, one per logical CPU) in __sched_procs[] and adopts P[0] for the main OS
+// thread. Worker OS threads are spawned LAZILY: when an enqueue finds more runnable
+// work than active workers, __gt_enqueue atomically claims a stopped P (CAS
+// P->status 0→1) and pthread_creates a worker running __sched_worker_loop on it,
+// bumping __sched_active_workers. Idle workers park on a per-P dispatch semaphore
+// (P.wakeSemaphore) and are woken by the next enqueue; a worker with no local work
+// tries the global queue, then work-steals half of a random active peer's local
+// queue before parking.
+//
+// Each M's current P is its per-OS-thread identity, read inline from pthread TSD
+// (arm64GtLoadCurrentP: tsd[__sched_tls_key] off the masked TPIDRRO_EL0 thread
+// pointer, with a pre-init/un-adopted NULL gate) — there is no single
+// __gt_current_p global. Per-P state (local run queue head/tail/len, runnext,
+// GT-struct free list, remote-free MPSC head) is reached through that P pointer.
+//
+// QUEUES + LOCKS. The global run queue and the per-P local queues are guarded by
+// recursive spinlocks (emitArm64SlabLock{Acquire,Release}; owner = masked thread
+// pointer, recursion count): __sched_global_queue_cs (global queue + victim-queue
+// walk), __sched_all_cs (the __gt_all_head all-threads list), __gt_timer_cs (the
+// sleep timer min-heap). Acquire/release go through arm64GtLock{Acquire,Release}.
+//
+// HANDSHAKES. The await/trampoline waiter handoff uses a Dekker-style StoreLoad
+// barrier pair on GtGtOffIoYielded so a waiter that has begun context-switching out
+// is reliably observed (and re-enqueued) by the completing GT — see the io_yielded
+// flag uses in __gt_await and the trampoline. P.pendingWaiter defers the wake of a
+// just-unblocked waiter until after the switching GT has fully suspended.
+//
+// FAULT HANDLER. __gt_install_fault_handler registers a sigaction thunk for
+// SEGV/BUS that, since a fault can hit any raw M, stashes the faulting PC/addr/msg
+// in process-global __gt_fault_* .data slots and rewrites the trapping thread's
+// mcontext to resume at __gt_fault_diagnostic on a fresh frame (FP=0) that prints
+// the diagnostic and _exit(1)s without walking the (now-invalid) frame chain.
+//
+// Calling convention: AAPCS64 (args x0..x7, return x0). The self-hosted arm64
+// backend uses standard AAPCS64 for runtime calls (unlike the x64 self-hosted
+// internal rcx/rdx/rax→r8 convention), so `__slab_alloc(x0)→x0`,
+// `__slab_free(x0)`, `mm_decref(x0)`, `__managed_mem_create(x0,x1)→x0`,
+// `__diag_print_tag(x0)`, `__diag_print_i64(x0)` are plain x0-in / x0-out calls.
+// Scratch: x9..x15, x16/x17 (IP0/IP1).
+//
+// Direct BL <name> (the slab allocator, the trace printers, helper-local `__gt_*`
+// calls) are recorded as `Arm64CallFixup`s patched by `arm64ResolveCallFixups`.
+// Global addresses use an `ADRP Xd, page(global) ; ADD Xd, Xd, #pageoff` pair
+// (±4 GiB reach) recorded as `dataSectionArm64Adrp` + `dataSectionArm64PageOff`
+// rdata relocations; loads/stores fold the page offset into the LDR/STR. The
+// __sched_/__gt_/__at_ prefixes classify to the writable heap data section (see
+// arm64RelocKindForLabel; arm64GtAssertDataSection enforces it for these
+// accessors). `__gt_trampoline`'s address uses `ADR Xd, <func>` recorded as an
+// `Arm64AdrFixup`. IAT (GOT) imports (mmap/munmap/gettimeofday/usleep) use the
+// same shape: `ADRP x16,GOT ; LDR x16,[x16] ; BLR x16`.
+// =============================================================================
+
+// --- GreenThread (gt) struct offsets (216 bytes = 0xD8). Authoritative GtLayout
+//     (maxon-sharp), identical to the self-hosted X64Backend GtOff* block. ---
+let GtGtOffSp = 0x00  // saved stack pointer (SP at the context-switch point)
+let GtGtOffFp = 0x08  // saved frame pointer (unused by the naked switch, kept for parity)
+let GtGtOffStatus = 0x10  // 0=ready, 1=running, 2=completed, 3=waiting
+let GtGtOffStackBase = 0x18  // low address of the mmap'd stack (0 for the main thread's inline GT)
+let GtGtOffStackSize = 0x20
+let GtGtOffResult = 0x28  // return value when completed
+let GtGtOffWaiter = 0x30  // ptr to the GT awaiting this one
+let GtGtOffNext = 0x38  // linked-list chain (run queue / free list)
+let GtGtOffFuncPtr = 0x40  // target function address
+let GtGtOffArgBuf = 0x48  // ptr to the __slab_alloc'd argument buffer
+let GtGtOffThrew = 0x58  // 0=success, 1=threw (the multi-value error flag)
+let GtGtOffCancelFlag = 0x78  // 0=live, 1=cancel-requested
+let GtGtOffAllNext = 0x88  // next ptr in the global all-threads list (__gt_all_head)
+let GtGtOffTraceId = 0xA0  // async trace id (AsyncTrace only)
+let GtGtOffIoYielded = 0xA8  // 0=not yet yielded, 1=context switch complete
+
+// CPU-fault diagnostic fields (multi-M fault handler, Phase 4). Byte-identical to the
+// C# GtLayout / self-hosted x64 GtOffFault* so GtGtStructSize stays 0xD8 across compilers.
+// The hand-emitted sigaction thunk stashes the faulting state in the __gt_fault_* .data
+// globals (process-global, simpler than per-GT since a fault can hit a raw OS thread),
+// so these document the layout; they sit above IoYielded(0xA8), below StructSize(0xD8).
+let GtGtOffFaultRip = 0xB0  // PC of the faulting instruction
+let GtGtOffFaultMsg = 0xB8  // ptr to a static NUL-terminated panic message
+let GtGtOffFaultRedirectRip = 0xC0  // resume PC (handler writes this into mcontext->pc)
+let GtGtOffFaultRedirectRsp = 0xC8  // resume SP (mcontext->sp)
+let GtGtOffFaultRedirectFp = 0xD0  // resume FP (mcontext->fp / x29)
+let GtGtStructSize = 0xD8
+
+// --- GT status values ---
+let GtStatusReady = 0
+let GtStatusRunning = 1
+let GtStatusCompleted = 2
+let GtStatusWaiting = 3
+
+// --- ProcContext (P) struct offsets (authoritative: maxon-sharp GtLayout.cs, byte-
+//     identical to the self-hosted X64Backend POff* block). The single-M build only
+//     touched CurrentGt/PendingWaiter/FreeList*/MainThread; the rest are the multi-M
+//     GMP fields (local run queue, worker id/rng/idle/wake/thread/status, runnext, the
+//     remote-free MPSC head the slab indexes via __sched_procs[id]+RemoteFreeHead). ---
+let GtPOffLocalQueueHead = 0x00  // per-P local run queue head (multi-M work-steal)
+let GtPOffLocalQueueTail = 0x08
+let GtPOffLocalQueueLen = 0x10
+let GtPOffCurrentGt = 0x18  // currently-running GT on this processor
+let GtPOffId = 0x20  // processor id (worker #N; shard index for the slab mcache)
+let GtPOffRng = 0x28  // xorshift64 seed (work-steal fairness)
+let GtPOffIdleFlag = 0x30  // 1 = worker parked on its wake semaphore
+let GtPOffWakeSemaphore = 0x38  // dispatch_semaphore_t for park/wake (macOS; x64 uses an Event here)
+let GtPOffOsThreadHandle = 0x40  // pthread_t of this P's worker (8-byte opaque ptr)
+let GtPOffStatus = 0x48  // 0 = stopped, 1 = active
+let GtPOffPendingWaiter = 0x50  // GT to wake after a context switch (deferred)
+let GtPOffRunnext = 0x58  // single-slot LIFO priority slot
+let GtPOffFreeListHead = 0x60  // per-P GT-struct free list
+let GtPOffFreeListLen = 0x68
+let GtPOffSystemStackSP = 0x70  // top of the per-P scheduler/system stack (parity; arm64 runs the M loop on the pthread stack)
+let GtPOffRemoteFreeHead = 0x78  // per-P remote-free MPSC head (Treiber stack; slab cross-P frees)
+let GtPOffMainThread = 0x80  // inline GT struct (the OS thread's own GT)
+let GtPStructSize = 0x158  // 0x80 + 0xD8
+let GtPSystemStackSize = 0x10000  // 64 KB per-P system stack (parity with x64)
+let GtMaxFreeListLen = 64  // per-P GT-struct free-list cap; beyond this __gt_await __slab_frees
+
+// Per-P local run-queue cap: when the local queue reaches this length, enqueue
+// overflows new work to the global run queue (matches the C# MaxLocalQueueLen).
+let GtMaxLocalQueueLen = 256
+
+// Dequeue fairness: ~1 in N dequeues skips the local queue and pulls from the
+// global queue first, so global-queue work can't starve behind a busy local
+// queue (matches the C# FairnessInterval).
+let GtFairnessInterval = 61
+
+// Green-thread stack: a fixed 1 MiB mmap'd region. The arm64 self-hosted backend
+// emits NO stack-guard probe / morestack (unlike x64-Windows, which grows a 2 KB
+// stack on demand), so the stack must be large enough up-front for the deepest
+// coroutine frame chain the spec tests reach (deepRecurse(100) — a few KB). 1 MiB
+// is generously safe and mmap-backed (demand-paged, so unused pages cost nothing).
+let GtStackSize = 0x100000  // 1 MiB
+
+// Context-switch saved-register frame on the GT stack: 160 bytes holding the
+// callee-saved GPR pairs x19..x28 + x29/x30, and FP pairs d8..d15, in the exact
+// push order __gt_context_switch saves them (see emitArm64GtContextSwitch). On
+// spawn we lay out a fresh such frame with the LR slot = &__gt_trampoline, so the
+// first switch-in's final `LDP x29,x30 ; RET` enters the trampoline.
+let GtSwitchFrameSize = 160
+
+// AAPCS64 condition codes used here.
+let GtCondEq = 0
+let GtCondNe = 1
+let GtCondHs = 2  // unsigned >= (carry set)
+let GtCondGe = 10
+let GtCondLt = 11
+let GtCondGt = 12
+let GtCondLe = 13
+
+// ADD/SUB/AND register-register opcodes (64-bit).
+let GtAluAdd = 0x8B000000
+let GtAluSub = 0xCB000000
+let GtAluAnd = 0x8A000000  // AND Xd, Xn, Xm (used to 16-align the redirect SP)
+
+// =============================================================================
+// CPU-fault handler (multi-M sigaction handler). Byte-identical to the C# GtLayout
+// / self-hosted x64 fault-code mapping (FaultCode* in X64Backend.maxon). macOS only
+// delivers SIGSEGV/SIGBUS/SIGFPE, so the SEGV/BUS->NilDeref and FPE->{DivZero by
+// si_code, else IntOverflow} subset is all that has a delivery path; StackOverflow
+// is declared for layout/message parity but is not separately classified (a true
+// stack overflow arrives as SIGSEGV and is handled on the sigaltstack as nil-deref).
+let FaultCodeNilDeref = 1
+let FaultCodeDivZero = 2
+let FaultCodeIntOverflow = 3
+let FaultCodeStackOverflow = 4
+let FaultFpeIntDiv = 7  // SIGFPE si_code for integer divide-by-zero (FPE_INTDIV)
+
+// Signal numbers (macOS).
+let FaultSigBus = 10
+let FaultSigSegv = 11
+let FaultSigFpe = 8
+
+// sigaction / sigaltstack flags + struct field offsets (Darwin arm64).
+let FaultSaSigInfo = 0x40
+let FaultSaOnStack = 0x01
+let FaultSaRestart = 0x02
+let FaultSaFlags = FaultSaSigInfo or FaultSaOnStack or FaultSaRestart  // 0x43
+let FaultSigactionOffHandler = 0x00  // sa_handler / sa_sigaction
+let FaultSigactionOffTramp = 0x08  // sa_tramp (leave NULL: kernel substitutes __sigtramp)
+let FaultSigactionOffMask = 0x10  // sa_mask
+let FaultSigactionOffFlags = 0x14  // sa_flags (32-bit)
+let FaultSigaltOffSp = 0x00  // ss_sp
+let FaultSigaltOffSize = 0x08  // ss_size
+let FaultSigaltOffFlags = 0x10  // ss_flags (32-bit)
+let FaultAltStackSize = 0x8000  // 32 KB altstack (matches the proven C# reference)
+
+// siginfo_t field offsets.
+let FaultSiginfoOffCode = 0x08  // si_code (32-bit)
+let FaultSiginfoOffAddr = 0x18  // si_addr (64-bit, the bad VA)
+
+// ucontext_t -> mcontext64 -> __darwin_arm_thread_state64 field offsets. These are
+// the OFF-BY-8-CORRECTED values: SsFp=0xF8, SsSp=0x108, SsPc=0x110 (NOT the stale
+// 0x100/0x110/0x118 inline-comment values in the C# reference).
+let FaultUcontextOffMcontext = 0x30
+let FaultMcontextOffSsFp = 0xF8
+let FaultMcontextOffSsSp = 0x108
+let FaultMcontextOffSsPc = 0x110
+
+// Named registers.
+let GtRegX29 = 29
+let GtRegSp = 31  // SP in the contexts where bit field 31 means SP, not XZR
+let GtRegXzr = 31
+
+// =============================================================================
+// Per-function block table (block-local branch fixups), mirroring
+// Arm64MacosSubpState. The green-thread runtime is one concatenated chunk, so
+// direct BL targets (the slab allocator, trace printers, helper-local __gt_*) are
+// global Arm64CallFixups; only block-local branches use this per-function state.
+// =============================================================================
+type Arm64MacosGtState
+	export var blockOffsets as Arm64OffsetArray
+	export var blockFixups as BlockIdFixupArray
+
+	static function create(numBlocks BlockId) returns Arm64MacosGtState
+		var offsets = Arm64OffsetArray.create()
+		for _ in 0 upto numBlocks 'alloc'
+			offsets.push(0)
+		end 'alloc'
+		return Self{blockOffsets: offsets, blockFixups: BlockIdFixupArray.create()}
+	end 'create'
+end 'Arm64MacosGtState'
+
+function arm64GtMarkBlock(state Arm64MacosGtState, code ByteArray, blockId BlockId)
+	try state.blockOffsets.set(blockId, value: code.count()) otherwise panic("arm64GtMarkBlock: blockId {blockId} out of range")
+end 'arm64GtMarkBlock'
+
+// Standard prologue: STP x29,x30,[sp,#-frameSize]! ; MOV x29,sp ; then home the
+// first `argCount` incoming-arg registers (x0..x7) into [x29 + 16 + i*8] so the
+// body can reload them across calls. Mirrors arm64MacosSubpPrologue.
+function arm64GtPrologue(code ByteArray, frameSize StackSize, argCount MachineWord)
+	arm64EmitStpPreIndex(code, frameSize: frameSize)
+	arm64EmitMovFpSp(code)
+	var i = 0
+	while i < argCount and i < 8 'homeArgs'
+		arm64EmitStrRegOffset(code, rt: i, baseReg: GtRegX29, offset: 16 + i * 8)
+		i = i + 1
+	end 'homeArgs'
+end 'arm64GtPrologue'
+
+// Standard epilogue: MOV sp,x29 ; LDP x29,x30,[sp],#frameSize ; RET.
+function arm64GtEpilogue(code ByteArray, frameSize StackSize)
+	arm64EmitInsn(code, insn: 0x91000000 or (GtRegX29 shl 5) or GtRegSp)  // MOV SP, X29
+	arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	arm64EmitRet(code)
+end 'arm64GtEpilogue'
+
+// Reload the incoming arg `argIndex` (homed at [x29 + 16 + i*8]) into `dest`.
+function arm64GtReloadArg(code ByteArray, dest MachineWord, argIndex MachineWord)
+	arm64EmitLdrRegOffset(code, rt: dest, baseReg: GtRegX29, offset: 16 + argIndex * 8)
+end 'arm64GtReloadArg'
+
+// STR Xsrc, [x29, #disp] for an 8-byte frame local at a raw byte displacement.
+function arm64GtStore(code ByteArray, disp MachineWord, src MachineWord)
+	arm64EmitStrRegOffset(code, rt: src, baseReg: GtRegX29, offset: disp)
+end 'arm64GtStore'
+
+// LDR Xdest, [x29, #disp] for an 8-byte frame local at a raw byte displacement.
+function arm64GtLoad(code ByteArray, dest MachineWord, disp MachineWord)
+	arm64EmitLdrRegOffset(code, rt: dest, baseReg: GtRegX29, offset: disp)
+end 'arm64GtLoad'
+
+// STR Xsrc, [Xbase, #disp] — store to a struct field.
+function arm64GtStoreField(code ByteArray, baseReg MachineWord, disp MachineWord, src MachineWord)
+	arm64EmitStrRegOffset(code, rt: src, baseReg: baseReg, offset: disp)
+end 'arm64GtStoreField'
+
+// LDR Xdest, [Xbase, #disp] — load a struct field.
+function arm64GtLoadField(code ByteArray, dest MachineWord, baseReg MachineWord, disp MachineWord)
+	arm64EmitLdrRegOffset(code, rt: dest, baseReg: baseReg, offset: disp)
+end 'arm64GtLoadField'
+
+// CMP Xn, #imm12 => SUBS XZR, Xn, #imm12.
+function arm64GtCmpImm(code ByteArray, rn MachineWord, imm12 MachineWord)
+	let insn = 0xF100001F or ((imm12 and 0xFFF) shl 10) or (rn shl 5)
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtCmpImm'
+
+// ALU reg-reg: Xd = Xn <op> Xm.
+function arm64GtAlu(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
+	let insn = opcode or (rm shl 16) or (rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtAlu'
+
+// LSL Xd, Xn, #shift (alias of UBFM). Used for index*16 timer-entry scaling.
+function arm64GtLslImm(code ByteArray, rd MachineWord, rn MachineWord, shift MachineWord)
+	let immr = (64 - shift) and 63
+	let imms = 63 - shift
+	let insn = 0xD3400000 or (immr shl 16) or (imms shl 10) or (rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtLslImm'
+
+// LSR Xd, Xn, #shift (alias of UBFM). Used for (i-1)>>1 parent / usec/1000 paths.
+function arm64GtLsrImm(code ByteArray, rd MachineWord, rn MachineWord, shift MachineWord)
+	let insn = 0xD3400000 or (shift shl 16) or (63 shl 10) or (rn shl 5) or rd
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtLsrImm'
+
+// ADD Xd, x29, #disp — address of a frame local (for &tv etc.).
+function arm64GtLeaFrame(code ByteArray, rd MachineWord, disp MachineWord)
+	arm64EmitAddImm(code, rd: rd, rn: GtRegX29, imm12: disp)
+end 'arm64GtLeaFrame'
+
+// dest = address of a writable .data/.rdata global via an ADRP+ADD pair with ±4 GiB
+// reach: `ADRP dest, page(global)` (a dataSectionArm64Adrp reloc) ; `ADD dest, dest,
+// #pageoff(global)` (a dataSectionArm64PageOff reloc). The single-ADR form this
+// replaced reached only ±1 MiB; the multi-M runtime multiplied both the number of
+// these accesses and the code-to-data distance, so a large program's runtime globals
+// could silently resolve to the wrong address. The import GOT path (arm64GtCallImport)
+// uses the identical ADRP shape. The section class (heap .data vs .rdata) is chosen by
+// arm64RelocKindForLabel for the bare-ADR users; the ADRP/pageoff pair here is always a
+// writable-data target (every green-thread global lives in the heap data section).
+// The ADRP/pageoff pair always targets the heap data section (MachOWriter patches it
+// against heapSectionVMAddr). Every green-thread global is a writable runtime global,
+// so it must classify as dataSection; assert it loudly rather than silently address a
+// read-only .rdata label against the wrong section.
+function arm64GtAssertDataSection(name String)
+	match classifyGlobalLabel(name) 'cls'
+		dataSection then break 'cls'
+		covData then panic("arm64GtGlobalAddr: '{name}' classifies as covData — green-thread accessors only target the heap data section")
+		rdata then panic("arm64GtGlobalAddr: '{name}' classifies as read-only .rdata — green-thread accessors only target the heap data section")
+	end 'cls'
+end 'arm64GtAssertDataSection'
+
+function arm64GtGlobalAddr(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, name String)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
+	arm64EmitAddImm(code, rd: dest, rn: dest, imm12: 0)
+end 'arm64GtGlobalAddr'
+
+// dest = value of an 8-byte global via an ADRP+LDR pair: `ADRP dest, page(global)` ;
+// `LDR dest, [dest, #pageoff(global)]`. The LDR folds the within-page offset directly
+// (dataSectionArm64PageOff scales the imm12 by 8 for an LDR Xn), saving the ADD.
+function arm64GtLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, name String)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
+	arm64EmitLdrRegOffset(code, rt: dest, baseReg: dest, offset: 0)
+end 'arm64GtLoadGlobal'
+
+// Store src into an 8-byte global via an ADRP+STR pair: `ADRP scratch, page(global)` ;
+// `STR src, [scratch, #pageoff(global)]`.
+function arm64GtStoreGlobal(code ByteArray, rdataRelocs RdataRelocationArray, src MachineWord, name String, scratch MachineWord)
+	arm64GtAssertDataSection(name)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64Adrp))
+	arm64EmitAdrp(code, rd: scratch)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.dataSectionArm64PageOff))
+	arm64EmitStrRegOffset(code, rt: src, baseReg: scratch, offset: 0)
+end 'arm64GtStoreGlobal'
+
+// dest = address of a function: `ADR dest, #0` recorded as an Arm64AdrFixup that
+// arm64ResolveAdrFixups patches once every label offset is known.
+function arm64GtFuncAddr(code ByteArray, adrFixups Arm64AdrFixupArray, dest MachineWord, name String)
+	adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: dest, targetName: name))
+	arm64EmitAdr(code, rd: dest, offset: 0)
+end 'arm64GtFuncAddr'
+
+// IAT (GOT) import call: ADRP x16,GOT[slot] ; LDR x16,[x16] ; BLR x16.
+function arm64GtCallImport(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	arm64EmitAdrp(code, rd: 16)
+	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+	arm64EmitBlr(code, rn: 16)
+end 'arm64GtCallImport'
+
+// Direct BL <name>: record an Arm64CallFixup at the current offset.
+function arm64GtBranchLink(code ByteArray, callFixups Arm64CallFixupArray, name String)
+	callFixups.push(Arm64CallFixup.create(code.count(), targetName: name))
+	arm64EmitBranchLink(code)
+end 'arm64GtBranchLink'
+
+// Acquire the recursive spinlock named `name`: x0 = &<name> ; BL __slab_lock_acquire.
+// __slab_lock_acquire clobbers only x16/x17 (reserved scratch), so the only register
+// disturbed is x0 (the lock address argument).
+function arm64GtLockAcquire(code ByteArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, name String)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: name)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_acquire")
+end 'arm64GtLockAcquire'
+
+// Release one level of the recursive spinlock named `name`: x0 = &<name> ;
+// BL __slab_lock_release. Symmetric with arm64GtLockAcquire.
+function arm64GtLockRelease(code ByteArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, name String)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: name)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_lock_release")
+end 'arm64GtLockRelease'
+
+// Direct B <name> (TAIL call): an unconditional branch to a runtime label, recorded
+// as an Arm64CallFixup (arm64PatchBranch preserves the B vs BL opcode bit). Used to
+// tail-call into a helper after restoring our own frame so the helper's RET returns
+// straight to OUR caller and its x0 result is our return value — without re-saving a
+// link register (a BL+RET here would loop forever: the BL overwrites LR with the RET
+// address, the callee restores that same LR, and the RET jumps back to itself).
+function arm64GtTailBranch(code ByteArray, callFixups Arm64CallFixupArray, name String)
+	callFixups.push(Arm64CallFixup.create(code.count(), targetName: name))
+	arm64EmitBranch(code)
+end 'arm64GtTailBranch'
+
+// Unconditional B to a block local to the current function.
+function arm64GtBranch(code ByteArray, state Arm64MacosGtState, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: false))
+	arm64EmitBranch(code)
+end 'arm64GtBranch'
+
+// B.cond to a block local to the current function.
+function arm64GtCondBranch(code ByteArray, state Arm64MacosGtState, cond MachineWord, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: true))
+	arm64EmitCondBranch(code, cond: cond)
+end 'arm64GtCondBranch'
+
+// CBZ Xn, block.
+function arm64GtCbz(code ByteArray, state Arm64MacosGtState, rn MachineWord, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: true))
+	arm64EmitCbz(code, rn: rn, imm19: 0)
+end 'arm64GtCbz'
+
+// CBNZ Xn, block.
+function arm64GtCbnz(code ByteArray, state Arm64MacosGtState, rn MachineWord, targetBlock BlockId)
+	state.blockFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: true))
+	arm64EmitCbnz(code, rn: rn, imm19: 0)
+end 'arm64GtCbnz'
+
+// Resolve all block-local jump fixups for the just-emitted function. CBZ/CBNZ
+// share the B.cond imm19 patch (same 19-bit field at bit 5); the `isCond` arms
+// cover both. Same encodings as the subprocess emitter's patch routines.
+function arm64GtFinalize(code ByteArray, state Arm64MacosGtState)
+	for fixup in state.blockFixups 'resolve'
+		let targetOffset = try state.blockOffsets.get(fixup.targetBlock) otherwise panic("arm64GtFinalize: fixup target block {fixup.targetBlock} out of range")
+		if fixup.isCond 'cond'
+			arm64GtPatchImm19(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+		end 'cond' else 'uncond'
+			arm64GtPatchImm26(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+		end 'uncond'
+	end 'resolve'
+end 'arm64GtFinalize'
+
+// Patch a B (imm26) at instrOffset. Preserves the top 6 opcode bits.
+function arm64GtPatchImm26(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
+	let relInsns = (targetOffset - instrOffset) / 4
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64GtPatchImm26: instrOffset {instrOffset} past end of code (count={code.count()})")
+	let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
+	patchDword(code, offset: instrOffset, value: patched)
+end 'arm64GtPatchImm26'
+
+// Patch a B.cond / CBZ / CBNZ (imm19 at bit 5) at instrOffset, preserving the
+// instruction's class/condition bits.
+function arm64GtPatchImm19(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
+	let relInsns = (targetOffset - instrOffset) / 4
+	let origInsn = try readDword(code, offset: instrOffset) otherwise panic("arm64GtPatchImm19: instrOffset {instrOffset} past end of code (count={code.count()})")
+	let cleared = origInsn and 0xFF00001F
+	let patched = cleared or ((relInsns and 0x7FFFF) shl 5)
+	patchDword(code, offset: instrOffset, value: patched)
+end 'arm64GtPatchImm19'
+
+// dest = the current OS thread's ProcContext* (per-thread P), read inline from the
+// pthread thread-specific-data (TSD) array WITHOUT a pthread_getspecific call — the
+// macOS TSD layout is `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`, empirically probe-
+// confirmed. This replaces the single-M __gt_current_p global load so every P read
+// (spawn/trampoline/await/yield/sleep/cleanup/timer/enqueue/dequeue) is correct on
+// every M once >1 worker runs. The masked TPIDRRO_EL0 is the per-OS-thread TSD base.
+//
+// PRE-INIT GATE: before __gt_init runs, __sched_tls_key == 0; a plain LDR would read
+// tsd[0] (a real pthread-internal slot holding garbage), NOT NULL — violating the
+// P==NULL contract the __gt_dequeue guard + sync-Subprocess rely on. So gate with
+// CMP key,#0 ; CSEL dest,dest,xzr,NE: dest = (key != 0) ? tsd[key] : 0 — branchless,
+// returns NULL pre-init, and post-init yields 0 for un-adopted/raw OS threads (TSD
+// slot 0) and P[i] for adopted Ms. The tsd[0] read when key==0 is a harmless
+// discarded load. Clobbers ONLY dest + x16 + x17 (reserved scratch), so no call site
+// needs changes.
+function arm64GtLoadCurrentP(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord)
+	// x17 = pthread_key_t (__sched_tls_key value).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 17, name: "__sched_tls_key")
+	// x16 = masked thread pointer (TPIDRRO_EL0 & ~7) = TSD base.
+	arm64GtOwnerToken(code, reg: 16)
+	// dest = tsd[key] = *(x16 + key*8) via LDR dest,[x16, x17, LSL #3].
+	arm64EmitInsn(code, insn: 0xF8607800 or (17 shl 16) or (16 shl 5) or dest)
+	// dest = (key != 0) ? tsd[key] : 0.
+	arm64EmitCmpRegZero(code, rn: 17)  // CMP x17, #0
+	arm64EmitCsel(code, rd: dest, rn: dest, rm: GtRegXzr, cond: GtCondNe)
+end 'arm64GtLoadCurrentP'
+
+// =============================================================================
+// Recursive spinlock helpers (__slab_lock_acquire / __slab_lock_release).
+//
+// Layout in the 40-byte lock global: [lock@0 (0=free / 1=held), owner@8 (masked
+// thread pointer), count@16 (recursion depth)]. osLockInit stays a no-op because
+// a zero-initialised .data lock IS an unlocked lock.
+//
+// OWNER TOKEN = the masked thread pointer TPIDRRO_EL0 & ~7 — a per-OS-thread-stable,
+// non-zero, unique value (each M is pinned to one OS thread). This is the C#'s
+// X28=P owner semantics without dedicating a register, and needs no pthread key,
+// no TSD deref, and no NULL-owner edge case; it works pre-scheduler and multi-M
+// uniformly. Read with MRS x16,TPIDRRO_EL0 ; LSR x16,#3 ; LSL x16,#3.
+//
+// Both helpers take the lock address in x0 and clobber only x16/x17 (reserved
+// scratch, outside the regalloc pool) — leaf functions, no stack frame, no calls.
+// The MIR osLockAcquire/osLockRelease ops are isCall:true, so the surrounding
+// compiled code already spills caller-saved registers across the BL to these.
+//
+// MRS x16,TPIDRRO_EL0 = 0xD53BD070. The exclusive/release primitives go through the
+// shared Arm64CodeEmitter helpers: arm64EmitLdaxr (LDAXR Xt,[Xn]), arm64EmitStlxr
+// (STLXR Ws,Xt,[Xn]) and arm64EmitStlr (STLR Xt,[Xn]); CMP via arm64EmitCmp. The
+// STLXR rs==rt form is tolerated on Apple Silicon (C# ships it). LSR/LSL via
+// arm64GtLsrImm/arm64GtLslImm.
+// =============================================================================
+
+let GtLockOffOwner = 8  // owner@8: masked thread pointer of the holding M (0 = free)
+let GtLockOffCount = 16  // count@16: recursion depth (number of nested acquires)
+let GtTpidrro = 0xD53BD060  // MRS Xt,TPIDRRO_EL0 base; or Rt for the dest register
+
+// Materialise the owner token (masked thread pointer) into reg via
+// MRS reg,TPIDRRO_EL0 ; LSR reg,reg,#3 ; LSL reg,reg,#3.
+function arm64GtOwnerToken(code ByteArray, reg MachineWord)
+	arm64EmitInsn(code, insn: GtTpidrro or reg)
+	arm64GtLsrImm(code, rd: reg, rn: reg, shift: 3)
+	arm64GtLslImm(code, rd: reg, rn: reg, shift: 3)
+end 'arm64GtOwnerToken'
+
+// __slab_lock_acquire(addr=x0): acquire the recursive spinlock at [x0].
+// Re-entrant fast path bumps count when the current M already owns it; otherwise
+// spins on an LDAXR/STLXR CAS of lock@0 from 0->1, then records owner+count=1.
+function emitArm64SlabLockAcquire(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_lock_acquire", offset: code.count())
+	var state = Arm64MacosGtState.create(3)
+
+	let spinBlock = 0
+	let ownedBlock = 1
+	let doneBlock = 2
+
+	// x16 = owner token (masked thread pointer).
+	arm64GtOwnerToken(code, reg: 16)
+
+	// If owner@8 already == this token, we hold it → recursive increment.
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffOwner)
+	arm64EmitCmp(code, rn: 17, rm: 16)  // CMP x17, x16
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: ownedBlock)
+
+	// SPIN: LDAXR x17,[x0] ; if held (x17 != 0) retry ; else STLXR w17,#1,[x0] ;
+	// if the store-exclusive failed (status != 0) retry.
+	arm64GtMarkBlock(state, code: code, blockId: spinBlock)
+	arm64EmitLdaxr(code, rt: 17, rn: 0)  // LDAXR x17, [x0]
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
+	arm64EmitMovImm(code, rd: 17, value: 1)
+	arm64EmitStlxr(code, rs: 17, rt: 17, rn: 0)  // STLXR w17, x17, [x0]
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: spinBlock)
+
+	// Acquired: owner@8 = token ; count@16 = 1.
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffOwner, src: 16)
+	arm64EmitMovImm(code, rd: 17, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+	arm64GtBranch(code, state: state, targetBlock: doneBlock)
+
+	// OWNED: count@16 += 1 (re-entrant, no atomic — only the owning M reaches here).
+	arm64GtMarkBlock(state, code: code, blockId: ownedBlock)
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffCount)
+	arm64EmitAddImm(code, rd: 17, rn: 17, imm12: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64EmitRet(code)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabLockAcquire'
+
+// __slab_lock_release(addr=x0): release one level of the recursive spinlock at
+// [x0]. Decrements count@16; on the outermost release (count hits 0) clears
+// owner@8 and stores 0 to lock@0 with release ordering (STLR) so the unlock is
+// visible before any subsequent acquire by another M.
+function emitArm64SlabLockRelease(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_lock_release", offset: code.count())
+	var state = Arm64MacosGtState.create(1)
+
+	let doneBlock = 0
+
+	// count@16 -= 1 ; store it back.
+	arm64GtLoadField(code, dest: 17, baseReg: 0, disp: GtLockOffCount)
+	arm64EmitSubImm(code, rd: 17, rn: 17, imm12: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffCount, src: 17)
+
+	// Still held by an outer acquire (count != 0) → done.
+	arm64GtCbnz(code, state: state, rn: 17, targetBlock: doneBlock)
+
+	// Outermost release: owner@8 = 0 ; STLR xzr,[x0] (release ordering, REQUIRED).
+	arm64GtStoreField(code, baseReg: 0, disp: GtLockOffOwner, src: GtRegXzr)
+	arm64EmitStlr(code, rt: GtRegXzr, rn: 0)  // STLR xzr, [x0]
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64EmitRet(code)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabLockRelease'
+
+// =============================================================================
+// __slab_current_p_id() -> x0: the per-P mcache shard id of the calling OS thread,
+// or -1 when no GMP scheduler owns this thread. Overrides the runtime.std stub
+// (which returns -1 unconditionally — the correct answer before __gt_init
+// publishes P[0] to TSD, or on a raw un-adopted OS thread). The sharded slab
+// allocator in runtime.std calls this to index its per-P mcache and to route
+// cross-P frees onto the owning P's remote-free queue; a -1 result maps to the
+// single raw shard there, so the allocator degrades to locked single-shard
+// behavior. Ports the self-hosted x64 emitX64SlabCurrentPId — but on arm64 the
+// AAPCS64 return register is x0 (the x64 version uses its r8 internal ABI).
+//
+// arm64GtLoadCurrentP already returns NULL for BOTH the pre-init (key==0) and
+// un-adopted (tsd[key]==0) cases via its CSEL gate, so a single P==NULL test
+// covers both runtime.std-stub sentinels. Leaf: no frame, clobbers only x0 plus
+// the x16/x17 TSD scratch (all caller-saved).
+//   P == NULL  → -1
+//   else       → P->id  (GtPOffId)
+// =============================================================================
+function emitArm64SlabCurrentPId(code ByteArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__slab_current_p_id", offset: code.count())
+	var state = Arm64MacosGtState.create(1)
+
+	let negBlock = 0
+
+	// x0 = P (or NULL).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 0)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: negBlock)
+	// x0 = P->id.
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: GtPOffId)
+	arm64EmitRet(code)
+
+	// no_p: return -1.
+	arm64GtMarkBlock(state, code: code, blockId: negBlock)
+	arm64EmitMovImm(code, rd: 0, value: -1)
+	arm64EmitRet(code)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SlabCurrentPId'
+
+// =============================================================================
+// __gt_fault_diagnostic(): the redirect landing pad. The sigaction thunk rewrites
+// the faulting thread's mcontext so that, on kernel sigreturn, the thread resumes
+// HERE with a fresh 16-aligned SP and FP(x29)=0. Because FP is zeroed there is NO
+// valid frame chain — this MUST NOT call mrt_panic (which walks frames). Instead it
+// prints the chosen panic message + faulting PC + bad VA via the leaf cstr/hex
+// printers and _exit(1)s. Ports the self-hosted x64 emitX64GtFaultDiagnostic (the
+// body is ABI-agnostic; only the print/exit calls use arm64 conventions).
+//
+// Output line: "<msg> at rip=<hexpc> addr=<hexaddr>\n".
+// =============================================================================
+function emitArm64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_fault_diagnostic", offset: code.count())
+	// Stand up a fresh frame (x29 was redirected to 0). 0x20 keeps SP 16-aligned for
+	// the leaf BL calls and the _exit import.
+	arm64GtPrologue(code, frameSize: 0x20, argCount: 0)
+
+	// <msg> — the chosen panic message (an 8-byte global holding the cstr ptr).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_msg")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+
+	// " at rip=" <hex faulting PC>.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_at_rip")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_rip")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_hex")
+
+	// " addr=" <hex bad VA> (meaningful for SEGV/BUS; 0 otherwise).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_addr")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_fault_last_addr")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_hex")
+
+	// Trailing newline.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_panic_msg_nl")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "mrt_write_cstr_stderr")
+
+	// _exit(1) — never returns.
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_EXIT)
+
+	// Unreached (well-formedness only).
+	arm64GtEpilogue(code, frameSize: 0x20)
+end 'emitArm64GtFaultDiagnostic'
+
+// =============================================================================
+// __gt_fault_thunk(int sig=x0, siginfo_t* info=x1, void* uctx=x2): the sigaction
+// handler the kernel invokes on a hardware fault (SA_SIGINFO + SA_ONSTACK, so it
+// runs on the per-thread sigaltstack). Maps the signal to a fault code + panic
+// message, stashes the diagnostic info in the process-global __gt_fault_* slots,
+// then rewrites the faulting mcontext (pc/sp/fp) to resume at __gt_fault_diagnostic
+// and RETURNs — the kernel restores the (now-rewritten) mcontext on sigreturn,
+// landing the thread at the diagnostic. Merges the C# EmitFaultHandlerProlog +
+// shared chooser + EmitFaultHandlerEpilog (this runtime has no separate module),
+// mirroring how the self-hosted x64 merges them into emitX64GtFaultThunk.
+//
+// The thunk runs on the kernel signal frame: use ONLY x9-x15 as scratch (x16/x17
+// are reserved IP0/IP1 and are clobbered internally by arm64GtGlobalAddr /
+// arm64GtLoadGlobal / arm64GtStoreGlobal / arm64GtFuncAddr / arm64GtCallImport).
+// =============================================================================
+function emitArm64GtFaultThunk(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_fault_thunk", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(6)
+	// Homes sig@[x29+16], info@[x29+24], uctx@[x29+32].
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let segvBlock = 0
+	let fpeBlock = 1
+	let chosenBlock = 2
+	let bailBlock = 3
+	let fpeDivBlock = 4
+	let redirectBlock = 5
+
+	// (A) Re-entrancy guard: a nested/teardown fault during the diagnostic's _exit
+	// rundown must not recurse into a second diagnostic + double print. If the guard
+	// is already set, bail (_exit(1)); otherwise claim it.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_fault_in_progress")
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: bailBlock)
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_fault_in_progress", scratch: 10)
+
+	// (B) Classify sig -> faultCode (x10) + message global (chosen via a B to the
+	// per-signal block). SEGV(11)/BUS(10) -> NilDeref; FPE(8) -> div/overflow split
+	// on si_code; any other signal -> bail (we never install for those).
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // sig
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigSegv)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: segvBlock)
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigBus)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: segvBlock)
+	arm64GtCmpImm(code, rn: 9, imm12: FaultSigFpe)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: fpeBlock)
+	arm64GtBranch(code, state: state, targetBlock: bailBlock)
+
+	// SEGV/BUS -> nil-deref. x9 = &msg, x10 = faultCode (homed for the chosen block).
+	arm64GtMarkBlock(state, code: code, blockId: segvBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_nil_deref")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeNilDeref)
+	arm64GtBranch(code, state: state, targetBlock: chosenBlock)
+
+	// FPE -> si_code==FPE_INTDIV(7) ? div-zero : int-overflow.
+	arm64GtMarkBlock(state, code: code, blockId: fpeBlock)
+	arm64GtReloadArg(code, dest: 11, argIndex: 1)  // info
+	arm64EmitLoadWordWidth(code, rt: 11, rn: 11, offset: FaultSiginfoOffCode, signed: false)  // si_code (32-bit)
+	arm64GtCmpImm(code, rn: 11, imm12: FaultFpeIntDiv)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: fpeDivBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_int_overflow")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeIntOverflow)
+	arm64GtBranch(code, state: state, targetBlock: chosenBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: fpeDivBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 9, name: "__gt_panic_msg_div_zero")
+	arm64EmitMovImm(code, rd: 10, value: FaultCodeDivZero)
+	// Fall through to chosen.
+
+	// (C) chosen: stash the chosen message ptr (x9) into __gt_fault_msg.
+	arm64GtMarkBlock(state, code: code, blockId: chosenBlock)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_fault_msg", scratch: 12)
+
+	// (D) Stash bad VA = info->si_addr (+0x18).
+	arm64GtReloadArg(code, dest: 11, argIndex: 1)  // info
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: FaultSiginfoOffAddr)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 11, name: "__gt_fault_last_addr", scratch: 12)
+
+	// Stash faulting PC = mcontext->__ss.__pc. mctx = *(uctx + 0x30).
+	arm64GtReloadArg(code, dest: 13, argIndex: 2)  // uctx
+	arm64GtLoadField(code, dest: 13, baseReg: 13, disp: FaultUcontextOffMcontext)  // mctx*
+	arm64GtLoadField(code, dest: 11, baseReg: 13, disp: FaultMcontextOffSsPc)  // pc
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 11, name: "__gt_fault_rip", scratch: 12)
+
+	// (E) Redirect. Recompute mctx* (StoreGlobal clobbered x16/x17 only, but reload
+	// conservatively) and write pc/sp/fp.
+	arm64GtMarkBlock(state, code: code, blockId: redirectBlock)
+	arm64GtReloadArg(code, dest: 13, argIndex: 2)  // uctx
+	arm64GtLoadField(code, dest: 13, baseReg: 13, disp: FaultUcontextOffMcontext)  // mctx*
+	// safeSP = faultSP & ~0xF (16-aligned down). NO -8 bias (that is the x64 post-call
+	// parity fixup; arm64 enters the diagnostic via kernel sigreturn, not a BL).
+	arm64GtLoadField(code, dest: 10, baseReg: 13, disp: FaultMcontextOffSsSp)  // faulting sp
+	arm64EmitMovImm(code, rd: 11, value: -16)  // ~0xF
+	arm64GtAlu(code, opcode: GtAluAnd, rd: 10, rn: 10, rm: 11)
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsSp, src: 10)
+	// pc = &__gt_fault_diagnostic.
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 9, name: "__gt_fault_diagnostic")
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsPc, src: 9)
+	// fp = 0.
+	arm64GtStoreField(code, baseReg: 13, disp: FaultMcontextOffSsFp, src: GtRegXzr)
+
+	// Return: kernel sigreturn restores the rewritten mcontext, landing at the
+	// diagnostic.
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// bail: unrecognised signal or a nested fault — _exit(1). The POSIX analogue of
+	// the x64 EXCEPTION_CONTINUE_SEARCH (the process is already dying; no _signal /
+	// _raise import exists on arm64-macOS).
+	arm64GtMarkBlock(state, code: code, blockId: bailBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_EXIT)
+	arm64GtEpilogue(code, frameSize: frameSize)  // unreached
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtFaultThunk'
+
+// =============================================================================
+// __gt_install_fault_handler(): arm the sigaction handler + the main thread's
+// sigaltstack. Called once from __gt_init's tail on the main M (single-threaded,
+// race-free). sigaction is process-global; the sigaltstack here covers only the
+// main M — each worker M installs its OWN altstack at __sched_worker_loop entry.
+// Mirrors the C# EmitInstallFaultHandler, but additionally fixes the C# reference's
+// latent multi-M bug (no per-worker altstack) via the worker-loop install.
+//
+// Frame: sigaction struct @ [x29+0x10..], sigaltstack struct @ [x29+0x30..].
+// =============================================================================
+function emitArm64GtInstallFaultHandler(code ByteArray, relocations RelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_install_fault_handler", offset: code.count())
+	let frameSize = 0x60
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let actBase = 0x10  // sigaction struct local
+	let ssBase = 0x30  // sigaltstack struct local
+
+	// (A) Zero the sigaction struct (handler/tramp/mask).
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffTramp, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffMask, src: GtRegXzr)
+
+	// (B) sa_handler = &__gt_fault_thunk.
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 9, name: "__gt_fault_thunk")
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: 9)
+
+	// (C) sa_flags = SA_SIGINFO|SA_ONSTACK|SA_RESTART (0x43, a 32-bit field).
+	arm64EmitMovImm(code, rd: 9, value: FaultSaFlags)
+	arm64EmitStrWord(code, rt: 9, rn: GtRegX29, offset: actBase + FaultSigactionOffFlags)
+
+	// (D) Build the main-thread sigaltstack BEFORE arming SA_ONSTACK handlers (the
+	// altstack must exist before the handlers reference it). mmap a 0x8000 region.
+	arm64GtMmapAnon(code, relocations: relocations, length: FaultAltStackSize)
+	arm64GtStore(code, disp: ssBase + FaultSigaltOffSp, src: 0)  // ss_sp
+	arm64EmitMovImm(code, rd: 9, value: FaultAltStackSize)
+	arm64GtStore(code, disp: ssBase + FaultSigaltOffSize, src: 9)  // ss_size
+	arm64EmitStrWord(code, rt: GtRegXzr, rn: GtRegX29, offset: ssBase + FaultSigaltOffFlags)  // ss_flags = 0
+
+	// (E) sigaltstack(&ss, NULL).
+	arm64GtLeaFrame(code, rd: 0, disp: ssBase)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGALTSTACK)
+
+	// (F) sigaction(sig, &act, NULL) for sig in {SEGV, BUS, FPE}. The struct lives on
+	// the x29 frame, so it survives the import's x0-x18 clobber.
+	arm64EmitMovImm(code, rd: 0, value: FaultSigSegv)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64EmitMovImm(code, rd: 0, value: FaultSigBus)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64EmitMovImm(code, rd: 0, value: FaultSigFpe)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64GtEpilogue(code, frameSize: frameSize)
+end 'emitArm64GtInstallFaultHandler'
+
+// =============================================================================
+// Top-level driver — emit every hand-rolled green-thread / sleep runtime
+// function. Called from concatArm64FunctionChunks under `if isMacosOs`, after the
+// stdlib link pass, so these labels override the runtime.std stubs.
+//
+// Order: context_switch first (its label is BL'd by the others), then the
+// scheduler primitives, the public entrypoints, and the trace helpers.
+// =============================================================================
+export function emitArm64MacosGreenThread(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	emitArm64GtContextSwitch(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabLockAcquire(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabLockRelease(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64SlabCurrentPId(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// __sched_worker_loop is emitted BEFORE __gt_enqueue (whose spawn-scan takes its
+	// address via arm64GtFuncAddr) and __gt_steal_work BEFORE __gt_dequeue (which BLs
+	// it). Both are internal (no runtime.std stub), so they are emitted unconditionally
+	// — no arm64MacosGreenThreadRuntimeNames entry is needed for either.
+	emitArm64SchedWorkerLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtStealWork(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtEnqueue(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtDequeue(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// CPU-fault handler: diagnostic FIRST (its label must exist), then the thunk
+	// (which ADRs the diagnostic), then __gt_init's tail ADRs the thunk (sa_handler)
+	// + emits the install. Fixups resolve in a later pass regardless of emit order,
+	// but keep diagnostic->thunk->install for parity with the x64 ordering.
+	emitArm64GtFaultDiagnostic(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtFaultThunk(code, relocations: relocations, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtInstallFaultHandler(code, relocations: relocations, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtSpawn(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtTrampoline(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtProcessPendingWaiter(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtYield(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtAwait(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtIsComplete(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtCancel(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtCleanup(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtTimerAdd(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtTimerCheck(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtNowMs(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64IoCheckCompletions(code, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtTraceEmit(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtCurrentTraceId(code, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+end 'emitArm64MacosGreenThread'
+
+// The RUNTIME.STD function names whose bodies these hand-emitted green-thread
+// bodies BL into (and which must therefore survive runtime DCE + be lazily
+// compiled). Only names with a runtime.std stub are listed — the internal
+// helper-to-helper labels (__gt_context_switch / __gt_enqueue / __gt_dequeue /
+// __gt_trampoline / __gt_process_pending_waiter / __gt_timer_add / __gt_timer_check
+// / __gt_now_ms / __io_check_completions) have NO runtime.std stub: they are emitted
+// unconditionally by this backend, so their labels always exist and their BL fixups
+// resolve regardless of reachability (seeding a non-stub name is a no-op in
+// seedRuntimeReachName / lazyNeededClosure anyway). `__gt_init` / `__slab_current_p_id`
+// / `__gt_trace_emit` / `__gt_current_trace_id` ARE stubs (overridden here) and must
+// be kept (the override label wins only if the stub survived DCE); the slab
+// allocator / mm_decref / diag printers are real runtime bodies the trampoline +
+// trace path call. Seeded by BackendDispatch's reachability + lazy closures off a
+// reachable green-thread root (`__gt_spawn` / `__gt_await` / `maxon_sleep` /
+// `__gt_init` / `__gt_cleanup`).
+export function arm64MacosGreenThreadRuntimeNames() returns StringArray
+	var names = StringArray.create()
+	names.push("__slab_alloc")
+	names.push("__slab_free")
+	names.push("mm_decref")
+	names.push("__diag_print_tag")
+	names.push("__diag_print_i64")
+	// The CPU-fault diagnostic (emitArm64GtFaultDiagnostic) BLs these two to render
+	// its panic line; no other call edge reaches them in a non-fault program.
+	names.push("mrt_write_cstr_stderr")
+	names.push("__diag_print_hex")
+	names.push("__gt_init")
+	names.push("__slab_current_p_id")
+	names.push("__gt_trace_emit")
+	names.push("__gt_current_trace_id")
+	return names
+end 'arm64MacosGreenThreadRuntimeNames'
+
+// =============================================================================
+// __gt_context_switch(from=x0, to=x1, p=x2): the naked cooperative context switch.
+// Saves callee-saved x19..x28 + x29/x30 + d8..d15 on the current (from) stack,
+// records SP into from.sp, restores SP from to.sp, updates P->currentGt = to, and
+// restores the callee-saved set from the new stack. The final `LDP x29,x30 ; RET`
+// returns to the new thread's saved LR (the trampoline on first switch-in, or the
+// caller's resume point otherwise). Ports the C# EmitGtContextSwitch byte-for-byte
+// (it is ABI-agnostic). Push order MUST match the spawn-time stack layout below.
+// =============================================================================
+function emitArm64GtContextSwitch(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_context_switch", offset: code.count())
+
+	// Save callee-saved registers via pre-indexed STP (push). Each STP X,[sp,#-16]!
+	// decrements SP by 16. Order: x19/x20, x21/x22, x23/x24, x25/x26, x27/x28,
+	// d8/d9, d10/d11, d12/d13, d14/d15, x29/x30 — 10 pairs = 160 bytes.
+	arm64GtStpPush(code, rt1: 19, rt2: 20)
+	arm64GtStpPush(code, rt1: 21, rt2: 22)
+	arm64GtStpPush(code, rt1: 23, rt2: 24)
+	arm64GtStpPush(code, rt1: 25, rt2: 26)
+	arm64GtStpPush(code, rt1: 27, rt2: 28)
+	arm64GtFpStpPush(code, rt1: 8, rt2: 9)
+	arm64GtFpStpPush(code, rt1: 10, rt2: 11)
+	arm64GtFpStpPush(code, rt1: 12, rt2: 13)
+	arm64GtFpStpPush(code, rt1: 14, rt2: 15)
+	arm64GtStpPush(code, rt1: 29, rt2: 30)
+
+	// from.sp = SP: MOV x9, SP ; STR x9, [x0, #GtGtOffSp].
+	arm64EmitInsn(code, insn: 0x910003E9)  // MOV X9, SP (ADD X9, SP, #0)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffSp, src: 9)
+
+	// from.ioYielded = 1 (off-stack signal; harmless single-threaded but kept for
+	// parity with the C# reference / the await wait-off spin).
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 9)
+
+	// SP = to.sp: LDR x9, [x1, #GtGtOffSp] ; MOV SP, x9.
+	arm64GtLoadField(code, dest: 9, baseReg: 1, disp: GtGtOffSp)
+	arm64EmitInsn(code, insn: 0x9100013F)  // MOV SP, X9 (ADD SP, X9, #0)
+
+	// P->currentGt = to (x2 = P).
+	arm64GtStoreField(code, baseReg: 2, disp: GtPOffCurrentGt, src: 1)
+
+	// Restore callee-saved registers via post-indexed LDP (pop), reverse order.
+	arm64GtLdpPop(code, rt1: 29, rt2: 30)
+	arm64GtFpLdpPop(code, rt1: 14, rt2: 15)
+	arm64GtFpLdpPop(code, rt1: 12, rt2: 13)
+	arm64GtFpLdpPop(code, rt1: 10, rt2: 11)
+	arm64GtFpLdpPop(code, rt1: 8, rt2: 9)
+	arm64GtLdpPop(code, rt1: 27, rt2: 28)
+	arm64GtLdpPop(code, rt1: 25, rt2: 26)
+	arm64GtLdpPop(code, rt1: 23, rt2: 24)
+	arm64GtLdpPop(code, rt1: 21, rt2: 22)
+	arm64GtLdpPop(code, rt1: 19, rt2: 20)
+
+	arm64EmitRet(code)
+end 'emitArm64GtContextSwitch'
+
+// STP Xt1, Xt2, [SP, #-16]! (pre-indexed pair push).
+function arm64GtStpPush(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	let imm7 = (0 - 16) / 8 and 0x7F  // -2
+	let insn = 0xA9800000 or (imm7 shl 15) or (rt2 shl 10) or (31 shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtStpPush'
+
+// LDP Xt1, Xt2, [SP], #16 (post-indexed pair pop).
+function arm64GtLdpPop(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	let imm7 = 16 / 8 and 0x7F  // 2
+	let insn = 0xA8C00000 or (imm7 shl 15) or (rt2 shl 10) or (31 shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtLdpPop'
+
+// STP Dt1, Dt2, [SP, #-16]! (pre-indexed FP pair push).
+function arm64GtFpStpPush(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	let imm7 = (0 - 16) / 8 and 0x7F  // -2
+	let insn = 0x6D800000 or (imm7 shl 15) or (rt2 shl 10) or (31 shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtFpStpPush'
+
+// LDP Dt1, Dt2, [SP], #16 (post-indexed FP pair pop).
+function arm64GtFpLdpPop(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	let imm7 = 16 / 8 and 0x7F  // 2
+	let insn = 0x6CC00000 or (imm7 shl 15) or (rt2 shl 10) or (31 shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64GtFpLdpPop'
+
+// =============================================================================
+// xorshift64 advance of P->rng (GtPOffRng), used for dequeue fairness and (in a
+// later unit) work-steal victim selection. Ports the C# EmitXorshift64:
+//   x = P->rng ; x ^= x<<13 ; x ^= x>>7 ; x ^= x<<17 ; P->rng = x ; return x.
+// `pReg` (the P pointer) is preserved; `dest` ends holding the new rng; `scratch`
+// is clobbered. The literal shifts use the UBFM imm aliases (arm64GtLslImm /
+// arm64GtLsrImm), not the variable LSLV/LSRV. The updated value MUST be written
+// back to P->rng or the sequence degenerates to a constant.
+// =============================================================================
+function arm64GtXorshift(code ByteArray, dest MachineWord, pReg MachineWord, scratch MachineWord)
+	arm64GtLoadField(code, dest: dest, baseReg: pReg, disp: GtPOffRng)
+	arm64GtLslImm(code, rd: scratch, rn: dest, shift: 13)  // scratch = x << 13
+	arm64EmitEor(code, rd: dest, rn: dest, rm: scratch)  // x ^= x << 13
+	arm64GtLsrImm(code, rd: scratch, rn: dest, shift: 7)  // scratch = x >> 7
+	arm64EmitEor(code, rd: dest, rn: dest, rm: scratch)  // x ^= x >> 7
+	arm64GtLslImm(code, rd: scratch, rn: dest, shift: 17)  // scratch = x << 17
+	arm64EmitEor(code, rd: dest, rn: dest, rm: scratch)  // x ^= x << 17
+	arm64GtStoreField(code, baseReg: pReg, disp: GtPOffRng, src: dest)
+end 'arm64GtXorshift'
+
+// DMB ISH — full data-memory barrier (inner-shareable). Ports the C# EmitDmbIsh
+// (raw word 0xD5033BBF). Used by the enqueue wake-scan (between the queue-publish
+// and the idleFlag reads) and the worker-loop park (between the idleFlag=1 store
+// and the re-dequeue) to close the Dekker-style missed-wakeup race. Clobbers
+// nothing.
+function arm64GtDmbIsh(code ByteArray)
+	arm64EmitInsn(code, insn: 0xD5033BBF)
+end 'arm64GtDmbIsh'
+
+// =============================================================================
+// __sched_worker_loop(P=x0) -> x0=0: the entry point each non-main worker M (OS
+// thread) starts on. pthread_create launches it (SpawnWorker in __gt_enqueue), so
+// the arg arrives in x0 = P*. AAPCS64 pthread signature `void* fn(void* arg)`.
+// Adopts P as this OS thread's processor (pthread_setspecific so arm64GtLoadCurrentP
+// returns it), then runs the GMP M-loop until __sched_shutdown_flag is set.
+//
+// Ports the C# EmitSchedWorkerLoop (ARM64CodeEmitter.Runtime.cs:3235) — but the
+// self-hosted backend does NOT dedicate x28 as the P register (it is in the regalloc
+// pool), so per-thread P is read via the inline TSD path in arm64GtLoadCurrentP, NOT
+// MOV from x28. P is RE-READ via arm64GtLoadCurrentP after every BL/import (cheap,
+// clobbers only dest + x16/x17); only the running GT `g` is homed in a frame slot.
+//
+// DORMANT until the flip unit: emitted unconditionally (so SpawnWorker's funcAddr
+// resolves), but nothing pthread_create's it while num_procs stays 1.
+//
+// Frame: P@0x10 (homed arg), g@0x18.
+// =============================================================================
+function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__sched_worker_loop", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(6)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)  // P homed at [x29+16]
+
+	let loopTop = 0
+	let runGt = 1
+	let park = 2
+	let reallyPark = 3
+	let exitBlock = 4
+	let decActive = 5  // in-place active-worker decrement retry loop (exit teardown)
+
+	let slotG = 0x18
+	let slotSs = 0x20  // per-thread sigaltstack stack_t local (24 bytes, fits 0x20..0x38)
+
+	// ADOPT: pthread_setspecific(__sched_tls_key, P) — so arm64GtLoadCurrentP reads
+	// THIS thread's P. x0 = key value, x1 = P.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
+	arm64GtReloadArg(code, dest: 1, argIndex: 0)  // P
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC)
+
+	// PER-THREAD sigaltstack: sigaction is process-global (installed once in __gt_init),
+	// but sigaltstack is PER-THREAD on POSIX — a SA_ONSTACK handler with no altstack
+	// registered for THIS pthread runs on the (possibly exhausted) thread stack and
+	// double-faults on a stack overflow. The C# arm64 reference omits this (a latent
+	// multi-M bug); install a fresh 0x8000 altstack here so a fault on any worker M is
+	// delivered on its own altstack. mmap leaks for the M's lifetime (correct: it must
+	// outlive every fault). The imports clobber x0-x18, but P is homed at [x29+16].
+	arm64GtMmapAnon(code, relocations: relocations, length: FaultAltStackSize)
+	arm64GtStore(code, disp: slotSs + FaultSigaltOffSp, src: 0)  // ss_sp
+	arm64EmitMovImm(code, rd: 9, value: FaultAltStackSize)
+	arm64GtStore(code, disp: slotSs + FaultSigaltOffSize, src: 9)  // ss_size
+	arm64EmitStrWord(code, rt: GtRegXzr, rn: GtRegX29, offset: slotSs + FaultSigaltOffFlags)  // ss_flags = 0
+	arm64GtLeaFrame(code, rd: 0, disp: slotSs)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGALTSTACK)
+
+	// P.mainThread.status = running ; P.currentGt = &P.mainThread ; P.status = 1.
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // P
+	arm64EmitMovImm(code, rd: 10, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffMainThread + GtGtOffStatus, src: 10)
+	arm64EmitAddImm(code, rd: 10, rn: 9, imm12: GtPOffMainThread)  // &P.mainThread
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffCurrentGt, src: 10)
+	arm64EmitMovImm(code, rd: 10, value: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffStatus, src: 10)
+
+	// loop_top: process deferred waiter ; fire timers ; check shutdown ; dequeue.
+	arm64GtMarkBlock(state, code: code, blockId: loopTop)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_process_pending_waiter")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_shutdown_flag")
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: exitBlock)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = GT or 0
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: park)
+	arm64GtStore(code, disp: slotG, src: 0)  // home g
+
+	// run_gt: g.status = running ; P.currentGt = g ; context_switch(&P.mainThread, g, P).
+	arm64GtMarkBlock(state, code: code, blockId: runGt)
+	arm64GtLoad(code, dest: 0, disp: slotG)  // g
+	arm64EmitMovImm(code, rd: 9, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffStatus, src: 9)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffCurrentGt, src: 0)  // P.currentGt = g (x0)
+	// from = &P.mainThread (x0), to = g (x1), P = x2.
+	arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtPOffMainThread)
+	arm64GtLoad(code, dest: 1, disp: slotG)
+	arm64EmitMovRegReg(code, rd: 2, rn: 9)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed: the GT we dispatched (slot g) switched off its stack back to here. Set
+	// ITS ioYielded=1 from the frame slot — the resume-point discipline (name the GT
+	// we switched to via a local, NOT a shared per-P field), which is what makes it
+	// correct under nested awaits and across worker Ms. Signals an async-I/O
+	// completion that the GT is off its stack and safe to enqueue/free.
+	arm64GtLoad(code, dest: 0, disp: slotG)
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 9)
+	arm64GtBranch(code, state: state, targetBlock: loopTop)
+
+	// park: publish idleFlag=1, DMB ISH, then RE-DEQUEUE to close the missed-wakeup
+	// window. An enqueuer that reads idleFlag after its queue-publish either sees 1
+	// (and signals our semaphore) or sees 0 with its queue-publish already globally
+	// visible — in which case the re-dequeue here picks it up. The DMB pairs with the
+	// enqueuer-side DMB (arm64GtDmbIsh in __gt_enqueue's wake scan).
+	arm64GtMarkBlock(state, code: code, blockId: park)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
+	arm64EmitMovImm(code, rd: 10, value: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: 10)
+	arm64GtDmbIsh(code)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = GT or 0
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: reallyPark)
+	// Work found in the race window — clear idleFlag, home g, run it.
+	arm64GtStore(code, disp: slotG, src: 0)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P (dequeue clobbered it)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
+	arm64GtBranch(code, state: state, targetBlock: runGt)
+
+	// really_park: re-check shutdown (an enqueuer that set __sched_shutdown_flag
+	// before our idleFlag store would skip our semaphore signal), then block on the
+	// per-P wake semaphore with a 100 ms missed-wakeup safety-net timeout, then unmark
+	// idle and loop.
+	arm64GtMarkBlock(state, code: code, blockId: reallyPark)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_shutdown_flag")
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: exitBlock)
+	// timeout = dispatch_time(DISPATCH_TIME_NOW=0, 100ms = 100_000_000 ns).
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64EmitMovImm(code, rd: 1, value: 100000000)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_TIME)  // x0 = token
+	// dispatch_semaphore_wait(P->wakeSemaphore, token). MOV x1=token BEFORE the sem
+	// load overwrites x0 (order matters — the C# reference notes this).
+	arm64EmitMovRegReg(code, rd: 1, rn: 0)  // x1 = timeout token
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtPOffWakeSemaphore)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_WAIT)
+	// Unmark idle and loop.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
+	arm64GtBranch(code, state: state, targetBlock: loopTop)
+
+	// exit: balance the spawn-phase active-worker bookkeeping, then return NULL.
+	// __gt_enqueue's spawn scan atomically INCREMENTS __sched_active_workers when it
+	// claims a stopped P and pthread_creates a worker on it; a worker that returns
+	// here without the matching DECREMENT would permanently inflate the count, so the
+	// `active_workers >= max_procs` capacity gate would wrongly believe the pool is
+	// full and stop spawning — starving later async work. Mirror the x64 worker-exit
+	// teardown (emitX64SchedWorkerLoop): drop active_workers, then clear this P's
+	// status (0 = stopped, so the next enqueue can re-claim it) and idleFlag (a worker
+	// that exits via the shutdown re-check in really_park still has idleFlag=1 set from
+	// the park block). The decrement is an IN-PLACE LDAXR/STLXR retry loop, the exact
+	// shape of the enqueue increment but with SUB — another enqueuer may be claiming a
+	// different P concurrently. x13 = &active_workers, x12 = LDAXR value, x11 = STLXR
+	// status; x9 holds P.
+	arm64GtMarkBlock(state, code: code, blockId: exitBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 13, name: "__sched_active_workers")
+	arm64GtMarkBlock(state, code: code, blockId: decActive)
+	arm64EmitLdaxr(code, rt: 12, rn: 13)  // LDAXR x12, [x13]
+	arm64EmitSubImm(code, rd: 12, rn: 12, imm12: 1)
+	arm64EmitStlxr(code, rs: 11, rt: 12, rn: 13)  // STLXR w11, x12, [x13]
+	arm64GtCbnz(code, state: state, rn: 11, targetBlock: decActive)  // store-exclusive lost → retry the dec in place
+	// P->status = 0 ; P->idleFlag = 0.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffStatus, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64SchedWorkerLoop'
+
+// =============================================================================
+// __gt_steal_work() -> x0 (the first stolen GT, or 0): the work-steal fallback the
+// dequeue tail-calls when both the runnext slot and the local + global queues are
+// empty. Picks a random victim P, and if it has ≥2 GTs in its local queue, steals
+// half: returns the first stolen GT and pushes the rest onto our own local queue.
+// Ports the C# EmitGtStealWork (RuntimeEmitter.Scheduler.cs:409).
+//
+// The victim-queue walk MUST run under __sched_global_queue_cs (the SAME lock the
+// owner's enqueue/dequeue take to mutate its local queue) — otherwise a thief and
+// the owner can both pop the same head node → double-run → SIGSEGV. The ≥2 length
+// guard ensures we never empty a victim down to nothing it could itself be running.
+//
+// DORMANT at num_procs=1: attempts = num_procs = 1, the single victim index 0 is our
+// own P->id, so the self-skip sends us straight to steal_fail → return 0 (matching
+// the prior single-M dequeue). Activated only when the flip unit sets num_procs>1.
+//
+// Frame: ourP@0x10, attempts@0x18, numProcs@0x20, victimP@0x28, first@0x30,
+// n@0x38, walk@0x40 (counter), last@0x48.
+// =============================================================================
+function emitArm64GtStealWork(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_steal_work", offset: code.count())
+	let frameSize = 0x60
+	var state = Arm64MacosGtState.create(9)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let stealLoop = 0
+	let walkLoop = 1
+	let walkDone = 2
+	let victimNonempty = 3
+	let localNonempty = 4
+	let setTail = 5
+	let gotOne = 6
+	let unlockSkip = 7
+	let stealFail = 8
+
+	let slotOurP = 0x10
+	let slotAttempts = 0x18
+	let slotNumProcs = 0x20
+	let slotVictimP = 0x28
+	let slotFirst = 0x30
+	let slotN = 0x38
+	let slotWalk = 0x40
+	let slotLast = 0x48
+
+	// our P ; attempts = num_procs ; cache num_procs.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtStore(code, disp: slotOurP, src: 9)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_num_procs")
+	arm64GtStore(code, disp: slotAttempts, src: 9)
+	arm64GtStore(code, disp: slotNumProcs, src: 9)
+
+	// steal_loop: while attempts != 0 { attempts-- ; pick a victim }.
+	arm64GtMarkBlock(state, code: code, blockId: stealLoop)
+	arm64GtLoad(code, dest: 9, disp: slotAttempts)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: stealFail)
+	arm64EmitSubImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64GtStore(code, disp: slotAttempts, src: 9)
+
+	// victim_idx = xorshift64(ourP->rng) % num_procs (UDIV + MSUB, unsigned).
+	arm64GtLoad(code, dest: 9, disp: slotOurP)  // P (pReg)
+	arm64GtXorshift(code, dest: 11, pReg: 9, scratch: 10)  // x11 = rng
+	arm64GtLoad(code, dest: 10, disp: slotNumProcs)  // divisor
+	arm64EmitUdiv(code, rd: 16, rn: 11, rm: 10)  // x16 = rng / num_procs
+	arm64EmitMsub(code, rd: 11, rn: 16, rm: 10, ra: 11)  // x11 = rng % num_procs = victim_idx
+	// victimP = __sched_procs[victim_idx].
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__sched_procs")
+	arm64GtLslImm(code, rd: 11, rn: 11, shift: 3)  // idx*8
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 10, rn: 10, rm: 11)
+	arm64GtLoadField(code, dest: 10, baseReg: 10, disp: 0)  // victimP
+	arm64GtStore(code, disp: slotVictimP, src: 10)
+	// Skip self (victimP == ourP->id?). C# compares the victim P* to our P*; do the
+	// same — load ourP and compare pointers.
+	arm64GtLoad(code, dest: 9, disp: slotOurP)
+	arm64EmitCmp(code, rn: 10, rm: 9)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: stealLoop)
+	// Skip inactive workers (victimP->status != 1).
+	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffStatus)
+	arm64GtCmpImm(code, rn: 9, imm12: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondNe, targetBlock: stealLoop)
+
+	// Lock the global queue CS (serializes the victim-queue walk against its owner).
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	// Need ≥2 in the victim's local queue, else release + try another victim.
+	arm64GtLoad(code, dest: 10, disp: slotVictimP)
+	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffLocalQueueLen)
+	arm64GtCmpImm(code, rn: 9, imm12: 2)
+	arm64GtCondBranch(code, state: state, cond: GtCondLt, targetBlock: unlockSkip)
+	// n = len / 2 ; first = victim head ; walk = first ; counter = n - 1.
+	arm64GtLsrImm(code, rd: 9, rn: 9, shift: 1)  // n = len/2
+	arm64GtStore(code, disp: slotN, src: 9)
+	arm64GtLoadField(code, dest: 11, baseReg: 10, disp: GtPOffLocalQueueHead)  // first
+	arm64GtStore(code, disp: slotFirst, src: 11)
+	arm64GtStore(code, disp: slotLast, src: 11)  // walk pointer starts at first
+	arm64EmitSubImm(code, rd: 9, rn: 9, imm12: 1)  // n-1
+	arm64GtStore(code, disp: slotWalk, src: 9)
+
+	// walk_loop: advance `last` n-1 nodes to find the split point (last stolen node).
+	arm64GtMarkBlock(state, code: code, blockId: walkLoop)
+	arm64GtLoad(code, dest: 9, disp: slotWalk)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: walkDone)
+	arm64GtLoad(code, dest: 11, disp: slotLast)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtGtOffNext)
+	arm64GtStore(code, disp: slotLast, src: 11)
+	arm64GtLoad(code, dest: 9, disp: slotWalk)
+	arm64EmitSubImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64GtStore(code, disp: slotWalk, src: 9)
+	arm64GtBranch(code, state: state, targetBlock: walkLoop)
+
+	// walk_done: slotLast = last stolen node. new_victim_head = last->next ;
+	// last->next = 0 (terminate stolen chain).
+	arm64GtMarkBlock(state, code: code, blockId: walkDone)
+	arm64GtLoad(code, dest: 11, disp: slotLast)  // last
+	arm64GtLoadField(code, dest: 12, baseReg: 11, disp: GtGtOffNext)  // new victim head
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffNext, src: GtRegXzr)
+	// victim.head = new_head ; if new_head == 0 → victim.tail = 0.
+	arm64GtLoad(code, dest: 10, disp: slotVictimP)
+	arm64GtStoreField(code, baseReg: 10, disp: GtPOffLocalQueueHead, src: 12)
+	arm64GtCbnz(code, state: state, rn: 12, targetBlock: victimNonempty)
+	arm64GtStoreField(code, baseReg: 10, disp: GtPOffLocalQueueTail, src: GtRegXzr)
+
+	// victim_nonempty: victim.len -= n.
+	arm64GtMarkBlock(state, code: code, blockId: victimNonempty)
+	arm64GtLoad(code, dest: 10, disp: slotVictimP)
+	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffLocalQueueLen)
+	arm64GtLoad(code, dest: 12, disp: slotN)
+	arm64GtAlu(code, opcode: GtAluSub, rd: 9, rn: 9, rm: 12)
+	arm64GtStoreField(code, baseReg: 10, disp: GtPOffLocalQueueLen, src: 9)
+
+	// Add the stolen items except the first ([second..last]) to our local queue.
+	// second = first->next ; if null we only stole one → got_one (return just first).
+	arm64GtLoad(code, dest: 11, disp: slotFirst)
+	arm64GtLoadField(code, dest: 12, baseReg: 11, disp: GtGtOffNext)  // second (x12, held to set_tail)
+	arm64GtCbz(code, state: state, rn: 12, targetBlock: gotOne)
+	// our local tail: non-empty → old_tail->next = second ; empty → our head = second.
+	arm64GtLoad(code, dest: 9, disp: slotOurP)
+	arm64GtLoadField(code, dest: 13, baseReg: 9, disp: GtPOffLocalQueueTail)  // old_tail
+	arm64GtCbnz(code, state: state, rn: 13, targetBlock: localNonempty)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueHead, src: 12)  // empty: head = second
+	arm64GtBranch(code, state: state, targetBlock: setTail)
+
+	// local_nonempty: old_tail->next = second (x13 = old_tail, x12 = second).
+	arm64GtMarkBlock(state, code: code, blockId: localNonempty)
+	arm64GtStoreField(code, baseReg: 13, disp: GtGtOffNext, src: 12)
+
+	// set_tail: our tail = last ; our len += (n - 1).
+	arm64GtMarkBlock(state, code: code, blockId: setTail)
+	arm64GtLoad(code, dest: 9, disp: slotOurP)
+	arm64GtLoad(code, dest: 11, disp: slotLast)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueTail, src: 11)
+	arm64GtLoadField(code, dest: 13, baseReg: 9, disp: GtPOffLocalQueueLen)
+	arm64GtLoad(code, dest: 12, disp: slotN)
+	arm64EmitSubImm(code, rd: 12, rn: 12, imm12: 1)  // n-1
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 13, rn: 13, rm: 12)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueLen, src: 13)
+
+	// got_one: release the lock and return `first` with its next cleared.
+	arm64GtMarkBlock(state, code: code, blockId: gotOne)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoad(code, dest: 0, disp: slotFirst)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// unlock_skip: victim too small → release the lock and try another victim.
+	arm64GtMarkBlock(state, code: code, blockId: unlockSkip)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtBranch(code, state: state, targetBlock: stealLoop)
+
+	// steal_fail: no stealable victim after all attempts → return 0.
+	arm64GtMarkBlock(state, code: code, blockId: stealFail)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtStealWork'
+
+// =============================================================================
+// __gt_enqueue(g=x0): schedule the green thread `g`. Ports the multi-M GMP queue
+// STRUCTURE of the C# / x64 EmitGtEnqueue (runnext priority slot → per-P local
+// run queue → global overflow queue), all guarded by the recursive spinlock at
+// `__sched_global_queue_cs`:
+//   1. g.next = 0.
+//   2. Load the current P. P==NULL (the I/O / pre-init path) → global queue.
+//   3. runnext: empty → store g there (highest priority, no lock); else displace
+//      the old runnext occupant down into the local queue and put g in runnext.
+//   4. local queue (under the lock): if it's full (len >= MaxLocalQueueLen) release
+//      and fall through to the global queue; else append to the local tail, len++,
+//      release.
+//   5. global queue (under the lock): append to __gt_run_queue_head/tail.
+//
+// Then the cross-P wake phase (mirrors the C# / x64 EmitGtEnqueue wake scan):
+//   6. DMB ISH (full barrier, pairs with the worker-loop park's barrier).
+//   7. scan P[1..num_procs-1] for a parked worker (idleFlag set) → clear its flag and
+//      dispatch_semaphore_signal it; else
+//   8. if active_workers < max_procs, scan for a stopped P, claim it via an atomic
+//      LDAXR/STLXR status CAS (0→1), atomically bump active_workers, and pthread_create
+//      a worker on it (entry __sched_worker_loop).
+// DORMANT at num_procs=1: the wake loop (i=1, 1<1 false) and the spawn loop
+// (active_workers 0 >= max_procs 0) both fall straight through with no WakeWorker /
+// SpawnWorker, so single-M behaviour is byte-for-byte unchanged. ≥2 concurrent GTs
+// still exercise the runnext + local-queue paths exactly as multi-M would.
+//
+// The lock is taken by loading &__sched_global_queue_cs into x0 and BL'ing the
+// recursive spinlock leaf; x0 (and any volatile) is clobbered across that BL, so g
+// and P are re-homed in frame slots and reloaded after every lock call. Void.
+// Frame: g@0x10 (homed arg), P@0x18, num_procs@0x20, i@0x28.
+// =============================================================================
+function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_enqueue", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(15)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
+
+	let enqueueGlobal = 0
+	let displaceRunnext = 1
+	let localAppend = 2
+	let localInc = 3
+	let localFullUnlock = 4
+	let globalAppend = 5
+	let globalUnlock = 6
+	let wakeScan = 7  // convergence point for every enqueue path (DMB + idle-P scan)
+	let wakeLoop = 8
+	let wakeSpawn = 9
+	let wakeNext = 10
+	let spawnScan = 11
+	let incActive = 12  // atomic-inc-active-workers retry loop (after a successful P claim)
+	let spawnNext = 13
+	let wakeDone = 14  // function exit
+
+	let slotP = 0x18
+	let slotNumProcs = 0x20
+	let slotI = 0x28
+
+	// g.next = 0.
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)
+
+	// P = current P ; P==NULL → global queue (I/O worker / pre-init path).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: enqueueGlobal)
+	arm64GtStore(code, disp: slotP, src: 9)  // P
+
+	// runnext: if empty store g there and finish; else displace the old occupant.
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtPOffRunnext)
+	arm64GtCbnz(code, state: state, rn: 10, targetBlock: displaceRunnext)
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // g
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRunnext, src: 0)  // P->runnext = g
+	arm64GtBranch(code, state: state, targetBlock: wakeScan)
+
+	// displace_runnext: old = P->runnext (x10) ; old.next = 0 ; P->runnext = g ;
+	// then append the displaced `old` to the local queue (reuse the g-slot for old).
+	arm64GtMarkBlock(state, code: code, blockId: displaceRunnext)
+	arm64GtStoreField(code, baseReg: 10, disp: GtGtOffNext, src: GtRegXzr)  // old.next = 0
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // g
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRunnext, src: 0)  // P->runnext = g
+	arm64GtStore(code, disp: 0x10, src: 10)  // the GT to push to the local queue is now `old`
+
+	// local queue (under the lock). Lock serializes the local-queue append against a
+	// future work-stealer walking this P's queue; with num_procs=1 it is uncontended.
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoad(code, dest: 9, disp: slotP)  // reload P
+	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
+	arm64GtCmpImm(code, rn: 11, imm12: GtMaxLocalQueueLen)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: localFullUnlock)  // full → overflow
+	// append g (frame 0x10) to the local tail.
+	arm64GtLoad(code, dest: 0, disp: 0x10)  // g
+	arm64GtLoadField(code, dest: 12, baseReg: 9, disp: GtPOffLocalQueueTail)
+	arm64GtCbnz(code, state: state, rn: 12, targetBlock: localAppend)
+	// empty local queue: head = tail = g.
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueHead, src: 0)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueTail, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: localInc)
+	// non-empty: tail.next = g ; tail = g.
+	arm64GtMarkBlock(state, code: code, blockId: localAppend)
+	arm64GtStoreField(code, baseReg: 12, disp: GtGtOffNext, src: 0)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueTail, src: 0)
+	// local_inc: len++ ; release the lock ; finish.
+	arm64GtMarkBlock(state, code: code, blockId: localInc)
+	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
+	arm64EmitAddImm(code, rd: 11, rn: 11, imm12: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueLen, src: 11)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtBranch(code, state: state, targetBlock: wakeScan)
+
+	// local_full_unlock: release the lock, then overflow to the global queue.
+	arm64GtMarkBlock(state, code: code, blockId: localFullUnlock)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+
+	// enqueue_global: append g (frame 0x10) to the global run queue under the lock.
+	arm64GtMarkBlock(state, code: code, blockId: enqueueGlobal)
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // g (reloaded after the lock BL)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 1, name: "__gt_run_queue_tail")
+	arm64GtCbnz(code, state: state, rn: 1, targetBlock: globalAppend)
+	// empty global queue: head = tail = g.
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_run_queue_head", scratch: 9)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_run_queue_tail", scratch: 9)
+	arm64GtBranch(code, state: state, targetBlock: globalUnlock)
+	// non-empty: tail.next = g ; run_queue_tail = g.
+	arm64GtMarkBlock(state, code: code, blockId: globalAppend)
+	arm64GtStoreField(code, baseReg: 1, disp: GtGtOffNext, src: 0)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_run_queue_tail", scratch: 9)
+	// global_unlock: release the lock.
+	arm64GtMarkBlock(state, code: code, blockId: globalUnlock)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+
+	// === Wake phase: cross-P wake/spawn (mirrors C# EmitGtEnqueue's wake scan). ===
+	// DORMANT at num_procs=1: the wake loop (i starts at 1, 1 < 1 is false) and the
+	// spawn loop (active_workers 0 >= max_procs 0) both fall straight through with no
+	// WakeWorker/SpawnWorker, so single-M behaviour is unchanged. Activated only when
+	// the flip unit sets num_procs=ncpu and max_procs.
+	arm64GtMarkBlock(state, code: code, blockId: wakeScan)
+
+	// Full memory barrier between the queue-publish above and the idleFlag reads
+	// below. Closes the Dekker-style missed-wakeup race against the worker-loop
+	// park's "store idleFlag=1 ; DMB ISH ; re-dequeue" sequence: without this an
+	// idleFlag=0 read could be observed (stale) while our queue-publish isn't yet
+	// globally visible, so the worker would re-dequeue empty and park with work
+	// queued. Pairs with arm64GtDmbIsh in the worker-loop park.
+	arm64GtDmbIsh(code)
+
+	// if __sched_shutdown_flag != 0 → done (no point waking workers that are exiting).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_shutdown_flag")
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: wakeDone)
+
+	// Scan P[1 .. num_procs-1] for a parked worker. numProcs → frame ; i = 1 → frame.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_num_procs")
+	arm64GtStore(code, disp: slotNumProcs, src: 9)
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStore(code, disp: slotI, src: 9)
+
+	arm64GtMarkBlock(state, code: code, blockId: wakeLoop)
+	// if i >= num_procs → no idle worker found, try to spawn.
+	arm64GtLoad(code, dest: 9, disp: slotI)
+	arm64GtLoad(code, dest: 10, disp: slotNumProcs)
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: wakeSpawn)
+	// P_i = __sched_procs[i] = *(load(__sched_procs) + i*8).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__sched_procs")
+	arm64GtLslImm(code, rd: 9, rn: 9, shift: 3)  // i*8
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 10, rn: 10, rm: 9)  // &procs[i]
+	arm64GtLoadField(code, dest: 10, baseReg: 10, disp: 0)  // P_i
+	// if P_i->idleFlag == 0 → not parked, advance.
+	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffIdleFlag)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: wakeNext)
+	// Parked worker: clear idleFlag, then WakeWorker(P_i) =
+	// dispatch_semaphore_signal(P_i->wakeSemaphore).
+	arm64GtStoreField(code, baseReg: 10, disp: GtPOffIdleFlag, src: GtRegXzr)
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtPOffWakeSemaphore)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_SIGNAL)
+	arm64GtBranch(code, state: state, targetBlock: wakeDone)
+
+	arm64GtMarkBlock(state, code: code, blockId: wakeNext)
+	arm64GtLoad(code, dest: 9, disp: slotI)
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64GtStore(code, disp: slotI, src: 9)
+	arm64GtBranch(code, state: state, targetBlock: wakeLoop)
+
+	// === Spawn phase: no idle worker → claim a stopped P and pthread_create it. ===
+	arm64GtMarkBlock(state, code: code, blockId: wakeSpawn)
+	// if active_workers >= max_procs → at capacity, done.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_active_workers")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__sched_max_procs")
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: wakeDone)
+	// i = 1 (re-scan from the first worker P).
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStore(code, disp: slotI, src: 9)
+
+	arm64GtMarkBlock(state, code: code, blockId: spawnScan)
+	arm64GtLoad(code, dest: 9, disp: slotI)
+	arm64GtLoad(code, dest: 10, disp: slotNumProcs)
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: wakeDone)
+	// P_i = __sched_procs[i].
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__sched_procs")
+	arm64GtLslImm(code, rd: 9, rn: 9, shift: 3)  // i*8
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 10, rn: 10, rm: 9)  // &procs[i]
+	arm64GtLoadField(code, dest: 10, baseReg: 10, disp: 0)  // P_i
+	// Atomically claim P_i: CAS P_i->status 0 → 1 via LDAXR/STLXR. This MUST be
+	// atomic — two enqueuers racing to spawn the SAME stopped P would both run a
+	// worker on it, two Ms sharing one P's mcache shard → heap corruption. x14 holds
+	// &P_i->status; x9 is the LDAXR result / STLXR status scratch.
+	arm64EmitAddImm(code, rd: 14, rn: 10, imm12: GtPOffStatus)  // &P_i->status
+	arm64EmitLdaxr(code, rt: 9, rn: 14)  // LDAXR x9, [x14]
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: spawnNext)  // already active → next P
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64EmitStlxr(code, rs: 9, rt: 9, rn: 14)  // STLXR w9, x9, [x14]
+	arm64GtCbnz(code, state: state, rn: 9, targetBlock: spawnScan)  // store-exclusive lost → retry this P
+
+	// Claimed P_i (status 0→1, x10). Atomically bump __sched_active_workers in an
+	// IN-PLACE retry loop (a different enqueuer may be claiming another P
+	// concurrently). The retry MUST stay here, NOT branch back to spawnScan: P_i is
+	// already claimed (status=1), so a re-scan would skip it via spawnNext and strand
+	// a claimed-but-unspawned P. x13 = &active_workers, x12 = LDAXR value, x11 = STLXR
+	// status. P_i is preserved in x10 throughout (callee-clobber-free until the
+	// pthread_create below).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 13, name: "__sched_active_workers")
+	arm64GtMarkBlock(state, code: code, blockId: incActive)
+	arm64EmitLdaxr(code, rt: 12, rn: 13)  // LDAXR x12, [x13]
+	arm64EmitAddImm(code, rd: 12, rn: 12, imm12: 1)
+	arm64EmitStlxr(code, rs: 11, rt: 12, rn: 13)  // STLXR w11, x12, [x13]
+	arm64GtCbnz(code, state: state, rn: 11, targetBlock: incActive)  // store-exclusive lost → retry the inc in place
+	// SpawnWorker(P_i) = pthread_create(&P_i->osThreadHandle, NULL,
+	// __sched_worker_loop, P_i). x0 = &P_i->osThreadHandle, x1 = 0,
+	// x2 = &__sched_worker_loop, x3 = P_i.
+	arm64EmitAddImm(code, rd: 0, rn: 10, imm12: GtPOffOsThreadHandle)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 2, name: "__sched_worker_loop")
+	arm64EmitMovRegReg(code, rd: 3, rn: 10)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_CREATE)
+	arm64GtBranch(code, state: state, targetBlock: wakeDone)
+
+	arm64GtMarkBlock(state, code: code, blockId: spawnNext)
+	arm64GtLoad(code, dest: 9, disp: slotI)
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64GtStore(code, disp: slotI, src: 9)
+	arm64GtBranch(code, state: state, targetBlock: spawnScan)
+
+	arm64GtMarkBlock(state, code: code, blockId: wakeDone)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtEnqueue'
+
+// =============================================================================
+// __gt_dequeue() -> x0: pop the next ready green thread, or 0 if none. Ports the
+// multi-M GMP fairness order of the C# EmitGtDequeue:
+//   1. runnext: if present, clear the slot and return it (highest priority).
+//   2. fairness: advance P->rng (xorshift64); ~1 in FairnessInterval dequeues
+//      ((rng % 61) == 0) skip the local queue and go straight to the global queue,
+//      so global work can't starve behind a busy local queue.
+//   3. local queue (under the lock): pop the head, len--, fix the tail.
+//   4. global queue (under the lock): pop __gt_run_queue_head.
+//   5. all empty → 0.
+//
+// The C# / x64 reference then falls back to __gt_steal_work (steal half of a random
+// victim P's local queue). That is DEFERRED to the worker-flip unit — at num_procs=1
+// there is no other P to steal from, so this returns 0 instead (see the marker).
+//
+// The popped GT is saved to a frame slot BEFORE releasing the lock, because the
+// release BL clobbers volatile registers. Frame: P@0x10, result@0x18.
+// =============================================================================
+function emitArm64GtDequeue(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_dequeue", offset: code.count())
+	let frameSize = 0x30
+	var state = Arm64MacosGtState.create(9)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let checkFairness = 0
+	let tryLocal = 1
+	let localEmptyUnlock = 2
+	let tryGlobal = 3
+	let globalUnlock = 4
+	let globalReturn = 5
+	let returnResult = 6
+	let stealFallback = 7  // both queues empty → __gt_steal_work (no-op at num_procs=1)
+	let returnRunnext = 8
+
+	let slotP = 0x10
+	let slotResult = 0x18
+
+	// P = current P. P==NULL means the scheduler is uninitialized (a non-async
+	// program that nonetheless drives the cooperative loop — e.g. a synchronous
+	// Subprocess.run calling __gt_yield → __gt_dequeue before any `async`/`sleep`
+	// ran __gt_init). The per-P runnext / local-queue / rng reads below would
+	// dereference NULL, so route straight to the (empty) global queue, matching the
+	// enqueue P==NULL path.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: tryGlobal)
+	arm64GtStore(code, disp: slotP, src: 9)
+
+	// runnext: if present, clear it and return it.
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtPOffRunnext)
+	arm64GtCbnz(code, state: state, rn: 10, targetBlock: returnRunnext)
+
+	// fairness: advance the rng ; (rng % 61) == 0 → global first, else local. pReg
+	// (x9 = P) must stay distinct from dest (x11) — arm64GtXorshift writes the new
+	// rng back to [pReg+GtPOffRng], so aliasing them would store to the rng value as
+	// an address.
+	arm64GtMarkBlock(state, code: code, blockId: checkFairness)
+	arm64GtXorshift(code, dest: 11, pReg: 9, scratch: 10)  // x11 = new rng
+	arm64EmitMovImm(code, rd: 10, value: GtFairnessInterval)
+	arm64EmitUdiv(code, rd: 16, rn: 11, rm: 10)  // x16 = rng / 61
+	arm64EmitMsub(code, rd: 11, rn: 16, rm: 10, ra: 11)  // x11 = rng - (rng/61)*61 = rng % 61
+	arm64GtCbz(code, state: state, rn: 11, targetBlock: tryGlobal)
+
+	// try_local (under the lock): pop the local-queue head.
+	arm64GtMarkBlock(state, code: code, blockId: tryLocal)
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoad(code, dest: 9, disp: slotP)  // reload P
+	arm64GtLoadField(code, dest: 11, baseReg: 9, disp: GtPOffLocalQueueLen)
+	arm64GtCbz(code, state: state, rn: 11, targetBlock: localEmptyUnlock)
+	// g = local head ; head = g.next ; len-- ; if head==0 tail=0 ; g.next = 0.
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtPOffLocalQueueHead)  // g
+	arm64GtLoadField(code, dest: 12, baseReg: 10, disp: GtGtOffNext)  // next
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueHead, src: 12)
+	arm64EmitSubImm(code, rd: 11, rn: 11, imm12: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueLen, src: 11)
+	arm64GtCbnz(code, state: state, rn: 12, targetBlock: returnResult)  // head still live → keep tail
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffLocalQueueTail, src: GtRegXzr)  // local queue now empty
+	arm64GtBranch(code, state: state, targetBlock: returnResult)
+
+	// local_empty_unlock: nothing in the local queue → release and try global.
+	arm64GtMarkBlock(state, code: code, blockId: localEmptyUnlock)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+
+	// try_global (under the lock): pop the global-queue head.
+	arm64GtMarkBlock(state, code: code, blockId: tryGlobal)
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__gt_run_queue_head")  // g
+	arm64GtCbz(code, state: state, rn: 10, targetBlock: globalUnlock)  // empty → unlock + steal/0
+	arm64GtLoadField(code, dest: 12, baseReg: 10, disp: GtGtOffNext)  // next
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 12, name: "__gt_run_queue_head", scratch: 9)
+	arm64GtCbnz(code, state: state, rn: 12, targetBlock: globalReturn)  // new head live → keep tail
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: GtRegXzr, name: "__gt_run_queue_tail", scratch: 9)  // queue now empty
+	// global_return: spill g, release the lock, clear g.next, return it.
+	arm64GtMarkBlock(state, code: code, blockId: globalReturn)
+	arm64GtStore(code, disp: slotResult, src: 10)  // spill g before the release BL clobbers volatiles
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoad(code, dest: 0, disp: slotResult)  // g
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)  // g.next = 0
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// global_unlock: global queue empty → release and fall through to steal/return-0.
+	arm64GtMarkBlock(state, code: code, blockId: globalUnlock)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+
+	// steal_fallback: both queues empty → tail-call __gt_steal_work, which steals half
+	// of a random victim P's local queue and returns the first stolen GT in x0 (or 0).
+	// DORMANT at num_procs=1: its only candidate victim is self (skipped), so it returns
+	// 0 — identical to the prior single-M behaviour. We pop our own frame FIRST
+	// (MOV SP,X29 ; LDP x29,x30 — restoring the original caller's LR), then B (TAIL,
+	// not BL) into __gt_steal_work: its RET returns straight to our caller with its x0
+	// result, with no extra LR save. (A BL+RET would loop — see arm64GtTailBranch.)
+	arm64GtMarkBlock(state, code: code, blockId: stealFallback)
+	arm64EmitInsn(code, insn: 0x91000000 or (GtRegX29 shl 5) or GtRegSp)  // MOV SP, X29
+	arm64EmitLdpPostIndex(code, frameSize: frameSize)  // LDP x29,x30,[sp],#frameSize
+	arm64GtTailBranch(code, callFixups: callFixups, name: "__gt_steal_work")
+
+	// return_result: pop from the LOCAL queue path. Spill g, release the lock, clear
+	// g.next, return g.
+	arm64GtMarkBlock(state, code: code, blockId: returnResult)
+	arm64GtStore(code, disp: slotResult, src: 10)  // spill g before the release BL
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_global_queue_cs")
+	arm64GtLoad(code, dest: 0, disp: slotResult)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffNext, src: GtRegXzr)  // g.next = 0
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// return_runnext: clear P->runnext, clear g.next, return g (x10 = g, x9 = P).
+	arm64GtMarkBlock(state, code: code, blockId: returnRunnext)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRunnext, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 10, disp: GtGtOffNext, src: GtRegXzr)
+	arm64EmitMovRegReg(code, rd: 0, rn: 10)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtDequeue'
+
+// =============================================================================
+// __gt_init(): one-time scheduler init (idempotent via __gt_init_done). Single
+// thread → no TLS key, no CPU-count query, no worker P array, no kqueue, no
+// pthread/semaphore worker (the C# arm64 EmitGtInit's GMP setup is all dropped).
+// Allocates ONE ProcContext P (mmap, PStructSize), makes its inline mainThread the
+// current GT (status=running, P.currentGt = &P.mainThread), and publishes P into
+// __gt_current_p + __sched_procs[0]. __sched_procs is a real P*[] array base (mmap'd,
+// one 8-byte slot) so the slab's procs = loadIndirect(__sched_procs); procs[id*8]
+// indexing reads P[0] correctly. Called lazily at the first `async`/`sleep`.
+// Frame: P@0x10 procsArray@0x18.
+// =============================================================================
+// THE MULTI-M FLIP. Builds the full GMP processor pool: sysconf(_SC_NPROCESSORS_ONLN)
+// CPU count → ncpu (clamped to [1, 256] — the slab mcache has 256 shards); a register-
+// length mmap'd P*[ncpu] array; a per-P loop that mmaps each ProcContext, wires its
+// id/rng/wakeSemaphore; then adopts P[0] for the main OS thread (TSD + currentGt +
+// mainThread.status) and FLIPS __sched_num_procs/__sched_max_procs to ncpu with
+// __sched_active_workers=1. The full scheduler machinery (worker loop, enqueue wake/
+// spawn, dequeue steal, park/wake) becomes LIVE the moment num_procs > 1. Worker Ms are
+// NOT spawned here — __gt_enqueue's spawn-scan lazily pthread_create's them, claiming a
+// stopped P (status 0→1) via LDAXR/STLXR CAS. Mirrors C# EmitGtInit (Runtime.cs:3081)
+// and self-hosted x64 emitX64GtInit, swapping VirtualAlloc→mmap, GetSystemInfo→sysconf,
+// CreateThread/Event/TLS→pthread_create/dispatch_semaphore/pthread-key. The per-P
+// scheduler stack of the C#/x64 reference is omitted: each worker M runs the scheduler
+// loop on its own pthread stack, only GTs use the mmap'd GT stacks.
+//
+// Frame slots: P[0]@0x10, procsArray@0x18, max_procs(=ncpu)@0x20, loop_i@0x28, P[i]@0x30.
+// arm64GtCallImport clobbers x0-x18, so EVERY loop local is homed in a frame slot and
+// reloaded after each import (sysconf, dispatch_semaphore_create, pthread_*).
+function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, callFixups Arm64CallFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_init", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(4)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let doneBlock = 0
+	let ploopBlock = 1
+	let ploopDoneBlock = 2
+	let clampSkipBlock = 3
+
+	let slotP0 = 0x10
+	let slotProcs = 0x18
+	let slotMaxProcs = 0x20
+	let slotI = 0x28
+	let slotPi = 0x30
+
+	// if __gt_init_done != 0 → return (idempotent). Set =1 EARLY: this lazy init runs
+	// single-threaded on the main M before any worker exists, so no init race is
+	// possible and an early store keeps the guard trivially correct.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_init_done")
+	arm64GtCbnz(code, state: state, rn: 0, targetBlock: doneBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_init_done", scratch: 9)
+
+	// STEP 1 — pthread_key_create(&__sched_tls_key, NULL): the per-OS-thread P key.
+	// One-time (guarded by __gt_init_done above) BEFORE the first setspecific.
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_KEY_CREATE)
+
+	// STEP 2 — ncpu = sysconf(_SC_NPROCESSORS_ONLN = 58). Clamp to [1, 256]: a count of
+	// 0 (or a sysconf error of -1) would mmap a zero/negative-length array, and >256
+	// would index past the slab's 256-shard mcache. Store ncpu → max_procs slot and
+	// the __sched_max_procs / __sched_num_procs globals (THE FLIP from the old MOV #1).
+	arm64EmitMovImm(code, rd: 0, value: 58)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SYSCONF)
+	// if x0 < 1 → x0 = 1.
+	arm64GtCmpImm(code, rn: 0, imm12: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondGe, targetBlock: clampSkipBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtMarkBlock(state, code: code, blockId: clampSkipBlock)
+	// if x0 > 256 → x0 = 256.
+	arm64GtCmpImm(code, rn: 0, imm12: 256)
+	arm64EmitMovImm(code, rd: 9, value: 256)
+	arm64EmitCsel(code, rd: 0, rn: 9, rm: 0, cond: GtCondGt)  // x0 = (x0 > 256) ? 256 : x0
+	arm64GtStore(code, disp: slotMaxProcs, src: 0)  // max_procs (= ncpu)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_max_procs", scratch: 9)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_num_procs", scratch: 9)
+
+	// STEP 3 — procsArray = mmap(NULL, ncpu*8, RW, ANON|PRIVATE, -1, 0): the P*[ncpu]
+	// pointer array (register-length mmap — ncpu is a runtime value). __sched_procs =
+	// procsArray.
+	arm64GtLoad(code, dest: 0, disp: slotMaxProcs)  // ncpu
+	arm64GtLslImm(code, rd: 1, rn: 0, shift: 3)  // x1 = ncpu * 8 (mmap byte count)
+	arm64GtMmapAnonReg(code, relocations: relocations)
+	arm64GtStore(code, disp: slotProcs, src: 0)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_procs", scratch: 9)
+
+	// STEP 4 — per-P alloc loop i = 0 .. ncpu-1: mmap a ProcContext, publish it to
+	// procs[i], and wire id/rng/wakeSemaphore. status stays 0 (=stopped) from the mmap
+	// zero-fill — only P[0] is adopted (Step 5); workers claim P[1..] via the spawn-scan
+	// CAS. No system stack: each M runs the scheduler loop on its own pthread stack.
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtStore(code, disp: slotI, src: 0)  // i = 0
+
+	arm64GtMarkBlock(state, code: code, blockId: ploopBlock)
+	arm64GtLoad(code, dest: 0, disp: slotI)
+	arm64GtLoad(code, dest: 1, disp: slotMaxProcs)
+	arm64EmitCmp(code, rn: 0, rm: 1)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: ploopDoneBlock)
+
+	// P[i] = mmap(NULL, PStructSize, ...) ; home it.
+	arm64GtMmapAnon(code, relocations: relocations, length: GtPStructSize)
+	arm64GtStore(code, disp: slotPi, src: 0)  // P[i]
+
+	// procs[i] = P[i]: addr = procs + i*8.
+	arm64GtLoad(code, dest: 1, disp: slotProcs)  // procs
+	arm64GtLoad(code, dest: 2, disp: slotI)  // i
+	arm64GtLslImm(code, rd: 2, rn: 2, shift: 3)  // i * 8
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 1, rn: 1, rm: 2)  // procs + i*8
+	arm64GtLoad(code, dest: 0, disp: slotPi)  // P[i]
+	arm64GtStoreField(code, baseReg: 1, disp: 0, src: 0)  // procs[i] = P[i]
+
+	// P[i].id = i ; P[i].rng = i + 1 (xorshift64 seed MUST be non-zero, so i+1 not i).
+	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i]
+	arm64GtLoad(code, dest: 0, disp: slotI)  // i
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffId, src: 0)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)  // i + 1
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRng, src: 0)
+
+	// P[i].wakeSemaphore = dispatch_semaphore_create(0): a worker starts parked, so the
+	// initial count is 0. The import clobbers x0-x18 → reload P[i] from its frame slot.
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_CREATE)
+	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i] (clobbered by the import)
+	arm64GtStoreField(code, baseReg: 9, disp: GtPOffWakeSemaphore, src: 0)
+
+	// i++ ; loop.
+	arm64GtLoad(code, dest: 0, disp: slotI)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStore(code, disp: slotI, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: ploopBlock)
+
+	arm64GtMarkBlock(state, code: code, blockId: ploopDoneBlock)
+
+	// STEP 5 — adopt P[0] for the main OS thread. P0 = procs[0].
+	arm64GtLoad(code, dest: 0, disp: slotProcs)  // procs
+	arm64GtLoadField(code, dest: 0, baseReg: 0, disp: 0)  // procs[0] = P[0]
+	arm64GtStore(code, disp: slotP0, src: 0)  // P[0]
+
+	// P[0].status = 1 (active — only P[0] is adopted at init).
+	arm64EmitMovImm(code, rd: 9, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtPOffStatus, src: 9)
+
+	// pthread_setspecific(__sched_tls_key, P[0]): make arm64GtLoadCurrentP read P[0] on
+	// this (main) M. Reload key + P[0] across the import.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__sched_tls_key")
+	arm64GtLoad(code, dest: 1, disp: slotP0)  // P[0]
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC)
+
+	// __sched_active_workers = 1 (the main M counts as the first active worker).
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__sched_active_workers", scratch: 9)
+
+	// P[0].mainThread.status = running ; P[0].currentGt = &P[0].mainThread.
+	arm64GtLoad(code, dest: 1, disp: slotP0)  // P[0]
+	arm64EmitMovImm(code, rd: 9, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 1, disp: GtPOffMainThread + GtGtOffStatus, src: 9)
+	arm64EmitAddImm(code, rd: 9, rn: 1, imm12: GtPOffMainThread)  // &P[0].mainThread
+	arm64GtStoreField(code, baseReg: 1, disp: GtPOffCurrentGt, src: 9)
+
+	// __gt_current_p = P[0]: a transitional bridge for any remaining single-global
+	// reader; the per-thread P read goes through TSD (arm64GtLoadCurrentP) on every M.
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_current_p", scratch: 9)
+
+	// Arm the CPU-fault handler (sigaction + main-thread sigaltstack). Runs once here
+	// on the main M before any worker spawns, mirroring the x64 install at the tail of
+	// emitX64GtInit. Worker Ms install their own sigaltstack at __sched_worker_loop entry.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_install_fault_handler")
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtInit'
+
+// mmap(NULL, <x1>, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) → x0, with the
+// byte length supplied by the CALLER in x1 (a runtime value). Sets every other mmap
+// arg (x0/x2/x3/x4/x5) but deliberately leaves x1 untouched. Mirrors C# EmitMmapAnon
+// (Runtime.cs:137-144) and Arm64MacosSubprocess's arm64MacosSubpMmapAnon. The const-
+// length arm64GtMmapAnon delegates here after materialising x1.
+function arm64GtMmapAnonReg(code ByteArray, relocations RelocationArray)
+	arm64EmitMovImm(code, rd: 0, value: 0)  // addr = NULL
+	arm64EmitMovImm(code, rd: 2, value: 3)  // PROT_READ|PROT_WRITE
+	arm64EmitMovImm(code, rd: 3, value: 0x1002)  // MAP_ANON|MAP_PRIVATE
+	arm64EmitMovImm(code, rd: 4, value: -1)  // fd = -1
+	arm64EmitMovImm(code, rd: 5, value: 0)  // offset = 0
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_MMAP)
+end 'arm64GtMmapAnonReg'
+
+// mmap(NULL, length, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) → x0.
+// Mirrors arm64MacosSubpMmapAnon but takes the length as a compile-time constant;
+// materialises x1 then delegates to the register-length form.
+function arm64GtMmapAnon(code ByteArray, relocations RelocationArray, length MachineWord)
+	arm64EmitMovImm(code, rd: 1, value: length)
+	arm64GtMmapAnonReg(code, relocations: relocations)
+end 'arm64GtMmapAnon'
+
+// =============================================================================
+// __gt_spawn(func_ptr=x0, arg_count=x1, arg_buf=x2) -> x0 (the promise = GT ptr).
+// Recycle a GT from the per-P free list or __slab_alloc one; mmap a fresh stack;
+// initialise the GT fields; lay out the context-switch frame so the first switch-in
+// enters __gt_trampoline; link onto the all-threads list; bump live count; assign a
+// trace id + emit `spawn #<id>`; enqueue. Ports the self-hosted x64 emitX64GtSpawn
+// (single-thread: no all-threads lock, no LOCK INC) + the C# arm64 stack layout.
+// Frame: func@0x10 count@0x18 buf@0x20 (homed) ; gt@0x28 stackBase@0x30.
+// =============================================================================
+function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_spawn", offset: code.count())
+	let frameSize = 0x50
+	var state = Arm64MacosGtState.create(4)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let allocNew = 0
+	let haveGt = 1
+	let zeroLoop = 2
+	let zeroDone = 3
+
+	// Lazy one-time scheduler init.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_init")
+
+	// Try the per-P free list first (owner-only, no lock — matches x64/C#).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)  // P
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListHead)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: allocNew)
+	// free-list hit: gt = head ; P.freeListHead = gt.next ; P.freeListLen--.
+	arm64GtLoadField(code, dest: 9, baseReg: 0, disp: GtGtOffNext)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListHead, src: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 11, disp: GtPOffFreeListLen)
+	arm64EmitSubImm(code, rd: 9, rn: 9, imm12: 1)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListLen, src: 9)
+	arm64GtBranch(code, state: state, targetBlock: haveGt)
+
+	arm64GtMarkBlock(state, code: code, blockId: allocNew)
+	arm64EmitMovImm(code, rd: 0, value: GtGtStructSize)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_alloc")  // x0 = gt
+
+	arm64GtMarkBlock(state, code: code, blockId: haveGt)
+	arm64GtStore(code, disp: 0x28, src: 0)  // gt
+
+	// stack_base = mmap(NULL, GtStackSize, RW, ANON|PRIVATE, -1, 0).
+	arm64GtMmapAnon(code, relocations: relocations, length: GtStackSize)
+	arm64GtStore(code, disp: 0x30, src: 0)  // stack_base
+
+	// Initialise GT fields. x9 = gt for the duration.
+	arm64GtLoad(code, dest: 9, disp: 0x28)
+	arm64GtLoad(code, dest: 0, disp: 0x30)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStackBase, src: 0)
+	arm64EmitMovImm(code, rd: 0, value: GtStackSize)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStackSize, src: 0)
+	// func_ptr, arg_buf
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffFuncPtr, src: 0)
+	arm64GtReloadArg(code, dest: 0, argIndex: 2)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffArgBuf, src: 0)
+	// status=ready(0), result=0, waiter=0, next=0, threw=0, cancel=0.
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffResult, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffWaiter, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffNext, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffThrew, src: GtRegXzr)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffCancelFlag, src: GtRegXzr)
+	// ioYielded = 1 (safe to enqueue — no pending switch on a new GT).
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffIoYielded, src: 0)
+
+	// Initial stack: stack_top = stack_base + GtStackSize ; frame = stack_top - 160.
+	// x10 = stack_top, x11 = frame_base.
+	arm64GtLoad(code, dest: 10, disp: 0x30)
+	arm64EmitMovImm(code, rd: 12, value: GtStackSize)
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 10, rn: 10, rm: 12)  // stack_top
+	arm64EmitMovImm(code, rd: 12, value: GtSwitchFrameSize)
+	arm64GtAlu(code, opcode: GtAluSub, rd: 11, rn: 10, rm: 12)  // frame_base = stack_top - 160
+	// Zero the 160-byte frame: for i in 0..160 step 8: [frame_base + i] = 0.
+	// x12 = cursor, x13 = end.
+	arm64EmitMovRegReg(code, rd: 12, rn: 11)
+	arm64EmitMovRegReg(code, rd: 13, rn: 10)
+	arm64GtMarkBlock(state, code: code, blockId: zeroLoop)
+	arm64EmitCmp(code, rn: 12, rm: 13)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: zeroDone)
+	arm64EmitStrRegOffset(code, rt: GtRegXzr, baseReg: 12, offset: 0)
+	arm64EmitAddImm(code, rd: 12, rn: 12, imm12: 8)
+	arm64GtBranch(code, state: state, targetBlock: zeroLoop)
+	arm64GtMarkBlock(state, code: code, blockId: zeroDone)
+
+	// The context switch's final pair-pop is `LDP x29,x30,[sp],#16`, popped LAST
+	// (it was pushed last). So x30 (LR) sits at frame_base + 8 (the second word of
+	// the x29/x30 pair, which is the deepest = first-popped slot). Set it to
+	// &__gt_trampoline so the first switch-in's RET enters the trampoline. x29
+	// stays 0 (no caller frame). frame_base + 0 = x29 slot, + 8 = x30/LR slot.
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 0, name: "__gt_trampoline")
+	arm64EmitStrRegOffset(code, rt: 0, baseReg: 11, offset: 8)  // LR slot
+	// gt.sp = frame_base ; gt.fp = 0.
+	arm64GtLoad(code, dest: 9, disp: 0x28)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffSp, src: 11)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffFp, src: GtRegXzr)
+
+	// Link onto the all-threads list + bump the live/trace counters UNDER __sched_all_cs.
+	// These three globals (__gt_all_head, __gt_live_count, __gt_trace_counter) are shared
+	// across every worker M: a completing GT's trampoline concurrently unlinks itself +
+	// decrements live_count, and sibling spawns race here. Without the lock the list push
+	// (read-head / store-all_next / store-head) and the read-add-store counters tear,
+	// corrupting the all-list — which recycles a still-queued GT struct and surfaces as
+	// the __gt_trampoline BRK (P.currentGt read back as &P.mainThread). Mirrors the x64
+	// reference's EnterCriticalSection(&__sched_all_cs) + LOCK INC/XADD. The recursive
+	// spinlock takes the lock address in x0 and clobbers volatiles, so gt is reloaded
+	// from its frame slot after the acquire.
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
+	arm64GtLoad(code, dest: 9, disp: 0x28)  // reload gt (lock BL clobbered x9)
+
+	// gt.all_next = __gt_all_head ; __gt_all_head = gt.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_all_head")
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffAllNext, src: 0)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 9, name: "__gt_all_head", scratch: 0)
+	// __gt_live_count += 1.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_live_count")
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_live_count", scratch: 9)
+
+	// Assign trace id: __gt_trace_counter += 1 ; gt.traceId = new.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_trace_counter")
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_trace_counter", scratch: 9)
+	arm64GtLoad(code, dest: 9, disp: 0x28)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffTraceId, src: 0)
+
+	// Release __sched_all_cs before the trace/enqueue calls (they take their own locks;
+	// keeping the all-lock narrow avoids any lock-order coupling).
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
+
+	// emit `spawn #id`.
+	// __gt_trace_emit(tag=&"spawn #", value=gt.traceId, suffix=0).
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__at_tag_spawn")
+	arm64GtLoad(code, dest: 9, disp: 0x28)
+	arm64GtLoadField(code, dest: 1, baseReg: 9, disp: GtGtOffTraceId)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_trace_emit")
+
+	// __gt_enqueue(gt).
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+
+	// Return gt as the promise.
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtSpawn'
+
+// =============================================================================
+// __gt_trampoline(): entry point for a new green thread. Entered via the first
+// context-switch RET (LR = this label). No standard prologue — sets up its own
+// frame. Loads count + args from the GT's arg buffer, calls the user function,
+// stores result + threw, drops the spawn-time refs on managed args (decref by the
+// buffer's managed_mask) and __slab_frees the buffer, unlinks from the all-threads
+// list + drops the live count, marks completed, defers the waiter into
+// P.pendingWaiter, and context-switches to P.mainThread (never returns — completed
+// GTs don't resume). Ports the self-hosted x64 emitX64GtTrampoline (the managed
+// decref-by-mask loop + arg-buffer free are the self-hosted ABI specifics the C#
+// arm64 reference left as a TODO). Frame: gt@0x10 func@0x18 buf@0x28 count@0x30
+// mask@0x38 result@0x40 threw@0x48 (highest slot used); 0x50..0x98 is unused
+// headroom within the 0xA0 frame.
+// =============================================================================
+function emitArm64GtTrampoline(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_trampoline", offset: code.count())
+	let frameSize = 0xA0
+	var state = Arm64MacosGtState.create(40)
+	// No homed args — entered via context switch, x0..x7 are undefined here.
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	// gt = P->currentGt (the switch set this to us before the RET).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtStore(code, disp: 0x10, src: 9)  // gt
+	// func = gt.func_ptr ; buf = gt.arg_buf ; count = [buf+0] ; mask = [buf+8].
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtGtOffFuncPtr)
+	arm64GtStore(code, disp: 0x18, src: 10)
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtGtOffArgBuf)
+	arm64GtStore(code, disp: 0x28, src: 10)
+	arm64GtLoadField(code, dest: 11, baseReg: 10, disp: 0)  // count
+	arm64GtStore(code, disp: 0x30, src: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 10, disp: 8)  // managed_mask
+	arm64GtStore(code, disp: 0x38, src: 11)
+
+	// Count-guarded arg loads: for i in 0..7, if count <= i skip to the call; else
+	// load arg[i] from [buf + 16 + i*8] into x<i> (AAPCS64 arg register). Each skip
+	// jumps to the call block (block 8) — once an index is missing, all higher ones
+	// are too. count is RELOADED from the frame at the START of each iteration (x11
+	// last held the managed_mask above, and a skipped iteration would otherwise leave
+	// x11 holding the wrong value for the next cmp — the bug where a non-managed-arg
+	// async with mask==0 skipped ALL arg loads and ran with garbage in x0..x7).
+	let callBlock = 8
+	var i = 0
+	while i < 8 'argLoads'
+		arm64GtLoad(code, dest: 11, disp: 0x30)  // count
+		arm64GtCmpImm(code, rn: 11, imm12: i + 1)
+		arm64GtCondBranch(code, state: state, cond: GtCondLt, targetBlock: callBlock)  // count < i+1 → call
+		arm64GtLoad(code, dest: 10, disp: 0x28)  // buf
+		arm64EmitLdrRegOffset(code, rt: i, baseReg: 10, offset: 16 + i * 8)
+		i = i + 1
+	end 'argLoads'
+
+	arm64GtMarkBlock(state, code: code, blockId: callBlock)
+	// Call the user function (ptr in x16 to avoid clobbering an arg in x0..x7).
+	arm64GtLoad(code, dest: 16, disp: 0x18)  // func
+	arm64EmitBlr(code, rn: 16)
+	// result = x0 ; threw = x1 (the multi-value error flag). Capture before any
+	// code below clobbers them.
+	arm64GtStore(code, disp: 0x40, src: 0)  // result
+	arm64GtStore(code, disp: 0x48, src: 1)  // threw
+
+	// Store result/threw onto the GT struct.
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // gt
+	arm64GtLoad(code, dest: 0, disp: 0x40)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffResult, src: 0)
+	arm64GtLoad(code, dest: 0, disp: 0x48)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffThrew, src: 0)
+
+	// Drop the spawn-time refs on managed args: for each set bit i in managed_mask
+	// (capped at the 7 args the buffer carries), mm_decref(arg[i]) when non-null.
+	// count@0x30 and mask@0x38 are reloaded from the frame each iteration (mm_decref
+	// clobbers volatiles). Each guard jumps to the per-arg continuation block.
+	var d = 0
+	while d < 7 'decref'
+		let contBlock = 9 + d  // blocks 9..15
+		// count <= d → no arg here.
+		arm64GtLoad(code, dest: 11, disp: 0x30)
+		arm64GtCmpImm(code, rn: 11, imm12: d)
+		arm64GtCondBranch(code, state: state, cond: GtCondLe, targetBlock: contBlock)
+		// (mask & (1<<d)) == 0 → arg not managed.
+		arm64GtLoad(code, dest: 11, disp: 0x38)
+		arm64EmitMovImm(code, rd: 12, value: 1 shl d)
+		arm64GtAlu(code, opcode: GtAluAnd, rd: 11, rn: 11, rm: 12)  // AND x11, x11, x12
+		arm64GtCbz(code, state: state, rn: 11, targetBlock: contBlock)
+		// arg = [buf + 16 + d*8]; if null → skip; else mm_decref(arg).
+		arm64GtLoad(code, dest: 10, disp: 0x28)
+		arm64EmitLdrRegOffset(code, rt: 0, baseReg: 10, offset: 16 + d * 8)
+		arm64GtCbz(code, state: state, rn: 0, targetBlock: contBlock)
+		arm64GtBranchLink(code, callFixups: callFixups, name: "mm_decref")
+		arm64GtMarkBlock(state, code: code, blockId: contBlock)
+		d = d + 1
+	end 'decref'
+
+	// Free the arg buffer (__slab_alloc'd by lowerAsyncCallReal, leaked until now).
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // gt
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffArgBuf)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_free")
+
+	// Decrement live_count + unlink from the all-threads list UNDER __sched_all_cs — the
+	// mirror of the spawn-side critical section. Both globals are shared across worker
+	// Ms; an unsynchronized read-add-store of live_count or a concurrent list walk/splice
+	// races with sibling spawns/completions. Mirrors the x64 LOCK DEC + EnterCriticalSection
+	// (&__sched_all_cs) unlink. The lock BL clobbers volatiles, so gt is reloaded from its
+	// frame slot inside the locked region.
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
+
+	// __gt_live_count -= 1.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_live_count")
+	arm64EmitSubImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_live_count", scratch: 9)
+
+	// Unlink this GT from the all-threads list (walk prev/cur). Blocks 16..19.
+	let allLoop = 16
+	let allFound = 17
+	let allPrev = 18
+	let allDone = 19
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // gt (target)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 1, name: "__gt_all_head")  // cur
+	arm64EmitMovImm(code, rd: 2, value: 0)  // prev = NULL
+	arm64GtMarkBlock(state, code: code, blockId: allLoop)
+	arm64GtCbz(code, state: state, rn: 1, targetBlock: allDone)  // not found
+	arm64EmitCmp(code, rn: 1, rm: 9)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: allFound)
+	// prev = cur ; cur = cur.all_next.
+	arm64EmitMovRegReg(code, rd: 2, rn: 1)
+	arm64GtLoadField(code, dest: 1, baseReg: 1, disp: GtGtOffAllNext)
+	arm64GtBranch(code, state: state, targetBlock: allLoop)
+	arm64GtMarkBlock(state, code: code, blockId: allFound)
+	// x0 = gt.all_next ; if prev==NULL: head = x0 ; else prev.all_next = x0.
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffAllNext)
+	arm64GtCbnz(code, state: state, rn: 2, targetBlock: allPrev)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_all_head", scratch: 3)
+	arm64GtBranch(code, state: state, targetBlock: allDone)
+	arm64GtMarkBlock(state, code: code, blockId: allPrev)
+	arm64GtStoreField(code, baseReg: 2, disp: GtGtOffAllNext, src: 0)
+	arm64GtMarkBlock(state, code: code, blockId: allDone)
+
+	// Release __sched_all_cs (live_count-- + unlink complete).
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__sched_all_cs")
+
+	// gt.status = completed.
+	arm64GtLoad(code, dest: 9, disp: 0x10)
+	arm64EmitMovImm(code, rd: 0, value: GtStatusCompleted)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	// Dekker StoreLoad barrier: order `gt.status = completed` before the waiter LOAD
+	// below. Pairs with the awaiter's barrier — if the awaiter has published its
+	// waiter, we are guaranteed to observe it here; otherwise it observes our
+	// status=completed on its recheck. Closes the lost-wakeup race. See arm64GtDmbIsh.
+	arm64GtDmbIsh(code)
+
+	// Defer the waiter into P.pendingWaiter (do NOT switch directly to it — the
+	// scheduler re-enqueues it after we've left this GT's stack). x0 = gt.waiter.
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffWaiter)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 1)
+	arm64GtStoreField(code, baseReg: 1, disp: GtPOffPendingWaiter, src: 0)
+
+	// context_switch(from=gt, to=&P.mainThread, p=P) — back to the scheduler.
+	arm64GtLoad(code, dest: 0, disp: 0x10)  // from = gt
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 1)
+	arm64EmitMovRegReg(code, rd: 2, rn: 1)  // p
+	arm64EmitAddImm(code, rd: 1, rn: 1, imm12: GtPOffMainThread)  // to = &P.mainThread
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Never returns here (gt is completed). BRK #0 as a safety net.
+	arm64EmitInsn(code, insn: 0xD4200000)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtTrampoline'
+
+// =============================================================================
+// __gt_process_pending_waiter(): re-ready a waiter a just-completed GT deferred
+// into P.pendingWaiter. A regular GT waiter is marked ready and re-enqueued; a
+// parked main-thread waiter (stackBase==0) is left for its own loop's recheck.
+// Ports the self-hosted x64 emitX64GtProcessPendingWaiter. Void.
+//
+// ioYielded GATE (multi-M): before re-enqueueing a regular GT waiter, spin until
+// w.ioYielded == 1. The awaiter cleared its own ioYielded=0 in __gt_await right
+// before publishing promise.waiter=self, and __gt_context_switch sets it back to 1
+// only AFTER it has saved the awaiter's SP/callee-saved block to w.sp. Enqueueing w
+// while ioYielded==0 (its registers still in-flight on its original M's stack) lets
+// another M dequeue+context_switch-to w and restore a garbage register block — the
+// SIGBUS race. This is the await/trampoline analogue of the C# __io_complete_gt
+// __io_complete_gt_spin gate (ARM64CodeEmitter.Runtime.cs:6059). The await idle path
+// guarantees the awaiter always reaches a context_switch (it switches back to its
+// M's scheduler when it has nothing to run), so this spin always terminates.
+// Frame: w@0x10.
+// =============================================================================
+function emitArm64GtProcessPendingWaiter(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_process_pending_waiter", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(2)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let doneBlock = 0
+	let spinBlock = 1
+
+	let slotW = 0x10
+
+	// w = P.pendingWaiter ; if null → done.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 10, baseReg: 11, disp: GtPOffPendingWaiter)
+	arm64GtCbz(code, state: state, rn: 10, targetBlock: doneBlock)
+	// P.pendingWaiter = 0.
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffPendingWaiter, src: GtRegXzr)
+	// if w.stackBase == 0 (parked main thread) → done (it rechecks itself).
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+	arm64GtStore(code, disp: slotW, src: 10)  // home w across the spin / enqueue BL
+
+	// spin: wait until w.ioYielded == 1 (awaiter has saved its context), so the
+	// __gt_enqueue below can never publish a still-running GT. A DMB ISH per iteration
+	// pairs with __gt_context_switch's ioYielded=1 store on the awaiter's M.
+	arm64GtMarkBlock(state, code: code, blockId: spinBlock)
+	arm64GtLoad(code, dest: 10, disp: slotW)
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtGtOffIoYielded)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: spinBlock)
+	arm64GtDmbIsh(code)
+
+	// regular GT: w.status = ready ; __gt_enqueue(w).
+	arm64GtLoad(code, dest: 10, disp: slotW)
+	arm64EmitMovImm(code, rd: 0, value: GtStatusReady)
+	arm64GtStoreField(code, baseReg: 10, disp: GtGtOffStatus, src: 0)
+	arm64EmitMovRegReg(code, rd: 0, rn: 10)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtProcessPendingWaiter'
+
+// =============================================================================
+// __gt_yield() -> x0 (1 if it switched to another GT, 0 if no other GT was ready).
+// A cooperative reschedule point for a green thread that wants to let siblings run
+// without becoming a waiter (used by the subprocess wait_collect poll loop so the
+// single-OS-thread scheduler can run the other green threads while one is blocked on
+// waitpid). The simpler sibling of __gt_await: it re-enqueues self as ready instead
+// of marking it waiting, mirroring __gt_await's dequeue + context_switch sequence so
+// the scheduling invariants match.
+//   next = __gt_dequeue(); if next == 0 → return 0 (no other runnable GT).
+//   self = P.currentGt; self.status = ready; __gt_enqueue(self).
+//   next.status = running; __gt_context_switch(from=self, to=next, p=P).
+//   (resumed later by the scheduler) → return 1.
+// Frame: next@0x10 self@0x18.
+// =============================================================================
+function emitArm64GtYield(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_yield", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(1)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let noneBlock = 0
+
+	// next = __gt_dequeue(); if null → no other runnable GT, return 0.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: noneBlock)
+	arm64GtStore(code, disp: 0x10, src: 0)  // next
+
+	// self = P.currentGt ; self.status = ready ; __gt_enqueue(self).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtStore(code, disp: 0x18, src: 9)  // self
+	arm64EmitMovImm(code, rd: 0, value: GtStatusReady)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	arm64GtLoad(code, dest: 0, disp: 0x18)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+
+	// next.status = running ; context_switch(from=self, to=next, p=P).
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // next
+	arm64EmitMovImm(code, rd: 0, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: 0)
+	arm64GtLoad(code, dest: 0, disp: 0x18)  // from = self
+	arm64GtLoad(code, dest: 1, disp: 0x10)  // to = next
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // p = P
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+
+	// Resumed later by the scheduler: we switched, so return 1.
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	// No other runnable GT: return 0.
+	arm64GtMarkBlock(state, code: code, blockId: noneBlock)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtYield'
+
+// =============================================================================
+// __gt_await(promise=x0) -> x0 (result), x1 (threw flag). If the promise GT has
+// completed, extract its result; else mark the current GT waiting, record it as the
+// promise's waiter, and drive the cooperative scheduler (process pending waiter + io
+// completions + timers + dequeue + context switch) until the promise completes. Then
+// munmap the promise GT's stack, recycle its record (free list, overflow →
+// __slab_free), trace `await #<id> [yield|immediate]`, and return the result in x0
+// AND the threw flag in x1. A plain `await` ignores x1; a `try await` lowers to the
+// SAME __gt_await via `tryCall` and reads x1 (see lowerTryAwaitReal — there is no
+// separate __gt_try_await). Ports the self-hosted x64 emitX64GtAwait.
+// Frame: promise@0x10 (homed) ; result@0x18 yielded@0x20 next@0x28 threw@0x30.
+// =============================================================================
+function emitArm64GtAwait(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_await", offset: code.count())
+	let frameSize = 0x50
+	var state = Arm64MacosGtState.create(11)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
+
+	let loopBlock = 0
+	let recheckBlock = 1
+	let extractBlock = 2
+	let traceImm = 3
+	let traceEmit = 4
+	let waitOff = 5
+	let skipFreeStack = 6
+	let freeFull = 7
+	let freeDone = 8
+	let idleBlock = 9
+	let mainParkBlock = 10
+
+	// yielded = 0 (immediate unless we have to wait).
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtStore(code, disp: 0x20, src: 0)
+
+	// if promise.status == completed → extract (immediate).
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusCompleted)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: extractBlock)
+
+	// Have to wait → yielded = 1.
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtStore(code, disp: 0x20, src: 0)
+	// self = P.currentGt ; self.status = waiting ; promise.waiter = self.
+	// ioYielded=0 (cleared BEFORE publishing promise.waiter=self) is the re-enqueue
+	// gate that stops the completer from resuming us on a second M while our register
+	// context is still on this stack and unsaved. The completing GT's
+	// __gt_process_pending_waiter spin-waits until self.ioYielded==1 (which
+	// __gt_context_switch sets only AFTER saving our SP/callee-saved block to self.sp)
+	// before it __gt_enqueue's us. Without this gate a sibling leaf that completes on
+	// another M between this store and the loop's first context_switch could
+	// re-enqueue+resume `self` mid-flight, restoring a garbage callee-saved/SP block
+	// (the SIGBUS race). Mirrors the C# __io_submit_sync / __io_complete_gt ioYielded
+	// handshake (ARM64CodeEmitter.Runtime.cs:4824 + 6059).
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffIoYielded, src: GtRegXzr)
+	arm64EmitMovImm(code, rd: 0, value: GtStatusWaiting)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffStatus, src: 0)
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffWaiter, src: 11)
+	// Dekker StoreLoad barrier: force `promise.waiter = self` to global visibility
+	// before the loop's recheck LOAD of promise.status. Pairs with the trampoline's
+	// barrier so the completer cannot read waiter==0 while we read status!=completed
+	// (the lost-wakeup double-miss). See arm64GtDmbIsh.
+	arm64GtDmbIsh(code)
+
+	// loop: process_pending_waiter ; io_check_completions ; timer_check ; g = dequeue.
+	arm64GtMarkBlock(state, code: code, blockId: loopBlock)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_process_pending_waiter")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__io_check_completions")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = g or 0
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: idleBlock)
+	// Run g: save it ; g.status = running ; context_switch(from=P.currentGt, to=g, P).
+	arm64GtStore(code, disp: 0x28, src: 0)  // next
+	arm64EmitMovImm(code, rd: 1, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffStatus, src: 1)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // P
+	arm64GtLoadField(code, dest: 0, baseReg: 2, disp: GtPOffCurrentGt)  // from
+	arm64GtLoad(code, dest: 1, disp: 0x28)  // to = g
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed: set the GT we ran (slot next) ioYielded=1 from the local (off-stack
+	// signal; harmless single-threaded).
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 1)
+	// Productive dispatch — recheck immediately (the idle usleep is only for the
+	// dequeue==0 path, so we don't add latency after every dispatched GT).
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// idle: __gt_dequeue found no runnable GT on this M. Two cases, split on whether
+	// the awaiter is a worker-dispatched GT or the main OS thread (stackBase==0):
+	//
+	//   * WORKER GT (stackBase!=0): switch back to this M's scheduler (P.mainThread)
+	//     instead of spinning on our own stack. This is the textbook GMP "a blocked GT
+	//     yields its M" move and it fixes BOTH multi-M failure modes:
+	//       - LIVENESS: spinning here pins the M to one awaiter, so a sibling GT that
+	//         becomes runnable only on THIS P's local/runnext (unstealable by the >=2
+	//         steal guard) is stranded — no M ever reaches it and every worker parks.
+	//         Returning to the scheduler loop lets this M run that sibling, park, or be
+	//         woken to re-dispatch us once our awaited child completes.
+	//       - SAFETY: __gt_context_switch saves our SP/callee-saved block to self.sp and
+	//         sets self.ioYielded=1, which releases the __gt_process_pending_waiter gate
+	//         so the completer can safely re-enqueue us. Without ever switching, our
+	//         ioYielded would stay 0 forever and that gate would deadlock.
+	//     We resume here (after the scheduler re-dispatches us) and fall into recheck.
+	//   * MAIN THREAD (stackBase==0): there is no scheduler GT to switch to (we ARE the
+	//     scheduler), so usleep(200us) and recheck — parked (state S, SIGTERM-killable),
+	//     not a busy core-burning UE.
+	arm64GtMarkBlock(state, code: code, blockId: idleBlock)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 9, baseReg: 11, disp: GtPOffCurrentGt)  // self
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: mainParkBlock)  // stackBase==0 → main thread
+
+	// Worker GT: context_switch(from=self, to=&P.mainThread, p=P) back to the scheduler.
+	arm64EmitMovRegReg(code, rd: 0, rn: 9)  // from = self
+	arm64EmitMovRegReg(code, rd: 2, rn: 11)  // p = P
+	arm64EmitAddImm(code, rd: 1, rn: 11, imm12: GtPOffMainThread)  // to = &P.mainThread
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed by a worker re-dispatching us once our awaited child completed. P may be a
+	// different M now — reload it (recheck reloads promise from the homed arg).
+	arm64GtBranch(code, state: state, targetBlock: recheckBlock)
+
+	// main_park: the main OS thread has no scheduler GT; sleep briefly and recheck.
+	// usleep clobbers no live state here (P/promise are reloaded fresh below), but
+	// reload P after the import so a P-held register can never go stale across the sleep.
+	arm64GtMarkBlock(state, code: code, blockId: mainParkBlock)
+	arm64EmitMovImm(code, rd: 0, value: 200)  // usleep(200) = 200 us
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+
+	// recheck: if promise.status != completed → loop.
+	arm64GtMarkBlock(state, code: code, blockId: recheckBlock)
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusCompleted)
+	arm64GtCondBranch(code, state: state, cond: GtCondNe, targetBlock: loopBlock)
+
+	// extract: result = promise.result.
+	arm64GtMarkBlock(state, code: code, blockId: extractBlock)
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffResult)
+	arm64GtStore(code, disp: 0x18, src: 0)  // result
+
+	// Emit `await #<id> [yield|immediate]`. x2 = suffix tag address (survives — no
+	// calls between the branch and the trace call).
+	arm64GtLoad(code, dest: 0, disp: 0x20)  // yielded
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: traceImm)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 2, name: "__at_tag_await_yield")
+	arm64GtBranch(code, state: state, targetBlock: traceEmit)
+	arm64GtMarkBlock(state, code: code, blockId: traceImm)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 2, name: "__at_tag_await_imm")
+	arm64GtMarkBlock(state, code: code, blockId: traceEmit)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__at_tag_await")
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 1, baseReg: 9, disp: GtGtOffTraceId)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_trace_emit")
+
+	// wait_off: spin until promise.ioYielded == 1 (off-stack signal; stays 1 from
+	// spawn through completion in this single-thread model, so this falls through).
+	arm64GtMarkBlock(state, code: code, blockId: waitOff)
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffIoYielded)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: waitOff)
+
+	// Capture threw BEFORE the munmap/free below clobber things and before the
+	// free-list overflow path may __slab_free the GT struct.
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffThrew)
+	arm64GtStore(code, disp: 0x30, src: 0)  // threw
+
+	// munmap(stack_base, stack_size) if stack_base != 0 (main has none).
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: skipFreeStack)
+	arm64GtLoadField(code, dest: 1, baseReg: 9, disp: GtGtOffStackSize)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_MUNMAP)
+	arm64GtMarkBlock(state, code: code, blockId: skipFreeStack)
+
+	// Recycle the promise GT record: per-P free list (cap MaxFreeListLen), else
+	// __slab_free. P in x11.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListLen)
+	arm64GtCmpImm(code, rn: 0, imm12: GtMaxFreeListLen)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: freeFull)
+	// not full: gt.next = freeListHead ; freeListHead = gt ; freeListLen++.
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // gt
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListHead)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffNext, src: 0)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListHead, src: 9)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListLen)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListLen, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: freeDone)
+
+	arm64GtMarkBlock(state, code: code, blockId: freeFull)
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // gt
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_free")
+
+	arm64GtMarkBlock(state, code: code, blockId: freeDone)
+	// Return result in x0 and threw in x1 (the multi-value error flag; a plain
+	// `await` ignores it, `try await` via tryCall reads it).
+	arm64GtLoad(code, dest: 0, disp: 0x18)
+	arm64GtLoad(code, dest: 1, disp: 0x30)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtAwait'
+
+// =============================================================================
+// __gt_is_complete(promise=x0) -> x0 (1 if the GT has completed, else 0). Non-
+// blocking peek. Ports the self-hosted x64 emitX64GtIsComplete. Frame: none.
+// =============================================================================
+function emitArm64GtIsComplete(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_is_complete", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(2)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
+
+	let yesBlock = 0
+	let doneBlock = 1
+
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusCompleted)
+	arm64GtCondBranch(code, state: state, cond: GtCondEq, targetBlock: yesBlock)
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtBranch(code, state: state, targetBlock: doneBlock)
+	arm64GtMarkBlock(state, code: code, blockId: yesBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtIsComplete'
+
+// =============================================================================
+// __gt_cancel(promise=x0): request cancellation — gt.cancel_flag = 1. (No in-flight
+// I/O to abort in this model.) Ports the self-hosted x64 emitX64GtCancel. Void.
+// =============================================================================
+function emitArm64GtCancel(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_cancel", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(1)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffCancelFlag, src: 1)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtCancel'
+
+// =============================================================================
+// __gt_cleanup(): called from mrt_start after main returns (the
+// patchMrtStartCallGtCleanup injection). Drains any still-live (un-awaited /
+// cancelled / sleeping) green threads to completion ON THIS (main) thread so the
+// leak gate doesn't count their in-flight allocations as leaks. Single-threaded
+// drain loop, modelled on the self-hosted x64 emitX64GtCleanup's drain (block 5):
+// process pending waiter ; timer_check ; g = dequeue ; if g: switch to it, then
+// (if it completed AND has no waiter) tear it down (munmap stack + recycle record);
+// if the queue is empty but GTs are still live (sleeping), usleep then re-drain;
+// when no GTs remain, return. The teardown is gated on "no waiter" because an
+// awaiter's own __gt_await does that teardown — doing it here too would double-free.
+// Frame: g@0x10.
+// =============================================================================
+function emitArm64GtCleanup(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_cleanup", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(8)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let drainLoop = 0
+	let checkLive = 1
+	let runDoneCheck = 2
+	let teardownGt = 3
+	let drainContinue = 4
+	let freeFull = 5
+	let skipFreeStack = 6
+	let doneBlock = 7
+
+	// If the scheduler was never initialised (no async / sleep), nothing to drain.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_init_done")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+
+	// drain: pump waiter/timer queues, then run one GT.
+	arm64GtMarkBlock(state, code: code, blockId: drainLoop)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_process_pending_waiter")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")  // x0 = g or 0
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: checkLive)
+	arm64GtStore(code, disp: 0x10, src: 0)  // g
+	// g.status = running ; context_switch(from = P.currentGt, to = g, P).
+	arm64EmitMovImm(code, rd: 1, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffStatus, src: 1)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // P
+	arm64GtLoadField(code, dest: 0, baseReg: 2, disp: GtPOffCurrentGt)  // from
+	arm64GtLoad(code, dest: 1, disp: 0x10)  // to = g
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed: g (slot 0x10) ioYielded=1.
+	arm64GtLoad(code, dest: 0, disp: 0x10)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 1)
+
+	// run_done_check: completed AND un-awaited → teardown; else drain.
+	arm64GtMarkBlock(state, code: code, blockId: runDoneCheck)
+	arm64GtLoad(code, dest: 9, disp: 0x10)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusCompleted)
+	arm64GtCondBranch(code, state: state, cond: GtCondNe, targetBlock: drainLoop)  // not completed → drain
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffWaiter)
+	arm64GtCbnz(code, state: state, rn: 0, targetBlock: drainLoop)  // has waiter → its await tears down
+	arm64GtBranch(code, state: state, targetBlock: teardownGt)
+
+	// teardown_gt: munmap the stack (if any), then recycle the record.
+	arm64GtMarkBlock(state, code: code, blockId: teardownGt)
+	arm64GtLoad(code, dest: 9, disp: 0x10)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: skipFreeStack)
+	arm64GtLoadField(code, dest: 1, baseReg: 9, disp: GtGtOffStackSize)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_MUNMAP)
+	arm64GtMarkBlock(state, code: code, blockId: skipFreeStack)
+
+	// drain_continue: return the record to the per-P free list (cap), else __slab_free.
+	arm64GtMarkBlock(state, code: code, blockId: drainContinue)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListLen)
+	arm64GtCmpImm(code, rn: 0, imm12: GtMaxFreeListLen)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: freeFull)
+	arm64GtLoad(code, dest: 9, disp: 0x10)  // g
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListHead)
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffNext, src: 0)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListHead, src: 9)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtPOffFreeListLen)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListLen, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: drainLoop)
+
+	arm64GtMarkBlock(state, code: code, blockId: freeFull)
+	arm64GtLoad(code, dest: 0, disp: 0x10)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_free")
+	arm64GtBranch(code, state: state, targetBlock: drainLoop)
+
+	// check_live: queue empty. All GTs done → return; else (sleeping) usleep(1ms)
+	// and re-drain so the next timer_check re-queues an expired-timer GT.
+	arm64GtMarkBlock(state, code: code, blockId: checkLive)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_live_count")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1000)  // usleep(1000) = 1 ms
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64GtBranch(code, state: state, targetBlock: drainLoop)
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtCleanup'
+
+// =============================================================================
+// __gt_now_ms() -> x0: wall-clock milliseconds via gettimeofday(&tv, NULL), then
+// ms = tv.tv_sec*1000 + tv.tv_usec/1000. arm64-macOS `struct timeval` is
+// {tv_sec @0 (8B), tv_usec @8 (4B, signed)}. Mirrors lowerOsClockMsMacosArm64.
+// Used by the timer heap for absolute deadlines. Frame: tv@0x10 (16 bytes).
+// =============================================================================
+function emitArm64GtNowMs(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_now_ms", offset: code.count())
+	let frameSize = 0x30
+	var state = Arm64MacosGtState.create(1)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	// gettimeofday(&tv, NULL): x0 = &tv (frame local 0x10), x1 = NULL.
+	arm64GtLeaFrame(code, rd: 0, disp: 0x10)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_GETTIMEOFDAY)
+	// x9 = tv.tv_sec ; x10 = tv.tv_usec (LDRSW, 4-byte signed). ms = sec*1000 + usec/1000.
+	arm64GtLeaFrame(code, rd: 11, disp: 0x10)
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 11, offset: 0)  // tv_sec
+	// LDRSW X10, [X11, #8] (tv_usec, 4-byte signed; imm12 = offset/4 = 2). Reading a
+	// full 8-byte LDR here would pull in the 4 padding bytes at +12 (stack garbage),
+	// corrupting `now` and the sleep-timer deadline ordering.
+	arm64EmitInsn(code, insn: 0xB9800000 or (2 shl 10) or (11 shl 5) or 10)  // LDRSW X10, [X11, #8]
+	arm64EmitMovImm(code, rd: 12, value: 1000)
+	arm64GtAlu(code, opcode: 0x9B007C00, rd: 9, rn: 9, rm: 12)  // MUL x9, x9, x12 (sec*1000)
+	arm64GtAlu(code, opcode: 0x9AC00C00, rd: 10, rn: 10, rm: 12)  // SDIV x10, x10, x12 (usec/1000)
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 0, rn: 9, rm: 10)  // ms
+
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtNowMs'
+
+// dest = &__gt_timer_heap[idx] (16-byte entries). idxReg holds the index; scratch
+// gets the heap base. Computes base + idx*16.
+function arm64GtTimerEntryAddr(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, idxReg MachineWord, scratch MachineWord)
+	arm64GtLslImm(code, rd: dest, rn: idxReg, shift: 4)  // idx*16
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: scratch, name: "__gt_timer_heap")
+	arm64GtAlu(code, opcode: GtAluAdd, rd: dest, rn: dest, rm: scratch)
+end 'arm64GtTimerEntryAddr'
+
+// =============================================================================
+// __gt_timer_add(gt=x0, deadline=x1): insert (deadline, gt) into the sleep-timer
+// min-heap (keyed by absolute deadline ms), sift up under `__gt_timer_cs` (the
+// recursive spinlock that serializes all timer-heap mutation against concurrent
+// __gt_timer_check pops on every M). The lock BL clobbers volatiles, so the homed
+// args (gt, deadline) are reloaded from the frame after the acquire. Ports the
+// self-hosted x64 emitX64GtTimerAdd. Void. Frame: gt@0x10 deadline@0x18 i@0x20
+// parent@0x28.
+// =============================================================================
+function emitArm64GtTimerAdd(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_timer_add", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(2)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 2)
+
+	let siftLoop = 0
+	let doneBlock = 1
+
+	// Lock the timer heap (serializes append/sift-up against concurrent pops).
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
+
+	// i = count ; count++ ; heap[i] = {deadline, gt}.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtStore(code, disp: 0x20, src: 0)  // i
+	arm64EmitAddImm(code, rd: 1, rn: 0, imm12: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 1, name: "__gt_timer_count", scratch: 9)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 12, idxReg: 0, scratch: 9)  // &heap[i]
+	arm64GtReloadArg(code, dest: 9, argIndex: 1)  // deadline
+	arm64EmitStrRegOffset(code, rt: 9, baseReg: 12, offset: 0)
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // gt
+	arm64EmitStrRegOffset(code, rt: 9, baseReg: 12, offset: 8)
+
+	// sift_up: while i != 0 and heap[i].deadline < heap[parent].deadline, swap.
+	arm64GtMarkBlock(state, code: code, blockId: siftLoop)
+	arm64GtLoad(code, dest: 0, disp: 0x20)  // i
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+	// parent = (i-1) >> 1.
+	arm64EmitSubImm(code, rd: 9, rn: 0, imm12: 1)
+	arm64GtLsrImm(code, rd: 9, rn: 9, shift: 1)
+	arm64GtStore(code, disp: 0x28, src: 9)  // parent
+	// &heap[i] → x12, &heap[parent] → x13.
+	arm64GtLoad(code, dest: 0, disp: 0x20)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 12, idxReg: 0, scratch: 9)
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 13, idxReg: 0, scratch: 9)
+	// x10 = heap[i].deadline ; x11 = heap[parent].deadline ; if i >= parent → done.
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 12, offset: 0)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 13, offset: 0)
+	arm64EmitCmp(code, rn: 10, rm: 11)
+	arm64GtCondBranch(code, state: state, cond: GtCondGe, targetBlock: doneBlock)
+	// swap deadline (offset 0).
+	arm64EmitStrRegOffset(code, rt: 11, baseReg: 12, offset: 0)
+	arm64EmitStrRegOffset(code, rt: 10, baseReg: 13, offset: 0)
+	// swap gt (offset 8).
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 12, offset: 8)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 13, offset: 8)
+	arm64EmitStrRegOffset(code, rt: 11, baseReg: 12, offset: 8)
+	arm64EmitStrRegOffset(code, rt: 10, baseReg: 13, offset: 8)
+	// i = parent ; loop.
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtStore(code, disp: 0x20, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: siftLoop)
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	// Release the timer heap before returning.
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtTimerAdd'
+
+// =============================================================================
+// __gt_timer_check(): pop every timer whose deadline has passed (now = __gt_now_ms)
+// and re-ready its GT (status=ready; enqueue unless it's the main thread). Sift
+// down after each pop. Runs under `__gt_timer_cs` (the recursive spinlock that
+// serializes timer-heap mutation across every M) — the lock is held across the
+// entire pop / sift-down / fire, INCLUDING the __gt_enqueue that re-readies a
+// fired GT (mirroring x64: the nesting __gt_timer_cs -> __sched_global_queue_cs is
+// deadlock-free because no path takes them in the reverse order). A lock-free
+// count==0 fast path keeps the common no-timer case cheap. Each lock BL clobbers
+// volatiles, so live values are reloaded from frame slots after it. Ports the
+// self-hosted x64 emitX64GtTimerCheck. Void. Frame: now@0x10 gt@0x18 i@0x20
+// smallest@0x28 left@0x30 right@0x38.
+// =============================================================================
+function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_timer_check", offset: code.count())
+	let frameSize = 0x50
+	var state = Arm64MacosGtState.create(7)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let popLoop = 0
+	let cmpParent = 1
+	let fire = 2
+	let skipEnqueue = 3
+	let siftLoop = 4
+	let doneBlock = 5
+	let retBlock = 6
+
+	// lock-free fast path: count == 0 → return (the common no-timer case).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: retBlock)
+	// Lock the timer heap, then RE-CHECK count under the lock (it may have changed).
+	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)  // emptied → unlock + ret
+	// now = __gt_now_ms().
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_now_ms")
+	arm64GtStore(code, disp: 0x10, src: 0)  // now
+
+	// pop loop: if count == 0 stop; if heap[0].deadline > now stop; else pop root.
+	arm64GtMarkBlock(state, code: code, blockId: popLoop)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 12, name: "__gt_timer_heap")
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 12, offset: 0)  // heap[0].deadline
+	arm64GtLoad(code, dest: 10, disp: 0x10)  // now
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondGt, targetBlock: doneBlock)  // deadline > now → stop
+	// gt = heap[0].gt → slot 0x18.
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 12, offset: 8)
+	arm64GtStore(code, disp: 0x18, src: 9)
+	// count-- ; if count == 0 → fire (heap now empty).
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64EmitSubImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__gt_timer_count", scratch: 9)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: fire)
+	// move heap[count] → heap[0]. x13 = &heap[count], x12 = &heap[0].
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 13, idxReg: 0, scratch: 9)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 12, name: "__gt_timer_heap")
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 13, offset: 0)
+	arm64EmitStrRegOffset(code, rt: 9, baseReg: 12, offset: 0)
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 13, offset: 8)
+	arm64EmitStrRegOffset(code, rt: 9, baseReg: 12, offset: 8)
+	// i = 0.
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	arm64GtStore(code, disp: 0x20, src: 0)
+
+	// sift_down: left = 2i+1 ; if left >= count → fire. smallest = left. right = left+1.
+	arm64GtMarkBlock(state, code: code, blockId: siftLoop)
+	arm64GtLoad(code, dest: 0, disp: 0x20)  // i
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 9, rn: 0, rm: 0)  // 2i
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)  // left = 2i+1
+	arm64GtStore(code, disp: 0x30, src: 9)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__gt_timer_count")
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: fire)  // no children
+	arm64GtStore(code, disp: 0x28, src: 9)  // smallest = left
+	arm64EmitAddImm(code, rd: 9, rn: 9, imm12: 1)  // right = left+1
+	arm64GtStore(code, disp: 0x38, src: 9)
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 10, name: "__gt_timer_count")
+	arm64EmitCmp(code, rn: 9, rm: 10)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: cmpParent)  // no right child
+	// if heap[right].deadline < heap[left].deadline → smallest = right.
+	arm64GtLoad(code, dest: 0, disp: 0x38)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 12, idxReg: 0, scratch: 9)
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 12, offset: 0)  // right.deadline
+	arm64GtLoad(code, dest: 0, disp: 0x30)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 12, idxReg: 0, scratch: 9)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 12, offset: 0)  // left.deadline
+	arm64EmitCmp(code, rn: 10, rm: 11)
+	arm64GtCondBranch(code, state: state, cond: GtCondGe, targetBlock: cmpParent)  // right >= left
+	arm64GtLoad(code, dest: 9, disp: 0x38)
+	arm64GtStore(code, disp: 0x28, src: 9)  // smallest = right
+
+	// cmp_parent: if heap[smallest].deadline < heap[i].deadline → swap & descend; else done.
+	arm64GtMarkBlock(state, code: code, blockId: cmpParent)
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 12, idxReg: 0, scratch: 9)
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 12, offset: 0)  // smallest.deadline
+	arm64GtLoad(code, dest: 0, disp: 0x20)
+	arm64GtTimerEntryAddr(code, rdataRelocs: rdataRelocs, dest: 13, idxReg: 0, scratch: 9)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 13, offset: 0)  // i.deadline
+	arm64EmitCmp(code, rn: 10, rm: 11)
+	arm64GtCondBranch(code, state: state, cond: GtCondGe, targetBlock: fire)  // heap property holds
+	// swap heap[i] (x13) and heap[smallest] (x12): both addrs still live.
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 13, offset: 0)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 12, offset: 0)
+	arm64EmitStrRegOffset(code, rt: 11, baseReg: 13, offset: 0)
+	arm64EmitStrRegOffset(code, rt: 10, baseReg: 12, offset: 0)
+	arm64EmitLdrRegOffset(code, rt: 10, baseReg: 13, offset: 8)
+	arm64EmitLdrRegOffset(code, rt: 11, baseReg: 12, offset: 8)
+	arm64EmitStrRegOffset(code, rt: 11, baseReg: 13, offset: 8)
+	arm64EmitStrRegOffset(code, rt: 10, baseReg: 12, offset: 8)
+	// i = smallest ; loop.
+	arm64GtLoad(code, dest: 0, disp: 0x28)
+	arm64GtStore(code, disp: 0x20, src: 0)
+	arm64GtBranch(code, state: state, targetBlock: siftLoop)
+
+	// fire: gt.status = ready ; enqueue unless gt.stackBase == 0 (main thread).
+	arm64GtMarkBlock(state, code: code, blockId: fire)
+	arm64GtLoad(code, dest: 9, disp: 0x18)  // gt
+	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: GtRegXzr)  // status = ready (0)
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: skipEnqueue)
+	arm64GtLoad(code, dest: 0, disp: 0x18)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_enqueue")
+	arm64GtMarkBlock(state, code: code, blockId: skipEnqueue)
+	arm64GtBranch(code, state: state, targetBlock: popLoop)  // drain the next expired timer
+
+	// done: release the timer heap, then fall through to ret. The lock-free fast
+	// path (count==0 at entry) jumps straight to retBlock and skips this release.
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtLockRelease(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
+
+	arm64GtMarkBlock(state, code: code, blockId: retBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtTimerCheck'
+
+// =============================================================================
+// maxon_sleep(ms=x0): suspend the current GT for `ms` ms as a cooperative yield.
+// Lazy-init the scheduler ; deadline = __gt_now_ms() + ms ; self.status = waiting ;
+// __gt_timer_add(self, deadline). A worker GT (self.stackBase != 0) context-switches
+// to P.mainThread (the await/cleanup driver loop) and resumes when its timer fires
+// and re-enqueues it. The main thread runs an inline scheduler loop (run other GTs;
+// usleep when idle) until its own timer re-readies it. Ports the self-hosted x64
+// emitX64MaxonSleep. Void. Frame: ms@0x10 deadline@0x18 next@0x20.
+// =============================================================================
+function emitArm64MaxonSleep(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "maxon_sleep", offset: code.count())
+	let frameSize = 0x40
+	var state = Arm64MacosGtState.create(5)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)
+
+	let workerYield = 0
+	let mainLoop = 1
+	let parkBlock = 2
+	let resumeBlock = 3
+	let runGt = 4
+
+	// Lazy scheduler init so sleep works with no `async` in the program.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_init")
+	// deadline = __gt_now_ms() + ms.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_now_ms")  // x0 = now
+	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // ms
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 0, rn: 0, rm: 9)
+	arm64GtStore(code, disp: 0x18, src: 0)  // deadline
+	// self = P.currentGt ; self.status = waiting.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64EmitMovImm(code, rd: 0, value: GtStatusWaiting)
+	arm64GtStoreField(code, baseReg: 11, disp: GtGtOffStatus, src: 0)
+	// __gt_timer_add(self, deadline).
+	arm64EmitMovRegReg(code, rd: 0, rn: 11)
+	arm64GtLoad(code, dest: 1, disp: 0x18)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_add")
+	// Re-fetch self ; main thread iff self.stackBase == 0.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: mainLoop)
+
+	// worker-GT path: switch to P.mainThread; resume later when re-enqueued.
+	arm64GtMarkBlock(state, code: code, blockId: workerYield)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 10)  // P
+	arm64EmitMovImm(code, rd: 0, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 10, disp: GtPOffMainThread + GtGtOffStatus, src: 0)
+	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtPOffCurrentGt)  // from = self
+	arm64EmitMovRegReg(code, rd: 2, rn: 10)  // P
+	arm64EmitAddImm(code, rd: 1, rn: 10, imm12: GtPOffMainThread)  // to = &P.mainThread
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	arm64GtBranch(code, state: state, targetBlock: resumeBlock)
+
+	// main-thread loop: drive the scheduler until our timer fires.
+	arm64GtMarkBlock(state, code: code, blockId: mainLoop)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_process_pending_waiter")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_timer_check")
+	// if self.status != waiting → resume.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
+	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)
+	arm64GtLoadField(code, dest: 0, baseReg: 11, disp: GtGtOffStatus)
+	arm64GtCmpImm(code, rn: 0, imm12: GtStatusWaiting)
+	arm64GtCondBranch(code, state: state, cond: GtCondNe, targetBlock: resumeBlock)
+	// g = dequeue ; if null → park.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_dequeue")
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: parkBlock)
+	arm64GtStore(code, disp: 0x20, src: 0)  // next
+	arm64EmitMovImm(code, rd: 1, value: GtStatusRunning)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffStatus, src: 1)
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 2)  // P
+	arm64GtLoadField(code, dest: 0, baseReg: 2, disp: GtPOffCurrentGt)  // from = self
+	arm64GtLoad(code, dest: 1, disp: 0x20)  // to = g
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_context_switch")
+	// Resumed: dispatched GT (slot next) ioYielded=1.
+	arm64GtMarkBlock(state, code: code, blockId: runGt)
+	arm64GtLoad(code, dest: 0, disp: 0x20)
+	arm64EmitMovImm(code, rd: 1, value: 1)
+	arm64GtStoreField(code, baseReg: 0, disp: GtGtOffIoYielded, src: 1)
+	arm64GtBranch(code, state: state, targetBlock: mainLoop)
+
+	// park: no runnable GT; usleep(1ms), then re-check.
+	arm64GtMarkBlock(state, code: code, blockId: parkBlock)
+	arm64EmitMovImm(code, rd: 0, value: 1000)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_USLEEP)
+	arm64GtBranch(code, state: state, targetBlock: mainLoop)
+
+	arm64GtMarkBlock(state, code: code, blockId: resumeBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64MaxonSleep'
+
+// =============================================================================
+// __io_check_completions(): a no-op in THIS runtime because the self-hosted
+// arm64-macos runtime has no kqueue completion loop — NOT because kqueue is
+// "only for sockets". The C# bootstrap reference drives non-blocking I/O
+// completion through kqueue (__io_submit_read/write register EVFILT_READ/WRITE
+// + __io_poll_kqueue drains them) for BOTH socket I/O AND subprocess PIPE
+// streaming — its read_stdout_line/read_stderr_line park GTs on EVFILT_READ.
+// The self-hosted side instead does its only async I/O — the same streaming-
+// subprocess line reads — by setting the pipe ends O_NONBLOCK (fcntl) and
+// refilling via a non-blocking read() + __gt_yield poll loop (see
+// Arm64MacosSubprocess.maxon). So nothing here parks on kqueue and the
+// completion queue is always empty -> this returns immediately. The await/
+// yield/sleep loops still call it for parity with the x64 runtime. A kqueue
+// port (parking on EVFILT_READ instead of busy-polling the subprocess pipes)
+// would be an EFFICIENCY improvement, not dead code — deferred, not impossible.
+// Void.
+// =============================================================================
+function emitArm64IoCheckCompletions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_check_completions", offset: code.count())
+	let frameSize = 0x10
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+	arm64GtEpilogue(code, frameSize: frameSize)
+end 'emitArm64IoCheckCompletions'
+
+// =============================================================================
+// __gt_trace_emit(tag=x0, value=x1, suffix=x2): print one async-trace line —
+// `<tag><value><suffix?>\n` — to stderr. Gated on __at_trace_enabled (baked from
+// the AsyncTrace flag): a normal build returns immediately. `tag`/`suffix` are cstr
+// addresses; suffix=0 omits it; `value` is printed decimal. Single thread → no
+// trace lock. Mirrors the self-hosted x64 emitX64GtTraceEmit (minus the CS).
+// Frame: tag@0x10 value@0x18 suffix@0x20.
+// =============================================================================
+function emitArm64GtTraceEmit(code ByteArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_trace_emit", offset: code.count())
+	let frameSize = 0x30
+	var state = Arm64MacosGtState.create(2)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
+
+	let noSuffix = 0
+	let doneBlock = 1
+
+	// if __at_trace_enabled == 0 → done.
+	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__at_trace_enabled")
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: doneBlock)
+	// __diag_print_tag(tag).
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_tag")
+	// __diag_print_i64(value).
+	arm64GtReloadArg(code, dest: 0, argIndex: 1)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_i64")
+	// optional suffix.
+	arm64GtReloadArg(code, dest: 0, argIndex: 2)
+	arm64GtCbz(code, state: state, rn: 0, targetBlock: noSuffix)
+	arm64GtReloadArg(code, dest: 0, argIndex: 2)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_tag")
+	// newline.
+	arm64GtMarkBlock(state, code: code, blockId: noSuffix)
+	arm64GtGlobalAddr(code, rdataRelocs: rdataRelocs, dest: 0, name: "__at_tag_nl")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__diag_print_tag")
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtTraceEmit'
+
+// =============================================================================
+// __gt_current_trace_id() -> x0: the trace id of the GT currently running, or 0
+// when not on a green thread (no P, or the inline mainThread whose stackBase is 0).
+// Lets runtime.std code (mrt_file_exists) label io_yield/io_resume with the right
+// GT id. Ports the self-hosted x64 emitX64GtCurrentTraceId. Frame: none.
+// =============================================================================
+function emitArm64GtCurrentTraceId(code ByteArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_current_trace_id", offset: code.count())
+	let frameSize = 0x20
+	var state = Arm64MacosGtState.create(1)
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let doneBlock = 0
+
+	// result = 0 (default).
+	arm64EmitMovImm(code, rd: 0, value: 0)
+	// P = __gt_current_p ; if null → done.
+	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)
+	arm64GtCbz(code, state: state, rn: 9, targetBlock: doneBlock)
+	// gt = P.currentGt ; if gt.stackBase == 0 (mainThread) → done (result stays 0).
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffCurrentGt)
+	arm64GtLoadField(code, dest: 10, baseReg: 9, disp: GtGtOffStackBase)
+	arm64GtCbz(code, state: state, rn: 10, targetBlock: doneBlock)
+	// result = gt.traceId.
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtGtOffTraceId)
+
+	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
+	arm64GtEpilogue(code, frameSize: frameSize)
+	arm64GtFinalize(code, state: state)
+end 'emitArm64GtCurrentTraceId'

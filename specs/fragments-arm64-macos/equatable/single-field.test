@@ -1,0 +1,90 @@
+// Test: single-field
+
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper implements Equatable
+	export var value as Integer
+
+	function equals(other Wrapper) returns bool
+		return value == other.value
+	end 'equals'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+function main() returns ExitCode
+	let a = Wrapper.create(42)
+	let b = Wrapper.create(42)
+	let c = Wrapper.create(99)
+	if a.equals(b) 'eq'
+		if a.equals(c) 'neq'
+			return 1
+		end 'neq'
+		return 0
+	end 'eq'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, #99
+    arm64.str x0, [x21, #0] (8b)
+    arm64.ldr x22, [x20, #0] (8b)
+    arm64.ldr x23, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.cmp x23, x22
+    arm64.cset x0, eq
+    arm64.b.ne eq_0.after
+  eq_0:
+    arm64.ldr x20, [x21, #0] (8b)
+    arm64.ldr x22, [x19, #0] (8b)
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.cmp x22, x20
+    arm64.cset x0, eq
+    arm64.b.ne neq_0.after
+  neq_0:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  neq_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  eq_0.after:
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

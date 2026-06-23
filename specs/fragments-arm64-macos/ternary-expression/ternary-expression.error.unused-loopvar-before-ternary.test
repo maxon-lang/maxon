@@ -1,0 +1,38 @@
+// Test: ternary-expression.error.unused-loopvar-before-ternary
+typealias Idx = int(i64.min to i64.max)
+typealias IdxList = List with Idx
+
+function splice(lst IdxList, anchor Idx, after bool)
+	for outer in 0 upto 2 'eachBlock'
+		var insertPos = -1 as Idx
+		for posIdx in 0 upto lst.count() 'eachOpRef'
+			let ref = try lst.get(posIdx) otherwise panic("oob")
+			if ref == anchor 'foundAnchor'
+				insertPos = posIdx
+				break
+			end 'foundAnchor'
+		end 'eachOpRef'
+		if insertPos >= 0 'doInsert'
+			let target = insertPos + 1 if after else insertPos
+			try lst.insert(target, value: 99) otherwise panic("insert oob")
+			return
+		end 'doInsert'
+	end 'eachBlock'
+	panic("not found")
+end 'splice'
+
+function main() returns ExitCode
+	var a = IdxList.create()
+	a.append(10)
+	a.append(20)
+	a.append(30)
+	splice(a, anchor: 20, after: false)
+	print("pos1={try a.get(1) otherwise -1} pos2={try a.get(2) otherwise -1}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3012: specs/fragments/ternary-expression/ternary-expression.error.unused-loopvar-before-ternary.test:6:6: unused variable: 'outer'
+```
+---
+---

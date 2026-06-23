@@ -311,12 +311,12 @@ end 'isUserRdataEntry'
 //      Sorting by the (content-derived) label makes the order identical in both
 //      legs — the cache-parity fix — and stays deterministic across edits.
 //   3. infrastructure entries (everything else), insertion order.
-export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
+export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap, funcPtrAlign ByteCount) returns ByteArray
 	var rdata = ByteArray.create()
 	let count = table.names.count()
-	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: true)
-	emitSortedPanicRdataPass(rdata, table: table, map: map, count: count)
-	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: false)
+	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: true, funcPtrAlign: funcPtrAlign)
+	emitSortedPanicRdataPass(rdata, table: table, map: map, count: count, funcPtrAlign: funcPtrAlign)
+	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: false, funcPtrAlign: funcPtrAlign)
 	return rdata
 end 'buildRdataSection'
 
@@ -415,10 +415,23 @@ end 'orderedRdataNames'
 // Determinism: the result depends only on the label, and entries are emitted
 // in sorted label order, so the cache-on and cache-off legs produce a
 // byte-identical layout.
-function rdataEntryAlignment(name String) returns ByteCount
+// Mach-O chained-fixup REBASE pointers must be 8-byte aligned or dyld rejects
+// the fixup chain. The funcAbs64 slots live inside the `__witness_*` and
+// `__layout_*` blobs, so on macOS those entries align to 8; PE base relocations
+// and ELF RELATIVE relocs have no such requirement and the C# bootstrap packs
+// them tight (alignment 1), so every other target passes `funcPtrAlign = 1` and
+// stays byte-identical to its goldens.
+export function rdataFuncPtrAlignment(os Os) returns ByteCount
+	return 8 if os == Os.macos else 1
+end 'rdataFuncPtrAlignment'
+
+function rdataEntryAlignment(name String, funcPtrAlign ByteCount) returns ByteCount
 	if name.startsWith("__xmmmask_") 'isMask'
 		return 16
 	end 'isMask'
+	if name.startsWith("__witness_") or name.startsWith("__layout_") 'isFuncPtrTable'
+		return funcPtrAlign
+	end 'isFuncPtrTable'
 	return 1
 end 'rdataEntryAlignment'
 
@@ -427,8 +440,8 @@ end 'rdataEntryAlignment'
 // and append its bytes. No trailing pad — the next entry pads itself up as
 // needed. Shared by both rdata emit passes so the alignment rule lives in
 // exactly one place.
-function emitRdataEntry(rdata ByteArray, map RdataOffsetMap, name String, data ByteArray)
-	let alignment = rdataEntryAlignment(name)
+function emitRdataEntry(rdata ByteArray, map RdataOffsetMap, name String, data ByteArray, funcPtrAlign ByteCount)
+	let alignment = rdataEntryAlignment(name, funcPtrAlign: funcPtrAlign)
 	while rdata.count() mod alignment != 0 'align'
 		rdata.push(0)
 	end 'align'
@@ -440,7 +453,7 @@ end 'emitRdataEntry'
 // from `emitRdataPass` so the sort is isolated to these content-hashed labels —
 // `isUserRdataEntry` reports panic messages as "user" so they would otherwise
 // land in pass 1 in INSERTION order, which diverges between cache-parity legs.
-function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount)
+function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, funcPtrAlign ByteCount)
 	var panicNames = StringArray.create()
 	for i in 0 upto count 'collect'
 		let name = try table.names.get(i) otherwise panic("emitSortedPanicRdataPass: names.get({i}) failed")
@@ -452,7 +465,7 @@ function emitSortedPanicRdataPass(rdata ByteArray, table GlobalDataTable, map Rd
 	for name in sorted 'emit'
 		let idx = try table.nameIndex.get(name) otherwise panic("emitSortedPanicRdataPass: nameIndex.get('{name}') failed")
 		let data = try table.values.get(idx) otherwise panic("emitSortedPanicRdataPass: values.get({idx}) failed")
-		emitRdataEntry(rdata, map: map, name: name, data: data)
+		emitRdataEntry(rdata, map: map, name: name, data: data, funcPtrAlign: funcPtrAlign)
 	end 'emit'
 end 'emitSortedPanicRdataPass'
 
@@ -469,7 +482,7 @@ end 'emitSortedPanicRdataPass'
 // labels). The three groups stay separate and in order (user → panic → infra),
 // so RequiredRdata's "user entries grouped at the section start" semantics hold
 // — they are now sorted WITHIN the user group rather than insertion-ordered.
-function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, wantUser bool)
+function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, wantUser bool, funcPtrAlign ByteCount)
 	var names = StringArray.create()
 	for i in 0 upto count 'collect'
 		let name = try table.names.get(i) otherwise panic("emitRdataPass: i < count = table.names.count() but get({i}) failed")
@@ -488,7 +501,7 @@ function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMa
 	for name in sorted 'build'
 		let idx = try table.nameIndex.get(name) otherwise panic("emitRdataPass: nameIndex.get('{name}') failed")
 		let data = try table.values.get(idx) otherwise panic("emitRdataPass: values.get({idx}) failed (values.count={table.values.count()})")
-		emitRdataEntry(rdata, map: map, name: name, data: data)
+		emitRdataEntry(rdata, map: map, name: name, data: data, funcPtrAlign: funcPtrAlign)
 	end 'build'
 end 'emitRdataPass'
 
@@ -505,7 +518,7 @@ export function resolveRdataRelocations(relocs RdataRelocationArray, map RdataOf
 	for reloc in relocs 'resolve'
 		let labelForLookup = match reloc.kind 'pickLabel'
 			funcAbs64InRdata(_, rdataLabel, _) gives rdataLabel
-			ripRelDisp32 to covdataArm64Adr gives reloc.rdataLabel
+			ripRelDisp32 to covdataArm64PageOff gives reloc.rdataLabel
 		end 'pickLabel'
 		let offset = lookupRdataOffset(map, name: labelForLookup)
 		var copy = RdataRelocation.create(reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)

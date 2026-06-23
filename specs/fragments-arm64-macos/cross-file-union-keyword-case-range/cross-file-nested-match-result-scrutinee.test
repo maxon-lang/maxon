@@ -1,0 +1,159 @@
+// Test: cross-file-nested-match-result-scrutinee
+// --- file: types.maxon
+export typealias Dim = int(0 to 100)
+
+export union MyType
+	unresolved
+	named(id Dim)
+	other(x Dim)
+end 'MyType'
+
+export union Wrapper
+	void
+	value(inner MyType)
+end 'Wrapper'
+
+// --- file: main.maxon
+function classify(ref Wrapper) returns Dim
+	let raw = match ref 'unwrap'
+		void gives MyType.unresolved
+		value(inner) gives inner
+	end 'unwrap'
+	return match raw 'r'
+		named(id) gives id
+		other(x) gives x
+		unresolved gives 0
+	end 'r'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Wrapper.value(MyType.named(7)))
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @classify(x0: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x19, #0
+    arm64.cmp x1, x19
+    arm64.cset x1, eq
+    arm64.b.ne unwrap_0.next0
+    arm64.b unwrap_0.case0
+  unwrap_0.merge:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne r_0.next0
+    arm64.b r_0.case0
+  unwrap_0.case0:
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #0] (8b)
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.b unwrap_0.merge
+  unwrap_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne __phi_trampoline_3_0
+  unwrap_0.case1:
+    arm64.ldr x20, [x0, #8] (8b)
+    arm64.b __rc_edge_4_0
+  r_0.merge:
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+    arm64.b __range_panic_0
+  r_0.case0:
+    arm64.ldr x19, [x0, #8] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.b r_0.merge
+  r_0.next0:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.mov x2, #2
+    arm64.cmp x1, x2
+    arm64.cset x1, eq
+    arm64.b.ne r_0.next1
+  r_0.case1:
+    arm64.ldr x19, [x0, #8] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.b r_0.merge
+  r_0.next1:
+    arm64.ldr x1, [x0, #0] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x0, x19
+    arm64.b r_0.merge
+  __rc_edge_4_0:
+    arm64.mov x0, x20
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, x20
+    arm64.b unwrap_0.merge
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_a64dc03adc7dc708
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  __phi_trampoline_3_0:
+    arm64.mov x0, x19
+    arm64.b unwrap_0.merge
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #7
+    arm64.str x0, [x19, #8] (8b)
+    arm64.adrp+add x1, __destruct_Wrapper
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.mov x0, x20
+    arm64.bl classify
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x19, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_e185a128b4abc92a
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x19
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

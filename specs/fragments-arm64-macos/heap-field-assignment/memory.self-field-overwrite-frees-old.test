@@ -1,0 +1,160 @@
+// Test: memory.self-field-overwrite-frees-old
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Container
+	export var value as Integer
+	export var child as Inner
+
+	export function replaceChild(newChild Inner)
+		child = newChild
+	end 'replaceChild'
+
+	export function childValue() returns Integer
+		return child.value
+	end 'childValue'
+
+	static function create(value Integer, child Inner) returns Self
+		return Self{value: value, child: child}
+	end 'create'
+end 'Container'
+
+function testAssign()
+	var c = Container.create(1, child: Inner.create(10))
+	c.replaceChild(Inner.create(20))
+	print("{c.childValue()}\n")
+end 'testAssign'
+
+function main() returns ExitCode
+	testAssign()
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+20
+```
+---
+// CompiledIR
+module {
+  func @testAssign() {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp+add x1, __destruct_Container
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x20, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x20, #0] (8b)
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.mov x0, #20
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.str x19, [x20, #8] (8b)
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.ldr x0, [x20, #8] (8b)
+    arm64.ldr x19, [x0, #0] (8b)
+    arm64.mov x0, #21
+    arm64.bl mrt_alloc
+    arm64.mov x21, x0
+    arm64.mov x0, x19
+    arm64.mov x1, x21
+    arm64.bl mrt_i64_to_string
+    arm64.mov x19, x0
+    arm64.mov x0, x20
+    arm64.bl mm_drop
+    arm64.mov x20, #0
+    arm64.mov x22, #1
+    arm64.add x0, x19, x20
+    arm64.mov x1, #1
+    arm64.add x23, x0, x22
+    arm64.add x0, x23, x1
+    arm64.bl mrt_alloc
+    arm64.mov x24, x0
+    arm64.adrp_add_rdata x0, __istr_7
+    arm64.ldr x0, [x29, #72]
+    arm64.str x24, [x29, #16]
+    arm64.str x0, [x29, #72]
+    arm64.str x20, [x29, #24]
+    arm64.memcpy
+    arm64.add x4, x24, x20
+    arm64.str x4, [x29, #32]
+    arm64.str x21, [x29, #40]
+    arm64.str x19, [x29, #48]
+    arm64.memcpy
+    arm64.adrp_add_rdata x0, __istr_9
+    arm64.ldr x0, [x29, #16]
+    arm64.add x1, x4, x19
+    arm64.str x1, [x29, #56]
+    arm64.str x0, [x29, #16]
+    arm64.str x22, [x29, #64]
+    arm64.memcpy
+    arm64.mov x0, x21
+    arm64.bl stdlib.__mm_decref
+    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.mov x0, #48
+    arm64.bl mrt_alloc_with_dtor
+    arm64.mov x19, x0
+    arm64.str x20, [x19, #40] (8b)
+    arm64.str x24, [x19, #0] (8b)
+    arm64.str x23, [x19, #8] (8b)
+    arm64.str x23, [x19, #16] (8b)
+    arm64.mov x0, #1
+    arm64.str x0, [x19, #24] (8b)
+    arm64.mov x0, #-1
+    arm64.str x0, [x19, #32] (8b)
+    arm64.adrp+add x1, __destruct_String
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x21, x0
+    arm64.str x19, [x21, #0] (8b)
+    arm64.str x20, [x21, #8] (8b)
+    arm64.ldr x19, [x21, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl stdlib.__mm_incref
+    arm64.ldr x1, [x19, #8] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x20
+    arm64.bl mrt_write_stdout
+    arm64.mov x0, x21
+    arm64.bl mm_drop
+    arm64.mov x0, x19
+    arm64.bl __mm_decref_maybenull_helper
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl testAssign
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

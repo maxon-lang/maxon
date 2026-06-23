@@ -1,0 +1,42 @@
+// Test: chained-byte-int-float
+
+typealias Float = float(f64.min to f64.max)
+typealias Byte = int(0 to u8.max)
+
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
+function main() returns ExitCode
+	let b = 25 as Byte
+	let f = toFloat(b)
+	return trunc(f)
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #25
+    arm64.ldr d0, [rdata+__float_0]
+    arm64.scvtf d1, x0
+    arm64.fadd d2, d1, d0
+    arm64.mov x1, #255
+    arm64.fcvtzs x0, d2
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_d403c8d5be37ef05
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

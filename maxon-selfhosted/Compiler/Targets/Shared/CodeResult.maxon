@@ -90,8 +90,65 @@ export union RdataRelocKind
 	symdataArm64Adr
 	dataSectionArm64Adr
 	covdataArm64Adr
+	// ADRP+ADD/LDR/STR pairs for ±4 GiB-reach global access (arm64). The single-ADR
+	// `*Arm64Adr` variants above reach only ±1 MiB; the multi-M green-thread runtime
+	// multiplied both the number of global accesses and the code-to-data distance, so
+	// a large program could silently truncate a global's address. The `*Arm64Adrp`
+	// kind patches the ADRP's 4 KiB-page immediate; the paired `*Arm64PageOff` kind
+	// (emitted on the immediately-following instruction) patches the within-page byte
+	// offset into the ADD/LDR/STR's imm12 — the writer reads that instruction's own
+	// opcode to pick the imm12 scale (1 for ADD, 8 for LDR/STR Xn). One pair per
+	// output section, mirroring the single-ADR set: `arm64Adrp`→read-only .rdata,
+	// `dataSectionArm64Adrp`→writable heap .data, `covdataArm64Adrp`→.covdata.
+	arm64Adrp
+	arm64PageOff
+	dataSectionArm64Adrp
+	dataSectionArm64PageOff
+	covdataArm64Adrp
+	covdataArm64PageOff
 	funcAbs64InRdata(funcName String, rdataLabel String, offsetInLabel ByteOffset)
 end 'RdataRelocKind'
+
+// Output-section class of a global label, by name prefix. SHARED by every
+// backend's reloc-kind selection so the set of writable-.data / heap globals
+// lives in exactly one place — a backend that missed a prefix addressed the
+// global against read-only .rdata instead, which only "worked" while the rdata
+// image was small enough that .rdata + offset happened to land in the heap
+// section (the multi-page-rdata `__sched_procs` crash: `FilePath.from` etc. pull
+// in enough stdlib to push the heap past where the stale .rdata-relative offset
+// reached, so the slab read rdata garbage and faulted).
+export union GlobalLabelClass
+	covData
+	dataSection
+	rdata
+end 'GlobalLabelClass'
+
+// Classify a global label into its output section by name prefix. Data-section
+// (writable .data / heap arena) globals are the runtime's mutable state: user
+// globals + static fields (`__data_`), the slab/MM allocator (`__slab_`/`__mm_`),
+// the argv cache (`__mrt_`), and the Tier-4 green-thread / scheduler /
+// async-trace / subprocess / async-IO runtime
+// (`__gt_`/`__sched_`/`__at_`/`__subp_`/`__io_`). `__data_cov_` coverage counters
+// get their own .covdata section and MUST be checked first (their prefix is a
+// superset of `__data_`). Everything else is read-only .rdata.
+export function classifyGlobalLabel(label String) returns GlobalLabelClass
+	if label.startsWith("__data_cov_") 'cov'
+		return GlobalLabelClass.covData
+	end 'cov'
+	if label.startsWith("__data_") 'data'
+		return GlobalLabelClass.dataSection
+	end 'data'
+	if isRuntimeMutableGlobalLabel(label) 'mutable'
+		return GlobalLabelClass.dataSection
+	end 'mutable'
+	return GlobalLabelClass.rdata
+end 'classifyGlobalLabel'
+
+// True for the runtime's writable mutable-state global prefixes (everything in
+// the data section other than the `__data_`/`__data_cov_` user + coverage sets).
+function isRuntimeMutableGlobalLabel(label String) returns bool
+	return label.startsWith("__slab_") or label.startsWith("__mm_") or label.startsWith("__mrt_") or label.startsWith("__gt_") or label.startsWith("__sched_") or label.startsWith("__at_") or label.startsWith("__subp_") or label.startsWith("__io_")
+end 'isRuntimeMutableGlobalLabel'
 
 // --- Cache codec ---
 // Bare variants serialize as their ordinal. `funcAbs64InRdata` is excluded
@@ -103,7 +160,7 @@ end 'RdataRelocKind'
 export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
 	match kind 'k'
 		funcAbs64InRdata then panic("writeRdataRelocKind: funcAbs64InRdata is rdata-internal and must not enter the per-function cache stream")
-		ripRelDisp32 to covdataArm64Adr then writeDword(buf, value: kind.ordinal)
+		ripRelDisp32 to covdataArm64PageOff then writeDword(buf, value: kind.ordinal)
 	end 'k'
 end 'writeRdataRelocKind'
 
@@ -121,6 +178,12 @@ export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (Rd
 		symdataArm64Adr then return (RdataRelocKind.symdataArm64Adr, pos)
 		dataSectionArm64Adr then return (RdataRelocKind.dataSectionArm64Adr, pos)
 		covdataArm64Adr then return (RdataRelocKind.covdataArm64Adr, pos)
+		arm64Adrp then return (RdataRelocKind.arm64Adrp, pos)
+		arm64PageOff then return (RdataRelocKind.arm64PageOff, pos)
+		dataSectionArm64Adrp then return (RdataRelocKind.dataSectionArm64Adrp, pos)
+		dataSectionArm64PageOff then return (RdataRelocKind.dataSectionArm64PageOff, pos)
+		covdataArm64Adrp then return (RdataRelocKind.covdataArm64Adrp, pos)
+		covdataArm64PageOff then return (RdataRelocKind.covdataArm64PageOff, pos)
 		// funcAbs64InRdata is rdata-internal and never serialized into the
 		// per-function cache stream; seeing its tag means the bytes are corrupt.
 		funcAbs64InRdata then throw CacheCorruption.invalidEncoding
@@ -144,19 +207,45 @@ end 'RdataRelocation'
 
 export typealias RdataRelocationArray = Array with RdataRelocation
 
-// Phase 11.2/11.3: walk an RdataRelocationArray and append every
-// `funcAbs64InRdata` target name to `seeds`. The DFE/livenessRoots path
-// already keeps user-defined witness/layout-thunk impls alive through the
-// Maxon stage, but the per-target stdlib linker only seeds from `call`
-// fixups by default — without this helper, a stdlib method (e.g.
-// `Range.createIterator` referenced via a witness slot) would never make
-// it into `.text` and the PE/ELF/Mach-O writer would panic at link time.
-export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationArray)
+// A funcAbs64InRdata reloc resolved to the three fields the seed/patch/rebase
+// passes need. Collecting once keeps the reloc-walk + funcAbs64 match idiom in a
+// single place instead of repeating it at every consumer.
+export type FuncAbs64Slot
+	export let funcName as String
+	export let rdataOffset as CodeOffset
+	export let offsetInLabel as ByteOffset
+
+	export static function create(funcName String, rdataOffset CodeOffset, offsetInLabel ByteOffset) returns Self
+		return Self{funcName: funcName, rdataOffset: rdataOffset, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'FuncAbs64Slot'
+
+export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
+
+// Walk an RdataRelocationArray and collect every funcAbs64InRdata reloc. The
+// `ripRelDisp32 to covdataArm64PageOff` arm covers all the non-funcAbs64
+// kinds, so the match stays exhaustive over RdataRelocKind while isolating the
+// one case the seed/patch/rebase passes care about.
+export function collectFuncAbs64Slots(relocs RdataRelocationArray) returns FuncAbs64SlotArray
+	var slots = FuncAbs64SlotArray.create()
 	for reloc in relocs 'each'
 		match reloc.kind 'k'
-			ripRelDisp32 to covdataArm64Adr then break 'k'
-			funcAbs64InRdata(funcName, _, _) then seeds.push(funcName)
+			ripRelDisp32 to covdataArm64PageOff then break 'k'
+			funcAbs64InRdata(funcName, _, offsetInLabel) then slots.push(FuncAbs64Slot.create(funcName, rdataOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel))
 		end 'k'
+	end 'each'
+	return slots
+end 'collectFuncAbs64Slots'
+
+// Phase 11.2/11.3: append every funcAbs64InRdata target name to `seeds`. The
+// DFE/livenessRoots path already keeps user-defined witness/layout-thunk impls
+// alive through the Maxon stage, but the per-target stdlib linker only seeds
+// from `call` fixups by default — without this helper, a stdlib method (e.g.
+// `Range.createIterator` referenced via a witness slot) would never make it into
+// `.text` and the PE/ELF/Mach-O writer would panic at link time.
+export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationArray)
+	for slot in collectFuncAbs64Slots(relocs) 'each'
+		seeds.push(slot.funcName)
 	end 'each'
 end 'appendFuncAbs64Seeds'
 
@@ -164,7 +253,7 @@ end 'appendFuncAbs64Seeds'
 // `patchFuncAbs64InRdata` walks every reloc and would otherwise do a linear
 // scan of `debugSymbols` per reloc — at scale (thousands of relocs against
 // thousands of symbols) that's quadratic.
-function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
+export function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
 	var index = DebugSymbolIndexMap.create()
 	for sym in debugSymbols 'each'
 		index.upsert(sym.name, value: sym.codeOffset)
@@ -172,26 +261,26 @@ function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbo
 	return index
 end 'buildDebugSymbolIndex'
 
+// Resolve a funcAbs64InRdata reloc's target to its .text code offset. Shared by
+// the absolute-VA patcher (PE/ELF) and the Mach-O PIE rebaser; both fail the
+// same way when BuildLayoutDescriptors emitted a reloc to a function that was
+// never compiled into .text.
+export function resolveFuncAbs64Symbol(symbolIndex DebugSymbolIndexMap, funcName String) returns CodeOffset
+	return try symbolIndex.get(funcName) otherwise panic("resolveFuncAbs64Symbol: no .text symbol named '{funcName}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
+end 'resolveFuncAbs64Symbol'
+
 // Patch every funcAbs64InRdata reloc by writing the absolute VA of the
-// referenced .text function into the rdata slot. Format-neutral: callers
-// pass `textAbsBase` already collapsed for their target (PE: imageBase +
-// textRva; ELF: textVAddr; Mach-O: textSectionVMAddr).
+// referenced .text function into the rdata slot. Format-neutral: callers pass
+// `textAbsBase` already collapsed for their target (PE: imageBase + textRva;
+// ELF: textVAddr). Mach-O uses PIE chained-fixup rebases instead of this
+// absolute-VA bake (see writeMachoFuncAbs64Rebases).
 export function patchFuncAbs64InRdata(rdata ByteArray, rdataRelocs RdataRelocationArray, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
 	let symbolIndex = buildDebugSymbolIndex(debugSymbols)
-	for reloc in rdataRelocs 'patch'
-		match reloc.kind 'k'
-			ripRelDisp32 to covdataArm64Adr then break 'k'
-			funcAbs64InRdata(funcName, _, offsetInLabel) then patchOneFuncAbs64InRdata(rdata, descriptorOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel, funcName: funcName, textAbsBase: textAbsBase, symbolIndex: symbolIndex)
-		end 'k'
+	for slot in collectFuncAbs64Slots(rdataRelocs) 'patch'
+		let absVa = textAbsBase + resolveFuncAbs64Symbol(symbolIndex, funcName: slot.funcName)
+		patchQword(rdata, offset: slot.rdataOffset + slot.offsetInLabel, value: absVa)
 	end 'patch'
 end 'patchFuncAbs64InRdata'
-
-function patchOneFuncAbs64InRdata(rdata ByteArray, descriptorOffset CodeOffset, offsetInLabel ByteOffset, funcName String, textAbsBase MachineWord, symbolIndex DebugSymbolIndexMap)
-	let funcCodeOffset = try symbolIndex.get(funcName) otherwise panic("patchOneFuncAbs64InRdata: no .text symbol named '{funcName}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
-	let absVa = textAbsBase + funcCodeOffset
-	let slot = descriptorOffset + offsetInLabel
-	patchQword(rdata, offset: slot, value: absVa)
-end 'patchOneFuncAbs64InRdata'
 
 // Phase 11.5: per-function code chunk. The incremental backend emits one
 // chunk per function, then the module-level fixup pass concatenates them

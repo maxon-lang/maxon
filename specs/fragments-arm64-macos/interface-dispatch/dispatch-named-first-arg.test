@@ -1,0 +1,101 @@
+// Test: dispatch-named-first-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+// An interface (or type-parameter) method call may name its FIRST argument:
+// the receiver dispatches through interface monomorphization, which is
+// receiver-type-dependent and so cannot be ruled out syntactically at parse
+// time. The C# bootstrap accepts this (it routes interface/type-param method
+// calls through a path that silently consumes a first-arg label); the self-
+// hosted parser defers the E2052 check to TypeResolution, which re-applies it
+// only for concrete-struct / enum / builtin receivers. This is the regression
+// guard for that split.
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(first: 12, second: 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Summer.combine(x0: i64, x1: i64, x2: i64) -> i64 {
+  entry:
+    arm64.mov x3, x0
+    arm64.ldr x4, [x3, #0] (8b)
+    arm64.add x3, x4, x1
+    arm64.add x1, x3, x2
+    arm64.mov x0, x1
+    arm64.ret
+  }
+  func @combineVia(x0: i64, x1: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, x0
+    arm64.str x2, [x29, #16]
+    arm64.str x1, [x29, #24]
+    arm64.ldr x3, [x29, #24]
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x2, #30
+    arm64.mov x4, #12
+    arm64.mov x0, x1
+    arm64.mov x1, x4
+    arm64.ldr x16, [x3, #24] (8b)
+    arm64.blr x16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x19, #0] (8b)
+    arm64.adrp_add_rdata x0, __witness_Summer_Combiner
+    arm64.ldr x1, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl combineVia
+    arm64.mov x20, x0
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_ceec5066efc32245
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

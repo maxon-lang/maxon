@@ -21,6 +21,16 @@ dialog.
 The fault-handler infrastructure does not yet support `recover()` — once a fault
 fires, the process always exits.
 
+Integer divide-by-zero and modulo-by-zero are only caught on targets whose CPU
+traps the operation. On x64 the `idiv` instruction raises `#DE` (delivered as a
+Windows `EXCEPTION_INT_DIVIDE_BY_ZERO` / a POSIX `SIGFPE`), which the handler
+converts to the panic below. AArch64 integer `SDIV`/`UDIV` by zero is defined to
+return 0 with NO trap, so there is no fault to catch and the divide/modulo-by-zero
+tests are gated to `x64-windows`. The handler still classifies a `SIGFPE` it does
+receive (e.g. a floating-point trap) to the divide-by-zero panic. The nil-pointer
+(`SIGSEGV`/`SIGBUS`) path traps identically on both architectures, so the
+`force-segfault` test runs on `arm64-macos` as well as `x64-windows`.
+
 ## Tests
 
 <!-- test: divide-by-zero -->
@@ -58,7 +68,7 @@ panic: integer divide by zero
 ```
 
 <!-- test: force-segfault -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### Deliberate access violation produces a clean panic
 ```maxon
 function main() returns ExitCode

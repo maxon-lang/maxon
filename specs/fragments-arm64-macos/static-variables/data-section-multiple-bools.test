@@ -1,0 +1,50 @@
+// Test: data-section-multiple-bools
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i8 1
+i8 0
+i8 1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.adrp_add_rdata x0, __data_b
+    arm64.ldr x1, [x29, #16]
+    arm64.adrp_add_rdata x0, __data_c
+    arm64.ldr x2, [x29, #16]
+    arm64.adrp_add_rdata x0, __data_a
+    arm64.ldr x0, [x29, #16]
+    arm64.ldr x3, [x1, #0] (8b)
+    arm64.ldr x1, [x2, #0] (8b)
+    arm64.ldr x2, [x0, #0] (8b)
+    arm64.mov x0, #0
+    arm64.cmp x3, x0
+    arm64.cset x0, eq
+    arm64.and x3, x2, x1
+    arm64.ands x1, x3, x0
+    arm64.b.eq read_0.after
+  read_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  read_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

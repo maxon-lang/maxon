@@ -1,0 +1,92 @@
+// Test: extension-returns-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Pointlike
+	function getX() returns Integer
+	function getY() returns Integer
+end 'Pointlike'
+
+type SimplePoint
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'SimplePoint'
+
+extension Pointlike
+	function asSimple() returns SimplePoint
+		return SimplePoint.create(self.getX(), y: self.getY())
+	end 'asSimple'
+end 'Pointlike'
+
+type Coord implements Pointlike
+	let cx as Integer
+	let cy as Integer
+
+	function getX() returns Integer
+		return cx
+	end 'getX'
+
+	function getY() returns Integer
+		return cy
+	end 'getY'
+
+	static function create(cx Integer, cy Integer) returns Self
+		return Self{cx: cx, cy: cy}
+	end 'create'
+end 'Coord'
+
+function main() returns ExitCode
+	let c = Coord.create(10, cy: 32)
+	let p = c.asSimple()
+	return p.x + p.y
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #10
+    arm64.str x0, [x19, #0] (8b)
+    arm64.mov x0, #32
+    arm64.str x0, [x19, #8] (8b)
+    arm64.ldr x20, [x19, #8] (8b)
+    arm64.ldr x21, [x19, #0] (8b)
+    arm64.mov x1, #0
+    arm64.mov x0, #16
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x22, x0
+    arm64.str x21, [x22, #0] (8b)
+    arm64.str x20, [x22, #8] (8b)
+    arm64.ldr x20, [x22, #8] (8b)
+    arm64.ldr x21, [x22, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, x22
+    arm64.bl mm_drop
+    arm64.mov x1, #255
+    arm64.add x0, x21, x20
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1bbd4af6a027df81
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

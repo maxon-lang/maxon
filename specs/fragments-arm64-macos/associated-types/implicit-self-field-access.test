@@ -1,0 +1,57 @@
+// Test: implicit-self-field-access
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Countable
+	function getCount() returns Integer
+end 'Countable'
+
+type Counter implements Countable
+	let count as Integer
+
+	function getCount() returns Integer
+		return count
+	end 'getCount'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(42)
+	return c.getCount()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.mov x0, #8
+    arm64.bl stdlib.__mm_alloc
+    arm64.mov x19, x0
+    arm64.mov x0, #42
+    arm64.str x0, [x19, #0] (8b)
+    arm64.ldr x20, [x19, #0] (8b)
+    arm64.mov x0, x19
+    arm64.bl mm_drop
+    arm64.mov x0, #255
+    arm64.cmp x20, x0
+    arm64.cset x0, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_2cd23e42d65a94e0
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x20
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---
