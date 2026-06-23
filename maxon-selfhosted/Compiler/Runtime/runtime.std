@@ -3334,10 +3334,11 @@ end
 // The scratch buffer is the managed-mem's own HEAP data region (4096+1 bytes),
 // NOT a stack buffer. A stack buffer would have to be addressed via the
 // runtime's x64-centric "stack addresses go DOWN as the slot index goes up"
-// convention (see mrt_cov_dump), which is inverted on arm64 (slots grow UP
-// from x29) — so a stackAddr-based 4 KB buffer writes off the wrong end there.
-// Writing the path straight into the result mm's heap buffer and then setting
-// its length is architecture-neutral and avoids a second alloc + memcpy.
+// convention, which is inverted on arm64 (slots grow UP from x29) — so a
+// stackAddr-based 4 KB buffer writes off the wrong end there. mrt_cov_dump
+// uses the same heap-buffer approach for the same reason. Writing the path
+// straight into the result mm's heap buffer and then setting its length is
+// architecture-neutral and avoids a second alloc + memcpy.
 //
 // Slot usage:
 //   slot 0 = mm pointer
@@ -3402,23 +3403,36 @@ end
 // mrt_cov_dump(): writes the coverage file when MAXON_COV_OUT is set.
 // File format: 4-byte magic "MCOV" | 4-byte numSites (u32 LE) | numSites*8 bytes of counters (u64 LE).
 //
+// The MAXON_COV_OUT path is read into a managed-mem HEAP buffer (256+1 bytes),
+// NOT a stack buffer. A stackAddr-based buffer would have to be addressed via
+// the runtime's x64-centric "stack addresses go DOWN as the slot index goes up"
+// convention, which is inverted on arm64 (slots grow UP from x29), so a forward
+// osGetEnv fill from the buffer's slot would overrun off the wrong end there.
+// The heap buffer is architecture-neutral. cov_dump runs exactly once from
+// mrt_start_with_coverage, immediately before osExit, so the MM is intentionally
+// NOT released — the process is exiting and the OS reclaims it.
+//
 // Slot usage:
 //   slot 0 = bytes written by osGetEnv (path length)
 //   slot 1 = fd returned by osOpenWrite
 //   slot 2 = numSites (masked to u32)
-//   slots 10..41 = 256-byte path buffer (32 qword slots)
+//   slot 10 = managed-mem pointer for the path buffer
+//   slot 11 = mm[0] heap-data pointer (the actual 256-byte path buffer)
 //   slot 50 = 8-byte header buffer
 func mrt_cov_dump 0 void
   block entry:
+    // __managed_mem_create(256 + 1, 1): heap path buffer with NUL headroom.
+    v100 = std constI64 257
+    v101 = std constI64 1
+    v102 = std call __managed_mem_create v100 v101
+    std storeSlot 10 v102
+    // buf = mm[0]: osGetEnv writes the env value directly into this heap region.
+    v103 = std loadIndirect v102 0
+    std storeSlot 11 v103
+
     v0 = std globalAddr __cov_env_name
     v1 = std constI64 13
-    // Slots 10..41 reserve 256 bytes. Stack addresses go DOWN as slot index
-    // goes up, so the LOWEST address of the buffer is at slot 41. Passing
-    // stackAddr 41 as the ptr makes osGetEnv write FORWARD through slots
-    // 41..10; using stackAddr 10 here would write OFF THE TOP of the buffer
-    // into the saved frame and return address (works for ≤8-byte strings,
-    // crashes on longer paths).
-    v2 = std stackAddr 41
+    v2 = std loadSlot 11
     v3 = std constI64 256
     v4 = std osGetEnv v0 v1 v2 v3
     std storeSlot 0 v4
@@ -3427,7 +3441,7 @@ func mrt_cov_dump 0 void
     std condBr v6 done doOpen
 
   block doOpen:
-    v7 = std stackAddr 41
+    v7 = std loadSlot 11
     v8 = std loadSlot 0
     v9 = std osOpenWrite v7 v8
     std storeSlot 1 v9

@@ -3125,10 +3125,17 @@ function emitArm64MaxonSleep(code ByteArray, relocations RelocationArray, callFi
 end 'emitArm64MaxonSleep'
 
 // =============================================================================
-// __io_check_completions(): no-op on this single-thread compute+sleep model — there
-// is no async-FILE-I/O worker / completion queue (the spec tests reach only spawn /
-// await / yield / sleep paths). The await loop calls it for parity with the x64
-// runtime; it returns immediately. Void.
+// __io_check_completions(): INTENTIONALLY a no-op on arm64-macos — not a missing
+// port. kqueue exists only to drive non-blocking SOCKET I/O (the C# reference's
+// __io_submit_read/write + __io_poll_kqueue path), but this runtime has no real
+// sockets: mrt_managed_socket_* (runtime.std) are sentinel throw-stubs, so nothing
+// ever reaches __io_submit_read/write and the completion queue is always empty.
+// kqueue is deliberately out of scope on every non-windows target (see
+// X64Backend.maxon: the green-thread/IOCP runtime exists only on x64-windows).
+// Subprocess streaming uses non-blocking read() + __gt_yield, not kqueue. The
+// await/yield/sleep loops call this for parity with the x64 runtime; it returns
+// immediately. When/if a real socket runtime lands, this becomes the kqueue
+// completion drainer ported from C# __io_poll_kqueue. Void.
 // =============================================================================
 function emitArm64IoCheckCompletions(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__io_check_completions", offset: code.count())
