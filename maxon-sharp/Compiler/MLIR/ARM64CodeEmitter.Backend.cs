@@ -273,26 +273,6 @@ public partial class ARM64CodeEmitter {
     // Cross-P atomics (LDAXR/STLXR) are only needed for shared scheduler state,
     // which uses the LockAcquire/LockRelease path instead.
 
-    /// LDR Xdst, [Xbase, #offset] using unsigned-imm or unscaled-imm encoding.
-    private void EmitLoad64(ARM64Register dst, ARM64Register baseReg, int offset) {
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9400000, dst, baseReg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8400000 | (imm9 << 12) | (Reg(baseReg) << 5) | Reg(dst));
-      }
-    }
-
-    /// STR Xsrc, [Xbase, #offset] using unsigned-imm or unscaled-imm encoding.
-    private void EmitStore64(ARM64Register src, ARM64Register baseReg, int offset) {
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9000000, src, baseReg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8000000 | (imm9 << 12) | (Reg(baseReg) << 5) | Reg(src));
-      }
-    }
-
     // ARM64 has no plain-RMW atomicity (unlike x86's LOCK INC/DEC/XADD): a
     // LDR/ADD/STR sequence is NOT atomic, so under the multi-OS-thread GMP
     // scheduler concurrent refcount inc/dec lose updates -> premature free /
@@ -364,7 +344,7 @@ public partial class ARM64CodeEmitter {
       var resultReg = R(VReg.Scratch3);
 
       if (expectedReg == ARM64Register.X16 || expectedReg == ARM64Register.X17 ||
-          desiredReg  == ARM64Register.X16 || desiredReg  == ARM64Register.X17)
+          desiredReg == ARM64Register.X16 || desiredReg == ARM64Register.X17)
         throw new ArgumentException("AtomicCAS: expected/desired must not collide with X16/X17 scratch pair");
 
       // X16 = destBase + offset

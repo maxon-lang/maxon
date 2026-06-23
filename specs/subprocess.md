@@ -156,9 +156,12 @@ end 'main'
 
 <!-- test: subprocess-streaming-roundtrip -->
 `StreamingSubprocess` keeps the child's pipes open and drives stdio
-by hand, line by line. We spawn a line-echo child (`findstr "^"` on
+by hand, line by line. We spawn a line-echo child (`findstr "x*"` on
 Windows / `/bin/cat` on POSIX — both copy every stdin line straight
-to stdout), write three lines, then read each one back. The reader
+to stdout; `x*` is a regex matching any line, including empty ones,
+where a bare `^` would be eaten by cmd.exe as its escape character and
+fail with "Bad command line"), write three lines, then read each one
+back. The reader
 (`readStdoutLine`) PARKS on the OS until a line is available — on
 arm64-macOS via a kqueue `EVFILT_READ` registration, on Windows via
 the bootstrap's overlapped-I/O path — rather than busy-polling, so
@@ -173,7 +176,7 @@ function main() returns ExitCode
 	var argv = StringArray.create()
 	argv.push("/c")
 	argv.push("findstr")
-	argv.push("^")
+	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
 	var argv = StringArray.create()
