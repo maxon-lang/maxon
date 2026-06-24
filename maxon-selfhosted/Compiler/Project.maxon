@@ -1042,8 +1042,14 @@ end 'Project'
 // Phase 11.4: per-generic-function shape of synthetic trailing params.
 // `hasLayout` is true iff the function takes an implicit layout-descriptor
 // slot. `witnessConstraints` lists the where-clause entries that contribute
-// trailing `__witness_*` slots, in declaration order. Total trailing params
-// = (1 if hasLayout else 0) + witnessConstraints.count().
+// trailing `__witness_*` slots, in declaration order. `constructLayoutGids`
+// lists the conditional generic-instance shapes the body CONSTRUCTS whose base
+// type differs from the enclosing type — each contributes a trailing layout-
+// descriptor slot so the caller threads the CONSTRUCTED type's own descriptor
+// (not the enclosing instance's) down to the generic-shared constructor body.
+// Total trailing params = (1 if hasLayout else 0) + witnessConstraints.count()
+// + constructLayoutGids.count(), in that order: layout, then witnesses, then
+// construct-layouts.
 //
 // Read by `emitCallWithArgs` so the caller knows how many synthetic args to
 // append at a call site, and which `(typeParam, interface)` pair each one
@@ -1054,13 +1060,23 @@ end 'Project'
 export type GenericFunctionImplicits
 	export var hasLayout as bool
 	export var witnessConstraints as WhereClauseArray
+	// Each entry is the conditional `genericInstance` MaxonType (in the
+	// function's enclosing type-param scope) that the body constructs and
+	// whose layout descriptor must flow in from the caller. Empty for the
+	// common case of a generic body that never constructs a foreign-base
+	// generic type.
+	export var constructLayoutGids as MaxonTypeArray
 
 	export static function create(hasLayout bool, witnessConstraints WhereClauseArray) returns GenericFunctionImplicits
-		return Self{hasLayout: hasLayout, witnessConstraints: witnessConstraints}
+		return Self{hasLayout: hasLayout, witnessConstraints: witnessConstraints, constructLayoutGids: MaxonTypeArray.create()}
 	end 'create'
 
+	export static function createFull(hasLayout bool, witnessConstraints WhereClauseArray, constructLayoutGids MaxonTypeArray) returns GenericFunctionImplicits
+		return Self{hasLayout: hasLayout, witnessConstraints: witnessConstraints, constructLayoutGids: constructLayoutGids}
+	end 'createFull'
+
 	export static function none() returns GenericFunctionImplicits
-		return Self{hasLayout: false, witnessConstraints: WhereClauseArray.create()}
+		return Self{hasLayout: false, witnessConstraints: WhereClauseArray.create(), constructLayoutGids: MaxonTypeArray.create()}
 	end 'none'
 end 'GenericFunctionImplicits'
 

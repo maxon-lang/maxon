@@ -251,8 +251,15 @@ export type IrFunction
 	// generic functions; LowerMaxonToStd populates it as it discovers a
 	// generic body. Each entry's (paramName, requiredTraitName) names the
 	// `(typeParam, interface)` pair its trailing slot witnesses.
+	// `implicitConstructLayoutGids` lists the conditional `genericInstance`
+	// shapes the body constructs whose base type differs from the enclosing
+	// type — each contributes a trailing layout-descriptor slot AFTER the
+	// witness slots so the caller threads the CONSTRUCTED type's own
+	// descriptor (not the enclosing instance's). Final trailing order:
+	//   (user_args..., __env?, __layout, __witness_0?..., __ctorlayout_0?...)
 	export var hasImplicitLayoutParam as bool
 	export var implicitWitnessConstraints as WhereClauseArray
+	export var implicitConstructLayoutGids as MaxonTypeArray
 
 	// Phase 11.5: deterministic content hash over signature + body shape,
 	// computed by computeFunctionContentHash after resolveTypes. Used as the
@@ -381,6 +388,7 @@ export type IrFunction
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
 			implicitWitnessConstraints: WhereClauseArray.create(),
+			implicitConstructLayoutGids: MaxonTypeArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create(),
 			paramReservations: ParamReservationArray.create(),
@@ -431,6 +439,7 @@ export type IrFunction
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
 			implicitWitnessConstraints: WhereClauseArray.create(),
+			implicitConstructLayoutGids: MaxonTypeArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create(),
 			paramReservations: ParamReservationArray.create(),
@@ -483,6 +492,7 @@ export type IrFunction
 			calleeSavedFps: src.calleeSavedFps,
 			hasImplicitLayoutParam: src.hasImplicitLayoutParam,
 			implicitWitnessConstraints: src.implicitWitnessConstraints,
+			implicitConstructLayoutGids: src.implicitConstructLayoutGids,
 			contentHash: src.contentHash,
 			slotMaxonTypes: src.slotMaxonTypes,
 			// Layout (scope slot ids + ABI vector) is preserved verbatim by

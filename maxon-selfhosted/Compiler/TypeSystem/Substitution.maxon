@@ -207,6 +207,18 @@ end 'substituteGenericInstance'
 // arity validation lives at the call site (or in
 // `validateConformances`), not here — substitution is the primitive,
 // not the gatekeeper.
+// Build a substitution binding a single `(declaringTypeName, paramName)`
+// type-parameter to `concrete`. Used where one element binding must be folded
+// into a derived type (e.g. substituting `Array::Element -> int` into the
+// conformance's `ArrayIterator with Element` iterator binding). Centralized so
+// callers don't hand-roll a one-entry `TypeSubstitution`.
+export function singleParamSubstitution(project Project, declaringTypeName String, paramName String, concrete MaxonType) returns TypeSubstitution
+	var subst = TypeSubstitution.create()
+	let paramId = project.typeParameters.intern(declaringTypeName, paramName: paramName)
+	subst.bind(paramId, concrete: concrete)
+	return subst
+end 'singleParamSubstitution'
+
 export function buildSubstitution(project Project, declaringTypeName String, args MaxonTypeArray) returns TypeSubstitution
 	var subst = TypeSubstitution.create()
 	let paramNames = project.typeParameters.getParamNames(declaringTypeName)

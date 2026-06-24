@@ -280,7 +280,15 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // preservation of unchanged functions' Tier-C bytecode across a source edit
 // (`preserveUnchangedTierC`). A v83 reader lacks the two maps at the tail of the
 // Tier-AB body, so the version gate forces clean regeneration.
-let CACHE_FORMAT_VERSION = 84
+// v85: each cached IrFunction + GenericFunctionImplicits now carries
+// `implicitConstructLayoutGids` — the conditional generic-instance shapes a
+// generic-shared body CONSTRUCTS whose base differs from the enclosing type
+// (e.g. `Array.withIterator` building `WithIterIterator`). Each contributes a
+// trailing implicit layout-descriptor slot so the CONSTRUCTED type's own
+// destructor flows in from the caller. A v84 reader lacks the new MaxonTypeArray
+// in both the StdModule per-function records and the arity map, so the version
+// gate forces clean regeneration.
+let CACHE_FORMAT_VERSION = 85
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -1477,7 +1485,7 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 	try writeStringArray(buf, arr: data.moduleInitFuncs)
 	try writeInitToStoredVarsMap(buf, m: data.initToStoredVars)
 	try writeTopLevelVarMap(writeTables, buf: buf, m: data.topLevelVars)
-	try writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
+	try writeGenericFunctionImplicitArityMap(writeTables, buf: buf, m: data.genericFunctionImplicitArity)
 	try writeStaticRdataValueMap(buf, m: data.staticRdataValues)
 	// Cache v50 (J.4c): stdlib-side extension metadata. Written before the
 	// StdModule blob so the decoder's pos chain stays straightforward and the
@@ -1493,7 +1501,7 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 	// v84 (Phase 7): the per-function CONTENT HASH map lives in the TARGET tier
 	// (co-located with the Tier-C bodies it gates), so nothing per-function is
 	// added to the meta body.
-	try writeStdModule(buf, module: data.inlinerStdModule)
+	try writeStdModule(writeTables, buf: buf, module: data.inlinerStdModule)
 end 'encodeLibraryTierAB'
 
 // v84: serialize the funcName → post-inline content-hash map. dword count, then
@@ -2281,7 +2289,7 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 	let (tlv, pTlv) = try readTopLevelVarMap(project, buf: buf, offset: pos)
 	pos = pTlv
 	data.topLevelVars = tlv
-	let (gfia, pGfia) = try readGenericFunctionImplicitArityMap(buf, offset: pos)
+	let (gfia, pGfia) = try readGenericFunctionImplicitArityMap(project, buf: buf, offset: pos)
 	pos = pGfia
 	data.genericFunctionImplicitArity = gfia
 	let (srv, pSrv) = try readStaticRdataValueMap(buf, offset: pos)
@@ -2303,7 +2311,7 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 	// Cache v10: read the stdlib's post-dce StdModule for the user
 	// pipeline's inliner pass. (v84: the per-function content-hash map lives in
 	// the target tier — nothing per-function in the meta body.)
-	let (inlinerMod, pIm2) = try readStdModule(buf, offset: pos)
+	let (inlinerMod, pIm2) = try readStdModule(project, buf: buf, offset: pos)
 	pos = pIm2
 	data.inlinerStdModule = inlinerMod
 
@@ -4163,16 +4171,17 @@ end 'readWitnessTableRegistry'
 
 // --- GenericFunctionImplicitArityMap ---
 
-function writeGenericFunctionImplicitArityMap(buf ByteArray, m GenericFunctionImplicitArityMap) throws CacheCorruption
+function writeGenericFunctionImplicitArityMap(writeTables MaxonTypeWriteTables, buf ByteArray, m GenericFunctionImplicitArityMap) throws CacheCorruption
 	writeDword(buf, value: m.count())
 	for (name, implicits) in m 'eachEntry'
 		try writeString(buf, s: name)
 		writeBoolByte(buf, b: implicits.hasLayout)
 		try writeWhereClauseArray(buf, arr: implicits.witnessConstraints)
+		try writeMaxonTypeArray(writeTables, buf: buf, arr: implicits.constructLayoutGids)
 	end 'eachEntry'
 end 'writeGenericFunctionImplicitArityMap'
 
-function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) returns (GenericFunctionImplicitArityMap, ByteOffset) throws CacheCorruption
+function readGenericFunctionImplicitArityMap(project Project, buf ByteArray, offset ByteOffset) returns (GenericFunctionImplicitArityMap, ByteOffset) throws CacheCorruption
 	let count = try readDword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	var pos = offset + 4
 	var m = GenericFunctionImplicitArityMap.create()
@@ -4183,7 +4192,9 @@ function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) r
 		pos = p2
 		let (witnessConstraints, p3) = try readWhereClauseArray(buf, offset: pos)
 		pos = p3
-		try m.insert(name, value: GenericFunctionImplicits.create(hasLayout, witnessConstraints: witnessConstraints)) otherwise ignore
+		let (constructLayoutGids, p4) = try readMaxonTypeArray(project, buf: buf, offset: pos)
+		pos = p4
+		try m.insert(name, value: GenericFunctionImplicits.createFull(hasLayout, witnessConstraints: witnessConstraints, constructLayoutGids: constructLayoutGids)) otherwise ignore
 	end 'eachEntry'
 	return (m, pos)
 end 'readGenericFunctionImplicitArityMap'
@@ -5689,7 +5700,7 @@ end 'readIrBlock'
 // inlinable subset (single-block accessors typically have zero slots after
 // mem2reg).
 
-function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorruption
+function writeStdIrFunction(writeTables MaxonTypeWriteTables, buf ByteArray, func IrFunction) throws CacheCorruption
 	try writeString(buf, s: func.name)
 	// Synthesized functions (e.g. `__layout_copy_*`, `__destruct_*`) leave
 	// `namespace` and `sourceFilePath` empty — route both through the
@@ -5709,6 +5720,7 @@ function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorrupti
 	writeQword(buf, value: func.nextBlockId)
 	writeBoolByte(buf, b: func.hasImplicitLayoutParam)
 	try writeWhereClauseArray(buf, arr: func.implicitWitnessConstraints)
+	try writeMaxonTypeArray(writeTables, buf: buf, arr: func.implicitConstructLayoutGids)
 	// Phase 2 closure-capture-count localization: lifted closure bodies
 	// carry their capture count on the IrFunction itself, replacing the
 	// project-wide `closureCaptureCounts` map.
@@ -5745,7 +5757,7 @@ function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorrupti
 	end 'eachTypeParamName'
 end 'writeStdIrFunction'
 
-function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset) throws CacheCorruption
+function readStdIrFunction(project Project, buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset) throws CacheCorruption
 	let (name, p1) = try readString(buf, offset: offset)
 	// `namespace` round-trips through the optional-string codec because
 	// synthesized functions (e.g. `__layout_copy_*`) leave it empty — see
@@ -5780,8 +5792,11 @@ function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction
 	pos = p7
 	let (witnessConstraints, p8) = try readWhereClauseArray(buf, offset: pos)
 	pos = p8
+	let (constructLayoutGids, p8b) = try readMaxonTypeArray(project, buf: buf, offset: pos)
+	pos = p8b
 	func.hasImplicitLayoutParam = hasLayout
 	func.implicitWitnessConstraints = witnessConstraints
+	func.implicitConstructLayoutGids = constructLayoutGids
 	let captureCount = try readQword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 8
 	func.closureCaptureCount = captureCount
@@ -5822,10 +5837,10 @@ end 'readStdIrFunction'
 
 // --- StdModule ---
 
-function writeStdModule(buf ByteArray, module StdModule) throws CacheCorruption
+function writeStdModule(writeTables MaxonTypeWriteTables, buf ByteArray, module StdModule) throws CacheCorruption
 	writeDword(buf, value: module.functions.count())
 	for f in module.functions 'eachFunc'
-		try writeStdIrFunction(buf, func: f)
+		try writeStdIrFunction(writeTables, buf: buf, func: f)
 	end 'eachFunc'
 	writeDword(buf, value: module.blocks.count())
 	for blk in module.blocks 'eachBlock'
@@ -5837,13 +5852,13 @@ function writeStdModule(buf ByteArray, module StdModule) throws CacheCorruption
 	end 'eachOp'
 end 'writeStdModule'
 
-function readStdModule(buf ByteArray, offset ByteOffset) returns (StdModule, ByteOffset) throws CacheCorruption
+function readStdModule(project Project, buf ByteArray, offset ByteOffset) returns (StdModule, ByteOffset) throws CacheCorruption
 	var module = StdModule.create()
 	var pos = offset
 	let funcCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto funcCount 'eachFunc'
-		let (f, p) = try readStdIrFunction(buf, offset: pos)
+		let (f, p) = try readStdIrFunction(project, buf: buf, offset: pos)
 		pos = p
 		module.functions.push(f)
 	end 'eachFunc'

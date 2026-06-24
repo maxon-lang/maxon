@@ -2757,6 +2757,14 @@ type MaxonToStdLowering
 	// Empty when the function has no where-clauses; populated when the
 	// function-body emission resolves the trailing slot ids.
 	var implicitWitnessValueIds as ValueIdArray
+	// Per-function ValueIds of the synthetic `__ctorlayout_*` trailing params,
+	// parallel to `currentMaxonFunc.implicitConstructLayoutGids` (one slot per
+	// foreign-base generic construction the body performs, after the witness
+	// slots). `materializeLayoutForGid` matches a conditional construction gid
+	// against `implicitConstructLayoutGids` and returns the slot here, so the
+	// CONSTRUCTED type's descriptor flows from the caller instead of forwarding
+	// the enclosing instance's layout. Empty for the common case.
+	var implicitConstructLayoutValueIds as ValueIdArray
 	// Stage E (closures): the IrFunction currently being lowered. Set at
 	// the top of each function's body walk and read by lowerClosureCreate
 	// to look up the OUTER function's `scope` for capture-slot resolution.
@@ -2837,6 +2845,7 @@ type MaxonToStdLowering
 			liftedEnvValueId: 0,
 			implicitLayoutValueId: 0,
 			implicitWitnessValueIds: ValueIdArray.create(),
+			implicitConstructLayoutValueIds: ValueIdArray.create(),
 			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0),
 			interfaceWitnessSlots: InterfaceWitnessSlotMap.create(),
 			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create(),
@@ -3145,8 +3154,10 @@ type MaxonToStdLowering
 			var func = try self.maxonModule.functions.get(i) otherwise panic("invariant: i < functions.count() but get failed")
 			let needsLayout = functionIsGenericForLowering(self.project, func: func)
 			var witnessConstraints = WhereClauseArray.create()
+			var constructLayoutGids = MaxonTypeArray.create()
 			if needsLayout 'collectConstraints'
-				witnessConstraints = collectFunctionWitnessConstraints(self.project, func: func)
+				witnessConstraints = collectFunctionWitnessConstraints(self.project, func: func, maxonModule: self.maxonModule)
+				constructLayoutGids = collectFunctionConstructLayoutGids(self.project, func: func, maxonModule: self.maxonModule)
 			end 'collectConstraints'
 			var stdParams = StdTypeArray.create()
 			for paramType in func.maxonParamTypes 'eachParam'
@@ -3192,13 +3203,26 @@ type MaxonToStdLowering
 				end 'addWitnessLoop'
 			end 'addWitness'
 			func.implicitWitnessConstraints = witnessConstraints
+			// One trailing `__ctorlayout_*` slot per foreign-base generic
+			// construction the body performs, AFTER the witness slots. The
+			// caller threads the CONSTRUCTED type's own layout descriptor here
+			// (see `collectFunctionConstructLayoutGids`). Skipped for closures
+			// inheriting via env — those ride the env block instead (handled in
+			// the per-function env-load setup below).
+			if not inheritsImplicitsViaEnv 'addConstructLayout'
+				for _ in 0 upto constructLayoutGids.count() 'addConstructLayoutLoop'
+					stdParams.push(StdType.i64)
+					func.paramCount = func.paramCount + 1
+				end 'addConstructLayoutLoop'
+			end 'addConstructLayout'
+			func.implicitConstructLayoutGids = constructLayoutGids
 			// Phase 11.4: record the implicit shape in a project-wide map so
 			// per-function pipeline runs (where the callee isn't in the local
 			// stdModule.functions) can still discover whether a callsite needs
 			// the synthetic layout/witness args appended. See the field comment
 			// in Project.maxon for the architectural rationale.
 			if needsLayout and not inheritsImplicitsViaEnv 'recordArity'
-				self.project.genericFunctionImplicitArity.upsert(func.name, value: GenericFunctionImplicits.create(true, witnessConstraints: witnessConstraints))
+				self.project.genericFunctionImplicitArity.upsert(func.name, value: GenericFunctionImplicits.createFull(true, witnessConstraints: witnessConstraints, constructLayoutGids: constructLayoutGids))
 			end 'recordArity'
 			func.returnType = maxonReturnTypeToStdReturnType(self.project, ref: func.maxonReturnType)
 			func.paramTypes = stdParams
@@ -3273,6 +3297,7 @@ type MaxonToStdLowering
 			self.liftedEnvValueId = 0
 			self.implicitLayoutValueId = 0
 			self.implicitWitnessValueIds = ValueIdArray.create()
+			self.implicitConstructLayoutValueIds = ValueIdArray.create()
 			self.currentMaxonFunc = srcFunc
 			// Drop-tracking: clear the per-function alias flags (see aliasValues).
 			self.aliasValues = BoolArray.create()
@@ -3301,11 +3326,19 @@ type MaxonToStdLowering
 			// `param` ops are emitted in the entry block.
 			let closureBodyInheritsImplicits = isLiftedClosureName(srcFunc.name) and srcFunc.hasImplicitLayoutParam
 			if srcFunc.hasImplicitLayoutParam and not closureBodyInheritsImplicits 'stampLayout'
+				// Trailing-param order: [__layout][__witness_0..][__ctorlayout_0..].
+				// Index from the END so the layout slot stays correct regardless
+				// of how many witness/ctorlayout slots precede the user args.
 				let constraintCount = srcFunc.implicitWitnessConstraints.count()
-				let firstWitnessIdx = (srcFunc.paramCount - constraintCount)
+				let ctorLayoutCount = srcFunc.implicitConstructLayoutGids.count()
+				let firstConstructIdx = (srcFunc.paramCount - ctorLayoutCount)
+				let firstWitnessIdx = (firstConstructIdx - constraintCount)
 				for wIdx in 0 upto constraintCount 'eachWitness'
 					self.implicitWitnessValueIds.push((firstWitnessIdx + wIdx))
 				end 'eachWitness'
+				for cIdx in 0 upto ctorLayoutCount 'eachConstructLayout'
+					self.implicitConstructLayoutValueIds.push((firstConstructIdx + cIdx))
+				end 'eachConstructLayout'
 				self.implicitLayoutValueId = (firstWitnessIdx - 1)
 			end 'stampLayout'
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
@@ -3382,6 +3415,9 @@ type MaxonToStdLowering
 				for witnessId in self.implicitWitnessValueIds 'witnessParam'
 					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(witnessId, paramIndex: witnessId, paramType: StdType.i64)))
 				end 'witnessParam'
+				for ctorLayoutId in self.implicitConstructLayoutValueIds 'ctorLayoutParam'
+					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(ctorLayoutId, paramIndex: ctorLayoutId, paramType: StdType.i64)))
+				end 'ctorLayoutParam'
 			end 'emitSyntheticParams'
 
 			// Phase 11.4 closure-inheritance: a lifted closure with
@@ -3412,6 +3448,14 @@ type MaxonToStdLowering
 					self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadIndirect(witnessId, addrId: envBaseId, offset: (captureCount + 1 + wIdx) * 8, width: StoreWidth.qword, signed: false, isFloat: false)))
 					self.implicitWitnessValueIds.push(witnessId)
 				end 'eachWitness'
+				// Construct-layout descriptors sit after the witness pointers in
+				// the env block (mirrors the positional trailing-param order).
+				let ctorLayoutCount = srcFunc.implicitConstructLayoutGids.count()
+				for cIdx in 0 upto ctorLayoutCount 'eachConstructLayout'
+					let ctorLayoutId = allocValueId(self.funcIdRef)
+					self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadIndirect(ctorLayoutId, addrId: envBaseId, offset: (captureCount + 1 + constraintCount + cIdx) * 8, width: StoreWidth.qword, signed: false, isFloat: false)))
+					self.implicitConstructLayoutValueIds.push(ctorLayoutId)
+				end 'eachConstructLayout'
 			end 'emitClosureImplicitLoads'
 
 			// Drop-tracking: zero-init every drop-tracked local slot at entry so
@@ -5945,6 +5989,9 @@ type MaxonToStdLowering
 			for wc in calleeImplicits.witnessConstraints 'addWitness'
 				finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, constraint: wc, dstBlock: dstBlock)
 			end 'addWitness'
+			for ctorGidType in calleeImplicits.constructLayoutGids 'addConstructLayout'
+				finalArgIds = self.appendConstructLayoutArg(finalArgIds, receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, calleeScopeGidType: ctorGidType, dstBlock: dstBlock)
+			end 'addConstructLayout'
 		end 'addLayout'
 		let resultId = self.defineName(result)
 		// Interface-returning callees encode the fat pointer across the
@@ -6092,6 +6139,53 @@ type MaxonToStdLowering
 		return out
 	end 'appendWitnessArg'
 
+	// Materialize and append one trailing construct-layout arg: the layout
+	// descriptor for the FOREIGN-base generic the callee constructs
+	// (`calleeScopeGidType` is the conditional `genericInstance` in the
+	// callee's enclosing type-param scope). Substitute the call-site bindings
+	// (read off `receiverContext`) into it, then materialize the resulting
+	// gid's descriptor — concrete at a non-generic frame, or recursively
+	// threaded through THIS caller's own construct-layout slot when the caller
+	// is itself generic.
+	function appendConstructLayoutArg(argIds ValueIdArray, receiverContext MaxonType, qualifiedCallee String, calleeScopeGidType MaxonType, dstBlock IrBlock) returns ValueIdArray
+		var out = argIds
+		let descId = self.materializeConstructLayoutArg(receiverContext, qualifiedCallee: qualifiedCallee, calleeScopeGidType: calleeScopeGidType, dstBlock: dstBlock)
+		out.push(descId)
+		return out
+	end 'appendConstructLayoutArg'
+
+	function materializeConstructLayoutArg(receiverContext MaxonType, qualifiedCallee String, calleeScopeGidType MaxonType, dstBlock IrBlock) returns ValueId
+		// Resolve the callee-scope construction gid through the call site's
+		// substitution (read off `receiverContext`), then materialize the
+		// result — concrete at a non-generic frame, or recursively threaded
+		// through THIS caller's own construct-layout slot when the caller is
+		// itself generic (`materializeLayoutForGid` routes the conditional case).
+		let callSiteGid = self.resolveConstructLayoutGid(receiverContext, calleeScopeGidType: calleeScopeGidType, context: "materializeConstructLayoutArg (callee '{qualifiedCallee}')")
+		return self.materializeLayoutForGid(callSiteGid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
+	end 'materializeConstructLayoutArg'
+
+	// Shared canonicalize -> substitute -> extract -> validate sequence behind
+	// both the call-site (`materializeConstructLayoutArg`) and thunk-side
+	// (`materializeThunkConstructLayoutArg`) construct-layout resolution.
+	//
+	// `bindingInstance` supplies the substitution: at a call site it is the
+	// receiverContext (`Array with Int` -> {Element -> Int}); in a witness
+	// thunk it is the concrete conformer gid. Canonicalize BEFORE substituting
+	// so a typealias arg (`ArrayIter = ArrayIterator with Element`) expands and
+	// its now-exposed `Element` participates in the substitution — otherwise
+	// `substituteType` passes the bare `named` alias through untouched and the
+	// resulting gid (`ArrayIterator with Element`) wouldn't match the concrete
+	// descriptor BuildLayoutDescriptors keyed under `ArrayIterator with int`.
+	function resolveConstructLayoutGid(bindingInstance MaxonType, calleeScopeGidType MaxonType, context String) returns GenericInstanceId
+		let canonCalleeGid = canonicalizeGenericInstanceArgsDeep(self.project, t: calleeScopeGidType)
+		let subst = buildSubstitutionForInstance(self.project, t: bindingInstance)
+		let resolvedType = substituteType(self.project, t: canonCalleeGid, subst: subst)
+		if not maxonTypeIsGenericInstance(resolvedType) 'notGid'
+			panic("{context}: construct-layout gid substituted to a non-genericInstance type ({resolvedType.toString(self.project)}) — binding instance is malformed")
+		end 'notGid'
+		return genericInstanceIdOrZero(resolvedType)
+	end 'resolveConstructLayoutGid'
+
 	function materializeLayoutArg(receiverContext MaxonType, qualifiedCallee String, dstBlock IrBlock) returns ValueId
 		match receiverContext 'pick'
 			genericInstance(gid) then return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
@@ -6185,6 +6279,16 @@ type MaxonToStdLowering
 	function materializeLayoutForGid(gid GenericInstanceId, qualifiedCallee String, dstBlock IrBlock) returns ValueId
 		let (_, gidArgs) = self.project.genericInstances.get(gid)
 		if anyMaxonTypeIsConditional(gidArgs) 'conditional'
+			// FOREIGN-base construction: this body is constructing a generic
+			// type whose base differs from the enclosing type (e.g.
+			// `Array.withIterator` building `WithIterIterator with (Iter,
+			// Element)`). Forwarding the enclosing instance's layout would
+			// stamp the WRONG destroy thunk on the constructed box. Instead
+			// return the trailing construct-layout slot the caller threaded
+			// in — which carries the CONSTRUCTED type's own descriptor.
+			if let ctorSlot = try self.tryConstructLayoutSlotForGid(gid) 'ctorSlot'
+				return ctorSlot
+			end 'ctorSlot'
 			// A single-element container (`Array`/`__ManagedMemory`/`Vector` …)
 			// over ONE type-parameter that belongs to a MULTI-type-param owner
 			// (e.g. `Map`'s `keys: Array with Key` / `values: Array with Value`)
@@ -6204,6 +6308,25 @@ type MaxonToStdLowering
 		end 'conditional'
 		return self.emitLoadLayoutDescriptorForGid(gid, dstBlock: dstBlock)
 	end 'materializeLayoutForGid'
+
+	// Match a conditional construction `gid` against the current function's
+	// `implicitConstructLayoutGids` and return the parallel trailing slot's
+	// ValueId. The body-scan (`collectFunctionConstructLayoutGids`) interned
+	// these gids from the same `resolvedReceiverTypes` the call lowering reads,
+	// so the construction-site gid is the SAME interned id — a direct equality
+	// match. Throws `ConstructLayoutSlotMiss` when this gid isn't a recorded
+	// construction (the common conditional case: forwarding `Self`/`T`).
+	function tryConstructLayoutSlotForGid(gid GenericInstanceId) returns ValueId throws ConstructLayoutSlotMiss
+		let gids = self.currentMaxonFunc.implicitConstructLayoutGids
+		for i in 0 upto gids.count() 'eachGid'
+			let entry = try gids.get(i) otherwise panic("tryConstructLayoutSlotForGid: implicitConstructLayoutGids.get OOB at {i}")
+			let entryGid = genericInstanceIdOrZero(entry)
+			if entryGid == gid 'matched'
+				return try self.implicitConstructLayoutValueIds.get(i) otherwise panic("tryConstructLayoutSlotForGid: implicitConstructLayoutValueIds desync at {i}")
+			end 'matched'
+		end 'eachGid'
+		throw ConstructLayoutSlotMiss.notAConstruction
+	end 'tryConstructLayoutSlotForGid'
 
 	// Project the per-arg heap-ref bit for a single-type-parameter field-array
 	// whose type-parameter belongs to a multi-type-param owner, returning a
@@ -6316,6 +6439,18 @@ type MaxonToStdLowering
 	//     (parallel to `currentMaxonFunc.implicitWitnessConstraints`) by
 	//     `(paramName, requiredTraitName)` match.
 	function materializeWitnessArg(receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueId
+		// Iterable-iterator witness: a `(<elementParam>, Iterator)` slot whose
+		// declaring type is a generic struct conforming to an Iterable-shaped
+		// interface (synthesized by `inferIterableIteratorConstraintFromConformer`
+		// for the monomorphized `Array.withIterator` clone). The witness is for
+		// the conformer's ITERATOR (`ArrayIterator with Element`), not the
+		// element itself — so resolving `Element -> int` and loading
+		// `(int, Iterator)` would be wrong. Route through the conformance to the
+		// concrete iterator instance (`ArrayIterator<int>`) and load its witness,
+		// interning the gid so BuildWitnessTables/BuildLayoutDescriptors emit it.
+		if let witnessId = try self.tryMaterializeIteratorWitnessFromConformance(receiverContext, qualifiedCallee: qualifiedCallee, constraint: constraint, dstBlock: dstBlock) 'iteratorWitness'
+			return witnessId
+		end 'iteratorWitness'
 		// Try to resolve `constraint.paramName` to a concrete type via
 		// the receiverContext's substitution.
 		let bound = self.resolveCalleeParamToConcreteType(receiverContext, qualifiedCallee: qualifiedCallee, paramName: constraint.paramName)
@@ -6325,6 +6460,126 @@ type MaxonToStdLowering
 			forwardFromCaller(callerParamName) then return self.forwardCallerWitness(qualifiedCallee, constraint: constraint, callerParamName: callerParamName)
 		end 'pick'
 	end 'materializeWitnessArg'
+
+	// Materialize the `Iterator` witness for an Iterable conformer's iterator,
+	// resolved through the conformance rather than treating the element param
+	// directly as the witness subject. Fires only for a `(<param>, Iterator)`
+	// constraint whose `declaringTypeName` is a struct conforming to an
+	// Iterable-shaped interface whose iterator binding depends on `<param>`.
+	// Throws `IteratorWitnessMiss` for every other constraint so the caller
+	// falls back to the generic witness resolution with a single
+	// `if let try`.
+	//
+	// Both call directions land here:
+	//   - EXTERNAL (`main` -> `Array.withIterator`): receiverContext is the
+	//     concrete conformer instance (`Array<int>`); the element binding
+	//     resolves to `int`, the iterator to a concrete `ArrayIterator<int>`,
+	//     and we load `__witness___ArrayIterator_int_Iterator`.
+	//   - GENERIC-TO-GENERIC (`Foo.bar` over `T` calls `Array<T>.withIterator`):
+	//     the element binding stays a type-parameter, the iterator gid is
+	//     conditional, and we forward the caller's own witness slot.
+	function tryMaterializeIteratorWitnessFromConformance(receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueId throws IteratorWitnessMiss
+		if constraint.requiredTraitName != "Iterator" 'notIterator'
+			throw IteratorWitnessMiss.notIteratorConstraint
+		end 'notIterator'
+		let structName = constraint.declaringTypeName
+		if structName.isEmpty() or project.interfaces.contains(structName) 'notStructConformer'
+			throw IteratorWitnessMiss.notIteratorConstraint
+		end 'notStructConformer'
+		// Recover the conformer's concrete iterator type for this call site by
+		// substituting the receiver's element binding into the conformance's
+		// iterator arg.
+		let iterType = try self.resolveConformerIteratorType(receiverContext, structName: structName, elementParam: constraint.paramName) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		match iterType 'pick'
+			named(id) then return self.emitLoadWitnessTable(self.project.typeNames.get(id), interfaceName: "Iterator", dstBlock: dstBlock)
+			genericInstance(gid) then return self.materializeIteratorGidWitness(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
+			boolean to character then throw IteratorWitnessMiss.noConformanceIterator
+			function to typeParameter then throw IteratorWitnessMiss.noConformanceIterator
+			interface to cstring then throw IteratorWitnessMiss.noConformanceIterator
+		end 'pick'
+	end 'tryMaterializeIteratorWitnessFromConformance'
+
+	// Resolve `structName`'s Iterable iterator type at this call site. Reads
+	// the conformance's iterator binding (e.g. `ArrayIterator with Element`)
+	// and substitutes `elementParam`'s concrete binding (recovered from the
+	// receiverContext) into it. When the receiverContext keeps the element as
+	// a type-parameter (generic-to-generic dispatch), the substituted iterator
+	// stays conditional and the caller forwards its own slot.
+	function resolveConformerIteratorType(receiverContext MaxonType, structName String, elementParam String) returns MaxonType throws IteratorWitnessMiss
+		let confId = try self.findIterableConformanceFor(structName) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		let ifaceName = try self.project.conformances.interfaceNames.get(confId) otherwise panic("resolveConformerIteratorType: interfaceNames.get OOB at {confId}")
+		let iface = try self.project.interfaces.get(ifaceName) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		let iterParamName = try iterableIteratorUsesParam(self.project, iface: iface) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		let iterOrdinal = try ordinalOfParamName(iface.usesParams, paramName: iterParamName) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		let confArgs = try self.project.conformances.withArgsList.get(confId) otherwise panic("resolveConformerIteratorType: withArgsList.get OOB at {confId}")
+		let rawIterBinding = try confArgs.get(iterOrdinal) otherwise throw IteratorWitnessMiss.noConformanceIterator
+		let iterBinding = chaseBindingToGenericInstance(self.project, t: rawIterBinding)
+		// Bind the conformer's element type-param to the receiver's concrete
+		// element. `Array<int>` -> {Element -> int}; a generic caller leaves
+		// Element as a type-parameter so the iterator stays conditional.
+		let elementType = self.resolveStructParamBinding(receiverContext, structName: structName, paramName: elementParam)
+		let subst = singleParamSubstitution(self.project, declaringTypeName: structName, paramName: elementParam, concrete: elementType)
+		return substituteType(self.project, t: iterBinding, subst: subst)
+	end 'resolveConformerIteratorType'
+
+	// Load (or forward) the `Iterator` witness for a resolved iterator gid.
+	// A fully concrete gid (`ArrayIterator<int>`) interns + loads its per-
+	// instance witness table; a conditional gid (`ArrayIterator<Element>` in a
+	// generic caller) forwards the caller's own witness slot keyed by the
+	// sole element param.
+	function materializeIteratorGidWitness(gid GenericInstanceId, qualifiedCallee String, dstBlock IrBlock) returns ValueId
+		let (_, args) = self.project.genericInstances.get(gid)
+		if anyMaxonTypeIsConditional(args) 'conditional'
+			let paramName = trySoleConditionalParamName(self.project, args: args)
+			let constraint = WhereClause.createScoped(paramName, requiredTraitName: "Iterator", declaringTypeName: "")
+			return self.forwardCallerWitness(qualifiedCallee, constraint: constraint, callerParamName: paramName)
+		end 'conditional'
+		return self.emitLoadWitnessTableForGid(gid, interfaceName: "Iterator", dstBlock: dstBlock)
+	end 'materializeIteratorGidWitness'
+
+	// Find the conformance id binding `structName` to its Iterable-shaped
+	// interface (declares `createIterator` returning a uses-param). Throws
+	// when the struct conforms to no such interface.
+	function findIterableConformanceFor(structName String) returns ConformanceId throws IteratorWitnessMiss
+		for confId in self.project.conformances.idsForType(structName) 'eachConf'
+			let ifaceName = try self.project.conformances.interfaceNames.get(confId) otherwise panic("findIterableConformanceFor: interfaceNames.get OOB at {confId}")
+			let iface = try self.project.interfaces.get(ifaceName) otherwise continue
+			if let _ = try iterableIteratorUsesParam(self.project, iface: iface) 'isIterable'
+				return confId
+			end 'isIterable'
+		end 'eachConf'
+		throw IteratorWitnessMiss.noConformanceIterator
+	end 'findIterableConformanceFor'
+
+	// Resolve the concrete (or still-typeParameter) binding of `structName`'s
+	// `paramName` at this call site from a `genericInstance` receiverContext.
+	// Falls back to the abstract type-parameter when the receiver isn't a
+	// matching concrete instance — the conditional path then forwards.
+	function resolveStructParamBinding(receiverContext MaxonType, structName String, paramName String) returns MaxonType
+		match receiverContext 'pick'
+			genericInstance then break 'pick'
+			boolean to typeParameter then return self.abstractStructParam(structName, paramName: paramName)
+			interface to cstring then return self.abstractStructParam(structName, paramName: paramName)
+		end 'pick'
+		let (baseId, gidArgs) = match receiverContext 'getGid'
+			genericInstance(gid) gives self.project.genericInstances.get(gid)
+			default panic("resolveStructParamBinding: receiverContext shape changed mid-resolve")
+		end 'getGid'
+		let baseName = self.project.typeNames.get(baseId)
+		if baseName != structName 'differentBase'
+			return self.abstractStructParam(structName, paramName: paramName)
+		end 'differentBase'
+		let usesParams = self.project.typeParameters.getParamNames(structName)
+		if let ordinal = try ordinalOfParamName(usesParams, paramName: paramName) 'haveOrdinal'
+			return try gidArgs.get(ordinal) otherwise self.abstractStructParam(structName, paramName: paramName)
+		end 'haveOrdinal'
+		return self.abstractStructParam(structName, paramName: paramName)
+	end 'resolveStructParamBinding'
+
+	function abstractStructParam(structName String, paramName String) returns MaxonType
+		let pid = self.project.typeParameters.intern(structName, paramName: paramName)
+		return MaxonType.typeParameter(pid)
+	end 'abstractStructParam'
 
 	function emitLoadWitnessTable(typeName String, interfaceName String, dstBlock IrBlock) returns ValueId
 		if not self.project.witnessTables.contains(typeName, interfaceName: interfaceName) 'missing'
@@ -6468,6 +6723,10 @@ type MaxonToStdLowering
 				let witnessId = self.materializeThunkWitnessArg(gid, baseName: baseName, constraint: wc, dstBlock: entryBlock, idRef: idRef)
 				implicitArgIds.push(witnessId)
 			end 'eachConstraint'
+			for ctorGidType in implicits.constructLayoutGids 'eachConstructLayout'
+				let ctorLayoutId = self.materializeThunkConstructLayoutArg(gid, calleeScopeGidType: ctorGidType, dstBlock: entryBlock, idRef: idRef)
+				implicitArgIds.push(ctorLayoutId)
+			end 'eachConstructLayout'
 		end 'addLayout'
 
 		// Compose the tail call's full arg list: declared params followed
@@ -6543,6 +6802,24 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
 		return resultId
 	end 'emitThunkWitnessLoadForBoundType'
+
+	// Thunk-side construct-layout arg: the thunk's `gid` is the fully-concrete
+	// conformer instance, so substituting its bindings into the callee-scope
+	// construction gid yields a concrete gid whose descriptor is loadable by
+	// label. Mirrors `materializeConstructLayoutArg` but at a concrete frame
+	// (no recursion / forwarding) and using the thunk's `idRef`.
+	function materializeThunkConstructLayoutArg(gid GenericInstanceId, calleeScopeGidType MaxonType, dstBlock IrBlock, idRef ValueIdRef) returns ValueId
+		let concreteGid = self.resolveConstructLayoutGid(MaxonType.genericInstance(gid), calleeScopeGidType: calleeScopeGidType, context: "materializeThunkConstructLayoutArg (conformer gid {gid})")
+		if not self.project.layoutDescriptors.contains(concreteGid) 'missing'
+			let shape = genericInstanceIdToString(self.project, id: concreteGid)
+			panic("materializeThunkConstructLayoutArg: no descriptor for construct-layout gid {concreteGid} ({shape}) — BuildLayoutDescriptors missed the conformer's construction instance")
+		end 'missing'
+		let label = self.project.layoutDescriptors.labelFor(concreteGid)
+		let resultId = allocValueId(idRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadLayoutDescriptor(resultId, label: label)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return resultId
+	end 'materializeThunkConstructLayoutArg'
 
 	function forwardCallerWitness(qualifiedCallee String, constraint WhereClause, callerParamName String) returns ValueId
 		// The caller must have an implicit witness slot whose
@@ -11033,7 +11310,7 @@ type MaxonToStdLowering
 		// store the enclosing's `implicitLayoutValueId` /
 		// `implicitWitnessValueIds` into env[0..implicitCount].
 		if self.liftedClosureInheritsImplicits(funcName) 'allocImplicitsEnv'
-			let implicitValueIds = self.collectInheritedImplicits()
+			let implicitValueIds = self.collectInheritedImplicits(funcName, dstBlock: dstBlock)
 			let envBaseId = self.allocEnvAndStoreImplicits(dstBlock, captureCount: 0, implicitValueIds: implicitValueIds)
 			self.fnEnvVarNames.upsert(resultId, value: envBaseId)
 			return
@@ -11099,7 +11376,7 @@ type MaxonToStdLowering
 		// — so the forwarded values match what the closure body needs.
 		var implicitValueIds = ValueIdArray.create()
 		if self.liftedClosureInheritsImplicits(funcName) 'collectImplicits'
-			implicitValueIds = self.collectInheritedImplicits()
+			implicitValueIds = self.collectInheritedImplicits(funcName, dstBlock: dstBlock)
 		end 'collectImplicits'
 
 		let envBaseId = self.allocEnvAndStoreImplicits(dstBlock, captureCount: captureCount, implicitValueIds: implicitValueIds)
@@ -11116,16 +11393,42 @@ type MaxonToStdLowering
 	// Phase 11.4 closure-inheritance: snapshot the outer function's
 	// implicit layout/witness ValueIds into a fresh array, in the order
 	// the closure body expects them (layout first, then witnesses in
-	// declaration order). Producers (`lowerFunctionRef` zero-capture +
+	// declaration order, then the CLOSURE's own construct-layout
+	// descriptors). Producers (`lowerFunctionRef` zero-capture +
 	// `lowerClosureCreate`) feed this into `allocEnvAndStoreImplicits`.
-	function collectInheritedImplicits() returns ValueIdArray
+	//
+	// The layout + witness slots forward the OUTER function's own values
+	// (the closure shares the enclosing type-param scope). The construct-
+	// layout slots are the CLOSURE's own constructions — the enclosing
+	// materializes each gid's descriptor here (substituting nothing: the
+	// gid is already in the enclosing scope, so `materializeLayoutForGid`
+	// resolves it the same way the body would).
+	function collectInheritedImplicits(funcName String, dstBlock IrBlock) returns ValueIdArray
 		var implicitValueIds = ValueIdArray.create()
 		implicitValueIds.push(self.implicitLayoutValueId)
 		for wId in self.implicitWitnessValueIds 'eachWitness'
 			implicitValueIds.push(wId)
 		end 'eachWitness'
+		for gidType in self.closureConstructLayoutGids(funcName) 'eachCtorLayout'
+			let gid = genericInstanceIdOrZero(gidType)
+			let descId = self.materializeLayoutForGid(gid, qualifiedCallee: funcName, dstBlock: dstBlock)
+			implicitValueIds.push(descId)
+		end 'eachCtorLayout'
 		return implicitValueIds
 	end 'collectInheritedImplicits'
+
+	// The construct-layout gids a lifted closure body needs, read off the
+	// closure's own IrFunction (populated by `transferFuncs`). Empty for
+	// non-closures and closures that construct no foreign-base generic.
+	function closureConstructLayoutGids(funcName String) returns MaxonTypeArray
+		for i in 0 upto self.stdModule.functions.count() 'scan'
+			let f = try self.stdModule.functions.get(i) otherwise panic("closureConstructLayoutGids: stdModule.functions.get OOB at {i}")
+			if f.name == funcName 'hit'
+				return f.implicitConstructLayoutGids
+			end 'hit'
+		end 'scan'
+		return MaxonTypeArray.create()
+	end 'closureConstructLayoutGids'
 
 	// Phase 11.4 closure-inheritance: allocate an env block sized for
 	// `captureCount` user captures plus `implicitValueIds.count()`
@@ -12760,10 +13063,38 @@ end 'resolvedCalleeParamFromNamed'
 function resolvedCalleeParamFromGenericInstance(project Project, gid GenericInstanceId) returns ResolvedCalleeParam
 	let (baseId, args) = project.genericInstances.get(gid)
 	if anyMaxonTypeIsConditional(args) 'conditional'
-		return ResolvedCalleeParam.forwardFromCaller("")
+		// A conditional gid over a SINGLE type-parameter element (e.g.
+		// `ArrayIterator with Element` in the monomorphized
+		// `Array.withIterator` body) forwards the caller's witness slot
+		// keyed by that element param name. The clone's
+		// `implicitWitnessConstraints` carries a matching `(Element,
+		// Iterator)` slot (see `inferIterableIteratorConstraint`), so pinning
+		// the forward name here lets `forwardCallerWitness` resolve it
+		// instead of falling back to the callee-scope `Source`, which the
+		// clone never declares. An empty name keeps the historic same-scope
+		// fallback for multi-arg / non-singleton conditional gids.
+		let soleParamName = trySoleConditionalParamName(project, args: args)
+		return ResolvedCalleeParam.forwardFromCaller(soleParamName)
 	end 'conditional'
 	return ResolvedCalleeParam.concreteGid(project.typeNames.get(baseId), gid: gid)
 end 'resolvedCalleeParamFromGenericInstance'
+
+// When a conditional gid's args are exactly one `typeParameter`, return that
+// parameter's name so a witness forward can key off it; otherwise return ""
+// (the historic callee-scope fallback). Centralized so the conditional-forward
+// path has a single source of truth for "is this a single-element container
+// over a bare type-param".
+function trySoleConditionalParamName(project Project, args MaxonTypeArray) returns String
+	if args.count() != 1 'notSingleton'
+		return ""
+	end 'notSingleton'
+	let only = try args.get(0) otherwise panic("trySoleConditionalParamName: args.get(0) failed despite count==1")
+	return match only 'pick'
+		typeParameter(id) gives project.typeParameters.getName(id)
+		boolean to unresolved gives ""
+		genericInstance to cstring gives ""
+	end 'pick'
+end 'trySoleConditionalParamName'
 
 // Compute the witness-table label for a per-instance thunk's implicit
 // witness arg. The bound type is the conformer's type-parameter resolved
@@ -12861,7 +13192,7 @@ end 'thunkBoundFatal'
 // matching the parser's left-to-right walk of the `where` clause. This is
 // the canonical order both the function body and every call site rely on
 // when indexing witness slots.
-function collectFunctionWitnessConstraints(project Project, func IrFunction) returns WhereClauseArray
+function collectFunctionWitnessConstraints(project Project, func IrFunction, maxonModule MaxonModule) returns WhereClauseArray
 	var out = WhereClauseArray.create()
 	// Phase 11.4 closure-inheritance: lifted closure bodies have no
 	// enclosing receiver of their own — chase the back-pointer to the
@@ -12888,7 +13219,7 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 				end 'eachTrait'
 			end 'match'
 		end 'scan'
-		inferImplicitWitnessConstraints(project, recvType: recvType, out: out)
+		inferImplicitWitnessConstraints(project, recvType: recvType, func: func, maxonModule: maxonModule, out: out)
 	end 'haveRecv'
 	// Extension-scoped where-clauses (e.g. `extension Array where Element is
 	// Equatable`) attach constraints to the methods declared inside the
@@ -12936,14 +13267,224 @@ end 'collectFunctionWitnessConstraints'
 // can forward the witness without panicking in `forwardCallerWitness`.
 //
 // Skip the inference when the user already wrote `where T is Iterator`
-// (don't double-slot the same constraint), and only fire on actual
-// interface receivers — struct receivers with `createIterator` follow the
-// concrete-conformer path that goes through `BuildWitnessTables` and
-// doesn't need the slot.
-function inferImplicitWitnessConstraints(project Project, recvType String, out WhereClauseArray)
-	let iface = try project.interfaces.get(recvType) otherwise return
+// (don't double-slot the same constraint).
+//
+// Two receiver shapes need the slot:
+//   - INTERFACE receivers (`Iterable.withIterator` before monomorphization):
+//     the iterator is the abstract uses-param `Iter`, so the constraint is
+//     `(Iter, Iterator)`.
+//   - GENERIC-STRUCT conformers (`Array.withIterator`, the monomorphized
+//     clone): the conformance binds the iterator to a CONDITIONAL instance
+//     (`ArrayIterator with Element`) whose element comes from the struct's
+//     own type-parameter. `BuildWitnessTables` only emits a concrete per-
+//     instance table, so the clone can't materialize the witness inline and
+//     must FORWARD it from its caller. The constraint is keyed by the
+//     struct's element type-param (`(Element, Iterator)`), matching the
+//     forward name `resolvedCalleeParamFromGenericInstance` pins for the
+//     conditional iterator inside the body.
+//
+// CONCRETE-iterator conformers (`OpenRange implements Iterable with
+// (RangeBound, RangeIterator)`) deliberately get NO slot: their iterator is
+// a fully concrete type with a real `(RangeIterator, Iterator)` witness
+// table, so the body materializes it inline through `BuildWitnessTables`.
+function inferImplicitWitnessConstraints(project Project, recvType String, func IrFunction, maxonModule MaxonModule, out WhereClauseArray)
+	if let iface = try project.interfaces.get(recvType) 'isInterface'
+		inferIterableIteratorConstraintFromInterface(project, iface: iface, recvType: recvType, out: out)
+		return
+	end 'isInterface'
+	// Struct conformer: only a body that actually forwards an iterator
+	// `Iterator` witness (constructs a `where (_) is Iterator` generic over
+	// the conformer's conditional iterator — the monomorphized
+	// `Array.withIterator` clone) needs the slot. Native struct methods
+	// (`Array.append`, `Array.push`, ...) carry the same generic receiver but
+	// never construct such a generic, so gating on the body keeps them
+	// slot-free and their callers from materializing a spurious witness.
+	if not functionForwardsIteratorWitness(project, func: func, maxonModule: maxonModule) 'noForward'
+		return
+	end 'noForward'
+	inferIterableIteratorConstraintFromConformer(project, structName: recvType, out: out)
+end 'inferImplicitWitnessConstraints'
+
+// True when `func`'s body contains a call whose callee's enclosing type
+// carries a `where (_) is Iterator` type-parameter constraint — i.e. the body
+// constructs a generic that demands an `Iterator` witness for one of its type
+// args. This is the structural signature of a method (like the monomorphized
+// `Array.withIterator`) that must forward an iterator witness; native struct
+// methods never call such a constructor, so they correctly return false.
+function functionForwardsIteratorWitness(project Project, func IrFunction, maxonModule MaxonModule) returns bool
+	let callerEnclosing = try enclosingTypeName(project, name: func.name) otherwise ""
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try maxonModule.blocks.get(blockRef) otherwise panic("functionForwardsIteratorWitness: blockRef {blockRef} OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try maxonModule.ops.get(opIdx) otherwise continue
+			let calleeType = try calleeEnclosingTypeOfOp(project, op: op, callerEnclosingType: callerEnclosing) otherwise continue
+			if typeParamsRequireIterator(project, declaringTypeName: calleeType) 'hit'
+				return true
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'functionForwardsIteratorWitness'
+
+// Body-scan for FOREIGN-base generic construction. A generic-shared function
+// (`Array.withIterator`) that constructs a DIFFERENT generic type whose own
+// `Self{...}` alloc routes its destructor through an implicit layout param
+// (`WithIterIterator.create`) cannot forward its OWN enclosing-instance layout
+// to that constructor — that would stamp the WRONG destroy thunk on the
+// constructed box (the `Array`-element drop instead of the `WithIterIterator`
+// field drop), leaking the moved-in field. Each such construction needs the
+// CONSTRUCTED type's own descriptor threaded in from the caller as a trailing
+// implicit layout slot.
+//
+// Returns the conditional `genericInstance` MaxonTypes the body constructs
+// (in the function's enclosing type-param scope, read from
+// `resolvedReceiverTypes` — the same receiver context the body's call lowering
+// uses), deduplicated by interned gid. Empty for the common case.
+function collectFunctionConstructLayoutGids(project Project, func IrFunction, maxonModule MaxonModule) returns MaxonTypeArray
+	var out = MaxonTypeArray.create()
+	var seen = GenericInstanceIdSet.create()
+	let enclosing = try enclosingTypeName(project, name: func.name) otherwise ""
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try maxonModule.blocks.get(blockRef) otherwise panic("collectFunctionConstructLayoutGids: blockRef {blockRef} OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try maxonModule.ops.get(opIdx) otherwise continue
+			if not opIsCallLike(op) 'notCall'
+				continue
+			end 'notCall'
+			let receiverType = try project.resolvedReceiverTypes.get(opIdx) otherwise continue
+			if not maxonTypeIsGenericInstance(receiverType) 'notGid'
+				continue
+			end 'notGid'
+			let gid = genericInstanceIdOrZero(receiverType)
+			let (baseId, gidArgs) = project.genericInstances.get(gid)
+			if not anyMaxonTypeIsConditional(gidArgs) 'concrete'
+				// Concrete construction site — the body materializes the real
+				// descriptor inline, no caller-threaded slot needed.
+				continue
+			end 'concrete'
+			let baseName = project.typeNames.get(baseId)
+			if baseName == enclosing 'selfConstruct'
+				// Constructing the enclosing instance (`Self{...}`) routes
+				// through the function's OWN layout param — no extra slot.
+				continue
+			end 'selfConstruct'
+			if not structConstructorNeedsLayoutDescriptor(project, structName: baseName) 'noLayoutDtor'
+				continue
+			end 'noLayoutDtor'
+			if seen.contains(gid) 'dup'
+				continue
+			end 'dup'
+			seen.insert(gid)
+			out.push(MaxonType.genericInstance(gid))
+		end 'eachOp'
+	end 'eachBlock'
+	return out
+end 'collectFunctionConstructLayoutGids'
+
+// True iff a `call`/`tryCall` op (the two op shapes that carry a resolved
+// receiver type for static/sibling construction). Other op shapes never key
+// `resolvedReceiverTypes`.
+function opIsCallLike(op MaxonOp) returns bool
+	return match op 'pick'
+		call gives true
+		tryCall gives true
+		literal to br gives false
+		methodCall to throw gives false
+		tryMethodCall to sizeofType gives false
+	end 'pick'
+end 'opIsCallLike'
+
+// True iff `structName`'s generic-shared constructor would stamp its
+// `Self{...}` alloc destructor from the implicit layout param — i.e. the
+// struct has at least one TYPE-PARAM-typed field whose drop is instance-
+// specific (mirrors the third clause of `structAllocLayoutDestructorApplies`).
+// A struct with only concrete (or no) managed fields takes the static-
+// destructor branch and needs no threaded descriptor.
+function structConstructorNeedsLayoutDescriptor(project Project, structName String) returns bool
+	let structType = try project.structTypes.get(structName) otherwise return false
+	for field in structType.fields 'eachField'
+		if maxonTypeIsTypeParameter(field.fieldType) 'typeParamField'
+			return true
+		end 'typeParamField'
+	end 'eachField'
+	return false
+end 'structConstructorNeedsLayoutDescriptor'
+
+// Extract the enclosing type name of a `call`/`tryCall` op's qualified
+// callee (`WithIterIterator.create` -> `WithIterIterator`). Throws for
+// non-call ops and bare/unqualified callees.
+function calleeEnclosingTypeOfOp(project Project, op MaxonOp, callerEnclosingType String) returns String throws EnclosingTypeError
+	let calleeStr = match op 'pick'
+		call(_, callee, _, _, _, _, _, _) gives String.from(callee)
+		tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
+		literal to br gives ""
+		methodCall to throw gives ""
+		tryMethodCall to sizeofType gives ""
+	end 'pick'
+	if calleeStr.isEmpty() 'notCall'
+		throw EnclosingTypeError.notAMethod
+	end 'notCall'
+	let bytes = calleeStr.toByteArray()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= bytes.count() 'noDot'
+		throw EnclosingTypeError.notAMethod
+	end 'noDot'
+	let prefix = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	if project.structTypes.contains(prefix) 'concreteEnclosing'
+		return prefix
+	end 'concreteEnclosing'
+	// The callee may be qualified by a generic typealias (`WithIterSelf.create`
+	// where `WithIterSelf = WithIterIterator with Iter, Element`); chase it to
+	// the underlying struct so the `where (_) is Iterator` probe runs against
+	// the real declaring type. `WithIterSelf` is an inner alias of `Iterable`,
+	// so the conformance-aware chase is needed — pass the function's own
+	// enclosing struct as the chase scope. An unresolvable prefix returns
+	// itself so the caller's `Iterator`-constraint probe simply finds nothing.
+	return try chaseTypealiasNameToStruct(project, name: prefix, enclosingType: callerEnclosingType) otherwise prefix
+end 'calleeEnclosingTypeOfOp'
+
+// True when any type-parameter declared on `declaringTypeName` carries an
+// `Iterator` (or an `Iterator`-extending) trait constraint. Drives the
+// body-scan gate: `WithIterIterator uses Source ... where Source is Iterator`
+// returns true.
+function typeParamsRequireIterator(project Project, declaringTypeName String) returns bool
+	for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
+		let d = try project.typeParameters.declaringTypeNames.get(i) otherwise panic("typeParamsRequireIterator: declaringTypeNames.get OOB at {i}")
+		if d != declaringTypeName 'differentOwner'
+			continue
+		end 'differentOwner'
+		let cs = project.typeParameters.getConstraints(i)
+		for j in 0 upto cs.count() 'eachTrait'
+			let traitName = try cs.get(j) otherwise panic("typeParamsRequireIterator: constraints.get OOB at {j}")
+			if traitName == "Iterator" or interfaceExtendsIterator(project, interfaceName: traitName) 'isIterator'
+				return true
+			end 'isIterator'
+		end 'eachTrait'
+	end 'scan'
+	return false
+end 'typeParamsRequireIterator'
+
+// True when `interfaceName` is `Iterator` or transitively extends it. Used so
+// a `where X is BidirectionalIterator` constraint (BidirectionalIterator
+// extends Iterator) still counts as requiring an iterator witness.
+function interfaceExtendsIterator(project Project, interfaceName String) returns bool
+	if interfaceName == "Iterator" 'isIterator'
+		return true
+	end 'isIterator'
+	let iface = try project.interfaces.get(interfaceName) otherwise return false
+	for parent in iface.extendsNames 'eachParent'
+		if interfaceExtendsIterator(project, interfaceName: parent) 'parentHit'
+			return true
+		end 'parentHit'
+	end 'eachParent'
+	return false
+end 'interfaceExtendsIterator'
+
+// Interface-receiver path: the iterator is the uses-param returned by
+// `createIterator`. Emit `(Iter, Iterator)` keyed by that uses-param name.
+function inferIterableIteratorConstraintFromInterface(project Project, iface IrInterface, recvType String, out WhereClauseArray)
 	for i in 0 upto iface.methods.count() 'eachMethod'
-		let m = try iface.methods.get(i) otherwise panic("inferImplicitWitnessConstraints: methods.get OOB at {i}")
+		let m = try iface.methods.get(i) otherwise panic("inferIterableIteratorConstraintFromInterface: methods.get OOB at {i}")
 		if m.name != "createIterator" 'notCreate'
 			continue
 		end 'notCreate'
@@ -12957,7 +13498,142 @@ function inferImplicitWitnessConstraints(project Project, recvType String, out W
 		end 'alreadyHave'
 		out.push(existing)
 	end 'eachMethod'
-end 'inferImplicitWitnessConstraints'
+end 'inferIterableIteratorConstraintFromInterface'
+
+// Generic-struct-conformer path: walk every interface `structName` conforms
+// to; for each Iterable-shaped interface (declares `createIterator`
+// returning a uses-param), read the conformance's iterator binding. When
+// that binding is CONDITIONAL (mentions one of the struct's own type-params,
+// e.g. `Array implements Iterable with (Element, ArrayIterator with
+// Element)`), the witness can't be built per-instance for the shared clone,
+// so emit a `(<elementParam>, Iterator)` slot keyed by the struct type-param
+// the iterator depends on. The matching call-site materializer
+// (`tryMaterializeIteratorWitnessFromConformance`) resolves that param
+// through the conformance to the concrete iterator gid.
+function inferIterableIteratorConstraintFromConformer(project Project, structName String, out WhereClauseArray)
+	for confId in project.conformances.idsForType(structName) 'eachConf'
+		let ifaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("inferIterableIteratorConstraintFromConformer: interfaceNames.get OOB at {confId}")
+		let iface = try project.interfaces.get(ifaceName) otherwise continue
+		let iterParamName = try iterableIteratorUsesParam(project, iface: iface) otherwise continue
+		let iterOrdinal = try ordinalOfParamName(iface.usesParams, paramName: iterParamName) otherwise continue
+		let confArgs = try project.conformances.withArgsList.get(confId) otherwise panic("inferIterableIteratorConstraintFromConformer: withArgsList.get OOB at {confId}")
+		let iterBinding = try confArgs.get(iterOrdinal) otherwise continue
+		let elementParam = try soleTypeParamNameOfBinding(project, t: iterBinding) otherwise continue
+		let existing = WhereClause.createScoped(elementParam, requiredTraitName: "Iterator", declaringTypeName: structName)
+		if whereClauseArrayContains(out, clause: existing) 'alreadyHave'
+			continue
+		end 'alreadyHave'
+		out.push(existing)
+	end 'eachConf'
+end 'inferIterableIteratorConstraintFromConformer'
+
+// Return the uses-param an Iterable-shaped interface uses as its iterator —
+// the param that its `createIterator` returns. Throws when the interface
+// doesn't declare a `createIterator` returning a bare uses-param (i.e. it
+// isn't Iterable-shaped).
+function iterableIteratorUsesParam(project Project, iface IrInterface) returns String throws IteratorParamLookupError
+	for i in 0 upto iface.methods.count() 'eachMethod'
+		let m = try iface.methods.get(i) otherwise panic("iterableIteratorUsesParam: methods.get OOB at {i}")
+		if m.name != "createIterator" 'notCreate'
+			continue
+		end 'notCreate'
+		let returnedName = try returnTypeNamedName(project, ref: m.returnType) otherwise continue
+		if not stringArrayContains(iface.usesParams, value: returnedName) 'notUsesParam'
+			continue
+		end 'notUsesParam'
+		return returnedName
+	end 'eachMethod'
+	throw IteratorParamLookupError.notIterable
+end 'iterableIteratorUsesParam'
+
+enum IteratorParamLookupError implements Error
+	notIterable
+end 'IteratorParamLookupError'
+
+enum IteratorWitnessMiss implements Error
+	notIteratorConstraint
+	noConformanceIterator
+end 'IteratorWitnessMiss'
+
+enum ConstructLayoutSlotMiss implements Error
+	notAConstruction
+end 'ConstructLayoutSlotMiss'
+
+// A conformance iterator binding like `ArrayIterator with Element` (a
+// `genericInstance` whose sole arg is one of the conformer's type-params)
+// yields that element param's name; a fully concrete binding (e.g.
+// `RangeIterator`) yields nothing — the concrete-witness path handles it. A
+// `named` alias that resolves to such a single-param generic instance is
+// chased one level so `ArrayIter = ArrayIterator with Element` still maps to
+// `Element`.
+function soleTypeParamNameOfBinding(project Project, t MaxonType) returns String throws IteratorParamLookupError
+	let resolved = chaseBindingToGenericInstance(project, t: t)
+	match resolved 'pick'
+		genericInstance(gid) then return try soleTypeParamNameOfGid(project, gid: gid)
+		boolean to typeParameter then throw IteratorParamLookupError.notIterable
+		interface to cstring then throw IteratorParamLookupError.notIterable
+	end 'pick'
+end 'soleTypeParamNameOfBinding'
+
+function soleTypeParamNameOfGid(project Project, gid GenericInstanceId) returns String throws IteratorParamLookupError
+	let (_, args) = project.genericInstances.get(gid)
+	let name = trySoleConditionalParamName(project, args: args)
+	if name.isEmpty() 'notSingleParam'
+		throw IteratorParamLookupError.notIterable
+	end 'notSingleParam'
+	return name
+end 'soleTypeParamNameOfGid'
+
+// Chase a `named` iterator binding one level through inner / generic
+// typealiases so `ArrayIter` (an inner alias of `Array`) surfaces its
+// underlying `ArrayIterator with Element` generic instance. Non-alias and
+// already-generic bindings pass through unchanged.
+function chaseBindingToGenericInstance(project Project, t MaxonType) returns MaxonType
+	let nameId = try maxonTypeNamedId(t) otherwise return t
+	let bareName = project.typeNames.get(nameId)
+	if let aliasTarget = try project.genericTypealiases.get(bareName) 'genericAlias'
+		return aliasTarget
+	end 'genericAlias'
+	let innerExpanded = tryAnyStructInnerAlias(project, name: bareName, fallbackId: nameId)
+	return innerExpanded
+end 'chaseBindingToGenericInstance'
+
+// Recursively canonicalize a `genericInstance`'s args so each arg is in the
+// SAME structural form BuildLayoutDescriptors keyed its descriptor under: a
+// `named` arg that aliases a generic instance (`ArrayIter = ArrayIterator with
+// Element`) is chased to its expanded form, then recursively canonicalized,
+// then the whole gid is re-interned. `substituteType` alone cannot do this —
+// it passes `named` arms through unchanged because the alias hides the inner
+// type-param it would otherwise rewrite. Non-genericInstance inputs and
+// already-canonical args pass through untouched.
+// Extract the `GenericInstanceId` from a `genericInstance` MaxonType, or 0 for
+// any other arm. Callers that need the gid to be meaningful guard with
+// `maxonTypeIsGenericInstance` first; the 0 fallback only feeds an early
+// return / a guarded-out path, never a live descriptor lookup.
+function genericInstanceIdOrZero(t MaxonType) returns GenericInstanceId
+	return match t 'pick'
+		genericInstance(g) gives g
+		boolean to typeParameter gives 0
+		interface to cstring gives 0
+	end 'pick'
+end 'genericInstanceIdOrZero'
+
+function canonicalizeGenericInstanceArgsDeep(project Project, t MaxonType) returns MaxonType
+	if not maxonTypeIsGenericInstance(t) 'notGid'
+		return t
+	end 'notGid'
+	let gid = genericInstanceIdOrZero(t)
+	let (baseId, args) = project.genericInstances.get(gid)
+	var canonArgs = MaxonTypeArray.create()
+	for arg in args 'eachArg'
+		let chased = chaseBindingToGenericInstance(project, t: arg)
+		canonArgs.push(canonicalizeGenericInstanceArgsDeep(project, t: chased))
+	end 'eachArg'
+	// Re-interning is idempotent: a structurally-unchanged arg list returns
+	// the same gid, so no change-detection is needed.
+	let canonGid = project.genericInstances.intern(baseId, args: canonArgs)
+	return MaxonType.genericInstance(canonGid)
+end 'canonicalizeGenericInstanceArgsDeep'
 
 // Extract the bare named-type name from a `MaxonReturnType`, or throw when
 // the return is `void` or a non-named MaxonType shape (genericInstance,
