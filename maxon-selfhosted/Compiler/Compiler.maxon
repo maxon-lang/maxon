@@ -1,7 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create()) returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false) returns FilePath throws CompileError
 	// Persisting the lazily-grown stdlib cache back to disk is safe from ANY
 	// project (Phase 3.5 made the cache codec project-independent — it resolves
 	// through the cache's own snapshot tables, not the consumer's interner), so
@@ -12,6 +12,9 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// binary exits 101 if any allocation is live at exit. Standalone equivalent of
 	// the spec runner's per-fragment leak gate; does NOT bypass the stdlib cache.
 	project.leakCheckEnabled = leakCheck
+	// `--fast`: use the fast register allocator (depth-0 recolor, no splitting,
+	// tighter spill-loop cap). Off by default so a normal build is byte-identical.
+	project.fastRegalloc = fastRegalloc
 	// `--cache-stats` / `--cache-root=DIR` (internal, drives `maxon test-lib-cache`):
 	// print the post-build CACHE_STATS line and/or redirect the library cache to a
 	// throwaway temp dir. Both default off / empty, so a normal build is unchanged.

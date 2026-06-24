@@ -1518,7 +1518,7 @@ function buildAndWriteLibraryCache(project Project, allModule MaxonModule, metaP
 		// stdlib/runtime resolve by name through `combinedLibraryCache()`'s
 		// name-keyed union at link time, and the external lib carries no runtime
 		// bodies of its own. (Phase 7 generalizes the lazy state per-library.)
-		cacheData.functions = emitLibraryNativeEager(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, ownFuncNames: ownFuncNames)
+		cacheData.functions = emitLibraryNativeEager(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, ownFuncNames: ownFuncNames, fastRegalloc: project.fastRegalloc)
 		logInfo(LogCategory.compiler, message: function() gives "Wrote library cache ({libName}): {cacheData.functions.count()} native functions to {cachePath}")
 	end 'nativeEager'
 
@@ -1565,7 +1565,7 @@ end 'buildAndWriteLibraryCache'
 // functions; its calls into them resolve by name through the Phase-4 union at
 // link time. Runtime functions are filtered out (the external lib carries none;
 // the filter is defensive, mirroring the wasm path).
-function emitLibraryNativeEager(mirModule MirModule, target Target, globalData GlobalDataTable, ownFuncNames StringSet) returns ObjectFunctionArray
+function emitLibraryNativeEager(mirModule MirModule, target Target, globalData GlobalDataTable, ownFuncNames StringSet, fastRegalloc bool) returns ObjectFunctionArray
 	// Emit ONLY the library's own functions. The pipeline pulls stdlib bodies
 	// (monomorphized generics, inlined accessors) into `mirModule`; those already
 	// live in stdlib's cache, so re-emitting them here would double-define them at
@@ -1586,8 +1586,8 @@ function emitLibraryNativeEager(mirModule MirModule, target Target, globalData G
 	// activated before any external library is registered.)
 	let stdlibFuncs = (try libraryRegistry.libs.get(0) otherwise panic("emitLibraryNativeEager: stdlib (index 0) not registered")).cacheData.functions
 	match target.cpu 'arch'
-		x64 then return runNativeBackendTail(X64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target)
-		arm64 then return runNativeBackendTail(Arm64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target)
+		x64 then return runNativeBackendTail(X64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target, fastRegalloc: fastRegalloc)
+		arm64 then return runNativeBackendTail(Arm64Backend.create(mirModule, target: target, globalData: globalData, stdlibFunctions: stdlibFuncs), funcsToLower: funcsToLower, target: target, fastRegalloc: fastRegalloc)
 		default panic("emitLibraryNativeEager: non-native target reached eager native emit")
 	end 'arch'
 end 'emitLibraryNativeEager'
@@ -2450,8 +2450,8 @@ end 'mergeGrownGlobalDataInto'
 function compileStdlibMirSubsetNative(project Project, funcsToLower IrFunctionArray) returns ObjectFunctionArray
 	let data = stdlibLib().cacheData
 	match project.target.cpu 'arch'
-		x64 then return runNativeBackendTail(X64Backend.create(lazyStdlibMir, target: project.target, globalData: data.globalData, stdlibFunctions: data.functions), funcsToLower: funcsToLower, target: project.target)
-		arm64 then return runNativeBackendTail(Arm64Backend.create(lazyStdlibMir, target: project.target, globalData: data.globalData, stdlibFunctions: data.functions), funcsToLower: funcsToLower, target: project.target)
+		x64 then return runNativeBackendTail(X64Backend.create(lazyStdlibMir, target: project.target, globalData: data.globalData, stdlibFunctions: data.functions), funcsToLower: funcsToLower, target: project.target, fastRegalloc: project.fastRegalloc)
+		arm64 then return runNativeBackendTail(Arm64Backend.create(lazyStdlibMir, target: project.target, globalData: data.globalData, stdlibFunctions: data.functions), funcsToLower: funcsToLower, target: project.target, fastRegalloc: project.fastRegalloc)
 		default panic("compileStdlibMirSubsetNative: non-native target reached lazy native codegen")
 	end 'arch'
 end 'compileStdlibMirSubsetNative'
@@ -2463,9 +2463,9 @@ end 'compileStdlibMirSubsetNative'
 // constructed by the caller's `match` so the interface value is a parameter,
 // not a local from a returning function (which the C# bootstrap can't resolve
 // interface-dispatch on).
-function runNativeBackendTail(backend TargetBackend, funcsToLower IrFunctionArray, target Target) returns ObjectFunctionArray
+function runNativeBackendTail(backend TargetBackend, funcsToLower IrFunctionArray, target Target, fastRegalloc bool) returns ObjectFunctionArray
 	var targetModule = backend.lowerMirToTargetForFunctions(funcsToLower)
-	targetModule = allocateRegisters(targetModule, target: target)
+	targetModule = allocateRegisters(targetModule, target: target, fastRegalloc: fastRegalloc)
 	insertPrologueEpilogueWith(targetModule, backend: backend)
 	return backend.emitPerFunction()
 end 'runNativeBackendTail'

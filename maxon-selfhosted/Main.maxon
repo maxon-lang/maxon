@@ -112,6 +112,7 @@ function printUsage()
 	print("  --dump-stages[=NAMES]    Write IR at each pipeline stage (user program only); NAMES = comma-separated pass-name substrings to dump only matching stages (e.g. =insert-refcounts)\n")
 	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
+	print("  --fast                   Fast register allocation: much faster dev builds, slightly worse codegen (default is quality)\n")
 	print("  --coverage               Emit a coverage-instrumented executable + .covmap\n")
 	print("  --cache-stats            Print a CACHE_STATS line after the build (library-cache hit/miss diagnostics)\n")
 	print("\n")
@@ -156,7 +157,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'hasCacheRoot'
 
 	let startMs = Clock.nowMs()
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries) otherwise (e) 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries, fastRegalloc: args.fastRegalloc) otherwise (e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
 			directoryNotFound(p) then printError("error: directory not found: {p}\n")

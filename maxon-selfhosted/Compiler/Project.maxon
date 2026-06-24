@@ -744,6 +744,14 @@ export type Project
 	// Off by default — production binaries don't pay the exit-time check.
 	export var leakCheckEnabled as bool
 
+	// When true (`maxon build --fast`), the backend uses the fast register
+	// allocator: depth-0 last-chance recoloring (the recursive recolor search
+	// is the dominant regalloc cost) plus no call/use range splitting. Trades a
+	// little codegen quality on register-pressured functions for a large
+	// compile-time win. Off by default — a default build keeps today's exact,
+	// byte-identical allocation.
+	export var fastRegalloc as bool
+
 	// True when `maxon build --cache-stats <file>` should print a `CACHE_STATS …`
 	// line after the build (per-function regalloc hits/misses, stdlib cache
 	// hit/miss, compiled-function count). Read by the `maxon test-lib-cache`
@@ -1026,6 +1034,7 @@ export type Project
 			coverageEnabled: false,
 			asyncTraceEnabled: false,
 			leakCheckEnabled: false,
+			fastRegalloc: false,
 			cacheStatsEnabled: false,
 			cacheRootOverride: FilePath from "",
 			libraryDirs: FilePathArray.create(),

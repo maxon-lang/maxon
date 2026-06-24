@@ -540,26 +540,26 @@ end 'functionHasVirtualRegs'
 // registers. If all registers are already physical (ISel assigned them
 // directly), the module is returned unchanged. If virtual registers are
 // present, runs the full SSA register allocation to resolve them.
-export function allocateRegisters(module TargetModule, target Target) returns TargetModule
+export function allocateRegisters(module TargetModule, target Target, fastRegalloc bool = false) returns TargetModule
 	match target.cpu 'dispatch'
-		x64 then allocateWithX64(module, target: target)
-		arm64 then allocateWithArm64(module)
+		x64 then allocateWithX64(module, target: target, fastRegalloc: fastRegalloc)
+		arm64 then allocateWithArm64(module, fastRegalloc: fastRegalloc)
 		wasm32 then break 'dispatch'
 	end 'dispatch'
 	return module
 end 'allocateRegisters'
 
-function allocateWithX64(module TargetModule, target Target)
+function allocateWithX64(module TargetModule, target Target, fastRegalloc bool)
 	let desc = createX64TargetRegAlloc(target.os)
-	allocateRegistersWithTarget(module, regTarget: X64RegAllocTarget.create(), desc: desc, opQuery: X64OpQuery.create())
+	allocateRegistersWithTarget(module, regTarget: X64RegAllocTarget.create(), desc: desc, opQuery: X64OpQuery.create(), fastRegalloc: fastRegalloc)
 end 'allocateWithX64'
 
-function allocateWithArm64(module TargetModule)
+function allocateWithArm64(module TargetModule, fastRegalloc bool)
 	let desc = createArm64TargetRegAlloc()
-	allocateRegistersWithTarget(module, regTarget: Arm64RegAllocTarget.create(), desc: desc, opQuery: Arm64OpQuery.create())
+	allocateRegistersWithTarget(module, regTarget: Arm64RegAllocTarget.create(), desc: desc, opQuery: Arm64OpQuery.create(), fastRegalloc: fastRegalloc)
 end 'allocateWithArm64'
 
-function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
+function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery, fastRegalloc bool)
 	let needsRegalloc = collectFuncsNeedingRegalloc(module, regTarget: regTarget)
 
 	if needsRegalloc.count() == 0 'allPhysical'
@@ -571,7 +571,7 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 	for funcIdx in needsRegalloc 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("allocateRegistersWithTarget: functions.get OOB at {funcIdx}")
 		let funcStart = passTimerStart()
-		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery)
+		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery, fastRegalloc: fastRegalloc)
 		// Defer the classify call so its string-format cost is only paid when
 		// timings are active.
 		if passTimingsActive() 'recordFunc'
@@ -622,8 +622,8 @@ end 'ssaGetEntryBlockId'
 // SSA register allocation pipeline
 // ============================================================
 
-function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
-	var allocator = FunctionRegAllocator.create(srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery)
+function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery, fastRegalloc bool)
+	var allocator = FunctionRegAllocator.create(srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery, fastRegalloc: fastRegalloc)
 	allocator.run()
 end 'allocateRegistersForFunc'
 
@@ -643,6 +643,11 @@ type FunctionRegAllocator
 	export var desc as TargetRegAlloc
 	export var regTarget as RegAllocTarget
 	export var opQuery as TargetOpQuery
+	// `--fast`: when true, the colorer uses depth-0 last-chance recoloring and
+	// the spill loop skips the call/use range splitters — disabling the
+	// expensive quality machinery that dominates compile time. Default false
+	// (today's exact behavior).
+	export var fastRegalloc as bool
 
 	// --- Phase 0: CFG analysis outputs ---
 	export var cfg as CfgInfo
@@ -700,7 +705,7 @@ type FunctionRegAllocator
 	// not set.
 	export var cascadeByValueId as RegIntArray
 
-	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery) returns FunctionRegAllocator
+	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery, fastRegalloc bool) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
 		// by run(); they exist only so the type can be constructed up front.
 		return Self{
@@ -709,6 +714,7 @@ type FunctionRegAllocator
 			desc: desc,
 			regTarget: regTarget,
 			opQuery: opQuery,
+			fastRegalloc: fastRegalloc,
 			cfg: createCfgInfo(0),
 			rpo: RpoInfo.create(BlockIdArray.create(), index: ValueIdArray.create()),
 			domInfo: DomInfo.create(ValueIdArray.create()),
@@ -752,7 +758,7 @@ type FunctionRegAllocator
 	end 'runLivenessAndRanges'
 
 	function runColoring()
-		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId)
+		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
 	end 'runColoring'
 
 	// Phases 4-5: iterate spill/re-color until every virtual range is colored.
@@ -800,7 +806,16 @@ type FunctionRegAllocator
 		var prevUncolored = -1
 		var noProgressStreak = 0
 		let splitProgressBudget = 3
-		var splittingHelps = true
+		// Fast mode skips the call/use range splitters entirely. Splitting is a
+		// pure quality pass (it shortens live ranges so they color without a
+		// spill) but each successful split forces a FULL liveness+coloring
+		// rebuild, and a function can split up to `2 * ranges.count()` times —
+		// it is a dominant slice of the spill-loop's cross-pass redundant cost.
+		// Disabling it makes an over-pressured range spill directly instead;
+		// correctness is unaffected (a spilled range still gets a stack slot and
+		// reloads). The eviction-based colorer plus the spiller already
+		// guarantee every range is either colored or spilled.
+		var splittingHelps = not fastRegalloc
 		// Track whether remat-only iterations make progress. Without this,
 		// a constant `2` that fails to color at its (high-pressure) use
 		// re-rematerializes every iteration: the fresh `movRegImm`-defined

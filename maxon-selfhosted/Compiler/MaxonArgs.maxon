@@ -60,6 +60,17 @@ export type MaxonArgs
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses as bool
+	// `maxon build --fast <file>`: use the fast register allocator. Register
+	// allocation dominates self-hosted compile time, and the bulk of that cost
+	// is the expensive last-chance recoloring search plus the call/use range
+	// splitters — quality machinery that earns release-grade codegen at a steep
+	// compile-time price. `--fast` disables that machinery (depth-0 recolor, no
+	// splitting) so dev/iteration builds compile much faster at the cost of
+	// slightly worse code on register-pressured functions. Off by default: a
+	// default build keeps today's exact, byte-identical allocation (the
+	// `-O0`-fast vs `-O2`-slow split LLVM draws between `regalloc=fast` and
+	// `regalloc=greedy`).
+	export var fastRegalloc as bool
 	// `maxon build --cache-stats <file>`: print a `CACHE_STATS …` line after the
 	// build reporting per-function regalloc hits/misses, the stdlib cache
 	// hit/miss, and the compiled-function count. Drives the `maxon test-lib-cache`
@@ -114,6 +125,7 @@ export type MaxonArgs
 			coverage: false,
 			leakCheck: false,
 			profilePasses: false,
+			fastRegalloc: false,
 			cacheStats: false,
 			cacheRoot: "",
 			libraries: StringArray.create(),
@@ -206,7 +218,9 @@ export type MaxonArgs
 				args.coverage = true
 			end 'isCoverage' else if arg == "--profile-passes" 'isProfilePasses'
 				args.profilePasses = true
-			end 'isProfilePasses' else if arg == "--cache-stats" 'isCacheStats'
+			end 'isProfilePasses' else if arg == "--fast" 'isFast'
+				args.fastRegalloc = true
+			end 'isFast' else if arg == "--cache-stats" 'isCacheStats'
 				args.cacheStats = true
 			end 'isCacheStats' else if arg.startsWith("--cache-root=") 'isCacheRoot'
 				// Sentinel: empty value flows to runBuild, which leaves the override

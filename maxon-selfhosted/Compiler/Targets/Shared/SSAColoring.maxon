@@ -162,7 +162,23 @@ let MAX_CASCADE = 8
 // hitting the depth cap.
 let MAX_RECOLOR_DEPTH = 3
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray) returns ColoringResult
+// The effective last-chance-recolor recursion depth for a coloring pass.
+// In `--fast` mode this is 0, which makes `tryLastChanceRecolor` return
+// immediately (its `depth <= 0` early-out), so a range that simple eviction
+// couldn't place just spills instead of triggering the recursive recolor
+// search. That search explores up to `MAX_RECOLOR_DEPTH * fanout * poolSize`
+// nodes per uncolored range — hundreds of thousands of nodes for a handful of
+// successful recolors on pressured functions — and is the single largest
+// regalloc cost. Quality mode keeps the full depth so its codegen is identical
+// to today.
+function effectiveRecolorDepth(fastRegalloc bool) returns RegInt
+	if fastRegalloc 'fast'
+		return 0
+	end 'fast'
+	return MAX_RECOLOR_DEPTH
+end 'effectiveRecolorDepth'
+
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, fastRegalloc bool) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -185,8 +201,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId)
-	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
 
 	logDebug(LogCategory.ir, message: function() gives "ssa-color: gpr={gprRanges.count()} fp={fpRanges.count()} maxVal={maxValueId}")
 	return result
@@ -196,7 +212,7 @@ end 'colorSSA'
 // Per-class coloring
 // ============================================================
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray)
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, fastRegalloc bool)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -367,7 +383,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// evictee weight or smaller cascade at equal weight) plus the
 	// MAX_CASCADE bound guarantees termination — see the LiveRange.cascade
 	// comment for the proof sketch.
-	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId)
+	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
 end 'colorClass'
 
 // Attempt to color a single range, writing the assignment to `rangeColors` and
@@ -490,8 +506,13 @@ end 'tryColorRange'
 // Ranges left uncolored after this pass fall through to the spill loop
 // (RegisterAllocator.runSpillColorLoop) just as before — the fixup never
 // makes the picker fail where the first-fit pass succeeded.
-function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, cascadeByValueId RegIntArray)
+function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, cascadeByValueId RegIntArray, fastRegalloc bool)
 	let numRanges = ranges.count()
+	// Effective last-chance-recolor depth. 0 in fast mode disables the
+	// recursive recolor search (the dominant regalloc cost) — the simple
+	// cascade-eviction below still runs, so termination and correctness are
+	// unaffected; a range eviction can't place just spills.
+	let recolorDepth = effectiveRecolorDepth(fastRegalloc)
 	// Worklist of range indices to (re-)try coloring. Initialized from
 	// the set of virtual ranges still uncolored after first-fit.
 	var pending = RegIntArray.create()
@@ -613,7 +634,7 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 			// bottom out within MAX_RECOLOR_DEPTH steps. It never spills, so
 			// it is safe to attempt for normal-weight evictors too.
 			var fixed = BoolArray.create()
-			let recolored = tryLastChanceRecolor(sortedIdx, depth: MAX_RECOLOR_DEPTH, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+			let recolored = tryLastChanceRecolor(sortedIdx, depth: recolorDepth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
 			if recolored 'recolorOk'
 				logTrace(LogCategory.ir, message: function() gives "ssa-color: last-chance-recolor v{range.valueId} (weight={range.spillWeight}, cascade={range.cascade})")
 				continue
