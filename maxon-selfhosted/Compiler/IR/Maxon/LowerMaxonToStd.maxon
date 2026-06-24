@@ -13068,7 +13068,7 @@ function resolvedCalleeParamFromGenericInstance(project Project, gid GenericInst
 		// `Array.withIterator` body) forwards the caller's witness slot
 		// keyed by that element param name. The clone's
 		// `implicitWitnessConstraints` carries a matching `(Element,
-		// Iterator)` slot (see `inferIterableIteratorConstraint`), so pinning
+		// Iterator)` slot (see `inferIterableIteratorConstraintFromConformer`), so pinning
 		// the forward name here lets `forwardCallerWitness` resolve it
 		// instead of falling back to the callee-scope `Source`, which the
 		// clone never declares. An empty name keeps the historic same-scope
@@ -13483,22 +13483,21 @@ end 'interfaceExtendsIterator'
 // Interface-receiver path: the iterator is the uses-param returned by
 // `createIterator`. Emit `(Iter, Iterator)` keyed by that uses-param name.
 function inferIterableIteratorConstraintFromInterface(project Project, iface IrInterface, recvType String, out WhereClauseArray)
-	for i in 0 upto iface.methods.count() 'eachMethod'
-		let m = try iface.methods.get(i) otherwise panic("inferIterableIteratorConstraintFromInterface: methods.get OOB at {i}")
-		if m.name != "createIterator" 'notCreate'
-			continue
-		end 'notCreate'
-		let returnedName = try returnTypeNamedName(project, ref: m.returnType) otherwise continue
-		if not stringArrayContains(iface.usesParams, value: returnedName) 'notUsesParam'
-			continue
-		end 'notUsesParam'
-		let existing = WhereClause.createScoped(returnedName, requiredTraitName: "Iterator", declaringTypeName: recvType)
-		if whereClauseArrayContains(out, clause: existing) 'alreadyHave'
-			continue
-		end 'alreadyHave'
-		out.push(existing)
-	end 'eachMethod'
+	let iterParamName = try iterableIteratorUsesParam(project, iface: iface) otherwise return
+	pushIteratorConstraintOnce(iterParamName, requiredTraitName: "Iterator", declaringTypeName: recvType, out: out)
 end 'inferIterableIteratorConstraintFromInterface'
+
+// Append an iterator-witness `WhereClause` unless an identical
+// `(paramName, requiredTraitName, declaringTypeName)` triple is already
+// present. Shared by the interface- and struct-conformer inference paths so
+// both dedup against `out` the same way.
+function pushIteratorConstraintOnce(paramName String, requiredTraitName String, declaringTypeName String, out WhereClauseArray)
+	let existing = WhereClause.createScoped(paramName, requiredTraitName: requiredTraitName, declaringTypeName: declaringTypeName)
+	if whereClauseArrayContains(out, clause: existing) 'alreadyHave'
+		return
+	end 'alreadyHave'
+	out.push(existing)
+end 'pushIteratorConstraintOnce'
 
 // Generic-struct-conformer path: walk every interface `structName` conforms
 // to; for each Iterable-shaped interface (declares `createIterator`
@@ -13519,11 +13518,7 @@ function inferIterableIteratorConstraintFromConformer(project Project, structNam
 		let confArgs = try project.conformances.withArgsList.get(confId) otherwise panic("inferIterableIteratorConstraintFromConformer: withArgsList.get OOB at {confId}")
 		let iterBinding = try confArgs.get(iterOrdinal) otherwise continue
 		let elementParam = try soleTypeParamNameOfBinding(project, t: iterBinding) otherwise continue
-		let existing = WhereClause.createScoped(elementParam, requiredTraitName: "Iterator", declaringTypeName: structName)
-		if whereClauseArrayContains(out, clause: existing) 'alreadyHave'
-			continue
-		end 'alreadyHave'
-		out.push(existing)
+		pushIteratorConstraintOnce(elementParam, requiredTraitName: "Iterator", declaringTypeName: structName, out: out)
 	end 'eachConf'
 end 'inferIterableIteratorConstraintFromConformer'
 
