@@ -402,6 +402,19 @@ export type Project
 	// reparses (e.g. user-project parse after stdlib parse) start clean.
 	export var pendingFuncRenames as FuncRenameMap
 
+	// PERSISTENT cross-file overload renames for USER files (the same
+	// `oldBareName -> newMangledName` pairs `pendingFuncRenames` carries
+	// transiently). `pendingFuncRenames` is cleared by every drain, so it only
+	// reflects renames queued during the CURRENT parse pass — a problem for the
+	// user pipeline, whose `allModule` is rebuilt on every `queryAllModule`
+	// recompute (e.g. an unrelated file changed) while the overloaded files
+	// stay parse-cache hits and never re-queue their rename. This map keeps the
+	// rename alive across rebuilds so `applyCrossFileOverloadRenames` can
+	// re-apply it to the freshly-merged `allModule` every time. Per-file rollback
+	// (a re-parse of the file whose overload triggered the rename) removes the
+	// matching entry via `crossFileOverloadRenamesKeys` in that file's delta.
+	export var crossFileOverloadRenames as FuncRenameMap
+
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants as ConstantMap
 
@@ -550,11 +563,14 @@ export type Project
 	// `interface(_)` everywhere it matters, matching maxon-sharp's `PreScan`.
 	export var prescannedInterfaceNames as PrescannedInterfaceNameSet
 	// Pre-parse scan output: every top-level `union <Name>` declaration across
-	// all files. Lets `enumIsAssociatedValueUnion` recognise a cross-file /
-	// forward-referenced union before its declaring file is parsed, so a caught
-	// error union binding (`try X() otherwise (e)` where the union is declared
-	// later) binds to the box pointer and reads payloads at the correct offset.
-	export var prescannedUnionNames as PrescannedUnionNameSet
+	// all files, mapped to whether any case carries a payload. Lets `enumIsUnion`
+	// recognise a cross-file / forward-referenced union (membership) and
+	// `unionIsBoxed` recover its representation (the payload flag) before its
+	// declaring file is parsed — so a caught error union binding (`try X()
+	// otherwise (e)`) and a thrown union case (`throw E.case`) both lower the same
+	// way they would once the union resolves: heap-boxed unions box + construct,
+	// scalar unions use the ordinal ABI.
+	export var prescannedUnionPayload as PrescannedUnionPayloadMap
 	// Pre-parse scan output: the qualified name of every function whose header
 	// declares `returns bool`, across all files. Lets the parser pin a
 	// bool-returning call's result type at the `and`/`or` short-circuit gate
@@ -966,6 +982,7 @@ export type Project
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
 			overloadedNames: OverloadedNameMap.create(),
 			pendingFuncRenames: FuncRenameMap.create(),
+			crossFileOverloadRenames: FuncRenameMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
@@ -984,7 +1001,7 @@ export type Project
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
 			interfaces: IrInterfaceMap.create(),
 			prescannedInterfaceNames: PrescannedInterfaceNameSet.create(),
-			prescannedUnionNames: PrescannedUnionNameSet.create(),
+			prescannedUnionPayload: PrescannedUnionPayloadMap.create(),
 			prescannedReturnBoolNames: PrescannedReturnBoolNameSet.create(),
 			functionTypes: FunctionTypeRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
@@ -3744,14 +3761,21 @@ export typealias RangeAmbiguousAliasNameSet = Set with String
 // name scan's output. See the field comment on `Project`.
 export typealias PrescannedInterfaceNameSet = Set with String
 
-// Name set for `Project.prescannedUnionNames` — every top-level `union <Name>`
-// declaration across all files, recorded by the pre-parse scan before any body
-// is parsed. `enumIsAssociatedValueUnion` consults it so a forward / cross-file
-// `union` reference (e.g. a caught error union `try X() otherwise (e)` whose
-// `union` is declared in a later-parsed file) is correctly treated as a
-// heap-boxed union — binding `e` to the box pointer and reading payloads at the
-// right offset — instead of falling back to the bare-ordinal enum path.
-export typealias PrescannedUnionNameSet = Set with String
+// Payload map for `Project.prescannedUnionPayload` — every top-level
+// `union <Name>` declaration across all files, mapped to whether ANY of its
+// cases carries an associated-value payload (`true`) or it is payload-free /
+// scalar (`false`). Recorded by the pre-parse scan before any body is parsed.
+// `enumIsUnion` keys off membership (any entry is a union), while `unionIsBoxed`
+// keys off the payload flag: a forward / cross-file union reference (e.g. a
+// `throw E.case` or `try X() otherwise (e)` whose `union` is declared in a
+// later-parsed file) must resolve its representation — heap-boxed (box pointer,
+// `__construct_*` constructor) vs scalar (ordinal+1 throw ABI, no constructor)
+// — the SAME way the resolved path would. Recording payload-ness here keeps the
+// cross-file answer consistent with `enumCasesAnyPayload(resolved.cases)`;
+// without it the fallback had to guess (it assumed boxed), which routed a
+// thrown scalar union's case through a `__construct_*` that was never
+// synthesized.
+export typealias PrescannedUnionPayloadMap = Map with (String, bool)
 
 // Qualified names of functions declaring `returns bool`, recorded by the
 // pre-parse header scan so a forward / cross-file bool-returning callee can be

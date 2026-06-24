@@ -107,55 +107,56 @@ end 'lowerABI'
 
 // -- Per-op processing --
 
-// Dispatch an op. For std.call ops, record ABI info; for all others, pass through.
+// Dispatch an op. lowerABI is a pure identity pass today (it only classifies
+// params for diagnostic logging — see processCall/processParam — and rewrites
+// nothing), so EVERY op is preserved by re-referencing its existing slot via
+// `dstBlock.opRefs.append(opIdx)`. Re-emitting an unchanged op through
+// `module.appendOp` instead would append a byte-identical duplicate and leave
+// the original as an orphan in the shared, append-only `module.ops`; over a
+// call-dense program (the self-hosted compiler's own source) that orphans
+// roughly every call/param/ret op and is a primary driver of the self-compile
+// memory blowup. When ABI rewriting actually changes an op, that arm must
+// append the rewritten op (and drop the reuse) at that point.
 function processOp(module StdModule, opIdx OpIndex, dstBlock IrBlock, convention ABIConvention)
 	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match stdOp 'outer'
-		call(funcOp) then processCallOp(module, funcOp: funcOp, dstBlock: dstBlock, convention: convention)
-		arith then dstBlock.opRefs.append(opIdx)
-		control then dstBlock.opRefs.append(opIdx)
-		memory then dstBlock.opRefs.append(opIdx)
-		system then dstBlock.opRefs.append(opIdx)
+		call(funcOp) then classifyCallOp(funcOp, convention: convention)
+		arith to control then break 'outer'
+		memory to system then break 'outer'
 	end 'outer'
+	dstBlock.opRefs.append(opIdx)
 end 'processOp'
 
-// Handle std.call dialect ops. Records call/param info for future rewriting.
-function processCallOp(module StdModule, funcOp StdCallOp, dstBlock IrBlock, convention ABIConvention)
+// Emit the diagnostic classification side-effects for a std.call dialect op.
+// Records nothing into the IR — the op is preserved in-place by processOp.
+function classifyCallOp(funcOp StdCallOp, convention ABIConvention)
 	match funcOp 'classify'
-		ret then module.appendOp(dstBlock, op: StdOp.call(funcOp))
-		call(resultId, callee, argIds) then processCall(module, resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, convention: convention)
-		tryCall to tailCall then module.appendOp(dstBlock, op: StdOp.call(funcOp))
-		param(resultId, paramIndex, paramType) then processParam(module, resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, convention: convention)
-		// errorReturn passes through unchanged — Phase 4 introduces the producer.
-		errorReturn then module.appendOp(dstBlock, op: StdOp.call(funcOp))
+		call(_, callee, argIds) then classifyCall(callee, argIds: argIds, convention: convention)
+		param(_, paramIndex, paramType) then classifyParamOp(paramIndex, paramType: paramType, convention: convention)
+		ret then break 'classify'
+		tryCall to tailCall then break 'classify'
+		errorReturn then break 'classify'
 	end 'classify'
-end 'processCallOp'
+end 'classifyCallOp'
 
-// Process a std.call op.
-function processCall(module StdModule, resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, convention ABIConvention)
+// Classify a std.call's args for ABI diagnostics (no IR mutation).
+function classifyCall(callee String, argIds ValueIdArray, convention ABIConvention)
 	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
 	logTrace(LogCategory.ir, message: function() gives "abi: call @{callInfo.callee} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
 
-	// Classify each argument (infrastructure for future rewriting)
 	var i = 0
 	while i < argIds.count() 'classifyArgs'
 		let paramClass = classifyParam(i, convention: convention)
 		logTrace(LogCategory.ir, message: function() gives "abi:   arg {i} -> {paramClassToString(paramClass)}")
 		i = i + 1
 	end 'classifyArgs'
+end 'classifyCall'
 
-	// Identity: emit the original call unchanged
-	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
-end 'processCall'
-
-// Process a std.param op.
-function processParam(module StdModule, resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock, convention ABIConvention)
+// Classify a std.param for ABI diagnostics (no IR mutation).
+function classifyParamOp(paramIndex VarSlot, paramType StdType, convention ABIConvention)
 	let paramClass = classifyParam(paramIndex, convention: convention)
 	logTrace(LogCategory.ir, message: function() gives "abi: param {paramIndex} : {paramType.name} -> {paramClassToString(paramClass)}")
-
-	// Identity: emit the original param unchanged
-	module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
-end 'processParam'
+end 'classifyParamOp'
 
 // -- Formatting helpers --
 

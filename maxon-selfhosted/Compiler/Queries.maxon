@@ -190,9 +190,11 @@ end 'queryParseOps'
 // top-level `interface <Name>` in `project.prescannedInterfaceNames` (so
 // `internMaxonType` can promote a forward-referenced interface use site to its
 // `interface(_)` arm) and each top-level `union <Name>` in
-// `project.prescannedUnionNames` (so `enumIsAssociatedValueUnion` recognises a
-// forward / cross-file union before its declaring file is parsed). Both close
-// the same gap: the parser parses file-by-file, top-to-bottom, so a declaration
+// `project.prescannedUnionPayload` — mapped to whether any case carries a
+// payload — so `enumIsUnion` (membership) and `unionIsBoxed` (the payload flag)
+// recognise a forward / cross-file union, AND its representation, before its
+// declaring file is parsed. Both close the same gap: the parser parses
+// file-by-file, top-to-bottom, so a declaration
 // may be parsed only after a use site elsewhere has already been resolved. This
 // is the self-hosted analogue of maxon-sharp's `PreScan` registering all type
 // names before any param/return annotation is resolved.
@@ -253,11 +255,94 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 			if isInterfaceKw 'recordInterface'
 				project.prescannedInterfaceNames.insert(nameToken.value)
 			end 'recordInterface' else 'recordUnion'
-				project.prescannedUnionNames.insert(nameToken.value)
+				// Record the union AND whether any case carries a payload, so the
+				// cross-file forward-reference fallbacks in `enumIsUnion` (membership)
+				// and `unionIsBoxed` (payload flag) answer the same way the resolved
+				// path would. A payload-free union is representationally an enum
+				// (ordinal+1 throw ABI, no `__construct_*`); a payload-bearing union
+				// is heap-boxed. Guessing "boxed" for a forward-referenced scalar
+				// union routed its thrown case through a never-synthesized
+				// `__construct_*` and crashed the backend.
+				let payloadBearing = unionBodyIsPayloadBearing(tokens, unionStart: i)
+				project.prescannedUnionPayload.upsert(nameToken.value, value: payloadBearing)
 			end 'recordUnion'
 		end 'eachToken'
 	end 'eachFile'
 end 'preRegisterInterfaceNames'
+
+// Token-level payload detector for the pre-parse scan: given the index of a
+// `union` opener token, returns true iff any of the union's cases carries an
+// associated-value payload (`caseName(...)`). Mirrors `parseUnionDecl`'s payload
+// decision (a case is payload-bearing iff its name is immediately followed by
+// `(`), but works purely on tokens so it can run before any body is parsed.
+//
+// Method bodies inside the union (`function m() ... end`) must NOT be mistaken
+// for payload cases: a call `helper(x)` inside a method is also `IDENT (`. So we
+// only inspect tokens DIRECTLY in the union body (block depth 0 relative to the
+// union opener), using the same block-opener set as `prescanFunctionThrows`. A
+// payload case appears at statement position (after a newline) at that depth.
+function unionBodyIsPayloadBearing(tokens TokenArray, unionStart ElementCount) returns bool
+	let tokenCount = tokens.count()
+	// Walk from just past `union <Name>`. `depth` counts open `end`-bearing
+	// blocks RELATIVE to the union body; depth 0 is the union body itself. The
+	// union's own body opens at depth 1 once we pass its header line, so we seed
+	// depth 1 here and close the union when depth falls back to 0.
+	var depth = 1 as PrescanDepth
+	var i = unionStart + 2
+	while i < tokenCount and depth > 0 'scan'
+		let tok = try tokens.get(i) otherwise break
+		let kind = tok.kind
+
+		// Block openers (mirror `prescanFunctionThrows`). A nested type opener
+		// cannot occur inside a union body, but methods, control flow, and
+		// block-form try all open `end`-bearing blocks whose contents must be
+		// skipped.
+		if kind == TokenKind.function or kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match 'blockOpener'
+			depth = depth + 1
+			i = i + 1
+			continue
+		end 'blockOpener'
+		if kind == TokenKind.else 'elseReopen'
+			depth = depth + 1
+			let nextTok = try tokens.get(i + 1) otherwise Token.eof()
+			if nextTok.kind == TokenKind.if 'elseIf'
+				i = i + 2
+				continue
+			end 'elseIf'
+			i = i + 1
+			continue
+		end 'elseReopen'
+		if kind == TokenKind.try 'maybeTryBlock'
+			let labelTok = try tokens.get(i + 1) otherwise Token.eof()
+			if labelTok.kind == TokenKind.charLiteral 'isBlockTry'
+				depth = depth + 1
+			end 'isBlockTry'
+			i = i + 1
+			continue
+		end 'maybeTryBlock'
+		if kind == TokenKind.end 'closeBlock'
+			depth = depth - 1
+			i = i + 1
+			continue
+		end 'closeBlock'
+
+		// A payload case is recognised only at the union-body statement position
+		// (depth 1, after a newline): an identifier whose next token is `(`. The
+		// preceding-newline gate keeps a method-return-type or backing expression
+		// that happens to read `IDENT (` from registering a false payload.
+		if depth == 1 and kind == TokenKind.identifier 'maybeCase'
+			let prev = try tokens.get(i - 1) otherwise Token.eof()
+			let afterName = try tokens.get(i + 1) otherwise Token.eof()
+			if prev.kind == TokenKind.newline and afterName.kind == TokenKind.leftParen 'payloadCase'
+				return true
+			end 'payloadCase'
+		end 'maybeCase'
+
+		i = i + 1
+	end 'scan'
+
+	return false
+end 'unionBodyIsPayloadBearing'
 
 // Pre-parse throws-clause scan. For every source file, run the parser's
 // throws-header prescan so `project.funcThrowsTypes` is seeded for EVERY
@@ -343,6 +428,20 @@ function queryAllModule(project Project) returns MaxonModule throws CompileError
 		let module = try queryParseOps(project, path: path)
 		allModule.merge(module)
 	end 'eachFile'
+
+	// Drain cross-file overload renames produced by `rekeyExistingFunction`
+	// when a late-parsed user file overloaded a sibling file's free function
+	// name. The per-file parser only sees its own freshly-parsing module, so it
+	// cannot reach the existing overload's IrFunction sitting in another file's
+	// already-merged module — the rename was queued in `crossFileOverloadRenames`
+	// instead. Apply it now, BEFORE TypeResolution and codegen key off the
+	// IrFunction `.name`. Mirrors the stdlib and external-library parse paths,
+	// which drain the same way after their own parse loops. Unlike
+	// `pendingFuncRenames` (a transient parse-time queue cleared each drain),
+	// `crossFileOverloadRenames` persists on the project so an incremental
+	// `allModule` rebuild whose triggering file did NOT re-parse the overload
+	// declaration still re-applies the rename to the freshly-merged module.
+	applyCrossFileOverloadRenames(project, allModule: allModule)
 
 	// G.2: user-code `<TypeName>.fromRawValue(...)` / `.fromName(...)`
 	// calls also go through the parser's optimistic rewrite, so a

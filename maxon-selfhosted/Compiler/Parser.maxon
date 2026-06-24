@@ -74,8 +74,10 @@ typealias UnicodeCodepoint = int(0 to 0x10FFFF)
 // when the parser needs to qualify a method call on `m`.
 typealias ScanDepth = int(0 to 8)
 
-// Block-nesting depth for the throws-clause header prescan (`prescanFunctionThrows`).
-typealias PrescanDepth = int(0 to u64.max)
+// Block-nesting depth for the pre-parse declaration scans (`prescanFunctionThrows`
+// here and `unionBodyIsPayloadBearing` in Queries.maxon). Exported so both
+// sibling prescans share the one depth type.
+export typealias PrescanDepth = int(0 to u64.max)
 typealias PrescanDepthArray = Array with PrescanDepth
 
 // Stage E (closures): one entry per distinct outer-scope name captured by
@@ -2929,6 +2931,14 @@ export type Parser
 			// already-mangled existing entry, never re-emitting the bare key.
 			panic("rekeyExistingFunction: duplicate pendingFuncRenames entry for '{bareName}' -> '{mangledName}'")
 		end 'dupRename'
+		// Also persist the rename so the user pipeline can re-apply it on every
+		// `allModule` rebuild — `pendingFuncRenames` is cleared by each drain and
+		// would lose this entry when the overloaded file is a parse-cache hit on
+		// an incremental rebuild. `upsert` (not `insert`): on a re-parse of this
+		// same file the prior persistent entry was already rolled back via
+		// `crossFileOverloadRenamesKeys`, but a redundant write is harmless.
+		project.crossFileOverloadRenames.upsert(bareName, value: mangledName)
+		recordCrossFileOverloadRename(project, filePath: filePath, oldBareName: bareName)
 	end 'rekeyExistingFunction'
 
 	// Reports a literal-overflow error at `token` with the fully-formatted
@@ -6059,17 +6069,18 @@ export type Parser
 		module.functions.push(func)
 	end 'synthesizeUnionConstructor'
 
-	// Phase 9 Stage 5: returns true when `enumName` resolves to a union
-	// type (one with any case carrying associated values). The parser
-	// uses this to decide whether `<Name>.fromRawValue(...)` and
-	// `<Name>.fromName(...)` calls should be redirected to a synthesized
-	// lookup helper. Pure unions (associated-value cases) are excluded
-	// because their `.fromRawValue` is explicitly rejected by the spec
-	// (E3034 from TypeResolution) and their `.fromName` needs a
-	// payload-routing path not yet synthesized. The `.unionCases`
-	// companion enums are bare enums (their cases have no payload fields),
-	// so they take the regular helper path.
-	function enumIsAssociatedValueUnion(enumName String) returns bool
+	// True when `enumName` names a union type — payload-bearing OR scalar
+	// (payload-free). This is the "is it any union at all" question, used to
+	// reject the enum-only static accessors `<Name>.allCases` / `.fromRawValue`
+	// on unions (the spec rejects both on ANY union — a union's cases have no
+	// single ordinal/raw-value sequence to enumerate; see the C# bootstrap's
+	// E4006/E3034 rejects at 2-Parser.cs:15029/15054). It is NOT the question
+	// "is this union heap-boxed" — that is `unionIsBoxed`, which additionally
+	// requires a payload case. The two were previously conflated, so the
+	// representation-deciding throw/binding sites that called this one mis-routed
+	// a payload-free union (which has NO `__construct_*`) through the heap-boxed
+	// path; those sites now call `unionIsBoxed`.
+	function enumIsUnion(enumName String) returns bool
 		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
 			return resolved.isUnion
 		end 'isResolved'
@@ -6078,12 +6089,10 @@ export type Parser
 		end 'isUnresolved'
 		// Cross-file / forward reference: the union is declared in a file not yet
 		// parsed, so it's absent from `enumTypes`/`unresolvedEnums`. The pre-parse
-		// scan recorded every `union <Name>` across all files, so consult it as a
-		// last resort. Without this, a caught error union whose declaration sorts
-		// after the catch site is mis-bound to the bare-ordinal enum path and its
-		// payloads read at the wrong offset (returning garbage / 0).
-		return project.prescannedUnionNames.contains(enumName)
-	end 'enumIsAssociatedValueUnion'
+		// scan recorded every `union <Name>` across all files; membership in the
+		// payload map answers "is it a union" regardless of payload-ness.
+		return project.prescannedUnionPayload.contains(enumName)
+	end 'enumIsUnion'
 
 	// True when `enumName` is a HEAP-BOXED union — a union with at least one
 	// payload-bearing case (`enumCasesAnyPayload`). These are the unions that
@@ -6091,10 +6100,10 @@ export type Parser
 	// synthesizes `__construct_Union_case` constructors. A payload-free
 	// (bare-case-only) union takes `parseUnionDecl`'s SCALAR arm instead — it is
 	// representationally an enum (case constants, ordinal+1 throw ABI) with NO
-	// constructors. `enumIsAssociatedValueUnion` conflates the two (it returns
-	// true for ANY union via the `.isUnion` flag), so the heap-box paths
-	// (throw-construction, the union-pointer `(e)` binding) must gate on THIS
-	// predicate to avoid calling a `__construct_*` that was never synthesized.
+	// constructors. The heap-box paths (throw-construction, the union-pointer
+	// `(e)` binding) gate on THIS predicate — never on `enumIsUnion`, which is
+	// true for scalar unions too — to avoid calling a `__construct_*` that was
+	// never synthesized.
 	function unionIsBoxed(enumName String) returns bool
 		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
 			return resolved.isUnion and enumCasesAnyPayload(resolved.cases)
@@ -6102,35 +6111,40 @@ export type Parser
 		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
 			return unresolved.isUnion and enumCasesAnyPayload(unresolved.cases)
 		end 'isUnresolved'
-		// Cross-file forward reference not yet parsed: the prescan only records
-		// the union NAME, not its cases, so payload-ness is unknown here. Treat as
-		// boxed (the conservative pre-existing behavior) — a payload-free union
-		// declared in a not-yet-parsed file is the rare case, and the scalar-throw
-		// fast path is an optimization, not a correctness requirement, for it.
-		return project.prescannedUnionNames.contains(enumName)
+		// Cross-file forward reference not yet parsed: consult the pre-parse scan,
+		// which recorded each union's payload-ness alongside its name. A union
+		// absent from the map is not a union at all (returns false); a recorded
+		// scalar union returns false (ordinal+1 throw ABI, no constructor); only a
+		// recorded payload-bearing union is boxed. This keeps the forward-reference
+		// answer identical to what the resolved branches above would return.
+		return try project.prescannedUnionPayload.get(enumName) otherwise false
 	end 'unionIsBoxed'
 
 	// Declare an error-value binding for an `(e)` clause on a fallback /
-	// else-after-if-try handler block. Discriminates between bare-enum throws
-	// (the runtime stores `ordinal + 1`, so emit `flag - 1` to recover the
-	// ordinal) and associated-value union throws (the flag SSA name IS the
-	// union pointer; bind `e` directly to it). Pushes a fresh scope so the
-	// binding is local to the handler body — the caller must `scope.popScope()`
-	// at handler-end.
+	// else-after-if-try handler block. Discriminates between ordinal-ABI throws
+	// (bare enums AND scalar payload-free unions — the runtime stores
+	// `ordinal + 1`, so emit `flag - 1` to recover the ordinal) and heap-boxed
+	// union throws (the flag SSA name IS the union pointer; bind `e` directly to
+	// it). Keys off `unionIsBoxed`, NOT "is it any union": a payload-free union is
+	// thrown through the ordinal+1 ABI (see `parseThrowStatement`), so binding `e`
+	// to the raw flag would leave a later `match e` comparing the ordinal against
+	// the flag (off by one) — a non-exhaustive-match at runtime. Pushes a fresh
+	// scope so the binding is local to the handler body — the caller must
+	// `scope.popScope()` at handler-end.
 	function declareErrorBindingInBlock(targetBlock IrBlock, errorFlagName ByteArray, bindingName String, bindingLine LineNumber, bindingColumn ColumnNumber, calleeThrowsTypeName ThrowsClause, range SourceRange) throws ParserError
 		var bindingType = MaxonType.integer
-		var throwsIsUnion = false
+		var throwsIsBoxedUnion = false
 		if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
 			bindingType = internMaxonType(project, name: throwsName)
-			throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
+			throwsIsBoxedUnion = unionIsBoxed(throwsName)
 		end 'haveThrowsName'
 		scope.pushScope()
 		let bindingSlot = declareCheckedLocal(bindingName, varType: bindingType, mutable: false, line: bindingLine, column: bindingColumn)
 		localVarLocations.push(ParamLocation.create(bindingName, line: bindingLine, column: bindingColumn))
 		var bindingValueName = ByteArray.create()
-		if throwsIsUnion 'isUnion'
+		if throwsIsBoxedUnion 'isBoxedUnion'
 			bindingValueName = errorFlagName
-		end 'isUnion' else 'isBare'
+		end 'isBoxedUnion' else 'isBare'
 			let oneName = emitLiteral(targetBlock, value: 1, valueType: MaxonType.integer)
 			let enumOrdinalName = freshSynthName()
 			module.appendOp(targetBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: range))
@@ -7136,7 +7150,7 @@ export type Parser
 		// captured and branched on directly (the `if try f() 'label'` boolean
 		// form means "enter if `f` did not throw" per the if-try spec, NOT "enter
 		// if `f` returned true" — using it here would always enter).
-		let throwHasPayload = at(TokenKind.leftParen) or enumIsAssociatedValueUnion(typeNameToken.value)
+		let throwHasPayload = at(TokenKind.leftParen) or unionIsBoxed(typeNameToken.value)
 		let routedThrow = try routeBareThrowToActiveTryBlock(block, enumName: typeNameToken.value, variantName: variantToken.value, hasPayload: throwHasPayload, range: SourceRange.between(throwToken, last: variantToken))
 		if routedThrow 'routedToTryBlock'
 			return
@@ -7177,17 +7191,16 @@ export type Parser
 	// error ABI.
 	//
 	// The value's runtime representation depends on the error type:
-	//   - A UNION-typed error value (bare-case or payload-bearing) is already
-	//     the raw error flag: for the self-hosted dialect every union case is
-	//     heap-boxed by its synthesized constructor, so the value IS the box
-	//     pointer the `try` site's `flag != 0` test recognises. The `(e)`
-	//     binding (declareErrorBindingInBlock) binds `e` straight to that flag,
-	//     and a `self.field` holding a union value carries the same pointer.
-	//     Re-throw it verbatim — no `+1`.
-	//   - A bare-ENUM error value is the variant ORDINAL (the `(e)` binding is
-	//     `flag - 1`). The flag ABI reserves 0 for "no error in flight", so the
-	//     re-published flag must be `ordinal + 1` (matches lowerThrow's literal
-	//     path and the C# `LowerThrow` ordinal arm).
+	//   - A HEAP-BOXED union (one with a payload case) error value is already the
+	//     raw error flag: its synthesized constructor heap-boxes the case, so the
+	//     value IS the box pointer the `try` site's `flag != 0` test recognises.
+	//     The `(e)` binding (declareErrorBindingInBlock) binds `e` straight to
+	//     that flag, and a `self.field` holding such a union value carries the
+	//     same pointer. Re-throw it verbatim — no `+1`.
+	//   - A bare-ENUM or SCALAR (payload-free) union error value is the variant
+	//     ORDINAL (the `(e)` binding is `flag - 1`). The flag ABI reserves 0 for
+	//     "no error in flight", so the re-published flag must be `ordinal + 1`
+	//     (matches lowerThrow's literal path and the C# `LowerThrow` ordinal arm).
 	// `MaxonOp.rethrow(flagName)` lowers the chosen flag value to a single
 	// `errorReturn(zero, errorFlagId: flag)` — the runtime-valued sibling of
 	// the constant-flag `MaxonOp.throw`.
@@ -7199,11 +7212,11 @@ export type Parser
 		let lastTok = previousToken()
 		let range = SourceRange.between(throwToken, last: lastTok)
 
-		// Decide the flag value. A union value is the flag as-is; a bare enum
-		// value is the ordinal and needs `+1` so the reserved-0 success
-		// sentinel is preserved.
+		// Decide the flag value. A heap-boxed union value is the flag (box
+		// pointer) as-is; a bare enum or scalar union value is the ordinal and
+		// needs `+1` so the reserved-0 success sentinel is preserved.
 		let valueTypeName = valueType.nameOrEmpty(project)
-		let flagName = computeRethrowFlag(currentBlock, valueName: valueName, isUnion: enumIsAssociatedValueUnion(valueTypeName), range: range)
+		let flagName = computeRethrowFlag(currentBlock, valueName: valueName, isBoxedUnion: unionIsBoxed(valueTypeName), range: range)
 
 		// Inside an active block-form `try`, route the re-thrown error to the
 		// shared `otherwise` handler instead of the function exit — mirrors
@@ -7221,13 +7234,14 @@ export type Parser
 		module.setTerminator(currentBlock, op: MaxonOp.rethrow(flagName, range: range))
 	end 'parseRethrowValue'
 
-	// Materialize the runtime error flag for a re-thrown value. A union value
-	// is already the flag (heap-box pointer); a bare-enum value is the ordinal
-	// and needs `+1` to clear the reserved-0 "no error" sentinel.
-	function computeRethrowFlag(block IrBlock, valueName ByteArray, isUnion bool, range SourceRange) returns ByteArray
-		if isUnion 'unionPassthrough'
+	// Materialize the runtime error flag for a re-thrown value. A heap-boxed
+	// union value is already the flag (box pointer); a bare-enum or scalar-union
+	// value is the ordinal and needs `+1` to clear the reserved-0 "no error"
+	// sentinel.
+	function computeRethrowFlag(block IrBlock, valueName ByteArray, isBoxedUnion bool, range SourceRange) returns ByteArray
+		if isBoxedUnion 'boxedUnionPassthrough'
 			return valueName
-		end 'unionPassthrough'
+		end 'boxedUnionPassthrough'
 		let oneName = emitLiteral(block, value: 1, valueType: MaxonType.integer, range: range)
 		let flagComputed = freshSynthName()
 		module.appendOp(block, op: MaxonOp.binop(flagComputed, left: valueName, right: oneName, opKind: BinOpKind.add, operandType: MaxonType.integer, range: range))
@@ -8255,10 +8269,15 @@ export type Parser
 
 	// True iff `t` is the String type in either representation: the primitive
 	// `string` arm or the discovered `named(<BuiltinStringLiteral struct>)`.
+	// This runs during PARSING (via emitArmDispatch), which can precede
+	// BuiltinStringLiteral discovery, so the `named` arm reads the raw cache via
+	// `nonEmptyEquals` rather than the panicking `builtinStringLiteralTypeName()`
+	// accessor — an undiscovered (empty) cache simply means "not the string type
+	// yet", mirroring the `isBuiltinTypeName` probe.
 	function maxonTypeIsTheStringType(t MaxonType) returns bool
 		return match t 'check'
 			string gives true
-			named(id) gives project.typeNames.get(id) == builtinStringLiteralTypeName()
+			named(id) gives nonEmptyEquals(project.typeNames.get(id), discovered: getCachedBuiltinStringLiteralTypeName())
 			boolean to float gives false
 			character gives false
 			function gives false
@@ -8971,7 +8990,7 @@ export type Parser
 		// the shared `otherwise` handler, mirroring a bare `throw` statement.
 		// Capture the bool return and branch on it directly — the `if try f()`
 		// boolean form means "enter if no throw", not "enter if returned true".
-		let throwsHasPayload = at(TokenKind.leftParen) or enumIsAssociatedValueUnion(typeNameToken.value)
+		let throwsHasPayload = at(TokenKind.leftParen) or unionIsBoxed(typeNameToken.value)
 		let routedThrows = try routeBareThrowToActiveTryBlock(armBodyBlock, enumName: typeNameToken.value, variantName: variantToken.value, hasPayload: throwsHasPayload, range: SourceRange.between(throwsToken, last: variantToken))
 		if routedThrows 'routedToTryBlock'
 			return
@@ -13744,7 +13763,7 @@ export type Parser
 					// so the surrounding expression stays well-formed;
 					// reportCompileError's first-error gate then suppresses any
 					// follow-on E3012 (unused loop variable) in the same function.
-					if enumIsAssociatedValueUnion(token.value) 'allCasesOnUnion'
+					if enumIsUnion(token.value) 'allCasesOnUnion'
 						reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "allCases is not available on unions", line: token.line, column: token.column, filePath: filePath)
 						return try emitArrayLiteralResult(currentBlock, elemNames: ByteArrayArray.create(), elemRanges: SourceRangeArray.create(), literalRange: accessRange, bracketToken: cursor.current())
 					end 'allCasesOnUnion'
@@ -18439,8 +18458,8 @@ end 'EnumLookupRejectKind'
 
 // G.2: classify the receiver of an `__enum_<X>_fromRawValue` call against
 // the now-fully-populated enum tables. Mirrors the parse-time gates
-// `enumIsStructBacked` / `enumIsAssociatedValueUnion` but runs after every
-// file has been parsed so it sees cross-file forward references.
+// `enumIsStructBacked` / `enumIsUnion` but runs after every file has been
+// parsed so it sees cross-file forward references.
 function classifyEnumLookupForFromRawValue(project Project, enumName String) returns EnumLookupTarget
 	if let resolved = try project.enumTypes.get(enumName) 'fromResolved'
 		if resolved.isUnion 'isUnion'

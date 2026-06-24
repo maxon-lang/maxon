@@ -119,6 +119,22 @@ function __slab_memzero(ptr MachineWord, size MachineWord)
 	end 'loop'
 end '__slab_memzero'
 
+// Validate the result of an `osAllocPages` request. `osAllocPages` wraps
+// VirtualAlloc(NULL, …, MEM_COMMIT|MEM_RESERVE) (mmap on POSIX), which returns
+// 0 when the OS cannot satisfy the request — the system commit limit is
+// exhausted. The slab's grow/init/OS-direct paths all immediately store the
+// arena metadata into the returned pointer; a 0 here would fault on a NULL
+// store (`mov %reg, (NULL)`) with an opaque segfault. Surface it as a clean,
+// distinct abort instead so an out-of-memory condition is diagnosable rather
+// than a mysterious nil-deref crash. 137 = slab OS allocation failed (OOM).
+function __slab_assert_os_alloc(ptr MachineWord) returns MachineWord
+	if ptr == 0 'oom'
+		// 137 = osAllocPages returned NULL (out of memory / commit limit).
+		__Internals.osExit(137)
+	end 'oom'
+	return ptr
+end '__slab_assert_os_alloc'
+
 // Allocates the very first 64 MiB arena from the OS, initialises its metadata
 // and bitmap, prepends it to the arena list, and flips __slab_init_done to 1.
 // Bitmap layout: chunk 0 holds the metadata, so its bit stays 0 (used); the
@@ -128,7 +144,7 @@ end '__slab_memzero'
 // globalAddr results are inlined (never bound to a local) so drop-injection
 // does not treat them as heap-owned and emit a stray sys.free at function exit.
 function __slab_arena_init()
-	let arenaBase = __Internals.osAllocPages(0x4000000)
+	let arenaBase = __slab_assert_os_alloc(__Internals.osAllocPages(0x4000000))
 	// metadata: next = NULL (offset 0)
 	__Internals.storeIndirect(arenaBase, value: 0)
 	// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE (chunk 0 used, rest free)
@@ -155,7 +171,7 @@ function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 	while true 'arenaLoop'
 		if arenaPtr == 0 'grow'
 			// No arena had room — alloc a fresh 64 MiB arena and link in.
-			let newArena = __Internals.osAllocPages(0x4000000)
+			let newArena = __slab_assert_os_alloc(__Internals.osAllocPages(0x4000000))
 			// metadata: next = old_head
 			__Internals.storeIndirect(newArena, value: __Internals.loadIndirect(__Internals.slabArenaListHeadAddr()))
 			// bitmap qword 0 = 0xFFFFFFFFFFFFFFFE
@@ -865,7 +881,7 @@ end '__slab_os_direct_free'
 function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	// Align up to 8KB.
 	let aligned = (size + 8191) and -8192
-	let ptr = __Internals.osAllocPages(aligned)
+	let ptr = __slab_assert_os_alloc(__Internals.osAllocPages(aligned))
 
 	// Lazy-allocate the OS-direct array on first call.
 	if __Internals.loadIndirect(__Internals.slabOsDirectCapacityAddr()) == 0 'allocArr'

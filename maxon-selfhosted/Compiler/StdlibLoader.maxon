@@ -442,19 +442,57 @@ end 'ensureStdlibSandboxParsed'
 // Walk `allModule.functions` and rename any IrFunction whose `.name` matches
 // a pending rename entry. The map is cleared after the walk so a follow-up
 // parse (user project) starts with a fresh state.
+//
+// This is the stdlib / external-library path: their cross-file overload renames
+// are baked into the library's whole-module cache here, so they never need the
+// PERSISTENT `crossFileOverloadRenames` map the user pipeline relies on. The
+// persistent map is reset in lockstep with `pendingFuncRenames` so stdlib/lib
+// renames don't leak into the user-file apply pass (which would re-target
+// already-mangled cached names — a no-op, but the map must stay user-only so
+// per-file rollback stays correct).
 function applyPendingFuncRenames(project Project, allModule MaxonModule)
 	if project.pendingFuncRenames.count() == 0 'noRenames'
 		return
 	end 'noRenames'
+	renameFunctionsByMap(allModule, renames: project.pendingFuncRenames)
+	project.pendingFuncRenames = FuncRenameMap.create()
+	project.crossFileOverloadRenames = FuncRenameMap.create()
+end 'applyPendingFuncRenames'
+
+// User-pipeline counterpart of `applyPendingFuncRenames`. Applies the
+// PERSISTENT `crossFileOverloadRenames` map (re-applied on every `queryAllModule`
+// recompute, including incremental rebuilds whose overloaded files were
+// parse-cache hits) to the freshly-merged user `allModule`, and folds in any
+// renames still sitting in the transient `pendingFuncRenames` from this pass.
+// Unlike the stdlib path it does NOT discard the persistent map — that map is
+// the source of truth across rebuilds and is pruned only by per-file rollback.
+// `pendingFuncRenames` IS cleared so a follow-up re-parse of an overloaded file
+// (which re-queues its rename) does not hit the duplicate-entry panic.
+export function applyCrossFileOverloadRenames(project Project, allModule MaxonModule)
+	for (oldName, newName) in project.pendingFuncRenames 'foldPending'
+		project.crossFileOverloadRenames.upsert(oldName, value: newName)
+	end 'foldPending'
+	project.pendingFuncRenames = FuncRenameMap.create()
+	if project.crossFileOverloadRenames.count() == 0 'noRenames'
+		return
+	end 'noRenames'
+	renameFunctionsByMap(allModule, renames: project.crossFileOverloadRenames)
+end 'applyCrossFileOverloadRenames'
+
+// Rewrite every IrFunction in `allModule` whose `.name` is a key in `renames`
+// to the mapped value. Shared by the stdlib/library drain
+// (`applyPendingFuncRenames`) and the user drain
+// (`applyCrossFileOverloadRenames`), which differ only in WHICH map they apply
+// and whether they discard it afterward.
+function renameFunctionsByMap(allModule MaxonModule, renames FuncRenameMap)
 	for i in 0 upto allModule.functions.count() 'eachFunc'
 		var f = try allModule.functions.get(i) otherwise continue
-		if let newName = try project.pendingFuncRenames.get(f.name) 'haveRename'
+		if let newName = try renames.get(f.name) 'haveRename'
 			f.name = newName
 			try allModule.functions.set(i, value: f) otherwise ignore
 		end 'haveRename'
 	end 'eachFunc'
-	project.pendingFuncRenames = FuncRenameMap.create()
-end 'applyPendingFuncRenames'
+end 'renameFunctionsByMap'
 
 // Discovery cache for the BuiltinArrayLiteral protocol, stored on the stdlib
 // Library's `builtinArrayLiteralTypeName`. The parser walks

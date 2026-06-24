@@ -33,6 +33,10 @@ export type FileParseDelta
 	// both buckets).
 	export var methodNameIndexKeys as StringArray
 	export var overloadedNamesKeys as StringArray
+	// `oldBareName` keys this file's parse added to `project.crossFileOverloadRenames`
+	// (a cross-file overload of a sibling file's free function). Rollback removes
+	// them so a re-parse re-queues a fresh rename.
+	export var crossFileOverloadRenamesKeys as StringArray
 	export var topLevelConstantsKeys as StringArray
 	export var topLevelVarsKeys as StringArray
 	export var unresolvedTopLevelDeclsKeys as StringArray
@@ -68,6 +72,7 @@ export type FileParseDelta
 			funcThrowsTypesKeys: StringArray.create(),
 			methodNameIndexKeys: StringArray.create(),
 			overloadedNamesKeys: StringArray.create(),
+			crossFileOverloadRenamesKeys: StringArray.create(),
 			topLevelConstantsKeys: StringArray.create(),
 			topLevelVarsKeys: StringArray.create(),
 			unresolvedTopLevelDeclsKeys: StringArray.create(),
@@ -202,6 +207,9 @@ function rollbackFileParseDelta(project Project, filePath FilePath)
 	for key in delta.overloadedNamesKeys 'eachOverload'
 		_ = project.overloadedNames.remove(key)
 	end 'eachOverload'
+	for key in delta.crossFileOverloadRenamesKeys 'eachCrossRename'
+		_ = project.crossFileOverloadRenames.remove(key)
+	end 'eachCrossRename'
 
 	// Top-level const/var registries (drain target of unresolvedTopLevelDecls
 	// for plain `let`/`var`; populated directly by parser for enum-case and
@@ -420,6 +428,11 @@ export function recordOverloadedNamesUpsert(project Project, filePath FilePath, 
 	var delta = ensureDelta(project, filePath: filePath)
 	delta.overloadedNamesKeys.push(key)
 end 'recordOverloadedNamesUpsert'
+
+export function recordCrossFileOverloadRename(project Project, filePath FilePath, oldBareName String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.crossFileOverloadRenamesKeys.push(oldBareName)
+end 'recordCrossFileOverloadRename'
 
 export function recordTopLevelConstantInsert(project Project, filePath FilePath, key String)
 	var delta = ensureDelta(project, filePath: filePath)
