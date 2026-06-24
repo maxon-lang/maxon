@@ -561,16 +561,33 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 		// Still no register. Try eviction.
 		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx in ranges bounds")
 
-		// Restrict eviction to high-priority ranges: reload vregs
-		// (SPILL_WEIGHT_INFINITE). For normal-weight ranges, evicting a
-		// colored neighbor would just trade one spill for another — the
-		// spill picker already does that calculus better, and the resulting
-		// reload chain may grow pressure at downstream points rather than
-		// reduce it (sha256 case). Reloads MUST be colored or the allocator
-		// panics, so they alone justify the cost of cascading evictions.
-		if range.spillWeight != SPILL_WEIGHT_INFINITE 'normalWeight'
-			continue
-		end 'normalWeight'
+		// Eviction is offered to BOTH infinite-weight reloads and normal-weight
+		// ranges, but with different stakes:
+		//
+		//   • Reloads (SPILL_WEIGHT_INFINITE) MUST be colored — they have no
+		//     stack home of their own — so they cascade-evict aggressively and
+		//     fall through to last-chance recoloring on failure.
+		//
+		//   • Normal-weight ranges evict ONLY when a strictly-cheaper colored
+		//     neighbor exists (pickEvictionVictim enforces the strict
+		//     (weight, cascade) ordering). This is not a free "trade one spill
+		//     for another": it is the fix for a class of spill-loop non-
+		//     termination. A range whose def site is register-pressure-
+		//     saturated cannot be relieved by spilling ITSELF — its def must
+		//     still land in a register before the spill-store can read it, so
+		//     the def→store remnant re-enters the next iteration uncolored and
+		//     the spiller re-spills the same value forever (loadSourceDirectory:
+		//     a 2-position loadIndirect def→store wedged among 14 colored
+		//     neighbors of equal-or-lower weight). The only way to color the
+		//     remnant is to free a register at that point by evicting a cheaper
+		//     neighbor — exactly what LLVM Greedy does. Because the victim is
+		//     always strictly cheaper, the net spill cost never rises, and the
+		//     cascade bound guarantees termination just as it does for reloads.
+		//
+		// A normal-weight range with NO strictly-cheaper victim still falls
+		// through to the spill loop unchanged (evicteeIdx < 0 below), so the
+		// only behavioral change is: when a cheaper neighbor IS available, we
+		// spill it instead of pointlessly re-spilling the evictor.
 
 		if range.cascade >= MAX_CASCADE 'cascadeExhausted'
 			// Cannot evict any neighbor — the eviction rule requires the
@@ -584,13 +601,14 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 		let evicteeIdx = pickEvictionVictim(sortedIdx, ranges: ranges, ig: ig, rangeColors: rangeColors, pool: pool, callerSavedMask: callerSavedMask)
 		if evicteeIdx < 0 'noVictim'
 			// Phase 6 backstop: try last-chance recursive recoloring before
-			// giving up on this reload. Eviction failed because every
-			// colored neighbor is either fixed-reg (cannot be moved) or
-			// another infinite-weight reload (we never displace one reload
-			// for another). Recursive recoloring can still succeed by
-			// moving an interferer to a different register — even one held
-			// by yet another colored neighbor — provided the cascading
-			// moves bottom out within MAX_RECOLOR_DEPTH steps.
+			// giving up. Eviction failed because every colored neighbor is
+			// either fixed-reg (cannot be moved), an infinite-weight reload
+			// (we never displace one reload for another), or not strictly
+			// cheaper than the evictor. Recursive recoloring can still succeed
+			// by moving an interferer to a different register — even one held
+			// by yet another colored neighbor — provided the cascading moves
+			// bottom out within MAX_RECOLOR_DEPTH steps. It never spills, so
+			// it is safe to attempt for normal-weight evictors too.
 			var fixed = BoolArray.create()
 			let recolored = tryLastChanceRecolor(sortedIdx, depth: MAX_RECOLOR_DEPTH, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
 			if recolored 'recolorOk'
@@ -598,8 +616,9 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 				continue
 			end 'recolorOk'
 			// No eligible victim AND last-chance recoloring failed — fall
-			// through to spill loop. If this range is an infinite-weight
-			// reload, the spill loop will panic via panicUnresolvableReload.
+			// through to spill loop, which spills this range (or, for an
+			// infinite-weight reload with no parent merge, panics via
+			// panicUnresolvableReload).
 			logTrace(LogCategory.ir, message: function() gives "ssa-color: no-evictee v{range.valueId} (weight={range.spillWeight}, cascade={range.cascade})")
 			continue
 		end 'noVictim'
