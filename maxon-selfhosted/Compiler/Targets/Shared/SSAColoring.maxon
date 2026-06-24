@@ -16,18 +16,21 @@ type InterferenceGraph
 
 	export static function create(numRanges RegInt) returns InterferenceGraph
 		var nbrs = RegIntArrayArray.create()
-		var mat = BoolArray.create()
 		var i = 0
 		while i < numRanges 'init'
 			nbrs.push(RegIntArray.create())
 			i = i + 1
 		end 'init'
+		// The duplicate-edge matrix is numRanges^2 bools. Bulk-resizing to that
+		// length zero-fills in one managed-memory allocation, where the previous
+		// per-element push loop re-checked capacity and grew incrementally on
+		// every one of the numRanges^2 elements — a measurable slice of
+		// interference-graph construction for wide functions, since the graph is
+		// rebuilt on every coloring pass across the spill/split loop. resize
+		// zero-inits new elements (false), matching the original all-false state.
 		let matSize = numRanges * numRanges
-		var mi = 0
-		while mi < matSize 'initMat'
-			mat.push(false)
-			mi = mi + 1
-		end 'initMat'
+		var mat = BoolArray.create()
+		mat.resize(matSize)
 		return Self{neighbors: nbrs, numRanges: numRanges, matrix: mat}
 	end 'create'
 end 'InterferenceGraph'
