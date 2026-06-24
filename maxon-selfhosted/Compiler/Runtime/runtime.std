@@ -2820,6 +2820,13 @@ func mrt_directory_next 1 i64
     v2 = std loadIndirect v0 8
     std storeSlot 2 v2
 
+    // The literal zero is consumed by blocks (read_entry_body, maybe_dot,
+    // maybe_dotdot_term, done_no_more) reachable WITHOUT passing through
+    // `refill`, so its definition must dominate every use. `entry` dominates
+    // the whole function — defining it here (like mrt_directory_filename's
+    // shared `v2`) keeps the def dominating, where a per-`refill` def did not.
+    v45 = std constI64 0
+
     std br check_buffer
 
   block check_buffer:
@@ -2842,12 +2849,10 @@ func mrt_directory_next 1 i64
 
     // Store new bufused, reset cursor.
     std storeIndirect v0 16 v11
-    v12 = std constI64 0
-    std storeIndirect v0 24 v12
+    std storeIndirect v0 24 v45
 
     // If <= 0, we're done (0 = EOF; negative = error treated as EOF).
-    v13 = std constI64 0
-    v14 = std cmpI64Le v11 v13
+    v14 = std cmpI64Le v11 v45
     std condBr v14 done_no_more check_buffer
 
   block read_entry:
@@ -2883,7 +2888,7 @@ func mrt_directory_next 1 i64
 
     // Skip "." and "..".
     v26 = std loadSlot 6
-    v27 = std loadByte v26 v13
+    v27 = std loadByte v26 v45
     v28 = std constI64 46
     v29 = std cmpI64Eq v27 v28
     std condBr v29 maybe_dot have_entry
@@ -2892,8 +2897,8 @@ func mrt_directory_next 1 i64
     // First byte is '.'. Check second byte.
     v30 = std constI64 1
     v31 = std addI64 v26 v30
-    v32 = std loadByte v31 v13
-    v33 = std cmpI64Eq v32 v13
+    v32 = std loadByte v31 v45
+    v33 = std cmpI64Eq v32 v45
     std condBr v33 skip_entry maybe_dotdot
 
   block maybe_dotdot:
@@ -2904,8 +2909,8 @@ func mrt_directory_next 1 i64
     // Two leading dots; check third byte for NUL.
     v35 = std constI64 2
     v36 = std addI64 v26 v35
-    v37 = std loadByte v36 v13
-    v38 = std cmpI64Eq v37 v13
+    v37 = std loadByte v36 v45
+    v38 = std cmpI64Eq v37 v45
     std condBr v38 skip_entry have_entry
 
   block skip_entry:
