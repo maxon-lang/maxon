@@ -1218,19 +1218,25 @@ end '__destruct___ManagedMemory'
 // in without an incref), so one decref nets to zero and cascades into the element's
 // own destructor. A 0 `element_destroy` (raw/primitive elements) makes this a no-op —
 // decref-ing a raw int would fault. Does NOT touch the buffer or length; callers do.
-function __managed_mem_walk_elements(self MachineWord)
+// Run the per-element teardown (`element_destroy@40`, &__mm_decref for
+// managed-pointer elements) on every live slot in the half-open range
+// [start, end). The single source of truth for partial element teardown:
+// full-record teardown (`__managed_mem_walk_elements`), clear, and the
+// shrink path of setLength all funnel through here so the element_destroy==0
+// raw-buffer gate and the per-slot null check live in one place. Caller
+// guarantees 0 <= start <= end <= length.
+function __managed_mem_walk_elements_range(self MachineWord, start MachineWord, end MachineWord)
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	if elementDestroy == 0 'rawElems'
 		return
 	end 'rawElems'
-	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let walkBuf = __Internals.loadIndirect(self)
 	if walkBuf == 0 'noBuf'
 		return
 	end 'noBuf'
-	var i = 0
-	while i < length 'eachElem'
+	var i = start
+	while i < end 'eachElem'
 		let slot = __Internals.loadIndirect(walkBuf + i * elemSize)
 		if slot != 0 'live'
 			// `element_destroy` is `&__mm_decref` (void), so use the void-shaped
@@ -1241,6 +1247,12 @@ function __managed_mem_walk_elements(self MachineWord)
 		end 'live'
 		i = i + 1
 	end 'eachElem'
+end '__managed_mem_walk_elements_range'
+
+// Walk and tear down every live element [0, length) of a ROOT record.
+function __managed_mem_walk_elements(self MachineWord)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	__managed_mem_walk_elements_range(self, start: 0, end: length)
 end '__managed_mem_walk_elements'
 
 // clear(self) — drop every live managed element, then truncate to empty (length=0).
@@ -1276,11 +1288,33 @@ end '__destruct___ManagedMemoryCursor'
 
 // setLength(self, n) — bounds-check n against capacity, then write to
 // self.length. Throws invalidLength (wire 4) on n > capacity.
+//
+// SHRINK frees dropped elements: when n < the current length, the slots
+// [n, oldLength) are about to leave the live range, so their per-element
+// teardown must run or every managed element in them leaks (the slot's +1
+// ref is orphaned). Walk-then-store mirrors `__managed_mem_clear` (which is
+// just the full-range shrink to 0). For raw/primitive-element records the
+// walk is inert (element_destroy==0 gate), so grow and primitive shrink stay
+// a bare length store. The walk must precede the length store: it reads
+// [n, oldLength) off the OLD length's live range.
 function __managed_mem_set_length(self MachineWord, n MachineWord) returns MachineWord throws __ManagedMemoryError
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if n > capacity 'tooLong'
 		throw __ManagedMemoryError.invalidLength
 	end 'tooLong'
+	let oldLength = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	if n < oldLength 'shrink'
+		// SHRINK frees the dropped elements: the slots [n, oldLength) are
+		// leaving the live range, so their per-element teardown must run or
+		// every managed element in them leaks (the slot's +1 ref is orphaned).
+		// Mirrors `__managed_mem_clear` (the full-range shrink to 0). For
+		// raw/primitive-element records the walk is inert (element_destroy==0
+		// gate). The walk must precede the length store: it reads [n, oldLength)
+		// off the OLD live range. The vacated slots stay as-is — freshly-grown
+		// capacity is zeroed at buffer-grow time (ensureCapacity), so a later
+		// regrow over these slots never re-exposes the decref'd pointers.
+		__managed_mem_walk_elements_range(self, start: n, end: oldLength)
+	end 'shrink'
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: n)
 	return 0
 end '__managed_mem_set_length'

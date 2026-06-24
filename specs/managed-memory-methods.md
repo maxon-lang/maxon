@@ -1,7 +1,7 @@
 ---
 feature: managed-memory-methods
-status: experimental
-keywords: [managed-memory, methods, builtin, buffer]
+status: stable
+keywords: [managed-memory, methods, builtin, buffer, setlength, shrink, leak]
 category: dev
 ---
 
@@ -16,7 +16,7 @@ category: dev
 - `length()` returns int
 - `capacity()` returns int
 - `elementSize()` returns int
-- `setLength(n)` — set element count (panics if n > capacity)
+- `setLength(n)` — set element count (panics if n > capacity). Shrinking (n < current length) tears down the dropped elements [n, length) — each managed element is released — so a shrink never leaks. Growing leaves the new slots as they were last initialized (fresh capacity reads as empty/null).
 - `get(index)` returns Element (panics if index >= length)
 - `set(index, value)` (panics if index >= capacity)
 - `grow(newCapacity)` (panics if newCapacity < current capacity)
@@ -351,4 +351,115 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+### Shrinking frees dropped elements
+
+Shrinking a buffer of managed elements (via `setLength`/`Array.resize` to a smaller
+length) must release the elements leaving the live range, or they leak. Every test
+below runs under the leak gate (no compiler stderr expected → leak-checked), so a
+dropped element that is not freed fails the test.
+
+<!-- test: shrink-managed-elements-no-leak -->
+Push three heap strings, then `resize(1)`. The two dropped strings must be freed.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("first heap string long enough to require an allocation")
+	xs.push("second heap string long enough to require an allocation")
+	xs.push("third heap string long enough to require an allocation")
+	xs.resize(1)
+	return xs.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: shrink-struct-elements-no-leak -->
+Elements are structs carrying a heap `String` field; shrinking must cascade the
+teardown into each dropped struct's field.
+```maxon
+type Box
+	var payload as String
+
+	static function create(payload String) returns Self
+		return Self{payload: payload}
+	end 'create'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function main() returns ExitCode
+	var boxes = BoxArray.create()
+	boxes.push(Box.create("box one with a heap string payload long enough"))
+	boxes.push(Box.create("box two with a heap string payload long enough"))
+	boxes.push(Box.create("box three with a heap string payload long enough"))
+	boxes.push(Box.create("box four with a heap string payload long enough"))
+	boxes.resize(2)
+	return boxes.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: shrink-setlength-direct-no-leak -->
+Shrink directly through the `__ManagedMemory.setLength` builtin (the path
+`Array.resize` lowers to). Dropping the tail must free those elements.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("alpha string payload long enough to need a heap allocation")
+	xs.push("beta string payload long enough to need a heap allocation")
+	xs.push("gamma string payload long enough to need a heap allocation")
+	try xs.managed.setLength(1) otherwise panic("setLength shrink cannot exceed capacity")
+	return xs.managed.length() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: shrink-to-zero-no-leak -->
+Shrinking all the way to zero frees every element (equivalent to `clear`).
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("only string payload long enough to need a heap allocation")
+	xs.push("other string payload long enough to need a heap allocation")
+	xs.resize(0)
+	return xs.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: shrink-then-regrow-empty-slots -->
+After shrinking and regrowing over the same slots, the regrown slots read as empty
+(the stale, already-freed pointers must not reappear). Pushing a fresh element after
+the regrow must not double-free or leak.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("first string payload long enough to need a heap allocation")
+	xs.push("second string payload long enough to need a heap allocation")
+	xs.push("third string payload long enough to need a heap allocation")
+	xs.resize(1)
+	xs.push("replacement payload long enough to need a heap allocation here")
+	let v = try xs.get(1) otherwise ""
+	return v.count() as ExitCode
+end 'main'
+```
+```exitcode
+62
 ```
