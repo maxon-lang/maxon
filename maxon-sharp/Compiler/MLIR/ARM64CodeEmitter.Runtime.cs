@@ -84,6 +84,24 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  /// <summary>
+  /// mrt_div_by_zero(): ARM64 SDIV/UDIV yield 0 on a zero divisor rather than faulting,
+  /// unlike x86's hardware #DE. The backend emits an explicit divisor==0 check before each
+  /// divide/remainder and tail-calls here when it trips. Prints the same diagnostic the
+  /// hardware-trap fault handler produces ("panic: integer divide by zero") and exits with
+  /// status 1. No stack trace — matching the x86 fault-handler path. Never returns.
+  /// </summary>
+  private void EmitMaxonDivByZero() {
+    EmitRuntimeFunctionStart("mrt_div_by_zero", 0, 0x20);
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_panic_msg_div_zero");
+    EmitBranchLink("rt_write_cstr_stderr");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_panic_msg_nl");
+    EmitBranchLink("rt_write_cstr_stderr");
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitCallImport("_exit");
+    EmitWord(0xD4200000); // BRK #0
+  }
+
   // Reload argument from stack
   private void EmitReloadArg(int argIndex) {
     EmitLoadStoreUnsignedImm(0xF9400000, AbiArgRegs[argIndex], ARM64Register.X29, 16 + argIndex * 8, 8);
@@ -253,6 +271,7 @@ public partial class ARM64CodeEmitter {
 
   public void EmitRuntimeFunctions() {
     EmitMaxonForceSegfault();
+    EmitMaxonDivByZero();
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
     EmitManagedWrite("maxon_managed_write_stdout", 1);
@@ -554,6 +573,11 @@ public partial class ARM64CodeEmitter {
     // Step 5: Print first frame (the function that called panic)
     // [x29+8] = saved LR = return addr back to the function that called panic
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 8, 8); // X0 = return addr
+    // A return address points to the instruction AFTER the call. When that call
+    // is the function's last instruction (e.g. a noreturn panic call), the return
+    // address lands at the start of the NEXT function, so symbolizing it directly
+    // names the wrong function. Subtract 1 so the address falls inside the caller.
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false); // X0 = ret_addr - 1
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // X1 = text_base
     EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1); // X0 = ret_addr - text_base
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8); // text_offset
@@ -587,6 +611,10 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8); // X1 = return addr
     _condBranchFixups.Add((_code.Count, "rt_panic_walk_done"));
     EmitWord(0xB4000001); // CBZ X1, rt_panic_walk_done
+
+    // Symbolize ret_addr - 1 so a call as a function's final instruction resolves
+    // to the calling function rather than the next one (see Step 5 above).
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false); // X1 = ret_addr - 1
 
     // Compute text_offset = return_addr - text_base
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 24, 8); // X2 = text_base

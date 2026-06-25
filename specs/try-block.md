@@ -889,7 +889,7 @@ function main() returns ExitCode
     otherwise (e) 'h'
         match e 'k'
             ErrA.bad(code) then sum = code
-            ErrA.worse then sum = 777
+            ErrA.worse then sum = 120
             ErrB.splat then sum = 99
         end 'k'
     end 'h'
@@ -897,7 +897,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-777
+120
 ```
 
 <!-- test: error.try-block-multi-union-assoc-wrong-binding-count -->
@@ -1177,8 +1177,8 @@ function dispatch(k Kind) returns Count throws MyError
         end 'm'
     end 'd' otherwise (e) 'h'
         match e 'he'
-            fooErr then result = 100
-            barErr then result = 200
+            fooErr then result = 40
+            barErr then result = 80
         end 'he'
     end 'h'
     return result
@@ -1192,7 +1192,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-301
+121
 ```
 
 <!-- test: try-block.managed-var-success-path -->

@@ -50,6 +50,13 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
 
   public static int RegisterParamCount => CallConvRegs.Length;
 
+  /// <summary>Name of the function being converted. Used to scope locally-generated
+  /// labels (e.g. divide-by-zero guards) so they stay globally unique.</summary>
+  public string FuncName { get; init; } = "";
+
+  // Monotonic within a function — combined with FuncName to make guard labels unique.
+  private int _divZeroLabelCounter = 0;
+
   // --- Abstract method implementations ---
 
   protected override ARM64Register[] GetGprPool() => _gprPool;
@@ -134,14 +141,42 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   }
 
   /// <summary>
+  /// ARM64 SDIV/UDIV yield 0 on a zero divisor instead of trapping (unlike x86's hardware
+  /// #DE). Emit an explicit check: when the divisor is zero, call mrt_div_by_zero, which
+  /// prints "panic: integer divide by zero" and exits 1. The check is skipped when the
+  /// divisor is a compile-time non-zero constant, so e.g. `x / 2` keeps a bare SDIV.
+  /// The divisor must already be materialized in <paramref name="divisorReg"/>.
+  /// </summary>
+  private void EmitDivisorZeroCheck(StdValue divisor, ARM64Register divisorReg, IrBlock<ARM64Op> block) {
+    if (_constantValues.TryGetValue(divisor, out var divisorConst) && divisorConst != 0)
+      return; // provably non-zero — no guard needed
+
+    var okLabel = $"{FuncName}.__div_ok_{_divZeroLabelCounter++}";
+    block.AddOp(new ARM64CmpRegImmOp(divisorReg, 0));
+    block.AddOp(new ARM64BranchCondOp(ARM64ConditionCode.Ne, okLabel));
+    // Taken only when divisor == 0; mrt_div_by_zero never returns, so the clobber it
+    // implies is irrelevant. The fall-through skips it and preserves all registers.
+    block.AddOp(new ARM64BranchLinkOp("mrt_div_by_zero"));
+    block.AddOp(new ARM64LabelDefOp(okLabel));
+  }
+
+  /// <summary>
   /// Emit signed division. ARM64 SDIV is a 3-address instruction, no RAX/RDX constraint.
   /// </summary>
   public void EmitDivision(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
-    EmitBinaryRegReg(lhs, rhs, result, block, (d, l, r) => new ARM64SdivRegRegOp(d, l, r));
+    var rhsReg = EnsureInRegister(rhs, block);
+    var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+    EmitDivisorZeroCheck(rhs, rhsReg, block);
+    var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
+    block.AddOp(new ARM64SdivRegRegOp(resultReg, lhsReg, rhsReg));
   }
 
   public void EmitUnsignedDivision(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
-    EmitBinaryRegReg(lhs, rhs, result, block, (d, l, r) => new ARM64UdivRegRegOp(d, l, r));
+    var rhsReg = EnsureInRegister(rhs, block);
+    var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+    EmitDivisorZeroCheck(rhs, rhsReg, block);
+    var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
+    block.AddOp(new ARM64UdivRegRegOp(resultReg, lhsReg, rhsReg));
   }
 
   /// <summary>
@@ -150,6 +185,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   public void EmitRemainder(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+    EmitDivisorZeroCheck(rhs, rhsReg, block);
     // Allocate a temp for the quotient
     var scratch = new StdI64(_scratchIdCounter--);
     var quotReg = AllocateRegister(scratch, block, protect1: lhsReg, protect2: rhsReg);
@@ -165,6 +201,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   public void EmitUnsignedRemainder(StdValue lhs, StdValue rhs, StdValue result, IrBlock<ARM64Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+    EmitDivisorZeroCheck(rhs, rhsReg, block);
     var scratch = new StdI64(_scratchIdCounter--);
     var quotReg = AllocateRegister(scratch, block, protect1: lhsReg, protect2: rhsReg);
     block.AddOp(new ARM64UdivRegRegOp(quotReg, lhsReg, rhsReg));

@@ -104,7 +104,8 @@ public static class StandardToARM64Conversion {
     var float32Constants = new Dictionary<float, string>();
 
     var regManager = new ARM64RegisterManager {
-      DeferredValues = sinkOnlyValues
+      DeferredValues = sinkOnlyValues,
+      FuncName = func.Name
     };
     regManager.SetSpillBaseOffset(-varStackSize);
 

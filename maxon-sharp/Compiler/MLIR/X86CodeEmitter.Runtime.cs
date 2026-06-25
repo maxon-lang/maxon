@@ -394,6 +394,11 @@ public partial class X86CodeEmitter {
 
     // Print first frame: [rbp+8] is return addr within the panicking function
     EmitMovRegMem(X86Register.Rax, 0x08, 8); // return addr into panicking function
+    // A return address points to the instruction AFTER the call. When that call is
+    // the function's last instruction (e.g. a noreturn panic call), the return
+    // address lands at the start of the NEXT function. Subtract 1 so symbolization
+    // resolves to the calling function rather than the next one.
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // text_base
     EmitBytes(0x48, 0x29, 0xD0); // SUB rax, rdx => text offset
     EmitMovMemReg(-0x38, X86Register.Rax, 8);
@@ -428,6 +433,10 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 8);
     EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
     EmitJcc("z", "rt_panic_walk_done");
+
+    // Symbolize ret_addr - 1 so a call as a function's final instruction resolves
+    // to the calling function rather than the next one (see first frame above).
+    EmitBytes(0x48, 0xFF, 0xCA); // DEC rdx
 
     // Compute text offset = return_addr - text_base
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
