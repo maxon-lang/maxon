@@ -25,20 +25,22 @@ let traceMaxBytes = 4 * 1024 * 1024
 
 /// Entry point called by Server.maxon's dispatch table.
 export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "mm-trace") otherwise (err) 'badSrc'
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("mm_trace_analyze")
+	end 'noRoot'
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "mm-trace", repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "mm_trace_analyze: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
-	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
 	if not File.exists(csharpBinary) 'noCsharp'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "mm_trace_analyze: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
 	end 'noCsharp'
 
 	let analyzerScript = childPath(repoRoot, segment: "scripts/analyze_mm_trace.py")
 	if not File.exists(analyzerScript) 'noScript'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer script `{analyzerScript.path}` not found")
 	end 'noScript'
 
@@ -49,13 +51,13 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	let buildPhase = runBuild(csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: mmBuildTimeoutMs)
 	if not buildPhase.succeeded() 'buildFailed'
 		let outcome = buildFailureOutcome(buildPhase)
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return outcome
 	end 'buildFailed'
 
 	let producedExe = expectedExePath(mainFile.mainFile)
 	if not File.exists(producedExe) 'noExe'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: build reported success but expected binary `{producedExe.path}` does not exist")
 	end 'noExe'
 
@@ -71,7 +73,7 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	runConfig.standardError = OutputDestination.collect(traceMaxBytes)
 	runConfig.timeoutMs = runTimeoutMs
 	let runResult = try runConfig.run() otherwise (err) 'runErr'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: run failed: {err.displayReason()}")
 	end 'runErr'
 	let runElapsed = Clock.elapsedMs(runTiming)
@@ -88,23 +90,23 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	analyzeConfig.standardError = OutputDestination.collect(32 * 1024)
 	analyzeConfig.timeoutMs = analyzeTimeoutMs
 	let analyzeResult = try analyzeConfig.run() otherwise (err) 'analyzeErr'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer spawn failed: {err.displayReason()} (is python on PATH?)")
 	end 'analyzeErr'
 	let analyzeElapsed = Clock.elapsedMs(analyzeTiming)
 
 	if not analyzeResult.succeeded() 'analyzeFail'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer exited non-zero ({analyzeResult.exitCode()}). stderr: {analyzeResult.stderr.trim()}")
 	end 'analyzeFail'
 
 	let report = try Json.parse(analyzeResult.stdout) otherwise (err) 'parseErr'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer JSON parse failed: {err.name}")
 	end 'parseErr'
 
 	let outcome = buildFullOutcome(buildPhase, run: runResult, runDurationMs: runElapsed, analyze: analyzeResult, analyzeDurationMs: analyzeElapsed, report: report)
-	cleanupResolvedSource(mainFile)
+	cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 	return outcome
 end 'mmTraceAnalyzeHandler'
 

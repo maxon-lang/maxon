@@ -30,7 +30,9 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 	end 'noFilter'
 
 	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
-	let repoRoot = repoRootPath()
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("spec_test_outcome {compiler}")
+	end 'noRoot'
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler}: required binary missing. Build it first via the `build` tool.")
 	end 'noBin'

@@ -14,7 +14,9 @@ export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId) retur
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {errorReason(err)}")
 	end 'bad'
 
-	let repoRoot = repoRootPath()
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("lookup_error_code")
+	end 'noRoot'
 	let entry = try lookupInErrorCodeFile(repoRoot, code: code) otherwise 'notInSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: code E{code} not found in maxon-selfhosted/Compiler/ErrorCode.maxon")
 	end 'notInSrc'

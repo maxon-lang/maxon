@@ -14,6 +14,16 @@ export union ToolOutcome
 	error(code RpcErrorCode, message String)
 end 'ToolOutcome'
 
+// Graceful JSON-RPC error returned when a tool can't locate the Maxon repo
+// root (no `bin/maxon` above the server binary — the C# bootstrap hasn't been
+// built, or the server was launched from outside a checkout). Centralised so
+// every handler reports it identically. Previously `repoRootPath` panicked
+// here, which crashed the server process and closed the stdio connection,
+// surfacing to clients as an opaque "Connection closed" on every tool call.
+export function repoRootErrorOutcome(tool String) returns ToolOutcome
+	return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{tool}: could not locate the Maxon repo root — no `bin/maxon{exeSuffix()}` found above the server binary. Build the C# bootstrap first (run `dotnet build` in maxon-sharp).")
+end 'repoRootErrorOutcome'
+
 // Names of all registered tools, in the order shown in `tools/list`. Kept as
 // a flat array because Maxon's compiler currently crashes (E9001) on a
 // `Map<String, FunctionType>` typealias — once that's resolved we can switch

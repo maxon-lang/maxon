@@ -47,7 +47,9 @@ export function selfHostedSpecTestHandler(argsDoc JsonDoc, argsId JsonNodeId) re
 end 'selfHostedSpecTestHandler'
 
 function specTestWith(compiler String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let repoRoot = repoRootPath()
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("spec-test {compiler}")
+	end 'noRoot'
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise (err) 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler}: required binary missing. Build it first via the `build` tool.")
 	end 'noBin'
@@ -83,9 +85,10 @@ end 'compilerFromArgs'
 /// the binary doesn't exist — callers translate that into an
 /// `invalidRequest` error pointing the user at the `build` tool.
 export function compilerBinary(repoRoot FilePath, compiler String) returns FilePath throws NotFound
+	let suffix = exeSuffix()
 	let path = match compiler 'pick'
-		"csharp" gives childPath(repoRoot, segment: "bin/maxon.exe")
-		"selfhosted" gives childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+		"csharp" gives childPath(repoRoot, segment: "bin/maxon{suffix}")
+		"selfhosted" gives childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted{suffix}")
 		default panic("compilerBinary: unknown compiler `{compiler}` — compilerFromArgs should have normalized")
 	end 'pick'
 	if not File.exists(path) 'missing'

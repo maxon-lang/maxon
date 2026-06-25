@@ -55,7 +55,7 @@ end 'ResolvedSource'
 /// directory containing `main.maxon`. The caller MUST call
 /// `cleanupResolvedSource` after the tool finishes — even on the error path —
 /// to remove the temp files when `isSnippet` is true.
-export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String) returns ResolvedSource throws SourceArgError
+export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String, repoRoot FilePath) returns ResolvedSource throws SourceArgError
 	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
 		throw SourceArgError.missingSource
 	end 'noSrc'
@@ -78,7 +78,7 @@ export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippet
 		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
 			throw SourceArgError.missingCode
 		end 'noCode'
-		return materializeSnippetProject(code, prefix: snippetPrefix)
+		return materializeSnippetProject(code, prefix: snippetPrefix, repoRoot: repoRoot)
 	end 'snippetKind'
 
 	throw SourceArgError.unknownKind
@@ -88,7 +88,7 @@ end 'resolveProjectSource'
 /// scratch file under `<repo>/temp/` rather than a per-snippet project
 /// directory. Used by tools (e.g. `fmt`) that act on the file path directly
 /// and don't need a project root.
-export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String) returns ResolvedSource throws SourceArgError
+export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String, repoRoot FilePath) returns ResolvedSource throws SourceArgError
 	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
 		throw SourceArgError.missingSource
 	end 'noSrc'
@@ -111,7 +111,7 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
 			throw SourceArgError.missingCode
 		end 'noCode'
-		return materializeSnippetFile(code, prefix: snippetPrefix)
+		return materializeSnippetFile(code, prefix: snippetPrefix, repoRoot: repoRoot)
 	end 'snippetKind'
 
 	throw SourceArgError.unknownKind
@@ -120,8 +120,7 @@ end 'resolveFileSource'
 // Materialize a snippet as a directory containing `main.maxon`. The dir
 // is named `<repo>/temp/<prefix>-<stamp>/` so concurrent calls don't
 // collide. `prefix` should be a short tool identifier like "dump-ir".
-function materializeSnippetProject(code String, prefix String) returns ResolvedSource
-	let repoRoot = repoRootPath()
+function materializeSnippetProject(code String, prefix String, repoRoot FilePath) returns ResolvedSource
 	let stamp = Clock.nowMs()
 	let projectDirStr = "{repoRoot.path}/temp/{prefix}-{stamp}"
 	let projectDir = try FilePath.from(projectDirStr) otherwise panic("materializeSnippetProject: derived dir '{projectDirStr}' is invalid")
@@ -139,8 +138,7 @@ end 'materializeSnippetProject'
 // Materialize a snippet as a single file under `<repo>/temp/`. Used by
 // `fmt`, which operates on the file directly without needing a project
 // directory.
-function materializeSnippetFile(code String, prefix String) returns ResolvedSource
-	let repoRoot = repoRootPath()
+function materializeSnippetFile(code String, prefix String, repoRoot FilePath) returns ResolvedSource
 	let stamp = Clock.nowMs()
 	let filename = "temp/{prefix}-{stamp}.maxon"
 	let target = childPath(repoRoot, segment: filename)
@@ -156,7 +154,7 @@ end 'materializeSnippetFile'
 /// a no-op. For snippet-mode sources we remove the snippet's main file and
 /// any sibling artifacts in the project dir; the (now-empty) directory is
 /// left in place since stdlib lacks a `Directory.remove`.
-export function cleanupResolvedSource(resolved ResolvedSource)
+export function cleanupResolvedSource(resolved ResolvedSource, repoRoot FilePath)
 	if not resolved.isSnippet 'keep'
 		return
 	end 'keep'
@@ -167,7 +165,6 @@ export function cleanupResolvedSource(resolved ResolvedSource)
 	let mainFile = resolved.mainFile
 	// Heuristic: if the project dir is exactly `<repo>/temp` we're in
 	// file-mode (materializeSnippetFile); only the main file is ours.
-	let repoRoot = repoRootPath()
 	let tempDir = childPath(repoRoot, segment: "temp")
 	if projectDir.path.equals(tempDir.path) 'fileMode'
 		try File.delete(mainFile) otherwise ignore

@@ -63,13 +63,24 @@ end 'main'
 // Path / fixture discovery
 // =============================================================================
 
-// The runner binary lives at `<repo>/maxon-dev-mcp/test/.maxon/maxon-dev-mcp-test.exe`.
-// Walk up until we find a `bin/maxon.exe` sibling — that's the repo root.
+// The host's executable-file suffix: `.exe` on Windows, empty elsewhere. The
+// server and compiler binaries this runner locates carry it only on Windows;
+// hardcoding `.exe` made every path probe miss on macOS/Linux.
+function exeSuffix() returns String
+	#if os(Windows)
+		return ".exe"
+	#else
+		return ""
+	#endif
+end 'exeSuffix'
+
+// The runner binary lives at `<repo>/maxon-dev-mcp/test/.maxon/maxon-dev-mcp-test`
+// (`.exe` on Windows). Walk up until we find a `bin/maxon` sibling — the repo root.
 function resolveRepoRoot() returns FilePath
 	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
 	var dir = parentDir(exe)
 	for _ in 0 upto 16 'walk'
-		let candidate = joinPath(dir, segment: "bin/maxon.exe")
+		let candidate = joinPath(dir, segment: "bin/maxon{exeSuffix()}")
 		if File.exists(candidate) 'found'
 			return dir
 		end 'found'
@@ -96,7 +107,7 @@ function locateBinary(repoRoot FilePath) returns FilePath
 		end 'missingOverride'
 		return overridePath
 	end 'haveOverride'
-	let path = joinPath(repoRoot, segment: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp.exe")
+	let path = joinPath(repoRoot, segment: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp{exeSuffix()}")
 	if not File.exists(path) 'missing'
 		panic("locateBinary: server binary not found at {path.path}. Build it via `build_dev_mcp` in build.maxon first.")
 	end 'missing'

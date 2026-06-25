@@ -64,15 +64,16 @@ end 'runBuild'
 // Expected exe path (snippets and projects both use this shape)
 // =============================================================================
 
-/// Locate the produced executable for a built Maxon source. The C# compiler
-/// emits either `<base>.exe` (single-file builds, like our snippets) or
-/// `<project>/.maxon/<basename>.exe` (project builds with a build.maxon).
+/// Locate the produced executable for a built Maxon source. The compiler emits
+/// either `<base>` (single-file builds, like our snippets) or
+/// `<project>/.maxon/<basename>` (project builds with a build.maxon), each
+/// carrying the host's executable suffix (`.exe` on Windows, none elsewhere).
 /// Returns the first existing path; if neither exists, returns the direct
-/// `<base>.exe` so callers can surface a useful "expected binary missing"
+/// `<base>` path so callers can surface a useful "expected binary missing"
 /// error.
 export function expectedExePath(mainFile FilePath) returns FilePath
 	let base = stripExtension(mainFile)
-	let direct = changeExtension(base, ext: "exe")
+	let direct = withExeSuffix(base)
 	if File.exists(direct) 'direct'
 		return direct
 	end 'direct'
@@ -80,7 +81,7 @@ export function expectedExePath(mainFile FilePath) returns FilePath
 		return direct
 	end 'noParent'
 	let basename = lastSegment(base)
-	let inMaxonDir = childPath(parent, segment: ".maxon/{basename}.exe")
+	let inMaxonDir = childPath(parent, segment: ".maxon/{basename}{exeSuffix()}")
 	if File.exists(inMaxonDir) 'inMaxon'
 		return inMaxonDir
 	end 'inMaxon'

@@ -1,5 +1,5 @@
 // `build` MCP tool. Invokes the canonical Maxon build commands so MCP
-// clients can drive `dotnet build` and `./bin/maxon.exe build maxon-selfhosted`
+// clients can drive `dotnet build` and `./bin/maxon build maxon-selfhosted`
 // through one structured tool call — no more re-deriving the commands each
 // session.
 
@@ -24,7 +24,9 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Too
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of csharp | selfhosted | both)")
 	end 'noTarget'
 
-	let repoRoot = repoRootPath()
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("build")
+	end 'noRoot'
 	if target.equals("csharp") 'cs'
 		return runCsharpBuild(repoRoot)
 	end 'cs'
@@ -60,7 +62,7 @@ function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
-	let binaryPath = childPath(repoRoot, segment: "bin/maxon.exe")
+	let binaryPath = childPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
 	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runCsharpBuild'
 
@@ -69,7 +71,7 @@ end 'runCsharpBuild'
 // =============================================================================
 
 function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
 	if not File.exists(csharpBinary) 'noCsharp'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build selfhosted: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
 	end 'noCsharp'
@@ -83,7 +85,7 @@ function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
-	let binaryPath = childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+	let binaryPath = childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted{exeSuffix()}")
 	return buildOutcome("selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runSelfhostedBuild'
 

@@ -44,13 +44,15 @@ end 'dumpStagesHandler'
 // requested), and package the produced .ir artifact(s). `toolName` only colours
 // the error messages so each tool reports under its own name.
 function emitIr(argsDoc JsonDoc, argsId JsonNodeId, toolName String, snippetPrefix String, compiler String, dumpStages bool) returns ToolOutcome
-	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: snippetPrefix) otherwise (err) 'badSrc'
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome(toolName)
+	end 'noRoot'
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: snippetPrefix, repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "{toolName}: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
-	let repoRoot = repoRootPath()
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{toolName}: the {compiler} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler}\").")
 	end 'noBin'
 
@@ -63,12 +65,12 @@ function emitIr(argsDoc JsonDoc, argsId JsonNodeId, toolName String, snippetPref
 	end 'doStages'
 
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: dumpIrTimeoutMs) otherwise (err) 'spawn'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "{toolName}: {err.displayReason()}")
 	end 'spawn'
 
 	let outcome = buildOutcome(mainFile, result: result, dumpStages: dumpStages)
-	cleanupResolvedSource(mainFile)
+	cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 	return outcome
 end 'emitIr'
 

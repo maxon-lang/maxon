@@ -102,20 +102,59 @@ export function childPath(parent FilePath, segment String) returns FilePath
 end 'childPath'
 
 // =============================================================================
+// Host executable suffix
+// =============================================================================
+
+/// The host platform's executable-file suffix, including the leading dot:
+/// `.exe` on Windows, empty on Linux/macOS/Wasi. The MCP tools resolve and
+/// invoke the Maxon compiler binaries, whose on-disk names carry this suffix
+/// only on Windows. Hardcoding `.exe` made every repo-relative binary path —
+/// and the repo-root probe — miss on non-Windows hosts, panicking the server.
+export function exeSuffix() returns String
+	#if os(Windows)
+		return ".exe"
+	#else
+		return ""
+	#endif
+end 'exeSuffix'
+
+/// Append the host platform's executable suffix to `base`. On Windows this
+/// yields `<base>.exe`; elsewhere the compiler emits an extension-less binary,
+/// so `base` is returned unchanged. Use for compiler-produced output binaries
+/// (e.g. a built snippet) whose base path is already known.
+export function withExeSuffix(base FilePath) returns FilePath
+	#if os(Windows)
+		return changeExtension(base, ext: "exe")
+	#else
+		return base
+	#endif
+end 'withExeSuffix'
+
+// =============================================================================
 // Repo root discovery
 // =============================================================================
 
 /// Resolve the Maxon repo root from the running server's executable path.
-/// Walks up from the executable's directory looking for a `bin/maxon.exe`
-/// sibling — that's the repo root. This handles both the canonical
-/// `<repo>/maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp.exe` layout and any side-built location (e.g.
-/// during development when the binary lives under `temp/`).
-export function repoRootPath() returns FilePath
-	let exe = try Process.executablePath() otherwise panic("repoRootPath: cannot determine executable path")
+/// Walks up from the executable's directory looking for a `bin/maxon`
+/// (`bin/maxon.exe` on Windows) sibling — that's the repo root. Handles both
+/// the canonical `<repo>/maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp` layout and any
+/// side-built location (e.g. during development when the binary lives under
+/// `temp/`).
+///
+/// Throws `NotFound` when no repo root turns up within `maxDepth` levels (or
+/// the executable path is unavailable). Callers translate that into a graceful
+/// per-request JSON-RPC error — see `repoRootErrorOutcome` — rather than
+/// panicking, which would tear down the whole stdio connection for every
+/// subsequent request.
+export function repoRootPath() returns FilePath throws NotFound
+	let exe = try Process.executablePath() otherwise 'noExe'
+		throw NotFound.notFound
+	end 'noExe'
+	let marker = "bin/maxon{exeSuffix()}"
 	var dir = parentDir(exe)
 	let maxDepth = 16
 	for _ in 0 upto maxDepth 'walk'
-		let candidate = childPath(dir, segment: "bin/maxon.exe")
+		let candidate = childPath(dir, segment: marker)
 		if File.exists(candidate) 'found'
 			return dir
 		end 'found'
@@ -125,7 +164,7 @@ export function repoRootPath() returns FilePath
 		end 'atRoot'
 		dir = parent
 	end 'walk'
-	panic("repoRootPath: walked up from {exe.path} without finding a `bin/maxon.exe`. Ensure the C# bootstrap exists at <repo>/bin/maxon.exe before invoking MCP tools.")
+	throw NotFound.notFound
 end 'repoRootPath'
 
 /// Return the parent directory of `path` (everything up to the last `/` or

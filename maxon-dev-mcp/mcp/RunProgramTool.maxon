@@ -33,13 +33,15 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {compilerArgErrorReason(err)}")
 	end 'badCompiler'
 
-	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "run-program") otherwise (err) 'badSrc'
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("run_program")
+	end 'noRoot'
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "run-program", repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
-	let repoRoot = repoRootPath()
 	let buildBinary = try compilerBinary(repoRoot, compiler: compiler) otherwise (err) 'noBin'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "run_program: the {compiler} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler}\").")
 	end 'noBin'
 
@@ -49,13 +51,13 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 	let buildResult = runBuild(buildBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
 	if not buildResult.succeeded() 'buildFailed'
 		let outcome = buildOutcomeBuildOnly(buildResult)
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return outcome
 	end 'buildFailed'
 
 	let producedExe = expectedExePath(mainFile.mainFile)
 	if not File.exists(producedExe) 'noExe'
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "run_program: build reported success but expected binary `{producedExe.path}` does not exist")
 	end 'noExe'
 
@@ -72,13 +74,13 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 	runConfig.timeoutMs = runTimeoutMs
 	let runResult = try runConfig.run() otherwise (err) 'runErr'
 		let outcome = buildOutcomeBuildOnlyWithRunError(buildResult, runErrorReason: err.displayReason(), runDurationMs: Clock.elapsedMs(runTiming))
-		cleanupResolvedSource(mainFile)
+		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return outcome
 	end 'runErr'
 	let runElapsed = Clock.elapsedMs(runTiming)
 
 	let outcome = buildOutcomeFull(buildResult, runResult: runResult, runDurationMs: runElapsed)
-	cleanupResolvedSource(mainFile)
+	cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 	return outcome
 end 'runProgramHandler'
 
