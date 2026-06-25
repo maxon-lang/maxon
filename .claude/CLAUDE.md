@@ -73,6 +73,7 @@ Apply these standards when writing or reviewing any code:
 - **No thin wrapper functions** — remove functions that do nothing but delegate to one other call.
 - **No sentinel return values** — functions that cannot return a valid value must throw, not return `""`, `-1`, `null`, or similar.
 - **Blank lines for readability** — add blank lines around control flow statements and between logical sections.
+- **No magic values** — replace bare literal constants (numbers, strings) with named `static` constants that describe their meaning. When a set of related constants belongs together, group them into a `static enum` instead of scattering individual constants.
 
 ## Spec Files
 
