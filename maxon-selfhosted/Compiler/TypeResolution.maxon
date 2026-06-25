@@ -8984,6 +8984,11 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	project.resolvedCallees = ResolvedCalleesMap.create()
 	project.resolvedReceiverTypes = ResolvedReceiverTypesMap.create()
 	project.callParamTypes = CallParamTypesMap.create()
+	// The callee-qualification cache memoizes results against this module's
+	// name/type registries; a separate module (stdlib vs user) has different
+	// registries and op indices, so drop the cache so cross-module entries can't
+	// alias.
+	project.qualifiedCalleeCache = QualifiedCalleeCacheMap.create()
 	// Merge cross-file extension inner typealiases that the parser queued
 	// because their target type hadn't been parsed yet. Must run before the
 	// interface/struct drains so the aliases promote into the resolved

@@ -1932,13 +1932,64 @@ export function qualifyCalleeForContext(project Project, bare String, callContex
 	return qualified
 end 'qualifyCalleeForContext'
 
+// Memoized result of `qualifyCalleeForContextWithType`: the resolved qualified
+// callee name plus the receiver MaxonType the typealias chase landed on (the two
+// values the wrapper returns as a tuple). Stored in `Project.qualifiedCalleeCache`.
+export type QualifiedCalleeResult
+	export var name as String
+	export var receiverType as MaxonType
+
+	export static function create(name String, receiverType MaxonType) returns QualifiedCalleeResult
+		return Self{name: name, receiverType: receiverType}
+	end 'create'
+end 'QualifiedCalleeResult'
+
+export typealias QualifiedCalleeCacheMap = Map with (String, QualifiedCalleeResult)
+
+// Encode a `qualifyCalleeForContextWithType` call's inputs into one cache key.
+// The function is pure over `(bare, callContext, currentNamespace,
+// readerFilePath, enclosingType)` plus the project name/type registries — and
+// those registries are frozen by the time `resolveAllCalls` runs — so identical
+// inputs always yield identical outputs and can be memoized. `\x1f` (unit
+// separator) joins the fields: it never appears in an identifier, namespace, or
+// path, so distinct field tuples can't alias to the same key. The callContext
+// discriminant (free / sibling+typeName / qualified) is folded in because it
+// selects a different probe order.
+function qualifyCalleeCacheKey(bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String) returns String
+	let ctxKey = match callContext 'ctx'
+		free gives "f"
+		sibling(typeName) gives "s:{typeName}"
+		qualified gives "q"
+	end 'ctx'
+	return "{ctxKey}\x1f{bare}\x1f{currentNamespace}\x1f{readerFilePath.toString()}\x1f{enclosingType}"
+end 'qualifyCalleeCacheKey'
+
 // Same as `qualifyCalleeForContext` but also returns the receiver
 // MaxonType the typealias chase landed on (for `qualified`/`sibling`
 // contexts). Resolvers that need to thread the receiver's
 // `genericInstance(...)` shape into a call-site sidecar (e.g.
 // `resolvedReceiverTypes` for layout-arg materialization) read this
 // instead of re-chasing the resolved name.
+//
+// Memoized: `resolveAllCalls` invokes this once per call op, and the same
+// `(bare, context, namespace, file, enclosingType)` tuple recurs across the
+// thousands of `print(...)` / `Type.create()` / sibling-method calls in a large
+// module. The candidate-scan + string-building cost is the single largest piece
+// of type resolution, so the result is cached on `project` (cleared at the top
+// of every `runTypeResolution` run alongside the other op-keyed sidetables).
 export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String = "") returns (String, MaxonType)
+	let cacheKey = qualifyCalleeCacheKey(bare, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingType)
+	if let hit = try project.qualifiedCalleeCache.get(cacheKey) 'cacheHit'
+		return (hit.name, hit.receiverType)
+	end 'cacheHit'
+	let (name, receiverType) = qualifyCalleeForContextWithTypeUncached(project, bare: bare, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingType)
+	try project.qualifiedCalleeCache.insert(cacheKey, value: QualifiedCalleeResult.create(name, receiverType: receiverType)) otherwise ignore
+	return (name, receiverType)
+end 'qualifyCalleeForContextWithType'
+
+// Uncached body of `qualifyCalleeForContextWithType`; call only through the
+// memoizing wrapper above.
+function qualifyCalleeForContextWithTypeUncached(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String = "") returns (String, MaxonType)
 	if isQualifiedCallContext(callContext) 'isQualified'
 		// Same-name static/instance disambiguation. A `Type.method()` qualified
 		// call always names the STATIC member when the type declares both a
@@ -2112,7 +2163,7 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 		end 'visible'
 	end 'each'
 	return (localName, MaxonType.unresolved)
-end 'qualifyCalleeForContextWithType'
+end 'qualifyCalleeForContextWithTypeUncached'
 
 // True when `readerFilePath` is one of the stdlib internals files that may
 // reference `__`-prefixed stdlib functions by bare name. Matches the

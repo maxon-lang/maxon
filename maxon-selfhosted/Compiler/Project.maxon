@@ -376,6 +376,16 @@ export type Project
 	// layout descriptor). Free non-generic calls don't insert.
 	export var resolvedReceiverTypes as ResolvedReceiverTypesMap
 
+	// Memoization for `qualifyCalleeForContextWithType` — keyed by its
+	// `(callContext, bare, namespace, readerFile, enclosingType)` inputs (the
+	// function is pure over those plus the frozen name/type registries). Cleared
+	// at the top of every `runTypeResolution` run alongside the op-keyed
+	// sidetables above. The per-call qualification (candidate scan + string
+	// building) is the dominant cost of `resolveAllCalls`, and the same tuple
+	// recurs across the many identical calls in a module, so the cache turns most
+	// of that walk into map hits.
+	export var qualifiedCalleeCache as QualifiedCalleeCacheMap
+
 	// Minimal first-param overload registry. When the parser detects a
 	// duplicate qualified function name and the two functions differ in their
 	// first non-`self` parameter type, both functions are re-keyed under
@@ -988,6 +998,7 @@ export type Project
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
+			qualifiedCalleeCache: QualifiedCalleeCacheMap.create(),
 			overloadedNames: OverloadedNameMap.create(),
 			pendingFuncRenames: FuncRenameMap.create(),
 			crossFileOverloadRenames: FuncRenameMap.create(),
