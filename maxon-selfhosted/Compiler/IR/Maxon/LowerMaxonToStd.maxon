@@ -3534,6 +3534,21 @@ type MaxonToStdLowering
 		// param so wasm's `call_indirect` sees a matching signature.
 		self.synthesizeFnRefThunks()
 
+		// Release the per-function `Scope` symbol tables. They are a
+		// front-end-only structure: the parser populates them and the passes
+		// up to and including this lowering read them (slot counts, per-var
+		// info), but no Std-tier, MIR-tier, or backend pass touches
+		// `func.scope` — the slot data they need was already snapshotted into
+		// `func.slotMaxonTypes` above. Holding ~8.5k Scopes (each with its own
+		// `vars` map + frame stack) resident for the whole compile is pure dead
+		// weight, so reset each to its empty form here, dropping the internal
+		// map/array allocations. Byte-identical: clearing state nothing reads
+		// cannot change codegen.
+		for i in 0 upto self.stdModule.functions.count() 'releaseScopes'
+			var func = try self.stdModule.functions.get(i) otherwise panic("releaseScopes: stdModule.functions.get OOB at {i}")
+			func.releaseScope()
+		end 'releaseScopes'
+
 		return self.stdModule
 	end 'lower'
 

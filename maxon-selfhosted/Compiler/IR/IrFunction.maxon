@@ -632,6 +632,17 @@ export type IrFunction
 	export function isValueInlinedArg(id ValueId) returns bool
 		return try self.valueInlinedArg.get(id) otherwise false
 	end 'isValueInlinedArg'
+
+	// Drop the front-end `Scope` symbol table once it is no longer read.
+	// `scope` is populated by the parser and consumed by the Maxon-tier
+	// passes through (and including) lowerMaxonToStd, which snapshots the
+	// per-slot type data it needs into `slotMaxonTypes`. No Std/MIR/backend
+	// pass reads `scope`, so once lowering finishes the table is dead weight;
+	// resetting it to its empty form frees the internal `vars` map and frame
+	// stack while leaving a valid (empty) Scope in place.
+	export function releaseScope()
+		self.scope.reset()
+	end 'releaseScope'
 end 'IrFunction'
 
 export typealias IrFunctionArray = Array with IrFunction

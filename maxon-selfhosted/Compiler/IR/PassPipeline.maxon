@@ -372,13 +372,29 @@ export type PassPipeline
 	function compactPhaseModuleAfter(pass PassKind)
 		match classifyPhase(pass) 'phase'
 			maxon then break 'phase'
-			std then stdModule.compactOps()
-			mir then mirModule.compactOps()
+			std then compactStdModule()
+			mir then compactMirModule()
 			// No pipeline pass classifies as `target`; the backend driver
 			// compacts the TargetModule directly.
 			target then break 'phase'
 		end 'phase'
 	end 'compactPhaseModuleAfter'
+
+	// Compact both the orphan ops and the orphan blocks a just-run Std-tier pass
+	// left behind. Ops first, then blocks: `compactBlocks` drops orphan blocks
+	// (releasing their `opRefs` lists), which can only shrink the live op set, so
+	// running ops-compaction first never wastes work re-scanning blocks that are
+	// about to disappear. Both are byte-identical no-ops when the pass orphaned
+	// nothing (each bails on its `liveCount == count` fast path).
+	function compactStdModule()
+		stdModule.compactOps()
+		stdModule.compactBlocks()
+	end 'compactStdModule'
+
+	function compactMirModule()
+		mirModule.compactOps()
+		mirModule.compactBlocks()
+	end 'compactMirModule'
 
 	// --- Logging / dump helpers ---
 
