@@ -7631,7 +7631,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
       string? returnVarName = expr is ExprResult.VarRef rv ? rv.VarName : null;
       var value = ResolveExprValue(expr);
-      CheckReturnType(value, returnToken);
+      value = CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
       // For heap-allocated returns (structs and associated-value enums),
       // incref the return value so it survives the caller.
@@ -7687,29 +7687,33 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  private void CheckReturnType(MaxonValue value, Token returnToken) {
+  // Validates the returned value against the function's declared return type.
+  // Returns the value to actually return — usually unchanged, but a
+  // constants-enum returned where a numeric primitive is declared is coerced to
+  // its extracted raw value (mirrors the enum-arg coercion in FillDefaultArgs).
+  private MaxonValue CheckReturnType(MaxonValue value, Token returnToken) {
     var returnType = _currentFunction?.ReturnType;
-    if (returnType == null) return;
+    if (returnType == null) return value;
 
     // Skip type checking for type parameter return types (e.g., Element in generic types)
-    if (returnType is IrTypeParameterType) return;
+    if (returnType is IrTypeParameterType) return value;
 
     if (returnType is IrStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
         if (value is MaxonStruct aliasActual && IsStructTypeCompatible(aliasActual.TypeName, expectedStruct.Name)) {
-          return;
+          return value;
         }
         // Allow returning concrete tuples when expected type has unresolved type parameters
         if (value is MaxonStruct && expectedStruct.IsTuple
             && expectedStruct.Fields.Any(f => f.Type is IrTypeParameterType)) {
-          return;
+          return value;
         }
         var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Cannot return '{actualName}' from function declared to return '{expectedStruct.Name}'",
           returnToken.Line, returnToken.Column);
       }
-      return;
+      return value;
     }
 
     if (returnType is IrEnumType expectedEnum) {
@@ -7719,17 +7723,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           $"Cannot return '{actualName}' from function declared to return '{expectedEnum.Name}'",
           returnToken.Line, returnToken.Column);
       }
-      return;
+      return value;
     }
 
     var valueKind = DetermineValueKind(value);
-
     var expectedKind = returnType.ToValueKind();
+
+    // Constants-enum → backing-type coercion. A constants-enum returned where a
+    // numeric primitive is declared (`return JsonByte.lBracket` from a `Byte`
+    // function) coerces to its raw backing value, mirroring the argument-side
+    // coercion. Extract the raw value, then fall through so the kind check /
+    // widening cast below applies to the extracted kind. Without this, the
+    // `IsWideningCast(Enum, …)` call below has no Enum arm and throws E9001.
+    if (valueKind == MaxonValueKind.Enum && IsNumericPrimitiveKind(expectedKind)
+        && TryCoerceConstantsToBackingType(value, out var coercedRaw, out var coercedBackingKind)
+        && coercedRaw != null
+        && coercedBackingKind != MaxonValueKind.Struct) {
+      value = coercedRaw;
+      valueKind = coercedBackingKind;
+    }
+
     if (valueKind == expectedKind || IsWideningCast(valueKind, expectedKind))
-      return;
+      return value;
     // Float literals are F64; allow narrowing to F32 ranged types (range check validates)
     if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32)
-      return;
+      return value;
 
     throw new CompileError(ErrorCode.SemanticTypeMismatch,
       $"Cannot return '{KindToTypeName(valueKind)}' from function declared to return '{KindToTypeName(expectedKind)}'",
@@ -17371,6 +17389,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static bool IsIntegerLikeKind(MaxonValueKind kind) =>
     kind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
 
+  private static bool IsNumericPrimitiveKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short
+      or MaxonValueKind.Float or MaxonValueKind.Float32;
+
   /// <summary>
   /// If the given value is a Character struct produced by a char literal op,
   /// replaces it with an integer literal containing the Unicode codepoint value.
@@ -18217,6 +18239,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
           // If argRangedName is null, it's a literal or untyped — allow if kind matches
         }
+      }
+
+      // Constants-enum → backing-type coercion. A constants-enum case whose
+      // backing is an integer/float coerces to a numeric primitive parameter by
+      // extracting its raw value — `out.push(JsonByte.lBracket)` instead of
+      // `out.push(JsonByte.lBracket.rawValue)`. This mirrors the existing
+      // `byte == EnumCase` comparison rule (see TryCoerceConstantsToBackingType).
+      // String/char-backed constants extract to a Struct and are handled by the
+      // struct-parameter path above, so they never reach here.
+      if (argKind == MaxonValueKind.Enum
+          && IsNumericPrimitiveKind(paramType.ToValueKind())
+          && TryCoerceConstantsToBackingType(args[i]!, out var coercedRaw, out var coercedBackingKind)
+          && coercedRaw != null
+          && coercedBackingKind != MaxonValueKind.Struct) {
+        args[i] = coercedRaw;
+        argKind = coercedBackingKind;
       }
 
       // Primitive parameter: arg must not be a struct/enum

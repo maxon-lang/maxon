@@ -64,7 +64,11 @@ module {
     %55 = mir.global_addr @__data_captured
     %56 = mir.load %55, 0 width: qword
     %69 = mir.load %56, 0 width: qword
-    %87 = mir.call @stdlib.__managed_mem_walk_elements(%69)
+    %92 = mir.mov_imm 8 : i64
+    %93 = mir.add.i64 %69, %92
+    %94 = mir.load %93, 0 width: qword
+    %95 = mir.mov_imm 0 : i64
+    %96 = mir.call @stdlib.__managed_mem_walk_elements_range(%69, %95, %94)
     %88 = mir.mov_imm 8 : i64
     %89 = mir.add.i64 %69, %88
     %90 = mir.mov_imm 0 : i64
@@ -86,7 +90,7 @@ module {
     mir.cond_br %74 [then: inlined_Array.pdqsortRange_1_0(), else: inlined_Array.pdqsortRange_3_9(%71, %72)]
   inlined_Array.pdqsortRange_1_0:
     %75 = mir.call @Array.smallSortRange(%3, %61, %63, %18, %0, %21)
-    %91 = mir.call @__mm_decref_maybenull_helper(%3)
+    %97 = mir.call @__mm_decref_maybenull_helper(%3)
     mir.br inline_cont_main_0()
   inlined_Array.pdqsortRange_3_9(%76: i64, %77: i64):
     %78 = mir.mov_imm 1 : i64
@@ -102,7 +106,7 @@ module {
     %84 = mir.mov_imm 2 : i64
     %85 = mir.mul.i64 %76, %84
     %86 = mir.call @Array.pdqsortRecurse(%3, %61, %63, %85, %71, %18, %0, %21)
-    %92 = mir.call @__mm_decref_maybenull_helper(%3)
+    %98 = mir.call @__mm_decref_maybenull_helper(%3)
     mir.br inline_cont_main_0()
   inline_cont_main_0:
     %23 = mir.call @Log.stopCapture()
@@ -126,8 +130,8 @@ module {
     %37 = mir.mov_imm 1 : i64
     mir.store %37, %34, 8 width: qword
     %38 = mir.call @Log.fired(%23, %34)
-    %94 = mir.call @__mm_decref_maybenull_helper(%23)
-    %93 = mir.call @mm_drop(%34)
+    %100 = mir.call @__mm_decref_maybenull_helper(%23)
+    %99 = mir.call @mm_drop(%34)
     mir.cond_br %38 [then: e_0(), else: e_0.after()]
   e_0:
     %39 = mir.global_addr @__istr_1
@@ -153,7 +157,7 @@ module {
     %66 = mir.load %65, 0 width: qword
     %67 = mir.load %65, 8 width: qword
     %68 = mir.call @mrt_write_stdout(%66, %67)
-    %95 = mir.call @mm_drop(%48)
+    %101 = mir.call @mm_drop(%48)
     mir.br e_0.after()
   e_0.after:
     mir.ret %0

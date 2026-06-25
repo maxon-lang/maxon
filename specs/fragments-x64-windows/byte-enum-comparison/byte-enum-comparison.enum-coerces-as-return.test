@@ -1,0 +1,47 @@
+// Test: byte-enum-comparison.enum-coerces-as-return
+
+typealias Byte = int(0 to u8.max)
+
+enum Punct
+	colon = 58
+	comma = 44
+end 'Punct'
+
+function colonByte() returns Byte
+	return Punct.colon
+end 'colonByte'
+
+function main() returns ExitCode
+	let r = colonByte()
+	if r == 58 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @colonByte() -> u8 {
+  entry:
+    x64.mov r8d, 58
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call colonByte
+    x64.cmp r8, 58
+    x64.jne ok_0.after
+  ok_0:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.mov r8d, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

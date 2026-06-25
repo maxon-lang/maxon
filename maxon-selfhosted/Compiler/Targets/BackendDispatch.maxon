@@ -1755,12 +1755,25 @@ function prepareTargetModule(pipeline PassPipeline, backend TargetBackend) throw
 	recordPassSince("__allocateRegisters", startMs: regStart)
 	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
 
+	// Reclaim the orphans regalloc left in the active target-op array.
+	// applyColoring and insertSpillCode clear+rebuild every block's opRefs per
+	// function, and the loop runs over all functions sharing one `x64Ops`/
+	// `arm64Ops` array, so this is the heaviest target-tier orphan source.
+	// Compacting here caps the array before prologue/epilogue grows it again.
+	// Byte-identical to a no-op (renumber + drop unreachable). See compactOps.
+	pipeline.targetModule.compactOps()
+
 	// Prologue/epilogue insertion (uses backend for target-specific ops)
 	logDebug(LogCategory.ir, message: function() gives "=== Running pass: insert-prologue-epilogue ===")
 	let peStart = passTimerStart()
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
 	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
 	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
+
+	// Final target-tier compaction: prologue/epilogue rewrites entry/exit
+	// blocks' opRefs, orphaning the pre-rewrite ops. Drop them before the
+	// emitter walks the module.
+	pipeline.targetModule.compactOps()
 end 'prepareTargetModule'
 
 function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
@@ -1928,11 +1941,17 @@ function prepareTargetModuleForFunctions(pipeline PassPipeline, backend TargetBa
 	recordPassSince("__allocateRegisters", startMs: regStart)
 	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
 
+	// Reclaim regalloc orphans before prologue/epilogue — mirrors the whole-
+	// module `prepareTargetModule`. Byte-identical to a no-op.
+	pipeline.targetModule.compactOps()
+
 	logDebug(LogCategory.ir, message: function() gives "=== Running pass: insert-prologue-epilogue (subset) ===")
 	let peStart = passTimerStart()
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
 	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
 	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
+
+	pipeline.targetModule.compactOps()
 end 'prepareTargetModuleForFunctions'
 
 typealias StringContentHashMap = Map with (String, ContentHash)

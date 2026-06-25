@@ -2466,6 +2466,13 @@ end 'compileStdlibMirSubsetNative'
 function runNativeBackendTail(backend TargetBackend, funcsToLower IrFunctionArray, target Target, fastRegalloc bool) returns ObjectFunctionArray
 	var targetModule = backend.lowerMirToTargetForFunctions(funcsToLower)
 	targetModule = allocateRegisters(targetModule, target: target, fastRegalloc: fastRegalloc)
+	// Reclaim regalloc's orphan ops (applyColoring / insertSpillCode clear and
+	// rebuild opRefs, leaving the old entries unreferenced in the shared ops
+	// array) before prologue/epilogue grows the array again. Compaction is
+	// byte-identical to a no-op — it only renumbers indices and drops the
+	// unreachable ops. See TargetModule.compactOps.
+	targetModule.compactOps()
 	insertPrologueEpilogueWith(targetModule, backend: backend)
+	targetModule.compactOps()
 	return backend.emitPerFunction()
 end 'runNativeBackendTail'

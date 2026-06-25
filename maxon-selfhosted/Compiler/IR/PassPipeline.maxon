@@ -252,6 +252,17 @@ export type PassPipeline
 			self.dispatch(pass)
 			recordPassSince(name, startMs: passStart)
 
+			// Reclaim the orphan ops the just-run pass left behind, at this
+			// whole-module boundary, so they never accumulate across passes and
+			// re-bloat the committed-but-untouched tail of `module.ops`. Block-
+			// rebuilding passes (mem2reg, canonicalize, CSE, DCE, LICM, the
+			// Std→MIR lowering, the MIR passes) clear `opRefs` and re-append; the
+			// orphans they leave are unreachable but never freed without this.
+			// Compaction is byte-identical to a no-op (it only renumbers indices
+			// and drops unreachable ops), so the dump/summary below see the same
+			// live IR. See IrModule.compactOps.
+			self.compactPhaseModuleAfter(pass)
+
 			logTrace(LogCategory.ir, message: function() gives self.summarizeForPass(pass, name: name))
 
 			// --dump-stages: write a post-pass IR snapshot before checking errors.
@@ -346,6 +357,28 @@ export type PassPipeline
 			scheduleInstructions then runMirPassPerFunction(self, kind: pass)
 		end 'dispatch'
 	end 'dispatch'
+
+	// Compact the orphan ops out of whichever module the pass just rewrote, at
+	// this whole-module boundary. Keyed off the pass's phase: Std-phase passes
+	// rewrite `stdModule`, MIR-phase passes rewrite `mirModule`. The Maxon module
+	// is deliberately never compacted — Maxon-level op indices are the keys of
+	// persistent `project` sidetables (resolvedCallees, callParamTypes,
+	// constantArrayRdata, …) that lowerMaxonToStd reads, so renumbering them
+	// would break those lookups. The Maxon tier also doesn't orphan: its passes
+	// rebuild `functions`, not `block.opRefs`. The Target module is compacted by
+	// the backend driver (it isn't a pipeline pass). For Std/MIR a pass that
+	// didn't orphan hits compactOps' `liveCount == opCount` fast path and only
+	// pays the O(blocks + opRefs) reachability walk.
+	function compactPhaseModuleAfter(pass PassKind)
+		match classifyPhase(pass) 'phase'
+			maxon then break 'phase'
+			std then stdModule.compactOps()
+			mir then mirModule.compactOps()
+			// No pipeline pass classifies as `target`; the backend driver
+			// compacts the TargetModule directly.
+			target then break 'phase'
+		end 'phase'
+	end 'compactPhaseModuleAfter'
 
 	// --- Logging / dump helpers ---
 

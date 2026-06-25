@@ -1,0 +1,54 @@
+// Test: byte-enum-comparison.enum-coerces-to-byte-arg
+
+typealias Byte = int(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function takesByte(b Byte) returns Byte
+	return b
+end 'takesByte'
+
+function main() returns ExitCode
+	let r = takesByte(Ascii.underscore)
+	if r == 95 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @takesByte(local0: u8) -> u8 {
+  entry:
+    %2 = mir.param local0 : u8
+    %3 = mir.mov_imm 255 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_1ba662e4b876302c
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 95 : i64
+    %1 = mir.call @takesByte(%0)
+    %3 = mir.mov_imm 95 : i64
+    %4 = mir.cmp eq, %1, %3
+    mir.cond_br %4 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  ok_0.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  }
+}
+---

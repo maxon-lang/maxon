@@ -1983,6 +1983,23 @@ end 'check'
 
 A string-backed enum value compares with `==` / `!=` against a `String` (and a char-backed value against a `Character`) by comparing the declared backing literal; both sides may also be the same enum type.
 
+### Implicit Coercion to the Backing Primitive
+
+A simple or int/float-backed enum case coerces *implicitly* to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function argument, a collection element, or a `return` value. No `.rawValue` and no explicit cast are needed; the case's backing value is used directly. This is the same rule that lets a `byte` compare against an enum case (`b == Ascii.space`), extended to value positions.
+
+```maxon
+enum JsonByte
+	lBracket = 0x5B
+	space = 0x20
+end 'JsonByte'
+
+var out = ByteArray.create()
+out.push(JsonByte.lBracket)        // coerces to Byte — no .rawValue needed
+out.push(JsonByte.space)
+```
+
+String-, char-, function-, and struct-backed enums are excluded: their runtime value is the ordinal, not the backing literal, so they still require an explicit `.rawValue` (which reconstructs the backing value). Use `.rawValue` explicitly whenever you want the value rather than relying on a primitive-typed context to drive the coercion.
+
 ### Name Access
 
 All enums have a `.name` property returning the case name as a `String`. For backed enums, `.name` always returns the case name, not the raw value:

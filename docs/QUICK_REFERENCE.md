@@ -607,6 +607,18 @@ var s4 = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.cl
 
 `.rawValue` reconstructs the declared backing literal from the runtime ordinal; `fromRawValue` takes the backing literal type (`String` / `Character`).
 
+### Implicit Coercion to a Numeric Primitive
+
+A simple or int/float-backed enum case coerces implicitly to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function/method argument, a collection element, or a `return` value — using the case's backing value, with no `.rawValue` or cast. Extends the `byte == EnumCase` comparison rule to value positions. String/char/function/struct-backed enums are excluded (their runtime value is the ordinal — use `.rawValue`).
+
+```maxon
+enum JsonByte
+	lBracket = 0x5B
+end 'JsonByte'
+
+out.push(JsonByte.lBracket)   // coerces to Byte — no .rawValue
+```
+
 ### Struct-Backed Enums
 
 ```maxon

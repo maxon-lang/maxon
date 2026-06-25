@@ -42,7 +42,11 @@ module {
     %65 = mir.global_addr @__data_captured
     %66 = mir.load %65, 0 width: qword
     %88 = mir.load %66, 0 width: qword
-    %90 = mir.call @stdlib.__managed_mem_walk_elements(%88)
+    %95 = mir.mov_imm 8 : i64
+    %96 = mir.add.i64 %88, %95
+    %97 = mir.load %96, 0 width: qword
+    %98 = mir.mov_imm 0 : i64
+    %99 = mir.call @stdlib.__managed_mem_walk_elements_range(%88, %98, %97)
     %91 = mir.mov_imm 8 : i64
     %92 = mir.add.i64 %88, %91
     %93 = mir.mov_imm 0 : i64
@@ -62,7 +66,7 @@ module {
     mir.store %18, %77, 0 width: qword
     mir.store %19, %77, 8 width: qword
     %78 = mir.call @Array.driftsortRange(%3, %71, %73, %74, %77, %18)
-    %94 = mir.call @__mm_decref_maybenull_helper(%3)
+    %100 = mir.call @__mm_decref_maybenull_helper(%3)
     %79 = mir.call @mm_drop(%77)
     %21 = mir.call @Log.stopCapture()
     %23 = mir.global_addr @__istr_0
@@ -83,8 +87,8 @@ module {
     mir.store %26, %32, 0 width: qword
     mir.store %9, %32, 8 width: qword
     %36 = mir.call @Log.fired(%21, %32)
-    %96 = mir.call @__mm_decref_maybenull_helper(%21)
-    %95 = mir.call @mm_drop(%32)
+    %102 = mir.call @__mm_decref_maybenull_helper(%21)
+    %101 = mir.call @mm_drop(%32)
     mir.cond_br %36 [then: k_0(), else: nk_0()]
   k_0:
     %37 = mir.global_addr @__istr_1
@@ -108,7 +112,7 @@ module {
     %81 = mir.load %80, 0 width: qword
     %82 = mir.load %80, 8 width: qword
     %83 = mir.call @mrt_write_stdout(%81, %82)
-    %97 = mir.call @mm_drop(%46)
+    %103 = mir.call @mm_drop(%46)
     mir.br k_0.merge()
   nk_0:
     %51 = mir.global_addr @__istr_2
@@ -132,7 +136,7 @@ module {
     %85 = mir.load %84, 0 width: qword
     %86 = mir.load %84, 8 width: qword
     %87 = mir.call @mrt_write_stdout(%85, %86)
-    %98 = mir.call @mm_drop(%60)
+    %104 = mir.call @mm_drop(%60)
     mir.br k_0.merge()
   k_0.merge:
     mir.ret %0

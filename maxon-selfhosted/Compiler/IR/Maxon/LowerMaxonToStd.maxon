@@ -9492,6 +9492,26 @@ type MaxonToStdLowering
 			let argId = self.resolveName(argName)
 			return self.emitImplicitConvert(argId, fromCategory: argCategory, toCategory: paramCategory, dstBlock: dstBlock)
 		end 'canConvert'
+
+		// Constants-enum → backing-type coercion. A constants-enum case whose
+		// backing is int/float coerces to a numeric primitive parameter
+		// (`out.push(JsonByte.lBracket)` instead of `.lBracket.rawValue`),
+		// mirroring the `byte == EnumCase` comparison rule. The enum's runtime
+		// SSA value already carries the raw backing bits (`.rawValue` is a
+		// value-level no-op for int/float/ordinal backings), so we only need to
+		// restamp the operand to its backing category and reuse the same
+		// same-category / implicit-convert paths the scalar arg would take.
+		if isCoercibleConstantsEnumType(self.project, t: argType) 'enumBackingCoerce'
+			let backingCategory = constantsEnumBackingCategory(self.project, t: argType)
+			if backingCategory == paramCategory 'enumSameCategory'
+				return self.resolveName(argName)
+			end 'enumSameCategory'
+			if implicitlyConvertible(backingCategory, to: paramCategory) 'enumCanConvert'
+				let enumArgId = self.resolveName(argName)
+				return self.emitImplicitConvert(enumArgId, fromCategory: backingCategory, toCategory: paramCategory, dstBlock: dstBlock)
+			end 'enumCanConvert'
+		end 'enumBackingCoerce'
+
 		// Mismatch — surface E3005 keyed off the argument's source span.
 		// Naming rule: when both endpoints are primitive numeric/bool families,
 		// prefer the underlying primitive name (int/float/byte/bool) so the

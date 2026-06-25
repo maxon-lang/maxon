@@ -490,7 +490,7 @@ end 'emitOutcome'
 // `type: "text"` content block — that's how MCP clients render structured
 // JSON output today.
 function emitToolSuccess(resultDoc JsonDoc, root JsonNodeId, req RpcRequest)
-	let payload = Json.stringify(rootedSubDoc(resultDoc, root: root))
+	let payload = Json.stringifyPrettyNode(resultDoc, root: root)
 	var envelope = JsonDoc.create()
 	let textId = envelope.add(JsonNode.stringNode(payload))
 	let typeId = envelope.add(JsonNode.stringNode("text"))
@@ -515,16 +515,6 @@ function emitToolSuccess(resultDoc JsonDoc, root JsonNodeId, req RpcRequest)
 
 	writeRpcResult(req.doc, idNodeId: req.idNodeId, resultDoc: envelope, resultRoot: envelope.root)
 end 'emitToolSuccess'
-
-// Build a fresh JsonDoc whose `root` is a copy of `srcRoot` from `src`.
-// Lets us stringify just a subtree without dragging the surrounding arena
-// along (which would otherwise serialize whichever node happened to be at
-// `doc.root`, not the subtree the tool meant to return).
-function rootedSubDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
-	var out = JsonDoc.create()
-	out.root = copyJsonNode(src, srcId: root, dst: out)
-	return out
-end 'rootedSubDoc'
 
 /// Deep-copy a JSON subtree across arenas. Used to assemble responses
 /// whose pieces were built in different `JsonDoc`s (e.g. an analyzer's

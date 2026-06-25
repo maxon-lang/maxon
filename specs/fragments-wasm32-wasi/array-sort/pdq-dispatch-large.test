@@ -57,7 +57,7 @@ module {
     %23 = mir.mov_imm 16 : i64
     %47 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %49 = mir.call @stdlib.__mm_alloc(%15, %47)
-    %342 = mir.call @stdlib.__mm_incref(%49)
+    %348 = mir.call @stdlib.__mm_incref(%49)
     %50 = mir.global_addr @__rdata_arr_main_0
     mir.store %50, %49, 0 width: qword
     %51 = mir.mov_imm 40 : i64
@@ -177,7 +177,11 @@ module {
     %258 = mir.global_addr @__data_captured
     %259 = mir.load %258, 0 width: qword
     %298 = mir.load %259, 0 width: qword
-    %338 = mir.call @stdlib.__managed_mem_walk_elements(%298)
+    %343 = mir.mov_imm 8 : i64
+    %344 = mir.add.i64 %298, %343
+    %345 = mir.load %344, 0 width: qword
+    %346 = mir.mov_imm 0 : i64
+    %347 = mir.call @stdlib.__managed_mem_walk_elements_range(%298, %346, %345)
     %339 = mir.mov_imm 8 : i64
     %340 = mir.add.i64 %298, %339
     %341 = mir.mov_imm 0 : i64
@@ -199,7 +203,7 @@ module {
     mir.cond_br %303 [then: inlined_Array.pdqsortRange_1_0(), else: inlined_Array.pdqsortRange_3_25(%300, %301)]
   inlined_Array.pdqsortRange_1_0:
     %304 = mir.call @Array.smallSortRange(%4, %264, %266, %120, %0, %123)
-    %343 = mir.call @__mm_decref_maybenull_helper(%4)
+    %349 = mir.call @__mm_decref_maybenull_helper(%4)
     mir.br inline_cont_main_0()
   inlined_Array.pdqsortRange_3_25(%305: i64, %306: i64):
     %307 = mir.mov_imm 1 : i64
@@ -215,7 +219,7 @@ module {
     %313 = mir.mov_imm 2 : i64
     %314 = mir.mul.i64 %305, %313
     %315 = mir.call @Array.pdqsortRecurse(%4, %264, %266, %314, %300, %120, %0, %123)
-    %344 = mir.call @__mm_decref_maybenull_helper(%4)
+    %350 = mir.call @__mm_decref_maybenull_helper(%4)
     mir.br inline_cont_main_0()
   inline_cont_main_0:
     %125 = mir.call @Log.stopCapture()
@@ -234,7 +238,7 @@ module {
     mir.store %130, %136, 0 width: qword
     mir.store %58, %136, 8 width: qword
     %140 = mir.call @Log.fired(%125, %136)
-    %345 = mir.call @mm_drop(%136)
+    %351 = mir.call @mm_drop(%136)
     mir.cond_br %140 [then: p_0(), else: p_0.after()]
   p_0:
     %141 = mir.global_addr @__istr_1
@@ -255,7 +259,7 @@ module {
     %269 = mir.load %268, 0 width: qword
     %270 = mir.load %268, 8 width: qword
     %271 = mir.call @mrt_write_stdout(%269, %270)
-    %346 = mir.call @mm_drop(%150)
+    %352 = mir.call @mm_drop(%150)
     mir.br p_0.after()
   p_0.after:
     %156 = mir.global_addr @__istr_2
@@ -273,7 +277,7 @@ module {
     mir.store %159, %165, 0 width: qword
     mir.store %58, %165, 8 width: qword
     %169 = mir.call @Log.fired(%125, %165)
-    %347 = mir.call @mm_drop(%165)
+    %353 = mir.call @mm_drop(%165)
     mir.cond_br %169 [then: m3_0(), else: m3_0.after()]
   m3_0:
     %170 = mir.global_addr @__istr_3
@@ -294,7 +298,7 @@ module {
     %273 = mir.load %272, 0 width: qword
     %274 = mir.load %272, 8 width: qword
     %275 = mir.call @mrt_write_stdout(%273, %274)
-    %348 = mir.call @mm_drop(%179)
+    %354 = mir.call @mm_drop(%179)
     mir.br m3_0.after()
   m3_0.after:
     %185 = mir.global_addr @__istr_4
@@ -312,9 +316,9 @@ module {
     mir.store %188, %194, 0 width: qword
     mir.store %58, %194, 8 width: qword
     %198 = mir.call @Log.fired(%125, %194)
-    %349 = mir.call @mm_drop(%194)
+    %355 = mir.call @mm_drop(%194)
     %200 = mir.xor.i64 %198, %58
-    %350 = mir.call @__mm_decref_maybenull_helper(%125)
+    %356 = mir.call @__mm_decref_maybenull_helper(%125)
     mir.cond_br %200 [then: nf_0(), else: nf_0.after()]
   nf_0:
     %201 = mir.global_addr @__istr_5
@@ -334,7 +338,7 @@ module {
     %277 = mir.load %276, 0 width: qword
     %278 = mir.load %276, 8 width: qword
     %279 = mir.call @mrt_write_stdout(%277, %278)
-    %351 = mir.call @mm_drop(%210)
+    %357 = mir.call @mm_drop(%210)
     mir.br nf_0.after()
   nf_0.after:
     %215 = mir.global_addr @__istr_6
@@ -354,15 +358,15 @@ module {
     %281 = mir.load %280, 0 width: qword
     %282 = mir.load %280, 8 width: qword
     %283 = mir.call @mrt_write_stdout(%281, %282)
-    %352 = mir.call @mm_drop(%224)
+    %358 = mir.call @mm_drop(%224)
     mir.ret %0
   __rc_edge_14_0:
-    %353 = mir.call @__mm_decref_maybenull_helper(%236)
-    %354 = mir.call @__mm_decref_maybenull_helper(%99)
+    %359 = mir.call @__mm_decref_maybenull_helper(%236)
+    %360 = mir.call @__mm_decref_maybenull_helper(%99)
     mir.br fill_0.exit()
   __rc_edge_18_0:
-    %355 = mir.call @__mm_decref_maybenull_helper(%236)
-    %356 = mir.call @__mm_decref_maybenull_helper(%99)
+    %361 = mir.call @__mm_decref_maybenull_helper(%236)
+    %362 = mir.call @__mm_decref_maybenull_helper(%99)
     mir.br fill_0.exit()
   }
 }

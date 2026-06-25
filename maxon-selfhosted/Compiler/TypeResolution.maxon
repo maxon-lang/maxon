@@ -1891,6 +1891,41 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
+// True when `t` names a constants-enum whose backing value coerces to a numeric
+// primitive — i.e. a plain `enum` (not a `union`) with an int/float/ordinal
+// backing. String-, char-, function-, and struct-backed enums are excluded:
+// their runtime value is the ordinal, so the raw value needs a materializing
+// helper rather than a value-level pass-through, and their backing isn't a
+// numeric primitive anyway. Shared by `coerceArgToParam` to allow
+// `out.push(JsonByte.lBracket)` without an explicit `.rawValue`, mirroring the
+// existing `byte == EnumCase` comparison coercion.
+export function isCoercibleConstantsEnumType(project Project, t MaxonType) returns bool
+	let name = t.namedAliasNameOrEmpty(project)
+	if name.isEmpty() 'notNamed'
+		return false
+	end 'notNamed'
+	let enumDef = try project.enumTypes.get(name) otherwise return false
+	if enumDef.isUnion or enumDef.isStringBacked or enumDef.isCharBacked or enumDef.isFunctionBacked 'nonNumericBacking'
+		return false
+	end 'nonNumericBacking'
+	if not enumStructBackingName(enumDef).isEmpty() 'structBacked'
+		return false
+	end 'structBacked'
+	return true
+end 'isCoercibleConstantsEnumType'
+
+// The Std cast category of a coercible constants-enum's backing value: `float`
+// for a float-backed enum, `int` for int/ordinal backings. Callers must gate on
+// `isCoercibleConstantsEnumType` first — this assumes a coercible enum.
+export function constantsEnumBackingCategory(project Project, t MaxonType) returns CastCategory
+	let name = t.namedAliasNameOrEmpty(project)
+	let enumDef = try project.enumTypes.get(name) otherwise panic("constantsEnumBackingCategory: '{name}' is not a registered enum — caller must gate on isCoercibleConstantsEnumType")
+	if enumDef.isFloatBacked 'float'
+		return CastCategory.float
+	end 'float'
+	return CastCategory.int
+end 'constantsEnumBackingCategory'
+
 // Phase A widening predicate: true when `from`'s category is `int` and
 // `to`'s category is `float`. Used at every widening site in TR (varStore
 // merge, varLoad re-publish, varDecl restamp, cmp/binop operand restamp)

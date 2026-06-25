@@ -20,6 +20,7 @@ typealias ChildIndex = int(0 to u64.max)
 
 typealias JsonInt = int(i64.min to i64.max)
 typealias JsonFloat = float(f64.min to f64.max)
+typealias IndentDepth = int(0 to u64.max)
 
 /// Errors emitted by `Json.parse`.
 enum JsonError implements Error
@@ -231,6 +232,17 @@ export type Json
 		writeNode(doc, id: doc.root, out: out)
 		return String.from(out)
 	end 'stringify'
+
+	/// Serialize the subtree rooted at `root` to indented RFC 8259 output (two
+	/// spaces per level). Same value rules as `stringify` — only the whitespace
+	/// framing differs. Pass `doc.root` to pretty-print the whole document, or any
+	/// node id to serialize one value out of a shared arena without first copying
+	/// it into a doc of its own.
+	export static function stringifyPrettyNode(doc JsonDoc, root JsonNodeId) returns String
+		var out = ByteArray.create()
+		writeNodePretty(doc, id: root, depth: 0, out: out)
+		return String.from(out)
+	end 'stringifyPrettyNode'
 end 'Json'
 
 // =============================================================================
@@ -750,6 +762,43 @@ end 'encodeCodepoint'
 // Stringify
 // =============================================================================
 
+// ASCII bytes the serializers emit as structural framing, escapes, and
+// whitespace, plus the input bytes `writeStringByte` tests for escaping. Named
+// so the writers read as JSON punctuation rather than a wall of hex. The raw
+// values ARE the ASCII codepoints, so each case coerces straight to a `Byte`
+// in a numeric context — a `Byte`-typed value compares directly against a case
+// (`b == JsonByte.quote`) and a case emits via `out.push(JsonByte.quote)`, with
+// no `.rawValue` at the call site (see the byte-enum-comparison spec). (The
+// lexer/parser/number paths above keep their inline hex because there they
+// participate in range comparisons like `b >= 0x30`, where a named boundary
+// reads worse than the digit it stands for.)
+enum JsonByte
+	quote = 0x22
+	backslash = 0x5C
+	lBracket = 0x5B
+	rBracket = 0x5D
+	lBrace = 0x7B
+	rBrace = 0x7D
+	comma = 0x2C
+	colon = 0x3A
+	space = 0x20
+	newline = 0x0A
+	backspace = 0x08
+	formFeed = 0x0C
+	carriageReturn = 0x0D
+	tab = 0x09
+	escB = 0x62
+	escF = 0x66
+	escN = 0x6E
+	escR = 0x72
+	escT = 0x74
+	escU = 0x75
+end 'JsonByte'
+
+// Bytes below this codepoint are JSON control characters that must be
+// `\uXXXX`-escaped rather than emitted literally.
+let firstPrintableByte = 0x20 as Byte
+
 function writeNode(doc JsonDoc, id JsonNodeId, out ByteArray)
 	let node = doc.get(id)
 	match node.kind 'k'
@@ -770,43 +819,121 @@ function writeBool(b bool, out ByteArray)
 	end 'false_'
 end 'writeBool'
 
+// Pretty-printing shares the scalar writers (`writeBool`, `writeNumber`,
+// `writeJsonString`, `nullBytes`) with the compact path; only arrays and
+// objects gain newlines and indentation.
+function writeNodePretty(doc JsonDoc, id JsonNodeId, depth IndentDepth, out ByteArray)
+	let node = doc.get(id)
+	match node.kind 'k'
+		jsonNull then writeBytes(out, src: nullBytes())
+		jsonBool then writeBool(node.boolValue, out: out)
+		jsonNumber then writeNumber(node.numberValue, out: out)
+		jsonString then writeJsonString(node.stringValue, out: out)
+		jsonArray then writeArrayPretty(doc, ids: node.children, depth: depth, out: out)
+		jsonObject then writeObjectPretty(doc, keys: node.keys, ids: node.children, depth: depth, out: out)
+	end 'k'
+end 'writeNodePretty'
+
+function writeArrayPretty(doc JsonDoc, ids JsonNodeIdArray, depth IndentDepth, out ByteArray)
+	let n = ids.count()
+	if n == 0 'empty'
+		out.push(JsonByte.lBracket)
+		out.push(JsonByte.rBracket)
+		return
+	end 'empty'
+
+	out.push(JsonByte.lBracket)
+	out.push(JsonByte.newline)
+	for i in 0 upto n 'each'
+		writeIndent(depth + 1, out: out)
+		let childId = try ids.get(i) otherwise 'gErr'
+			panic("writeArrayPretty: ids.get OOB — i < n by loop bound")
+		end 'gErr'
+		writeNodePretty(doc, id: childId, depth: depth + 1, out: out)
+		if i + 1 < n 'sep'
+			out.push(JsonByte.comma)
+		end 'sep'
+		out.push(JsonByte.newline)
+	end 'each'
+	writeIndent(depth, out: out)
+	out.push(JsonByte.rBracket)
+end 'writeArrayPretty'
+
+function writeObjectPretty(doc JsonDoc, keys StringArray, ids JsonNodeIdArray, depth IndentDepth, out ByteArray)
+	let n = ids.count()
+	if n == 0 'empty'
+		out.push(JsonByte.lBrace)
+		out.push(JsonByte.rBrace)
+		return
+	end 'empty'
+
+	out.push(JsonByte.lBrace)
+	out.push(JsonByte.newline)
+	for i in 0 upto n 'each'
+		writeIndent(depth + 1, out: out)
+		let key = try keys.get(i) otherwise 'kErr'
+			panic("writeObjectPretty: keys.get OOB — parallel arrays out of sync")
+		end 'kErr'
+		writeJsonString(key, out: out)
+		out.push(JsonByte.colon)
+		out.push(JsonByte.space)
+		let childId = try ids.get(i) otherwise 'cErr'
+			panic("writeObjectPretty: ids.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		writeNodePretty(doc, id: childId, depth: depth + 1, out: out)
+		if i + 1 < n 'sep'
+			out.push(JsonByte.comma)
+		end 'sep'
+		out.push(JsonByte.newline)
+	end 'each'
+	writeIndent(depth, out: out)
+	out.push(JsonByte.rBrace)
+end 'writeObjectPretty'
+
+function writeIndent(depth IndentDepth, out ByteArray)
+	for _ in 0 upto depth 'level'
+		out.push(JsonByte.space)
+		out.push(JsonByte.space)
+	end 'level'
+end 'writeIndent'
+
 function writeArray(doc JsonDoc, ids JsonNodeIdArray, out ByteArray)
-	out.push(0x5B)
+	out.push(JsonByte.lBracket)
 	let n = ids.count()
 	for i in 0 upto n 'each'
 		if i > 0 'sep'
-			out.push(0x2C)
+			out.push(JsonByte.comma)
 		end 'sep'
 		let childId = try ids.get(i) otherwise 'gErr'
 			panic("writeArray: ids.get OOB — i < n by loop bound")
 		end 'gErr'
 		writeNode(doc, id: childId, out: out)
 	end 'each'
-	out.push(0x5D)
+	out.push(JsonByte.rBracket)
 end 'writeArray'
 
 function writeObject(doc JsonDoc, keys StringArray, ids JsonNodeIdArray, out ByteArray)
-	out.push(0x7B)
+	out.push(JsonByte.lBrace)
 	let n = ids.count()
 	for i in 0 upto n 'each'
 		if i > 0 'sep'
-			out.push(0x2C)
+			out.push(JsonByte.comma)
 		end 'sep'
 		let key = try keys.get(i) otherwise 'kErr'
 			panic("writeObject: keys.get OOB — parallel arrays out of sync")
 		end 'kErr'
 		writeJsonString(key, out: out)
-		out.push(0x3A)
+		out.push(JsonByte.colon)
 		let childId = try ids.get(i) otherwise 'cErr'
 			panic("writeObject: ids.get OOB — parallel arrays out of sync")
 		end 'cErr'
 		writeNode(doc, id: childId, out: out)
 	end 'each'
-	out.push(0x7D)
+	out.push(JsonByte.rBrace)
 end 'writeObject'
 
 function writeJsonString(s String, out ByteArray)
-	out.push(0x22)
+	out.push(JsonByte.quote)
 	let bytes = s.toByteArray()
 	let n = bytes.count()
 	for i in 0 upto n 'each'
@@ -815,55 +942,54 @@ function writeJsonString(s String, out ByteArray)
 		end 'bErr'
 		writeStringByte(b, out: out)
 	end 'each'
-	out.push(0x22)
+	out.push(JsonByte.quote)
 end 'writeJsonString'
 
 function writeStringByte(b Byte, out ByteArray)
-	if b == 0x22 'quote'
-		out.push(0x5C)
-		out.push(0x22)
+	if b == JsonByte.quote 'quote'
+		writeShortEscape(JsonByte.quote, out: out)
 		return
 	end 'quote'
-	if b == 0x5C 'backslash'
-		out.push(0x5C)
-		out.push(0x5C)
+	if b == JsonByte.backslash 'backslash'
+		writeShortEscape(JsonByte.backslash, out: out)
 		return
 	end 'backslash'
-	if b == 0x08 'bs'
-		out.push(0x5C)
-		out.push(0x62)
+	if b == JsonByte.backspace 'bs'
+		writeShortEscape(JsonByte.escB, out: out)
 		return
 	end 'bs'
-	if b == 0x0C 'ff'
-		out.push(0x5C)
-		out.push(0x66)
+	if b == JsonByte.formFeed 'ff'
+		writeShortEscape(JsonByte.escF, out: out)
 		return
 	end 'ff'
-	if b == 0x0A 'nl'
-		out.push(0x5C)
-		out.push(0x6E)
+	if b == JsonByte.newline 'nl'
+		writeShortEscape(JsonByte.escN, out: out)
 		return
 	end 'nl'
-	if b == 0x0D 'cr'
-		out.push(0x5C)
-		out.push(0x72)
+	if b == JsonByte.carriageReturn 'cr'
+		writeShortEscape(JsonByte.escR, out: out)
 		return
 	end 'cr'
-	if b == 0x09 'tab'
-		out.push(0x5C)
-		out.push(0x74)
+	if b == JsonByte.tab 'tab'
+		writeShortEscape(JsonByte.escT, out: out)
 		return
 	end 'tab'
-	if b < 0x20 'ctl'
+	if b < firstPrintableByte 'ctl'
 		writeUnicodeEscape(b, out: out)
 		return
 	end 'ctl'
 	out.push(b)
 end 'writeStringByte'
 
+// Emit a two-byte `\<escChar>` short escape (e.g. `\n`, `\"`).
+function writeShortEscape(escChar JsonByte, out ByteArray)
+	out.push(JsonByte.backslash)
+	out.push(escChar)
+end 'writeShortEscape'
+
 function writeUnicodeEscape(value JsonInt, out ByteArray)
-	out.push(0x5C)
-	out.push(0x75)
+	out.push(JsonByte.backslash)
+	out.push(JsonByte.escU)
 	out.push(hexNybble((value / 0x1000) and 0xF))
 	out.push(hexNybble((value / 0x100) and 0xF))
 	out.push(hexNybble((value / 0x10) and 0xF))

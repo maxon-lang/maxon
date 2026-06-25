@@ -2354,6 +2354,23 @@ module function argTypesCompatible(project Project, argType MaxonType, paramType
 		return collectionEndpointsCompatible(project, arg: arg, param: param, argGeneric: argGeneric, paramGeneric: paramGeneric, argBaseColl: argBaseColl, paramBaseColl: paramBaseColl)
 	end 'collectionInvolved'
 
+	// Constants-enum → backing-type coercion (mirrors lowering's
+	// `coerceArgToParam`): a plain int/float-backed enum case coerces to a
+	// numeric primitive parameter, so `out.push(JsonByte.lBracket)` type-checks
+	// without an explicit `.rawValue`. The enum is named while the param is a
+	// bare primitive, so this must run before the named-vs-primitive rejection
+	// below. Gated to a numeric-primitive param whose category the enum's
+	// backing reaches (same category or an implicit int/float conversion).
+	if isCoercibleConstantsEnumType(project, t: arg) and namedStructOrEnumName(project, t: param).isEmpty() 'enumToPrimitive'
+		let backingCat = constantsEnumBackingCategory(project, t: arg)
+		let primParamCat = convertCastCategory(project, t: param)
+		if primParamCat == CastCategory.int or primParamCat == CastCategory.float 'paramNumeric'
+			if backingCat == primParamCat or implicitlyConvertible(backingCat, to: primParamCat) 'reachable'
+				return true
+			end 'reachable'
+		end 'paramNumeric'
+	end 'enumToPrimitive'
+
 	// Two named struct / enum types: compatible only when their names match.
 	let argStruct = namedStructOrEnumName(project, t: arg)
 	let paramStruct = namedStructOrEnumName(project, t: param)

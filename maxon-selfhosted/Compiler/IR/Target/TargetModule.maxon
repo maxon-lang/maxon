@@ -45,7 +45,89 @@ export type TargetModule
 	export function liveOpCount() returns OpCount
 		return countLiveOps(self.functions, blocks: self.blocks)
 	end 'liveOpCount'
+
+	// Reclaim orphaned target ops in place. The target phase orphans the same
+	// way the pre-target tiers do: applyColoring, insertSpillCode, and the
+	// prologue/epilogue pass all clear each block's `opRefs` and re-append fresh
+	// machine ops, leaving the predecessors unreferenced in the active op array.
+	// Across the per-function regalloc loop these orphans accumulate in one
+	// shared array (x64Ops or arm64Ops), so this is compacted at backend-stage
+	// boundaries to cap the peak. See IrModule.compactOps for the in-place
+	// algorithm and byte-identity guarantee — this mirrors it on whichever op
+	// array `cpu` selects (a TargetModule holds exactly one).
+	export function compactOps()
+		match self.cpu 'dispatch'
+			x64 then compactX64Ops(self)
+			arm64 then compactArm64Ops(self)
+			// WASM never reaches the target phase (it branches from MIR), so its
+			// op arrays are always empty — nothing to compact.
+			wasm32 then break 'dispatch'
+		end 'dispatch'
+	end 'compactOps'
 end 'TargetModule'
+
+// Compact `module.x64Ops` in place. Computes the shared op-type-agnostic
+// forwarding plan, moves each live op leftward (newIndex <= oldIndex, so no
+// clobber), truncates the orphan tail, then rewrites every block's opRefs +
+// terminator through the plan.
+function compactX64Ops(module TargetModule)
+	let oldCount = module.x64Ops.count()
+	let plan = computeOpCompaction(module.functions, blocks: module.blocks, opCount: oldCount)
+	if plan.liveCount == oldCount 'noOrphans'
+		return
+	end 'noOrphans'
+
+	// Swap (never `set`) each live op leftward — see IrModule.compactOps for why
+	// `set` would UAF a managed-payload op (X64Op carries String/array operands).
+	for oldIdx in 0 upto oldCount 'move'
+		let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactX64Ops: forward.get OOB at {oldIdx}")
+		if newIdx == plan.deadMarker 'orphan'
+			continue
+		end 'orphan'
+		if newIdx != oldIdx 'needsSwap'
+			module.x64Ops.swap(newIdx, j: oldIdx)
+		end 'needsSwap'
+	end 'move'
+
+	// Pop+drop the orphan tail so each dropped op's managed payload (String /
+	// array operands) is freed — see IrModule.compactOps for why `resize` alone
+	// would leak them.
+	for _ in plan.liveCount upto oldCount 'dropOrphan'
+		_ = try module.x64Ops.pop() otherwise panic("compactX64Ops: x64Ops.pop on non-empty tail failed")
+	end 'dropOrphan'
+
+	rewriteBlockOpRefs(module.functions, blocks: module.blocks, plan: plan)
+end 'compactX64Ops'
+
+// Compact `module.arm64Ops` in place — the arm64 mirror of compactX64Ops.
+function compactArm64Ops(module TargetModule)
+	let oldCount = module.arm64Ops.count()
+	let plan = computeOpCompaction(module.functions, blocks: module.blocks, opCount: oldCount)
+	if plan.liveCount == oldCount 'noOrphans'
+		return
+	end 'noOrphans'
+
+	// Swap (never `set`) each live op leftward — see IrModule.compactOps for why
+	// `set` would UAF a managed-payload op (Arm64Op carries String/array operands).
+	for oldIdx in 0 upto oldCount 'move'
+		let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactArm64Ops: forward.get OOB at {oldIdx}")
+		if newIdx == plan.deadMarker 'orphan'
+			continue
+		end 'orphan'
+		if newIdx != oldIdx 'needsSwap'
+			module.arm64Ops.swap(newIdx, j: oldIdx)
+		end 'needsSwap'
+	end 'move'
+
+	// Pop+drop the orphan tail so each dropped op's managed payload (String /
+	// array operands) is freed — see IrModule.compactOps for why `resize` alone
+	// would leak them.
+	for _ in plan.liveCount upto oldCount 'dropOrphan'
+		_ = try module.arm64Ops.pop() otherwise panic("compactArm64Ops: arm64Ops.pop on non-empty tail failed")
+	end 'dropOrphan'
+
+	rewriteBlockOpRefs(module.functions, blocks: module.blocks, plan: plan)
+end 'compactArm64Ops'
 
 // ============================================================
 // Op append / terminator helpers
