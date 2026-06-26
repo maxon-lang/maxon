@@ -3564,6 +3564,15 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffFp, 8);
 
+    // Add to all-threads list + bump live_count UNDER __sched_all_lock. These two globals
+    // (__gt_all_head, __gt_live_count) are shared across every worker M: a completing GT's
+    // trampoline concurrently unlinks itself + decrements live_count on another M. Without
+    // the lock the list push (read-head / store-all_next / store-head) and the read-add-store
+    // counter tear, corrupting the all-list — which recycles a still-live GT struct and
+    // surfaces as garbage await results / SIGILL. Mirrors the self-hosted __sched_all_cs.
+    // The lock call clobbers caller-saved regs, so reload gt from its frame slot ([x29+40]).
+    EmitLockAcquire("__sched_all_lock");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 40, 8); // reload gt_ptr
     // Add to all-threads list: gt.all_next = __gt_all_head; __gt_all_head = gt
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_all_head");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffAllNext, 8);
@@ -3573,6 +3582,8 @@ public partial class ARM64CodeEmitter {
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_live_count");
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
     EmitGlobalStoreReg(ARM64Register.X0, "__gt_live_count");
+    EmitLockRelease("__sched_all_lock");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 40, 8); // reload gt_ptr
 
     // Enqueue: __gt_enqueue(gt)
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
@@ -3708,6 +3719,11 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 128, 8); // threw
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffThrew, 8);
 
+    // Decrement live_count + unlink from the all-threads list UNDER __sched_all_lock —
+    // pairs with the spawn-side push/increment on other worker Ms (see EmitGtSpawn). The
+    // lock call clobbers caller-saved regs, so reload current GT after acquiring it.
+    EmitLockAcquire("__sched_all_lock");
+
     // Decrement live thread count
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_live_count");
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
@@ -3738,6 +3754,7 @@ public partial class ARM64CodeEmitter {
     // prev->all_next = cur->all_next
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X2, GtOffAllNext, 8);
     DefineLabel("__gt_tramp_alllist_done");
+    EmitLockRelease("__sched_all_lock");
 
     // Reload current gt
     EmitLoadCurrentGt(ARM64Register.X9);
@@ -3746,19 +3763,33 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, GtStatusCompleted);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
 
-    // Wake waiter if any
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X9, GtOffWaiter, 8);
-    EmitCbz(ARM64Register.X10, "__gt_tramp_no_waiter");
-    // waiter.status = ready
-    EmitMovRegImm(ARM64Register.X0, GtStatusReady);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
-    // enqueue waiter
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X10);
-    EmitBranchLink("__gt_enqueue");
-    DefineLabel("__gt_tramp_no_waiter");
+    // Dekker StoreLoad barrier: order `gt.status = completed` (above) before the waiter
+    // LOAD (below). This is the completer half of a Dekker handshake with __gt_await; on
+    // arm64's weak memory both our status store and the awaiter's waiter store can stay
+    // buffered, so without the fence the completer reads waiter==0 while the awaiter reads
+    // status!=completed — the lost-wakeup double-miss that strands the awaited GT.
+    EmitDmbIsh();
 
-    // Yield to next thread (never returns for completed threads)
-    EmitBranchLink("__gt_yield_completed");
+    // Defer the waiter into P.pendingWaiter — do NOT enqueue it here. We are still running
+    // on this completed GT's stack; enqueueing now would let another worker M dequeue and
+    // resume the waiter (restoring an unsaved register block / freeing this stack) before we
+    // leave it. __gt_process_pending_waiter (run by the scheduler we switch to below, off
+    // this stack) re-enqueues a real GT waiter under the ioYielded gate; a main-thread waiter
+    // (stackBase==0) is skipped there and rechecks promise.status in its own await loop.
+    // Mirrors the self-hosted emitArm64GtTrampoline.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X9, GtOffWaiter, 8); // X10 = gt.waiter
+    EmitLoadP(ARM64Register.X1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X1, POffPendingWaiter, 8);
+
+    // context_switch(from = gt, to = &P.mainThread, p = P) — return to this M's scheduler.
+    // For a worker M that scheduler is __sched_worker_loop; for the main OS thread (P[0]) it
+    // is main() itself, which resumes inside its await recheck loop. Never returns (this GT
+    // is completed and is never switched back in).
+    EmitLoadCurrentGt(ARM64Register.X0); // from = gt
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true); // to = &P.mainThread
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // p = P
+    EmitBranchLink("__gt_context_switch");
     // Should never reach here
     EmitWord(0xD4200000); // BRK #0
   }
@@ -3852,37 +3883,86 @@ public partial class ARM64CodeEmitter {
     // current.status = waiting
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    // Clear ioYielded = 0 BEFORE publishing promise.waiter, so the completing GT's
+    // trampoline gate (__gt_tramp_waiter_spin) blocks until __gt_context_switch has saved
+    // our registers and set ioYielded=1 again. Without this the completer could enqueue us
+    // while our context is still in-flight on this M's stack. Mirrors __io_submit_sync.
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
 
     // promise.waiter = current
     EmitReloadArg(0); // X0 = promise
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffWaiter, 8);
+    // Dekker StoreLoad barrier: order `promise.waiter = current` before any subsequent
+    // recheck/observation of promise.status, pairing with the trampoline's barrier so the
+    // completer cannot read waiter==0 while we'd read status!=completed (lost wakeup).
+    EmitDmbIsh();
 
-    // Dequeue next runnable thread
-    DefineLabel("__gt_await_spin");
-    EmitBranchLink("__gt_dequeue");
-    EmitCbnz(ARM64Register.X0, "__gt_await_has_next");
-    // No runnable thread — process pending I/O and timers, then retry
+    // Recheck loop: run other runnable GTs and, after each (and when idle), recheck
+    // promise.status. The completing GT defers us into P.pendingWaiter and switches back to
+    // its scheduler (off its dying stack). A worker-GT awaiter is re-enqueued under the
+    // ioYielded gate (so we resume via the context switch below and recheck); the main OS
+    // thread (stackBase==0) is NEVER enqueued and instead drives its own progress by polling
+    // promise.status here. Mirrors the self-hosted emitArm64GtAwait recheck loop.
+    DefineLabel("__gt_await_loop");
     EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
     EmitBranchLink("__io_poll_kqueue");
     EmitBranchLink("__gt_timer_check");
-    EmitBranch("__gt_await_spin");
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__gt_await_idle");
 
-    DefineLabel("__gt_await_has_next");
+    // Run the dequeued GT: save it, status=running, context_switch(from=current, to=g).
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save next
-
-    // Set next.status = running
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-
-    // Context switch: from=current, to=next
-    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadCurrentGt(ARM64Register.X0); // from = current
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // to = next
     EmitLoadP(ARM64Register.X9);
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
+    // Resumed: the GT we ran switched back to us. Mark it ioYielded=1 (off-stack signal).
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // next
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
+    EmitBranch("__gt_await_recheck");
 
-    // We resume here after being woken up
+    // Idle: nothing runnable on this M. A worker-GT awaiter (stackBase!=0) yields its M back
+    // to the scheduler (P.mainThread) — __gt_context_switch saves our context and sets
+    // ioYielded=1, releasing the process_pending_waiter gate so a worker can re-enqueue us
+    // once our awaited child completes; we resume here and recheck. The main OS thread
+    // (stackBase==0) has no scheduler GT to switch to, so it briefly sleeps and rechecks.
+    DefineLabel("__gt_await_idle");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__gt_await_main_park");
+    // Worker GT: switch back to this M's scheduler loop.
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X9); // from = self
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true); // to = &P.mainThread
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // P*
+    EmitBranchLink("__gt_context_switch");
+    EmitBranch("__gt_await_recheck");
+
+    // Main OS thread: nanosleep(200us) then recheck (parked, not core-burning).
+    DefineLabel("__gt_await_main_park");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 200000); // 200us in ns
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // tv_nsec
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 40, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("nanosleep");
+    EmitBranch("__gt_await_recheck");
+
+    // Recheck: if promise still not completed, loop; else fall into the extract path.
+    DefineLabel("__gt_await_recheck");
+    EmitReloadArg(0); // X0 = promise
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X1, GtStatusCompleted);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__gt_await_loop");
+
+    // Extract result
     DefineLabel("__gt_await_done");
 
     EmitTraceAcquire();
@@ -3991,40 +4071,72 @@ public partial class ARM64CodeEmitter {
       EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     }
 
-    // Not yet completed: block current thread
+    // Not yet completed: block current thread (recheck-loop design — see EmitGtAwait).
     EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    // Clear ioYielded=0 before publishing the waiter (process_pending_waiter gate handshake).
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
 
     // promise.waiter = current
     EmitReloadArg(0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffWaiter, 8);
+    EmitDmbIsh(); // Dekker StoreLoad barrier (see EmitGtAwait)
 
-    // Dequeue next runnable thread
-    DefineLabel("__gt_try_await_spin");
-    EmitBranchLink("__gt_dequeue");
-    EmitCbnz(ARM64Register.X0, "__gt_try_await_has_next");
+    // Recheck loop: run other GTs and recheck promise.status. A worker-GT awaiter yields its
+    // M to the scheduler; the main OS thread (stackBase==0) polls. See EmitGtAwait.
+    DefineLabel("__gt_try_await_loop");
     EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
     EmitBranchLink("__io_poll_kqueue");
     EmitBranchLink("__gt_timer_check");
-    EmitBranch("__gt_try_await_spin");
-
-    DefineLabel("__gt_try_await_has_next");
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__gt_try_await_idle");
+    // Run the dequeued GT.
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save next
-
-    // Set next.status = running
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-
-    // Context switch
-    EmitLoadCurrentGt(ARM64Register.X0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8);
+    EmitLoadCurrentGt(ARM64Register.X0); // from = current
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // to = next
     EmitLoadP(ARM64Register.X9);
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9);
     EmitBranchLink("__gt_context_switch");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // next
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
+    EmitBranch("__gt_try_await_recheck");
 
-    // Resume here
+    DefineLabel("__gt_try_await_idle");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__gt_try_await_main_park");
+    // Worker GT: yield M back to the scheduler.
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X9); // from = self
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true); // to = &P.mainThread
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9);
+    EmitBranchLink("__gt_context_switch");
+    EmitBranch("__gt_try_await_recheck");
+
+    // Main OS thread: nanosleep(200us) then recheck.
+    DefineLabel("__gt_try_await_main_park");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 200000); // 200us in ns
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8); // tv_nsec
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 48, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("nanosleep");
+    EmitBranch("__gt_try_await_recheck");
+
+    DefineLabel("__gt_try_await_recheck");
+    EmitReloadArg(0); // X0 = promise
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X1, GtStatusCompleted);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__gt_try_await_loop");
+
+    // Extract result + threw flag
     DefineLabel("__gt_try_await_done");
 
     EmitTraceAcquire();
@@ -6087,16 +6199,44 @@ public partial class ARM64CodeEmitter {
   /// </summary>
   private void EmitGtProcessPendingWaiter() {
     EmitRuntimeFunctionStart("__gt_process_pending_waiter", 0, 0x20);
+    // [x29+16] = homed waiter (across the gate spin / __gt_enqueue call)
 
-    // Load P->pendingWaiter
+    // w = P->pendingWaiter; if null → done.
     EmitLoadP(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffPendingWaiter, 8);
     EmitCbz(ARM64Register.X0, "__gt_ppw_done");
 
-    // Clear P->pendingWaiter
+    // Clear P->pendingWaiter.
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffPendingWaiter, 8);
-    // Enqueue the waiter
+
+    // A main-thread waiter (stackBase==0) is never enqueued — it has no schedulable GT
+    // stack and resumes by polling promise.status in its own __gt_await recheck loop.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X1, "__gt_ppw_done");
+
+    // Home w across the gate spin and the enqueue call.
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+
+    // ioYielded gate: spin until w.ioYielded == 1 so we never enqueue a GT whose register
+    // context is still being saved on its own M (another M could then resume it onto a
+    // half-saved register block — garbage / SIGILL). The awaiter cleared ioYielded=0 before
+    // publishing promise.waiter, and __gt_context_switch sets it to 1 after the save; the
+    // await idle path guarantees the awaiter always reaches a context switch, so this
+    // terminates. Mirrors __io_complete_gt_spin.
+    DefineLabel("__gt_ppw_spin");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // w
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
+    EmitCbnz(ARM64Register.X1, "__gt_ppw_ready");
+    EmitWord(0xD503203F); // YIELD
+    EmitBranch("__gt_ppw_spin");
+
+    DefineLabel("__gt_ppw_ready");
+    EmitDmbIsh();
+    // w.status = ready; __gt_enqueue(w).
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // w
+    EmitMovRegImm(ARM64Register.X1, GtStatusReady);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
     EmitBranchLink("__gt_enqueue");
 
     DefineLabel("__gt_ppw_done");
