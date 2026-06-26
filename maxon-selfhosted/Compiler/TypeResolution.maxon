@@ -7984,6 +7984,71 @@ end 'validateFieldVisibilityOp'
 // Project-wide and idempotent: only the first call drains the registry;
 // later per-module calls walk an empty map.
 
+// Order two top-level decl names by source declaration position (file, then
+// line, then column). `unresolvedTopLevelDecls` is a hash map whose iteration
+// order is unstable, so we sort the snapshot by this key before the DFS walk:
+// that fixes the evaluation order (and thus the E2012 cycle diagnostic's
+// member list, which is the DFS visit stack) to a deterministic, source-order
+// sequence matching the C# bootstrap, which evaluates decls in parse order.
+function topLevelDeclLessByPosition(project Project, a String, b String) returns bool
+	let ea = try project.unresolvedTopLevelDecls.get(a) otherwise return false
+	let eb = try project.unresolvedTopLevelDecls.get(b) otherwise return false
+
+	let pa = ea.filePath.toString()
+	let pb = eb.filePath.toString()
+	if stringLexLess(pa, b: pb) 'fileLess'
+		return true
+	end 'fileLess'
+	if stringLexLess(pb, b: pa) 'fileGreater'
+		return false
+	end 'fileGreater'
+
+	if ea.line != eb.line 'lineDiffers'
+		return ea.line < eb.line
+	end 'lineDiffers'
+	return ea.column < eb.column
+end 'topLevelDeclLessByPosition'
+
+// Selection sort of decl names by source position (mirrors
+// sortFilePathsAscending). The decl count is small, so O(n^2) is fine.
+function sortTopLevelNamesByPosition(project Project, names StringArray) returns StringArray
+	let total = names.count()
+	var used = BoolArray.create()
+	for _ in 0 upto total 'initUsed'
+		used.push(false)
+	end 'initUsed'
+
+	var out = StringArray.create()
+	for _ in 0 upto total 'emit'
+		var minIdx = 0
+		var haveMin = false
+		var k = 0
+		while k < total 'scan'
+			let consumed = try used.get(k) otherwise panic("sortTopLevelNamesByPosition: used.get({k}) failed")
+			if not consumed 'candidate'
+				if not haveMin 'firstCandidate'
+					minIdx = k
+					haveMin = true
+				end 'firstCandidate' else 'compare'
+					let candidate = try names.get(k) otherwise panic("sortTopLevelNamesByPosition: names.get({k}) failed")
+					let cur = try names.get(minIdx) otherwise panic("sortTopLevelNamesByPosition: names.get(min={minIdx}) failed")
+					if topLevelDeclLessByPosition(project, a: candidate, b: cur) 'smaller'
+						minIdx = k
+					end 'smaller'
+				end 'compare'
+			end 'candidate'
+			k = k + 1
+		end 'scan'
+		if not haveMin 'noneLeft'
+			panic("sortTopLevelNamesByPosition: no unconsumed name on emit round")
+		end 'noneLeft'
+		out.push(try names.get(minIdx) otherwise panic("sortTopLevelNamesByPosition: names.get(picked={minIdx}) failed"))
+		try used.set(minIdx, value: true) otherwise panic("sortTopLevelNamesByPosition: used.set({minIdx}) failed")
+	end 'emit'
+
+	return out
+end 'sortTopLevelNamesByPosition'
+
 function resolveAllTopLevelDecls(project Project)
 	if project.unresolvedTopLevelDecls.count() == 0 'alreadyDone'
 		return
@@ -7993,10 +8058,14 @@ function resolveAllTopLevelDecls(project Project)
 
 	// Snapshot key set up-front: we'll be removing entries as we evaluate
 	// them, and iterating-while-removing is unsafe for the underlying map.
-	var names = StringArray.create()
+	// Sort the snapshot into source-declaration order so the DFS visit stack
+	// (and the E2012 cycle diagnostic built from it) is deterministic — the
+	// map's own iteration order is unstable across runs.
+	var unsortedNames = StringArray.create()
 	for (name, _) in project.unresolvedTopLevelDecls 'collect'
-		names.push(name)
+		unsortedNames.push(name)
 	end 'collect'
+	let names = sortTopLevelNamesByPosition(project, names: unsortedNames)
 
 	for name in names 'evalEach'
 		_ = evaluateTopLevelDecl(project, name: name, evaluating: evaluating)
