@@ -1,0 +1,62 @@
+// Test: byte-enum-comparison.enum-coerces-to-byte-arg
+
+typealias Byte = int(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function takesByte(b Byte) returns Byte
+	return b
+end 'takesByte'
+
+function main() returns ExitCode
+	let r = takesByte(Ascii.underscore)
+	if r == 95 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @takesByte(x0: u8) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x1, hi
+    arm64.b.ls __range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_rdata x0, __panic_msg_1ba662e4b876302c
+    arm64.ldr x19, [x29, #16]
+    arm64.mov x0, x19
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #95
+    arm64.bl takesByte
+    arm64.mov x1, #95
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b.ne ok_0.after
+  ok_0:
+    arm64.mov x0, #0
+    arm64.epilogue
+    arm64.ret
+  ok_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue
+    arm64.ret
+  }
+}
+---

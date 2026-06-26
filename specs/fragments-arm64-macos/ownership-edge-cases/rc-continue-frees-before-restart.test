@@ -29,7 +29,7 @@ ExitCode: 8
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=176
+    arm64.prologue stack_size=192
     arm64.mov x0, #0
     arm64.mov x1, #0
     arm64.mov x19, x1
@@ -53,7 +53,7 @@ module {
     arm64.mov x23, x0
   inlined_stdlib.__mm_alloc_2_0:
     arm64.adrp_add_rdata x0, __mm_alloc_count
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.atomic_inc [x0]
     arm64.mov x0, #32
     arm64.add x24, x23, x0
@@ -65,7 +65,7 @@ module {
     arm64.b.le inlined_stdlib.__slab_alloc_2_0
   inlined_stdlib.__slab_alloc_1_0:
     arm64.adrp_add_rdata x0, __slab_lock
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.bl __slab_lock_acquire
   inlined_stdlib.__slab_os_direct_alloc_0_0:
     arm64.mov x0, #8191
@@ -84,9 +84,19 @@ module {
     arm64.mov x0, #0
     arm64.str x0, [x29, #56]
     arm64.call_import slot_3
-    arm64.ldr x25, [x29, #104]
+    arm64.ldr x25, [x29, #112]
+  inlined_stdlib.__slab_assert_os_alloc_0_0:
+    arm64.mov x0, #0
+    arm64.cmp x25, x0
+    arm64.cset x0, eq
+    arm64.b.ne inline_cont_main_0
+  inlined_stdlib.__slab_assert_os_alloc_1_0:
+    arm64.mov x0, #137
+    arm64.str x0, [x29, #64]
+    arm64.call_import slot_0
+  inline_cont_main_0:
     arm64.adrp_add_rdata x0, __slab_os_direct_capacity
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.ldr x1, [x0, #0] (8b)
     arm64.mov x0, #0
     arm64.cmp x1, x0
@@ -103,31 +113,31 @@ module {
   inlined_stdlib.__slab_memzero_1_0:
     arm64.cmp x5, x4
     arm64.cset x0, lt
-    arm64.b.ge inline_cont_main_0
+    arm64.b.ge inline_cont_main_1
   inlined_stdlib.__slab_memzero_2_0:
     arm64.mov x0, #0
-    arm64.str x3, [x29, #64]
-    arm64.str x5, [x29, #72]
-    arm64.str x0, [x29, #80]
+    arm64.str x3, [x29, #72]
+    arm64.str x5, [x29, #80]
+    arm64.str x0, [x29, #88]
     arm64.strb w2, [x0, #0]
   inlined_stdlib.__slab_memzero_3_0:
     arm64.mov x0, #1
     arm64.add x1, x5, x0
     arm64.mov x5, x1
     arm64.b inlined_stdlib.__slab_memzero_1_0
-  inline_cont_main_0:
+  inline_cont_main_1:
     arm64.adrp_add_rdata x0, __slab_os_direct_array
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.str x3, [x0, #0] (8b)
     arm64.adrp_add_rdata x0, __slab_os_direct_capacity
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.mov x1, #512
     arm64.str x1, [x0, #0] (8b)
   inlined_stdlib.__slab_os_direct_alloc_2_0:
     arm64.adrp_add_rdata x0, __slab_os_direct_capacity
-    arm64.ldr x1, [x29, #104]
+    arm64.ldr x1, [x29, #112]
     arm64.adrp_add_rdata x0, __slab_os_direct_count
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.ldr x2, [x1, #0] (8b)
     arm64.ldr x1, [x0, #0] (8b)
     arm64.cmp x1, x2
@@ -135,11 +145,11 @@ module {
     arm64.b.lt inlined_stdlib.__slab_os_direct_alloc_4_0
   inlined_stdlib.__slab_os_direct_alloc_3_0:
     arm64.mov x0, #134
-    arm64.str x0, [x29, #88]
+    arm64.str x0, [x29, #96]
     arm64.call_import slot_0
   inlined_stdlib.__slab_os_direct_alloc_4_0:
     arm64.adrp_add_rdata x0, __slab_os_direct_array
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.ldr x2, [x0, #0] (8b)
     arm64.mov x0, #4
     arm64.lslv x3, x1, x0
@@ -150,14 +160,14 @@ module {
     arm64.str x24, [x3, #0] (8b)
     arm64.mov x2, #1
     arm64.adrp_add_rdata x0, __slab_os_direct_count
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.add x3, x1, x2
     arm64.str x3, [x0, #0] (8b)
-  inline_cont_main_1:
+  inline_cont_main_2:
     arm64.adrp_add_rdata x0, __slab_lock
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.bl __slab_lock_release
-    arm64.b inline_cont_main_3
+    arm64.b inline_cont_main_4
   inlined_stdlib.__slab_alloc_2_0:
     arm64.mov x26, #18
     arm64.mov x27, x25
@@ -181,9 +191,9 @@ module {
     arm64.b inlined_stdlib.__slab_alloc_3_0
   inlined_stdlib.__slab_alloc_6_0:
     arm64.mov x0, #136
-    arm64.str x0, [x29, #96]
+    arm64.str x0, [x29, #104]
     arm64.call_import slot_0
-    arm64.b inline_cont_main_3
+    arm64.b inline_cont_main_4
   inlined_stdlib.__slab_alloc_7_0:
     arm64.mov x0, #-1
     arm64.cmp x0, x25
@@ -196,10 +206,10 @@ module {
     arm64.b.ge inlined_stdlib.__slab_proc_at_2_0
   inlined_stdlib.__slab_proc_at_1_0:
     arm64.mov x0, #0
-    arm64.b inline_cont_main_2
+    arm64.b inline_cont_main_3
   inlined_stdlib.__slab_proc_at_2_0:
     arm64.adrp_add_rdata x0, __sched_procs
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.ldr x1, [x0, #0] (8b)
     arm64.mov x0, #0
     arm64.cmp x1, x0
@@ -207,14 +217,14 @@ module {
     arm64.b.ne inlined_stdlib.__slab_proc_at_4_0
   inlined_stdlib.__slab_proc_at_3_0:
     arm64.mov x0, #0
-    arm64.b inline_cont_main_2
+    arm64.b inline_cont_main_3
   inlined_stdlib.__slab_proc_at_4_0:
     arm64.mov x0, #3
     arm64.lslv x2, x25, x0
     arm64.add x0, x1, x2
     arm64.ldr x1, [x0, #0] (8b)
     arm64.mov x0, x1
-  inline_cont_main_2:
+  inline_cont_main_3:
     arm64.cmp x0, x25
     arm64.cset x25, ne
   inlined_stdlib.__slab_alloc_9_0:
@@ -222,26 +232,26 @@ module {
     arm64.b.eq inlined_stdlib.__slab_alloc_11_0
   inlined_stdlib.__slab_alloc_10_0:
     arm64.adrp_add_rdata x0, __slab_lock
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.bl __slab_lock_acquire
     arm64.mov x0, x27
     arm64.bl stdlib.__slab_alloc_class
     arm64.mov x24, x0
     arm64.adrp_add_rdata x0, __slab_lock
-    arm64.ldr x0, [x29, #104]
+    arm64.ldr x0, [x29, #112]
     arm64.bl __slab_lock_release
     arm64.mov x25, x24
-    arm64.b inline_cont_main_3
+    arm64.b inline_cont_main_4
   inlined_stdlib.__slab_alloc_11_0:
     arm64.mov x0, x27
     arm64.bl stdlib.__slab_alloc_class
     arm64.mov x25, x0
-    arm64.b inline_cont_main_3
+    arm64.b inline_cont_main_4
   inlined_stdlib.__slab_alloc_12_0:
     arm64.mov x0, #1
     arm64.add x1, x27, x0
     arm64.b inlined_stdlib.__slab_alloc_5_0
-  inline_cont_main_3:
+  inline_cont_main_4:
     arm64.str x22, [x25, #0] (8b)
     arm64.mov x0, #8
     arm64.add x1, x25, x0
@@ -255,7 +265,7 @@ module {
     arm64.mov x0, #32
     arm64.add x21, x25, x0
     arm64.mov x22, x21
-  inline_cont_main_4:
+  inline_cont_main_5:
     arm64.mov x0, x21
     arm64.bl stdlib.__mm_incref
     arm64.str x20, [x22, #0] (8b)

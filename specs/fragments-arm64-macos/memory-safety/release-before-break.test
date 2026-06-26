@@ -27,106 +27,162 @@ ExitCode: 1
 RequiredIR: ```
 === maxon
 module {
+  func @Counter.create(n: i64) -> Counter {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %1 = maxon.struct_literal @Counter
+    maxon.scope_end [n]
+    maxon.return %1
+  }
   func @main() -> i64 {
   entry:
-    %9 = maxon.literal {value = 0 : i64}
-    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %10 = maxon.literal {value = 0 : i64}
-    maxon.assign %10 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %11 = maxon.literal {value = 0 : i64}
+    maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    maxon.assign %12 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.header:
-    %11 = maxon.literal {value = 3 : i64}
-    %12 = maxon.var_ref {var = i} {type = i64}
-    %13 = maxon.binop %12, %11 {op = lt}
-    maxon.cond_br %13 [then: loop_0, else: loop_0.exit]
-  loop_0:
+    %13 = maxon.literal {value = 3 : i64}
     %14 = maxon.var_ref {var = i} {type = i64}
-    %15 = maxon.struct_literal @Counter
-    maxon.assign %15 {var = c} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.struct_var_ref c
-    %17 = maxon.field_access .n %16
-    %18 = maxon.literal {value = 1 : i64}
-    %19 = maxon.binop %17, %18 {op = eq}
-    maxon.cond_br %19 [then: check_1, else: check_1.after]
-  check_1:
-    %20 = maxon.struct_var_ref c
-    %21 = maxon.field_access .n %20
-    maxon.assign %21 {var = result} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.binop %14, %13 {op = lt}
+    maxon.cond_br %15 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %16 = maxon.var_ref {var = i} {type = i64}
+    %17 = maxon.call @Counter.create %16
+    maxon.assign %17 {var = __call_tmp_0} {decl = 1 : i1}
+    maxon.assign %17 {var = c} {decl = 1 : i1}
+    %18 = maxon.struct_var_ref c
+    %19 = maxon.field_access .n %18
+    %20 = maxon.literal {value = 1 : i64}
+    %21 = maxon.binop %19, %20 {op = eq}
+    maxon.cond_br %21 [then: check_0, else: check_0.after]
+  check_0:
+    %22 = maxon.struct_var_ref c
+    %23 = maxon.field_access .n %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [c]
     maxon.br loop_0.exit
-  check_1.after:
-    %22 = maxon.literal {value = 1 : i64}
-    %23 = maxon.var_ref {var = i} {type = i64}
-    %24 = maxon.binop %23, %22 {op = add}
-    maxon.assign %24 {var = i} {kind = i64} {mut = 1 : i1}
+  check_0.after:
+    %24 = maxon.literal {value = 1 : i64}
+    %25 = maxon.var_ref {var = i} {type = i64}
+    %26 = maxon.binop %25, %24 {op = add}
+    maxon.assign %26 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [c]
     maxon.br loop_0.header
   loop_0.exit:
-    %25 = maxon.var_ref {var = result} {type = i64}
-    %26 = maxon.literal {value = 0 : i64}
-    %27 = maxon.binop %25, %26 {op = lt}
-    %28 = maxon.literal {value = 4294967295 : i64}
-    %29 = maxon.binop %25, %28 {op = gt}
-    %30 = maxon.binop %27, %29 {op = or}
-    maxon.cond_br %30 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
-    maxon.panic "panic at release-before-break.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_2:
+    %27 = maxon.var_ref {var = result} {type = i64}
+    %28 = maxon.literal {value = 0 : i64}
+    %29 = maxon.binop %27, %28 {op = lt}
+    %30 = maxon.literal {value = 255 : i64}
+    %31 = maxon.binop %27, %30 {op = gt}
+    %32 = maxon.binop %29, %31 {op = or}
+    maxon.cond_br %32 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at release-before-break.test:23: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
     maxon.scope_end [result, i]
-    maxon.return %25
+    maxon.return %27
   }
 }
 === standard
 module {
-  func @main() -> u32 {
+  func @Counter.create(n: i64) -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, result
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, i
+    %0 = func.param n : StdI64
+    %1 = arith.constant {value = 8 : i64}
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.constant {value = 1 : i64}
+    %4 = std.call_runtime @mm_alloc %1, %2, %3
+    memref.store %4, __struct_0
+    %5 = memref.load __struct_0 : i64
+    memref.store_indirect %0, %5+0
+    %6 = memref.load __struct_0 : i64
+    std.call_runtime @mm_incref %6
+    %7 = memref.load __struct_0 : i64
+    func.return %7
+  }
+  func @main() -> u8 {
+  entry:
+    %8 = arith.constant {value = 0 : i64}
+    memref.store %8, result
+    %9 = arith.constant {value = 0 : i64}
+    memref.store %9, i
     cf.br loop_0.header
   loop_0.header:
-    %2 = arith.constant {value = 3 : i64}
-    %3 = memref.load i : i64
-    %4 = arith.cmpi lt %3, %2
-    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
-  loop_0:
-    %5 = memref.load i : i64
-    memref.bulk_zero __stk_c, 1
-    memref.store %5, __stk_c.0
-    %6 = memref.load __stk_c.0 : i64
-    %7 = arith.constant {value = 1 : i64}
-    %8 = arith.cmpi eq %6, %7
-    cf.cond_br %8 [then: check_1, else: check_1.after]
-  check_1:
-    %9 = memref.load __stk_c.0 : i64
-    memref.store %9, result
-    cf.br loop_0.exit
-  check_1.after:
-    %10 = arith.constant {value = 1 : i64}
+    %10 = arith.constant {value = 3 : i64}
     %11 = memref.load i : i64
-    %12 = arith.addi %11, %10
-    memref.store %12, i
+    %12 = arith.cmpi lt %11, %10
+    cf.cond_br %12 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %13 = memref.load i : i64
+    %14 = func.call @Counter.create %13
+    memref.store %14, c
+    %17 = memref.load c : i64
+    %18 = memref.load_indirect %17+0
+    %19 = arith.constant {value = 1 : i64}
+    %20 = arith.cmpi eq %18, %19
+    cf.cond_br %20 [then: check_0, else: check_0.after]
+  check_0:
+    %21 = memref.load c : i64
+    %22 = memref.load_indirect %21+0
+    memref.store %22, result
+    %23 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %23
+    cf.br loop_0.exit
+  check_0.after:
+    %25 = arith.constant {value = 1 : i64}
+    %26 = memref.load i : i64
+    %27 = arith.addi %26, %25
+    memref.store %27, i
+    %28 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %28
     cf.br loop_0.header
   loop_0.exit:
-    %13 = memref.load result : i64
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
-    %19 = memref.lea_symdata __panic_msg_0
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_panic %20
-  __range_ok_2:
-    func.return %13
+    %30 = memref.load result : i64
+    %31 = arith.constant {value = 0 : i64}
+    %32 = arith.cmpi lt %30, %31
+    %33 = arith.constant {value = 255 : i64}
+    %34 = arith.cmpi gt %30, %33
+    %35 = arith.ori1 %32, %34
+    cf.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %36 = memref.lea_symdata __panic_msg_0
+    %37 = std.ptr_to_i64 %36
+    std.call_runtime @mrt_panic %37
+  __range_ok_0:
+    func.return %30
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    %39 = func.param ptr : StdI64
+    cf.br done
+  done:
+    func.return
   }
 }
 === arm64
 module {
-  func @main() -> u32 {
+  func @Counter.create(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #0
@@ -144,45 +200,64 @@ module {
     arm64.b main.loop_0.exit
   loop_0:
     arm64.ldr x0, [x29, #-16]
-    arm64.mov x1, #0
-    arm64.str x1, [x29, #-24]
+    arm64.bl Counter.create
     arm64.str x0, [x29, #-24]
-    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x1, #0]
     arm64.mov x3, #1
     arm64.cmp x2, x3
     arm64.cset x4, eq
     arm64.cmp x4, #0
-    arm64.b.ne main.check_1
-    arm64.b main.check_1.after
-  check_1:
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
+  check_0:
     arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_21
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_21
     arm64.b main.loop_0.exit
-  check_1.after:
+  check_0.after:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-16]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-16]
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_28
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_28
     arm64.b main.loop_0.header
   loop_0.exit:
     arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
-    arm64.mov x3, #4294967295
+    arm64.mov x3, #255
     arm64.cmp x0, x3
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne main.__range_panic_2
-    arm64.b main.__range_ok_2
-  __range_panic_2:
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
     arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
-    arm64.bl maxon_panic
-  __range_ok_2:
+    arm64.bl mrt_panic
+  __range_ok_0:
     arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    arm64.b __destruct_Counter.done
+  done:
     arm64.ret
   }
 }
