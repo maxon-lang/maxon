@@ -671,7 +671,22 @@ export type Parser
 				_ = try typeOpenDepthStack.pop() otherwise break
 				_ = try typeIsInterfaceStack.pop() otherwise break
 			end 'popClosed'
-			if kind == TokenKind.type or kind == TokenKind.extension or kind == TokenKind.interface or kind == TokenKind.enum or kind == TokenKind.union 'typeOpener'
+			if kind == TokenKind.enum or kind == TokenKind.union 'enumOrUnionOpener'
+				// Enum / union cases may be keyword-named (e.g. `enum TokenKind`
+				// has cases `if`, `while`, `for`, `match`, `else`, `try`, `end`,
+				// `function`, ...). A flat keyword-token walk would miscount those
+				// as control-flow block delimiters and corrupt the depth /
+				// owning-type tracking for EVERY later declaration in the file
+				// (the bug that made a top-level `tokenize` after `enum TokenKind`
+				// register under the wrong qualified name, so a cross-file
+				// `try tokenize() otherwise (e)` bound `e` to `integer`). Hand the
+				// whole body to a case-aware skipper that registers any method
+				// throws and returns the index past the closing `end`.
+				let ownerTok = try tokens.get(i + 1) otherwise Token.eof()
+				i = prescanEnumOrUnionBody(i, ownerName: ownerTok.value)
+				continue
+			end 'enumOrUnionOpener'
+			if kind == TokenKind.type or kind == TokenKind.extension or kind == TokenKind.interface 'typeOpener'
 				let nameTok = try tokens.get(i + 1) otherwise Token.eof()
 				if nameTok.kind == TokenKind.identifier 'haveTypeName'
 					typeNameStack.push(nameTok.value)
@@ -744,6 +759,89 @@ export type Parser
 		end 'scan'
 	end 'prescanFunctionThrows'
 
+	// Case-aware skip of an enum / union declaration body for the throws prescan.
+	// `enumStart` is the index of the `enum` / `union` keyword. Returns the index
+	// just past the declaration's closing `end <label>`. Enum / union cases may be
+	// keyword-named, so this does NOT treat bare keyword tokens as control-flow
+	// block delimiters — only a genuine `end <charLiteral-label>` block terminator
+	// decrements depth, and control-flow keywords open blocks ONLY inside a method
+	// body (depth > 1), never at the case-statement level (depth 1). Method
+	// declarations inside the body still get their throws clause registered (under
+	// the enum / union name), so an enum/union method's `throws` is not lost.
+	function prescanEnumOrUnionBody(enumStart ElementCount, ownerName String) returns ElementCount
+		let tokenCount = tokens.count()
+		// Seed depth 1 (the body) and start just past `enum/union <Name>`.
+		var depth = 1 as PrescanDepth
+		var i = enumStart + 2
+		while i < tokenCount and depth > 0 'scan'
+			let tok = try tokens.get(i) otherwise break
+			let kind = tok.kind
+
+			// A block terminator is `end <charLiteral-label>`; a keyword-named case
+			// `end` (followed by a newline / `=` raw value) must NOT decrement.
+			if kind == TokenKind.end 'maybeEnd'
+				let after = try tokens.get(i + 1) otherwise Token.eof()
+				if after.kind == TokenKind.charLiteral 'isBlockEnd'
+					depth = depth - 1
+				end 'isBlockEnd'
+				i = i + 1
+				continue
+			end 'maybeEnd'
+
+			// Inside a method body (depth > 1): balance end-bearing blocks.
+			// Closures are `gives`-form (no `end`), so `function` never opens here.
+			if depth > 1 'insideMethod'
+				if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match 'open'
+					depth = depth + 1
+					i = i + 1
+					continue
+				end 'open'
+				if kind == TokenKind.else 'elseOpen'
+					depth = depth + 1
+					let afterElse = try tokens.get(i + 1) otherwise Token.eof()
+					if afterElse.kind == TokenKind.if 'elseIf'
+						i = i + 2
+						continue
+					end 'elseIf'
+					i = i + 1
+					continue
+				end 'elseOpen'
+				if kind == TokenKind.try 'tryOpen'
+					let labelTok = try tokens.get(i + 1) otherwise Token.eof()
+					if labelTok.kind == TokenKind.charLiteral 'blockTry'
+						depth = depth + 1
+					end 'blockTry'
+					i = i + 1
+					continue
+				end 'tryOpen'
+				i = i + 1
+				continue
+			end 'insideMethod'
+
+			// depth == 1: the case-statement level. Only a method header
+			// (`[export] function IDENT (`) opens a block; everything else (cases,
+			// including keyword-named ones) is skipped. A `function` case name is
+			// followed by a newline / `=` (never IDENT + `(`), so it never matches.
+			var funcOffset = 0 as ElementCount
+			if kind == TokenKind.export 'sawExport'
+				funcOffset = 1
+			end 'sawExport'
+			let funcTok = try tokens.get(i + funcOffset) otherwise Token.eof()
+			if funcTok.kind == TokenKind.function 'maybeMethod'
+				let mNameTok = try tokens.get(i + funcOffset + 1) otherwise Token.eof()
+				let mAfterName = try tokens.get(i + funcOffset + 2) otherwise Token.eof()
+				if mNameTok.kind == TokenKind.identifier and mAfterName.kind == TokenKind.leftParen 'isMethod'
+					prescanRegisterFuncThrows(mNameTok, headerStart: i + funcOffset + 2, owningType: ownerName)
+					depth = depth + 1
+					i = i + funcOffset + 1
+					continue
+				end 'isMethod'
+			end 'maybeMethod'
+			i = i + 1
+		end 'scan'
+		return i
+	end 'prescanEnumOrUnionBody'
+
 	// Owning type for a method header during the throws prescan: the innermost
 	// open type/extension/interface name, or "" when at top level (a free
 	// function). Empty entries (malformed openers) read back as "" and so route
@@ -811,6 +909,14 @@ export type Parser
 				end 'noErrName'
 				let qualified = prescanQualifiedFuncName(nameToken.value, owningType: owningType)
 				prescanSeedFuncThrows(qualified, errorTypeName: errTok.value)
+				// Free (non-method) throwing functions also feed the bare-name
+				// index, so a cross-namespace `try freeFn() otherwise (e)` whose
+				// callee can't be namespace-resolved at parse time still recovers
+				// its error type. Methods resolve via receiver-type recovery
+				// (`maxonTypeStructName` + the type-name prescan), so they don't.
+				if owningType.isEmpty() 'isFreeFunction'
+					recordPrescannedFreeThrows(nameToken.value, errorTypeName: errTok.value)
+				end 'isFreeFunction'
 				return
 			end 'haveThrows'
 			j = j + 1
@@ -841,6 +947,30 @@ export type Parser
 		try project.funcThrowsTypes.insert(qualified, value: ThrowsClause.throwing(errorTypeName)) otherwise return
 		recordFuncThrowsInsert(project, filePath: filePath, key: qualified)
 	end 'prescanSeedFuncThrows'
+
+	// Record one free throwing function in the bare-name → error-type index
+	// (`Project.prescannedFreeThrowsByBare`). Unlike `funcThrowsTypes`, this
+	// index is a STABLE cross-file table (not recorded in the per-file parse
+	// delta and never rolled back) — it answers "which error type does free
+	// function <bare> throw?" for the parse-time `(e)`-binding fallback when the
+	// callee's namespace can't be resolved yet. A bare name claimed by two free
+	// functions with DIFFERENT error types is marked ambiguous and dropped, so
+	// the fallback only ever resolves an unambiguous name. Idempotent: re-seeing
+	// the same (bare, errorType) pair (the per-file prescan re-runs over an
+	// already-scanned file) is a no-op.
+	function recordPrescannedFreeThrows(bareName String, errorTypeName String)
+		if project.ambiguousFreeThrowsBare.contains(bareName) 'alreadyAmbiguous'
+			return
+		end 'alreadyAmbiguous'
+		if let existing = try project.prescannedFreeThrowsByBare.get(bareName) 'haveExisting'
+			if not existing.equals(errorTypeName) 'conflict'
+				project.ambiguousFreeThrowsBare.insert(bareName)
+				_ = project.prescannedFreeThrowsByBare.remove(bareName)
+			end 'conflict'
+			return
+		end 'haveExisting'
+		project.prescannedFreeThrowsByBare.upsert(bareName, value: errorTypeName)
+	end 'recordPrescannedFreeThrows'
 
 	// E3062: every file-private `typealias` recorded in this Parser must be
 	// referenced explicitly somewhere in the file. Implicit uses inferred from
@@ -12662,8 +12792,33 @@ export type Parser
 				end 'variantClause'
 			end 'eachVariant'
 		end 'overloaded'
+		// Cross-namespace free-function fallback: when the call site could not
+		// resolve the callee's namespace at parse time (its defining file is
+		// parsed later, so `funcReturnTypes` / `methodNameIndex` lack it),
+		// `qualifyCalleeForContext` leaves `qualifiedCallee` at a bare / local
+		// name that misses `funcThrowsTypes`. The pre-parse scan recorded every
+		// unambiguous free throwing function by bare name; consult it so the
+		// `(e)` binding recovers the error type regardless of file order.
+		let bare = bareTrailingSegment(qualifiedCallee)
+		if not project.ambiguousFreeThrowsBare.contains(bare) 'notAmbiguous'
+			if let errName = try project.prescannedFreeThrowsByBare.get(bare) 'haveBareThrows'
+				return ThrowsClause.throwing(errName)
+			end 'haveBareThrows'
+		end 'notAmbiguous'
 		return ThrowsClause.none
 	end 'resolveThrowsClauseForCallee'
+
+	// The final dotted segment of a (possibly namespace-qualified) callee name:
+	// `Compiler.compile` → `compile`, bare `compile` → `compile`. Used to probe
+	// the bare-name free-throws index when a cross-namespace callee left the
+	// qualified name unresolved at parse time.
+	function bareTrailingSegment(qualified String) returns String
+		let parts = qualified.split(".")
+		if parts.count() == 0 'empty'
+			return qualified
+		end 'empty'
+		return try parts.get(parts.count() - 1) otherwise qualified
+	end 'bareTrailingSegment'
 
 	// Recover the receiver's MaxonType for a tryMethodCall at parse time by
 	// scanning backward from `scanFrom` (exclusive) for the op that
@@ -13742,7 +13897,13 @@ export type Parser
 			// `unresolvedRead` lets TypeResolution validate the case against the
 			// fully-populated registries, exactly as it does for a plain
 			// identifier member.
-			let prefixIsEnum = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
+			// `prescannedEnumCases` is the cross-file / forward-reference fallback:
+			// the pre-parse scan recorded every enum across all files, so a
+			// `Name.allCases` / `Name.allCaseNames` whose `enum Name` is declared in
+			// a file the parse loop reaches later is still recognised as enum-static
+			// here (without it the access fell through to the qualified-read path
+			// and surfaced E3034 "unknown enum case: 'allCases'").
+			let prefixIsEnum = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value) or project.prescannedEnumCases.contains(token.value)
 			let memberIsIdent = memberToken.kind == TokenKind.identifier
 			let memberIsEnumCaseKeyword = (prefixIsEnum and not memberToken.value.isEmpty()) or (tokenIsIdentifierLike(memberToken) and isCapitalizedIdent(token.value))
 			// Phase 9 Stage 1: `EnumName.allCases` / `EnumName.allCaseNames`
@@ -15393,6 +15554,13 @@ export type Parser
 		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
 			return unresolved.cases
 		end 'isUnresolved'
+		// Cross-file / forward reference: the enum is declared in a file the parse
+		// loop has not reached yet, so it is absent from both resolved maps. The
+		// pre-parse scan recorded its declaration-ordered cases — return those so
+		// `.allCases` / `.allCaseNames` expand to the correct inline array.
+		if let prescanned = try project.prescannedEnumCases.get(enumName) 'isPrescanned'
+			return prescanned.cases
+		end 'isPrescanned'
 		throw ParserError.unhandledToken
 	end 'enumCasesOrEmpty'
 
@@ -15407,6 +15575,11 @@ export type Parser
 		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
 			return unresolved.isFloatBacked
 		end 'isUnresolved'
+		// Cross-file / forward reference: consult the pre-parse scan, which
+		// recorded each enum's float-backing flag alongside its cases.
+		if let prescanned = try project.prescannedEnumCases.get(enumName) 'isPrescanned'
+			return prescanned.isFloatBacked
+		end 'isPrescanned'
 		return false
 	end 'enumIsFloatBacked'
 
@@ -19406,6 +19579,16 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	if project.unresolvedStructTypes.contains(nameStr) 'isUnresolvedStruct'
 		return nameStr
 	end 'isUnresolvedStruct'
+	// Cross-file forward reference: the type is declared in a file the parse
+	// loop has not reached yet, so it is in neither struct registry. The
+	// pre-parse scan recorded every top-level `type <Name>`; recognising it
+	// here lets a parse-time method-call qualifier (`recv.method() otherwise
+	// (e)`) recover the `TypeName.method` key that `funcThrowsTypes` uses,
+	// instead of falling back to a bare method name that misses — keeping the
+	// `(e)` binding's error type resolvable regardless of file order.
+	if project.prescannedTypeNames.contains(nameStr) 'isPrescannedType'
+		return nameStr
+	end 'isPrescannedType'
 	// Enums share the method-dispatch path with structs: a method call on
 	// an enum-typed receiver qualifies the callee with the enum's name.
 	// Lookup against `enumTypes` (post-resolution) and `unresolvedEnums`

@@ -662,6 +662,10 @@ type X64FunctionLowering
 	// epilogue lay out callee-save slots above the outgoing-arg block.
 	var currentOutgoingArgSize as StackSize
 	var stdlibFunctions as ObjectFunctionArray
+	// Exact-name → signature map, built once at `create` from the full MIR
+	// function list + stdlib, so per-call signature lookups during lowering are
+	// O(1) instead of a linear scan over every function. See `buildCalleeSigMap`.
+	var calleeSigMap as CalleeSigMap
 	var constMap as ConstMap
 	var useCounts as UseCountMap
 	var absorbedConsts as AbsorbedConstSet
@@ -675,7 +679,7 @@ type X64FunctionLowering
 	var scratchValueIdCursor as ValueId
 
 	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
-		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", currentOutgoingArgSize: 0, constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}
+		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, calleeSigMap: buildCalleeSigMap(allFunctions, stdlibFunctions: stdlibFunctions), funcParamTypes: StdTypeArray.create(), currentFuncName: "", currentOutgoingArgSize: 0, constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}
 	end 'create'
 
 	// ============================================================
@@ -1323,7 +1327,7 @@ type X64FunctionLowering
 	// pre-reserve space — that way each call site only writes the bytes
 	// (no per-call `sub rsp` / `add rsp` pair).
 	function emitDirectCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock)
-		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+		let paramTypes = lookupFuncParamTypes(callee, sigMap: calleeSigMap, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
 		var argIdx = 0
 		var gprIdx = 0
@@ -1366,7 +1370,7 @@ type X64FunctionLowering
 
 		appendX64Op(target, block: dstBlock, op: X64Op.callDirect(callee))
 
-		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+		let calleeReturnType = lookupFuncReturnStdType(callee, sigMap: calleeSigMap, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
 			void then emitVoidResultAliasIfNeeded(resultId, argIds: argIds, dstBlock: dstBlock)
 			value(inner) then emitCallResultCapture(resultId, dstBlock: dstBlock, resultType: inner)

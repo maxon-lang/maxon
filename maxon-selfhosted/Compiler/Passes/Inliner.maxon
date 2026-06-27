@@ -181,6 +181,15 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 	// (the splice only adds entry/continuation edges, no edge from a callee
 	// block back to an original block). Re-runs next fixpoint round.
 	let loopDepth = computeLoopDepth(caller, module: module)
+	// Caller-local value→defining-op index, consulted O(1) by the arg-shape
+	// budget heuristics instead of re-scanning the caller's entire op set per
+	// arg per call site (the old linear scans were the inliner's O(n²) cost).
+	// A successful splice mutates the caller (spliced body ops define fresh
+	// ids; result-substitution can repoint a later call's arg onto one of
+	// them), so the map is rebuilt after every splice to stay identical to
+	// what a live re-scan would observe — the heuristics' decisions are thus
+	// byte-for-byte preserved.
+	var defs = buildValueDefMap(module, func: caller)
 	for blockRef in blockSnapshot 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("processOneCaller: blockRef {blockRef} not in module")
 		let blockDepth = lookupLoopDepth(loopDepth, blockId: block.id)
@@ -189,13 +198,14 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 		// place), and the iteration must not observe its own mutations.
 		let snapshot = block.opRefs.clone()
 		for opIdx in snapshot 'eachOp'
-			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, loopDepth: blockDepth)
+			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, loopDepth: blockDepth, defs: defs)
 			if decision.inline 'wantInline'
 				if performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap) 'didInline'
 					splices = splices + 1
 					if decision.loopBonus 'wasBonus'
 						loopBonus = loopBonus + 1
 					end 'wasBonus'
+					defs = buildValueDefMap(module, func: caller)
 				end 'didInline'
 			end 'wantInline'
 		end 'eachOp'
@@ -226,7 +236,7 @@ end 'InlineDecision'
 // top of this file. The `loopBonus` flag in accept() reports whether the
 // call site was inlined only because the loop-depth bonus pushed budget
 // past calleeOps — used for the inliner-debug telemetry counter.
-function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, loopDepth ParsedInt) returns InlineDecision
+function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, loopDepth ParsedInt, defs ValueDefMap) returns InlineDecision
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notInlinable'
 		return InlineDecision.skip()
@@ -274,11 +284,15 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	if calleeOps > maxBudget 'tooBig'
 		return InlineDecision.skip()
 	end 'tooBig'
-	let budget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, funcMap: funcMap, loopDepth: loopDepth)
+	// The arg-shape multipliers (descriptor / closure / const) are independent
+	// of loop depth, so compute them once: `baseBudget` is the loop-depth-0
+	// budget and the depth-scaled budget is just `baseBudget × loopMult`. This
+	// avoids the former double evaluation of the three caller-scan heuristics.
+	let baseBudget = computeArgShapeBudget(module, project: project, callShape: callShape, funcMap: funcMap, defs: defs)
+	let budget = baseBudget * loopDepthMultiplier(loopDepth)
 	if calleeOps > budget 'overBudget'
 		return InlineDecision.skip()
 	end 'overBudget'
-	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, funcMap: funcMap, loopDepth: 0)
 	let viaBonus = calleeOps > baseBudget
 	return InlineDecision.accept(viaBonus)
 end 'decideInline'
@@ -291,22 +305,35 @@ end 'decideInline'
 // capped at LOOP_DEPTH_2_MULT (depth ≥ 2 doesn't increase further) because
 // deeper nesting amplifies binary-size cost without proportional
 // hot-path-frequency gain.
-function computeInliningBudget(module StdModule, project Project, callShape CallShape, caller IrFunction, funcMap StdFuncByNameForInliner, loopDepth ParsedInt) returns ParsedInt
-	var budget = OP_THRESHOLD as ParsedInt
+// Loop-depth budget multiplier. Capped at LOOP_DEPTH_2_MULT (depth ≥ 2 doesn't
+// increase further) because deeper nesting amplifies binary-size cost without
+// proportional hot-path-frequency gain.
+function loopDepthMultiplier(loopDepth ParsedInt) returns ParsedInt
 	if loopDepth >= 2 'depthDeep'
-		budget = budget * LOOP_DEPTH_2_MULT
-	end 'depthDeep' else 'depthShallow'
-		if loopDepth == 1 'depthOne'
-			budget = budget * LOOP_DEPTH_1_MULT
-		end 'depthOne'
-	end 'depthShallow'
-	if callSiteHasConcreteDescriptorArg(module, project: project, caller: caller, argIds: callShape.argIds) 'concreteDesc'
+		return LOOP_DEPTH_2_MULT
+	end 'depthDeep'
+	if loopDepth == 1 'depthOne'
+		return LOOP_DEPTH_1_MULT
+	end 'depthOne'
+	return 1
+end 'loopDepthMultiplier'
+
+// Loop-depth-independent portion of the inlining budget: OP_THRESHOLD scaled by
+// the arg-shape multipliers (concrete descriptor, closure literal, all-const
+// args). The three multipliers compose multiplicatively. Each arg-shape check
+// consults the caller's precomputed value→def map (`defs`) in O(1) per arg
+// rather than re-scanning the caller's whole op set. The loop-depth multiplier
+// (`loopDepthMultiplier`) is applied separately by the caller so this need only
+// run once per call site.
+function computeArgShapeBudget(module StdModule, project Project, callShape CallShape, funcMap StdFuncByNameForInliner, defs ValueDefMap) returns ParsedInt
+	var budget = OP_THRESHOLD as ParsedInt
+	if callSiteHasConcreteDescriptorArg(module, project: project, defs: defs, argIds: callShape.argIds) 'concreteDesc'
 		budget = budget * CONCRETE_DESC_MULT
 	end 'concreteDesc'
-	if callSiteHasClosureLiteralArg(module, caller: caller, argIds: callShape.argIds) 'closureLit'
+	if callSiteHasClosureLiteralArg(module, defs: defs, argIds: callShape.argIds) 'closureLit'
 		budget = budget * CLOSURE_LITERAL_MULT
 	end 'closureLit'
-	if callSiteAllArgsAreConstants(module, caller: caller, argIds: callShape.argIds) 'allConst'
+	if callSiteAllArgsAreConstants(module, defs: defs, argIds: callShape.argIds) 'allConst'
 		// Bonus only sound when the body is pure arithmetic+control —
 		// the assumed "const args fold the body to a single value" cascade
 		// dead-ends at any opaque op (call, atomic, memcpy, OS, load/store,
@@ -320,46 +347,39 @@ function computeInliningBudget(module StdModule, project Project, callShape Call
 		end 'pure'
 	end 'allConst'
 	return budget
-end 'computeInliningBudget'
+end 'computeArgShapeBudget'
 
 // Approximate "concrete descriptor" detection: any arg whose definition
 // is a `loadLayoutDescriptor(label)` where `label` is in the project's
-// layout-descriptor registry counts. Walks the module ops; an arg
-// whose producer isn't in this module (e.g. a function param from
-// outside) returns false. Used only for budget multiplication, so a
-// false negative just means "don't apply the bonus" — never wrong.
-function callSiteHasConcreteDescriptorArg(module StdModule, project Project, caller IrFunction, argIds ValueIdArray) returns bool
+// layout-descriptor registry counts. Looks the arg's producer up in the
+// caller's value→def map; an arg whose producer isn't in this module (e.g. a
+// function param from outside) returns false. Used only for budget
+// multiplication, so a false negative just means "don't apply the bonus" —
+// never wrong.
+function callSiteHasConcreteDescriptorArg(module StdModule, project Project, defs ValueDefMap, argIds ValueIdArray) returns bool
 	for argId in argIds 'each'
-		if argDefinedAsConcreteDescriptor(module, project: project, caller: caller, argId: argId) 'hit'
+		if argDefinedAsConcreteDescriptor(module, project: project, defs: defs, argId: argId) 'hit'
 			return true
 		end 'hit'
 	end 'each'
 	return false
 end 'callSiteHasConcreteDescriptorArg'
 
-function argDefinedAsConcreteDescriptor(module StdModule, project Project, caller IrFunction, argId ValueId) returns bool
-	if let label = try findLoadLayoutDescriptorLabel(module, caller: caller, valueId: argId) 'haveLabel'
+function argDefinedAsConcreteDescriptor(module StdModule, project Project, defs ValueDefMap, argId ValueId) returns bool
+	if let label = try findLoadLayoutDescriptorLabel(module, defs: defs, valueId: argId) 'haveLabel'
 		return project.staticRdataValues.contains(label)
 	end 'haveLabel'
 	return false
 end 'argDefinedAsConcreteDescriptor'
 
-// Scope the descriptor-load search to the *caller's* op set. ValueIds are
-// function-local (allocValueId is per-IrFunction), so scanning the entire
-// module produces spurious matches whenever some unrelated function happens
-// to have a `loadLayoutDescriptor` whose resultId collides with this call's
-// argId. Restricting to the caller's blocks is both correct and faster.
-function findLoadLayoutDescriptorLabel(module StdModule, caller IrFunction, valueId ValueId) returns String throws DescriptorLabelError
-	for blockRef in caller.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise continue
-			if let label = try matchLayoutLoad(op, valueId: valueId) 'hit'
-				return label
-			end 'hit'
-		end 'eachOp'
-	end 'eachBlock'
-	throw DescriptorLabelError.notFound
+// O(1) descriptor-label lookup via the caller's value→def map. ValueIds are
+// function-local (allocValueId is per-IrFunction) and the map is built from the
+// caller's own ops, so it can never alias a `loadLayoutDescriptor` belonging to
+// another function whose resultId happens to collide.
+function findLoadLayoutDescriptorLabel(module StdModule, defs ValueDefMap, valueId ValueId) returns String throws DescriptorLabelError
+	let opIdx = try defs.get(valueId) otherwise throw DescriptorLabelError.notFound
+	let op = try module.ops.get(opIdx) otherwise throw DescriptorLabelError.notFound
+	return try matchLayoutLoad(op, valueId: valueId)
 end 'findLoadLayoutDescriptorLabel'
 
 enum DescriptorLabelError implements Error
@@ -385,37 +405,29 @@ end 'matchLayoutLoad'
 // any arg ValueId is the resultId of a `funcRef` op. The plan calls this
 // "closure literal" because phase 10 lifts closures into named functions
 // and emits a funcRef at the call site to bind the env.
-function callSiteHasClosureLiteralArg(module StdModule, caller IrFunction, argIds ValueIdArray) returns bool
+function callSiteHasClosureLiteralArg(module StdModule, defs ValueDefMap, argIds ValueIdArray) returns bool
 	for argId in argIds 'each'
-		if argDefinedAsFuncRef(module, caller: caller, valueId: argId) 'hit'
+		if argDefinedAsFuncRef(module, defs: defs, valueId: argId) 'hit'
 			return true
 		end 'hit'
 	end 'each'
 	return false
 end 'callSiteHasClosureLiteralArg'
 
-// Same scoping rationale as findLoadLayoutDescriptorLabel above: ValueIds
-// are function-local, so the funcRef-producer search must be limited to the
-// caller's own blocks. Without this, an unrelated funcRef anywhere in the
-// module can spuriously trigger the closure-literal budget multiplier.
-function argDefinedAsFuncRef(module StdModule, caller IrFunction, valueId ValueId) returns bool
-	for blockRef in caller.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise continue
-			let isMatch = match op 'shape'
-				arith gives false
-				control gives false
-				call(c) gives matchFuncRef(c, valueId: valueId)
-				memory gives false
-				system gives false
-			end 'shape'
-			if isMatch 'hit'
-				return true
-			end 'hit'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
+// Same scoping rationale as findLoadLayoutDescriptorLabel above: ValueIds are
+// function-local, so the funcRef producer is resolved through the caller's own
+// value→def map. Without this scoping an unrelated funcRef anywhere in the
+// module could spuriously trigger the closure-literal budget multiplier.
+function argDefinedAsFuncRef(module StdModule, defs ValueDefMap, valueId ValueId) returns bool
+	let opIdx = try defs.get(valueId) otherwise return false
+	let op = try module.ops.get(opIdx) otherwise return false
+	return match op 'shape'
+		arith gives false
+		control gives false
+		call(c) gives matchFuncRef(c, valueId: valueId)
+		memory gives false
+		system gives false
+	end 'shape'
 end 'argDefinedAsFuncRef'
 
 function matchFuncRef(op StdCallOp, valueId ValueId) returns bool
@@ -436,39 +448,31 @@ end 'matchFuncRef'
 // All-constant-args heuristic: every arg's defining op in the caller is a
 // `StdArithOp.const`. Empty arg lists return false (no win to be had from a
 // zero-arg call — the body's already free of arg-dependent shape).
-function callSiteAllArgsAreConstants(module StdModule, caller IrFunction, argIds ValueIdArray) returns bool
+function callSiteAllArgsAreConstants(module StdModule, defs ValueDefMap, argIds ValueIdArray) returns bool
 	if argIds.count() == 0 'noArgs'
 		return false
 	end 'noArgs'
 	for argId in argIds 'each'
-		if not argDefinedAsConst(module, caller: caller, valueId: argId) 'miss'
+		if not argDefinedAsConst(module, defs: defs, valueId: argId) 'miss'
 			return false
 		end 'miss'
 	end 'each'
 	return true
 end 'callSiteAllArgsAreConstants'
 
-// Same caller-scoped search as the descriptor / funcRef helpers above —
-// ValueIds are function-local, so a module-wide scan would alias unrelated
-// const producers from other functions onto this caller's argId.
-function argDefinedAsConst(module StdModule, caller IrFunction, valueId ValueId) returns bool
-	for blockRef in caller.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise continue
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise continue
-			let isMatch = match op 'shape'
-				arith(a) gives matchArithConst(a, valueId: valueId)
-				control gives false
-				call gives false
-				memory gives false
-				system gives false
-			end 'shape'
-			if isMatch 'hit'
-				return true
-			end 'hit'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
+// Same caller-scoped resolution as the descriptor / funcRef helpers above —
+// ValueIds are function-local, so the caller's value→def map can never alias an
+// unrelated const producer from another function onto this caller's argId.
+function argDefinedAsConst(module StdModule, defs ValueDefMap, valueId ValueId) returns bool
+	let opIdx = try defs.get(valueId) otherwise return false
+	let op = try module.ops.get(opIdx) otherwise return false
+	return match op 'shape'
+		arith(a) gives matchArithConst(a, valueId: valueId)
+		control gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'shape'
 end 'argDefinedAsConst'
 
 function matchArithConst(op StdArithOp, valueId ValueId) returns bool

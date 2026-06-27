@@ -56,6 +56,11 @@ export type Arm64Backend implements TargetBackend
 	var target as Target
 	var globalData as GlobalDataTable
 	var stdlibFunctions as ObjectFunctionArray
+	// Exact-name → signature map, built once at `create` from the full MIR
+	// function list + stdlib, so per-call signature lookups during lowering are
+	// O(1) instead of a linear scan over every function (the self-host backend
+	// blowup). See `buildCalleeSigMap` / `findCalleeSignature`.
+	var calleeSigMap as CalleeSigMap
 	export var targetModule as TargetModule = TargetModule.create(CpuArch.arm64)
 	// Outgoing-stack-arg budget for the function currently being lowered.
 	// `emitArm64DirectCall` bumps this whenever a call site passes more than 8
@@ -64,7 +69,7 @@ export type Arm64Backend implements TargetBackend
 	var currentOutgoingArgSize as StackSize = 0
 
 	export static function create(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns Self
-		return Self{mirModule: module, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions}
+		return Self{mirModule: module, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions, calleeSigMap: buildCalleeSigMap(module.functions, stdlibFunctions: stdlibFunctions)}
 	end 'create'
 
 	function lowerMirToTarget() returns TargetModule
@@ -877,7 +882,7 @@ export type Arm64Backend implements TargetBackend
 	// and (when captureErrorFlag is set) captures the secondary X1 error-flag
 	// register. Mirrors emitDirectCall on x64.
 	function emitArm64DirectCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock, allFunctions IrFunctionArray)
-		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+		let paramTypes = lookupFuncParamTypes(callee, sigMap: calleeSigMap, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
 		var argIdx = 0
 		var gprIdx = 0
@@ -924,7 +929,7 @@ export type Arm64Backend implements TargetBackend
 
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
 
-		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
+		let calleeReturnType = lookupFuncReturnStdType(callee, sigMap: calleeSigMap, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
 			void then emitArm64VoidResultAliasIfNeeded(resultId, argIds: argIds, dstBlock: dstBlock)
 			value(inner) then emitArm64CallResultCapture(resultId, dstBlock: dstBlock, resultType: inner)

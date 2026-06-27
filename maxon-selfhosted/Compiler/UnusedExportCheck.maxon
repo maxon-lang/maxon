@@ -95,27 +95,28 @@ function isStdlibBootstrapPath(p FilePath) returns bool
 	return p.toString() == "stdlib-bootstrap.maxon"
 end 'isStdlibBootstrapPath'
 
-// True when `p` lives under the stdlib source directory. The stdlib source
-// files are loaded into user projects' parser registries alongside user
-// files, so a non-stdlib pipeline compiling user code still has every
-// stdlib decl visible in `funcVisibilities` / `structTypes` / etc. Without
-// this filter the pass would emit E3092 against every stdlib typealias the
-// user happens not to mention.
-function isStdlibSourcePath(p FilePath) returns bool
-	let stdlibRoot = findStdlibPath()
+// Combined check against a pre-resolved stdlib root: skip stdlib bootstrap
+// symbols AND real stdlib source-file declarations. The stdlib source files are
+// loaded into user projects' parser registries alongside user files, so a
+// non-stdlib pipeline compiling user code still has every stdlib decl visible
+// in `funcVisibilities` / `structTypes` / etc. Without this filter the pass
+// would emit E3092 against every stdlib typealias the user happens not to
+// mention. `stdlibRoot` is passed in (not re-derived) because `findStdlibPath`
+// walks the filesystem on every call; seeding resolves it once.
+function isStdlibDeclUnderRoot(p FilePath, stdlibRoot FilePath) returns bool
+	if isStdlibBootstrapPath(p) 'bootstrap'
+		return true
+	end 'bootstrap'
 	if stdlibRoot.isEmpty() 'noRoot'
 		return false
 	end 'noRoot'
 	return p.isInside(stdlibRoot)
-end 'isStdlibSourcePath'
+end 'isStdlibDeclUnderRoot'
 
-// Combined check: skip stdlib bootstrap symbols AND real stdlib source-file
-// declarations.
+// Convenience wrapper for callers outside the seeding loop (a single check
+// where the per-call `findStdlibPath` walk is not on a hot path).
 module function isStdlibDecl(p FilePath) returns bool
-	if isStdlibBootstrapPath(p) 'bootstrap'
-		return true
-	end 'bootstrap'
-	return isStdlibSourcePath(p)
+	return isStdlibDeclUnderRoot(p, stdlibRoot: findStdlibPath())
 end 'isStdlibDecl'
 
 // Names the compiler synthesizes for itself.
@@ -138,22 +139,24 @@ function isSyntheticName(name String) returns bool
 	return false
 end 'isSyntheticName'
 
-function isEntrypointFunction(project Project, name String) returns bool
-	if name == "main" 'main'
-		return true
-	end 'main'
+typealias EntrypointSet = Set with String
+
+// Build the set of names that must never be flagged as unused exports: `main`,
+// every module-init function, and every liveness root. Built once per pass run
+// so `seedFunctions` can test membership in O(1) instead of re-scanning both
+// `StringArray`s for every function in the project (the former O(functions ×
+// roots) cost).
+function buildEntrypointSet(project Project) returns EntrypointSet
+	var set = EntrypointSet.create()
+	set.insert("main")
 	for init in project.moduleInitFuncs 'eachInit'
-		if init == name 'hit'
-			return true
-		end 'hit'
+		set.insert(init)
 	end 'eachInit'
 	for root in project.livenessRoots 'eachRoot'
-		if root == name 'rootHit'
-			return true
-		end 'rootHit'
+		set.insert(root)
 	end 'eachRoot'
-	return false
-end 'isEntrypointFunction'
+	return set
+end 'buildEntrypointSet'
 
 function splitOnLastDot(qualifiedName String) returns LastDotSplit
 	let bytes = qualifiedName.toByteArray()
@@ -270,17 +273,22 @@ function projectHasStructuralErrors(project Project) returns bool
 end 'projectHasStructuralErrors'
 
 function seedDecls(project Project, scopes UseScopeMap)
-	seedFunctions(project, scopes: scopes)
-	seedStructs(project, scopes: scopes)
-	seedEnums(project, scopes: scopes)
-	seedTypealiases(project, scopes: scopes)
-	seedConstants(project, scopes: scopes)
-	seedVars(project, scopes: scopes)
+	// Resolve the stdlib root once (findStdlibPath walks the filesystem) and
+	// build the entrypoint set once, then thread both through the per-decl
+	// seeding loops so each decl's check is O(1).
+	let stdlibRoot = findStdlibPath()
+	let entrypoints = buildEntrypointSet(project)
+	seedFunctions(project, scopes: scopes, stdlibRoot: stdlibRoot, entrypoints: entrypoints)
+	seedStructs(project, scopes: scopes, stdlibRoot: stdlibRoot)
+	seedEnums(project, scopes: scopes, stdlibRoot: stdlibRoot)
+	seedTypealiases(project, scopes: scopes, stdlibRoot: stdlibRoot)
+	seedConstants(project, scopes: scopes, stdlibRoot: stdlibRoot)
+	seedVars(project, scopes: scopes, stdlibRoot: stdlibRoot)
 end 'seedDecls'
 
-function seedFunctions(project Project, scopes UseScopeMap)
+function seedFunctions(project Project, scopes UseScopeMap, stdlibRoot FilePath, entrypoints EntrypointSet)
 	for (qualifiedName, info) in project.funcVisibilities 'eachFn'
-		if isStdlibDecl(info.sourceFilePath) 'stdlib'
+		if isStdlibDeclUnderRoot(info.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlib'
 			continue
 		end 'stdlib'
 		if info.visibility == Visibility.file 'filePrivate'
@@ -289,7 +297,7 @@ function seedFunctions(project Project, scopes UseScopeMap)
 		if isSyntheticName(qualifiedName) 'synth'
 			continue
 		end 'synth'
-		if isEntrypointFunction(project, name: qualifiedName) 'entry'
+		if entrypoints.contains(qualifiedName) 'entry'
 			continue
 		end 'entry'
 		if isInterfaceMethodImpl(project, qualifiedName: qualifiedName) 'iface'
@@ -326,9 +334,9 @@ function isMethodOnTrackedType(project Project, qualifiedName String) returns bo
 	return isStructOrEnumName(project, name: split.owner)
 end 'isMethodOnTrackedType'
 
-function seedStructs(project Project, scopes UseScopeMap)
+function seedStructs(project Project, scopes UseScopeMap, stdlibRoot FilePath)
 	for (name, st) in project.structTypes 'eachType'
-		if isStdlibDecl(st.sourceFilePath) 'stdlibT'
+		if isStdlibDeclUnderRoot(st.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlibT'
 			continue
 		end 'stdlibT'
 		if st.visibility == Visibility.file 'filePrivateT'
@@ -341,9 +349,9 @@ function seedStructs(project Project, scopes UseScopeMap)
 	end 'eachType'
 end 'seedStructs'
 
-function seedEnums(project Project, scopes UseScopeMap)
+function seedEnums(project Project, scopes UseScopeMap, stdlibRoot FilePath)
 	for (name, et) in project.enumTypes 'eachEnum'
-		if isStdlibDecl(et.sourceFilePath) 'stdlibE'
+		if isStdlibDeclUnderRoot(et.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlibE'
 			continue
 		end 'stdlibE'
 		if et.visibility == Visibility.file 'filePrivateE'
@@ -356,10 +364,10 @@ function seedEnums(project Project, scopes UseScopeMap)
 	end 'eachEnum'
 end 'seedEnums'
 
-function seedTypealiases(project Project, scopes UseScopeMap)
+function seedTypealiases(project Project, scopes UseScopeMap, stdlibRoot FilePath)
 	for (name, entries) in project.typealiasVisibilities 'eachAliasName'
 		for entry in entries 'eachEntry'
-			if isStdlibDecl(entry.sourceFilePath) 'stdlibA'
+			if isStdlibDeclUnderRoot(entry.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlibA'
 				continue
 			end 'stdlibA'
 			if entry.visibility == Visibility.file 'filePrivateA'
@@ -388,9 +396,9 @@ function seedTypealiases(project Project, scopes UseScopeMap)
 	end 'eachAliasName'
 end 'seedTypealiases'
 
-function seedConstants(project Project, scopes UseScopeMap)
+function seedConstants(project Project, scopes UseScopeMap, stdlibRoot FilePath)
 	for (name, entry) in project.topLevelConstants 'eachConst'
-		if isStdlibDecl(entry.sourceFilePath) 'stdlibC'
+		if isStdlibDeclUnderRoot(entry.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlibC'
 			continue
 		end 'stdlibC'
 		if entry.visibility == Visibility.file 'filePrivateC'
@@ -422,9 +430,9 @@ function isEnumCaseConstant(project Project, name String) returns bool
 	return project.enumTypes.contains(split.owner)
 end 'isEnumCaseConstant'
 
-function seedVars(project Project, scopes UseScopeMap)
+function seedVars(project Project, scopes UseScopeMap, stdlibRoot FilePath)
 	for (name, info) in project.topLevelVars 'eachVar'
-		if isStdlibDecl(info.sourceFilePath) 'stdlibV'
+		if isStdlibDeclUnderRoot(info.sourceFilePath, stdlibRoot: stdlibRoot) 'stdlibV'
 			continue
 		end 'stdlibV'
 		if info.visibility == Visibility.file 'filePrivateV'
@@ -468,10 +476,10 @@ end 'recordAllAliasUses'
 
 // Record a use of every typealias / struct / enum named by `t`. Generic
 // instances expand their args recursively.
-function recordTypeUses(project Project, scopes UseScopeMap, t MaxonType, readerFilePath FilePath)
+function recordTypeUses(project Project, scopes UseScopeMap, t MaxonType, readerFilePath FilePath, visited UseVisited)
 	match t 'kind'
-		named(id) then recordNamedTypeUse(project, scopes: scopes, name: project.typeNames.get(id), readerFilePath: readerFilePath)
-		genericInstance(id) then recordGenericInstanceUses(project, scopes: scopes, id: id, readerFilePath: readerFilePath)
+		named(id) then recordNamedTypeUse(project, scopes: scopes, name: project.typeNames.get(id), readerFilePath: readerFilePath, visited: visited)
+		genericInstance(id) then recordGenericInstanceUses(project, scopes: scopes, id: id, readerFilePath: readerFilePath, visited: visited)
 		boolean to character then break 'kind'
 		function to unresolved then break 'kind'
 		typeParameter then break 'kind'
@@ -479,7 +487,17 @@ function recordTypeUses(project Project, scopes UseScopeMap, t MaxonType, reader
 	end 'kind'
 end 'recordTypeUses'
 
-function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, readerFilePath FilePath)
+function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, readerFilePath FilePath, visited UseVisited)
+	let key = visitKeyNamed(name, readerFilePath: readerFilePath)
+	if visited.deepNamed.contains(key) 'alreadyDeep'
+		return
+	end 'alreadyDeep'
+	visited.deepNamed.insert(key)
+	// A deep visit subsumes the shallow one (it records everything
+	// `propagateFieldTypeNamed` would), so a later shallow reference to the same
+	// (type, reader) can be skipped.
+	visited.shallowNamed.insert(key)
+
 	maybeRecord(scopes, key: keyType(name), readerFilePath: readerFilePath)
 	recordAllAliasUses(project, scopes: scopes, name: name, readerFilePath: readerFilePath)
 	// If the name is a typealias whose RHS spelling is a generic-instance
@@ -490,7 +508,7 @@ function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, re
 	// typed `EntryMap` would only record a use of `EntryMap` itself, not
 	// the `Entry` and `String` arguments the alias expands to.
 	if let aliasExpansion = try project.genericTypealiases.get(name) 'haveExpansion'
-		recordTypeUses(project, scopes: scopes, t: aliasExpansion, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: aliasExpansion, readerFilePath: readerFilePath, visited: visited)
 	end 'haveExpansion'
 	// If the named type is a struct or enum, propagate the use through its
 	// field / payload types: reading an `Entry` value cross-file is also a
@@ -500,7 +518,7 @@ function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, re
 	// itself is used everywhere.
 	if let st = try project.structTypes.get(name) 'haveStruct'
 		for field in st.fields 'eachField'
-			propagateFieldTypeUse(project, scopes: scopes, t: field.fieldType, readerFilePath: readerFilePath)
+			propagateFieldTypeUse(project, scopes: scopes, t: field.fieldType, readerFilePath: readerFilePath, visited: visited)
 		end 'eachField'
 	end 'haveStruct'
 	// Enums / unions propagate the same way: matching a `StdOp` value and
@@ -513,10 +531,10 @@ function recordNamedTypeUse(project Project, scopes UseScopeMap, name String, re
 	if let et = try project.enumTypes.get(name) 'haveEnum'
 		for enumCase in et.cases 'eachCase'
 			for payload in enumCase.payloadFields 'eachPayload'
-				propagateFieldTypeUse(project, scopes: scopes, t: payload.fieldType, readerFilePath: readerFilePath)
+				propagateFieldTypeUse(project, scopes: scopes, t: payload.fieldType, readerFilePath: readerFilePath, visited: visited)
 			end 'eachPayload'
 			if not enumCase.backingStructName.isEmpty() 'haveBacking'
-				propagateFieldTypeNamed(project, scopes: scopes, name: enumCase.backingStructName, readerFilePath: readerFilePath)
+				propagateFieldTypeNamed(project, scopes: scopes, name: enumCase.backingStructName, readerFilePath: readerFilePath, visited: visited)
 			end 'haveBacking'
 		end 'eachCase'
 	end 'haveEnum'
@@ -528,10 +546,10 @@ end 'recordNamedTypeUse'
 // field typed `EntryMap` surfaces the `Map`, `String`, and `Entry` it
 // references. Avoids infinite recursion via the `keyType` map being
 // idempotent — a second visit can only widen flags, never loop.
-function propagateFieldTypeUse(project Project, scopes UseScopeMap, t MaxonType, readerFilePath FilePath)
+function propagateFieldTypeUse(project Project, scopes UseScopeMap, t MaxonType, readerFilePath FilePath, visited UseVisited)
 	match t 'kind'
-		named(id) then propagateFieldTypeNamed(project, scopes: scopes, name: project.typeNames.get(id), readerFilePath: readerFilePath)
-		genericInstance(id) then recordGenericInstanceUses(project, scopes: scopes, id: id, readerFilePath: readerFilePath)
+		named(id) then propagateFieldTypeNamed(project, scopes: scopes, name: project.typeNames.get(id), readerFilePath: readerFilePath, visited: visited)
+		genericInstance(id) then recordGenericInstanceUses(project, scopes: scopes, id: id, readerFilePath: readerFilePath, visited: visited)
 		boolean to character then break 'kind'
 		function to unresolved then break 'kind'
 		typeParameter then break 'kind'
@@ -539,33 +557,83 @@ function propagateFieldTypeUse(project Project, scopes UseScopeMap, t MaxonType,
 	end 'kind'
 end 'propagateFieldTypeUse'
 
-function propagateFieldTypeNamed(project Project, scopes UseScopeMap, name String, readerFilePath FilePath)
+function propagateFieldTypeNamed(project Project, scopes UseScopeMap, name String, readerFilePath FilePath, visited UseVisited)
+	let key = visitKeyNamed(name, readerFilePath: readerFilePath)
+	if visited.shallowNamed.contains(key) 'alreadyShallow'
+		return
+	end 'alreadyShallow'
+	visited.shallowNamed.insert(key)
+
 	maybeRecord(scopes, key: keyType(name), readerFilePath: readerFilePath)
 	recordAllAliasUses(project, scopes: scopes, name: name, readerFilePath: readerFilePath)
 	if let aliasExpansion = try project.genericTypealiases.get(name) 'haveExpansion'
-		recordTypeUses(project, scopes: scopes, t: aliasExpansion, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: aliasExpansion, readerFilePath: readerFilePath, visited: visited)
 	end 'haveExpansion'
 end 'propagateFieldTypeNamed'
 
-function recordGenericInstanceUses(project Project, scopes UseScopeMap, id GenericInstanceId, readerFilePath FilePath)
+function recordGenericInstanceUses(project Project, scopes UseScopeMap, id GenericInstanceId, readerFilePath FilePath, visited UseVisited)
+	let key = visitKeyGeneric(id, readerFilePath: readerFilePath)
+	if visited.genericInst.contains(key) 'alreadyGeneric'
+		return
+	end 'alreadyGeneric'
+	visited.genericInst.insert(key)
+
 	let (baseId, args) = project.genericInstances.get(id)
 	let baseName = project.typeNames.get(baseId)
 	if not baseName.isEmpty() 'haveBase'
-		recordNamedTypeUse(project, scopes: scopes, name: baseName, readerFilePath: readerFilePath)
+		recordNamedTypeUse(project, scopes: scopes, name: baseName, readerFilePath: readerFilePath, visited: visited)
 	end 'haveBase'
 	for arg in args 'eachArg'
-		recordTypeUses(project, scopes: scopes, t: arg, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: arg, readerFilePath: readerFilePath, visited: visited)
 	end 'eachArg'
 end 'recordGenericInstanceUses'
 
+typealias VisitKeySet = Set with String
+
+// Memoizes which (type, reader-file) propagations have already run, so a type
+// referenced many times from the same file expands its field/case/alias graph
+// exactly ONCE per reader rather than once per reference. Without this the pass
+// re-walked the full field/case graph of heavily-referenced types (the big IR
+// enums/structs are mentioned thousands of times) on every reference — the
+// pass's dominant cost. The recorded scope flags are a pure function of (decl,
+// reader), so deduping by (type, reader) is exactly output-preserving.
+//
+// `deepNamed` tracks `recordNamedTypeUse` (full depth: type + aliases + struct
+// fields + enum cases); `shallowNamed` tracks `propagateFieldTypeNamed`
+// (one-level: type + aliases only). A deep visit also marks shallow (deep ⊇
+// shallow), so a later shallow reference to the same (type, reader) is correctly
+// skipped; a shallow-first then deep still runs the deep pass (deepNamed not yet
+// set). `genericInst` dedups `recordGenericInstanceUses` by (instance-id,
+// reader).
+type UseVisited
+	export var deepNamed as VisitKeySet
+	export var shallowNamed as VisitKeySet
+	export var genericInst as VisitKeySet
+
+	export static function create() returns UseVisited
+		return Self{deepNamed: VisitKeySet.create(), shallowNamed: VisitKeySet.create(), genericInst: VisitKeySet.create()}
+	end 'create'
+end 'UseVisited'
+
+// Reader path and the type name (an identifier — never contains a newline) are
+// joined by '\n', so the key is unambiguous.
+function visitKeyNamed(name String, readerFilePath FilePath) returns String
+	return "{readerFilePath.toString()}\n{name}"
+end 'visitKeyNamed'
+
+function visitKeyGeneric(id GenericInstanceId, readerFilePath FilePath) returns String
+	return "{readerFilePath.toString()}\n#g{id}"
+end 'visitKeyGeneric'
+
 function recordRefsFromModule(project Project, module MaxonModule, scopes UseScopeMap)
+	var visited = UseVisited.create()
 	for func in module.functions 'eachFunc'
-		recordRefsFromFunc(project, module: module, scopes: scopes, func: func)
+		recordRefsFromFunc(project, module: module, scopes: scopes, func: func, visited: visited)
 	end 'eachFunc'
 	for (_, st) in project.structTypes 'eachStruct'
 		let structReader = st.sourceFilePath
 		for field in st.fields 'eachField'
-			recordTypeUses(project, scopes: scopes, t: field.fieldType, readerFilePath: structReader)
+			recordTypeUses(project, scopes: scopes, t: field.fieldType, readerFilePath: structReader, visited: visited)
 		end 'eachField'
 	end 'eachStruct'
 	// Top-level vars' slot types capture initializer-referenced named
@@ -576,7 +644,7 @@ function recordRefsFromModule(project Project, module MaxonModule, scopes UseSco
 	// folded to a bare literal by `evaluateUnresolvedConstExpr` before any
 	// IR op carries the name.
 	for (_, info) in project.topLevelVars 'eachVar'
-		recordTypeUses(project, scopes: scopes, t: info.slotType, readerFilePath: info.sourceFilePath)
+		recordTypeUses(project, scopes: scopes, t: info.slotType, readerFilePath: info.sourceFilePath, visited: visited)
 	end 'eachVar'
 	for entry in project.crossFileConstReads 'eachConst'
 		maybeRecord(scopes, key: keyConst(entry.constantName), readerFilePath: entry.readerFilePath)
@@ -588,43 +656,43 @@ function recordRefsFromModule(project Project, module MaxonModule, scopes UseSco
 		let split = splitOnLastDot(entry.constantName)
 		if split.dotIndex >= 0 'hasOwner'
 			if isStructOrEnumName(project, name: split.owner) 'isTypeOwned'
-				recordNamedTypeUse(project, scopes: scopes, name: split.owner, readerFilePath: entry.readerFilePath)
+				recordNamedTypeUse(project, scopes: scopes, name: split.owner, readerFilePath: entry.readerFilePath, visited: visited)
 			end 'isTypeOwned'
 		end 'hasOwner'
 	end 'eachConst'
 end 'recordRefsFromModule'
 
-function recordRefsFromFunc(project Project, module MaxonModule, scopes UseScopeMap, func IrFunction)
+function recordRefsFromFunc(project Project, module MaxonModule, scopes UseScopeMap, func IrFunction, visited UseVisited)
 	let readerFilePath = func.sourceFilePath
-	recordReturnTypeUses(project, scopes: scopes, ret: func.maxonReturnType, readerFilePath: readerFilePath)
+	recordReturnTypeUses(project, scopes: scopes, ret: func.maxonReturnType, readerFilePath: readerFilePath, visited: visited)
 	for t in func.maxonParamTypes 'eachParam'
-		recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath, visited: visited)
 	end 'eachParam'
-	recordThrowsUses(project, scopes: scopes, throws: func.throwsTypeName, readerFilePath: readerFilePath)
+	recordThrowsUses(project, scopes: scopes, throws: func.throwsTypeName, readerFilePath: readerFilePath, visited: visited)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("recordRefsFromFunc: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("recordRefsFromFunc: opIdx OOB")
-			recordRefsFromOp(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+			recordRefsFromOp(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath, visited: visited)
 		end 'eachOp'
 	end 'eachBlock'
 end 'recordRefsFromFunc'
 
-function recordReturnTypeUses(project Project, scopes UseScopeMap, ret MaxonReturnType, readerFilePath FilePath)
+function recordReturnTypeUses(project Project, scopes UseScopeMap, ret MaxonReturnType, readerFilePath FilePath, visited UseVisited)
 	match ret 'r'
 		void then break 'r'
-		value(t) then recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath)
+		value(t) then recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath, visited: visited)
 	end 'r'
 end 'recordReturnTypeUses'
 
-function recordThrowsUses(project Project, scopes UseScopeMap, throws ThrowsClause, readerFilePath FilePath)
+function recordThrowsUses(project Project, scopes UseScopeMap, throws ThrowsClause, readerFilePath FilePath, visited UseVisited)
 	match throws 'thr'
 		none then break 'thr'
-		throwing(errName) then recordNamedTypeUse(project, scopes: scopes, name: errName, readerFilePath: readerFilePath)
+		throwing(errName) then recordNamedTypeUse(project, scopes: scopes, name: errName, readerFilePath: readerFilePath, visited: visited)
 	end 'thr'
 end 'recordThrowsUses'
 
-function recordRefsFromOp(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath)
+function recordRefsFromOp(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath, visited UseVisited)
 	// The four resolved-invocation shapes (callFree/callMethod categories) share
 	// one handler; the rest are single-variant. Comparing `op.name` is E3097, so
 	// dispatch via an exhaustive `match` (non-call/global/convert/structAlloc ops
@@ -632,16 +700,16 @@ function recordRefsFromOp(project Project, scopes UseScopeMap, opIdx OpIndex, op
 	// tryCall/tryMethodCall are not contiguous in the union.
 	match op 'dispatch'
 		literal to varStore then noOp()
-		globalLoad then recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
-		globalStore then recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		globalLoad then recordGlobalLoadRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath, visited: visited)
+		globalStore then recordGlobalStoreRef(project, scopes: scopes, op: op, readerFilePath: readerFilePath, visited: visited)
 		binop to unop then noOp()
-		convert then recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath)
+		convert then recordConvertOpRefs(project, scopes: scopes, op: op, readerFilePath: readerFilePath, visited: visited)
 		castCheck to br then noOp()
-		call to methodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		call to methodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath, visited: visited)
 		ret to panicDynamic then noOp()
 		structAlloc then recordStructAllocRef(scopes, op: op, readerFilePath: readerFilePath)
 		fieldLoad to throw then noOp()
-		tryCall to tryMethodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath)
+		tryCall to tryMethodCall then recordCallOpRefs(project, scopes: scopes, opIdx: opIdx, op: op, readerFilePath: readerFilePath, visited: visited)
 		rethrow then noOp()
 		functionRef to sizeofType then noOp()
 	end 'dispatch'
@@ -650,7 +718,7 @@ end 'recordRefsFromOp'
 // Extract a call-shape op's argTypes and resolved callee, and record both.
 // Covers `call`, `methodCall`, `tryCall`, `tryMethodCall` — the four resolved
 // invocation shapes.
-function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath)
+function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op MaxonOp, readerFilePath FilePath, visited UseVisited)
 	if let callee = try project.resolvedCallees.get(opIdx) 'haveCallee'
 		maybeRecord(scopes, key: keyFn(callee), readerFilePath: readerFilePath)
 		// A static-method-style call `Point.create(...)` references the
@@ -661,7 +729,7 @@ function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op
 		// `Type.staticMethod()`.
 		let split = splitOnLastDot(callee)
 		if split.dotIndex >= 0 'hasOwner'
-			recordNamedTypeUse(project, scopes: scopes, name: split.owner, readerFilePath: readerFilePath)
+			recordNamedTypeUse(project, scopes: scopes, name: split.owner, readerFilePath: readerFilePath, visited: visited)
 		end 'hasOwner'
 		// Calling a throwing function references its error type from THIS file:
 		// `try MaxonArgs.parse() otherwise (e)` in another file catches and
@@ -670,7 +738,7 @@ function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op
 		// throws clause lives on the callee's declaration). Without this the
 		// error union is wrongly reported unused/over-exported (E3092).
 		if let throwsClause = try project.funcThrowsTypes.get(callee) 'haveThrows'
-			recordThrowsUses(project, scopes: scopes, throws: throwsClause, readerFilePath: readerFilePath)
+			recordThrowsUses(project, scopes: scopes, throws: throwsClause, readerFilePath: readerFilePath, visited: visited)
 		end 'haveThrows'
 
 		// Calling a function references its RETURN type from THIS file, for the
@@ -681,49 +749,49 @@ function recordCallOpRefs(project Project, scopes UseScopeMap, opIdx OpIndex, op
 		// callee's declaration. Without this an enum/union whose only cross-file
 		// use is as a returned-then-matched value is wrongly reported unused (E3092).
 		if let retType = try project.funcReturnTypes.get(callee) 'haveRet'
-			recordReturnTypeUses(project, scopes: scopes, ret: retType, readerFilePath: readerFilePath)
+			recordReturnTypeUses(project, scopes: scopes, ret: retType, readerFilePath: readerFilePath, visited: visited)
 		end 'haveRet'
 	end 'haveCallee'
 	if let recvType = try project.resolvedReceiverTypes.get(opIdx) 'haveRecv'
-		recordTypeUses(project, scopes: scopes, t: recvType, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: recvType, readerFilePath: readerFilePath, visited: visited)
 	end 'haveRecv'
 	match op 'extract'
-		call(_, _, _, _, _, argTypes, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath)
-		methodCall(_, _, _, _, _, argTypes, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath)
-		tryCall(_, _, _, _, _, argTypes, _, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath)
-		tryMethodCall(_, _, _, _, _, argTypes, _, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath)
+		call(_, _, _, _, _, argTypes, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath, visited: visited)
+		methodCall(_, _, _, _, _, argTypes, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath, visited: visited)
+		tryCall(_, _, _, _, _, argTypes, _, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath, visited: visited)
+		tryMethodCall(_, _, _, _, _, argTypes, _, _, _) then forEachTypeRecord(project, scopes: scopes, argTypes: argTypes, readerFilePath: readerFilePath, visited: visited)
 		default panic("recordCallOpRefs: unexpected op name '{op.name}'")
 	end 'extract'
 end 'recordCallOpRefs'
 
-function forEachTypeRecord(project Project, scopes UseScopeMap, argTypes MaxonTypeArray, readerFilePath FilePath)
+function forEachTypeRecord(project Project, scopes UseScopeMap, argTypes MaxonTypeArray, readerFilePath FilePath, visited UseVisited)
 	for t in argTypes 'eachArg'
-		recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath)
+		recordTypeUses(project, scopes: scopes, t: t, readerFilePath: readerFilePath, visited: visited)
 	end 'eachArg'
 end 'forEachTypeRecord'
 
-function recordGlobalLoadRef(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath)
+function recordGlobalLoadRef(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath, visited UseVisited)
 	match op 'extract'
-		globalLoad(_, name, slotType, _) then recordGlobalRef(project, scopes: scopes, name: name, slotType: slotType, readerFilePath: readerFilePath)
+		globalLoad(_, name, slotType, _) then recordGlobalRef(project, scopes: scopes, name: name, slotType: slotType, readerFilePath: readerFilePath, visited: visited)
 		default panic("recordGlobalLoadRef: unexpected op name '{op.name}'")
 	end 'extract'
 end 'recordGlobalLoadRef'
 
-function recordGlobalStoreRef(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath)
+function recordGlobalStoreRef(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath, visited UseVisited)
 	match op 'extract'
-		globalStore(name, _, slotType, _) then recordGlobalRef(project, scopes: scopes, name: name, slotType: slotType, readerFilePath: readerFilePath)
+		globalStore(name, _, slotType, _) then recordGlobalRef(project, scopes: scopes, name: name, slotType: slotType, readerFilePath: readerFilePath, visited: visited)
 		default panic("recordGlobalStoreRef: unexpected op name '{op.name}'")
 	end 'extract'
 end 'recordGlobalStoreRef'
 
-function recordGlobalRef(project Project, scopes UseScopeMap, name String, slotType MaxonType, readerFilePath FilePath)
+function recordGlobalRef(project Project, scopes UseScopeMap, name String, slotType MaxonType, readerFilePath FilePath, visited UseVisited)
 	maybeRecord(scopes, key: keyVar(name), readerFilePath: readerFilePath)
-	recordTypeUses(project, scopes: scopes, t: slotType, readerFilePath: readerFilePath)
+	recordTypeUses(project, scopes: scopes, t: slotType, readerFilePath: readerFilePath, visited: visited)
 end 'recordGlobalRef'
 
-function recordConvertOpRefs(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath)
+function recordConvertOpRefs(project Project, scopes UseScopeMap, op MaxonOp, readerFilePath FilePath, visited UseVisited)
 	match op 'extract'
-		convert(_, _, fromType, toType, _, _) then recordConvertTypes(project, scopes: scopes, fromType: fromType, toType: toType, readerFilePath: readerFilePath)
+		convert(_, _, fromType, toType, _, _) then recordConvertTypes(project, scopes: scopes, fromType: fromType, toType: toType, readerFilePath: readerFilePath, visited: visited)
 		default panic("recordConvertOpRefs: unexpected op name '{op.name}'")
 	end 'extract'
 end 'recordConvertOpRefs'
@@ -735,9 +803,9 @@ function recordStructAllocRef(scopes UseScopeMap, op MaxonOp, readerFilePath Fil
 	end 'extract'
 end 'recordStructAllocRef'
 
-function recordConvertTypes(project Project, scopes UseScopeMap, fromType MaxonType, toType MaxonType, readerFilePath FilePath)
-	recordTypeUses(project, scopes: scopes, t: fromType, readerFilePath: readerFilePath)
-	recordTypeUses(project, scopes: scopes, t: toType, readerFilePath: readerFilePath)
+function recordConvertTypes(project Project, scopes UseScopeMap, fromType MaxonType, toType MaxonType, readerFilePath FilePath, visited UseVisited)
+	recordTypeUses(project, scopes: scopes, t: fromType, readerFilePath: readerFilePath, visited: visited)
+	recordTypeUses(project, scopes: scopes, t: toType, readerFilePath: readerFilePath, visited: visited)
 end 'recordConvertTypes'
 
 function emitForVisibility(project Project, visibility Visibility, scope UseScope, declFilePath FilePath, line LineNumber, column ColumnNumber, kind String, name String)

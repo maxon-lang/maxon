@@ -1902,6 +1902,30 @@ function collectCalleeName(op MaxonOp, calleesOut FuncNameArray)
 	end 'hasName'
 end 'collectCalleeName'
 
+// Name → first-occurrence index into `module.functions`. Built once per purity
+// pass so callee resolution is O(1) instead of a linear `for func in
+// module.functions` scan. Without it, the fixed-point purity propagation was
+// O(iterations × functions × callees × functions) — at self-host scale (~38k
+// functions) that linear-scan-per-callee was the single dominant compile cost,
+// dwarfing every other pass (the C# bootstrap, which uses a hash lookup, spends
+// ~44ms here). First occurrence wins, matching the prior scan's "first name
+// match" semantics.
+typealias FuncNameIndexMap = Map with (String, ElementCount)
+
+function buildFuncNameIndex(module MaxonModule) returns FuncNameIndexMap
+	var index = FuncNameIndexMap.create()
+	let count = module.functions.count()
+	var i = 0 as ElementCount
+	while i < count 'each'
+		let func = try module.functions.get(i) otherwise panic("buildFuncNameIndex: functions.get OOB at {i}")
+		if not index.contains(func.name) 'firstWins'
+			index.upsert(func.name, value: i)
+		end 'firstWins'
+		i = i + 1
+	end 'each'
+	return index
+end 'buildFuncNameIndex'
+
 function computePurity(project Project, module MaxonModule)
 	let impureCallees = buildImpureCalleeSet()
 
@@ -1950,8 +1974,11 @@ function computePurity(project Project, module MaxonModule)
 
 	// Step 2: transitive propagation. Build callee edges per function, then
 	// walk: any function calling an impure function becomes impure. Iterate
-	// to fixed point.
+	// to fixed point. The name→index map gives O(1) callee-purity lookup
+	// (built after Step 1 since neither step adds/removes/reorders functions —
+	// only flips `isPure`, which is re-read live through the index).
 	let edges = buildCalleeEdges(module)
+	let nameIndex = buildFuncNameIndex(module)
 	var changed = true
 	while changed 'propagate'
 		changed = false
@@ -1975,7 +2002,7 @@ function computePurity(project Project, module MaxonModule)
 				// Resolve the callee name against module functions. The
 				// callee field may be bare or qualified — try direct match
 				// first, then qualified-with-caller-namespace.
-				let calleePure = lookupCalleePurity(module, calleeName: callee, callerNamespace: caller.namespace, impureCallees: impureCallees)
+				let calleePure = lookupCalleePurity(module, calleeName: callee, callerNamespace: caller.namespace, impureCallees: impureCallees, nameIndex: nameIndex)
 				if not calleePure 'isImpure'
 					becameImpure = true
 					break
@@ -2001,11 +2028,11 @@ end 'computePurity'
 // pass (`checkDiscardedResults`) defaults to `false` so unresolved callees
 // don't fire false-positive E3064s and instead route to the E3065 path
 // when bare-discarded.
-function lookupCalleePurity(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet) returns bool
-	return lookupCalleePurityImpl(module, calleeName: calleeName, callerNamespace: callerNamespace, impureCallees: impureCallees, unresolvedDefault: true)
+function lookupCalleePurity(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap) returns bool
+	return lookupCalleePurityImpl(module, calleeName: calleeName, callerNamespace: callerNamespace, impureCallees: impureCallees, nameIndex: nameIndex, unresolvedDefault: true)
 end 'lookupCalleePurity'
 
-function lookupCalleePurityImpl(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet, unresolvedDefault bool) returns bool
+function lookupCalleePurityImpl(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap, unresolvedDefault bool) returns bool
 	// Stdlib I/O entrypoint or runtime helper — always impure even when
 	// the body isn't in this MaxonModule.
 	if calleeIsImpure(calleeName, impureCallees: impureCallees) 'isStdlibImpure'
@@ -2014,19 +2041,21 @@ function lookupCalleePurityImpl(module MaxonModule, calleeName String, callerNam
 	if calleeName == "print" or calleeName == "printError" or calleeName == "readLine" 'isPrintFamily'
 		return false
 	end 'isPrintFamily'
-	for func in module.functions 'each'
-		if func.name == calleeName 'directHit'
+	// O(1) resolution via the prebuilt name→index map (was a linear
+	// `for func in module.functions` scan — the self-host purity blowup).
+	if let idx = try nameIndex.get(calleeName) 'directHit'
+		let func = try module.functions.get(idx) otherwise panic("lookupCalleePurityImpl: functions.get OOB at {idx}")
+		return func.isPure
+	end 'directHit'
+	// Namespace-qualified: `{namespace}.{bare}` for free functions in the
+	// same module.
+	if callerNamespace != "" 'hasNs'
+		let qualified = "{callerNamespace}.{calleeName}"
+		if let idx = try nameIndex.get(qualified) 'qualifiedHit'
+			let func = try module.functions.get(idx) otherwise panic("lookupCalleePurityImpl: functions.get OOB at {idx}")
 			return func.isPure
-		end 'directHit'
-		// Namespace-qualified: `{namespace}.{bare}` for free functions in
-		// the same module.
-		if callerNamespace != "" 'hasNs'
-			let qualified = "{callerNamespace}.{calleeName}"
-			if func.name == qualified 'qualifiedHit'
-				return func.isPure
-			end 'qualifiedHit'
-		end 'hasNs'
-	end 'each'
+		end 'qualifiedHit'
+	end 'hasNs'
 	return unresolvedDefault
 end 'lookupCalleePurityImpl'
 
@@ -2630,6 +2659,90 @@ function aliasNameForGenericType(project Project, t MaxonType) returns String
 	return ""
 end 'aliasNameForGenericType'
 
+typealias MethodVoidMap = Map with (String, bool)
+
+// Precomputed lookups for the discarded-result check, built ONCE per pass so
+// each discarded call site is tested in O(1). The former per-call helpers
+// (`calleeIsVoid`'s scan of every `project.funcReturnTypes` entry, and
+// `isChainableCallee`/`isChainableQualified`'s scans of every module function)
+// were the self-host O(discarded-calls × functions) blowup in this pass.
+type DiscardLookups
+	// Bare method name → true iff ANY registered overload `*.{method}`
+	// (mangled or not) returns void.
+	export var methodVoid as MethodVoidMap
+	// Qualified `T.method` names whose return type name equals their receiver
+	// type name T (the builder-pattern chainable carve-out)…
+	export var chainableQualified as StringSet
+	// …and the bare method-suffix (after the first '.') of each such name, for
+	// the bare-method-name call shape.
+	export var chainableBare as StringSet
+
+	export static function build(project Project, module MaxonModule) returns DiscardLookups
+		var methodVoid = MethodVoidMap.create()
+		for (key, rt) in project.funcReturnTypes 'eachRt'
+			if let method = try methodKeyForVoidIndex(key) 'haveMethod'
+				let isVoid = match rt 'rtkind'
+					void gives true
+					value gives false
+				end 'rtkind'
+				let prev = try methodVoid.get(method) otherwise false
+				methodVoid.upsert(method, value: prev or isVoid)
+			end 'haveMethod'
+		end 'eachRt'
+
+		var chainableQualified = StringSet.create()
+		var chainableBare = StringSet.create()
+		for func in module.functions 'eachFunc'
+			if let suffix = try chainableBareSuffixIfChainable(project, func: func) 'isChainable'
+				chainableQualified.insert(func.name)
+				chainableBare.insert(suffix)
+			end 'isChainable'
+		end 'eachFunc'
+
+		return Self{methodVoid: methodVoid, chainableQualified: chainableQualified, chainableBare: chainableBare}
+	end 'build'
+end 'DiscardLookups'
+
+enum DiscardKeyError implements Error
+	notAMethod
+end 'DiscardKeyError'
+
+// The bare method token `calleeIsVoid`'s former scan matched a key on: the
+// segment after the LAST '.', truncated at the first '$' (overload mangling).
+// Throws for a dot-free key (a free function — covered by `calleeIsVoid`'s
+// direct probes, never by the method scan).
+function methodKeyForVoidIndex(key String) returns String throws DiscardKeyError
+	let lastDot = try key.findLast(".") otherwise throw DiscardKeyError.notAMethod
+	let tailStart = try key.indexAfter(lastDot) otherwise throw DiscardKeyError.notAMethod
+	let tail = key.slice(tailStart, endIndex: key.endIndex())
+	if let dollar = try tail.findFirst("$") 'mangled'
+		return tail.slice(tail.startIndex(), endIndex: dollar)
+	end 'mangled'
+	return tail
+end 'methodKeyForVoidIndex'
+
+// If `func` is chainable — dotted name, at least one param, and return-type
+// name equal to the receiver-type name (the segment before the first '.') —
+// returns its bare method suffix (the segment after the first '.'), matching
+// the former `isChainableCallee` scan exactly. Throws otherwise.
+function chainableBareSuffixIfChainable(project Project, func IrFunction) returns String throws DiscardKeyError
+	let name = func.name
+	let dotIdx = try name.findFirst(".") otherwise throw DiscardKeyError.notAMethod
+	let receiverType = name.slice(name.startIndex(), endIndex: dotIdx)
+	if receiverType == "" 'noReceiver'
+		throw DiscardKeyError.notAMethod
+	end 'noReceiver'
+	if func.paramCount < 1 'noParams'
+		throw DiscardKeyError.notAMethod
+	end 'noParams'
+	let returnTypeName = maxonReturnTypeName(project, rt: func.maxonReturnType)
+	if returnTypeName != receiverType 'notChainable'
+		throw DiscardKeyError.notAMethod
+	end 'notChainable'
+	let methodStart = try name.indexAfter(dotIdx) otherwise throw DiscardKeyError.notAMethod
+	return name.slice(methodStart, endIndex: name.endIndex())
+end 'chainableBareSuffixIfChainable'
+
 function checkDiscardedResults(project Project, module MaxonModule)
 	// Short-circuit if the parser never tagged any discards. Avoids the
 	// per-function walk on the common all-results-used case.
@@ -2637,6 +2750,8 @@ function checkDiscardedResults(project Project, module MaxonModule)
 		return
 	end 'noTags'
 	let impureCallees = buildImpureCalleeSet()
+	let nameIndex = buildFuncNameIndex(module)
+	let lookups = DiscardLookups.build(project, module: module)
 	for func in module.functions 'eachFunc'
 		// Skip stdlib functions: the discarded-results lint is for user code
 		// only. Stdlib internals reuse `_ =` patterns and bare statement-
@@ -2652,7 +2767,7 @@ function checkDiscardedResults(project Project, module MaxonModule)
 			let block = try module.blocks.get(blockRef) otherwise panic("checkDiscardedResults: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkDiscardedResults: opIdx OOB")
-				checkOneCallForDiscard(project, module: module, opIdx: opIdx, op: op, callerName: func.name, callerNamespace: func.namespace, readerFilePath: readerFilePath, impureCallees: impureCallees)
+				checkOneCallForDiscard(project, module: module, opIdx: opIdx, op: op, callerName: func.name, callerNamespace: func.namespace, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -2735,12 +2850,12 @@ module function isStdlibFunctionPath(path FilePath) returns bool
 	return s.contains("stdlib/") or s.contains("stdlib\\")
 end 'isStdlibFunctionPath'
 
-function checkOneCallForDiscard(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+function checkOneCallForDiscard(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap, lookups DiscardLookups)
 	match op 'discardCheck'
-		call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-		tryCall(result, callee, _, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-		methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
-		tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+		call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
+		tryCall(result, callee, _, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
+		methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
+		tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscardedMethodCall(project, module: module, opIdx: opIdx, result: result, methodName: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
 		literal to br then noOp()
 		ret to throw then noOp()
 		rethrow to sizeofType then noOp()
@@ -2757,13 +2872,13 @@ end 'checkOneCallForDiscard'
 // `resolvedReceiverTypes` (keyed by the call's opIdx, populated by
 // `resolveMethodCallSite`), which covers every receiver shape — not just direct
 // var/global loads.
-function maybeReportDiscardedMethodCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, methodName ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+function maybeReportDiscardedMethodCall(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, methodName ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap, lookups DiscardLookups)
 	if let receiverType = try project.resolvedReceiverTypes.get(opIdx) 'haveReceiver'
 		if maxonTypeIsBuiltinManagedBase(project, t: receiverType) 'builtinReceiver'
 			return
 		end 'builtinReceiver'
 	end 'haveReceiver'
-	maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+	maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees, nameIndex: nameIndex, lookups: lookups)
 end 'maybeReportDiscardedMethodCall'
 
 // True when `t` (after chasing typealiases) is one of the builtin managed base
@@ -2789,7 +2904,7 @@ function maxonTypeIsBuiltinManagedBase(project Project, t MaxonType) returns boo
 	return false
 end 'maxonTypeIsBuiltinManagedBase'
 
-function maybeReportDiscarded(project Project, module MaxonModule, result ByteArray, callee ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+function maybeReportDiscarded(project Project, module MaxonModule, result ByteArray, callee ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap, lookups DiscardLookups)
 	if result.count() == 0 'noResult'
 		return
 	end 'noResult'
@@ -2809,14 +2924,14 @@ function maybeReportDiscarded(project Project, module MaxonModule, result ByteAr
 	// Void-returning callees have no result to "discard" — skip silently.
 	// `doNothing()` as a bare statement is the canonical example: the
 	// function exists for its side effects, the discard is implicit.
-	if calleeIsVoid(project, bareCallee: bareCallee, callerNamespace: callerNamespace) 'voidCallee'
+	if calleeIsVoid(project, bareCallee: bareCallee, callerNamespace: callerNamespace, lookups: lookups) 'voidCallee'
 		return
 	end 'voidCallee'
 	// Chainable carve-out: methods returning their own receiver type can be
 	// freely discarded (builder pattern). The check is conservative — if
 	// the callee can't be resolved, we don't fire either diagnostic to
 	// avoid noisy false-positives on unresolved-call paths.
-	if isChainableCallee(project, module: module, calleeName: bareCallee) 'chainable'
+	if isChainableCallee(lookups, calleeName: bareCallee) 'chainable'
 		return
 	end 'chainable'
 	// A callee that doesn't resolve to a user function in this module is a
@@ -2826,11 +2941,11 @@ function maybeReportDiscarded(project Project, module MaxonModule, result ByteAr
 	// bare statement-position intrinsic call (whose int result is routinely
 	// ignored) doesn't fire a spurious E3065. The genuinely-undefined-user-call
 	// case is reported as E2004 elsewhere, not here.
-	if not calleeResolvesToModuleFunction(module, calleeName: bareCallee, callerNamespace: callerNamespace) 'unresolvedCallee'
+	if not calleeResolvesToModuleFunction(bareCallee, callerNamespace: callerNamespace, nameIndex: nameIndex) 'unresolvedCallee'
 		return
 	end 'unresolvedCallee'
 	// Look up callee purity. Same lookup strategy as the transitive pass.
-	let calleePure = lookupCalleePurityForReport(module, bareCallee: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees)
+	let calleePure = lookupCalleePurityForReport(module, bareCallee: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees, nameIndex: nameIndex)
 	let displayName = formatCalleeNameForDiscard(bareCallee)
 	if calleePure 'pure'
 		// E3064 fires for both bare and let-discards — pure results MUST be used.
@@ -2853,7 +2968,7 @@ end 'maybeReportDiscarded'
 // name on the op, the qualified key has to be probed across every
 // `*.{methodName}` entry. This is O(N) per check; for the typical project
 // (a few thousand functions) it stays fast enough.
-function calleeIsVoid(project Project, bareCallee String, callerNamespace String) returns bool
+function calleeIsVoid(project Project, bareCallee String, callerNamespace String, lookups DiscardLookups) returns bool
 	// Direct probe by bare name (works for `foo()` calls on free functions).
 	if returnTypeIsVoid(project, qualifiedName: bareCallee) 'bareHit'
 		return true
@@ -2864,34 +2979,16 @@ function calleeIsVoid(project Project, bareCallee String, callerNamespace String
 			return true
 		end 'nsHit'
 	end 'hasNs'
-	// Method-call shape: the callee is just the method name; scan every
-	// registered function whose name ends in `.{bareCallee}` and report
-	// void if any matches. Multiple matches are uncommon (each receiver
-	// type defines at most one method by the same name), but if they
-	// disagree on return type the conservative answer is "void" — falsely
-	// suppressing a diagnostic is better than firing one spuriously on
-	// idiomatic mutator calls like `arr.push("x")`.
-	//
-	// Overload-mangled keys: when two same-named methods coexist the parser
-	// re-keys both under their mangled forms (`Array.sort$`,
-	// `Array.sort$SortComparator`). The original `.sort` suffix no longer
-	// ends the key, so the bare endsWith match misses both. Accept either
-	// `.{bareCallee}` (unmangled) or `.{bareCallee}$...` (mangled) so the
-	// scan finds every overload.
-	let methodSuffix = ".{bareCallee}"
-	let mangledPrefix = "{methodSuffix}$"
-	for (key, rt) in project.funcReturnTypes 'each'
-		if not (key.endsWith(methodSuffix) or key.contains(mangledPrefix)) 'notMethod'
-			continue
-		end 'notMethod'
-		let isVoid = match rt 'rtkind'
-			void gives true
-			value gives false
-		end 'rtkind'
-		if isVoid 'foundVoid'
-			return true
-		end 'foundVoid'
-	end 'each'
+	// Method-call shape: the callee is just the method name. `lookups.methodVoid`
+	// records, per bare method name, whether ANY registered overload
+	// `*.{bareCallee}` (unmangled `.sort` or mangled `.sort$...`) returns void —
+	// precomputed once, replacing the former O(project-functions) scan per
+	// discarded call. When overloads disagree the index stores "any void", the
+	// same conservative answer the scan gave (falsely suppressing a diagnostic
+	// beats firing one spuriously on idiomatic mutators like `arr.push("x")`).
+	if let anyVoid = try lookups.methodVoid.get(bareCallee) 'methodHit'
+		return anyVoid
+	end 'methodHit'
 	return false
 end 'calleeIsVoid'
 
@@ -2918,59 +3015,20 @@ end 'formatCalleeNameForDiscard'
 // the callee and the matching IrFunction's return type, we can apply the
 // carve-out. When the callee isn't matched (free function, stdlib helper),
 // returns false so the discard check still fires.
-function isChainableCallee(project Project, module MaxonModule, calleeName String) returns bool
-	// Two shapes the parser passes through:
-	//   - Qualified `"Counter.increment"` (from call ops on a static method).
-	//   - Bare method name `"increment"` (from methodCall ops — the receiver
-	//     isn't part of the callee bytes; type resolution stores the
-	//     receiver elsewhere). We probe both.
+// Chainable carve-out test against the precomputed sets. Two callee shapes:
+//   - Qualified `"Counter.increment"` (call ops on a static method) → look it
+//     up directly in `chainableQualified`.
+//   - Bare method name `"increment"` (methodCall ops — the receiver isn't in
+//     the callee bytes) → look it up in `chainableBare`, which holds the bare
+//     method suffix of every chainable qualified name.
+// Both are O(1); the former O(module-functions) scans per discarded call are
+// hoisted into `DiscardLookups.build`.
+function isChainableCallee(lookups DiscardLookups, calleeName String) returns bool
 	if calleeName.contains(".") 'qualified'
-		return isChainableQualified(project, module: module, qualified: calleeName)
+		return lookups.chainableQualified.contains(calleeName)
 	end 'qualified'
-	// Bare method name: walk the module for any function `"T.calleeName"`
-	// whose return type equals T. If multiple candidates match, the discard
-	// site is chainable as long as one does — the user's source-level
-	// method-resolution can only have picked one, so we err on the
-	// permissive side (false positive on the carve-out is preferred to a
-	// noisy E3064 false-positive).
-	for func in module.functions 'each'
-		let dotIdx = try func.name.findFirst(".") otherwise continue
-		let methodPart = try func.name.indexAfter(dotIdx) otherwise continue
-		let methodSuffix = func.name.slice(methodPart, endIndex: func.name.endIndex())
-		if methodSuffix != calleeName 'notThisMethod'
-			continue
-		end 'notThisMethod'
-		if isChainableQualified(project, module: module, qualified: func.name) 'yes'
-			return true
-		end 'yes'
-	end 'each'
-	return false
+	return lookups.chainableBare.contains(calleeName)
 end 'isChainableCallee'
-
-function isChainableQualified(project Project, module MaxonModule, qualified String) returns bool
-	for func in module.functions 'each'
-		if func.name != qualified 'noMatch'
-			continue
-		end 'noMatch'
-		if func.paramCount < 1 'noParams'
-			return false
-		end 'noParams'
-		let receiverType = receiverTypeNameFromCallee(qualified)
-		if receiverType == "" 'noReceiver'
-			return false
-		end 'noReceiver'
-		let returnTypeName = maxonReturnTypeName(project, rt: func.maxonReturnType)
-		return returnTypeName == receiverType
-	end 'each'
-	return false
-end 'isChainableQualified'
-
-// Receiver type name from a qualified callee name like `"Counter.increment"`
-// → `"Counter"`. Returns "" if no dot exists.
-function receiverTypeNameFromCallee(callee String) returns String
-	let dotIdx = try callee.findFirst(".") otherwise return ""
-	return callee.slice(callee.startIndex(), endIndex: dotIdx)
-end 'receiverTypeNameFromCallee'
 
 // Stringify a MaxonReturnType for the chainable check. `void` returns ""
 // so the equality with a receiver type can never succeed. `value(t)`
@@ -2998,8 +3056,8 @@ end 'maxonTypeBareName'
 // them would be a false positive. Defaulting to impure routes bare
 // discards through the documented E3065 "use `_ =` to discard" path
 // and silences `_=` discards on the same callees.
-function lookupCalleePurityForReport(module MaxonModule, bareCallee String, callerNamespace String, impureCallees ImpureCalleeSet) returns bool
-	return lookupCalleePurityImpl(module, calleeName: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees, unresolvedDefault: false)
+function lookupCalleePurityForReport(module MaxonModule, bareCallee String, callerNamespace String, impureCallees ImpureCalleeSet, nameIndex FuncNameIndexMap) returns bool
+	return lookupCalleePurityImpl(module, calleeName: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees, nameIndex: nameIndex, unresolvedDefault: false)
 end 'lookupCalleePurityForReport'
 
 // True iff `calleeName` resolves to a user function in this module (bare or
@@ -3009,17 +3067,17 @@ end 'lookupCalleePurityForReport'
 // The print-family / impure-builtin I/O entrypoints are likewise not module
 // functions; their results are void or routinely-ignored, so skipping them here
 // matches C# (they were never discard-lint targets).
-function calleeResolvesToModuleFunction(module MaxonModule, calleeName String, callerNamespace String) returns bool
-	for func in module.functions 'each'
-		if func.name == calleeName 'directHit'
+function calleeResolvesToModuleFunction(calleeName String, callerNamespace String, nameIndex FuncNameIndexMap) returns bool
+	// O(1) via the prebuilt name→index map (was a linear scan over
+	// `module.functions`, hence `module` is no longer needed).
+	if nameIndex.contains(calleeName) 'directHit'
+		return true
+	end 'directHit'
+	if callerNamespace != "" 'hasNs'
+		let qualified = "{callerNamespace}.{calleeName}"
+		if nameIndex.contains(qualified) 'qualifiedHit'
 			return true
-		end 'directHit'
-		if callerNamespace != "" 'hasNs'
-			let qualified = "{callerNamespace}.{calleeName}"
-			if func.name == qualified 'qualifiedHit'
-				return true
-			end 'qualifiedHit'
-		end 'hasNs'
-	end 'each'
+		end 'qualifiedHit'
+	end 'hasNs'
 	return false
 end 'calleeResolvesToModuleFunction'

@@ -581,6 +581,44 @@ export type Project
 	// way they would once the union resolves: heap-boxed unions box + construct,
 	// scalar unions use the ordinal ABI.
 	export var prescannedUnionPayload as PrescannedUnionPayloadMap
+	// Pre-parse scan output: every top-level `enum <Name>` declaration across ALL
+	// files, mapped to its fully-extracted `UnresolvedEnumType` (declaration-
+	// ordered cases + backing-kind flags). The `.allCases` / `.allCaseNames`
+	// synthesis runs at PARSE time and needs the receiver enum's cases right then;
+	// the `prefixIsEnum` gate likewise decides at parse time whether `Name.member`
+	// is an enum static access. Both consult this map so a forward / cross-file
+	// enum reference (an `enum` declared in a file the parse loop reaches AFTER the
+	// using file) resolves the same way it would in declaration order — the enum
+	// analogue of `prescannedUnionPayload`. Without it, `CpuArch.allCases` whose
+	// `enum CpuArch` lived in a later-enumerated file silently failed with E3034
+	// "unknown enum case: 'allCases'", which is why the self-hosted compiler could
+	// compile itself under Windows directory ordering but not macOS's.
+	export var prescannedEnumCases as PrescannedEnumMap
+	// Pre-parse scan output: the name of every top-level `type <Name>`
+	// declaration across ALL files. `maxonTypeStructName` consults it so a
+	// parse-time method-call qualifier (`recv.method() otherwise (e)`) can
+	// recover a cross-file struct-typed receiver's type name — and therefore the
+	// `TypeName.method` key that `funcThrowsTypes` uses — even when the type is
+	// declared in a file the parse loop reaches LATER. Without it, a `(e)`
+	// binding on a cross-file-typed receiver fell back to `integer` and the
+	// downstream `match e` / typed-error argument tripped E3005, which is why
+	// `scope.declare(...) otherwise (e)` self-compiled under Windows directory
+	// ordering (Scope's file parsed first) but not macOS's.
+	export var prescannedTypeNames as PrescannedTypeNameSet
+	// Pre-parse scan output: every UNAMBIGUOUS free (non-method) throwing
+	// function, mapped from its bare name to its declared error-type name. The
+	// `(e)` binding for a `try freeFn() otherwise (e)` needs the callee's error
+	// type at parse time, but a cross-NAMESPACE free callee can't be resolved to
+	// its qualified `funcThrowsTypes` key until its defining file is parsed
+	// (`qualifyCalleeForContext` probes `funcReturnTypes` / `methodNameIndex`,
+	// both populated only by the real parse). This bare-name index closes that
+	// gap regardless of file order. A bare name shared by two free functions
+	// with DIFFERENT error types is ambiguous (recorded in
+	// `ambiguousFreeThrowsBare` and dropped here) so the fallback never guesses.
+	export var prescannedFreeThrowsByBare as PrescannedFreeThrowsMap
+	// Bare names disqualified from `prescannedFreeThrowsByBare` because two free
+	// functions share the name but throw different error types.
+	export var ambiguousFreeThrowsBare as PrescannedTypeNameSet
 	// Pre-parse scan output: the qualified name of every function whose header
 	// declares `returns bool`, across all files. Lets the parser pin a
 	// bool-returning call's result type at the `and`/`or` short-circuit gate
@@ -1021,6 +1059,10 @@ export type Project
 			interfaces: IrInterfaceMap.create(),
 			prescannedInterfaceNames: PrescannedInterfaceNameSet.create(),
 			prescannedUnionPayload: PrescannedUnionPayloadMap.create(),
+			prescannedEnumCases: PrescannedEnumMap.create(),
+			prescannedTypeNames: PrescannedTypeNameSet.create(),
+			prescannedFreeThrowsByBare: PrescannedFreeThrowsMap.create(),
+			ambiguousFreeThrowsBare: PrescannedTypeNameSet.create(),
 			prescannedReturnBoolNames: PrescannedReturnBoolNameSet.create(),
 			functionTypes: FunctionTypeRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
@@ -3796,6 +3838,27 @@ export typealias PrescannedInterfaceNameSet = Set with String
 // thrown scalar union's case through a `__construct_*` that was never
 // synthesized.
 export typealias PrescannedUnionPayloadMap = Map with (String, bool)
+
+// Enum map for `Project.prescannedEnumCases` — every top-level `enum <Name>`
+// across all files, mapped to its pre-extracted `UnresolvedEnumType`. The
+// pre-parse scan walks each enum body at the token level (no IR emission, no
+// diagnostics — those stay with the real parse) and records the declaration-
+// ordered cases with their raw values, mirroring `parseCaseBacking`'s rules:
+// the raw value is the running ordinal for every backing EXCEPT int-backed
+// (explicit value, with C-style auto-increment) and float-backed (the IEEE-754
+// bit pattern). `enumCasesOrEmpty` / `enumIsFloatBacked` / the `prefixIsEnum`
+// gate consult this as the cross-file / forward-reference fallback, after the
+// resolved (`enumTypes`) and same-file pre-registered (`unresolvedEnums`) maps,
+// so `.allCases` / `.allCaseNames` expand correctly regardless of file order.
+export typealias PrescannedEnumMap = Map with (String, UnresolvedEnumType)
+
+// Name set for `Project.prescannedTypeNames` (every top-level `type <Name>`)
+// and for `Project.ambiguousFreeThrowsBare`. See those field comments.
+export typealias PrescannedTypeNameSet = Set with String
+
+// Bare-name → error-type-name index for `Project.prescannedFreeThrowsByBare`.
+// See that field comment.
+export typealias PrescannedFreeThrowsMap = Map with (String, String)
 
 // Qualified names of functions declaring `returns bool`, recorded by the
 // pre-parse header scan so a forward / cross-file bool-returning callee can be

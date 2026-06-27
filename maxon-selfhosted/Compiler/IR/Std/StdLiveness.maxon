@@ -95,6 +95,12 @@ export typealias StdLiveSetArray = Array with StdLiveSet
 // there is no remove. Mirrors `LiveSet` in the target liveness pass, renamed
 // to avoid a flat-namespace collision and re-typed for ValueId (which is
 // always >= 0, unlike the target's RegInt vregs).
+//
+// The membership oracle is a dense `BoolArray` (not a hash set): a hash set
+// allocates less up front, but the per-op `contains`/`add` hashing cost across
+// the liveness fixpoint and the per-op-position live sets MORE than doubled the
+// refcount pass in practice (measured), so the dense BoolArray's near-free O(1)
+// indexing wins despite the maxValueId-sized allocation.
 export type StdLiveSet
 	export var bits as BoolArray
 	export var members as ValueIdArray

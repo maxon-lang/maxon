@@ -36,6 +36,12 @@ typealias SchedIntArrayArray = Array with SchedIntArray
 type ScheduleState
 	export var module as MirModule
 	export var opRefs as OpIndexList
+	// Random-access snapshot of `opRefs`. The scheduler indexes the block's op
+	// list by position (`opRefs.get(idx)`) in tight loops; on the linked-list
+	// `OpIndexList` each such get is an O(idx) `walkTo` from the head, making
+	// scheduling O(ops²) per block — a dominant backend cost at self-host scale.
+	// The array gives O(1) indexed access. Built once in `create`.
+	export var opRefsArray as OpIndexArray
 	export var scheduled as BoolArray
 	export var successorCount as SchedIntArray
 	export var criticalPathLen as SchedIntArray
@@ -68,8 +74,10 @@ type ScheduleState
 		let liveVregs = SchedIntArray.create()
 		var predecessorsOf = SchedIntArrayArray.create()
 		var successorsOf = SchedIntArrayArray.create()
+		var opRefsArray = OpIndexArray.create()
 
 		for packed in opRefs 'init'
+			opRefsArray.push(packed)
 			scheduled.push(false)
 			successorCount.push(0)
 			let lat = getMirLatencyPacked(module, packed: packed, table: table)
@@ -91,6 +99,7 @@ type ScheduleState
 		return Self{
 			module: module,
 			opRefs: opRefs,
+			opRefsArray: opRefsArray,
 			scheduled: scheduled,
 			successorCount: successorCount,
 			criticalPathLen: criticalPathLen,
@@ -168,7 +177,7 @@ type ScheduleState
 			scheduledCount = scheduledCount + 1
 
 			// Decrement use counts for values used by this op.
-			let bestPacked = try opRefs.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but opRefs.get failed")
+			let bestPacked = try opRefsArray.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but opRefs.get failed")
 			let bestUseIds = extractUseValueIdsPacked(module, packed: bestPacked)
 			for uid in bestUseIds 'decUse'
 				let oldUC = schedLookupZero(useCount, index: uid)
@@ -199,7 +208,7 @@ type ScheduleState
 		for i in 0 upto scheduleOrder.count() 'buildResult'
 			let revIdx = scheduleOrder.count() - 1 - i
 			let opIdx = try scheduleOrder.get(revIdx) otherwise panic("invariant: revIdx < scheduleOrder.count() but get failed")
-			let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx from scheduleOrder is a valid op index but opRefs.get failed")
+			let packed = try opRefsArray.get(opIdx) otherwise panic("invariant: opIdx from scheduleOrder is a valid op index but opRefs.get failed")
 			result.append(packed)
 		end 'buildResult'
 		return result
@@ -356,7 +365,7 @@ type ScheduleState
 		if condId != SCHED_NONE 'hasCondBr'
 			let cmpIdx = schedLookup(defMap, index: condId as ValueId)
 			if cmpIdx != SCHED_NONE 'maybeCmp'
-				let cmpPacked = try opRefs.get(cmpIdx) otherwise panic("flag barrier: cmpIdx from defMap is a valid op index but opRefs.get failed")
+				let cmpPacked = try opRefsArray.get(cmpIdx) otherwise panic("flag barrier: cmpIdx from defMap is a valid op index but opRefs.get failed")
 				let cmpOp = try module.ops.get(cmpPacked) otherwise panic("flag barrier: cmpPacked is a valid op index but module.ops.get failed")
 				if cmpOp.rawValue.isCmp 'foundCmp'
 					var k = 0
@@ -478,7 +487,7 @@ type ScheduleState
 	//   - -criticalPathLen * 1000  — secondary: keep long chains moving
 	//   - -latency                 — tertiary: prefer expensive ops
 	function scoreHighPressure(opIdx SchedInt) returns SchedInt
-		let packed = try opRefs.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but opRefs.get failed")
+		let packed = try opRefsArray.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but opRefs.get failed")
 		let pressureDelta = self.estimatePressureDelta(packed)
 		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
 		let latency = try latencies.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
@@ -570,7 +579,7 @@ type ScheduleState
 
 	// Update the pressure model after scheduling an op (bottom-up).
 	function updatePressureForScheduledOp(opIdx SchedInt)
-		let packed = try opRefs.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
+		let packed = try opRefsArray.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
 
 		// In bottom-up order: scheduling an op means we're moving backward in time.
 		// A definition means the value is born — pressure goes up.

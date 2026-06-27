@@ -6213,12 +6213,30 @@ end 'maybePatchFnRegistryForOp'
 // resolved slot/producer types. Re-runs `recordFuncOpResults` on each
 // affected lifted body so downstream consumers (fieldLoad, methodCall)
 // see the fixed receiver type in the producer map.
+// Name → index over `module.functions`, built once so closure-lifted-function
+// lookups are O(1) instead of a linear scan of all functions per closure op
+// (the self-host closure-patch O(n²)). Function names in a resolved module are
+// unique, so last-write-wins `upsert` matches the former first-match scan.
+typealias FuncIdxByName = Map with (String, ElementCount)
+
+function buildFuncIdxByName(module MaxonModule) returns FuncIdxByName
+	var map = FuncIdxByName.create()
+	for funcIdx in 0 upto module.functions.count() 'each'
+		let f = try module.functions.get(funcIdx) otherwise panic("buildFuncIdxByName: funcIdx OOB")
+		map.upsert(f.name, value: funcIdx)
+	end 'each'
+	return map
+end 'buildFuncIdxByName'
+
 function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
 	// Track lifted closures that needed a fix, so we can re-record their
 	// producer-types in a second pass. (Building the map of capture types
 	// in the first pass and applying them in the second avoids mutating
-	// op storage while iterating producers we may revisit.)
-	var liftedToRebuild = StringArray.create()
+	// op storage while iterating producers we may revisit.) A Set gives the
+	// rebuild loop below O(1) membership instead of an O(lifted) linear scan
+	// per function.
+	var liftedToRebuild = StringSet.create()
+	let funcIdxByName = buildFuncIdxByName(module)
 	for outerIdx in 0 upto module.functions.count() 'eachOuter'
 		let outerFunc = try module.functions.get(outerIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: outerIdx OOB")
 		let outerSlots = try slotTypesPerFunc.get(outerIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: outer slotTypes OOB")
@@ -6227,7 +6245,7 @@ function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, pr
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: opIdx OOB")
 				match op 'check'
-					closureCreate(_, funcName, _, _, _, capturedOuterSlots, _) then patchOneClosureLifted(module, liftedName: funcName, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
+					closureCreate(_, funcName, _, _, _, capturedOuterSlots, _) then patchOneClosureLifted(module, liftedName: funcName, capturedOuterSlots: capturedOuterSlots, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild, funcIdxByName: funcIdxByName)
 					literal to functionRef then break 'check'
 					closureEnvLoad to sizeofType then break 'check'
 				end 'check'
@@ -6257,20 +6275,10 @@ end 'patchClosureEnvLoadCaptureTypes'
 // `closureCreate` op via `capturedOuterSlots`, indexed by the env-load's
 // `captureIndex`) through `outerSlots`, and update the op's `captureType`
 // field when the parser-stamped type was unresolved.
-function patchOneClosureLifted(module MaxonModule, liftedName String, capturedOuterSlots CapturedSlotArray, outerFunc IrFunction, outerSlots SlotTypeMap, liftedToRebuild StringArray)
-	// Locate the lifted IrFunction by name.
-	var liftedFuncIdx = -1
-	for funcIdx in 0 upto module.functions.count() 'find'
-		let candidate = try module.functions.get(funcIdx) otherwise panic("patchOneClosureLifted: funcIdx OOB")
-		if candidate.name == liftedName 'match'
-			liftedFuncIdx = funcIdx
-			break
-		end 'match'
-	end 'find'
-	if liftedFuncIdx < 0 'noMatch'
-		return
-	end 'noMatch'
-	let liftedFunc = try module.functions.get(liftedFuncIdx) otherwise panic("patchOneClosureLifted: liftedFuncIdx OOB after find")
+function patchOneClosureLifted(module MaxonModule, liftedName String, capturedOuterSlots CapturedSlotArray, outerFunc IrFunction, outerSlots SlotTypeMap, liftedToRebuild StringSet, funcIdxByName FuncIdxByName)
+	// Locate the lifted IrFunction by name (O(1) via the prebuilt index).
+	let liftedFuncIdx = try funcIdxByName.get(liftedName) otherwise return
+	let liftedFunc = try module.functions.get(liftedFuncIdx) otherwise panic("patchOneClosureLifted: liftedFuncIdx OOB after index lookup")
 	var anyPatched = false
 	for liftedBlockRef in liftedFunc.blockRefs 'eachLBlock'
 		let liftedBlock = try module.blocks.get(liftedBlockRef) otherwise panic("patchOneClosureLifted: liftedBlockRef OOB")
@@ -6282,7 +6290,7 @@ function patchOneClosureLifted(module MaxonModule, liftedName String, capturedOu
 		end 'eachLOp'
 	end 'eachLBlock'
 	if anyPatched 'mark'
-		liftedToRebuild.push(liftedName)
+		liftedToRebuild.insert(liftedName)
 	end 'mark'
 end 'patchOneClosureLifted'
 
@@ -10836,7 +10844,11 @@ end 'callUnresolvedIsPermanent'
 // body's producer-type pass + return-type resolution so downstream
 // consumers see the now-concrete types.
 function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
-	var liftedToRebuild = StringArray.create()
+	// Set (not StringArray) so the rebuild loop's membership test is O(1) per
+	// function rather than an O(lifted) linear scan; `funcIdxByName` makes the
+	// per-closure-arg lifted-function lookup O(1) (was a full-functions scan).
+	var liftedToRebuild = StringSet.create()
+	let funcIdxByName = buildFuncIdxByName(module)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: funcIdx OOB")
 		var producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: producerTypesPerFunc.get({funcIdx}) failed")
@@ -10859,7 +10871,7 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 				if op.rawValue.category == OpCategory.closureProducer 'isProducer'
 					recordClosureProducerOp(nameToOpIdx, op: op, opIdx: opIdx)
 				end 'isProducer' else if nameToOpIdx.count() > 0 'maybeCall'
-					maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild)
+					maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild, funcIdxByName: funcIdxByName)
 				end 'maybeCall'
 			end 'eachOp'
 		end 'eachBlock'
@@ -10985,7 +10997,7 @@ end 'recordClosureProducerOp'
 // `try*` variant) with substituted callParamTypes registered, walk each
 // argument; closure-typed args whose lifted function has unresolved param
 // slots get patched from the substituted target signature.
-function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, nameToOpIdx NameToOpIdxMap, liftedToRebuild StringArray)
+function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, nameToOpIdx NameToOpIdxMap, liftedToRebuild StringSet, funcIdxByName FuncIdxByName)
 	// Pre-filter on op.name so the destructuring match below only handles
 	// the four call shapes that participate in callParamTypes; a wildcard
 	// `default` arm on the union would have to choose between throwing
@@ -11038,7 +11050,7 @@ function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp
 			continue
 		end 'alreadyConcrete'
 		let producerOpIdx = try nameToOpIdx.get(argName) otherwise continue
-		patchOneClosureArg(project, module: module, producerOpIdx: producerOpIdx, expectedFn: expected, producerTypes: producerTypes, liftedToRebuild: liftedToRebuild)
+		patchOneClosureArg(project, module: module, producerOpIdx: producerOpIdx, expectedFn: expected, producerTypes: producerTypes, liftedToRebuild: liftedToRebuild, funcIdxByName: funcIdxByName)
 	end 'eachArg'
 end 'maybePropagateForCallOp'
 
@@ -11060,7 +11072,7 @@ end 'functionTypeHasUnresolved'
 // update FuncSignature.paramTypes, scope's VarInfo, every varLoad's
 // slotType, re-intern the FunctionTypeId, and rewrite the
 // functionRef/closureCreate op + the producerTypes entry to carry the new id.
-function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx OpIndex, expectedFn MaxonType, producerTypes ProducerTypeMap, liftedToRebuild StringArray)
+function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx OpIndex, expectedFn MaxonType, producerTypes ProducerTypeMap, liftedToRebuild StringSet, funcIdxByName FuncIdxByName)
 	let producerOp = try module.ops.get(producerOpIdx) otherwise panic("patchOneClosureArg: ops.get({producerOpIdx}) failed")
 	// Only `functionRef` and `closureCreate` produce a `function(_)` SSA
 	// value at this stage. Anything else means the call site's arg was
@@ -11076,19 +11088,9 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 		default panic("patchOneClosureArg: producer op kind drift — pre-filter said functionRef/closureCreate but match didn't bind")
 	end 'extractClosure'
 
-	// Locate the lifted IrFunction.
-	var liftedIdx = -1
-	for fIdx in 0 upto module.functions.count() 'find'
-		let candidate = try module.functions.get(fIdx) otherwise panic("patchOneClosureArg: functions.get({fIdx}) failed")
-		if candidate.name == liftedName 'match'
-			liftedIdx = fIdx
-			break
-		end 'match'
-	end 'find'
-	if liftedIdx < 0 'notFound'
-		return
-	end 'notFound'
-	var liftedFunc = try module.functions.get(liftedIdx) otherwise panic("patchOneClosureArg: functions.get({liftedIdx}) failed after locate")
+	// Locate the lifted IrFunction (O(1) via the prebuilt name index).
+	let liftedIdx = try funcIdxByName.get(liftedName) otherwise return
+	var liftedFunc = try module.functions.get(liftedIdx) otherwise panic("patchOneClosureArg: functions.get({liftedIdx}) failed after index lookup")
 
 	let targetFnId = functionMaxonTypeId(expectedFn)
 	let (targetParams, targetReturn) = project.functionTypes.get(targetFnId)
@@ -11187,9 +11189,7 @@ function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx O
 	// queried `lookupProducerType(closureResult)` re-read the new fnId.
 	recordResultType(producerTypes, name: result, t: newFnType)
 
-	if not liftedToRebuild.contains(liftedName) 'addOnce'
-		liftedToRebuild.push(liftedName)
-	end 'addOnce'
+	liftedToRebuild.insert(liftedName)
 end 'patchOneClosureArg'
 
 // Patch one body-op's varLoad slotType when its slotId is a user-param

@@ -253,6 +253,15 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 
 	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg)
 
+	// Escape analysis, computed ONCE up front so `valueEscapes` is an O(1)
+	// membership test. Must run BEFORE any sweep that consults `valueEscapes`
+	// (via `freshRc0NeedsAcquire`), and the IR is read-only until edits are
+	// applied later, so a single pass here is authoritative. `opTransferDisposition`
+	// — the only analysis `buildEscapingValuesSet` invokes — reads no
+	// escape/ownership state, so building the set here (before
+	// `computeIncomingOwnerAcquire`) is safe.
+	ctx.escapingValues = buildEscapingValuesSet(ctx)
+
 	// Per-value acquire analysis for `incomingOwner` values (the conditional rule;
 	// see `computeIncomingOwnerAcquire`). Must run BEFORE the acquire/release/phi
 	// sweeps, which all consult `ctx.incomingOwnerAcquiresCached` so the +1, the
@@ -469,6 +478,15 @@ type RcContext
 	export var idRef as ValueIdRef
 	export var paramValues as BoolArray
 	export var returnedValues as BoolArray
+	// ValueIds that escape their def-local single-owner lifetime via an op-keyed
+	// transfer (move into a container/global/field/...) OR a move into a
+	// releasable successor phi. Computed ONCE per function (`buildEscapingValuesSet`,
+	// right after this context is created) so `valueEscapes` is an O(1) membership
+	// test instead of re-scanning every op of the function per value — the latter
+	// made `insertRefcountsInFunction` O(values × ops) and was a dominant backend-
+	// adjacent cost at self-host scale. (The returned/thrown escape stays a
+	// separate `returnedValues` check in `valueEscapes`.)
+	export var escapingValues as BoolArray
 	// ValueIds that are `sys.global_addr @__data_*` results — the addresses of
 	// module-level writable globals. A managed `store_indirect` through one of
 	// these is an ownership TRANSFER into the long-lived global (see
@@ -540,6 +558,7 @@ type RcContext
 			idRef: idRef,
 			paramValues: paramValues,
 			returnedValues: returnedValues,
+			escapingValues: BoolArray.create(),
 			globalAddrValues: globalAddrValues,
 			transparentWrapResults: transparentWrapResults,
 			borrowReturningCallResults: borrowReturningCallResults,
@@ -1447,37 +1466,81 @@ end 'freshRc0NeedsAcquire'
 // Scans every op that READS `id` and every block for a phi-move. Returns true
 // (escapes → must acquire) on any unrecognized escape so the optimization only
 // fires for provably-local values.
+// True iff the managed value `id` escapes its def-local single-owner lifetime.
+// O(1): the op-transfer and phi-move escapes were precomputed once into
+// `ctx.escapingValues` by `buildEscapingValuesSet`; the returned/thrown escape
+// stays a direct `returnedValues` check (also O(1)).
 function valueEscapes(ctx RcContext, id ValueId) returns bool
 	if ctx.isReturned(id) 'returned'
 		return true
 	end 'returned'
+	return try ctx.escapingValues.get(id) otherwise false
+end 'valueEscapes'
+
+// Single-pass escape-set builder for `valueEscapes`. Mirrors the prior per-value
+// scan exactly, but accumulates EVERY escaping ValueId in one walk of the
+// function: each body op marks the operands it transfers (the same
+// `markOpTransferredOperands` view the acquire analysis reads, so escape and
+// acquire cannot drift), and each terminator marks the values it moves into a
+// releasable successor phi. The returned/thrown escape is handled by
+// `valueEscapes` itself via `returnedValues`, so it is not duplicated here.
+function buildEscapingValuesSet(ctx RcContext) returns BoolArray
+	var escaping = BoolArray.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise continue
-		// Body ops: any op-keyed transfer of `id` (Concept B) escapes it — a move into
-		// a container / global / type-param sink, OR a plain `store_indirect` into a
-		// non-global heap field. The field store is an escape REGARDLESS of liveness
-		// (an escape need not be the LAST use — `s.f = x; ...use(x)...` still escaped):
-		// the field holds `id`, so a `freshRc0` whose only escape is a field store must
-		// ACQUIRE its +1 at def so the field-transfer branch can suppress the
-		// store-incref and the field carries the acquired +1; without the acquire the
-		// value arrives rc=0, the transfer suppresses the store-incref → field owns
-		// rc=0 → UAF. `opTransfersOperand` is the SAME full transfer set the acquire
-		// analysis (`markOpTransferredOperands`) reads, so escape and acquire agree.
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise continue
-			if opTransfersOperand(ctx, op: op, argId: id) 'transferred'
-				return true
-			end 'transferred'
+			markOpTransferredOperands(ctx, op: op, transferred: escaping)
 		end 'eachOp'
-		// Terminator: a move of `id` into a successor's phi transfers its +1.
 		if block.hasTerminatorOp() 'hasTerm'
-			if valueMovedIntoAnyPhi(ctx, block: block, vid: id) 'phiMove'
-				return true
-			end 'phiMove'
+			markPhiMovedValues(ctx, fromBlock: block, escaping: escaping)
 		end 'hasTerm'
 	end 'eachBlock'
-	return false
-end 'valueEscapes'
+	return escaping
+end 'buildEscapingValuesSet'
+
+// Mark every value `fromBlock`'s terminator moves into a RELEASABLE successor
+// phi (a managed / type-param block-arg). The enumerate-all counterpart of
+// `valueMovedIntoAnyPhi`/`argsFeedReleasablePhi`, used by `buildEscapingValuesSet`.
+function markPhiMovedValues(ctx RcContext, fromBlock IrBlock, escaping BoolArray)
+	let term = try ctx.module.ops.get(fromBlock.terminatorIndex()) otherwise return
+	match term 'k'
+		control(cf) then markCfPhiMovedValues(ctx, cf: cf, escaping: escaping)
+		arith then noOp()
+		call then noOp()
+		memory then noOp()
+		system then noOp()
+	end 'k'
+end 'markPhiMovedValues'
+
+function markCfPhiMovedValues(ctx RcContext, cf StdControlOp, escaping BoolArray)
+	match cf 'c'
+		br(target, argIds) then markEdgePhiMovedValues(ctx, target: target, argIds: argIds, escaping: escaping)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) then markBothEdgePhiMovedValues(ctx, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, escaping: escaping)
+	end 'c'
+end 'markCfPhiMovedValues'
+
+function markBothEdgePhiMovedValues(ctx RcContext, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, escaping BoolArray)
+	markEdgePhiMovedValues(ctx, target: thenTarget, argIds: thenArgIds, escaping: escaping)
+	markEdgePhiMovedValues(ctx, target: elseTarget, argIds: elseArgIds, escaping: escaping)
+end 'markBothEdgePhiMovedValues'
+
+// Positional block-arg → phi binding (mirrors `argsFeedReleasablePhi`): the Nth
+// edge arg feeds the Nth successor block-arg, so an edge arg moves a +1 whenever
+// the phi it feeds is itself releasable (managed or type-param).
+function markEdgePhiMovedValues(ctx RcContext, target BlockId, argIds ValueIdArray, escaping BoolArray)
+	let toBlock = findBlockById(ctx, blockId: target)
+	var i = 0
+	for id in argIds 'each'
+		if i < toBlock.blockArgs.count() 'inRange'
+			let phiArg = try toBlock.blockArgs.get(i) otherwise break
+			if ctx.isManaged(phiArg.valueId) or ctx.isTypeParam(phiArg.valueId) 'releasable'
+				setBoolAt(escaping, id: id, value: true)
+			end 'releasable'
+		end 'inRange'
+		i = i + 1
+	end 'each'
+end 'markEdgePhiMovedValues'
 
 // ============================================================
 // Heap-store increfs (container takes a ref — balanced by its destructor)

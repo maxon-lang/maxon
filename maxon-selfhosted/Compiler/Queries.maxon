@@ -228,13 +228,16 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 				end 'haveOpen'
 				continue
 			end 'closeGroup'
-			// We scan for two declaration keywords: `interface <Name>` and
-			// `union <Name>`. Both are also legal as parameter / variable names
-			// (keywords-as-identifiers), so require depth 0 (a param-name keyword
-			// always sits inside `(...)`) and the statement-position gate below.
+			// We scan for four declaration keywords: `interface <Name>`,
+			// `union <Name>`, `enum <Name>`, and `type <Name>`. All are also legal
+			// as parameter / variable names (keywords-as-identifiers), so require
+			// depth 0 (a param-name keyword always sits inside `(...)`) and the
+			// statement-position gate below.
 			let isInterfaceKw = token.kind == TokenKind.interface
 			let isUnionKw = token.kind == TokenKind.union
-			if (not isInterfaceKw and not isUnionKw) or parenDepth != 0 'notDecl'
+			let isEnumKw = token.kind == TokenKind.enum
+			let isTypeKw = token.kind == TokenKind.type
+			if (not isInterfaceKw and not isUnionKw and not isEnumKw and not isTypeKw) or parenDepth != 0 'notDecl'
 				continue
 			end 'notDecl'
 			// Statement-position gate: a genuine declaration follows a newline,
@@ -254,7 +257,7 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 			end 'noName'
 			if isInterfaceKw 'recordInterface'
 				project.prescannedInterfaceNames.insert(nameToken.value)
-			end 'recordInterface' else 'recordUnion'
+			end 'recordInterface' else if isUnionKw 'recordUnion'
 				// Record the union AND whether any case carries a payload, so the
 				// cross-file forward-reference fallbacks in `enumIsUnion` (membership)
 				// and `unionIsBoxed` (payload flag) answer the same way the resolved
@@ -265,7 +268,22 @@ function preRegisterInterfaceNames(project Project) throws CompileError
 				// `__construct_*` and crashed the backend.
 				let payloadBearing = unionBodyIsPayloadBearing(tokens, unionStart: i)
 				project.prescannedUnionPayload.upsert(nameToken.value, value: payloadBearing)
-			end 'recordUnion'
+			end 'recordUnion' else if isEnumKw 'recordEnum'
+				// Record the enum's full declaration-ordered case list so the
+				// parse-time `.allCases` / `.allCaseNames` synthesis (and the
+				// `prefixIsEnum` static-access gate) resolve a forward / cross-file
+				// enum reference the same way they would in declaration order —
+				// regardless of which file the parse loop reaches first. See
+				// `scanEnumBodyCases`. A `union` is introduced with its own keyword
+				// (handled above), so only a genuine `enum` reaches here.
+				project.prescannedEnumCases.upsert(nameToken.value, value: scanEnumBodyCases(tokens, enumStart: i, filePath: path))
+			end 'recordEnum' else 'recordType'
+				// Record the struct/type name so `maxonTypeStructName` recognises a
+				// cross-file struct-typed receiver at parse time (the qualified
+				// `TypeName.method` key the `(e)` binding's throws lookup needs),
+				// regardless of which file the parse loop reaches first.
+				project.prescannedTypeNames.insert(nameToken.value)
+			end 'recordType'
 		end 'eachToken'
 	end 'eachFile'
 end 'preRegisterInterfaceNames'
@@ -343,6 +361,261 @@ function unionBodyIsPayloadBearing(tokens TokenArray, unionStart ElementCount) r
 
 	return false
 end 'unionBodyIsPayloadBearing'
+
+// One enum case's `= <raw value>` backing, decoded at the token level for the
+// pre-parse scan. See `scanEnumCaseBacking`.
+type PrescanEnumBacking
+	// The case's raw value — what `.allCases` emits as the literal. The running
+	// ordinal for every backing except int-backed (explicit value) and
+	// float-backed (the IEEE-754 bit pattern).
+	export var rawValue as IntConstant
+	// The auto-increment counter for the NEXT case that omits `=`.
+	export var nextOrdinal as IntConstant
+	// Token index where the case walk resumes (the terminating newline / `end`).
+	export var nextIndex as ElementCount
+	export var isFloat as bool
+	export var isString as bool
+	export var isChar as bool
+
+	export static function create(rawValue IntConstant, nextOrdinal IntConstant, nextIndex ElementCount, isFloat bool, isString bool, isChar bool) returns PrescanEnumBacking
+		return Self{rawValue: rawValue, nextOrdinal: nextOrdinal, nextIndex: nextIndex, isFloat: isFloat, isString: isString, isChar: isChar}
+	end 'create'
+end 'PrescanEnumBacking'
+
+// Advance past one enum-case right-hand side, balancing `()` / `[]` / `{}` so a
+// struct-literal backing (`= StructType{...}` / `= StructType.create(...)`) that
+// spans brackets or newlines is consumed whole. Returns the index of the
+// terminating newline (or the enum's `end`, or EOF) at bracket depth 0, where
+// the caller's statement-position case walk resumes.
+function skipEnumBackingRhs(tokens TokenArray, startIndex ElementCount) returns ElementCount
+	let tokenCount = tokens.count()
+	var bracketDepth = 0 as PrescanDepth
+	var i = startIndex
+	while i < tokenCount 'skip'
+		let tok = try tokens.get(i) otherwise break
+		let kind = tok.kind
+		if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'open'
+			bracketDepth = bracketDepth + 1
+			i = i + 1
+			continue
+		end 'open'
+		if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'close'
+			if bracketDepth > 0 'haveOpen'
+				bracketDepth = bracketDepth - 1
+			end 'haveOpen'
+			i = i + 1
+			continue
+		end 'close'
+		if bracketDepth == 0 and (kind == TokenKind.newline or kind == TokenKind.end) 'lineEnd'
+			return i
+		end 'lineEnd'
+		i = i + 1
+	end 'skip'
+	return i
+end 'skipEnumBackingRhs'
+
+// Token-level reader for one enum case's `= <raw value>` backing, used by
+// `scanEnumBodyCases`. `valueIndex` points at the first token after `=`.
+// Mirrors `parseCaseBacking`'s raw-value assignment: an int literal (optionally
+// negated) is the explicit value and resets the auto-increment counter; a float
+// literal becomes the IEEE-754 bit pattern (negated by toggling the sign bit);
+// string / char / struct / function backings keep the running ordinal as the
+// raw value (their representation IS the ordinal). Emits no diagnostics —
+// overflow / type-mismatch reporting stays with the real parse.
+function scanEnumCaseBacking(tokens TokenArray, valueIndex ElementCount, nextOrdinal IntConstant) returns PrescanEnumBacking
+	var rawValue = nextOrdinal
+	var nextOrdinalOut = nextOrdinal + 1
+	var isFloat = false
+	var isString = false
+	var isChar = false
+
+	// Peel an optional leading `-` so a negative numeric literal reads as one
+	// value (the lexer emits `-` as its own token).
+	var magIndex = valueIndex
+	var sign = 1 as IntConstant
+	let signTok = try tokens.get(valueIndex) otherwise Token.eof()
+	if signTok.kind == TokenKind.minus 'negative'
+		sign = 0 - 1
+		magIndex = valueIndex + 1
+	end 'negative'
+
+	let magTok = try tokens.get(magIndex) otherwise Token.eof()
+	if magTok.kind == TokenKind.intLiteral 'intBacking'
+		let mag = try parseInt(magTok.value) otherwise 0
+		rawValue = mag * sign
+		nextOrdinalOut = rawValue + 1
+	end 'intBacking' else if magTok.kind == TokenKind.floatLiteral 'floatBacking'
+		var bits = 0 as IntConstant
+		bits = try parseFloatBits(magTok.value) otherwise 0
+		if sign < 0 'negateFloat'
+			bits = bits xor (1 shl 63)
+		end 'negateFloat'
+		rawValue = bits
+		isFloat = true
+		// Float-backed cases all require explicit values, so the auto-increment
+		// counter is irrelevant; leave it unchanged (matches `parseCaseBacking`).
+		nextOrdinalOut = nextOrdinal
+	end 'floatBacking' else if magTok.kind == TokenKind.stringLiteral 'stringBacking'
+		isString = true
+	end 'stringBacking' else if magTok.kind == TokenKind.charLiteral 'charBacking'
+		isChar = true
+	end 'charBacking'
+	// else: identifier (struct / function backing) or malformed — keep the
+	// running ordinal as the raw value (already seeded above).
+
+	let nextIndex = skipEnumBackingRhs(tokens, startIndex: valueIndex)
+	return PrescanEnumBacking.create(rawValue, nextOrdinal: nextOrdinalOut, nextIndex: nextIndex, isFloat: isFloat, isString: isString, isChar: isChar)
+end 'scanEnumCaseBacking'
+
+// Token-level enum-case extractor for the pre-parse scan: given the index of an
+// `enum` opener token, walk the enum body and return an `UnresolvedEnumType`
+// carrying the declaration-ordered cases with their raw values. Mirrors
+// `parseEnumDecl` / `parseCaseBacking` but emits no IR and no diagnostics (the
+// real parse owns those). Used only as the cross-file / forward-reference
+// fallback for `.allCases` / `.allCaseNames`, so a complex enum (methods,
+// struct / function backings) need only yield correct names + ordinals here;
+// its same-file uses still resolve through the real parse's `unresolvedEnums`
+// entry. Best-effort and diagnostic-free, so an already-invalid enum (e.g.
+// duplicate cases) is left for the real parse to reject — we do not dedup.
+//
+// Like `unionBodyIsPayloadBearing`, `depth` tracks open `end`-bearing blocks
+// relative to the enum body: depth 1 is the enum body itself (where cases and
+// method headers live); depth >= 2 is inside a method body. Control-flow
+// keywords (`if` / `while` / `for` / `match` / block-`try`) are legal keyword
+// CASE NAMES at depth 1, so they only act as block openers once we are already
+// inside a method body (depth >= 2). Closures are always `gives`-form (no
+// `end`), so `function` inside a method body never opens a block.
+function scanEnumBodyCases(tokens TokenArray, enumStart ElementCount, filePath FilePath) returns UnresolvedEnumType
+	let tokenCount = tokens.count()
+	let nameTok = try tokens.get(enumStart + 1) otherwise Token.eof()
+	let enumName = nameTok.value
+
+	var cases = EnumCaseArray.create()
+	var nextOrdinal = 0 as IntConstant
+	var isFloatBacked = false
+	var isStringBacked = false
+	var isCharBacked = false
+
+	// Seed depth 1 (enum body) and start just past `enum <Name>`. Any
+	// `implements I1, I2` clause sits on the header line before the first
+	// newline; the statement-position gate (prev == newline) excludes those
+	// identifiers, so the clause needs no explicit skip.
+	var depth = 1 as PrescanDepth
+	var i = enumStart + 2
+	while i < tokenCount and depth > 0 'scan'
+		let tok = try tokens.get(i) otherwise break
+		let kind = tok.kind
+
+		if kind == TokenKind.end 'closeBlock'
+			if depth > 0 'haveDepth'
+				depth = depth - 1
+			end 'haveDepth'
+			i = i + 1
+			continue
+		end 'closeBlock'
+
+		// Inside a method body (depth >= 2): only balance `end`-bearing blocks; a
+		// case is never declared here.
+		if depth > 1 'insideMethod'
+			if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match 'methodBlockOpener'
+				depth = depth + 1
+				i = i + 1
+				continue
+			end 'methodBlockOpener'
+			if kind == TokenKind.else 'methodElse'
+				depth = depth + 1
+				let afterElse = try tokens.get(i + 1) otherwise Token.eof()
+				if afterElse.kind == TokenKind.if 'methodElseIf'
+					i = i + 2
+					continue
+				end 'methodElseIf'
+				i = i + 1
+				continue
+			end 'methodElse'
+			if kind == TokenKind.try 'methodTry'
+				let labelTok = try tokens.get(i + 1) otherwise Token.eof()
+				if labelTok.kind == TokenKind.charLiteral 'methodBlockTry'
+					depth = depth + 1
+				end 'methodBlockTry'
+				i = i + 1
+				continue
+			end 'methodTry'
+			i = i + 1
+			continue
+		end 'insideMethod'
+
+		// depth == 1: enum-body statement level. A case (or method header) appears
+		// at statement position — the previous token is a newline (the header's
+		// trailing newline for the first case).
+		let prev = try tokens.get(i - 1) otherwise Token.eof()
+		if prev.kind != TokenKind.newline 'notStatementStart'
+			i = i + 1
+			continue
+		end 'notStatementStart'
+
+		// Compiler directives (`#if` / `#else` / `#endif`) at the enum-body level:
+		// skip the directive token. Cases under any branch are still scanned by
+		// the surrounding walk — over-including an inactive branch is harmless for
+		// a parse-time-only fallback (the real parse owns branch selection).
+		if kind == TokenKind.hashIf or kind == TokenKind.hashElse or kind == TokenKind.hashEndif 'directive'
+			i = i + 1
+			continue
+		end 'directive'
+
+		// Method header: `[export] function IDENT (`. Enter its body (depth + 1)
+		// so the contents are skipped. A `function` keyword used as a case name is
+		// followed by a newline / `=` / end-of-block (never IDENT + `(`) and falls
+		// through to the case path below.
+		var funcOffset = 0 as ElementCount
+		if kind == TokenKind.export 'sawExport'
+			funcOffset = 1
+		end 'sawExport'
+		let funcTok = try tokens.get(i + funcOffset) otherwise Token.eof()
+		if funcTok.kind == TokenKind.function 'maybeMethod'
+			let mNameTok = try tokens.get(i + funcOffset + 1) otherwise Token.eof()
+			let mAfterName = try tokens.get(i + funcOffset + 2) otherwise Token.eof()
+			if mNameTok.kind == TokenKind.identifier and mAfterName.kind == TokenKind.leftParen 'isMethod'
+				depth = depth + 1
+				i = i + funcOffset + 1
+				continue
+			end 'isMethod'
+		end 'maybeMethod'
+
+		// Otherwise this token is a case name (an identifier, or a keyword token
+		// used as a case name — the lexer keeps the raw spelling in `.value`).
+		let caseName = tok.value
+		i = i + 1
+
+		var rawValue = nextOrdinal
+		let eqTok = try tokens.get(i) otherwise Token.eof()
+		if eqTok.kind == TokenKind.equals 'hasBacking'
+			i = i + 1
+			let backing = scanEnumCaseBacking(tokens, valueIndex: i, nextOrdinal: nextOrdinal)
+			rawValue = backing.rawValue
+			nextOrdinal = backing.nextOrdinal
+			i = backing.nextIndex
+			if backing.isFloat 'float'
+				isFloatBacked = true
+			end 'float'
+			if backing.isString 'string'
+				isStringBacked = true
+			end 'string'
+			if backing.isChar 'char'
+				isCharBacked = true
+			end 'char'
+		end 'hasBacking' else 'noBacking'
+			nextOrdinal = nextOrdinal + 1
+		end 'noBacking'
+
+		let ordinalSlot = cases.count() as CaseOrdinal
+		cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: tok.line, column: tok.column))
+	end 'scan'
+
+	// Exported tier: a forward / cross-file `.allCases` is only reachable when
+	// the enum is cross-file-visible anyway, and none of the fallback consumers
+	// (`enumCasesOrEmpty` / `enumIsFloatBacked` / `prefixIsEnum`) read visibility.
+	return UnresolvedEnumType.create(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: Visibility.global, line: nameTok.line, column: nameTok.column, filePath: filePath, implementedInterfaces: ConformanceArray.create(), isStringBacked: isStringBacked, isCharBacked: isCharBacked)
+end 'scanEnumBodyCases'
 
 // Pre-parse throws-clause scan. For every source file, run the parser's
 // throws-header prescan so `project.funcThrowsTypes` is seeded for EVERY
@@ -667,6 +940,18 @@ module function computeStdContentHashFor(project Project, module StdModule, func
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount)
 	h = mix(h, value: func.blockRefs.count())
+	// Collect THIS function's blocks once so the per-op control-flow
+	// stringification (`stdOpToString` → `cfBrToString` → `resolveBlockLabel`)
+	// resolves branch-target labels against only this function's blocks. Passing
+	// `module.blocks` (every block of every function in the module) made each
+	// branch label lookup an O(total-module-blocks) linear scan — a module-wide
+	// O(branches × blocks) blowup that dominated once the earlier O(n²) passes
+	// were fixed. Branch targets are intra-function, so the function's own block
+	// list resolves every label identically.
+	var funcBlocks = IrBlockArray.create()
+	for blockRef in func.blockRefs 'collectBlocks'
+		funcBlocks.push(try module.blocks.get(blockRef) otherwise panic("computeStdContentHashFor: blocks.get OOB collecting funcBlocks"))
+	end 'collectBlocks'
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("computeStdContentHashFor: blocks.get OOB")
 		h = mixString(h, s: block.label)
@@ -683,11 +968,11 @@ module function computeStdContentHashFor(project Project, module StdModule, func
 		// contentHash even when block shape is preserved.
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeStdContentHashFor: ops.get OOB at {opIdx}")
-			h = mixString(h, s: stdOpToString(op, blocks: module.blocks))
+			h = mixString(h, s: stdOpToString(op, blocks: funcBlocks))
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTermOp'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("computeStdContentHashFor: ops.get OOB at terminator {block.terminatorIndex()}")
-			h = mixString(h, s: stdOpToString(termOp, blocks: module.blocks))
+			h = mixString(h, s: stdOpToString(termOp, blocks: funcBlocks))
 		end 'hasTermOp'
 	end 'eachBlock'
 	return h
