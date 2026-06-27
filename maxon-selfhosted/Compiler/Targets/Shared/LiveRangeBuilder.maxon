@@ -902,11 +902,26 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 			// (a constant materialized into the same register) could legally be
 			// colored there and clobber the argument before the call (the sort
 			// cas-cluster miscompile: `Array.push` received 1 instead of 8).
+			//
+			// When there is NO following call in the block, the phys-dest write
+			// is return plumbing (per target lowering, explicit phys-dest writes
+			// occur only in call-argument setup and return-value setup). The
+			// return value must stay live in its return register (x0/x1/d0)
+			// until the `ret` — extend the pseudo to the block terminator so a
+			// later same-block def (e.g. a rematerialized error-flag constant
+			// materialized just before `mov x1, flag`) cannot be colored into
+			// the return register and clobber the already-staged return value.
+			// Stopping at `opIdx + 2` left the return register free from the
+			// op after the write through the terminator, which let a spilled
+			// managed return value's error-flag remat steal x0 (the url/filepath
+			// nil-pointer miscompile). The block-end position is `opRefs.count()`
+			// (ops 0..count-1, terminator at count), so the exclusive end that
+			// covers the terminator is `count + 1`.
 			let physDestMask = regTarget.getPhysGprDestMask(module, packed: packed)
 
 			if physDestMask > 0 'hasPhysDest'
 				let callPos = getOr(nextCallPos, index: opIdx, fallback: RM_NONE)
-				var endPos = opIdx + 2
+				var endPos = block.opRefs.count() + 1
 
 				if callPos != RM_NONE 'extendToCall'
 					endPos = callPos + 1
