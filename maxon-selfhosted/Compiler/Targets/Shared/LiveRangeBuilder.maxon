@@ -577,30 +577,30 @@ function scanDefinitions(module TargetModule, func IrFunction, defBlockId RegInt
 end 'scanDefinitions'
 
 function scanOpDefPacked(module TargetModule, packed OpIndex, blockId BlockId, opIdx RegInt, defBlockId RegIntArray, defPos RegIntArray, defRegClass RegIntArray, isConst BoolArray, constVal RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery)
-	// Use noteOpDefs to find which valueIds this op defines
+	// Use noteOpDefs to find which valueIds this op defines (sparse id list).
 	var defs = RegIntArray.create()
-	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'eachDef'
-		let defBlock = try defs.get(di) otherwise panic("scanOpDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
-		if defBlock == 1 and di < defBlockId.count() 'isDef'
+		let defId = try defs.get(di) otherwise panic("scanOpDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
+		if defId < defBlockId.count() 'isDef'
 			// Only record the FIRST definition of a value in a block.
 			// TwoAddr ops (e.g., addRegReg) both read and write the dest register,
 			// creating a second "def" after the initial movRegReg def. The interval
 			// must start at the first def to correctly cover the full lifetime.
-			let existingDef = getOr(defBlockId, index: di, fallback: -1)
+			let existingDef = getOr(defBlockId, index: defId, fallback: -1)
 			if existingDef != blockId 'firstDef'
-				try defBlockId.set(di, value: blockId) otherwise panic("invariant: defBlockId.set OOB")
-				try defPos.set(di, value: opIdx) otherwise panic("invariant: defPos.set OOB")
+				try defBlockId.set(defId, value: blockId) otherwise panic("invariant: defBlockId.set OOB")
+				try defPos.set(defId, value: opIdx) otherwise panic("invariant: defPos.set OOB")
 			end 'firstDef'
 
 			// Determine register class from op pattern
 			let rc = getOpDefRegClassWith(module, packed: packed, opQuery: opQuery)
-			try defRegClass.set(di, value: rc) otherwise panic("invariant: defRegClass.set OOB")
+			try defRegClass.set(defId, value: rc) otherwise panic("invariant: defRegClass.set OOB")
 
 			// Detect constants for rematerialization
-			detectConstantWith(module, packed: packed, valueId: di, isConst: isConst, constVal: constVal, opQuery: opQuery)
+			detectConstantWith(module, packed: packed, valueId: defId, isConst: isConst, constVal: constVal, opQuery: opQuery)
 		end 'isDef'
 		di = di + 1
 	end 'eachDef'
@@ -701,15 +701,13 @@ function recordArgIdsLastUses(argIds ValueIdArray, map LastUseMap, blockBase Reg
 end 'recordArgIdsLastUses'
 
 function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map LastUseMap, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
-	var counts = RegIntArray.create()
-	regTarget.countOpReads(module, counts: counts, packed: packed)
+	var reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
 
 	var i = 0
-	while i < counts.count() 'each'
-		let cnt = try counts.get(i) otherwise panic("recordOpLastUsesPacked.each: i < counts.count() by loop guard but get({i}) failed")
-		if cnt > 0 'isUsed'
-			map.upsert(blockBase + i, value: opIdx)
-		end 'isUsed'
+	while i < reads.count() 'each'
+		let readId = try reads.get(i) otherwise panic("recordOpLastUsesPacked.each: i < reads.count() by loop guard but get({i}) failed")
+		map.upsert(blockBase + readId, value: opIdx)
 		i = i + 1
 	end 'each'
 end 'recordOpLastUsesPacked'

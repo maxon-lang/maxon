@@ -591,23 +591,48 @@ function classifyRegallocFunc(name String) returns String
 	return "__regalloc-user"
 end 'classifyRegallocFunc'
 
-// Increment the use count for a value. Called during pre-scan for each read operand.
-export function incUse(counts RegIntArray, id RegInt)
+// Append a read value's id to the op's sparse read-id list. Called during the
+// liveness pre-scan for each read operand. Sparse (one push per real read,
+// typically 1-3 per op) rather than a dense per-valueId count array: every
+// consumer only asks "which valueIds does this op read", never the numeric
+// count, so the id list is equivalent and avoids the O(ops x maxValueId)
+// dense-array grow that walled the largest-function self-compile. Negative ids
+// (physical registers) are dropped, matching the old count guard.
+export function collectRead(reads RegIntArray, id RegInt)
 	if id < 0 'invalid'
 		return
 	end 'invalid'
-	let current = getOr(counts, index: id, fallback: 0)
-	set(counts, index: id, value: current + 1, sentinel: 0)
-end 'incUse'
+	reads.push(id)
+end 'collectRead'
 
-// Record the last use position for a value. Called during pre-scan for each read operand.
-// Forward scan: each call overwrites the previous, so at the end we have the last use position.
-export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
+// Append a defined value's id to the op's sparse def-id list. Mirror of
+// collectRead for the def side: every consumer only asks "does this op define
+// v", never which block, so a plain id list replaces the former dense
+// defBlocks[valueId] = blockIdx array (and its O(ops x maxValueId) grow).
+// Negative ids (physical destinations) are dropped, matching the old id >= 0
+// guard in the per-target *DefId helpers.
+export function collectDef(defs RegIntArray, id RegInt)
 	if id < 0 'invalid'
 		return
 	end 'invalid'
-	set(positions, index: id, value: opIdx, sentinel: -1)
-end 'recordLastUse'
+	defs.push(id)
+end 'collectDef'
+
+// Membership test over a sparse id list (read-id or def-id list produced by a
+// target's countOpReads / noteOpDefs). Linear, but the lists hold only an op's
+// few operands so the scan is O(operands), not O(maxValueId).
+export function idListContains(ids RegIntArray, target RegInt) returns bool
+	var i = 0
+	let n = ids.count()
+	while i < n 'each'
+		let id = try ids.get(i) otherwise panic("idListContains: i < count by guard but get({i}) failed")
+		if id == target 'found'
+			return true
+		end 'found'
+		i = i + 1
+	end 'each'
+	return false
+end 'idListContains'
 
 function ssaGetEntryBlockId(module TargetModule, func IrFunction) returns BlockId
 	if func.blockRefs.count() == 0 'noBlocks'

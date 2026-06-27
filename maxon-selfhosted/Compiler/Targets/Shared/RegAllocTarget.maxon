@@ -86,9 +86,20 @@ export interface RegAllocTarget
 
 	// --- Liveness helpers ---
 
-	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
+	// Append the valueIds this op READS into the sparse `reads` list (one push
+	// per read operand; order is unspecified and no consumer depends on it).
+	// Physical-register operands contribute nothing. Replaces a former dense
+	// per-valueId read-count array — every consumer only tests membership
+	// ("does this op read v?"), never a numeric count, so the id list is
+	// equivalent while avoiding the O(ops x maxValueId) dense-array grow.
+	function countOpReads(module TargetModule, reads RegIntArray, packed OpIndex)
 
-	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
+	// Append the valueIds this op DEFINES into the sparse `defs` list (order
+	// unspecified). Physical destinations contribute nothing. Replaces a former
+	// dense defBlocks[valueId] = blockIdx array — every consumer only tests
+	// membership ("does this op define v?"), so the id list is equivalent while
+	// avoiding the O(ops x maxValueId) dense-array grow.
+	function noteOpDefs(module TargetModule, defs RegIntArray, packed OpIndex)
 
 	// --- Remap/substitute ---
 

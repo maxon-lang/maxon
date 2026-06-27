@@ -220,31 +220,27 @@ end 'scanUseDef'
 // A value is in use[B] if it is read AND not already in def[B] (not defined earlier in this block).
 // A value is in def[B] if it is defined by this op.
 function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet LiveSet, defSet LiveSet, regTarget RegAllocTarget)
-	// Collect reads: use a temporary counts array
-	var counts = RegIntArray.create()
-	regTarget.countOpReads(module, counts: counts, packed: packed)
+	// Collect reads: sparse list of the valueIds this op reads.
+	var reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
 
 	var ui = 0
-	while ui < counts.count() 'eachUse'
-		let cnt = try counts.get(ui) otherwise panic("scanOpUseDefPacked.eachUse: ui < counts.count() by loop guard but get({ui}) failed")
-		if cnt > 0 'isUsed'
-			if not defSet.contains(ui) 'notDef'
-				_ = useSet.add(ui)
-			end 'notDef'
-		end 'isUsed'
+	while ui < reads.count() 'eachUse'
+		let readId = try reads.get(ui) otherwise panic("scanOpUseDefPacked.eachUse: ui < reads.count() by loop guard but get({ui}) failed")
+		if not defSet.contains(readId) 'notDef'
+			_ = useSet.add(readId)
+		end 'notDef'
 		ui = ui + 1
 	end 'eachUse'
 
-	// Collect defs: use a temporary defBlocks array with a known sentinel
+	// Collect defs: sparse list of the valueIds this op defines.
 	var defs = RegIntArray.create()
-	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'eachDef'
-		let defBlock = try defs.get(di) otherwise panic("scanOpUseDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
-		if defBlock == 1 'isDef'
-			_ = defSet.add(di)
-		end 'isDef'
+		let defId = try defs.get(di) otherwise panic("scanOpUseDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
+		_ = defSet.add(defId)
 		di = di + 1
 	end 'eachDef'
 end 'scanOpUseDefPacked'
@@ -301,36 +297,30 @@ end 'scanMaxValueIdForLiveness'
 function scanOpMaxValueIdPacked(module TargetModule, packed OpIndex, regTarget RegAllocTarget) returns RegInt
 	var maxVal = 0
 
-	// Check reads
-	var counts = RegIntArray.create()
-	regTarget.countOpReads(module, counts: counts, packed: packed)
+	// Check reads: max over the sparse read-id list.
+	var reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
 
-	var i = counts.count() - 1
-	while i >= 0 'findMaxRead'
-		let cnt = try counts.get(i) otherwise panic("scanOpMaxValueIdPacked.findMaxRead: 0 <= i < counts.count() but get({i}) failed")
-		if cnt > 0 'found'
-			if i > maxVal 'update'
-				maxVal = i
-			end 'update'
-			break
-		end 'found'
-		i = i - 1
+	var i = 0
+	while i < reads.count() 'findMaxRead'
+		let readId = try reads.get(i) otherwise panic("scanOpMaxValueIdPacked.findMaxRead: 0 <= i < reads.count() but get({i}) failed")
+		if readId > maxVal 'update'
+			maxVal = readId
+		end 'update'
+		i = i + 1
 	end 'findMaxRead'
 
-	// Check defs
+	// Check defs: max over the sparse def-id list.
 	var defs = RegIntArray.create()
-	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
 
-	var di = defs.count() - 1
-	while di >= 0 'findMaxDef'
-		let defBlock = try defs.get(di) otherwise panic("scanOpMaxValueIdPacked.findMaxDef: 0 <= di < defs.count() but get({di}) failed")
-		if defBlock == 1 'found2'
-			if di > maxVal 'update2'
-				maxVal = di
-			end 'update2'
-			break
-		end 'found2'
-		di = di - 1
+	var di = 0
+	while di < defs.count() 'findMaxDef'
+		let defId = try defs.get(di) otherwise panic("scanOpMaxValueIdPacked.findMaxDef: 0 <= di < defs.count() but get({di}) failed")
+		if defId > maxVal 'update2'
+			maxVal = defId
+		end 'update2'
+		di = di + 1
 	end 'findMaxDef'
 
 	return maxVal

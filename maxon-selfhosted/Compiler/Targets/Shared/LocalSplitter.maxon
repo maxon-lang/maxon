@@ -304,10 +304,9 @@ export function trySplitAtUse(range LiveRange, func IrFunction, module TargetMod
 	var oi = range.defPosition
 	while oi < opCount 'collectUses'
 		let packed = try block.opRefs.get(oi) otherwise panic("trySplitAtUse.collectUses: oi < opCount by loop guard but get({oi}) failed")
-		var counts = RegIntArray.create()
-		regTarget.countOpReads(module, counts: counts, packed: packed)
-		let n = getOr(counts, index: range.valueId, fallback: 0)
-		if n > 0 'isUse'
+		var reads = RegIntArray.create()
+		regTarget.countOpReads(module, reads: reads, packed: packed)
+		if idListContains(reads, target: range.valueId) 'isUse'
 			useList.push(oi + 1)
 		end 'isUse'
 		oi = oi + 1
@@ -383,9 +382,8 @@ function splitAtPosition(range LiveRange, func IrFunction, module TargetModule, 
 	while preOi < precheckOpCount 'redefScan'
 		let packed = try precheckBlock.opRefs.get(preOi) otherwise panic("splitAtPosition.redefScan: preOi < count but get({preOi}) failed")
 		var defs = RegIntArray.create()
-		regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
-		let defMark = getOr(defs, index: range.valueId, fallback: -1)
-		if defMark == 1 'isRedef'
+		regTarget.noteOpDefs(module, defs: defs, packed: packed)
+		if idListContains(defs, target: range.valueId) 'isRedef'
 			// Found a redef before any rewrite — bail out cleanly.
 			logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} redef at opIdx={preOi} in defBlock={targetBlockId}")
 			return false
@@ -444,9 +442,8 @@ function splitAtPosition(range LiveRange, func IrFunction, module TargetModule, 
 
 		// Stop walking if this op redefines range.valueId.
 		var defs = RegIntArray.create()
-		regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
-		let defMark = getOr(defs, index: range.valueId, fallback: -1)
-		if defMark == 1 'isRedef'
+		regTarget.noteOpDefs(module, defs: defs, packed: packed)
+		if idListContains(defs, target: range.valueId) 'isRedef'
 			break
 		end 'isRedef'
 

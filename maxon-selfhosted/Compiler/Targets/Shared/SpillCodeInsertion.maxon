@@ -673,8 +673,8 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 
 	// Step 1: Find which values this op reads that are spilled or
 	// rematerialized.
-	var counts = RegIntArray.create()
-	regTarget.countOpReads(module, counts: counts, packed: packed)
+	var reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
 
 	// Step 1a (Phase 3): if the target can fold reg-mem ALU ops, see if
 	// any spilled read of this op can be folded into a `*Mem` form. The
@@ -685,7 +685,7 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 	var workingPacked = packed
 	var skipFoldedId = -1
 	if desc.hasMemOperandAlu 'tryFold'
-		let foldRes = tryFoldOneSpilledRead(module, state: state, counts: counts, packed: packed, regTarget: regTarget)
+		let foldRes = tryFoldOneSpilledRead(module, state: state, reads: reads, packed: packed, regTarget: regTarget)
 		if foldRes.opIndex >= 0 'folded'
 			workingPacked = foldRes.opIndex
 			skipFoldedId = foldRes.foldedValueId
@@ -697,45 +697,51 @@ function processOp(module TargetModule, state SpillInsertState, packed OpIndex, 
 	var remap = RegIntArray.create()
 	var needsRemap = false
 
-	var ri = 0
-	while ri < counts.count() 'checkReads'
-		let cnt = try counts.get(ri) otherwise panic("processOp.checkReads: ri < counts.count() by loop guard but get({ri}) failed")
+	var idx = 0
+	while idx < reads.count() 'checkReads'
+		let readId = try reads.get(idx) otherwise panic("processOp.checkReads: idx < reads.count() by loop guard but get({idx}) failed")
 
-		if cnt > 0 and ri != skipFoldedId 'isRead'
-			let isRemat = try state.rematerializeIds.get(ri) otherwise false
+		// A value read in two operand positions of one op (e.g. testRegReg r,r)
+		// appears twice in the sparse list; the former dense scan visited each
+		// valueId at most once. Skip a second occurrence once a remap exists for
+		// it so reload/remat ops are emitted exactly once, preserving output.
+		let alreadyRemapped = getOr(remap, index: readId, fallback: RM_NONE) != RM_NONE
+
+		if readId != skipFoldedId and not alreadyRemapped 'isRead'
+			let isRemat = try state.rematerializeIds.get(readId) otherwise false
 			if isRemat 'isRematRead'
 				// Rematerializable read: emit a fresh constant load
 				// targeting a brand-new vreg, then remap the use to that
 				// vreg. No reload-from-stack — the constant has no slot.
-				let rc = getOr(state.spillRegClass, index: ri, fallback: SPILL_RC_GPR)
-				let constVal = getOr(state.rematerializeValue, index: ri, fallback: 0)
+				let rc = getOr(state.spillRegClass, index: readId, fallback: SPILL_RC_GPR)
+				let constVal = getOr(state.rematerializeValue, index: readId, fallback: 0)
 				let freshId = freshRematId(state, constVal: constVal)
 				regTarget.emitRematConst(module, ops: dstOps, freshId: freshId, constantValue: constVal, regClass: rc)
-				set(remap, index: ri, value: freshId, sentinel: RM_NONE)
+				set(remap, index: readId, value: freshId, sentinel: RM_NONE)
 				needsRemap = true
 			end 'isRematRead' else 'notRemat'
-				let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
+				let slotOffset = getOr(state.spillSlots, index: readId, fallback: RM_NONE)
 				if slotOffset != RM_NONE 'isSpilled'
 					// Plain spilled value — reuse a cached reload from
 					// earlier in this block when available; otherwise
 					// emit a fresh reload and record its vreg id.
-					let cachedId = getOr(reloadCacheIds, index: ri, fallback: RM_NONE)
+					let cachedId = getOr(reloadCacheIds, index: readId, fallback: RM_NONE)
 					if cachedId != RM_NONE 'cached'
-						set(remap, index: ri, value: cachedId, sentinel: RM_NONE)
+						set(remap, index: readId, value: cachedId, sentinel: RM_NONE)
 					end 'cached' else 'fresh'
-						let rc = getOr(state.spillRegClass, index: ri, fallback: SPILL_RC_GPR)
+						let rc = getOr(state.spillRegClass, index: readId, fallback: SPILL_RC_GPR)
 						let freshId = freshValueId(state)
 						let stackOff = computeStackOffset(state, slotOffset: slotOffset)
 						regTarget.emitReloadOp(module, ops: dstOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
-						set(remap, index: ri, value: freshId, sentinel: RM_NONE)
-						set(reloadCacheIds, index: ri, value: freshId, sentinel: RM_NONE)
+						set(remap, index: readId, value: freshId, sentinel: RM_NONE)
+						set(reloadCacheIds, index: readId, value: freshId, sentinel: RM_NONE)
 					end 'fresh'
 					needsRemap = true
 				end 'isSpilled'
 			end 'notRemat'
 		end 'isRead'
 
-		ri = ri + 1
+		idx = idx + 1
 	end 'checkReads'
 
 	// Step 2: Remap the (possibly folded) op if any reads were spilled
@@ -789,24 +795,26 @@ end 'FoldResult'
 // Rematerializable reads are still routed through the standard remat
 // path — folding them would discard the constant load that would
 // otherwise be issued at the use site.
-function tryFoldOneSpilledRead(module TargetModule, state SpillInsertState, counts RegIntArray, packed OpIndex, regTarget RegAllocTarget) returns FoldResult
-	var ri = 0
-	while ri < counts.count() 'scan'
-		let cnt = try counts.get(ri) otherwise panic("tryFoldOneSpilledRead.scan: ri < counts.count() by loop guard but get({ri}) failed")
-		if cnt > 0 'isRead'
-			let isRemat = try state.rematerializeIds.get(ri) otherwise false
-			if not isRemat 'notRemat'
-				let slotOffset = getOr(state.spillSlots, index: ri, fallback: RM_NONE)
-				if slotOffset != RM_NONE 'isSpilled'
-					let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-					let foldIdx = regTarget.tryFoldReadFromSlot(module, packed: packed, valueId: ri, stackOffset: stackOff)
-					if foldIdx >= 0 'accepted'
-						return FoldResult.success(foldIdx, valueId: ri)
-					end 'accepted'
-				end 'isSpilled'
-			end 'notRemat'
-		end 'isRead'
-		ri = ri + 1
+// `reads` is the op's sparse read-id list. At most one operand position per op
+// shape is fold-eligible (the source/rhs, and only when it differs from the
+// dest/lhs — see foldTwoAddrToMem / foldCmpToMem), so the unique foldable read
+// is found regardless of the list's operand order.
+function tryFoldOneSpilledRead(module TargetModule, state SpillInsertState, reads RegIntArray, packed OpIndex, regTarget RegAllocTarget) returns FoldResult
+	var idx = 0
+	while idx < reads.count() 'scan'
+		let readId = try reads.get(idx) otherwise panic("tryFoldOneSpilledRead.scan: idx < reads.count() by loop guard but get({idx}) failed")
+		let isRemat = try state.rematerializeIds.get(readId) otherwise false
+		if not isRemat 'notRemat'
+			let slotOffset = getOr(state.spillSlots, index: readId, fallback: RM_NONE)
+			if slotOffset != RM_NONE 'isSpilled'
+				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
+				let foldIdx = regTarget.tryFoldReadFromSlot(module, packed: packed, valueId: readId, stackOffset: stackOff)
+				if foldIdx >= 0 'accepted'
+					return FoldResult.success(foldIdx, valueId: readId)
+				end 'accepted'
+			end 'isSpilled'
+		end 'notRemat'
+		idx = idx + 1
 	end 'scan'
 	return FoldResult.none()
 end 'tryFoldOneSpilledRead'
@@ -826,42 +834,40 @@ end 'tryFoldOneSpilledRead'
 // original spill slot, keeping subsequent reloads coherent.
 function processDefsForOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, remap RegIntArray, regTarget RegAllocTarget, reloadCacheIds RegIntArray)
 	var defs = RegIntArray.create()
-	regTarget.noteOpDefs(module, defBlocks: defs, blockIdx: 1, packed: packed)
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
 
 	var di = 0
 	while di < defs.count() 'checkDefs'
-		let defBlock = try defs.get(di) otherwise panic("processDefsForOp.checkDefs: di < defs.count() by loop guard but get({di}) failed")
+		let defId = try defs.get(di) otherwise panic("processDefsForOp.checkDefs: di < defs.count() by loop guard but get({di}) failed")
 
-		if defBlock == 1 'isDef'
-			let isRematDef = try state.rematerializeIds.get(di) otherwise false
-			if isRematDef 'rematDef'
-				// Constant-defining op: the def's result vreg is dead
-				// from this point — every use will rematerialize from
-				// the constant. No spill store needed.
-				di = di + 1
-				continue
-			end 'rematDef'
+		let isRematDef = try state.rematerializeIds.get(defId) otherwise false
+		if isRematDef 'rematDef'
+			// Constant-defining op: the def's result vreg is dead
+			// from this point — every use will rematerialize from
+			// the constant. No spill store needed.
+			di = di + 1
+			continue
+		end 'rematDef'
 
-			let slotOffset = getOr(state.spillSlots, index: di, fallback: RM_NONE)
-			if slotOffset != RM_NONE 'isSpilledDef'
-				let rc = getOr(state.spillRegClass, index: di, fallback: SPILL_RC_GPR)
-				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				// If the def was also remapped (two-address read-and-write of
-				// a spilled value), store the remapped id so the slot holds
-				// the updated value. Otherwise store the original value id.
-				let remappedId = getOr(remap, index: di, fallback: RM_NONE)
-				var storeId = di
-				if remappedId != RM_NONE 'isRemap'
-					storeId = remappedId
-				end 'isRemap'
-				logTrace(LogCategory.ir, message: function() gives "spill-store: %{di} (as %{storeId}) -> [{stackOff}]")
-				regTarget.emitSpillStore(module, ops: dstOps, valueId: storeId, stackOffset: stackOff, regClass: rc)
-				// The slot now holds a NEW definition. Invalidate any
-				// cached reload vreg for this valueId so subsequent
-				// reads reload the fresh data.
-				set(reloadCacheIds, index: di, value: RM_NONE, sentinel: RM_NONE)
-			end 'isSpilledDef'
-		end 'isDef'
+		let slotOffset = getOr(state.spillSlots, index: defId, fallback: RM_NONE)
+		if slotOffset != RM_NONE 'isSpilledDef'
+			let rc = getOr(state.spillRegClass, index: defId, fallback: SPILL_RC_GPR)
+			let stackOff = computeStackOffset(state, slotOffset: slotOffset)
+			// If the def was also remapped (two-address read-and-write of
+			// a spilled value), store the remapped id so the slot holds
+			// the updated value. Otherwise store the original value id.
+			let remappedId = getOr(remap, index: defId, fallback: RM_NONE)
+			var storeId = defId
+			if remappedId != RM_NONE 'isRemap'
+				storeId = remappedId
+			end 'isRemap'
+			logTrace(LogCategory.ir, message: function() gives "spill-store: %{defId} (as %{storeId}) -> [{stackOff}]")
+			regTarget.emitSpillStore(module, ops: dstOps, valueId: storeId, stackOffset: stackOff, regClass: rc)
+			// The slot now holds a NEW definition. Invalidate any
+			// cached reload vreg for this valueId so subsequent
+			// reads reload the fresh data.
+			set(reloadCacheIds, index: defId, value: RM_NONE, sentinel: RM_NONE)
+		end 'isSpilledDef'
 
 		di = di + 1
 	end 'checkDefs'

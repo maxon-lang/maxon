@@ -519,244 +519,237 @@ end 'x64FpVRegId'
 // X64 use count and classification
 // ============================================================
 
-// Collect read VReg IDs from an X64 op and record their last use at opIdx.
-function countX64OpReads(counts RegIntArray, x64Op X64Op)
+// Collect read VReg IDs from an X64 op into a sparse read-id list.
+function collectX64OpReads(reads RegIntArray, x64Op X64Op)
 	match x64Op 'scan'
 		prologue to ret then break 'scan'
 		movRegImm to movRegImm32 then break 'scan'
-		movSlot(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		movSlot(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
 		loadSlot then break 'scan'
-		addRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		subRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		addRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
-		subRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
-		imulRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		addRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
+		subRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
+		addRegImm(destReg, _) then collectRead(reads, id: x64VRegId(destReg))
+		subRegImm(destReg, _) then collectRead(reads, id: x64VRegId(destReg))
+		imulRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
 		idivRcx to iremRcx then break 'scan'
-		negReg(reg) then incUse(counts, id: x64VRegId(reg))
-		bitNotReg(reg) then incUse(counts, id: x64VRegId(reg))
-		andRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		orRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		xorRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		shlRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
-		sarRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
-		shrRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
+		negReg(reg) then collectRead(reads, id: x64VRegId(reg))
+		bitNotReg(reg) then collectRead(reads, id: x64VRegId(reg))
+		andRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
+		orRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
+		xorRegReg(destReg, srcReg) then collectX64TwoReads(reads, reg1: destReg, reg2: srcReg)
+		shlRegCl(_, operand, shiftCount) then collectX64TwoReads(reads, reg1: operand, reg2: shiftCount)
+		sarRegCl(_, operand, shiftCount) then collectX64TwoReads(reads, reg1: operand, reg2: shiftCount)
+		shrRegCl(_, operand, shiftCount) then collectX64TwoReads(reads, reg1: operand, reg2: shiftCount)
 		cmpRaxRcx to addRspImm then break 'scan'
-		movRspOffsetReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		movRspOffsetReg(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
 		loadRegRbpOffset then break 'scan'
 		callDirect to memcpyOp then break 'scan'
-		movRegReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
-		cmpRegReg(lhsReg, rhsReg) then countX64TwoReads(counts, reg1: lhsReg, reg2: rhsReg)
-		cmpRegImm(lhsReg, _) then incUse(counts, id: x64VRegId(lhsReg))
-		testRegReg(reg1, reg2) then countX64TwoReads(counts, reg1: reg1, reg2: reg2)
+		movRegReg(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
+		cmpRegReg(lhsReg, rhsReg) then collectX64TwoReads(reads, reg1: lhsReg, reg2: rhsReg)
+		cmpRegImm(lhsReg, _) then collectRead(reads, id: x64VRegId(lhsReg))
+		testRegReg(reg1, reg2) then collectX64TwoReads(reads, reg1: reg1, reg2: reg2)
 		cqo then break 'scan'
-		idivReg(divisorReg) then incUse(counts, id: x64VRegId(divisorReg))
-		spillToStack(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		idivReg(divisorReg) then collectRead(reads, id: x64VRegId(divisorReg))
+		spillToStack(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
 		reloadFromStack to xorRegRegSelf then break 'scan'
-		callIndirect(reg) then incUse(counts, id: x64VRegId(reg))
-		xchgRegReg(reg1, reg2) then countX64TwoReads(counts, reg1: reg1, reg2: reg2)
-		movXmmXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
-		spillXmmToStack(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		callIndirect(reg) then collectRead(reads, id: x64VRegId(reg))
+		xchgRegReg(reg1, reg2) then collectX64TwoReads(reads, reg1: reg1, reg2: reg2)
+		movXmmXmm(_, src, _) then collectRead(reads, id: x64FpVRegId(src))
+		spillXmmToStack(_, src, _) then collectRead(reads, id: x64FpVRegId(src))
 		reloadXmmFromStack to movXmmRipRel then break 'scan'
-		addXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		subXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		mulXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		divXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		minXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		maxXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
-		sqrtXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
-		roundXmm(_, src, _, _) then incUse(counts, id: x64FpVRegId(src))
-		ucomisXmm(src1, src2, _) then countX64FpTwoReads(counts, fp1: src1, fp2: src2)
-		cvtSi2Float(_, src, _) then incUse(counts, id: x64VRegId(src))
-		cvttFloat2Si(_, src, _) then incUse(counts, id: x64FpVRegId(src))
-		cvtSd2Ss(_, src) then incUse(counts, id: x64FpVRegId(src))
-		cvtSs2Sd(_, src) then incUse(counts, id: x64FpVRegId(src))
-		movqXmmToGpr(_, src) then incUse(counts, id: x64FpVRegId(src))
-		movqGprToXmm(_, src) then incUse(counts, id: x64VRegId(src))
-		andMaskRipRel(dest, _, _) then incUse(counts, id: x64FpVRegId(dest))
-		storeIndirect(baseReg, _, srcReg, _) then countX64TwoReads(counts, reg1: baseReg, reg2: srcReg)
-		loadIndirect(_, baseReg, _, _, _) then incUse(counts, id: x64VRegId(baseReg))
-		storeIndirectXmm(baseReg, _, src, _) then countX64MixedReads(counts, gpr: baseReg, fp: src)
-		loadIndirectXmm(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
+		addXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		subXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		mulXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		divXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		minXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		maxXmm(dest, src, _) then collectX64FpTwoReads(reads, fp1: dest, fp2: src)
+		sqrtXmm(_, src, _) then collectRead(reads, id: x64FpVRegId(src))
+		roundXmm(_, src, _, _) then collectRead(reads, id: x64FpVRegId(src))
+		ucomisXmm(src1, src2, _) then collectX64FpTwoReads(reads, fp1: src1, fp2: src2)
+		cvtSi2Float(_, src, _) then collectRead(reads, id: x64VRegId(src))
+		cvttFloat2Si(_, src, _) then collectRead(reads, id: x64FpVRegId(src))
+		cvtSd2Ss(_, src) then collectRead(reads, id: x64FpVRegId(src))
+		cvtSs2Sd(_, src) then collectRead(reads, id: x64FpVRegId(src))
+		movqXmmToGpr(_, src) then collectRead(reads, id: x64FpVRegId(src))
+		movqGprToXmm(_, src) then collectRead(reads, id: x64VRegId(src))
+		andMaskRipRel(dest, _, _) then collectRead(reads, id: x64FpVRegId(dest))
+		storeIndirect(baseReg, _, srcReg, _) then collectX64TwoReads(reads, reg1: baseReg, reg2: srcReg)
+		loadIndirect(_, baseReg, _, _, _) then collectRead(reads, id: x64VRegId(baseReg))
+		storeIndirectXmm(baseReg, _, src, _) then collectX64MixedReads(reads, gpr: baseReg, fp: src)
+		loadIndirectXmm(_, baseReg, _, _) then collectRead(reads, id: x64VRegId(baseReg))
 		globalLoad then break 'scan'
-		globalStore(_, src, _) then incUse(counts, id: x64VRegId(src))
+		globalStore(_, src, _) then collectRead(reads, id: x64VRegId(src))
 		globalLoadXmm then break 'scan'
-		globalStoreXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		globalStoreXmm(_, src, _) then collectRead(reads, id: x64FpVRegId(src))
 		leaFromStack to setcc then break 'scan'
-		cmov(_, src, _) then incUse(counts, id: x64VRegId(src))
-		movsxd(_, src) then incUse(counts, id: x64VRegId(src))
-		movzx32(_, src) then incUse(counts, id: x64VRegId(src))
-		nullSafeLoad(_, baseReg, _) then incUse(counts, id: x64VRegId(baseReg))
+		cmov(_, src, _) then collectRead(reads, id: x64VRegId(src))
+		movsxd(_, src) then collectRead(reads, id: x64VRegId(src))
+		movzx32(_, src) then collectRead(reads, id: x64VRegId(src))
+		nullSafeLoad(_, baseReg, _) then collectRead(reads, id: x64VRegId(baseReg))
 		repMovsb to repStosq then break 'scan'
-		lockIncMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
-		lockDecMemory(addrReg) then incUse(counts, id: x64VRegId(addrReg))
-		lockXaddMemReg(valReg, addrReg) then countX64TwoReads(counts, reg1: valReg, reg2: addrReg)
-		lockCmpxchgMemReg(newReg, addrReg) then countX64TwoReads(counts, reg1: newReg, reg2: addrReg)
+		lockIncMemory(addrReg) then collectRead(reads, id: x64VRegId(addrReg))
+		lockDecMemory(addrReg) then collectRead(reads, id: x64VRegId(addrReg))
+		lockXaddMemReg(valReg, addrReg) then collectX64TwoReads(reads, reg1: valReg, reg2: addrReg)
+		lockCmpxchgMemReg(newReg, addrReg) then collectX64TwoReads(reads, reg1: newReg, reg2: addrReg)
 		stashEntryArgv then break 'scan'
 		// Phase 2: dest is both read and written, base is read.
-		addRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		subRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		andRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		orRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		xorRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		imulRegMem(destReg, baseReg, _) then countX64TwoReads(counts, reg1: destReg, reg2: baseReg)
-		cmpRegMem(lhsReg, baseReg, _) then countX64TwoReads(counts, reg1: lhsReg, reg2: baseReg)
-		andRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
-		orRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
-		xorRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
-		imulRegImm(_, srcReg, _) then incUse(counts, id: x64VRegId(srcReg))
+		addRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		subRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		andRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		orRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		xorRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		imulRegMem(destReg, baseReg, _) then collectX64TwoReads(reads, reg1: destReg, reg2: baseReg)
+		cmpRegMem(lhsReg, baseReg, _) then collectX64TwoReads(reads, reg1: lhsReg, reg2: baseReg)
+		andRegImm(destReg, _) then collectRead(reads, id: x64VRegId(destReg))
+		orRegImm(destReg, _) then collectRead(reads, id: x64VRegId(destReg))
+		xorRegImm(destReg, _) then collectRead(reads, id: x64VRegId(destReg))
+		imulRegImm(_, srcReg, _) then collectRead(reads, id: x64VRegId(srcReg))
 	end 'scan'
-end 'countX64OpReads'
+end 'collectX64OpReads'
 
-// Record the block index where each value is defined.
-// defBlocks[valueId] = blockIdx (using set).
-function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64Op)
+// Append the valueIds this op DEFINES into the sparse `defs` id list.
+function noteX64OpDefs(defs RegIntArray, x64Op X64Op)
 	let pat = x64Op.rawValue.pattern
 	match pat 'patDef'
 		passThrough then break 'patDef'
-		singleDef then noteX64SingleDef(defBlocks, blockIdx: blockIdx, op: x64Op)
+		singleDef then noteX64SingleDef(defs, op: x64Op)
 		singleUse then break 'patDef'
-		defUse then noteX64DefUse(defBlocks, blockIdx: blockIdx, op: x64Op)
-		twoAddr then noteX64TwoAddr(defBlocks, blockIdx: blockIdx, op: x64Op)
-		useDefImm then noteX64UseDefImm(defBlocks, blockIdx: blockIdx, op: x64Op)
-		unaryInPlace then noteX64UnaryInPlace(defBlocks, blockIdx: blockIdx, op: x64Op)
+		defUse then noteX64DefUse(defs, op: x64Op)
+		twoAddr then noteX64TwoAddr(defs, op: x64Op)
+		useDefImm then noteX64UseDefImm(defs, op: x64Op)
+		unaryInPlace then noteX64UnaryInPlace(defs, op: x64Op)
 		threeAddr to baseUseSrcUse then break 'patDef'
-		baseUseDest then noteX64BaseUseDest(defBlocks, blockIdx: blockIdx, op: x64Op)
-		fpSingleDef then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		baseUseDest then noteX64BaseUseDest(defs, op: x64Op)
+		fpSingleDef then noteX64FpDef(defs, op: x64Op, pat: pat)
 		fpSingleUse then break 'patDef'
-		fpDefUse then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
-		fpTwoAddr then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
+		fpDefUse then noteX64FpDef(defs, op: x64Op, pat: pat)
+		fpTwoAddr then noteX64FpDef(defs, op: x64Op, pat: pat)
 		fpThreeAddr to fpTwoUse then break 'patDef'
-		fpMov then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
-		gprToFp then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
-		fpToGpr then noteX64FpToGprDef(defBlocks, blockIdx: blockIdx, op: x64Op)
+		fpMov then noteX64FpDef(defs, op: x64Op, pat: pat)
+		gprToFp then noteX64FpDef(defs, op: x64Op, pat: pat)
+		fpToGpr then noteX64FpToGprDef(defs, op: x64Op)
 		baseUseFpUse then break 'patDef'
-		baseUseFpDef then noteX64FpDef(defBlocks, blockIdx: blockIdx, op: x64Op, pat: pat)
-		movRegReg then noteX64MovRegRegDef(defBlocks, blockIdx: blockIdx, op: x64Op)
-		constImm then noteX64ConstImm(defBlocks, blockIdx: blockIdx, op: x64Op)
-		shift then noteX64Shift(defBlocks, blockIdx: blockIdx, op: x64Op)
+		baseUseFpDef then noteX64FpDef(defs, op: x64Op, pat: pat)
+		movRegReg then noteX64MovRegRegDef(defs, op: x64Op)
+		constImm then noteX64ConstImm(defs, op: x64Op)
+		shift then noteX64Shift(defs, op: x64Op)
 		divReg to csel then break 'patDef'
-		baseUseUseDef then noteX64BaseUseUseDef(defBlocks, blockIdx: blockIdx, op: x64Op)
+		baseUseUseDef then noteX64BaseUseUseDef(defs, op: x64Op)
 		baseTwoUse then break 'patDef'
-		defUseImm then noteX64DefUseImm(defBlocks, blockIdx: blockIdx, op: x64Op)
+		defUseImm then noteX64DefUseImm(defs, op: x64Op)
 		fourAddr then break 'patDef'
 	end 'patDef'
 end 'noteX64OpDefs'
 
-function noteX64DefId(defBlocks RegIntArray, blockIdx RegInt, vreg X64VReg)
-	let id = x64VRegId(vreg)
-	if id >= 0 'valid'
-		set(defBlocks, index: id, value: blockIdx, sentinel: -1)
-	end 'valid'
+function noteX64DefId(defs RegIntArray, vreg X64VReg)
+	collectDef(defs, id: x64VRegId(vreg))
 end 'noteX64DefId'
 
-function noteX64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64SingleDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		loadSlot(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		loadRegRbpOffset(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		reloadFromStack(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		xorRegRegSelf(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
-		globalLoad(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		leaFromStack(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		leaRipRelative(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		leaFuncAddr(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		setcc(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadSlot(dest, _) then noteX64DefId(defs, vreg: dest)
+		loadRegRbpOffset(dest, _) then noteX64DefId(defs, vreg: dest)
+		reloadFromStack(dest, _) then noteX64DefId(defs, vreg: dest)
+		xorRegRegSelf(reg) then noteX64DefId(defs, vreg: reg)
+		globalLoad(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		leaFromStack(dest, _) then noteX64DefId(defs, vreg: dest)
+		leaRipRelative(dest, _) then noteX64DefId(defs, vreg: dest)
+		leaFuncAddr(dest, _) then noteX64DefId(defs, vreg: dest)
+		setcc(dest, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64SingleDef'
 
-function noteX64DefUse(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64DefUse(defs RegIntArray, op X64Op)
 	match op 'extract'
-		movsxd(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		movzx32(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movsxd(dest, _) then noteX64DefId(defs, vreg: dest)
+		movzx32(dest, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64DefUse'
 
-function noteX64TwoAddr(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64TwoAddr(defs RegIntArray, op X64Op)
 	match op 'extract'
-		addRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		subRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		imulRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		andRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		orRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		xorRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		cmov(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		lockXaddMemReg(valReg, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: valReg)
+		addRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		subRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		imulRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		andRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		orRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		xorRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		cmov(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		lockXaddMemReg(valReg, _) then noteX64DefId(defs, vreg: valReg)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64TwoAddr'
 
-function noteX64UseDefImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64UseDefImm(defs RegIntArray, op X64Op)
 	match op 'extract'
-		addRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		subRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		andRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		orRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		xorRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		addRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		subRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		andRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		orRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		xorRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64UseDefImm'
 
-function noteX64UnaryInPlace(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64UnaryInPlace(defs RegIntArray, op X64Op)
 	match op 'extract'
-		negReg(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
-		bitNotReg(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
+		negReg(reg) then noteX64DefId(defs, vreg: reg)
+		bitNotReg(reg) then noteX64DefId(defs, vreg: reg)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64UnaryInPlace'
 
-function noteX64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64BaseUseDest(defs RegIntArray, op X64Op)
 	match op 'extract'
-		loadIndirect(dest, _, _, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		nullSafeLoad(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIndirect(dest, _, _, _, _) then noteX64DefId(defs, vreg: dest)
+		nullSafeLoad(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64BaseUseDest'
 
 // Phase 2: memory-operand ALU. Dest is both used and (re)defined.
-function noteX64BaseUseUseDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64BaseUseUseDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		addRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		subRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		andRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		orRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		xorRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		imulRegMem(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		addRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		subRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		andRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		orRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		xorRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		imulRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64BaseUseUseDef'
 
 // Phase 2: three-operand immediate form. Dest is def-only.
-function noteX64DefUseImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64DefUseImm(defs RegIntArray, op X64Op)
 	match op 'extract'
-		imulRegImm(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		imulRegImm(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64DefUseImm'
 
-function noteX64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64MovRegRegDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		movRegReg(destReg, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
+		movRegReg(destReg, _) then noteX64DefId(defs, vreg: destReg)
 		prologue to memcpyOp then break 'extract'
 		cmpRegReg to imulRegImm then break 'extract'
 	end 'extract'
 end 'noteX64MovRegRegDef'
 
-function noteX64FpDefId(defBlocks RegIntArray, blockIdx RegInt, vreg X64FpVReg)
-	let id = x64FpVRegId(vreg)
-	if id >= 0 'valid'
-		set(defBlocks, index: id, value: blockIdx, sentinel: -1)
-	end 'valid'
+function noteX64FpDefId(defs RegIntArray, vreg X64FpVReg)
+	collectDef(defs, id: x64FpVRegId(vreg))
 end 'noteX64FpDefId'
 
-function noteX64FpDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op, pat OpPattern)
+function noteX64FpDef(defs RegIntArray, op X64Op, pat OpPattern)
 	match pat 'which'
-		fpSingleDef then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpSingleDef(op))
-		fpDefUse then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpDefUseOperands(op).0)
-		fpTwoAddr then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetFpTwoAddrOperands(op).0)
-		fpMov then noteX64FpMovDef(defBlocks, blockIdx: blockIdx, op: op)
-		gprToFp then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: x64GetGprToFpOperands(op).0)
-		baseUseFpDef then noteX64BaseUseFpDefDef(defBlocks, blockIdx: blockIdx, op: op)
+		fpSingleDef then noteX64FpDefId(defs, vreg: x64GetFpSingleDef(op))
+		fpDefUse then noteX64FpDefId(defs, vreg: x64GetFpDefUseOperands(op).0)
+		fpTwoAddr then noteX64FpDefId(defs, vreg: x64GetFpTwoAddrOperands(op).0)
+		fpMov then noteX64FpMovDef(defs, op: op)
+		gprToFp then noteX64FpDefId(defs, vreg: x64GetGprToFpOperands(op).0)
+		baseUseFpDef then noteX64BaseUseFpDefDef(defs, op: op)
 		passThrough to baseUseDest then break 'which'
 		fpSingleUse then break 'which'
 		fpThreeAddr then break 'which'
@@ -769,45 +762,45 @@ function noteX64FpDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op, pat OpPa
 	end 'which'
 end 'noteX64FpDef'
 
-function noteX64FpMovDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64FpMovDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		movXmmXmm(dest, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movXmmXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
 		prologue to xchgRegReg then break 'extract'
 		spillXmmToStack to imulRegImm then break 'extract'
 	end 'extract'
 end 'noteX64FpMovDef'
 
-function noteX64FpToGprDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64FpToGprDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		cvttFloat2Si(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		movqXmmToGpr(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		cvttFloat2Si(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		movqXmmToGpr(dest, _) then noteX64DefId(defs, vreg: dest)
 		prologue to cvtSi2Float then break 'extract'
 		cvtSd2Ss to cvtSs2Sd then break 'extract'
 		movqGprToXmm to imulRegImm then break 'extract'
 	end 'extract'
 end 'noteX64FpToGprDef'
 
-function noteX64BaseUseFpDefDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64BaseUseFpDefDef(defs RegIntArray, op X64Op)
 	match op 'extract'
-		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defs, vreg: dest)
 		prologue to storeIndirectXmm then break 'extract'
 		globalLoad to imulRegImm then break 'extract'
 	end 'extract'
 end 'noteX64BaseUseFpDefDef'
 
-function noteX64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64ConstImm(defs RegIntArray, op X64Op)
 	match op 'extract'
-		movRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		movRegImm32(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		movRegImm32(dest, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64ConstImm'
 
-function noteX64Shift(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+function noteX64Shift(defs RegIntArray, op X64Op)
 	match op 'extract'
-		shlRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		sarRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
-		shrRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		shlRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		sarRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		shrRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
 end 'noteX64Shift'
@@ -973,151 +966,20 @@ function x64PhysMaskDefUseImm(op X64Op) returns RegMask
 	end 'extract'
 end 'x64PhysMaskDefUseImm'
 
-function countX64TwoReads(counts RegIntArray, reg1 X64VReg, reg2 X64VReg)
-	incUse(counts, id: x64VRegId(reg1))
-	incUse(counts, id: x64VRegId(reg2))
-end 'countX64TwoReads'
+function collectX64TwoReads(reads RegIntArray, reg1 X64VReg, reg2 X64VReg)
+	collectRead(reads, id: x64VRegId(reg1))
+	collectRead(reads, id: x64VRegId(reg2))
+end 'collectX64TwoReads'
 
-function countX64FpTwoReads(counts RegIntArray, fp1 X64FpVReg, fp2 X64FpVReg)
-	incUse(counts, id: x64FpVRegId(fp1))
-	incUse(counts, id: x64FpVRegId(fp2))
-end 'countX64FpTwoReads'
+function collectX64FpTwoReads(reads RegIntArray, fp1 X64FpVReg, fp2 X64FpVReg)
+	collectRead(reads, id: x64FpVRegId(fp1))
+	collectRead(reads, id: x64FpVRegId(fp2))
+end 'collectX64FpTwoReads'
 
-function countX64MixedReads(counts RegIntArray, gpr X64VReg, fp X64FpVReg)
-	incUse(counts, id: x64VRegId(gpr))
-	incUse(counts, id: x64FpVRegId(fp))
-end 'countX64MixedReads'
-
-// Record the last use position for each read operand of an X64 op.
-// Mirrors countX64OpReads but calls recordLastUse instead of incUse.
-function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx RegInt)
-	match x64Op 'scan'
-		prologue to ret then break 'scan'
-		movRegImm to movRegImm32 then break 'scan'
-		movSlot(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
-		loadSlot then break 'scan'
-		addRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		subRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		addRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
-		subRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
-		imulRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		idivRcx to iremRcx then break 'scan'
-		negReg(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
-		bitNotReg(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
-		andRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		orRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		xorRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
-		shlRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
-		sarRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
-		shrRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
-		cmpRaxRcx to addRspImm then break 'scan'
-		movRspOffsetReg(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
-		loadRegRbpOffset then break 'scan'
-		callDirect to memcpyOp then break 'scan'
-		movRegReg(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
-		cmpRegReg(lhsReg, rhsReg) then recordX64TwoLastUses(positions, reg1: lhsReg, reg2: rhsReg, opIdx: opIdx)
-		cmpRegImm(lhsReg, _) then recordLastUse(positions, id: x64VRegId(lhsReg), opIdx: opIdx)
-		testRegReg(reg1, reg2) then recordX64TwoLastUses(positions, reg1: reg1, reg2: reg2, opIdx: opIdx)
-		cqo then break 'scan'
-		idivReg(divisorReg) then recordLastUse(positions, id: x64VRegId(divisorReg), opIdx: opIdx)
-		spillToStack(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
-		reloadFromStack to xorRegRegSelf then break 'scan'
-		callIndirect(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
-		xchgRegReg(reg1, reg2) then recordX64TwoLastUses(positions, reg1: reg1, reg2: reg2, opIdx: opIdx)
-		movXmmXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		spillXmmToStack(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		reloadXmmFromStack to movXmmRipRel then break 'scan'
-		addXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		subXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		mulXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		divXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		minXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		maxXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
-		sqrtXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		roundXmm(_, src, _, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		ucomisXmm(src1, src2, _) then recordX64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
-		cvtSi2Float(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		cvttFloat2Si(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		cvtSd2Ss(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		cvtSs2Sd(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		movqXmmToGpr(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		movqGprToXmm(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		andMaskRipRel(dest, _, _) then recordLastUse(positions, id: x64FpVRegId(dest), opIdx: opIdx)
-		storeIndirect(baseReg, _, srcReg, _) then recordX64TwoLastUses(positions, reg1: baseReg, reg2: srcReg, opIdx: opIdx)
-		loadIndirect(_, baseReg, _, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
-		storeIndirectXmm(baseReg, _, src, _) then recordX64MixedLastUses(positions, gpr: baseReg, fp: src, opIdx: opIdx)
-		loadIndirectXmm(_, baseReg, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
-		globalLoad then break 'scan'
-		globalStore(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		globalLoadXmm then break 'scan'
-		globalStoreXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
-		leaFromStack to setcc then break 'scan'
-		cmov(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		movsxd(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		movzx32(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
-		nullSafeLoad(_, baseReg, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
-		repMovsb to repStosq then break 'scan'
-		lockIncMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
-		lockDecMemory(addrReg) then recordLastUse(positions, id: x64VRegId(addrReg), opIdx: opIdx)
-		lockXaddMemReg(valReg, addrReg) then recordX64TwoLastUses(positions, reg1: valReg, reg2: addrReg, opIdx: opIdx)
-		lockCmpxchgMemReg(newReg, addrReg) then recordX64TwoLastUses(positions, reg1: newReg, reg2: addrReg, opIdx: opIdx)
-		stashEntryArgv then break 'scan'
-		// Phase 2: memory-operand ALU — both dest (use+def) and base (use) are reads.
-		addRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		subRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		andRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		orRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		xorRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		imulRegMem(destReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: destReg, reg2: baseReg, opIdx: opIdx)
-		cmpRegMem(lhsReg, baseReg, _) then recordX64TwoLastUses(positions, reg1: lhsReg, reg2: baseReg, opIdx: opIdx)
-		andRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
-		orRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
-		xorRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
-		imulRegImm(_, srcReg, _) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
-	end 'scan'
-end 'recordX64OpLastUses'
-
-function recordX64TwoLastUses(positions RegIntArray, reg1 X64VReg, reg2 X64VReg, opIdx RegInt)
-	recordLastUse(positions, id: x64VRegId(reg1), opIdx: opIdx)
-	recordLastUse(positions, id: x64VRegId(reg2), opIdx: opIdx)
-end 'recordX64TwoLastUses'
-
-function recordX64FpTwoLastUses(positions RegIntArray, fp1 X64FpVReg, fp2 X64FpVReg, opIdx RegInt)
-	recordLastUse(positions, id: x64FpVRegId(fp1), opIdx: opIdx)
-	recordLastUse(positions, id: x64FpVRegId(fp2), opIdx: opIdx)
-end 'recordX64FpTwoLastUses'
-
-function recordX64MixedLastUses(positions RegIntArray, gpr X64VReg, fp X64FpVReg, opIdx RegInt)
-	recordLastUse(positions, id: x64VRegId(gpr), opIdx: opIdx)
-	recordLastUse(positions, id: x64FpVRegId(fp), opIdx: opIdx)
-end 'recordX64MixedLastUses'
-
-// Classify an X64 op's reads as sink or non-sink.
-// Sink: movRegReg where dest is physical (call arg / return value setup).
-// Non-sink: everything else that reads a virtual register.
-function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op X64Op)
-	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
-		match x64Op 'extractMov'
-			movRegReg(destReg, srcReg) then classifyX64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, destReg: destReg, srcReg: srcReg)
-			prologue to memcpyOp then break 'extractMov'
-			cmpRegReg to imulRegImm then break 'extractMov'
-		end 'extractMov'
-	end 'isMov' else 'other'
-		countX64OpReads(usedByNonSink, x64Op: x64Op)
-	end 'other'
-end 'classifyX64OpReads'
-
-function classifyX64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, destReg X64VReg, srcReg X64VReg)
-	let srcId = x64VRegId(srcReg)
-	if srcId < 0 'physSrc'
-		return
-	end 'physSrc'
-	// If dest is physical, this is a sink (call arg / return setup)
-	match destReg 'checkDest'
-		physical then incUse(sinkOnly, id: srcId)
-		virtual then incUse(usedByNonSink, id: srcId)
-	end 'checkDest'
-end 'classifyX64MovRegReg'
+function collectX64MixedReads(reads RegIntArray, gpr X64VReg, fp X64FpVReg)
+	collectRead(reads, id: x64VRegId(gpr))
+	collectRead(reads, id: x64FpVRegId(fp))
+end 'collectX64MixedReads'
 
 export function isX64RetTerminator(module TargetModule, packed OpIndex) returns bool
 	let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
@@ -2794,14 +2656,14 @@ export type X64RegAllocTarget implements RegAllocTarget
 
 	// --- Liveness helpers ---
 
-	function countOpReads(module TargetModule, counts RegIntArray, packed OpIndex)
+	function countOpReads(module TargetModule, reads RegIntArray, packed OpIndex)
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
-		countX64OpReads(counts, x64Op: x64Op)
+		collectX64OpReads(reads, x64Op: x64Op)
 	end 'countOpReads'
 
-	function noteOpDefs(module TargetModule, defBlocks RegIntArray, blockIdx RegInt, packed OpIndex)
+	function noteOpDefs(module TargetModule, defs RegIntArray, packed OpIndex)
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
-		noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
+		noteX64OpDefs(defs, x64Op: x64Op)
 	end 'noteOpDefs'
 
 	// --- Remap/substitute ---
