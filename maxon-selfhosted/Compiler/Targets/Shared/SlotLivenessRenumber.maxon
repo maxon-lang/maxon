@@ -376,25 +376,44 @@ end 'recordBlockSlotPositions'
 // Interference + coloring
 // ============================================================
 
+// Hot inner predicate (called O(ranges × occupants) from findCompatibleColor):
+// index-based loops, NOT `for … in`, because for-in over the struct-element
+// `IntervalArray` heap-allocates + refcounts an ArrayIterator on every call
+// (C# does not elide struct-element loops) — a per-call allocation in the
+// backend's hottest path. The interval lists are hoisted so the field access +
+// count() run once per call, not once per iteration.
 function slotRangesInterfere(a SlotRange, b SlotRange) returns bool
-	for ai in a.intervals 'eachA'
-		for bi in b.intervals 'eachB'
-			if ai.blockId == bi.blockId 'sameBlock'
-				if ai.startPos < bi.endPos and bi.startPos < ai.endPos 'overlap'
-					return true
-				end 'overlap'
-			end 'sameBlock'
+	let aIntervals = a.intervals
+	let bIntervals = b.intervals
+	let aCount = aIntervals.count()
+	let bCount = bIntervals.count()
+	var ai = 0
+	while ai < aCount 'eachA'
+		let intervalA = try aIntervals.get(ai) otherwise panic("slotRangesInterfere: a.intervals.get({ai}) OOB")
+		var bi = 0
+		while bi < bCount 'eachB'
+			let intervalB = try bIntervals.get(bi) otherwise panic("slotRangesInterfere: b.intervals.get({bi}) OOB")
+			if intervalA.blockId == intervalB.blockId and intervalA.startPos < intervalB.endPos and intervalB.startPos < intervalA.endPos 'overlap'
+				return true
+			end 'overlap'
+			bi = bi + 1
 		end 'eachB'
+		ai = ai + 1
 	end 'eachA'
 	return false
 end 'slotRangesInterfere'
 
 function rangeEarliestStart(range SlotRange) returns RegInt
 	var best = i64.max
-	for iv in range.intervals 'each'
+	let intervals = range.intervals
+	let n = intervals.count()
+	var k = 0
+	while k < n 'each'
+		let iv = try intervals.get(k) otherwise panic("rangeEarliestStart: intervals.get({k}) OOB")
 		if iv.startPos < best 'lower'
 			best = iv.startPos
 		end 'lower'
+		k = k + 1
 	end 'each'
 	if best == i64.max 'noIntervals'
 		return 0
@@ -417,19 +436,22 @@ end 'appendOccupant'
 // or -1 if no existing slot is reusable. Extracted into its own function so
 // the borrow on `pool` is released before the caller mutates it.
 function findCompatibleColor(pool ColorPool, range SlotRange) returns RegInt
+	let colorCount = pool.occupantsByColor.count()
 	var ci = 0
-	while ci < pool.occupantsByColor.count() 'scanPool'
+	while ci < colorCount 'scanPool'
 		let occupants = try pool.occupantsByColor.get(ci) otherwise panic("invariant: pool get OOB after count() guard")
+		// Index-based, not `for occ in occupants`: the latter heap-allocates an
+		// ArrayIterator per color-scan in the backend's hottest loop.
+		let occCount = occupants.count()
+		var oi = 0
 		var compatible = true
-		for occ in occupants 'eachOcc'
-			if occ.escaped 'occEsc'
-				compatible = false
-				break
-			end 'occEsc'
-			if slotRangesInterfere(occ, b: range) 'conflict'
+		while oi < occCount 'eachOcc'
+			let occ = try occupants.get(oi) otherwise panic("findCompatibleColor: occupants.get({oi}) OOB")
+			if occ.escaped or slotRangesInterfere(occ, b: range) 'conflict'
 				compatible = false
 				break
 			end 'conflict'
+			oi = oi + 1
 		end 'eachOcc'
 		if compatible 'reuse'
 			return ci
@@ -451,12 +473,19 @@ function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntAr
 		i = i + 1
 	end 'init'
 
+	// Build the work list AND cache each slot's earliest-start once (indexed by
+	// slotIdx). The insertion sort below compares earliest-starts O(slots²)
+	// times; recomputing `rangeEarliestStart` (an O(intervals) scan) per
+	// comparison was an O(slots² × intervals) hot spot on large functions.
 	var order = RegIntArray.create()
+	var earliestStart = RegIntArray.create()
 	var s = 0
 	while s < maxSlotIdx 'initOrder'
+		earliestStart.push(0)
 		let r = try ranges.get(s) otherwise panic("invariant: ranges sized to maxSlotIdx but get({s}) failed")
 		if r.intervals.count() > 0 or r.escaped 'live'
 			order.push(s)
+			try earliestStart.set(s, value: rangeEarliestStart(r)) otherwise panic("invariant: earliestStart.set({s}) OOB")
 		end 'live'
 		s = s + 1
 	end 'initOrder'
@@ -467,14 +496,14 @@ function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntAr
 	while si < count 'sort'
 		let keyIdx = try order.get(si) otherwise panic("invariant: order.get OOB during sort")
 		let keyRange = try ranges.get(keyIdx) otherwise panic("invariant: ranges.get OOB during sort")
-		let keyStart = rangeEarliestStart(keyRange)
+		let keyStart = try earliestStart.get(keyIdx) otherwise panic("invariant: earliestStart.get({keyIdx}) OOB")
 		let keyEsc = keyRange.escaped
 
 		var j = si - 1
 		while j >= 0 'insert'
 			let jIdx = try order.get(j) otherwise break
 			let jRange = try ranges.get(jIdx) otherwise break
-			let jStart = rangeEarliestStart(jRange)
+			let jStart = try earliestStart.get(jIdx) otherwise break
 			let jEsc = jRange.escaped
 
 			if jEsc and not keyEsc 'inPlace1'

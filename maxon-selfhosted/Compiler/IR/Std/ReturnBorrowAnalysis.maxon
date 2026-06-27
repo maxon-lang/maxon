@@ -1278,18 +1278,65 @@ function borrowReturningCallResultOfCall(c StdCallOp, project Project) returns R
 end 'borrowReturningCallResultOfCall'
 
 // Per-function map from a ValueId to the index of the op that DEFINES it (its
-// `writeIds`). Built once per function for the return-value provenance walk.
-export typealias ValueDefMap = Map with (ValueId, OpIndex)
+// `writeIds`). ValueIds are dense per-function (0..maxValueId), so this is a
+// flat array indexed by ValueId rather than a hash map. Building it — done
+// once per function, and once after every splice in the inliner — was a
+// hash-`upsert`-per-op hot spot (`buildValueDefMap`/`ValueDefMap.findSlot`
+// dominated the inliner in profiling); direct indexing removes the hashing.
+// Slots store `opIdx + 1`, so 0 means "no recorded def" and a zero-initialized
+// array is the empty map.
+export typealias ValueDefSlotArray = Array with OpIndex
+
+enum ValueDefMiss implements Error
+	absent
+end 'ValueDefMiss'
+
+export type ValueDefMap
+	export var slots as ValueDefSlotArray
+
+	export static function create(maxValueId ValueId) returns ValueDefMap
+		var slots = ValueDefSlotArray.create()
+		var i = 0
+		while i <= maxValueId 'fill'
+			slots.push(0)
+			i = i + 1
+		end 'fill'
+		return Self{slots: slots}
+	end 'create'
+
+	// Record `valueId`'s defining op (last write wins, matching the former
+	// `Map.upsert`). Out-of-range ids are ignored — they can never be queried
+	// back (the array is sized to the function's max value id).
+	export function set(valueId ValueId, opIdx OpIndex)
+		if valueId >= 0 and valueId < self.slots.count() 'inRange'
+			try self.slots.set(valueId, value: opIdx + 1) otherwise panic("ValueDefMap.set: OOB despite bound check")
+		end 'inRange'
+	end 'set'
+
+	// The op defining `valueId`, or throw `ValueDefMiss.absent` when none is
+	// recorded — mirrors the former `Map.get(...) otherwise …` shape so callers
+	// using `try defs.get(id) otherwise …` are unchanged.
+	export function get(valueId ValueId) returns OpIndex throws ValueDefMiss
+		if valueId < 0 or valueId >= self.slots.count() 'outOfRange'
+			throw ValueDefMiss.absent
+		end 'outOfRange'
+		let raw = try self.slots.get(valueId) otherwise throw ValueDefMiss.absent
+		if raw == 0 'noDef'
+			throw ValueDefMiss.absent
+		end 'noDef'
+		return raw - 1
+	end 'get'
+end 'ValueDefMap'
 
 export function buildValueDefMap(module StdModule, func IrFunction) returns ValueDefMap
-	var defs = ValueDefMap.create()
+	var defs = ValueDefMap.create(scanMaxValueId(func, module: module))
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildValueDefMap: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("buildValueDefMap: opIdx not in module.ops")
 			let operands = extractStdOpOperands(op)
 			for writeId in operands.writeIds 'eachDef'
-				defs.upsert(writeId, value: opIdx)
+				defs.set(writeId, opIdx: opIdx)
 			end 'eachDef'
 		end 'eachOp'
 	end 'eachBlock'
