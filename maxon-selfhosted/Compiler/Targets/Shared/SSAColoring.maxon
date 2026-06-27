@@ -693,6 +693,14 @@ end 'runEvictionFixup'
 // Depth is bounded by MAX_RECOLOR_DEPTH so the worst-case work is
 // `O(depth * fanout * pool_size)`. At depth 0 the helper degrades to
 // "find a literally-free register" — no further recursion is permitted.
+//
+// Performance: the per-register interferer scan that `tryRecolorAtReg` used
+// to do (re-walking `nbrs` once per pool register, O(poolSize * nbrs)) is
+// replaced by a `RecolorInterferers` precompute that `tryRecolorPass` builds
+// in a single O(nbrs) scan and reuses across the register attempts. The
+// precompute is refreshed only after an attempt that actually mutated colors
+// (rare on the hot path), keeping it bit-identical with the old fresh-per-call
+// scan — see `RecolorInterferers` / `RecolorAttempt`.
 function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult) returns bool
 	if depth <= 0 'noDepth'
 		return false
@@ -713,7 +721,9 @@ function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ra
 	// crossing ranges, callee-saved bias otherwise). The two-pass order
 	// mirrors `pickRegFromPool`: preferred class first, then the off-class
 	// fallback for non-call-crossing ranges. Call-crossing ranges never
-	// accept a caller-saved register (would be silently clobbered).
+	// accept a caller-saved register (would be silently clobbered). Each pass
+	// builds (and refreshes) its own interferer-lookup precompute against the
+	// current colors.
 	if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: preferCallerSaved) 'preferOk'
 		return true
 	end 'preferOk'
@@ -727,11 +737,116 @@ function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ra
 	return false
 end 'tryLastChanceRecolor'
 
+// Interferer-collection precompute for last-chance recoloring, keyed by pool
+// index. Built (and refreshed) by `tryRecolorPass` against the colors current
+// at each per-register attempt, so a single O(nbrs) scan replaces the old
+// O(poolSize * nbrs) per-register re-scan inside tryRecolorAtReg.
+//
+//   • coloredNeighborsByReg[poolIndexOf[reg]] is the list of neighbor range
+//     indices currently colored `reg`, in the SAME order `nbrs` enumerates
+//     them. tryRecolorAtReg's interferer set for a given targetReg is exactly
+//     this list (filtered later by the unmovability checks), reproducing the
+//     order the old full `nbrs` scan produced.
+//   • uncoloredFixedRegSet[poolIndexOf[reg]] is true when some uncolored
+//     neighbor has fixedReg == reg — it will inevitably take that register,
+//     so handing it to `range` would conflict (the old `futureFixed` guard).
+//
+// Out-of-pool neighbor colors / fixedRegs are skipped: a targetReg always
+// comes from the pool, so an ordinal absent from the pool can never equal it,
+// matching the old per-reg `==` test exactly.
+type RecolorInterferers
+	export var coloredNeighborsByReg as RegIntArrayArray
+	export var uncoloredFixedRegSet as BoolArray
+
+	export static function create(nbrs RegIntArray, ranges LiveRangeArray, rangeColors RegIntArray, poolIndexOf RegIntArray, poolSize RegInt) returns RecolorInterferers
+		var coloredNeighborsByReg = RegIntArrayArray.create()
+		var slot = 0
+		while slot < poolSize 'initBuckets'
+			coloredNeighborsByReg.push(RegIntArray.create())
+			slot = slot + 1
+		end 'initBuckets'
+
+		var uncoloredFixedRegSet = BoolArray.create()
+		growColorBoolArray(uncoloredFixedRegSet, size: poolSize)
+
+		for nbrIdx in nbrs 'eachNbr'
+			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+			if nbrColor != RM_NONE 'colored'
+				let pi = poolIndexOfReg(nbrColor, poolIndexOf: poolIndexOf)
+				if pi != RM_NONE 'inPool'
+					var bucket = try coloredNeighborsByReg.get(pi) otherwise panic("RecolorInterferers.create: pi < poolSize but coloredNeighborsByReg.get OOB")
+					bucket.push(nbrIdx)
+				end 'inPool'
+			end 'colored' else 'uncolored'
+				let nbrRange = try ranges.get(nbrIdx) otherwise panic("RecolorInterferers.create: nbrIdx from ig.neighbors out of bounds in ranges")
+				if nbrRange.fixedReg != RM_NONE 'hasFixed'
+					let pi = poolIndexOfReg(nbrRange.fixedReg, poolIndexOf: poolIndexOf)
+					if pi != RM_NONE 'fixedInPool'
+						try uncoloredFixedRegSet.set(pi, value: true) otherwise panic("RecolorInterferers.create: uncoloredFixedRegSet.set OOB")
+					end 'fixedInPool'
+				end 'hasFixed'
+			end 'uncolored'
+		end 'eachNbr'
+
+		return Self{coloredNeighborsByReg: coloredNeighborsByReg, uncoloredFixedRegSet: uncoloredFixedRegSet}
+	end 'create'
+end 'RecolorInterferers'
+
+// Outcome of one `tryRecolorAtReg` attempt. `success` is the old boolean
+// return. `mutatedColors` is true when the attempt reached the
+// tentative-assignment block — i.e. it may have left `rangeColors`/`result`
+// changed relative to the attempt's entry state. A failed attempt rolls back
+// its OWN interferers and `range`, but a successful inner recursion it later
+// abandons can leave THIRD-PARTY neighbors recolored (pre-existing behavior
+// the old per-call rescan absorbed). So whenever `mutatedColors` is true, the
+// frame's `RecolorInterferers` precompute must be rebuilt before the next
+// per-register attempt to stay bit-identical with the old fresh-scan logic.
+type RecolorAttempt
+	export var success as bool
+	export var mutatedColors as bool
+
+	// `range` could not take `targetReg` and no colors were touched (an early
+	// bail before the tentative-assignment block).
+	export static function bailedClean() returns RecolorAttempt
+		return Self{success: false, mutatedColors: false}
+	end 'bailedClean'
+
+	// `range` successfully took `targetReg`; the assignment sticks.
+	export static function placed() returns RecolorAttempt
+		return Self{success: true, mutatedColors: true}
+	end 'placed'
+
+	// The attempt reached the tentative-assignment block but failed and rolled
+	// back its own state; third-party colors may have changed (see the type doc).
+	export static function rolledBack() returns RecolorAttempt
+		return Self{success: false, mutatedColors: true}
+	end 'rolledBack'
+end 'RecolorAttempt'
+
+// Map a register ordinal to its pool index, or RM_NONE when the ordinal is
+// not in the active pool (negative ordinals or a different register class).
+// Mirrors the lookup markRegUsed/isRegUsed perform.
+function poolIndexOfReg(regOrd RegInt, poolIndexOf RegIntArray) returns RegInt
+	if regOrd < 0 'negative'
+		return RM_NONE
+	end 'negative'
+	return try poolIndexOf.get(regOrd) otherwise RM_NONE
+end 'poolIndexOfReg'
+
 // One sweep of the pool at a fixed preferred class. Used by
 // tryLastChanceRecolor to split the two-tier walk (preferred class first,
 // then off-class fallback) without duplicating the per-register attempt
 // logic.
 function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange, preferClass bool) returns bool
+	// Build the interferer lookup once for this pass; the dominant per-register
+	// cost (interferer collection) becomes a single O(nbrs) scan instead of
+	// O(poolSize * nbrs). It is rebuilt only after a per-register attempt that
+	// reached its tentative-assignment block, since only those can leave the
+	// live colors changed (a failed attempt that abandons a successful inner
+	// recursion can leak third-party recolors). Early-bailing attempts — the
+	// common case on high-pressure functions — reuse the same precompute.
+	var interferers = RecolorInterferers.create(nbrs, ranges: ranges, rangeColors: rangeColors, poolIndexOf: poolIndexOf, poolSize: poolSize)
+
 	var pi = 0
 	while pi < poolSize 'eachReg'
 		let isCallerSaved = try callerSavedMask.get(pi) otherwise panic("tryRecolorPass: callerSavedMask must be parallel to pool but get({pi}) failed")
@@ -741,61 +856,75 @@ function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges L
 		end 'wrongClass'
 
 		let reg = try pool.get(pi) otherwise panic("tryRecolorPass: pi < poolSize just succeeded but pool.get({pi}) failed")
-		if tryRecolorAtReg(rangeIdx, targetReg: reg, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range) 'tookIt'
+		let attempt = tryRecolorAtReg(rangeIdx, targetReg: reg, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, range: range, recolorInterferers: interferers)
+		if attempt.success 'tookIt'
 			return true
 		end 'tookIt'
+
+		if attempt.mutatedColors 'rebuild'
+			// The failed attempt may have left third-party neighbor colors
+			// changed; refresh the lookup so the remaining registers see the
+			// same live colors the old per-call fresh scan would have seen.
+			interferers = RecolorInterferers.create(nbrs, ranges: ranges, rangeColors: rangeColors, poolIndexOf: poolIndexOf, poolSize: poolSize)
+		end 'rebuild'
+
 		pi = pi + 1
 	end 'eachReg'
 	return false
 end 'tryRecolorPass'
 
 // Attempt to give `range` the specific register `targetReg` by recursively
-// re-placing every colored neighbor currently holding `targetReg`. Returns
-// true on success (the assignment sticks), false on failure (state is
-// rolled back exactly as it was on entry).
+// re-placing every colored neighbor currently holding `targetReg`. Returns a
+// `RecolorAttempt`: `success` true means the assignment sticks; on failure
+// this frame's own state is rolled back. `mutatedColors` reports whether the
+// attempt reached the tentative-assignment block (see `RecolorAttempt`).
 //
 // Pre-conditions: `range` is virtual (fixedReg == RM_NONE) and currently
-// uncolored. `targetReg` is in `pool`.
-function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange) returns bool
-	// Collect every colored neighbor currently holding `targetReg`. If any
-	// of them is unmovable (fixed-reg, already pinned by an outer recursion
-	// via `fixed`, or has been evicted to cascade exhaustion), `targetReg`
-	// is unreachable for `range` — try the next register.
-	//
-	// Same-register check on a fixed-reg uncolored neighbor: a virtual
-	// neighbor with fixedReg == targetReg is also unmovable — when it gets
-	// colored later it will inevitably take targetReg, so handing targetReg
-	// to `range` now would create a conflict.
+// uncolored. `targetReg` is in `pool`. `recolorInterferers` is the
+// precompute built by `RecolorInterferers.create` against the colors as they
+// stand at the moment this attempt begins (the caller rebuilds it after any
+// mutating attempt).
+function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, range LiveRange, recolorInterferers RecolorInterferers) returns RecolorAttempt
+	// `targetReg` always comes from the pool, so its pool index must exist.
+	let targetPi = poolIndexOfReg(targetReg, poolIndexOf: poolIndexOf)
+	if targetPi == RM_NONE 'targetNotInPool'
+		panic("tryRecolorAtReg: targetReg must be in the active pool")
+	end 'targetNotInPool'
+
+	// An uncolored fixed-reg neighbor will later take its fixed register; if
+	// that fixed register is `targetReg`, picking it for `range` would conflict
+	// once the neighbor is colored. (The old per-reg `futureFixed` guard.)
+	let futureFixed = try recolorInterferers.uncoloredFixedRegSet.get(targetPi) otherwise panic("tryRecolorAtReg: uncoloredFixedRegSet must be parallel to pool but get OOB")
+	if futureFixed 'futureFixed'
+		return RecolorAttempt.bailedClean()
+	end 'futureFixed'
+
+	// The colored neighbors currently holding `targetReg`, already in `nbrs`
+	// order from the precompute. If any is unmovable (fixed-reg, already pinned
+	// by an outer recursion via `fixed`, or evicted to cascade exhaustion),
+	// `targetReg` is unreachable for `range` — try the next register. The
+	// per-interferer checks and their order are identical to the old full scan.
+	let matchedColor = try recolorInterferers.coloredNeighborsByReg.get(targetPi) otherwise panic("tryRecolorAtReg: coloredNeighborsByReg must be parallel to pool but get OOB")
 	var interferers = RegIntArray.create()
-	for nbrIdx in nbrs 'eachNbr'
-		let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+	for nbrIdx in matchedColor 'eachInterferer'
 		let nbrRange = try ranges.get(nbrIdx) otherwise panic("tryRecolorAtReg: nbrIdx from ig.neighbors out of bounds in ranges")
-		if nbrColor == targetReg 'matchColor'
-			// Cannot displace a fixed-reg neighbor.
-			if nbrRange.fixedReg != RM_NONE 'nbrFixed'
-				return false
-			end 'nbrFixed'
-			// Cannot displace a neighbor the outer recursion has frozen.
-			if isFixedInRecolor(fixed, idx: nbrIdx) 'pinned'
-				return false
-			end 'pinned'
-			// Cannot displace a neighbor that has exhausted its eviction
-			// cascade — the eviction picker already determined no further
-			// movement is allowed for it. (Identical to the
-			// runEvictionFixup `cascadeExhausted` guard.)
-			if nbrRange.cascade >= MAX_CASCADE 'cascadeOut'
-				return false
-			end 'cascadeOut'
-			interferers.push(nbrIdx)
-		end 'matchColor' else 'noMatch'
-			// An uncolored fixed-reg neighbor will later take its fixed
-			// register; if that fixed register is `targetReg`, picking it
-			// for `range` would conflict once the neighbor is colored.
-			if nbrColor == RM_NONE and nbrRange.fixedReg == targetReg 'futureFixed'
-				return false
-			end 'futureFixed'
-		end 'noMatch'
-	end 'eachNbr'
+		// Cannot displace a fixed-reg neighbor.
+		if nbrRange.fixedReg != RM_NONE 'nbrFixed'
+			return RecolorAttempt.bailedClean()
+		end 'nbrFixed'
+		// Cannot displace a neighbor the outer recursion has frozen.
+		if isFixedInRecolor(fixed, idx: nbrIdx) 'pinned'
+			return RecolorAttempt.bailedClean()
+		end 'pinned'
+		// Cannot displace a neighbor that has exhausted its eviction
+		// cascade — the eviction picker already determined no further
+		// movement is allowed for it. (Identical to the
+		// runEvictionFixup `cascadeExhausted` guard.)
+		if nbrRange.cascade >= MAX_CASCADE 'cascadeOut'
+			return RecolorAttempt.bailedClean()
+		end 'cascadeOut'
+		interferers.push(nbrIdx)
+	end 'eachInterferer'
 
 	// Class-safety check for `range` itself: a call-crossing range cannot
 	// land in a caller-saved register (the intervening call would clobber
@@ -803,7 +932,7 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 	if range.crossesCall 'mustBeCalleeSaved'
 		let regIsCS = regIsCallerSaved(targetReg, pool: pool, callerSavedMask: callerSavedMask)
 		if regIsCS 'wouldClobber'
-			return false
+			return RecolorAttempt.bailedClean()
 		end 'wouldClobber'
 	end 'mustBeCalleeSaved'
 
@@ -862,7 +991,7 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 	if allOk 'success'
 		removeFixedInRecolor(fixed, idx: rangeIdx)
 		logTrace(LogCategory.ir, message: function() gives "ssa-color: recolor v{range.valueId} -> reg={targetReg} depth={depth} interferers={interferers.count()}")
-		return true
+		return RecolorAttempt.placed()
 	end 'success'
 
 	// Roll back: undo any successful interferer placements first (so their
@@ -902,7 +1031,11 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 		try result.assignment.set(range.valueId, value: RM_NONE) otherwise panic("tryRecolorAtReg: result.assignment.set OOB on unassign self")
 	end 'inBoundsSelfR'
 	removeFixedInRecolor(fixed, idx: rangeIdx)
-	return false
+	// This attempt entered the tentative-assignment block, so a successful
+	// inner recursion it has now abandoned may have left third-party neighbors
+	// recolored — signal the caller to rebuild the precompute before the next
+	// per-register attempt so the interferer scan stays bit-identical.
+	return RecolorAttempt.rolledBack()
 end 'tryRecolorAtReg'
 
 // Mark `idx` as frozen for the duration of an outer last-chance recolor
