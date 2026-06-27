@@ -1475,56 +1475,101 @@ function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns 
 		i = i + 1
 	end 'init'
 
-	// Insertion sort by (domPreorderIndex[range.defBlock], isVirtual, defPosition).
-	// Fixed-reg ranges sort before virtual ranges at the same dom position so that
-	// their physical register is already marked used when virtual ranges are colored.
-	var si = 1
-	while si < numRanges 'sort'
-		let keyIdx = try order.get(si) otherwise 'skipSort'
-			si = si + 1
-			continue
-		end 'skipSort'
-
-		let keyRange = try ranges.get(keyIdx) otherwise 'skipSort2'
-			si = si + 1
-			continue
-		end 'skipSort2'
-		let keyDomPos = getOr(domIndex, index: keyRange.defBlock, fallback: i64.max)
-		let keyIsVirtual = keyRange.fixedReg == RM_NONE
-		let keyDefPos = keyRange.defPosition
-
-		var j = si - 1
-		while j >= 0 'insert'
-			let jIdx = try order.get(j) otherwise break
-			let jRange = try ranges.get(jIdx) otherwise break
-			let jDomPos = getOr(domIndex, index: jRange.defBlock, fallback: i64.max)
-			let jIsVirtual = jRange.fixedReg == RM_NONE
-			let jDefPos = jRange.defPosition
-
-			// Compare: (domPos, isVirtual, defPos) — fixed-reg before virtual
-			if jDomPos < keyDomPos 'inPlace1'
-				break
-			end 'inPlace1'
-			if jDomPos == keyDomPos 'sameDom'
-				if not jIsVirtual and keyIsVirtual 'fixedFirst'
-					break
-				end 'fixedFirst'
-				if jIsVirtual == keyIsVirtual and jDefPos <= keyDefPos 'sameKind'
-					break
-				end 'sameKind'
-			end 'sameDom'
-
-			// Shift j to j+1
-			try order.set(j + 1, value: jIdx) otherwise panic("invariant: order.set OOB")
-			j = j - 1
-		end 'insert'
-
-		try order.set(j + 1, value: keyIdx) otherwise panic("invariant: order.set OOB")
-		si = si + 1
-	end 'sort'
+	// Sort by (domPreorderIndex[range.defBlock], fixed-before-virtual,
+	// defPosition, range index). Fixed-reg ranges sort before virtual ranges at
+	// the same dom position so their physical register is marked used before
+	// virtual ranges are colored.
+	//
+	// Was an O(numRanges²) insertion sort; on the compiler's largest functions
+	// the spill loop rebuilds + re-sorts tens of thousands of ranges every
+	// iteration, so it dominated backend time. This is an inline O(n log n) merge
+	// sort (NOT stdlib Array.sort — its comparator path is unused and crashes in
+	// the self-hosted compiler). `rangeBeforeByDomPreorder` is a TOTAL order (the
+	// range-index tiebreaker), and the former insertion sort was stable over the
+	// identity permutation, so the two produce byte-identical orders.
+	if numRanges > 1 'doSort'
+		var scratch = RegIntArray.create()
+		var s = 0
+		while s < numRanges 'initScratch'
+			scratch.push(0)
+			s = s + 1
+		end 'initScratch'
+		mergeSortByDomPreorder(order, lo: 0, hi: numRanges, scratch: scratch, ranges: ranges, domIndex: domIndex)
+	end 'doSort'
 
 	return order
 end 'sortByDomPreorder'
+
+// Recursive merge sort of order[lo..hi) (indices into `ranges`) by
+// `rangeBeforeByDomPreorder`. `scratch` is a caller-provided buffer sized to
+// order.count(); each merge writes only its own [lo, hi) slice, so the shared
+// buffer is safe under depth-first recursion.
+function mergeSortByDomPreorder(order RegIntArray, lo RegInt, hi RegInt, scratch RegIntArray, ranges LiveRangeArray, domIndex RegIntArray)
+	if hi - lo < 2 'base'
+		return
+	end 'base'
+	let mid = lo + (hi - lo) / 2
+	mergeSortByDomPreorder(order, lo: lo, hi: mid, scratch: scratch, ranges: ranges, domIndex: domIndex)
+	mergeSortByDomPreorder(order, lo: mid, hi: hi, scratch: scratch, ranges: ranges, domIndex: domIndex)
+
+	var i = lo
+	var j = mid
+	var k = lo
+	while i < mid and j < hi 'merge'
+		let a = try order.get(i) otherwise panic("mergeSortByDomPreorder: order.get({i}) OOB")
+		let b = try order.get(j) otherwise panic("mergeSortByDomPreorder: order.get({j}) OOB")
+		if rangeBeforeByDomPreorder(a, bIdx: b, ranges: ranges, domIndex: domIndex) 'takeLeft'
+			try scratch.set(k, value: a) otherwise panic("mergeSortByDomPreorder: scratch.set OOB")
+			i = i + 1
+		end 'takeLeft' else 'takeRight'
+			try scratch.set(k, value: b) otherwise panic("mergeSortByDomPreorder: scratch.set OOB")
+			j = j + 1
+		end 'takeRight'
+		k = k + 1
+	end 'merge'
+	while i < mid 'drainLeft'
+		let a = try order.get(i) otherwise panic("mergeSortByDomPreorder: drainLeft.get OOB")
+		try scratch.set(k, value: a) otherwise panic("mergeSortByDomPreorder: drainLeft.set OOB")
+		i = i + 1
+		k = k + 1
+	end 'drainLeft'
+	while j < hi 'drainRight'
+		let b = try order.get(j) otherwise panic("mergeSortByDomPreorder: drainRight.get OOB")
+		try scratch.set(k, value: b) otherwise panic("mergeSortByDomPreorder: drainRight.set OOB")
+		j = j + 1
+		k = k + 1
+	end 'drainRight'
+	var m = lo
+	while m < hi 'copyBack'
+		let v = try scratch.get(m) otherwise panic("mergeSortByDomPreorder: copyBack.get OOB")
+		try order.set(m, value: v) otherwise panic("mergeSortByDomPreorder: copyBack.set OOB")
+		m = m + 1
+	end 'copyBack'
+end 'mergeSortByDomPreorder'
+
+// True iff range `aIdx` sorts strictly before range `bIdx`: by dom-preorder
+// index of the def block, then fixed-reg before virtual, then def position,
+// then range index (tiebreaker → total order). Matches the former insertion
+// sort's stable (domPos, isVirtual, defPos) ordering exactly.
+function rangeBeforeByDomPreorder(aIdx RegInt, bIdx RegInt, ranges LiveRangeArray, domIndex RegIntArray) returns bool
+	let aRange = try ranges.get(aIdx) otherwise panic("rangeBeforeByDomPreorder: ranges.get({aIdx}) OOB")
+	let bRange = try ranges.get(bIdx) otherwise panic("rangeBeforeByDomPreorder: ranges.get({bIdx}) OOB")
+	let aDomPos = getOr(domIndex, index: aRange.defBlock, fallback: i64.max)
+	let bDomPos = getOr(domIndex, index: bRange.defBlock, fallback: i64.max)
+	if aDomPos != bDomPos 'domDiffers'
+		return aDomPos < bDomPos
+	end 'domDiffers'
+	let aIsVirtual = aRange.fixedReg == RM_NONE
+	let bIsVirtual = bRange.fixedReg == RM_NONE
+	if aIsVirtual != bIsVirtual 'kindDiffers'
+		// fixed-reg (not virtual) sorts first: a is before b iff a is fixed.
+		return not aIsVirtual
+	end 'kindDiffers'
+	if aRange.defPosition != bRange.defPosition 'defDiffers'
+		return aRange.defPosition < bRange.defPosition
+	end 'defDiffers'
+	return aIdx < bIdx
+end 'rangeBeforeByDomPreorder'
 
 // ============================================================
 // Register availability helpers
