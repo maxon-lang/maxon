@@ -11,8 +11,6 @@ export typealias RegIntArrayArray = Array with RegIntArray
 type InterferenceGraph
 	export var neighbors as RegIntArrayArray
 	export var numRanges as RegInt
-	// Flat boolean matrix for O(1) duplicate-edge checks: matrix[a * numRanges + b]
-	export var matrix as BoolArray
 
 	export static function create(numRanges RegInt) returns InterferenceGraph
 		var nbrs = RegIntArrayArray.create()
@@ -21,17 +19,7 @@ type InterferenceGraph
 			nbrs.push(RegIntArray.create())
 			i = i + 1
 		end 'init'
-		// The duplicate-edge matrix is numRanges^2 bools. Bulk-resizing to that
-		// length zero-fills in one managed-memory allocation, where the previous
-		// per-element push loop re-checked capacity and grew incrementally on
-		// every one of the numRanges^2 elements — a measurable slice of
-		// interference-graph construction for wide functions, since the graph is
-		// rebuilt on every coloring pass across the spill/split loop. resize
-		// zero-inits new elements (false), matching the original all-false state.
-		let matSize = numRanges * numRanges
-		var mat = BoolArray.create()
-		mat.resize(matSize)
-		return Self{neighbors: nbrs, numRanges: numRanges, matrix: mat}
+		return Self{neighbors: nbrs, numRanges: numRanges}
 	end 'create'
 end 'InterferenceGraph'
 
@@ -1416,19 +1404,21 @@ function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns
 end 'areCopyConnected'
 
 function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
-	// Add edge a <-> b using matrix for O(1) duplicate check
-	let idxAB = a * ig.numRanges + b
-	let alreadyEdge = try ig.matrix.get(idxAB) otherwise panic("addInterference: matrix sized numRanges*numRanges but get({idxAB}) failed (numRanges={ig.numRanges}, matrix.count={ig.matrix.count()}, a={a}, b={b})")
-	if alreadyEdge 'duplicate'
+	// Add edge a <-> b, deduplicating against the existing neighbor set. The edge
+	// is symmetric and both neighbor lists are updated together, so a single
+	// membership scan of nbrsA covers both call orders (addInterference(a,b) and
+	// addInterference(b,a)). This replaces a former numRanges*numRanges dedup
+	// matrix that was allocated and zero-filled on EVERY coloring pass (~495MB at
+	// 22270 ranges, ×2 for gpr+fp, rebuilt each spill iteration) yet was never
+	// read by coloring — only here, for dedup. Per-range degree is small relative
+	// to numRanges, and `b` is appended only on first sight, so neighbor lists
+	// remain byte-identical to the matrix version.
+	var nbrsA = try ig.neighbors.get(a) otherwise panic("addInterference: a={a} out of bounds in ig.neighbors (numRanges={ig.numRanges})")
+	if regIntArrayContains(nbrsA, value: b) 'duplicate'
 		return
 	end 'duplicate'
 
-	try ig.matrix.set(idxAB, value: true) otherwise panic("invariant: ig.matrix.set OOB")
-	let idxBA = b * ig.numRanges + a
-	try ig.matrix.set(idxBA, value: true) otherwise panic("invariant: ig.matrix.set OOB")
-
-	var nbrsA = try ig.neighbors.get(a) otherwise panic("invariant: a out of bounds in ig.neighbors after matrix.get succeeded")
-	var nbrsB = try ig.neighbors.get(b) otherwise panic("invariant: b out of bounds in ig.neighbors after matrix.get succeeded")
+	var nbrsB = try ig.neighbors.get(b) otherwise panic("addInterference: b={b} out of bounds in ig.neighbors (numRanges={ig.numRanges})")
 	nbrsA.push(b)
 	nbrsB.push(a)
 end 'addInterference'
