@@ -351,6 +351,23 @@ function addBlockArgEdgeIntervals(module TargetModule, func IrFunction, cfg CfgI
 		ri = ri + 1
 	end 'index'
 
+	// Precompute blockId -> block length once, so the per-predecessor lookup
+	// below is O(1). It was `findBlockById`, a LINEAR scan over func.blockRefs,
+	// called inside the block × blockArg × predecessor triple loop — O(blocks²)
+	// on functions with many blocks. The "<100 blocks" assumption in
+	// findBlockById's comment does NOT hold for huge functions (e.g.
+	// Testing.parseSpecFile at 2445 blocks), where it dominated backend time.
+	var blockLenById = RegIntArray.create()
+	var bl = 0
+	while bl < func.nextBlockId 'initLen'
+		blockLenById.push(-1)
+		bl = bl + 1
+	end 'initLen'
+	for blockRef in func.blockRefs 'eachLenBlock'
+		let lblock = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		try blockLenById.set(lblock.id, value: lblock.opRefs.count() + 1) otherwise panic("invariant: blockLenById.set OOB; sized to func.nextBlockId")
+	end 'eachLenBlock'
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.blockArgs.count() == 0 'noArgs'
@@ -379,8 +396,10 @@ function addBlockArgEdgeIntervals(module TargetModule, func IrFunction, cfg CfgI
 			var range = try ranges.get(rangeIdx) otherwise panic("addBlockArgEdgeIntervals.eachArg: rangeIdx populated from ranges scan but get({rangeIdx}) failed")
 
 			for predId in preds 'eachPred'
-				let predBlock = findBlockById(module, func: func, blockId: predId)
-				let predBlockLen = predBlock.opRefs.count() + 1
+				let predBlockLen = try blockLenById.get(predId) otherwise panic("addBlockArgEdgeIntervals: predId {predId} >= func.nextBlockId")
+				if predBlockLen < 0 'predNotFound'
+					panic("addBlockArgEdgeIntervals: predecessor block {predId} not in func.blockRefs")
+				end 'predNotFound'
 				let copyPos = predBlockLen - 1
 
 				// Dedup: skip if an interval anchored to this predecessor at
@@ -638,18 +657,21 @@ end 'markConstant'
 
 // RegIntArray is a flat RegIntArray: [blockId * maxVal + valueId] = opIdx
 
-function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, regTarget RegAllocTarget) returns RegIntArray
-	var map = RegIntArray.create()
+typealias LastUseMap = Map with (RegInt, RegInt)
 
-	// Initialize: -1 means "not used in this block"
+function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, regTarget RegAllocTarget) returns LastUseMap
+	// Sparse `blockId*maxVal + valueId` -> last-use op position. A dense
+	// RegIntArray sized to maxBlockId*maxVal was filled one push per slot
+	// (mostly -1): on a 2445-block / 7441-value function (Testing.parseSpecFile)
+	// that is ~18M managed pushes — the self-compile's backend wall. The map
+	// stores only the O(ops) real uses; `getLastUseInBlock` returns -1 for any
+	// absent (block, value), exactly as the former -1 fill did, so it is
+	// result-preserving and far cheaper to build for every function (no fill).
+	var map = LastUseMap.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockBase = block.id * maxVal
-
-		// Ensure map is big enough for this block
-		while map.count() <= blockBase + maxVal 'grow'
-			map.push(-1)
-		end 'grow'
 
 		// Scan ops forward, recording last use position for each value
 		var opIdx = 0
@@ -672,16 +694,13 @@ function buildRegIntArray(module TargetModule, func IrFunction, maxVal RegInt, r
 	return map
 end 'buildRegIntArray'
 
-function recordArgIdsLastUses(argIds ValueIdArray, map RegIntArray, blockBase RegInt, opIdx RegInt)
+function recordArgIdsLastUses(argIds ValueIdArray, map LastUseMap, blockBase RegInt, opIdx RegInt)
 	for argId in argIds 'each'
-		let idx = blockBase + argId
-		if idx < map.count() 'inBounds'
-			try map.set(idx, value: opIdx) otherwise panic("invariant: map.set OOB")
-		end 'inBounds'
+		map.upsert(blockBase + argId, value: opIdx)
 	end 'each'
 end 'recordArgIdsLastUses'
 
-function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map RegIntArray, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
+function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map LastUseMap, blockBase RegInt, opIdx RegInt, regTarget RegAllocTarget)
 	var counts = RegIntArray.create()
 	regTarget.countOpReads(module, counts: counts, packed: packed)
 
@@ -689,25 +708,22 @@ function recordOpLastUsesPacked(module TargetModule, packed OpIndex, map RegIntA
 	while i < counts.count() 'each'
 		let cnt = try counts.get(i) otherwise panic("recordOpLastUsesPacked.each: i < counts.count() by loop guard but get({i}) failed")
 		if cnt > 0 'isUsed'
-			let idx = blockBase + i
-			if idx < map.count() 'inBounds'
-				try map.set(idx, value: opIdx) otherwise panic("invariant: map.set OOB")
-			end 'inBounds'
+			map.upsert(blockBase + i, value: opIdx)
 		end 'isUsed'
 		i = i + 1
 	end 'each'
 end 'recordOpLastUsesPacked'
 
-function getLastUseInBlock(map RegIntArray, blockId BlockId, valueId ValueId, maxVal RegInt) returns RegInt
+function getLastUseInBlock(map LastUseMap, blockId BlockId, valueId ValueId, maxVal RegInt) returns RegInt
 	let idx = blockId * maxVal + valueId
-	return getOr(map, index: idx, fallback: -1)
+	return try map.get(idx) otherwise -1
 end 'getLastUseInBlock'
 
 // ============================================================
 // Phase 3: Build intervals for a value
 // ============================================================
 
-function buildIntervalsForValue(module TargetModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func IrFunction, lastUseInBlock RegIntArray, maxVal RegInt)
+function buildIntervalsForValue(module TargetModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func IrFunction, lastUseInBlock LastUseMap, maxVal RegInt)
 	let vid = range.valueId
 
 	for blockRef in func.blockRefs 'eachBlock'
