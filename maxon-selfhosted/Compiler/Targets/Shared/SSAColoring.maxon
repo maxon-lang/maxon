@@ -219,8 +219,18 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 		try vidToRangeIdx.set(vid, value: ri) otherwise panic("invariant: vidToRangeIdx.set OOB")
 	end 'buildMap'
 
+	// Caller-saved lookup keyed by register ordinal, used by the interference
+	// graph build to drop edges between a caller-saved fixed-reg pseudo-range
+	// (a call-clobber / param / phys-dest range) and a call-crossing virtual.
+	// Such an edge can never change a coloring decision — the picker forbids a
+	// crossesCall virtual from taking ANY caller-saved register on every path
+	// (hint, first-fit fallback, eviction-victim acceptance, last-chance
+	// recolor) — so the edge is pure dead weight on the (very dense) graph.
+	// See `buildCallerSavedByOrdinal` / `interferenceEdgeIsRedundant`.
+	let callerSavedByOrdinal = buildCallerSavedByOrdinal(pool, callerSaved: callerSaved)
+
 	// Step 1: Build interference graph
-	let ig = buildInterferenceGraph(ranges)
+	let ig = buildInterferenceGraph(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
 
 	// Step 2: Compute dominance-tree preorder index for sorting
 	let domIndex = buildDomPreorderIndex(domPreorder)
@@ -742,11 +752,17 @@ end 'tryLastChanceRecolor'
 // at each per-register attempt, so a single O(nbrs) scan replaces the old
 // O(poolSize * nbrs) per-register re-scan inside tryRecolorAtReg.
 //
-//   • coloredNeighborsByReg[poolIndexOf[reg]] is the list of neighbor range
-//     indices currently colored `reg`, in the SAME order `nbrs` enumerates
-//     them. tryRecolorAtReg's interferer set for a given targetReg is exactly
-//     this list (filtered later by the unmovability checks), reproducing the
-//     order the old full `nbrs` scan produced.
+// Layout: a flat counting-sort bucketization rather than `poolSize` separate
+// arrays. `bucketStart` has poolSize+1 entries; the colored neighbors holding
+// the register at pool index `pi` occupy `flatColoredNeighbors[bucketStart[pi]
+// .. bucketStart[pi+1])`, in the SAME order `nbrs` enumerates them. The old
+// per-pool-index `RegIntArrayArray` (poolSize fresh `RegIntArray`s allocated on
+// every build, the dominant regalloc allocation churn on high-pressure
+// functions) is replaced by two flat `RegIntArray`s total, independent of
+// poolSize. `bucketRangeFor` reproduces the per-targetReg interferer slice; the
+// stable counting-sort placement keeps the slice order byte-identical to the
+// old bucket-push order.
+//
 //   • uncoloredFixedRegSet[poolIndexOf[reg]] is true when some uncolored
 //     neighbor has fixedReg == reg — it will inevitably take that register,
 //     so handing it to `range` would conflict (the old `futureFixed` guard).
@@ -755,27 +771,34 @@ end 'tryLastChanceRecolor'
 // comes from the pool, so an ordinal absent from the pool can never equal it,
 // matching the old per-reg `==` test exactly.
 type RecolorInterferers
-	export var coloredNeighborsByReg as RegIntArrayArray
+	export var flatColoredNeighbors as RegIntArray
+	export var bucketStart as RegIntArray
 	export var uncoloredFixedRegSet as BoolArray
 
 	export static function create(nbrs RegIntArray, ranges LiveRangeArray, rangeColors RegIntArray, poolIndexOf RegIntArray, poolSize RegInt) returns RecolorInterferers
-		var coloredNeighborsByReg = RegIntArrayArray.create()
-		var slot = 0
-		while slot < poolSize 'initBuckets'
-			coloredNeighborsByReg.push(RegIntArray.create())
-			slot = slot + 1
-		end 'initBuckets'
-
 		var uncoloredFixedRegSet = BoolArray.create()
 		growColorBoolArray(uncoloredFixedRegSet, size: poolSize)
 
-		for nbrIdx in nbrs 'eachNbr'
+		// Counting sort pass 1: tally colored neighbors per pool index while
+		// marking uncolored fixed-reg conflicts. `bucketStart` is sized
+		// poolSize+1 and first used as the per-bucket count, then prefix-summed
+		// into start offsets.
+		var bucketStart = RegIntArray.create()
+		var s = 0
+		while s <= poolSize 'initCounts'
+			bucketStart.push(0)
+			s = s + 1
+		end 'initCounts'
+
+		var totalColored = 0
+		for nbrIdx in nbrs 'tally'
 			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
 			if nbrColor != RM_NONE 'colored'
 				let pi = poolIndexOfReg(nbrColor, poolIndexOf: poolIndexOf)
 				if pi != RM_NONE 'inPool'
-					var bucket = try coloredNeighborsByReg.get(pi) otherwise panic("RecolorInterferers.create: pi < poolSize but coloredNeighborsByReg.get OOB")
-					bucket.push(nbrIdx)
+					let prev = try bucketStart.get(pi) otherwise panic("RecolorInterferers.create: bucketStart.get OOB during tally")
+					try bucketStart.set(pi, value: prev + 1) otherwise panic("RecolorInterferers.create: bucketStart.set OOB during tally")
+					totalColored = totalColored + 1
 				end 'inPool'
 			end 'colored' else 'uncolored'
 				let nbrRange = try ranges.get(nbrIdx) otherwise panic("RecolorInterferers.create: nbrIdx from ig.neighbors out of bounds in ranges")
@@ -786,11 +809,69 @@ type RecolorInterferers
 					end 'fixedInPool'
 				end 'hasFixed'
 			end 'uncolored'
-		end 'eachNbr'
+		end 'tally'
 
-		return Self{coloredNeighborsByReg: coloredNeighborsByReg, uncoloredFixedRegSet: uncoloredFixedRegSet}
+		// Prefix sum: bucketStart[pi] becomes the start offset of bucket pi.
+		// `cursor` tracks the next free slot per bucket during placement.
+		var cursor = RegIntArray.create()
+		var acc = 0
+		var bi = 0
+		while bi < poolSize 'prefixSum'
+			let cnt = try bucketStart.get(bi) otherwise panic("RecolorInterferers.create: bucketStart.get OOB during prefix sum")
+			try bucketStart.set(bi, value: acc) otherwise panic("RecolorInterferers.create: bucketStart.set OOB during prefix sum")
+			cursor.push(acc)
+			acc = acc + cnt
+			bi = bi + 1
+		end 'prefixSum'
+		try bucketStart.set(poolSize, value: acc) otherwise panic("RecolorInterferers.create: bucketStart.set sentinel OOB")
+
+		// Pre-size the flat output so placement writes by index.
+		var flatColoredNeighbors = RegIntArray.create()
+		var f = 0
+		while f < totalColored 'initFlat'
+			flatColoredNeighbors.push(-1)
+			f = f + 1
+		end 'initFlat'
+
+		// Counting sort pass 2: scatter each colored neighbor into its bucket
+		// slot. The per-bucket cursor advances in `nbrs` order, so each bucket's
+		// slice preserves the enumeration order of `nbrs` — byte-identical to
+		// the old append-per-bucket build.
+		for nbrIdx in nbrs 'scatter'
+			let nbrColor = getOr(rangeColors, index: nbrIdx, fallback: RM_NONE)
+			if nbrColor != RM_NONE 'coloredScatter'
+				let pi = poolIndexOfReg(nbrColor, poolIndexOf: poolIndexOf)
+				if pi != RM_NONE 'inPoolScatter'
+					let slot = try cursor.get(pi) otherwise panic("RecolorInterferers.create: cursor.get OOB during scatter")
+					try flatColoredNeighbors.set(slot, value: nbrIdx) otherwise panic("RecolorInterferers.create: flatColoredNeighbors.set OOB during scatter")
+					try cursor.set(pi, value: slot + 1) otherwise panic("RecolorInterferers.create: cursor.set OOB during scatter")
+				end 'inPoolScatter'
+			end 'coloredScatter'
+		end 'scatter'
+
+		return Self{flatColoredNeighbors: flatColoredNeighbors, bucketStart: bucketStart, uncoloredFixedRegSet: uncoloredFixedRegSet}
 	end 'create'
 end 'RecolorInterferers'
+
+// The [start, stop) range into `interferers.flatColoredNeighbors` holding the
+// colored neighbors at pool index `pi`. `pi` is always a valid pool index (it
+// comes from `poolIndexOfReg` on a pool register), so both reads are in bounds.
+function recolorBucketRange(interferers RecolorInterferers, pi RegInt) returns RegIntPair
+	let start = try interferers.bucketStart.get(pi) otherwise panic("recolorBucketRange: bucketStart.get({pi}) OOB")
+	let stop = try interferers.bucketStart.get(pi + 1) otherwise panic("recolorBucketRange: bucketStart.get({pi + 1}) OOB")
+	return RegIntPair.create(start, second: stop)
+end 'recolorBucketRange'
+
+// A pair of RegInts; used for the [start, stop) slice returned by
+// recolorBucketRange.
+type RegIntPair
+	export var first as RegInt
+	export var second as RegInt
+
+	export static function create(first RegInt, second RegInt) returns RegIntPair
+		return Self{first: first, second: second}
+	end 'create'
+end 'RegIntPair'
 
 // Outcome of one `tryRecolorAtReg` attempt. `success` is the old boolean
 // return. `mutatedColors` is true when the attempt reached the
@@ -904,9 +985,12 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 	// by an outer recursion via `fixed`, or evicted to cascade exhaustion),
 	// `targetReg` is unreachable for `range` — try the next register. The
 	// per-interferer checks and their order are identical to the old full scan.
-	let matchedColor = try recolorInterferers.coloredNeighborsByReg.get(targetPi) otherwise panic("tryRecolorAtReg: coloredNeighborsByReg must be parallel to pool but get OOB")
+	let bucket = recolorBucketRange(recolorInterferers, pi: targetPi)
 	var interferers = RegIntArray.create()
-	for nbrIdx in matchedColor 'eachInterferer'
+	var mi = bucket.first
+	while mi < bucket.second 'eachInterferer'
+		let nbrIdx = try recolorInterferers.flatColoredNeighbors.get(mi) otherwise panic("tryRecolorAtReg: flatColoredNeighbors.get({mi}) OOB")
+		mi = mi + 1
 		let nbrRange = try ranges.get(nbrIdx) otherwise panic("tryRecolorAtReg: nbrIdx from ig.neighbors out of bounds in ranges")
 		// Cannot displace a fixed-reg neighbor.
 		if nbrRange.fixedReg != RM_NONE 'nbrFixed'
@@ -1293,7 +1377,7 @@ end 'pickRegFromPool'
 // Interference graph construction
 // ============================================================
 
-function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
+function buildInterferenceGraph(ranges LiveRangeArray, callerSavedByOrdinal BoolArray) returns InterferenceGraph
 	let numRanges = ranges.count()
 	var ig = InterferenceGraph.create(numRanges)
 
@@ -1426,7 +1510,13 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 				// they share only position P (the movRegReg instruction).
 				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
 				if not isCopyBoundary 'realOverlap'
-					addInterference(ig, a: ri1, b: ri2)
+					// Drop edges between a caller-saved fixed-reg pseudo-range and a
+					// call-crossing virtual: the picker never assigns that virtual to
+					// any caller-saved register on any path, so the edge is provably
+					// inert yet inflates the virtual's degree and apparent pressure.
+					if not interferenceEdgeIsRedundant(ranges, ri1: ri1, ri2: ri2, callerSavedByOrdinal: callerSavedByOrdinal) 'notRedundant'
+						addInterference(ig, a: ri1, b: ri2)
+					end 'notRedundant'
 				end 'realOverlap'
 
 				ei = ei + 1
@@ -1535,6 +1625,80 @@ function areCopyConnected(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns
 	let r2 = try ranges.get(ri2) otherwise panic("invariant: ri2 out of bounds in ranges")
 	return r1.copyHintValueId == r2.valueId or r2.copyHintValueId == r1.valueId
 end 'areCopyConnected'
+
+// Build a caller-saved lookup keyed by register ordinal: result[ord] is true
+// when the register with ordinal `ord` is in this class's caller-saved set.
+// Sized to the largest ordinal in `pool`; ordinals past the end (or absent
+// from the pool) read false via `getOr`, which is correct — a fixed-reg range
+// pinned to a register outside the active pool is never caller-saved from this
+// class's perspective.
+function buildCallerSavedByOrdinal(pool RegIntArray, callerSaved RegIntArray) returns BoolArray
+	var byOrd = BoolArray.create()
+	for reg in pool 'sizeToPool'
+		while byOrd.count() <= reg 'grow'
+			byOrd.push(false)
+		end 'grow'
+	end 'sizeToPool'
+	for csReg in callerSaved 'markCallerSaved'
+		if csReg >= 0 and csReg < byOrd.count() 'inRange'
+			try byOrd.set(csReg, value: true) otherwise panic("buildCallerSavedByOrdinal: set OOB after grow")
+		end 'inRange'
+	end 'markCallerSaved'
+	return byOrd
+end 'buildCallerSavedByOrdinal'
+
+// True when the interference edge between range indices `ri1` and `ri2` cannot
+// affect any coloring decision and is therefore safe to omit from the graph.
+//
+// The redundant case: one endpoint is a FIXED-REG range whose fixed register is
+// caller-saved (a call-clobber pseudo, a caller-saved parameter range, or a
+// caller-saved phys-dest range), and the OTHER endpoint is a VIRTUAL range that
+// crosses a call. A crossesCall virtual is forbidden from any caller-saved
+// register on every picker path:
+//   • hint path: `hintClassSafe` rejects a caller-saved hint for crossesCall;
+//   • first-fit / tryColorRange fallback: `pickRegFromPool` runs with
+//     preferCallerSaved=false, so caller-saved regs are Tier-3 and Tier-3 is
+//     returned only for preferCallerSaved=true (never for a crossesCall range);
+//   • eviction: a crossesCall evictor rejects a freed caller-saved register
+//     (`pickEvictionVictim` wrongClass guard); a fixed-reg range is never a
+//     victim anyway;
+//   • last-chance recolor: `tryRecolorAtReg` bails on a caller-saved targetReg
+//     for a crossesCall range, and a fixed-reg interferer is never displaced.
+// So the virtual would never occupy the fixed range's register regardless of
+// the edge; removing it changes no `usedRegs`/hint/victim/recolor outcome but
+// lowers the virtual's degree, reducing first-fit failures and recolor work.
+function interferenceEdgeIsRedundant(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt, callerSavedByOrdinal BoolArray) returns bool
+	let r1 = try ranges.get(ri1) otherwise panic("interferenceEdgeIsRedundant: ri1={ri1} OOB in ranges")
+	let r2 = try ranges.get(ri2) otherwise panic("interferenceEdgeIsRedundant: ri2={ri2} OOB in ranges")
+	return edgeRedundantOrdered(r1, other: r2, callerSavedByOrdinal: callerSavedByOrdinal) or edgeRedundantOrdered(r2, other: r1, callerSavedByOrdinal: callerSavedByOrdinal)
+end 'interferenceEdgeIsRedundant'
+
+// Directed half of `interferenceEdgeIsRedundant`: true when `fixed` is a
+// caller-saved fixed-reg range and `other` is a call-crossing virtual.
+function edgeRedundantOrdered(fixed LiveRange, other LiveRange, callerSavedByOrdinal BoolArray) returns bool
+	if fixed.fixedReg == RM_NONE 'notFixed'
+		return false
+	end 'notFixed'
+	if not other.crossesCall 'otherNotCallCrossing'
+		return false
+	end 'otherNotCallCrossing'
+	if other.fixedReg != RM_NONE 'otherIsFixed'
+		// Two fixed-reg ranges: their colors are hardwired, never picked, so
+		// the edge is moot — but leave it in to avoid reasoning about fixed
+		// vs fixed overlap; the cheap early-outs above already exclude the
+		// common cases. A fixed range's crossesCall flag is left at its
+		// default, so this branch is effectively unreachable for clobber
+		// pseudos (crossesCall==false); guarding it keeps the predicate's
+		// "other is the virtual" precondition explicit.
+		return false
+	end 'otherIsFixed'
+	// Out-of-range ordinals (a register outside this class's pool) read false:
+	// such a fixed range is not caller-saved from this class's perspective.
+	if fixed.fixedReg < 0 or fixed.fixedReg >= callerSavedByOrdinal.count() 'outOfRange'
+		return false
+	end 'outOfRange'
+	return try callerSavedByOrdinal.get(fixed.fixedReg) otherwise false
+end 'edgeRedundantOrdered'
 
 function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	// Add edge a <-> b, deduplicating against the existing neighbor set. The edge
