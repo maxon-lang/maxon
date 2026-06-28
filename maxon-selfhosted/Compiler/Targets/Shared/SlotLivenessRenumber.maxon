@@ -382,19 +382,29 @@ type SlotInterferenceGraph
 	end 'create'
 end 'SlotInterferenceGraph'
 
-// Add the symmetric edge a <-> b, deduplicating against `a`'s existing neighbor
-// list. The edge is symmetric and both neighbor lists grow together, so a
-// single membership scan of nbrsA covers either call order (mirrors the
-// register allocator's `addInterference`). Per-slot degree is small relative to
-// maxSlotIdx, so the membership scan stays cheap.
-function addSlotInterference(ig SlotInterferenceGraph, a VarSlot, b VarSlot)
-	var nbrsA = try ig.neighbors.get(a) otherwise panic("addSlotInterference: a={a} OOB in neighbors (sized to maxSlotIdx)")
-	for v in nbrsA 'dedup'
-		if v == b 'already'
-			return
-		end 'already'
-	end 'dedup'
+// Add the symmetric edge a <-> b, deduplicating against `a`'s neighbor set in
+// O(1) via the caller-owned `adjStamp` epoch scratch (instead of an O(degree)
+// membership scan of nbrsA).
+//
+// The caller seeds `adjStamp[n] = epoch` for every existing neighbor `n` of `a`
+// ONCE per emit batch (one arrival in the sweep), then calls this for each
+// candidate `b` with that same `epoch`. A `b` already adjacent to `a` — whether
+// from this batch or a prior block/interval — carries the current `epoch` and
+// is rejected here; a fresh `b` is appended to both lists and its stamp updated
+// so a repeated `b` in the same batch is also caught.
+//
+// Why this matters: in a high-spill function (e.g. the test-runner functions
+// with >1000 coalescing slots all live across one dense region) the old
+// O(degree) dedup scan made the whole build O(slots³) — the self-compile wall.
+// The epoch-stamped dedup drops it to O(Σ neighbors + Σ active-set sizes).
+function addSlotInterference(ig SlotInterferenceGraph, a VarSlot, b VarSlot, adjStamp RegIntArray, epoch RegInt)
+	let bStamp = try adjStamp.get(b) otherwise panic("addSlotInterference: b={b} OOB in adjStamp (sized to maxSlotIdx)")
+	if bStamp == epoch 'already'
+		return
+	end 'already'
+	try adjStamp.set(b, value: epoch) otherwise panic("addSlotInterference: adjStamp.set({b}) OOB")
 
+	var nbrsA = try ig.neighbors.get(a) otherwise panic("addSlotInterference: a={a} OOB in neighbors (sized to maxSlotIdx)")
 	var nbrsB = try ig.neighbors.get(b) otherwise panic("addSlotInterference: b={b} OOB in neighbors (sized to maxSlotIdx)")
 	nbrsA.push(b)
 	nbrsB.push(a)
@@ -463,6 +473,19 @@ function buildSlotInterferenceGraph(ranges SlotRangeArray, maxSlotIdx VarSlot) r
 		s2 = s2 + 1
 	end 'populate'
 
+	// O(1)-dedup epoch scratch for addSlotInterference: `adjStamp[slot] == epoch`
+	// means `slot` is already a neighbor of the arrival being emitted this batch.
+	// One stamp slot per slot index; a monotonically increasing `epoch` per
+	// arrival means no per-batch clearing is needed (a stale stamp from an
+	// earlier batch never equals the current epoch).
+	var adjStamp = RegIntArray.create()
+	var stampInit = 0
+	while stampInit < maxSlotIdx 'initAdjStamp'
+		adjStamp.push(-1)
+		stampInit = stampInit + 1
+	end 'initAdjStamp'
+	var epoch = 0
+
 	var active = RegIntArray.create()
 	var blockId = 0
 	while blockId < numBlocks 'eachBlock'
@@ -499,13 +522,23 @@ function buildSlotInterferenceGraph(ranges SlotRangeArray, maxSlotIdx VarSlot) r
 				end 'stillLive'
 			end 'retire'
 
+			// New epoch for this arrival's emit batch. Seed slot1's existing
+			// neighbors (from earlier blocks / earlier intervals) so addSlotInterference
+			// dedups against them in O(1). Reseeding once per arrival keeps the
+			// build O(Σ neighbors + Σ active-set sizes) instead of O(slots³).
+			epoch = epoch + 1
+			let priorNbrs = try ig.neighbors.get(slot1) otherwise panic("buildSlotInterferenceGraph: neighbors.get({slot1}) OOB during reseed")
+			for n in priorNbrs 'seedStamp'
+				try adjStamp.set(n, value: epoch) otherwise panic("buildSlotInterferenceGraph: adjStamp.set({n}) OOB during reseed")
+			end 'seedStamp'
+
 			// Every surviving active entry overlaps the arrival.
 			var ei = 0
 			while ei < active.count() 'emit'
 				let activeIdx = try active.get(ei) otherwise panic("buildSlotInterferenceGraph: active.get({ei}) OOB during emit")
 				let slot2 = try bSlots.get(activeIdx) otherwise panic("buildSlotInterferenceGraph: bSlots.get({activeIdx}) OOB during emit")
 				if slot1 != slot2 'distinctSlots'
-					addSlotInterference(ig, a: slot1, b: slot2)
+					addSlotInterference(ig, a: slot1, b: slot2, adjStamp: adjStamp, epoch: epoch)
 				end 'distinctSlots'
 				ei = ei + 1
 			end 'emit'

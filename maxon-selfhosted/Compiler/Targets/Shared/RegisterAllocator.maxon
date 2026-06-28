@@ -955,6 +955,17 @@ type FunctionRegAllocator
 		var prevUncolored = -1
 		var noProgressStreak = 0
 		let splitProgressBudget = 3
+		// Hard cap on total reactive split iterations for THIS function. Each
+		// split forces a full liveness+coloring rebuild, and the no-progress
+		// streak does NOT catch the case where every split shrinks the uncolored
+		// count by one yet the function needs many splits (e.g. the test-runner
+		// functions, whose callee-saved over-subscription would otherwise drive
+		// dozens-to-hundreds of rebuild-heavy split iterations — a self-compile
+		// wall). After this many splits, disable splitting and let the spiller
+		// place the remainder directly (splitting is a pure quality pass; spilling
+		// is the correctness fallback). Small enough to bound the churn, far above
+		// any normal function's split count so ordinary codegen is unchanged.
+		let maxReactiveSplitIterations = 24
 		// Fast mode skips the call/use range splitters entirely. Splitting is a
 		// pure quality pass (it shortens live ranges so they color without a
 		// spill) but each successful split forces a FULL liveness+coloring
@@ -1066,6 +1077,13 @@ type FunctionRegAllocator
 			// ranges.count() across the whole function.
 			var nextId = SplitNextId.create(scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget))
 			let callPositions = buildCallPositionsPerBlock(module, func: func, opQuery: opQuery)
+			// Precompute per-(block,position) live pressure ONCE for this
+			// iteration so each splitter's pressure-locality gate is an O(1)
+			// lookup instead of an O(ranges × intervals) rescan. `ranges` is
+			// stable across all the split attempts in this pass (it is only
+			// rebuilt after a split or a spill, which both `continue`/exit the
+			// loop body), so one build covers every Pass-1a/1b gate test.
+			let livePressure = LivePressureMap.build(ranges)
 			var anySplit = false
 
 			// Pass 1a: call-boundary splitting. The redef-precheck in
@@ -1079,7 +1097,7 @@ type FunctionRegAllocator
 					afterCallSplit.push(ur)
 					continue
 				end 'skip'
-				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtCall(ur, func: func, module: module, regTarget: regTarget, callPositionsPerBlock: callPositions, stageByValueId: stageByValueId, nextId: nextId, ranges: ranges, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
+				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtCall(ur, func: func, module: module, regTarget: regTarget, callPositionsPerBlock: callPositions, stageByValueId: stageByValueId, nextId: nextId, pressure: livePressure, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
 					anySplit = true
 				end 'splitOk' else 'noSplit'
 					afterCallSplit.push(ur)
@@ -1098,7 +1116,7 @@ type FunctionRegAllocator
 					stillUnsplit.push(ur)
 					continue
 				end 'skip'
-				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtUse(ur, func: func, module: module, regTarget: regTarget, stageByValueId: stageByValueId, nextId: nextId, ranges: ranges, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
+				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtUse(ur, func: func, module: module, regTarget: regTarget, stageByValueId: stageByValueId, nextId: nextId, pressure: livePressure, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
 					anySplit = true
 				end 'splitOk' else 'noSplit'
 					stillUnsplit.push(ur)
@@ -1110,6 +1128,10 @@ type FunctionRegAllocator
 				// Skip Pass 2 this iteration — the next pass sees the shorter
 				// ranges and may color them without any spill at all.
 				splitOnlyIterations = splitOnlyIterations + 1
+				if splitOnlyIterations >= maxReactiveSplitIterations 'splitCapReached'
+					// Bounded the per-function split churn — spill the rest.
+					splittingHelps = false
+				end 'splitCapReached'
 				if splitOnlyIterations > 2 * ranges.count() 'splitRunaway'
 					panic("regalloc: split loop runaway in {state.funcName} — {splitOnlyIterations} split-only iterations exceeds bound 2 * {ranges.count()}")
 				end 'splitRunaway'
