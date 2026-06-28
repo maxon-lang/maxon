@@ -59,21 +59,6 @@ type SlotRange
 end 'SlotRange'
 
 export typealias SlotRangeArray = Array with SlotRange
-export typealias SlotRangeArrayArray = Array with SlotRangeArray
-
-// Wrapper around `SlotRangeArrayArray`. The extra field-access hop is what
-// Maxon's borrow checker needs to let `appendOccupant` both read an existing
-// occupant list (`pool.occupantsByColor.get(c)`) and write it back
-// (`pool.occupantsByColor.set(c, ...)`) without flagging an overlapping
-// mutable borrow. (See the parallel ownership trick in SpillManager's
-// `SlotPool` / `recordSlotOccupant`.)
-type ColorPool
-	export var occupantsByColor as SlotRangeArrayArray
-
-	export static function create() returns ColorPool
-		return Self{occupantsByColor: SlotRangeArrayArray.create()}
-	end 'create'
-end 'ColorPool'
 
 // ============================================================
 // Max slot index
@@ -376,32 +361,198 @@ end 'recordBlockSlotPositions'
 // Interference + coloring
 // ============================================================
 
-// Hot inner predicate (called O(ranges × occupants) from findCompatibleColor):
-// index-based loops, NOT `for … in`, because for-in over the struct-element
-// `IntervalArray` heap-allocates + refcounts an ArrayIterator on every call
-// (C# does not elide struct-element loops) — a per-call allocation in the
-// backend's hottest path. The interval lists are hoisted so the field access +
-// count() run once per call, not once per iteration.
-function slotRangesInterfere(a SlotRange, b SlotRange) returns bool
-	let aIntervals = a.intervals
-	let bIntervals = b.intervals
-	let aCount = aIntervals.count()
-	let bCount = bIntervals.count()
-	var ai = 0
-	while ai < aCount 'eachA'
-		let intervalA = try aIntervals.get(ai) otherwise panic("slotRangesInterfere: a.intervals.get({ai}) OOB")
-		var bi = 0
-		while bi < bCount 'eachB'
-			let intervalB = try bIntervals.get(bi) otherwise panic("slotRangesInterfere: b.intervals.get({bi}) OOB")
-			if intervalA.blockId == intervalB.blockId and intervalA.startPos < intervalB.endPos and intervalB.startPos < intervalA.endPos 'overlap'
-				return true
-			end 'overlap'
-			bi = bi + 1
-		end 'eachB'
-		ai = ai + 1
-	end 'eachA'
-	return false
-end 'slotRangesInterfere'
+// Per-slot interference graph: `neighbors[slotIdx]` is the dedup'd list of
+// slot indices whose live ranges overlap slot `slotIdx` (same-block half-open
+// overlap, exactly the relation the former `slotRangesInterfere` computed).
+// Built once via a per-block active-set sweep — O(Σ_block (intervals + edges))
+// instead of the O(slots²) pairwise occupant scan the coloring used before.
+export typealias SlotIntArrayArray = Array with RegIntArray
+
+type SlotInterferenceGraph
+	export var neighbors as SlotIntArrayArray
+
+	export static function create(maxSlotIdx VarSlot) returns SlotInterferenceGraph
+		var nbrs = SlotIntArrayArray.create()
+		var i = 0
+		while i < maxSlotIdx 'init'
+			nbrs.push(RegIntArray.create())
+			i = i + 1
+		end 'init'
+		return Self{neighbors: nbrs}
+	end 'create'
+end 'SlotInterferenceGraph'
+
+// Add the symmetric edge a <-> b, deduplicating against `a`'s existing neighbor
+// list. The edge is symmetric and both neighbor lists grow together, so a
+// single membership scan of nbrsA covers either call order (mirrors the
+// register allocator's `addInterference`). Per-slot degree is small relative to
+// maxSlotIdx, so the membership scan stays cheap.
+function addSlotInterference(ig SlotInterferenceGraph, a VarSlot, b VarSlot)
+	var nbrsA = try ig.neighbors.get(a) otherwise panic("addSlotInterference: a={a} OOB in neighbors (sized to maxSlotIdx)")
+	for v in nbrsA 'dedup'
+		if v == b 'already'
+			return
+		end 'already'
+	end 'dedup'
+
+	var nbrsB = try ig.neighbors.get(b) otherwise panic("addSlotInterference: b={b} OOB in neighbors (sized to maxSlotIdx)")
+	nbrsA.push(b)
+	nbrsB.push(a)
+end 'addSlotInterference'
+
+// Build the slot interference graph via a per-block active-set sweep over slot
+// intervals. For each block we collect its (slotIdx, startPos, endPos) triples,
+// sort them by startPos, then sweep: on each arrival retire active entries that
+// ended at or before the new start (half-open: an entry ending at endPos shares
+// no position with one starting at endPos, matching `startA < endB and
+// startB < endA`), then emit an interference edge against every survivor (they
+// overlap the arrival by construction), then add the arrival to the active set.
+// Two slots end up adjacent iff some pair of their intervals overlaps in the
+// same block — exactly the old `slotRangesInterfere`.
+function buildSlotInterferenceGraph(ranges SlotRangeArray, maxSlotIdx VarSlot) returns SlotInterferenceGraph
+	var ig = SlotInterferenceGraph.create(maxSlotIdx)
+
+	var maxBlockId = 0
+	var s = 0
+	while s < maxSlotIdx 'findMaxBlock'
+		let range = try ranges.get(s) otherwise panic("buildSlotInterferenceGraph: ranges.get({s}) OOB (sized to maxSlotIdx)")
+		let intervals = range.intervals
+		let n = intervals.count()
+		var k = 0
+		while k < n 'eachInterval'
+			let iv = try intervals.get(k) otherwise panic("buildSlotInterferenceGraph: intervals.get({k}) OOB")
+			if iv.blockId > maxBlockId 'higher'
+				maxBlockId = iv.blockId
+			end 'higher'
+			k = k + 1
+		end 'eachInterval'
+		s = s + 1
+	end 'findMaxBlock'
+
+	let numBlocks = maxBlockId + 1
+
+	// Parallel per-block triples: slot index, interval start, interval end.
+	var blockSlots = SlotIntArrayArray.create()
+	var blockStarts = SlotIntArrayArray.create()
+	var blockEnds = SlotIntArrayArray.create()
+	var bi = 0
+	while bi < numBlocks 'initBlockMaps'
+		blockSlots.push(RegIntArray.create())
+		blockStarts.push(RegIntArray.create())
+		blockEnds.push(RegIntArray.create())
+		bi = bi + 1
+	end 'initBlockMaps'
+
+	var s2 = 0
+	while s2 < maxSlotIdx 'populate'
+		let range = try ranges.get(s2) otherwise panic("buildSlotInterferenceGraph: ranges.get({s2}) OOB during populate")
+		let intervals = range.intervals
+		let n = intervals.count()
+		var k = 0
+		while k < n 'eachInterval2'
+			let iv = try intervals.get(k) otherwise panic("buildSlotInterferenceGraph: intervals.get({k}) OOB during populate")
+			let bid = iv.blockId
+			var bSlots = try blockSlots.get(bid) otherwise panic("invariant: bid < numBlocks but blockSlots.get OOB")
+			var bStarts = try blockStarts.get(bid) otherwise panic("invariant: bid < numBlocks but blockStarts.get OOB")
+			var bEnds = try blockEnds.get(bid) otherwise panic("invariant: bid < numBlocks but blockEnds.get OOB")
+			bSlots.push(s2)
+			bStarts.push(iv.startPos)
+			bEnds.push(iv.endPos)
+			k = k + 1
+		end 'eachInterval2'
+		s2 = s2 + 1
+	end 'populate'
+
+	var active = RegIntArray.create()
+	var blockId = 0
+	while blockId < numBlocks 'eachBlock'
+		let bSlots = try blockSlots.get(blockId) otherwise panic("invariant: blockSlots sized to numBlocks but get({blockId}) OOB")
+		let bStarts = try blockStarts.get(blockId) otherwise panic("invariant: blockStarts sized to numBlocks but get({blockId}) OOB")
+		let bEnds = try blockEnds.get(blockId) otherwise panic("invariant: blockEnds sized to numBlocks but get({blockId}) OOB")
+
+		let count = bSlots.count()
+		active.clear()
+
+		let order = sortIntervalIndicesByStart(bStarts)
+
+		var oi = 0
+		while oi < count 'sweep'
+			let idx = try order.get(oi) otherwise panic("buildSlotInterferenceGraph: order.get({oi}) OOB (count={count})")
+			let slot1 = try bSlots.get(idx) otherwise panic("buildSlotInterferenceGraph: bSlots.get({idx}) OOB")
+			let s1 = try bStarts.get(idx) otherwise panic("buildSlotInterferenceGraph: bStarts.get({idx}) OOB")
+
+			// Retire active entries whose interval ended at or before s1.
+			var ai = 0
+			while ai < active.count() 'retire'
+				let activeIdx = try active.get(ai) otherwise panic("buildSlotInterferenceGraph: active.get({ai}) OOB")
+				let activeEnd = try bEnds.get(activeIdx) otherwise panic("buildSlotInterferenceGraph: bEnds.get({activeIdx}) OOB")
+				if activeEnd <= s1 'expired'
+					// Swap-pop: O(1) removal that doesn't preserve order.
+					let lastPos = active.count() - 1
+					if ai != lastPos 'notLast'
+						let tail = try active.get(lastPos) otherwise panic("buildSlotInterferenceGraph: active.get(lastPos) OOB")
+						try active.set(ai, value: tail) otherwise panic("buildSlotInterferenceGraph: active.set OOB during swap-pop")
+					end 'notLast'
+					try active.pop() otherwise panic("buildSlotInterferenceGraph: active.pop on non-empty set must succeed")
+				end 'expired' else 'stillLive'
+					ai = ai + 1
+				end 'stillLive'
+			end 'retire'
+
+			// Every surviving active entry overlaps the arrival.
+			var ei = 0
+			while ei < active.count() 'emit'
+				let activeIdx = try active.get(ei) otherwise panic("buildSlotInterferenceGraph: active.get({ei}) OOB during emit")
+				let slot2 = try bSlots.get(activeIdx) otherwise panic("buildSlotInterferenceGraph: bSlots.get({activeIdx}) OOB during emit")
+				if slot1 != slot2 'distinctSlots'
+					addSlotInterference(ig, a: slot1, b: slot2)
+				end 'distinctSlots'
+				ei = ei + 1
+			end 'emit'
+
+			active.push(idx)
+			oi = oi + 1
+		end 'sweep'
+
+		blockId = blockId + 1
+	end 'eachBlock'
+
+	return ig
+end 'buildSlotInterferenceGraph'
+
+// Insertion-sort permutation: indices 0..starts.count() sorted by
+// starts[idx] ascending. Per-block interval counts are bounded, so insertion
+// sort beats a recursive sort once constants fold in, and is trivially stable.
+function sortIntervalIndicesByStart(starts RegIntArray) returns RegIntArray
+	let count = starts.count()
+	var order = RegIntArray.create()
+	var i = 0
+	while i < count 'init'
+		order.push(i)
+		i = i + 1
+	end 'init'
+
+	var si = 1
+	while si < count 'sort'
+		let keyIdx = try order.get(si) otherwise panic("sortIntervalIndicesByStart: order.get({si}) OOB (count={count})")
+		let keyStart = try starts.get(keyIdx) otherwise panic("sortIntervalIndicesByStart: starts.get({keyIdx}) OOB")
+
+		var j = si - 1
+		while j >= 0 'insert'
+			let jIdx = try order.get(j) otherwise panic("sortIntervalIndicesByStart: order.get({j}) OOB during insert")
+			let jStart = try starts.get(jIdx) otherwise panic("sortIntervalIndicesByStart: starts.get({jIdx}) OOB during insert")
+			if jStart <= keyStart 'inPlace'
+				break
+			end 'inPlace'
+			try order.set(j + 1, value: jIdx) otherwise panic("sortIntervalIndicesByStart: order.set OOB during insert")
+			j = j - 1
+		end 'insert'
+		try order.set(j + 1, value: keyIdx) otherwise panic("sortIntervalIndicesByStart: order.set final OOB")
+		si = si + 1
+	end 'sort'
+
+	return order
+end 'sortIntervalIndicesByStart'
 
 function rangeEarliestStart(range SlotRange) returns RegInt
 	var best = i64.max
@@ -421,50 +572,90 @@ function rangeEarliestStart(range SlotRange) returns RegInt
 	return best
 end 'rangeEarliestStart'
 
-// Append `range` to the existing color's occupant list. Isolated into a
-// function so the borrow on `colorPool` lives strictly inside this call —
-// the borrow checker won't let us hold both `let occupants = colorPool.get(c)`
-// and call `colorPool.set(c, ...)` in the same outer scope.
-function appendOccupant(pool ColorPool, color RegInt, range SlotRange)
-	var occupants = try pool.occupantsByColor.get(color) otherwise panic("invariant: pool get OOB in appendOccupant")
-	occupants.push(range)
-	try pool.occupantsByColor.set(color, value: occupants) otherwise panic("invariant: pool set OOB in appendOccupant")
-end 'appendOccupant'
+// True iff slot `aIdx` sorts strictly before slot `bIdx`: escaped slots first,
+// then earliestStart ascending, then slotIdx ascending. `aIdx`/`bIdx` are the
+// slot indices stored in `order`, and `order` is built in ascending-slotIdx
+// order, so the slotIdx tiebreak reproduces the original positional order. This
+// is a TOTAL order (distinct slots compare unequal), so the inline merge sort
+// below yields byte-identical output to the former stable insertion sort.
+function slotRangeBefore(aIdx VarSlot, bIdx VarSlot, ranges SlotRangeArray, earliestStart RegIntArray) returns bool
+	let aRange = try ranges.get(aIdx) otherwise panic("slotRangeBefore: ranges.get({aIdx}) OOB")
+	let bRange = try ranges.get(bIdx) otherwise panic("slotRangeBefore: ranges.get({bIdx}) OOB")
+	let aEsc = aRange.escaped
+	let bEsc = bRange.escaped
 
-// Scan the color pool for the first slot whose occupants are all compatible
-// (i.e. non-interfering, non-escaped) with `range`. Returns the color index
-// or -1 if no existing slot is reusable. Extracted into its own function so
-// the borrow on `pool` is released before the caller mutates it.
-function findCompatibleColor(pool ColorPool, range SlotRange) returns RegInt
-	let colorCount = pool.occupantsByColor.count()
-	var ci = 0
-	while ci < colorCount 'scanPool'
-		let occupants = try pool.occupantsByColor.get(ci) otherwise panic("invariant: pool get OOB after count() guard")
-		// Index-based, not `for occ in occupants`: the latter heap-allocates an
-		// ArrayIterator per color-scan in the backend's hottest loop.
-		let occCount = occupants.count()
-		var oi = 0
-		var compatible = true
-		while oi < occCount 'eachOcc'
-			let occ = try occupants.get(oi) otherwise panic("findCompatibleColor: occupants.get({oi}) OOB")
-			if occ.escaped or slotRangesInterfere(occ, b: range) 'conflict'
-				compatible = false
-				break
-			end 'conflict'
-			oi = oi + 1
-		end 'eachOcc'
-		if compatible 'reuse'
-			return ci
-		end 'reuse'
-		ci = ci + 1
-	end 'scanPool'
-	return -1
-end 'findCompatibleColor'
+	if aEsc != bEsc 'escapedFirst'
+		return aEsc
+	end 'escapedFirst'
+
+	let aStart = try earliestStart.get(aIdx) otherwise panic("slotRangeBefore: earliestStart.get({aIdx}) OOB")
+	let bStart = try earliestStart.get(bIdx) otherwise panic("slotRangeBefore: earliestStart.get({bIdx}) OOB")
+	if aStart != bStart 'byStart'
+		return aStart < bStart
+	end 'byStart'
+
+	return aIdx < bIdx
+end 'slotRangeBefore'
+
+// Recursive merge sort of `order[lo..hi)` (slot indices) by `slotRangeBefore`.
+// `scratch` is a caller-provided buffer sized to order.count(); each merge
+// writes only its own [lo, hi) slice, so the shared buffer is safe under
+// depth-first recursion. Mirrors `mergeSortByDomPreorder` in SSAColoring.
+function mergeSortSlots(order RegIntArray, lo RegInt, hi RegInt, scratch RegIntArray, ranges SlotRangeArray, earliestStart RegIntArray)
+	if hi - lo < 2 'base'
+		return
+	end 'base'
+	let mid = lo + (hi - lo) / 2
+	mergeSortSlots(order, lo: lo, hi: mid, scratch: scratch, ranges: ranges, earliestStart: earliestStart)
+	mergeSortSlots(order, lo: mid, hi: hi, scratch: scratch, ranges: ranges, earliestStart: earliestStart)
+
+	var i = lo
+	var j = mid
+	var k = lo
+	while i < mid and j < hi 'merge'
+		let a = try order.get(i) otherwise panic("mergeSortSlots: order.get({i}) OOB")
+		let b = try order.get(j) otherwise panic("mergeSortSlots: order.get({j}) OOB")
+		if slotRangeBefore(a, bIdx: b, ranges: ranges, earliestStart: earliestStart) 'takeLeft'
+			try scratch.set(k, value: a) otherwise panic("mergeSortSlots: scratch.set OOB")
+			i = i + 1
+		end 'takeLeft' else 'takeRight'
+			try scratch.set(k, value: b) otherwise panic("mergeSortSlots: scratch.set OOB")
+			j = j + 1
+		end 'takeRight'
+		k = k + 1
+	end 'merge'
+	while i < mid 'drainLeft'
+		let a = try order.get(i) otherwise panic("mergeSortSlots: drainLeft.get OOB")
+		try scratch.set(k, value: a) otherwise panic("mergeSortSlots: drainLeft.set OOB")
+		i = i + 1
+		k = k + 1
+	end 'drainLeft'
+	while j < hi 'drainRight'
+		let b = try order.get(j) otherwise panic("mergeSortSlots: drainRight.get OOB")
+		try scratch.set(k, value: b) otherwise panic("mergeSortSlots: drainRight.set OOB")
+		j = j + 1
+		k = k + 1
+	end 'drainRight'
+	var m = lo
+	while m < hi 'copyBack'
+		let v = try scratch.get(m) otherwise panic("mergeSortSlots: copyBack.get OOB")
+		try order.set(m, value: v) otherwise panic("mergeSortSlots: copyBack.set OOB")
+		m = m + 1
+	end 'copyBack'
+end 'mergeSortSlots'
 
 // Linear-scan color slot ranges. Returns (remap, newSlotCount):
 //   remap[oldSlot] = newSlot, or -1 for slots with no intervals.
 // Escaped slots are colored first, each into its own color, so they never
 // share storage with anything else.
+//
+// Coloring is driven by a precomputed slot interference graph (per-block
+// active-set sweep) rather than a per-color occupant scan: for each slot we
+// pick the lowest color index not held by any already-colored interfering
+// neighbor. This is provably identical to a first-fit over a color pool — a
+// color is reusable iff none of its occupants interfere, iff no interfering
+// neighbor already holds it — but runs in O(Σ neighbors) instead of
+// O(slots² × intervals).
 function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntArray, VarSlot)
 	var remap = RegIntArray.create()
 	var i = 0
@@ -474,9 +665,9 @@ function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntAr
 	end 'init'
 
 	// Build the work list AND cache each slot's earliest-start once (indexed by
-	// slotIdx). The insertion sort below compares earliest-starts O(slots²)
+	// slotIdx). The merge sort below compares earliest-starts O(slots log slots)
 	// times; recomputing `rangeEarliestStart` (an O(intervals) scan) per
-	// comparison was an O(slots² × intervals) hot spot on large functions.
+	// comparison would be an O(slots log slots × intervals) hot spot.
 	var order = RegIntArray.create()
 	var earliestStart = RegIntArray.create()
 	var s = 0
@@ -490,38 +681,32 @@ function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntAr
 		s = s + 1
 	end 'initOrder'
 
-	// Insertion sort by (escaped first, then earliestStart ascending).
+	// Stable O(n log n) sort by (escaped first, then earliestStart ascending,
+	// slotIdx tiebreak) — replaces the former O(slots²) insertion sort, same order.
 	let count = order.count()
-	var si = 1
-	while si < count 'sort'
-		let keyIdx = try order.get(si) otherwise panic("invariant: order.get OOB during sort")
-		let keyRange = try ranges.get(keyIdx) otherwise panic("invariant: ranges.get OOB during sort")
-		let keyStart = try earliestStart.get(keyIdx) otherwise panic("invariant: earliestStart.get({keyIdx}) OOB")
-		let keyEsc = keyRange.escaped
+	if count > 1 'doSort'
+		var scratch = RegIntArray.create()
+		var sc = 0
+		while sc < count 'initScratch'
+			scratch.push(0)
+			sc = sc + 1
+		end 'initScratch'
+		mergeSortSlots(order, lo: 0, hi: count, scratch: scratch, ranges: ranges, earliestStart: earliestStart)
+	end 'doSort'
 
-		var j = si - 1
-		while j >= 0 'insert'
-			let jIdx = try order.get(j) otherwise break
-			let jRange = try ranges.get(jIdx) otherwise break
-			let jStart = try earliestStart.get(jIdx) otherwise break
-			let jEsc = jRange.escaped
+	let ig = buildSlotInterferenceGraph(ranges, maxSlotIdx: maxSlotIdx)
 
-			if jEsc and not keyEsc 'inPlace1'
-				break
-			end 'inPlace1'
-			if jEsc == keyEsc and jStart <= keyStart 'inPlace2'
-				break
-			end 'inPlace2'
+	// `forbidden[color]` is stamped with the current slot's `epoch` while
+	// scanning its colored neighbors, so the lowest unstamped color is the
+	// first-fit choice — no per-color clearing needed across slots.
+	var forbidden = RegIntArray.create()
+	var fi = 0
+	while fi < count 'initForbidden'
+		forbidden.push(-1)
+		fi = fi + 1
+	end 'initForbidden'
 
-			try order.set(j + 1, value: jIdx) otherwise panic("invariant: order.set OOB")
-			j = j - 1
-		end 'insert'
-		try order.set(j + 1, value: keyIdx) otherwise panic("invariant: order.set OOB")
-		si = si + 1
-	end 'sort'
-
-	var pool = ColorPool.create()
-
+	var nextColor = 0
 	var oi = 0
 	while oi < count 'assign'
 		let slotIdx = try order.get(oi) otherwise panic("invariant: order.get OOB during assign")
@@ -530,23 +715,38 @@ function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntAr
 		var chosenColor = -1
 
 		if not range.escaped 'tryReuse'
-			chosenColor = findCompatibleColor(pool, range: range)
+			// Mark every color held by an already-colored interfering neighbor as
+			// forbidden, then take the lowest color not forbidden at this epoch.
+			let nbrs = try ig.neighbors.get(slotIdx) otherwise panic("invariant: ig.neighbors.get({slotIdx}) OOB")
+			let epoch = oi
+			for nbrIdx in nbrs 'eachNbr'
+				let nbrColor = try remap.get(nbrIdx) otherwise panic("invariant: remap.get({nbrIdx}) OOB for neighbor")
+				if nbrColor >= 0 'colored'
+					try forbidden.set(nbrColor, value: epoch) otherwise panic("invariant: forbidden.set({nbrColor}) OOB; forbidden sized to count() >= nextColor")
+				end 'colored'
+			end 'eachNbr'
+
+			var c = 0
+			while c < nextColor 'firstFit'
+				let stamp = try forbidden.get(c) otherwise panic("invariant: forbidden.get({c}) OOB during first-fit")
+				if stamp != epoch 'free'
+					chosenColor = c
+					break
+				end 'free'
+				c = c + 1
+			end 'firstFit'
 		end 'tryReuse'
 
 		if chosenColor < 0 'newColor'
-			chosenColor = pool.occupantsByColor.count()
-			var fresh = SlotRangeArray.create()
-			fresh.push(range)
-			pool.occupantsByColor.push(fresh)
-		end 'newColor' else 'augment'
-			appendOccupant(pool, color: chosenColor, range: range)
-		end 'augment'
+			chosenColor = nextColor
+			nextColor = nextColor + 1
+		end 'newColor'
 
 		try remap.set(slotIdx, value: chosenColor) otherwise panic("invariant: remap.set OOB")
 		oi = oi + 1
 	end 'assign'
 
-	return (remap, pool.occupantsByColor.count())
+	return (remap, nextColor)
 end 'colorSlots'
 
 function anyEscaped(escaped BoolArray, maxSlotIdx VarSlot) returns bool
