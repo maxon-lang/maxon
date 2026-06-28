@@ -1,0 +1,820 @@
+// Pre-coloring Belady/MIN register-pressure spill pass.
+//
+// Theory of operation: strict-SSA interference graphs are chordal, hence
+// perfect, so their chromatic number equals their clique number (= MaxLive,
+// the peak number of simultaneously-live values per register class). If we
+// reduce MaxLive to <= k (the pool size) at every program point BEFORE
+// coloring, the chordal graph is provably k-colorable and SSAColoring's
+// first-fit pass cannot fail — the expensive eviction/last-chance recolor
+// never fires. This is the standard Hack/Braun "spill before color" approach
+// (Register Spilling and Live-Range Splitting for SSA-Form Programs, 2009).
+//
+// The pass observes the flat `ranges` array (virtual ranges PLUS the fixed
+// pseudo-ranges minted by insertPhysicalConstraints — clobbers/params/phys-
+// dest, which consume real registers at call sites) and, at every over-
+// pressured point, spills the live values whose NEXT USE is farthest away
+// (Belady's MIN). It produces a SpillDecision and routes it through the
+// existing allocateSpillSlots -> insertSpillCode path — it emits no spill
+// code itself and never mutates ranges/liveness/IR directly. The driver loop
+// lives in FunctionRegAllocator.runBeladyPressureReduction; this file holds
+// the analysis (pressure, next-use) and the spill picker.
+//
+// Why this must run AFTER insertPhysicalConstraints (so clobber pseudo-ranges
+// are visible as pressure) and BEFORE colorSSA/destroySSA (destroySSA lowers
+// phi to copies and destroys chordality).
+
+// Safety belt on the number of spill-and-rebuild rounds. The infinite-weight
+// invariant on reload vregs already bounds rounds (each round makes >=1 more
+// vreg unspillable); this cap matches the reactive loop's iteration cap.
+export let BELADY_MAX_ROUNDS = 10
+
+// Cross-block next-use ordering unit. A value still live out of the current
+// block sorts as farther than any in-block use; the next-use-block's RPO
+// index is multiplied by this so cross-block ordering dominates intra-block
+// tie-breaking. 1048576 (2^20, ~1M) is large enough that no realistic block has
+// that many positions, yet small enough that rpoIndex * UNIT never overflows
+// i64 for any realistic function. (Written as a literal, not `1 shl 20`: the
+// self-hosted parser does not accept a binary operator in a module-level `let`
+// initializer, only in expression contexts — and this file must self-compile.)
+let BLOCK_DISTANCE_UNIT = 1048576
+
+// Next-use distance for a value with no use at or beyond the current point
+// (dead here) — spill it first, it is needed never.
+let NEXT_USE_INFINITE = i64.max
+
+// Peak simultaneous-live count per register class (a.k.a. MaxLive / clique
+// number of the chordal interference graph). gpr and fp are independent
+// pools so we track them separately.
+export type MaxLiveResult
+	export var gpr as RegInt
+	export var fp as RegInt
+
+	export static function create(gpr RegInt, fp RegInt) returns MaxLiveResult
+		return Self{gpr: gpr, fp: fp}
+	end 'create'
+end 'MaxLiveResult'
+
+// Per-block map blockId -> max op position in that block. Max position is
+// `opRefs.count() + 1` (the terminator slot): ops 0..count-1 live at
+// positions 1..count, and the terminator at count+1. Mirrors the sizing in
+// buildCallPositionsPerBlock (array length = maxBlockId + 1, keyed by raw
+// block.id). Blocks not in this func index a -1 sentinel.
+function blockMaxPositions(module TargetModule, func IrFunction) returns RegIntArray
+	var maxBlockId = 0
+	for blockRef in func.blockRefs 'findMax'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		if block.id > maxBlockId 'higher'
+			maxBlockId = block.id
+		end 'higher'
+	end 'findMax'
+
+	var result = RegIntArray.create()
+	var i = 0
+	while i <= maxBlockId 'init'
+		result.push(-1)
+		i = i + 1
+	end 'init'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		try result.set(block.id, value: block.opRefs.count() + 1) otherwise panic("invariant: blockMaxPositions.set OOB; sized to maxBlockId+1")
+	end 'eachBlock'
+
+	return result
+end 'blockMaxPositions'
+
+// True if a RegClass is the FP class. Mirrors the gpr/fp discrimination used
+// throughout the allocator (LocalSplitter's poolSizeFor pattern).
+function regClassIsFp(regClass RegClass) returns bool
+	return match regClass 'rc'
+		gpr gives false
+		fp gives true
+	end 'rc'
+end 'regClassIsFp'
+
+// True if `range` belongs to the given register class.
+function rangeIsClass(range LiveRange, regClass RegClass) returns bool
+	return regClassIsFp(range.regClass) == regClassIsFp(regClass)
+end 'rangeIsClass'
+
+// Compute MaxLive per register class across the whole function via a per-
+// block delta/prefix-sum scan. Pressure is measured PER OP POSITION (not
+// per interval): for each interval [startPos, endPos) we add +1 at startPos
+// and -1 at endPos into the block's delta vector, then prefix-sum to get the
+// live count at each position; the running max over all positions of all
+// blocks per class is MaxLive_class. This matches SSAColoring's per-position
+// clique view — measuring per-interval would under-count spike points.
+//
+// Fixed pseudo-ranges (fixedReg != RM_NONE) are counted: emitClobberRanges /
+// emitFixedRegRanges / emitPerBitParamRanges set regClass = gpr, so they
+// raise GPR pressure exactly at the call/arg-setup windows where the
+// physical registers are genuinely occupied. This is why pressure is read
+// straight off `ranges` rather than from a per-op liveness walk (the pseudo-
+// ranges exist only in `ranges`, never in liveIn/liveOut).
+export function computeMaxLivePerBlock(ranges LiveRangeArray, module TargetModule, func IrFunction) returns MaxLiveResult
+	let blockMaxPos = blockMaxPositions(module, func: func)
+	let numBlockSlots = blockMaxPos.count()
+
+	var maxGpr = 0
+	var maxFp = 0
+
+	var b = 0
+	while b < numBlockSlots 'eachBlock'
+		let maxPos = try blockMaxPos.get(b) otherwise panic("computeMaxLivePerBlock: b < count by guard but get({b}) failed")
+		if maxPos < 0 'notInFunc'
+			b = b + 1
+			continue
+		end 'notInFunc'
+
+		// delta[p] for p in 0..maxPos+1 (one extra slot so endPos == maxPos+1
+		// has a landing index for its -1).
+		var deltaGpr = RegIntArray.create()
+		var deltaFp = RegIntArray.create()
+		var di = 0
+		while di <= maxPos + 1 'initDelta'
+			deltaGpr.push(0)
+			deltaFp.push(0)
+			di = di + 1
+		end 'initDelta'
+
+		for range in ranges 'eachRange'
+			let isGpr = rangeIsClass(range, regClass: RegClass.gpr)
+			for iv in range.intervals 'eachInterval'
+				if iv.blockId != b 'otherBlock'
+					continue
+				end 'otherBlock'
+				// Clamp endPos into the delta array; intervals built from
+				// liveness never exceed maxPos+1, but guard anyway.
+				var endIdx = iv.endPos
+				if endIdx > maxPos + 1 'clampEnd'
+					endIdx = maxPos + 1
+				end 'clampEnd'
+				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
+					continue
+				end 'badStart'
+
+				if isGpr 'gprDelta'
+					let s0 = try deltaGpr.get(iv.startPos) otherwise panic("computeMaxLivePerBlock: deltaGpr start OOB")
+					try deltaGpr.set(iv.startPos, value: s0 + 1) otherwise panic("invariant: deltaGpr.set start OOB")
+					let e0 = try deltaGpr.get(endIdx) otherwise panic("computeMaxLivePerBlock: deltaGpr end OOB")
+					try deltaGpr.set(endIdx, value: e0 - 1) otherwise panic("invariant: deltaGpr.set end OOB")
+				end 'gprDelta' else 'fpDelta'
+					let s0 = try deltaFp.get(iv.startPos) otherwise panic("computeMaxLivePerBlock: deltaFp start OOB")
+					try deltaFp.set(iv.startPos, value: s0 + 1) otherwise panic("invariant: deltaFp.set start OOB")
+					let e0 = try deltaFp.get(endIdx) otherwise panic("computeMaxLivePerBlock: deltaFp end OOB")
+					try deltaFp.set(endIdx, value: e0 - 1) otherwise panic("invariant: deltaFp.set end OOB")
+				end 'fpDelta'
+			end 'eachInterval'
+		end 'eachRange'
+
+		// Prefix-sum to recover the live count at each position; track the
+		// running max per class.
+		var runningGpr = 0
+		var runningFp = 0
+		var p = 0
+		while p <= maxPos + 1 'prefixSum'
+			runningGpr = runningGpr + (try deltaGpr.get(p) otherwise panic("computeMaxLivePerBlock: deltaGpr prefix OOB"))
+			runningFp = runningFp + (try deltaFp.get(p) otherwise panic("computeMaxLivePerBlock: deltaFp prefix OOB"))
+			if runningGpr > maxGpr 'newGpr'
+				maxGpr = runningGpr
+			end 'newGpr'
+			if runningFp > maxFp 'newFp'
+				maxFp = runningFp
+			end 'newFp'
+			p = p + 1
+		end 'prefixSum'
+
+		b = b + 1
+	end 'eachBlock'
+
+	return MaxLiveResult.create(maxGpr, fp: maxFp)
+end 'computeMaxLivePerBlock'
+
+// True if `range` is live at (blockId, pos): half-open [startPos, endPos)
+// overlap, same convention as rangesInterfere / buildInterferenceGraph.
+function rangeLiveAt(range LiveRange, blockId BlockId, pos RegInt) returns bool
+	for iv in range.intervals 'each'
+		if iv.blockId == blockId and iv.startPos <= pos and pos < iv.endPos 'live'
+			return true
+		end 'live'
+	end 'each'
+	return false
+end 'rangeLiveAt'
+
+// True if `range` has an interval in `blockId` (used to test whether a range
+// is live-in toward a successor block — its presence in the successor's
+// interval list means it flows there).
+function rangeLiveInBlock(range LiveRange, blockId BlockId) returns bool
+	for iv in range.intervals 'each'
+		if iv.blockId == blockId 'present'
+			return true
+		end 'present'
+	end 'each'
+	return false
+end 'rangeLiveInBlock'
+
+// ============================================================
+// Next-use analysis
+// ============================================================
+
+// Precomputed, once per round, the first read position of every value as a
+// (blockId, position) pair. We avoid the per-point forward scan called out as
+// a hotspot in review by building this per-valueId next-use map from a single
+// forward read scan, then consulting it O(1) per (point, range).
+//
+// `firstReadBlock[vid]` / `firstReadPos[vid]`: the (block, position) of the
+// FIRST op (RPO order) that reads vid. -1 if never read (dead value). This is
+// a global "next use" approximation: combined with the per-point distance
+// computation it yields a monotone ordering good enough for MIN. Correctness
+// needs only MaxLive <= k; next-use only governs WHICH value to spill.
+type NextUseMap
+	export var firstReadBlock as RegIntArray
+	export var firstReadPos as RegIntArray
+
+	export static function create() returns NextUseMap
+		return Self{firstReadBlock: RegIntArray.create(), firstReadPos: RegIntArray.create()}
+	end 'create'
+end 'NextUseMap'
+
+// Build the next-use map by walking blocks in RPO order and, within each
+// block, ops front-to-back. The first time a value is seen as a read it is
+// stamped; later reads are ignored (we want the earliest). Branch-edge arg
+// sources count as a read at the predecessor's terminator slot.
+function buildNextUseMap(ranges LiveRangeArray, module TargetModule, func IrFunction, rpo RpoInfo, regTarget RegAllocTarget) returns NextUseMap
+	var map = NextUseMap.create()
+
+	var maxVid = 0
+	for range in ranges 'findMax'
+		if range.valueId > maxVid 'higher'
+			maxVid = range.valueId
+		end 'higher'
+	end 'findMax'
+
+	var i = 0
+	while i <= maxVid 'init'
+		map.firstReadBlock.push(-1)
+		map.firstReadPos.push(-1)
+		i = i + 1
+	end 'init'
+
+	let numOrder = rpo.order.count()
+	var oi = 0
+	while oi < numOrder 'eachRpoBlock'
+		let blockId = try rpo.order.get(oi) otherwise panic("buildNextUseMap: oi < count by guard but rpo.order.get({oi}) failed")
+		let block = findBlockById(module, func: func, blockId: blockId)
+
+		var opIdx = 0
+		for packed in block.opRefs 'eachOp'
+			var reads = RegIntArray.create()
+			regTarget.countOpReads(module, reads: reads, packed: packed)
+			recordFirstReads(map, reads: reads, blockId: blockId, pos: opIdx + 1, maxVid: maxVid)
+			opIdx = opIdx + 1
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			var reads = RegIntArray.create()
+			regTarget.countOpReads(module, reads: reads, packed: block.terminatorIndex())
+			recordFirstReads(map, reads: reads, blockId: blockId, pos: opIdx + 1, maxVid: maxVid)
+		end 'hasTerm'
+
+		// Branch-edge arg sources: a value used as a block-arg source is read
+		// at the predecessor's terminator slot. Position opRefs.count()+1 is
+		// the terminator slot.
+		let termPos = block.opRefs.count() + 1
+		for edge in block.branchEdges 'eachEdge'
+			recordFirstReads(map, reads: edge.argIds, blockId: blockId, pos: termPos, maxVid: maxVid)
+		end 'eachEdge'
+
+		oi = oi + 1
+	end 'eachRpoBlock'
+
+	return map
+end 'buildNextUseMap'
+
+// Stamp the first-read (block, pos) for each id in `reads` that hasn't been
+// seen yet. Only ids within [0, maxVid] are recorded.
+function recordFirstReads(map NextUseMap, reads RegIntArray, blockId BlockId, pos RegInt, maxVid RegInt)
+	for vid in reads 'each'
+		if vid < 0 or vid > maxVid 'outOfRange'
+			continue
+		end 'outOfRange'
+		let prev = try map.firstReadBlock.get(vid) otherwise panic("recordFirstReads: vid in range but firstReadBlock.get failed")
+		if prev < 0 'unset'
+			try map.firstReadBlock.set(vid, value: blockId) otherwise panic("invariant: firstReadBlock.set OOB")
+			try map.firstReadPos.set(vid, value: pos) otherwise panic("invariant: firstReadPos.set OOB")
+		end 'unset'
+	end 'each'
+end 'recordFirstReads'
+
+// Distance from point (blockId, fromPos) to the next use of `range`, using
+// the precomputed NextUseMap and the RPO ordering for the cross-block term.
+// Larger = farther = better spill candidate (Belady spills farthest-next-use).
+//
+//   1. Next use is in THIS block after fromPos  -> distance = readPos - fromPos.
+//   2. Value is live out toward a successor (has an interval in a successor
+//      block) -> distance = (blockMaxPos[B] - fromPos) + rpoIndexOfNextLiveBlock
+//      * BLOCK_DISTANCE_UNIT, so survival farther down the RPO chain sorts as
+//      farther while staying above any intra-block distance.
+//   3. No use at or beyond this point (dead here) -> NEXT_USE_INFINITE.
+function nextUseFromPoint(range LiveRange, blockId BlockId, fromPos RegInt, rpo RpoInfo, nextUse NextUseMap, blockMaxPos RegIntArray, cfg CfgInfo) returns RegInt
+	let vid = range.valueId
+
+	// Case 1: in-block use after fromPos.
+	let readBlock = getOr(nextUse.firstReadBlock, index: vid, fallback: -1)
+	let readPos = getOr(nextUse.firstReadPos, index: vid, fallback: -1)
+	if readBlock == blockId and readPos > fromPos 'inBlockUse'
+		return readPos - fromPos
+	end 'inBlockUse'
+
+	// Case 2: live-out toward a successor. Find the min RPO index among
+	// successors in whose interval list `range` appears live.
+	let maxPos = getOr(blockMaxPos, index: blockId, fallback: 0)
+	let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+		return NEXT_USE_INFINITE
+	end 'noSuccs'
+
+	var bestRpo = i64.max
+	for succ in succs 'eachSucc'
+		if rangeLiveInBlock(range, blockId: succ) 'liveThere'
+			let ri = getOr(rpo.index, index: succ, fallback: i64.max)
+			if ri < bestRpo 'closer'
+				bestRpo = ri
+			end 'closer'
+		end 'liveThere'
+	end 'eachSucc'
+
+	if bestRpo == i64.max 'noLiveSucc'
+		// Dead after this point (no in-block use, no live successor).
+		return NEXT_USE_INFINITE
+	end 'noLiveSucc'
+
+	return (maxPos - fromPos) + bestRpo * BLOCK_DISTANCE_UNIT
+end 'nextUseFromPoint'
+
+// ============================================================
+// Block-arg plumbing identification (W-set safety)
+// ============================================================
+
+// Build a bitmap (indexed by valueId) of every value involved in block-arg
+// (phi) plumbing: both the block-arg DESTINATIONS (phi-merge values) and the
+// branch-edge SOURCES that feed them. Belady must NOT spill any of these.
+//
+// Why both ends are off-limits (not just destinations):
+//   A block-arg destination has multiple incoming SSA sources (one per
+//   predecessor). insertSpillCode's two-pass branch-edge handling
+//   (remapBranchEdgeArgs + the successor spill-store) is only consistent when
+//   either the destination AND all its sources are spilled, or none are (the
+//   memory-routed-phi shortcut — which is currently gated off). Spilling a
+//   destination while a source stays in a register, OR spilling a source that
+//   feeds a destination whose slot is coalesced with the source's slot,
+//   produces a parallel-copy / spill-store mismatch: the value arrives in one
+//   place but is read from another.
+//
+//   The W-set fixpoint from Braun/Hack would reconcile this by forcing all
+//   sources spilled when a destination is, but that depends on the gated-off
+//   memory-routed-phi path being sound. The conservative-but-correct rule —
+//   and the one that keeps Belady purely a pressure-relief pass with no spill
+//   emission of its own — is to leave block-arg plumbing values to the
+//   reactive loop, which already owns that machinery. Ordinary cross-block
+//   and intra-block temporaries (the bulk of register pressure) remain
+//   freely spillable; their reload/store plumbing stays clear of the phi
+//   parallel-copy machinery.
+function buildBlockArgPlumbingSet(module TargetModule, func IrFunction) returns BoolArray
+	var maxVid = 0
+	for blockRef in func.blockRefs 'findMax'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if arg.valueId > maxVid 'higherArg'
+				maxVid = arg.valueId
+			end 'higherArg'
+		end 'eachArg'
+		for edge in block.branchEdges 'eachEdge'
+			for srcId in edge.argIds 'eachSrc'
+				if srcId > maxVid 'higherSrc'
+					maxVid = srcId
+				end 'higherSrc'
+			end 'eachSrc'
+		end 'eachEdge'
+	end 'findMax'
+
+	var result = BoolArray.create()
+	var i = 0
+	while i <= maxVid 'init'
+		result.push(false)
+		i = i + 1
+	end 'init'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'markArg'
+			try result.set(arg.valueId, value: true) otherwise panic("invariant: buildBlockArgPlumbingSet.set OOB; sized to maxVid+1")
+		end 'markArg'
+		for edge in block.branchEdges 'markEdge'
+			for srcId in edge.argIds 'markSrc'
+				if srcId >= 0 'validSrc'
+					try result.set(srcId, value: true) otherwise panic("invariant: buildBlockArgPlumbingSet.set OOB source; sized to maxVid+1")
+				end 'validSrc'
+			end 'markSrc'
+		end 'markEdge'
+	end 'eachBlock'
+
+	return result
+end 'buildBlockArgPlumbingSet'
+
+// True if `range` is a legal Belady spill candidate of class `regClass`:
+//   - right register class,
+//   - not a fixed pseudo-range (those are physical constraints — they count
+//     toward pressure but can never get a stack slot),
+//   - finite spill weight (reload vregs and phi-merge sub-ranges are
+//     SPILL_WEIGHT_INFINITE — already unspillable),
+//   - not a block-arg plumbing value (dest or source; W-set safety — also
+//     covers entry-block parameters, which have no def op to anchor a store),
+//   - not already chosen this round.
+//
+// Cross-block (multi-interval) values ARE spillable: insertSpillCode stores
+// after the def and reloads before each use, with the cross-block-arg case
+// handled by remapBranchEdgeArgs. The dense-function pressure that walls the
+// self-compile is dominated by cross-block values, so excluding them would
+// defeat the pass. Spilling a cross-block managed RETURN value is correct only
+// because insertPhysicalConstraints keeps each return-register phys-dest write
+// (mov x0,<retVal>; mov x1,<errorFlag>) live to the block terminator when no
+// call follows it (see LiveRangeBuilder.insertPhysicalConstraints): the staged
+// return register stays OCCUPIED through `ret`, so a reloaded return value (or
+// a rematerialized error-flag constant) materialized just before the return
+// movs interferes with the phys-dest and cannot be colored into the return
+// register and clobber the already-staged value. Without that interference the
+// colorer would assign the reload x0 and the function would return nil (the
+// URL.resolve / multi-value-return nil-pointer miscompile).
+function isSpillCandidate(range LiveRange, regClass RegClass, blockArgPlumbing BoolArray, chosen BoolArray) returns bool
+	if not rangeIsClass(range, regClass: regClass) 'wrongClass'
+		return false
+	end 'wrongClass'
+	if range.fixedReg != RM_NONE 'fixed'
+		return false
+	end 'fixed'
+	if range.spillWeight == SPILL_WEIGHT_INFINITE 'unspillable'
+		return false
+	end 'unspillable'
+	let isBlockArg = try blockArgPlumbing.get(range.valueId) otherwise false
+	if isBlockArg 'blockArg'
+		return false
+	end 'blockArg'
+	let already = try chosen.get(range.valueId) otherwise false
+	if already 'taken'
+		return false
+	end 'taken'
+	return true
+end 'isSpillCandidate'
+
+// ============================================================
+// Spill picker
+// ============================================================
+
+// Greedy Belady/MIN spill picker. For each over-pressured (block, position),
+// of each register class, gather the live spillable ranges and select the
+// `excess` of them with the FARTHEST next use, marking each chosen and
+// pushing it into the returned SpillDecision. Two constraints are enforced
+// in the same pass (both correctness-relevant):
+//
+//   (a) total class pressure <= k  (the chordality budget), and
+//   (b) at call positions, the number of live crossesCall ranges of a class
+//       <= kCalleeSaved for that class. crossesCall values can only use
+//       callee-saved registers (the caller-saved ones are clobbered by the
+//       call), so even if total pressure fits, too many call-crossing values
+//       make the colorer fail. This is NOT an optional refinement — it is a
+//       hard coloring constraint, so it runs in the main picker.
+//
+// Selection uses inline selection (no Array.sort), deterministic tie-break by
+// LARGER valueId. Rematerializable values are pushed to spilledRanges like
+// any other — Belady is a pressure-relief pass, not a cost-minimization pass;
+// insertSpillCode decides remat-vs-stack downstream.
+export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, func IrFunction, rpo RpoInfo, cfg CfgInfo, regTarget RegAllocTarget, opQuery TargetOpQuery, desc TargetRegAlloc) returns SpillDecision
+	var decision = SpillDecision.create()
+
+	let kGpr = desc.gprPoolSize
+	let kFp = desc.fpPoolSize
+	let kCalleeGpr = desc.gprPoolSize - desc.callerSavedGprs.count()
+	let kCalleeFp = desc.fpPoolSize - desc.callerSavedFps.count()
+
+	let blockMaxPos = blockMaxPositions(module, func: func)
+	let blockArgPlumbing = buildBlockArgPlumbingSet(module, func: func)
+	let nextUse = buildNextUseMap(ranges, module: module, func: func, rpo: rpo, regTarget: regTarget)
+	let callPositions = buildCallPositionsPerBlock(module, func: func, opQuery: opQuery)
+
+	// `chosen` carries forward across all positions and blocks within this
+	// round: once a value is selected to spill, it relieves every position it
+	// was live at, so subsequent positions must not re-select it.
+	var chosen = BoolArray.create()
+	var maxVid = 0
+	for range in ranges 'findMax'
+		if range.valueId > maxVid 'higher'
+			maxVid = range.valueId
+		end 'higher'
+	end 'findMax'
+	var ci = 0
+	while ci <= maxVid 'initChosen'
+		chosen.push(false)
+		ci = ci + 1
+	end 'initChosen'
+
+	pickForClass(ranges, regClass: RegClass.gpr, k: kGpr, kCallee: kCalleeGpr, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, callPositions: callPositions, decision: decision, rpo: rpo, cfg: cfg)
+	pickForClass(ranges, regClass: RegClass.fp, k: kFp, kCallee: kCalleeFp, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, callPositions: callPositions, decision: decision, rpo: rpo, cfg: cfg)
+
+	return decision
+end 'pickBeladySpills'
+
+// Pick spills for one register class over all blocks/positions. Greedy across
+// each block carrying `chosen` forward, so a single chosen spill at a block's
+// worst position relieves the whole contiguous run.
+//
+// Per block we run a classic linear-scan sweep that maintains the SET of range
+// indices actually live at the current position, instead of rescanning all
+// ranges at every position (the old O(positions x allRanges) wall: ~22270
+// ranges, ~15000 of them 1-position clobber pseudo-ranges, scanned per pos).
+// The sweep is event-driven off each range's interval(s) IN THIS BLOCK:
+//
+//   * enter at startPos, exit at endPos, matching rangeLiveAt's half-open
+//     convention exactly (a range is live at pos iff some interval in this
+//     block has startPos <= pos < endPos). At each position p we first apply
+//     exits where endPos == p (those died strictly before p), then enters where
+//     startPos == p, so `liveSet` membership equals rangeLiveAt(range, b, p)
+//     for every range at every p.
+//   * the 1-position clobber pseudo-ranges have interval [callPos, callPos+1):
+//     they enter at callPos and exit at callPos+1, so they inflate pressure
+//     ONLY at their exact call position and are gone by the next — handled by
+//     the event sweep, never a full-array scan.
+//
+// `liveSet` is sized O(pressure) (a few dozen), so the per-position relief now
+// scans the live set, not all ranges. `liveSlot` maps a range index to its
+// slot in `liveSet` (or -1 when not live) for O(1) swap-remove on exit; it is
+// allocated once for the whole class pass and only the entries this block
+// touched are reset between blocks.
+function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCallee RegInt, blockMaxPos RegIntArray, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, callPositions RegIntArrayArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
+	let numBlockSlots = blockMaxPos.count()
+	let numRanges = ranges.count()
+
+	// Range-index -> slot in `liveSet`, or -1 when not live. Allocated once for
+	// the whole class pass; entered ranges are reset to -1 after each block.
+	var liveSlot = RegIntArray.create()
+	var si = 0
+	while si < numRanges 'initSlot'
+		liveSlot.push(-1)
+		si = si + 1
+	end 'initSlot'
+
+	var b = 0
+	while b < numBlockSlots 'eachBlock'
+		let maxPos = try blockMaxPos.get(b) otherwise panic("pickForClass: b < count by guard but get({b}) failed")
+		if maxPos < 0 'notInFunc'
+			b = b + 1
+			continue
+		end 'notInFunc'
+
+		let callBucket = try callPositions.get(b) otherwise panic("invariant: callPositions sized to maxBlockId+1 but get({b}) failed")
+
+		// Per-position enter/exit event buckets for this block. Positions run
+		// 1..maxPos; endPos can be maxPos+1, so we size to maxPos+2 to give that
+		// exit a landing slot (it falls past the swept range and never fires,
+		// matching the old code where such ranges stay live through maxPos).
+		var entersAt = RegIntArrayArray.create()
+		var exitsAt = RegIntArrayArray.create()
+		var ei = 0
+		while ei <= maxPos + 1 'initEvents'
+			entersAt.push(RegIntArray.create())
+			exitsAt.push(RegIntArray.create())
+			ei = ei + 1
+		end 'initEvents'
+
+		// Collect this block's interval events. Empty intervals (startPos ==
+		// endPos) are never live under rangeLiveAt, so they contribute nothing.
+		var ri = 0
+		while ri < numRanges 'eachRange'
+			let range = try ranges.get(ri) otherwise panic("pickForClass: ri < numRanges but ranges.get({ri}) failed")
+			for iv in range.intervals 'eachInterval'
+				if iv.blockId != b 'otherBlock'
+					continue
+				end 'otherBlock'
+				if iv.startPos >= iv.endPos 'emptyInterval'
+					continue
+				end 'emptyInterval'
+				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
+					continue
+				end 'badStart'
+				var endIdx = iv.endPos
+				if endIdx > maxPos + 1 'clampEnd'
+					endIdx = maxPos + 1
+				end 'clampEnd'
+				var enterBucket = try entersAt.get(iv.startPos) otherwise panic("invariant: entersAt sized to maxPos+2 but get({iv.startPos}) failed")
+				enterBucket.push(ri)
+				var exitBucket = try exitsAt.get(endIdx) otherwise panic("invariant: exitsAt sized to maxPos+2 but get({endIdx}) failed")
+				exitBucket.push(ri)
+			end 'eachInterval'
+			ri = ri + 1
+		end 'eachRange'
+
+		// Sweep positions, maintaining the live set. `liveSet` holds the range
+		// indices live at the current position; `liveSlot[idx]` is its slot.
+		var liveSet = RegIntArray.create()
+
+		var p = 1
+		while p <= maxPos 'eachPos'
+			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"))
+			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"))
+
+			let isCallPos = bucketContains(callBucket, value: p)
+			relievePressureAt(ranges, liveSet: liveSet, regClass: regClass, blockId: b, pos: p, k: k, kCallee: kCallee, isCallPos: isCallPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, decision: decision, rpo: rpo, cfg: cfg)
+			p = p + 1
+		end 'eachPos'
+
+		// Reset the touched `liveSlot` entries (ranges still live past maxPos
+		// were never exited) so the next block starts from an all -1 map.
+		for idx in liveSet 'resetLive'
+			try liveSlot.set(idx, value: -1) otherwise panic("invariant: liveSlot.set OOB during reset; sized to numRanges")
+		end 'resetLive'
+
+		b = b + 1
+	end 'eachBlock'
+end 'pickForClass'
+
+// Apply interval exits at the current position: each range in `exitBucket`
+// dies strictly before this position (endPos == pos), so remove it from the
+// live set via O(1) swap-remove keyed by its recorded slot.
+function applyExits(liveSet RegIntArray, liveSlot RegIntArray, exitBucket RegIntArray)
+	for idx in exitBucket 'each'
+		let slot = try liveSlot.get(idx) otherwise panic("invariant: liveSlot.get({idx}) OOB on exit")
+		if slot < 0 'notLive'
+			// Not currently live (e.g. another interval of the same range
+			// already exited, or it never entered); nothing to remove.
+			continue
+		end 'notLive'
+		let lastIdx = liveSet.count() - 1
+		let moved = try liveSet.get(lastIdx) otherwise panic("invariant: liveSet non-empty when slot>=0 but get(last) failed")
+		try liveSet.set(slot, value: moved) otherwise panic("invariant: liveSet.set OOB on swap-remove")
+		try liveSlot.set(moved, value: slot) otherwise panic("invariant: liveSlot.set OOB for moved element")
+		try liveSet.pop() otherwise panic("invariant: liveSet.pop on non-empty set")
+		try liveSlot.set(idx, value: -1) otherwise panic("invariant: liveSlot.set(-1) OOB on exit")
+	end 'each'
+end 'applyExits'
+
+// Apply interval enters at the current position: each range in `enterBucket`
+// becomes live at this position (startPos == pos). Append to the live set and
+// record its slot. Guards against double-enter (a range with two intervals in
+// the same block both starting at pos would otherwise corrupt the slot map).
+function applyEnters(liveSet RegIntArray, liveSlot RegIntArray, enterBucket RegIntArray)
+	for idx in enterBucket 'each'
+		let slot = try liveSlot.get(idx) otherwise panic("invariant: liveSlot.get({idx}) OOB on enter")
+		if slot >= 0 'alreadyLive'
+			// Already live (overlapping/touching intervals of the same range in
+			// this block); membership is unchanged.
+			continue
+		end 'alreadyLive'
+		try liveSlot.set(idx, value: liveSet.count()) otherwise panic("invariant: liveSlot.set OOB on enter")
+		liveSet.push(idx)
+	end 'each'
+end 'applyEnters'
+
+// True if the sorted call-position bucket contains `value`. Buckets are tiny
+// (calls per block), so a linear scan beats a binary search's overhead.
+function bucketContains(bucket RegIntArray, value RegInt) returns bool
+	for v in bucket 'each'
+		if v == value 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'bucketContains'
+
+// At one (block, pos), relieve both the total-pressure budget (k) and, when
+// this is a call position, the callee-saved budget for call-crossing values
+// (kCallee). Operates on `liveSet` — the O(pressure) set of range indices live
+// at this position — rather than rescanning all ranges. Selects farthest-next-
+// use spillable ranges via inline selection.
+function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, blockId BlockId, pos RegInt, k RegInt, kCallee RegInt, isCallPos bool, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, blockMaxPos RegIntArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
+	// Total-pressure relief: count live ranges of this class not yet chosen,
+	// then spill the excess.
+	let liveCount = countLiveNotChosen(ranges, liveSet: liveSet, regClass: regClass, chosen: chosen)
+	var excess = liveCount - k
+	while excess > 0 'spillForTotal'
+		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: false, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
+		if not picked.found 'noCandidate'
+			// Remaining excess is fixed/infinite/block-arg — architecture-
+			// limited; the reactive loop handles it.
+			break
+		end 'noCandidate'
+		commitSpill(decision, range: picked.range, chosen: chosen)
+		excess = excess - 1
+	end 'spillForTotal'
+
+	// Callee-saved relief at call positions: count live crossesCall ranges of
+	// this class not yet chosen, then spill the excess over kCallee.
+	if isCallPos 'calleeCheck'
+		let liveCross = countLiveCrossesCallNotChosen(ranges, liveSet: liveSet, regClass: regClass, chosen: chosen)
+		var crossExcess = liveCross - kCallee
+		while crossExcess > 0 'spillForCallee'
+			let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: true, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
+			if not picked.found 'noCandidate'
+				break
+			end 'noCandidate'
+			commitSpill(decision, range: picked.range, chosen: chosen)
+			crossExcess = crossExcess - 1
+		end 'spillForCallee'
+	end 'calleeCheck'
+end 'relievePressureAt'
+
+// Count live ranges of `regClass` in `liveSet` that haven't been chosen to
+// spill yet — this is the demand the colorer would see. `liveSet` already
+// holds exactly the ranges live at this position (see pickForClass sweep), so
+// no rangeLiveAt rescan is needed.
+function countLiveNotChosen(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, chosen BoolArray) returns RegInt
+	var count = 0
+	for idx in liveSet 'each'
+		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx {idx} OOB in ranges")
+		if not rangeIsClass(range, regClass: regClass) 'wrongClass'
+			continue
+		end 'wrongClass'
+		let already = try chosen.get(range.valueId) otherwise false
+		if already 'skip'
+			continue
+		end 'skip'
+		count = count + 1
+	end 'each'
+	return count
+end 'countLiveNotChosen'
+
+// Count live crossesCall ranges of `regClass` in `liveSet` not yet chosen.
+// Fixed pseudo-ranges are never crossesCall (built with default false), so
+// they don't count here — only real values do.
+function countLiveCrossesCallNotChosen(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, chosen BoolArray) returns RegInt
+	var count = 0
+	for idx in liveSet 'each'
+		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx {idx} OOB in ranges")
+		if not rangeIsClass(range, regClass: regClass) 'wrongClass'
+			continue
+		end 'wrongClass'
+		if not range.crossesCall 'notCross'
+			continue
+		end 'notCross'
+		let already = try chosen.get(range.valueId) otherwise false
+		if already 'skip'
+			continue
+		end 'skip'
+		count = count + 1
+	end 'each'
+	return count
+end 'countLiveCrossesCallNotChosen'
+
+// Result of an inline farthest-next-use selection.
+type PickResult
+	export var found as bool
+	export var range as LiveRange
+
+	export static function create(found bool, range LiveRange) returns PickResult
+		return Self{found: found, range: range}
+	end 'create'
+end 'PickResult'
+
+// Inline selection (no Array.sort): scan the live spillable ranges of this
+// class at (blockId, pos) and return the one with the LARGEST next-use
+// distance. Tie-break deterministically by LARGER valueId so the choice is
+// reproducible across builds. `calleeOnly` restricts to crossesCall ranges
+// (callee-saved relief). Does NOT mutate `chosen` — caller commits.
+//
+// Scans `liveSet` (the O(pressure) range indices live at this position) rather
+// than all ranges; every member is already live at (blockId, pos) by the
+// sweep invariant, so no rangeLiveAt re-test is needed.
+function selectFarthest(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, blockId BlockId, pos RegInt, calleeOnly bool, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, blockMaxPos RegIntArray, rpo RpoInfo, cfg CfgInfo) returns PickResult
+	var bestDist = i64.min
+	var bestVid = -1
+	var best = LiveRange.create(-1)
+	var found = false
+
+	for idx in liveSet 'each'
+		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx {idx} OOB in ranges")
+		if not isSpillCandidate(range, regClass: regClass, blockArgPlumbing: blockArgPlumbing, chosen: chosen) 'notCandidate'
+			continue
+		end 'notCandidate'
+		if calleeOnly and not range.crossesCall 'notCross'
+			continue
+		end 'notCross'
+
+		let dist = nextUseFromPoint(range, blockId: blockId, fromPos: pos, rpo: rpo, nextUse: nextUse, blockMaxPos: blockMaxPos, cfg: cfg)
+		let better = dist > bestDist or (dist == bestDist and range.valueId > bestVid)
+		if not found or better 'takeIt'
+			bestDist = dist
+			bestVid = range.valueId
+			best = range
+			found = true
+		end 'takeIt'
+	end 'each'
+
+	return PickResult.create(found, range: best)
+end 'selectFarthest'
+
+// Mark `range` chosen and push it into the decision's spilledRanges. Pushes
+// the actual LiveRange object (as the reactive loop does) so allocateSpillSlots
+// can partition by class and assign slots.
+function commitSpill(decision SpillDecision, range LiveRange, chosen BoolArray)
+	try chosen.set(range.valueId, value: true) otherwise panic("invariant: commitSpill chosen.set OOB; sized to maxVid+1")
+	decision.spilledRanges.push(range)
+	logTrace(LogCategory.ir, message: function() gives "belady: spill v={range.valueId} class={range.regClass.name} weight={range.spillWeight} crossesCall={range.crossesCall}")
+end 'commitSpill'

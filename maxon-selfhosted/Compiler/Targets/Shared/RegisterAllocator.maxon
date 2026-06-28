@@ -729,6 +729,14 @@ type FunctionRegAllocator
 	// cascade = MAX_CASCADE can never be evicted again. Default 0 when
 	// not set.
 	export var cascadeByValueId as RegIntArray
+	// Running high-water mark of spill-slot offsets across ALL spill rounds
+	// of this function — both the pre-coloring Belady rounds and the reactive
+	// runSpillColorLoop iterations. allocateSpillSlots starts each round at
+	// this offset and returns the new watermark. It must persist across the
+	// whole allocation so a Belady-allocated slot (rounds 0..N) never aliases
+	// a later reactive-spill slot (rounds N+1..). Promoted out of
+	// runSpillColorLoop's former local so Belady can seed it.
+	export var spillBaseOffset as RegInt
 
 	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery, fastRegalloc bool) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
@@ -754,7 +762,8 @@ type FunctionRegAllocator
 			rematerializeValueByValueId: RegIntArray.create(),
 			splitInfo: SplitMergeInfoArray.create(),
 			stageByValueId: RegIntArray.create(),
-			cascadeByValueId: RegIntArray.create()
+			cascadeByValueId: RegIntArray.create(),
+			spillBaseOffset: 0
 		}
 	end 'create'
 
@@ -785,6 +794,109 @@ type FunctionRegAllocator
 	function runColoring()
 		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
 	end 'runColoring'
+
+	// Pre-coloring Belady/MIN register-pressure reduction. Runs AFTER
+	// runLivenessAndRanges (so the fixed clobber/param/phys-dest pseudo-ranges
+	// are visible as pressure) and BEFORE runColoring (so SSA chordality still
+	// holds — destroySSA, which lowers phi to copies, would break it).
+	//
+	// Each round computes MaxLive per register class off the flat `ranges`
+	// array; if both classes are already within budget (the common case) it
+	// returns immediately, so non-dense functions pay only one pressure scan.
+	// Otherwise it picks Belady spills (farthest-next-use, with the callee-
+	// saved-at-calls constraint), materializes them through the SAME
+	// allocateSpillSlots -> insertSpillCode path the reactive loop uses, unions
+	// the reload/remat bitmaps into the cumulative sets (so rebuilt reload
+	// vregs get SPILL_WEIGHT_INFINITE), rebuilds liveness+ranges, and repeats.
+	//
+	// Belady spills both cross-block and intra-block values (see isSpillCandidate
+	// in BeladySpill); only block-arg/phi plumbing, fixed pseudo-ranges, and
+	// already-unspillable reloads are excluded. The dense interior pressure that
+	// was the self-compile wall is dominated by cross-block values, so this
+	// collapses the recursive last-chance-recolor explosion: where the over-
+	// pressure peak is spillable, reducing MaxLive <= k makes the chordal SSA
+	// interference graph k-colorable, runColoring's first-fit pass succeeds, and
+	// runSpillColorLoop finds zero uncolored ranges immediately. Where the
+	// binding peak is dominated by phi-plumbing / fixed / unspillable ranges
+	// (architecture-limited), Belady relieves what it can and hands off; the
+	// reactive loop resolves the remainder in a couple of cheap iterations (not
+	// the 800-deep recolor recursion). The pass never panics on these.
+	//
+	// Spilling cross-block managed RETURN values is SSA-correct because the
+	// return-register phys-dest pseudo-ranges built in insertPhysicalConstraints
+	// stay live to the block terminator (extended past the return movs when no
+	// call follows), so a reloaded return value cannot be colored into the return
+	// register and clobber the staged value — without that, the colorer would
+	// alias the reload onto x0 and the function would return nil.
+	//
+	// Termination: each round either (a) finds MaxLive <= k and breaks, or
+	// (b) finds no spillable candidate and breaks (architecture-limited), or
+	// (c) spills >= 1 finite-weight range whose reloads become unspillable —
+	// strictly shrinking the spillable working set. We additionally break if a
+	// round fails to strictly reduce MaxLive (convergence is not automatic:
+	// the MIN heuristic CAN place a reload at another over-pressured point), so
+	// we never spin; the reactive loop is the fallback for whatever remains.
+	// BELADY_MAX_ROUNDS is a final safety belt.
+	function runBeladyPressureReduction()
+		let kGpr = state.desc.gprPoolSize
+		let kFp = state.desc.fpPoolSize
+
+		var prevGpr = i64.max
+		var prevFp = i64.max
+		var round = 0
+
+		while round < BELADY_MAX_ROUNDS 'beladyLoop'
+			let maxLive = computeMaxLivePerBlock(ranges, module: module, func: func)
+
+			if round == 0 'firstRound'
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} enter maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} kGpr={kGpr} kFp={kFp}")
+			end 'firstRound'
+
+			if maxLive.gpr <= kGpr and maxLive.fp <= kFp 'withinBudget'
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} within budget after rounds={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp}")
+				break
+			end 'withinBudget'
+
+			// Convergence guard: if a previous round's spills did not strictly
+			// reduce MaxLive for either class, further Belady rounds won't help
+			// (reloads re-pressurized at other points). Hand off to the reactive
+			// loop rather than spin.
+			if round > 0 and maxLive.gpr >= prevGpr and maxLive.fp >= prevFp 'noImprovement'
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no MaxLive improvement at round={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} — handing off to reactive loop")
+				break
+			end 'noImprovement'
+
+			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, opQuery: opQuery, desc: state.desc)
+
+			if spillDec.spilledRanges.count() == 0 'noCandidate'
+				// Architecture-limited point: every over-pressured clique is
+				// fixed / unspillable / block-arg. The reactive loop (and its
+				// recolor backstop) handle it.
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no spillable candidate at round={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} — handing off to reactive loop")
+				break
+			end 'noCandidate'
+
+			self.spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: self.spillBaseOffset)
+			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: state.desc)
+
+			// Union this round's reload/remat bitmaps into the cumulative sets
+			// before rebuilding ranges — identical bookkeeping to
+			// runSpillColorLoop — so the new reload vregs get
+			// SPILL_WEIGHT_INFINITE on the next liveness rebuild.
+			unionReloadIds(reloadIds, source: spillDec.reloadIds)
+			unionReloadIds(rematerializeIds, source: spillDec.rematerializeIds)
+			unionRematValues(rematerializeValueByValueId, source: spillDec.rematerializeValue, ids: spillDec.rematerializeIds)
+
+			logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} round={round} spilled={spillDec.spilledRanges.count()} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp}")
+
+			prevGpr = maxLive.gpr
+			prevFp = maxLive.fp
+
+			self.runLivenessAndRanges()
+
+			round = round + 1
+		end 'beladyLoop'
+	end 'runBeladyPressureReduction'
 
 	// Phases 4-5: iterate spill/re-color until every virtual range is colored.
 	//
@@ -852,12 +964,11 @@ type FunctionRegAllocator
 		// reload, which the colorer's eviction fixup is empowered to drive.
 		let rematProgressBudget = 2
 		var rematHelps = true
-		// Running high-water mark of spill-slot offsets across iterations.
-		// Each iteration's allocateSpillSlots starts at this offset and
-		// returns the new watermark. Resetting to 0 every iteration would
-		// reuse the same physical slots for fresh vregs, silently aliasing
-		// reloads from earlier iterations.
-		var spillBaseOffset = 0
+		// Spill-slot high-water mark lives on the allocator (self.spillBaseOffset)
+		// so it persists across both the pre-coloring Belady rounds (which
+		// allocate the first slots 0..N) and these reactive iterations (N+1..).
+		// Each round's allocateSpillSlots starts there and returns the new
+		// watermark; resetting to 0 would alias fresh vregs onto earlier slots.
 		// Iteration cap: each spill round insertSpillCode mints reload
 		// vregs with SPILL_WEIGHT_INFINITE, which the spill picker refuses
 		// to re-spill. So the working set strictly shrinks every iteration
@@ -1077,7 +1188,7 @@ type FunctionRegAllocator
 				panic("regalloc: spill loop stalled in {state.funcName} — {stillUnsplit.count()} uncolored ranges but Pass 2 spilled nothing (iteration={iteration})")
 			end 'nothingToSpill'
 
-			spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: spillBaseOffset)
+			self.spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: self.spillBaseOffset)
 			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: desc)
 
 			// Union this iteration's reload bitmap into the cumulative set
@@ -1105,7 +1216,15 @@ type FunctionRegAllocator
 		// Phases 1-3: liveness, live ranges, coalescing
 		self.runLivenessAndRanges()
 
-		// Phase 4-5: spill/color loop
+		// Phase 3.5: pre-coloring Belady/MIN pressure reduction. Spills the
+		// farthest-next-use values at every over-pressured point so MaxLive <= k
+		// per class. On the chordal SSA interference graph this makes the
+		// subsequent first-fit coloring provably succeed, so the eviction /
+		// last-chance-recolor path (the self-compile wall) never fires.
+		self.runBeladyPressureReduction()
+
+		// Phase 4-5: spill/color loop (now a rare backstop for architecture-
+		// limited points Belady cannot relieve).
 		self.runColoring()
 		self.runSpillColorLoop()
 

@@ -261,7 +261,7 @@ module {
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=128
+    arm64.prologue stack_size=160
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x1, [x29, #16]
     arm64.adrp+add x19, stdlib.__destruct___ManagedMemory
@@ -274,21 +274,26 @@ module {
     arm64.mov x25, #1
     arm64.adrp+add x26, __destruct_String
     arm64.mov x27, #16
-    arm64.mov x28, #1
-    arm64.adrp+add x0, __destruct_Tag
+    arm64.mov x0, #1
     arm64.str x0, [x29, #24]
-    arm64.mov x0, #16
-    arm64.mov x0, #0
-    arm64.adrp+add x0, __destruct_Entry
+    arm64.adrp+add x0, __destruct_Tag
     arm64.str x0, [x29, #32]
-    arm64.mov x0, #8
+    arm64.mov x0, #16
+    arm64.str x0, [x29, #40]
     arm64.mov x0, #0
+    arm64.str x0, [x29, #48]
+    arm64.adrp+add x0, __destruct_Entry
+    arm64.str x0, [x29, #56]
+    arm64.mov x0, #8
+    arm64.str x0, [x29, #64]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #72]
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x29, #40]
+    arm64.str x0, [x29, #80]
     arm64.mov x0, x1
     arm64.bl Array.create
-    arm64.str x0, [x29, #48]
+    arm64.mov x28, x0
     arm64.mov x0, x20
     arm64.mov x1, x19
     arm64.bl mrt_alloc_with_dtor
@@ -306,30 +311,30 @@ module {
     arm64.mov x0, x20
     arm64.bl stdlib.__mm_incref
     arm64.str x19, [x20, #0] (8b)
-    arm64.str x28, [x20, #8] (8b)
-    arm64.mov x0, #16
-    arm64.ldr x1, [x29, #24]
+    arm64.ldr x0, [x29, #24]
+    arm64.str x0, [x20, #8] (8b)
+    arm64.ldr x0, [x29, #40]
+    arm64.ldr x1, [x29, #32]
     arm64.bl stdlib.__mm_alloc
     arm64.mov x19, x0
     arm64.mov x0, x19
     arm64.bl stdlib.__mm_incref
-    arm64.mov x0, #0
+    arm64.ldr x0, [x29, #48]
     arm64.str x0, [x19, #0] (8b)
     arm64.str x20, [x19, #8] (8b)
-    arm64.mov x0, #8
-    arm64.ldr x1, [x29, #32]
+    arm64.ldr x0, [x29, #64]
+    arm64.ldr x1, [x29, #56]
     arm64.bl stdlib.__mm_alloc
     arm64.mov x20, x0
     arm64.mov x0, x20
     arm64.bl stdlib.__mm_incref
-    arm64.mov x0, #0
+    arm64.ldr x0, [x29, #72]
     arm64.str x0, [x20, #0] (8b)
     arm64.str x19, [x20, #0] (8b)
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
-    arm64.ldr x2, [x29, #40]
+    arm64.ldr x2, [x29, #80]
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, __destruct_Tag
     arm64.mov x0, #16
     arm64.bl stdlib.__mm_alloc
@@ -351,10 +356,9 @@ module {
     arm64.str x19, [x20, #0] (8b)
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x2, [x29, #16]
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, __destruct_Tag
     arm64.mov x0, #16
     arm64.bl stdlib.__mm_alloc
@@ -376,10 +380,9 @@ module {
     arm64.str x19, [x20, #0] (8b)
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x2, [x29, #16]
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, __destruct_Tag
     arm64.mov x0, #16
     arm64.bl stdlib.__mm_alloc
@@ -401,10 +404,9 @@ module {
     arm64.str x19, [x20, #0] (8b)
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x2, [x29, #16]
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
     arm64.mov x0, #48
     arm64.bl mrt_alloc_with_dtor
@@ -449,10 +451,9 @@ module {
     arm64.str x19, [x20, #0] (8b)
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x2, [x29, #16]
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, __destruct_Tag
     arm64.mov x0, #16
     arm64.bl stdlib.__mm_alloc
@@ -474,18 +475,16 @@ module {
     arm64.str x19, [x20, #0] (8b)
     arm64.adrp_add_rdata x0, __layout_Array_Entry
     arm64.ldr x2, [x29, #16]
-    arm64.ldr x0, [x29, #48]
+    arm64.mov x0, x28
     arm64.mov x1, x20
     arm64.bl Array.push
-    arm64.ldr x0, [x29, #48]
     arm64.adrp+add x1, __destruct_Store
     arm64.mov x0, #8
     arm64.bl stdlib.__mm_alloc
     arm64.mov x19, x0
     arm64.mov x0, #0
     arm64.str x0, [x19, #0] (8b)
-    arm64.ldr x0, [x29, #48]
-    arm64.str x0, [x19, #0] (8b)
+    arm64.str x28, [x19, #0] (8b)
     arm64.mov x0, x19
     arm64.bl removeNone
     arm64.mov x0, x19
