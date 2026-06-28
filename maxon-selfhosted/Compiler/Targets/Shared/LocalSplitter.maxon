@@ -293,18 +293,46 @@ export function trySplitAtUse(range LiveRange, func IrFunction, module TargetMod
 	let block = findBlockById(module, func: func, blockId: targetBlockId)
 	let opCount = block.opRefs.count()
 
+	// Bound the use scan to the range's live extent in its def block. A value
+	// has no use past its last use in the block, so scanning to the block END
+	// (opCount) was pure waste for a short-lived value in a large block (blocks
+	// reach ~800 ops in the self-compile, and this scan runs per uncolored range
+	// per split iteration). scanEnd is the MAX endPos over the range's def-block
+	// interval(s) — a range can have MULTIPLE disjoint intervals in one block
+	// after splitting, and the scan must cover the last of them or it would miss
+	// later uses and pick a wrong split point (which mis-splits -> over-spills).
+	// endPos is the half-open 1-indexed end, so `oi < scanEnd` covers every op
+	// that can hold a use. Clamp to opCount. Byte-identical to the full-tail scan
+	// (positions past the live extent are dead for this value). Falls back to
+	// opCount if no def-block interval is found (defensive; the range is defined
+	// in this block so always has one).
+	var scanEnd = range.defPosition
+	for iv in range.intervals 'findDefIv'
+		if iv.blockId == targetBlockId and iv.endPos > scanEnd 'inDefBlock'
+			scanEnd = iv.endPos
+		end 'inDefBlock'
+	end 'findDefIv'
+	if scanEnd <= range.defPosition 'noDefIv'
+		scanEnd = opCount
+	end 'noDefIv'
+	if scanEnd > opCount 'clampScan'
+		scanEnd = opCount
+	end 'clampScan'
+
 	// Eligibility gate 4: collect use positions in defBlock past the def.
 	// `oi` is an opIdx (0-indexed); the corresponding 1-indexed position
 	// is `oi + 1`. range.defPosition is the def's position, so the def's
 	// opIdx is defPosition - 1; the first op AFTER the def is at opIdx
 	// defPosition. Starting oi = range.defPosition skips the def itself.
 	// This matches the convention used by splitAtPosition's rewrite loop,
-	// which uses `oi = splitPos` as an opIdx.
+	// which uses `oi = splitPos` as an opIdx. `reads` is hoisted and cleared
+	// per op so the scan does not allocate a fresh RegIntArray per op.
 	var useList = RegIntArray.create()
+	var reads = RegIntArray.create()
 	var oi = range.defPosition
-	while oi < opCount 'collectUses'
-		let packed = try block.opRefs.get(oi) otherwise panic("trySplitAtUse.collectUses: oi < opCount by loop guard but get({oi}) failed")
-		var reads = RegIntArray.create()
+	while oi < scanEnd 'collectUses'
+		let packed = try block.opRefs.get(oi) otherwise panic("trySplitAtUse.collectUses: oi < scanEnd <= opCount by loop guard but get({oi}) failed")
+		reads.clear()
 		regTarget.countOpReads(module, reads: reads, packed: packed)
 		if idListContains(reads, target: range.valueId) 'isUse'
 			useList.push(oi + 1)
