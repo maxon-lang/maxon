@@ -150,6 +150,59 @@ let MAX_CASCADE = 8
 // hitting the depth cap.
 let MAX_RECOLOR_DEPTH = 3
 
+// Interference cap for one last-chance-recolor candidate register. If giving
+// `range` a particular register would require displacing more than this many
+// colored neighbors, that candidate is abandoned (the recursion would fan out
+// combinatorially: each displaced neighbor recurses up to MAX_RECOLOR_DEPTH
+// levels, so an uncapped attempt on a dense interference graph explores
+// O(fanout^depth) nodes — the explosion that walls the self-compile on its
+// densest test-runner functions, where a single call-site clique has 20-40
+// simultaneously-live ranges). Mirrors LLVM Greedy's tryRecolorCandidates
+// interference limit. Abandoning a candidate is always SAFE: the eviction
+// fixup's spill backstop (runSpillColorLoop) still colors or spills every
+// range, so the cap only trades a small amount of recolor quality for
+// tractable compile time, never correctness (no colorLookupGpr panic).
+let MAX_RECOLOR_INTERFERERS = 8
+
+// Hard work budget for ALL last-chance recoloring in ONE coloring pass
+// (one runEvictionFixup): the maximum total number of per-register placement
+// attempts (tryRecolorAtReg invocations) summed across every range's recolor
+// search. The interference cap bounds one node's breadth and MAX_RECOLOR_DEPTH
+// bounds recursion, but neither bounds the COUNT of recolor entries — a dense
+// function leaves many ranges uncolored, each starting a fresh search, so the
+// aggregate still walls the self-compile. A single pass-wide budget caps the
+// total exploration to O(budget) regardless of graph density or pending count.
+// When exhausted every further attempt bails clean and the range falls through
+// to the spill loop — so the budget trades recolor QUALITY for bounded compile
+// time, never correctness (the spill backstop still colors or spills every
+// range; no colorLookupGpr panic). The spill loop re-runs coloring with a fresh
+// budget each iteration, so genuine recolors that legitimately need work still
+// get it across iterations. 4096 is generous for the handful of nodes real
+// recolors use (the spec suite never approaches it) yet tiny next to the
+// millions an unbudgeted dense search visits.
+let MAX_RECOLOR_NODES_PER_PASS = 4096
+
+// Mutable per-top-level-recolor work counter. Threaded through the recursion so
+// every tryRecolorAtReg attempt decrements one shared budget; once it reaches
+// zero the whole search unwinds via clean bails. Created fresh at each
+// runEvictionFixup last-chance-recolor entry point.
+type RecolorBudget
+	export var remaining as RegInt
+
+	export static function create(budget RegInt) returns RecolorBudget
+		return Self{remaining: budget}
+	end 'create'
+
+	// Consume one unit; returns true while budget remains, false once exhausted.
+	export function tryConsume() returns bool
+		if remaining <= 0 'exhausted'
+			return false
+		end 'exhausted'
+		remaining = remaining - 1
+		return true
+	end 'tryConsume'
+end 'RecolorBudget'
+
 // The effective last-chance-recolor recursion depth for a coloring pass.
 // In `--fast` mode this is 0, which makes `tryLastChanceRecolor` return
 // immediately (its `depth <= 0` early-out), so a range that simple eviction
@@ -511,6 +564,15 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 	// cascade-eviction below still runs, so termination and correctness are
 	// unaffected; a range eviction can't place just spills.
 	let recolorDepth = effectiveRecolorDepth(fastRegalloc)
+	// Single work budget shared by EVERY last-chance-recolor in this coloring
+	// pass. A per-entry budget bounds one search but not the count of entries:
+	// a dense function leaves many ranges uncolored, each triggering a fresh
+	// recolor, so the aggregate still explodes. One pass-wide budget hard-caps
+	// the TOTAL recolor work for the whole eviction fixup regardless of how many
+	// ranges are pending. Once spent, every further attempt bails clean and the
+	// range falls through to the spill loop — bounded compile time, never
+	// incorrect (see RecolorBudget / MAX_RECOLOR_NODES_PER_PASS).
+	var recolorBudget = RecolorBudget.create(MAX_RECOLOR_NODES_PER_PASS)
 	// Worklist of range indices to (re-)try coloring. Initialized from
 	// the set of virtual ranges still uncolored after first-fit.
 	var pending = RegIntArray.create()
@@ -632,7 +694,7 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 			// bottom out within MAX_RECOLOR_DEPTH steps. It never spills, so
 			// it is safe to attempt for normal-weight evictors too.
 			var fixed = BoolArray.create()
-			let recolored = tryLastChanceRecolor(sortedIdx, depth: recolorDepth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result)
+			let recolored = tryLastChanceRecolor(sortedIdx, depth: recolorDepth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, budget: recolorBudget)
 			if recolored 'recolorOk'
 				logTrace(LogCategory.ir, message: function() gives "ssa-color: last-chance-recolor v{range.valueId} (weight={range.spillWeight}, cascade={range.cascade})")
 				continue
@@ -711,7 +773,7 @@ end 'runEvictionFixup'
 // precompute is refreshed only after an attempt that actually mutated colors
 // (rare on the hot path), keeping it bit-identical with the old fresh-per-call
 // scan — see `RecolorInterferers` / `RecolorAttempt`.
-function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult) returns bool
+function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, budget RecolorBudget) returns bool
 	if depth <= 0 'noDepth'
 		return false
 	end 'noDepth'
@@ -734,13 +796,13 @@ function tryLastChanceRecolor(rangeIdx RegInt, depth RegInt, fixed BoolArray, ra
 	// accept a caller-saved register (would be silently clobbered). Each pass
 	// builds (and refreshes) its own interferer-lookup precompute against the
 	// current colors.
-	if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: preferCallerSaved) 'preferOk'
+	if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: preferCallerSaved, budget: budget) 'preferOk'
 		return true
 	end 'preferOk'
 	if preferCallerSaved 'tryOffClass'
 		// Tier-3 fallback for non-call-crossing ranges: callee-saved is
 		// acceptable but costs an extra prologue save.
-		if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: false) 'offClassOk'
+		if tryRecolorPass(rangeIdx, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, nbrs: nbrs, range: range, preferClass: false, budget: budget) 'offClassOk'
 			return true
 		end 'offClassOk'
 	end 'tryOffClass'
@@ -918,7 +980,7 @@ end 'poolIndexOfReg'
 // tryLastChanceRecolor to split the two-tier walk (preferred class first,
 // then off-class fallback) without duplicating the per-register attempt
 // logic.
-function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange, preferClass bool) returns bool
+function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, nbrs RegIntArray, range LiveRange, preferClass bool, budget RecolorBudget) returns bool
 	// Build the interferer lookup once for this pass; the dominant per-register
 	// cost (interferer collection) becomes a single O(nbrs) scan instead of
 	// O(poolSize * nbrs). It is rebuilt only after a per-register attempt that
@@ -937,7 +999,7 @@ function tryRecolorPass(rangeIdx RegInt, depth RegInt, fixed BoolArray, ranges L
 		end 'wrongClass'
 
 		let reg = try pool.get(pi) otherwise panic("tryRecolorPass: pi < poolSize just succeeded but pool.get({pi}) failed")
-		let attempt = tryRecolorAtReg(rangeIdx, targetReg: reg, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, range: range, recolorInterferers: interferers)
+		let attempt = tryRecolorAtReg(rangeIdx, targetReg: reg, depth: depth, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, range: range, recolorInterferers: interferers, budget: budget)
 		if attempt.success 'tookIt'
 			return true
 		end 'tookIt'
@@ -965,7 +1027,15 @@ end 'tryRecolorPass'
 // precompute built by `RecolorInterferers.create` against the colors as they
 // stand at the moment this attempt begins (the caller rebuilds it after any
 // mutating attempt).
-function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, range LiveRange, recolorInterferers RecolorInterferers) returns RecolorAttempt
+function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fixed BoolArray, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, range LiveRange, recolorInterferers RecolorInterferers, budget RecolorBudget) returns RecolorAttempt
+	// Hard work-budget gate: once the whole search has spent its node budget,
+	// every further candidate bails clean so the recolor is O(MAX_RECOLOR_NODES)
+	// regardless of graph density. Safe — the eviction/spill backstop still
+	// colors or spills the range. (See MAX_RECOLOR_NODES / RecolorBudget.)
+	if not budget.tryConsume() 'budgetExhausted'
+		return RecolorAttempt.bailedClean()
+	end 'budgetExhausted'
+
 	// `targetReg` always comes from the pool, so its pool index must exist.
 	let targetPi = poolIndexOfReg(targetReg, poolIndexOf: poolIndexOf)
 	if targetPi == RM_NONE 'targetNotInPool'
@@ -1009,6 +1079,17 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 		end 'cascadeOut'
 		interferers.push(nbrIdx)
 	end 'eachInterferer'
+
+	// Interference cap: abandon this candidate register if it would require
+	// displacing too many colored neighbors. The recursive re-placement of each
+	// interferer fans out combinatorially with depth, so an uncapped attempt on
+	// a dense call-site clique is the recolor explosion that stalls the self-
+	// compile. Bailing clean here is safe — no colors have been mutated yet, and
+	// the eviction/spill backstop still colors or spills `range`. (See
+	// MAX_RECOLOR_INTERFERERS.)
+	if interferers.count() > MAX_RECOLOR_INTERFERERS 'tooManyInterferers'
+		return RecolorAttempt.bailedClean()
+	end 'tooManyInterferers'
 
 	// Class-safety check for `range` itself: a call-crossing range cannot
 	// land in a caller-saved register (the intervening call would clobber
@@ -1064,7 +1145,7 @@ function tryRecolorAtReg(rangeIdx RegInt, targetReg RegOrdinal, depth RegInt, fi
 		// Recursive recolor at depth-1. The shared `fixed` set carries the
 		// outer frame's pinned assignments so the recursion cannot disturb
 		// them.
-		if tryLastChanceRecolor(n, depth: depth - 1, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result) 'recursiveOk'
+		if tryLastChanceRecolor(n, depth: depth - 1, fixed: fixed, ranges: ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, budget: budget) 'recursiveOk'
 			placedCount = placedCount + 1
 			continue
 		end 'recursiveOk'

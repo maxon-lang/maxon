@@ -42,17 +42,91 @@ let BLOCK_DISTANCE_UNIT = 1048576
 // (dead here) — spill it first, it is needed never.
 let NEXT_USE_INFINITE = i64.max
 
-// Peak simultaneous-live count per register class (a.k.a. MaxLive / clique
-// number of the chordal interference graph). gpr and fp are independent
-// pools so we track them separately.
+// Peak register-pressure demand per register class, measured the way the
+// colorer actually allocates: caller-saved and callee-saved registers are
+// DISJOINT sub-pools, so a single "MaxLive vs k" total over-states pressure
+// at call sites (where the 1-position caller-saved clobber pseudo-ranges pile
+// up) and, worse, hides genuine callee-saved over-subscription (a crowd of
+// call-crossing values is callee-saved-ONLY at EVERY point it is live).
+//
+// Two demands are tracked per class:
+//   * `gpr`/`fp` — TOTAL distinct-register demand: live virtuals (each needs
+//     one register) plus the count of DISTINCT physical registers the live
+//     fixed pseudo-ranges occupy. Counting distinct registers (not raw range
+//     count) is what removes the over-count: at a call the arg-setup phys-dest
+//     range for x0 and the call's clobber range for x0 both pin x0 but consume
+//     ONE register, so they count once. Must be <= poolSize for the chordal
+//     graph to be colorable at all.
+//   * `gprCallee`/`fpCallee` — CALLEE-SAVED demand: live call-crossing virtuals
+//     (which the colorer can place ONLY in callee-saved registers — a caller-
+//     saved one is clobbered by the intervening call) plus distinct callee-
+//     saved registers pinned by fixed ranges. Must be <= the callee-saved
+//     sub-pool size, independently of the total. This is the constraint that
+//     was previously invisible: a function can sit at total <= k yet have far
+//     more call-crossing values than callee-saved registers, which the first-
+//     fit colorer cannot satisfy and the last-chance recolor then explodes on.
+//
+// gpr and fp are independent pools so we track them separately.
 export type MaxLiveResult
 	export var gpr as RegInt
 	export var fp as RegInt
+	export var gprCallee as RegInt
+	export var fpCallee as RegInt
 
-	export static function create(gpr RegInt, fp RegInt) returns MaxLiveResult
-		return Self{gpr: gpr, fp: fp}
+	export static function create(gpr RegInt, fp RegInt, gprCallee RegInt, fpCallee RegInt) returns MaxLiveResult
+		return Self{gpr: gpr, fp: fp, gprCallee: gprCallee, fpCallee: fpCallee}
 	end 'create'
 end 'MaxLiveResult'
+
+// True iff `ord` is a callee-saved register of `regClass` under `desc`. A
+// register is callee-saved iff it is in the class pool but NOT in the class's
+// caller-saved list. Linear scans over the (tiny) caller-saved list; called
+// only while sizing the per-class callee-saved bitmap, not per position.
+function ordinalIsCalleeSaved(ord RegOrdinal, regClass RegClass, desc TargetRegAlloc) returns bool
+	let callerSaved = match regClass 'pick'
+		gpr gives desc.callerSavedGprs
+		fp gives desc.callerSavedFps
+	end 'pick'
+	for cs in callerSaved 'each'
+		if cs == ord 'isCaller'
+			return false
+		end 'isCaller'
+	end 'each'
+	return true
+end 'ordinalIsCalleeSaved'
+
+// Callee-saved sub-pool size for a class: poolSize minus the caller-saved
+// count. Matches the colorer's partition (crossesCall ⇒ callee-saved only).
+export function calleeSavedSizeFor(regClass RegClass, desc TargetRegAlloc) returns RegInt
+	return match regClass 'pick'
+		gpr gives desc.gprPoolSize - desc.callerSavedGprs.count()
+		fp gives desc.fpPoolSize - desc.callerSavedFps.count()
+	end 'pick'
+end 'calleeSavedSizeFor'
+
+// Pool size for a class.
+export function poolSizeFor(regClass RegClass, desc TargetRegAlloc) returns RegInt
+	return match regClass 'pick'
+		gpr gives desc.gprPoolSize
+		fp gives desc.fpPoolSize
+	end 'pick'
+end 'poolSizeFor'
+
+// Max physical register ordinal of a class's pool, used to size the per-
+// position distinct-register occupancy bitmaps. Scans the (small) pool once.
+function maxPoolOrdinalFor(regClass RegClass, desc TargetRegAlloc) returns RegInt
+	let pool = match regClass 'pick'
+		gpr gives desc.gprPool
+		fp gives desc.fpPool
+	end 'pick'
+	var maxOrd = 0
+	for ord in pool 'each'
+		if ord > maxOrd 'higher'
+			maxOrd = ord
+		end 'higher'
+	end 'each'
+	return maxOrd
+end 'maxPoolOrdinalFor'
 
 // Per-block map blockId -> max op position in that block. Max position is
 // `opRefs.count() + 1` (the terminator slot): ops 0..count-1 live at
@@ -97,98 +171,286 @@ function rangeIsClass(range LiveRange, regClass RegClass) returns bool
 	return regClassIsFp(range.regClass) == regClassIsFp(regClass)
 end 'rangeIsClass'
 
-// Compute MaxLive per register class across the whole function via a per-
-// block delta/prefix-sum scan. Pressure is measured PER OP POSITION (not
-// per interval): for each interval [startPos, endPos) we add +1 at startPos
-// and -1 at endPos into the block's delta vector, then prefix-sum to get the
-// live count at each position; the running max over all positions of all
-// blocks per class is MaxLive_class. This matches SSAColoring's per-position
-// clique view — measuring per-interval would under-count spike points.
+// Compute peak register-pressure demand per class across the whole function,
+// measured the way the colorer allocates: per disjoint sub-pool, with fixed
+// pseudo-ranges counted by DISTINCT physical register rather than by raw range
+// count. See MaxLiveResult for why the old single "MaxLive vs k" total both
+// over-stated pressure at call sites and hid callee-saved over-subscription.
 //
-// Fixed pseudo-ranges (fixedReg != RM_NONE) are counted: emitClobberRanges /
-// emitFixedRegRanges / emitPerBitParamRanges set regClass = gpr, so they
-// raise GPR pressure exactly at the call/arg-setup windows where the
-// physical registers are genuinely occupied. This is why pressure is read
-// straight off `ranges` rather than from a per-op liveness walk (the pseudo-
-// ranges exist only in `ranges`, never in liveIn/liveOut).
-export function computeMaxLivePerBlock(ranges LiveRangeArray, module TargetModule, func IrFunction) returns MaxLiveResult
+// Per (block, position) we hold the set of live ranges of the class (an event-
+// driven enter/exit sweep keyed off each interval's [startPos, endPos), the
+// same half-open convention as rangeLiveAt) and derive:
+//   * total demand    = live virtuals + |distinct registers the live fixed
+//                        pseudo-ranges occupy|.
+//   * callee demand    = live crossesCall virtuals + |distinct CALLEE-saved
+//                        registers the live fixed pseudo-ranges occupy|.
+// The running max of each over all positions/blocks per class is the result.
+//
+// Fixed pseudo-ranges (fixedReg != RM_NONE) come from emitClobberRanges /
+// emitFixedRegRanges / emitPerBitParamRanges (regClass gpr/fp); they pin real
+// registers at the call/arg-setup windows. Reading pressure off `ranges` (not
+// a liveIn/liveOut walk) is required because the pseudo-ranges live only here.
+export function computeMaxLivePerBlock(ranges LiveRangeArray, module TargetModule, func IrFunction, desc TargetRegAlloc) returns MaxLiveResult
+	let gpr = computeClassDemand(ranges, module: module, func: func, regClass: RegClass.gpr, desc: desc)
+	let fp = computeClassDemand(ranges, module: module, func: func, regClass: RegClass.fp, desc: desc)
+	return MaxLiveResult.create(gpr.total, fp: fp.total, gprCallee: gpr.callee, fpCallee: fp.callee)
+end 'computeMaxLivePerBlock'
+
+// Peak (total, callee) demand for one class. Pulled out of computeMaxLivePerBlock
+// so the two classes share one event-sweep implementation.
+type ClassDemand
+	export var total as RegInt
+	export var callee as RegInt
+
+	export static function create(total RegInt, callee RegInt) returns ClassDemand
+		return Self{total: total, callee: callee}
+	end 'create'
+end 'ClassDemand'
+
+// Incremental sub-pool demand counters maintained DURING the per-block live-set
+// sweep, so the demand at each position is O(1) instead of an O(liveSet) rescan
+// with a per-position scratch allocation. The single-class event sweep
+// (computeClassDemand / pickForClass) calls `enter`/`exit` as ranges become
+// live/dead and `markChosen` when the picker commits a spill; `total()` /
+// `callee()` then read the current demand directly. Equivalent to liveDemand's
+// per-position recompute, but the work is paid once per interval event rather
+// than once per position.
+//
+// Demand is measured the way the colorer allocates (see MaxLiveResult):
+//   total  = live not-chosen virtuals + |distinct registers live fixed ranges pin|
+//   callee = live not-chosen crossesCall virtuals + |distinct CALLEE-saved registers
+//            live fixed ranges pin|
+// Fixed ranges are deduplicated by register via `fixedRefCount` (a register's
+// distinct contribution is counted while >= 1 fixed range pins it).
+type DemandTracker
+	// `calleeByOrdinal[ord]` true iff `ord` is a callee-saved register of the
+	// class (parallel to the register ordinal space, sized regOrdCap). Precomputed
+	// once per class pass so enter/exit need no per-event class lookup.
+	export var calleeByOrdinal as BoolArray
+	// Per-register count of currently-live fixed ranges pinned to that ordinal.
+	export var fixedRefCount as RegIntArray
+	export var liveVirtuals as RegInt
+	export var liveCalleeVirtuals as RegInt
+	export var distinctFixed as RegInt
+	export var distinctCalleeFixed as RegInt
+
+	export static function create(regClass RegClass, regOrdCap RegInt, desc TargetRegAlloc) returns DemandTracker
+		var calleeByOrdinal = BoolArray.create()
+		var fixedRefCount = RegIntArray.create()
+		var i = 0
+		while i < regOrdCap 'init'
+			calleeByOrdinal.push(ordinalIsCalleeSaved(i, regClass: regClass, desc: desc))
+			fixedRefCount.push(0)
+			i = i + 1
+		end 'init'
+		return Self{calleeByOrdinal: calleeByOrdinal, fixedRefCount: fixedRefCount, liveVirtuals: 0, liveCalleeVirtuals: 0, distinctFixed: 0, distinctCalleeFixed: 0}
+	end 'create'
+
+	// Zero all running counts for the start of a new block. `calleeByOrdinal`
+	// (class-constant) is preserved. Needed because ranges live past a block's
+	// last swept position are never `exit`ed, so their contributions must be
+	// cleared explicitly rather than balanced out.
+	export function reset()
+		liveVirtuals = 0
+		liveCalleeVirtuals = 0
+		distinctFixed = 0
+		distinctCalleeFixed = 0
+		var i = 0
+		let n = fixedRefCount.count()
+		while i < n 'clear'
+			try fixedRefCount.set(i, value: 0) otherwise panic("invariant: fixedRefCount.set OOB in reset")
+			i = i + 1
+		end 'clear'
+	end 'reset'
+
+	export function total() returns RegInt
+		return liveVirtuals + distinctFixed
+	end 'total'
+
+	export function callee() returns RegInt
+		return liveCalleeVirtuals + distinctCalleeFixed
+	end 'callee'
+
+	// Account a range becoming live. `chosen` lets virtuals already spilled this
+	// round be excluded from the live demand (they relieve every position).
+	export function enter(range LiveRange, chosen BoolArray)
+		if range.fixedReg != RM_NONE 'fixed'
+			let ord = range.fixedReg
+			if ord >= 0 and ord < fixedRefCount.count() 'inRange'
+				let prev = try fixedRefCount.get(ord) otherwise panic("invariant: fixedRefCount.get OOB in enter")
+				try fixedRefCount.set(ord, value: prev + 1) otherwise panic("invariant: fixedRefCount.set OOB in enter")
+				if prev == 0 'firstPin'
+					distinctFixed = distinctFixed + 1
+					let isCallee = try calleeByOrdinal.get(ord) otherwise false
+					if isCallee 'callee'
+						distinctCalleeFixed = distinctCalleeFixed + 1
+					end 'callee'
+				end 'firstPin'
+			end 'inRange'
+		end 'fixed' else 'virtual'
+			let isChosen = try chosen.get(range.valueId) otherwise false
+			if not isChosen 'counted'
+				liveVirtuals = liveVirtuals + 1
+				if range.crossesCall 'cross'
+					liveCalleeVirtuals = liveCalleeVirtuals + 1
+				end 'cross'
+			end 'counted'
+		end 'virtual'
+	end 'enter'
+
+	// Account a range becoming dead — exact inverse of `enter`. The `chosen`
+	// state of a virtual is stable between its enter and exit at one position
+	// EXCEPT when markChosen fired in between; markChosen already removed it from
+	// the live counts, and a chosen virtual is skipped here too, so the counts
+	// stay balanced.
+	export function exit(range LiveRange, chosen BoolArray)
+		if range.fixedReg != RM_NONE 'fixed'
+			let ord = range.fixedReg
+			if ord >= 0 and ord < fixedRefCount.count() 'inRange'
+				let prev = try fixedRefCount.get(ord) otherwise panic("invariant: fixedRefCount.get OOB in exit")
+				try fixedRefCount.set(ord, value: prev - 1) otherwise panic("invariant: fixedRefCount.set OOB in exit")
+				if prev == 1 'lastPin'
+					distinctFixed = distinctFixed - 1
+					let isCallee = try calleeByOrdinal.get(ord) otherwise false
+					if isCallee 'callee'
+						distinctCalleeFixed = distinctCalleeFixed - 1
+					end 'callee'
+				end 'lastPin'
+			end 'inRange'
+		end 'fixed' else 'virtual'
+			let isChosen = try chosen.get(range.valueId) otherwise false
+			if not isChosen 'counted'
+				liveVirtuals = liveVirtuals - 1
+				if range.crossesCall 'cross'
+					liveCalleeVirtuals = liveCalleeVirtuals - 1
+				end 'cross'
+			end 'counted'
+		end 'virtual'
+	end 'exit'
+
+	// Account a still-live virtual being chosen to spill: it stops contributing
+	// to demand from now on. Called by the picker right after commitSpill so the
+	// relief loop sees demand shrink. (Fixed ranges are never chosen.)
+	export function markChosen(range LiveRange)
+		liveVirtuals = liveVirtuals - 1
+		if range.crossesCall 'cross'
+			liveCalleeVirtuals = liveCalleeVirtuals - 1
+		end 'cross'
+	end 'markChosen'
+end 'DemandTracker'
+
+function computeClassDemand(ranges LiveRangeArray, module TargetModule, func IrFunction, regClass RegClass, desc TargetRegAlloc) returns ClassDemand
 	let blockMaxPos = blockMaxPositions(module, func: func)
 	let numBlockSlots = blockMaxPos.count()
+	let numRanges = ranges.count()
+	let regOrdCap = maxPoolOrdinalFor(regClass, desc: desc) + 1
 
-	var maxGpr = 0
-	var maxFp = 0
+	var maxTotal = 0
+	var maxCallee = 0
+
+	// Empty `chosen` set: pure pressure measurement spills nothing, so every
+	// `chosen.get` returns the false fallback.
+	let noneChosen = BoolArray.create()
+
+	// Incremental demand counters, updated as ranges enter/exit the sweep so the
+	// per-position demand is O(1). Reset at each block (ranges live past a block's
+	// last position are never exited).
+	var tracker = DemandTracker.create(regClass, regOrdCap: regOrdCap, desc: desc)
+
+	// Range-index -> slot in `liveSet`, or -1 when not live. Allocated once for
+	// the whole pass; entered ranges are reset to -1 after each block.
+	var liveSlot = RegIntArray.create()
+	var si = 0
+	while si < numRanges 'initSlot'
+		liveSlot.push(-1)
+		si = si + 1
+	end 'initSlot'
 
 	var b = 0
 	while b < numBlockSlots 'eachBlock'
-		let maxPos = try blockMaxPos.get(b) otherwise panic("computeMaxLivePerBlock: b < count by guard but get({b}) failed")
+		let maxPos = try blockMaxPos.get(b) otherwise panic("computeClassDemand: b < count by guard but get({b}) failed")
 		if maxPos < 0 'notInFunc'
 			b = b + 1
 			continue
 		end 'notInFunc'
 
-		// delta[p] for p in 0..maxPos+1 (one extra slot so endPos == maxPos+1
-		// has a landing index for its -1).
-		var deltaGpr = RegIntArray.create()
-		var deltaFp = RegIntArray.create()
-		var di = 0
-		while di <= maxPos + 1 'initDelta'
-			deltaGpr.push(0)
-			deltaFp.push(0)
-			di = di + 1
-		end 'initDelta'
+		// Per-position enter/exit event buckets for this block (positions 1..maxPos;
+		// endPos can reach maxPos+1, so size to maxPos+2 to land that exit).
+		var entersAt = RegIntArrayArray.create()
+		var exitsAt = RegIntArrayArray.create()
+		var ei = 0
+		while ei <= maxPos + 1 'initEvents'
+			entersAt.push(RegIntArray.create())
+			exitsAt.push(RegIntArray.create())
+			ei = ei + 1
+		end 'initEvents'
 
-		for range in ranges 'eachRange'
-			let isGpr = rangeIsClass(range, regClass: RegClass.gpr)
+		var ri = 0
+		while ri < numRanges 'eachRange'
+			let range = try ranges.get(ri) otherwise panic("computeClassDemand: ri < numRanges but ranges.get({ri}) failed")
+			if not rangeIsClass(range, regClass: regClass) 'wrongClass'
+				ri = ri + 1
+				continue
+			end 'wrongClass'
 			for iv in range.intervals 'eachInterval'
 				if iv.blockId != b 'otherBlock'
 					continue
 				end 'otherBlock'
-				// Clamp endPos into the delta array; intervals built from
-				// liveness never exceed maxPos+1, but guard anyway.
+				if iv.startPos >= iv.endPos 'emptyInterval'
+					continue
+				end 'emptyInterval'
+				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
+					continue
+				end 'badStart'
 				var endIdx = iv.endPos
 				if endIdx > maxPos + 1 'clampEnd'
 					endIdx = maxPos + 1
 				end 'clampEnd'
-				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
-					continue
-				end 'badStart'
-
-				if isGpr 'gprDelta'
-					let s0 = try deltaGpr.get(iv.startPos) otherwise panic("computeMaxLivePerBlock: deltaGpr start OOB")
-					try deltaGpr.set(iv.startPos, value: s0 + 1) otherwise panic("invariant: deltaGpr.set start OOB")
-					let e0 = try deltaGpr.get(endIdx) otherwise panic("computeMaxLivePerBlock: deltaGpr end OOB")
-					try deltaGpr.set(endIdx, value: e0 - 1) otherwise panic("invariant: deltaGpr.set end OOB")
-				end 'gprDelta' else 'fpDelta'
-					let s0 = try deltaFp.get(iv.startPos) otherwise panic("computeMaxLivePerBlock: deltaFp start OOB")
-					try deltaFp.set(iv.startPos, value: s0 + 1) otherwise panic("invariant: deltaFp.set start OOB")
-					let e0 = try deltaFp.get(endIdx) otherwise panic("computeMaxLivePerBlock: deltaFp end OOB")
-					try deltaFp.set(endIdx, value: e0 - 1) otherwise panic("invariant: deltaFp.set end OOB")
-				end 'fpDelta'
+				var enterBucket = try entersAt.get(iv.startPos) otherwise panic("invariant: entersAt sized to maxPos+2 but get({iv.startPos}) failed")
+				enterBucket.push(ri)
+				var exitBucket = try exitsAt.get(endIdx) otherwise panic("invariant: exitsAt sized to maxPos+2 but get({endIdx}) failed")
+				exitBucket.push(ri)
 			end 'eachInterval'
+			ri = ri + 1
 		end 'eachRange'
 
-		// Prefix-sum to recover the live count at each position; track the
-		// running max per class.
-		var runningGpr = 0
-		var runningFp = 0
-		var p = 0
-		while p <= maxPos + 1 'prefixSum'
-			runningGpr = runningGpr + (try deltaGpr.get(p) otherwise panic("computeMaxLivePerBlock: deltaGpr prefix OOB"))
-			runningFp = runningFp + (try deltaFp.get(p) otherwise panic("computeMaxLivePerBlock: deltaFp prefix OOB"))
-			if runningGpr > maxGpr 'newGpr'
-				maxGpr = runningGpr
-			end 'newGpr'
-			if runningFp > maxFp 'newFp'
-				maxFp = runningFp
-			end 'newFp'
+		var liveSet = RegIntArray.create()
+		tracker.reset()
+
+		var p = 1
+		while p <= maxPos 'eachPos'
+			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: noneChosen)
+			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: noneChosen)
+
+			if tracker.total() > maxTotal 'newTotal'
+				maxTotal = tracker.total()
+			end 'newTotal'
+			if tracker.callee() > maxCallee 'newCallee'
+				maxCallee = tracker.callee()
+			end 'newCallee'
+
 			p = p + 1
-		end 'prefixSum'
+		end 'eachPos'
+
+		for idx in liveSet 'resetLive'
+			try liveSlot.set(idx, value: -1) otherwise panic("invariant: liveSlot.set OOB during reset; sized to numRanges")
+		end 'resetLive'
 
 		b = b + 1
 	end 'eachBlock'
 
-	return MaxLiveResult.create(maxGpr, fp: maxFp)
-end 'computeMaxLivePerBlock'
+	return ClassDemand.create(maxTotal, callee: maxCallee)
+end 'computeClassDemand'
+
+// How far a measured demand exceeds its budget (0 when within budget). Used by
+// the Belady driver to fold the four sub-pool demands (gpr/fp total and callee)
+// into a single over-budget magnitude that must strictly shrink each round.
+export function pressureExcess(demand RegInt, budget RegInt) returns RegInt
+	if demand > budget 'over'
+		return demand - budget
+	end 'over'
+	return 0
+end 'pressureExcess'
 
 // True if `range` is live at (blockId, pos): half-open [startPos, endPos)
 // overlap, same convention as rangesInterfere / buildInterferenceGraph.
@@ -473,33 +735,37 @@ end 'isSpillCandidate'
 // Greedy Belady/MIN spill picker. For each over-pressured (block, position),
 // of each register class, gather the live spillable ranges and select the
 // `excess` of them with the FARTHEST next use, marking each chosen and
-// pushing it into the returned SpillDecision. Two constraints are enforced
-// in the same pass (both correctness-relevant):
+// pushing it into the returned SpillDecision. Both sub-pool constraints the
+// colorer must satisfy are enforced per position (see relievePressureAt):
 //
-//   (a) total class pressure <= k  (the chordality budget), and
-//   (b) at call positions, the number of live crossesCall ranges of a class
-//       <= kCalleeSaved for that class. crossesCall values can only use
-//       callee-saved registers (the caller-saved ones are clobbered by the
-//       call), so even if total pressure fits, too many call-crossing values
-//       make the colorer fail. This is NOT an optional refinement — it is a
-//       hard coloring constraint, so it runs in the main picker.
+//   (a) CALLEE-saved: live call-crossing virtuals + distinct callee-pinned
+//       fixed registers <= kCallee. crossesCall values can only use callee-
+//       saved registers (caller-saved ones are clobbered by the call they
+//       span), so this binds at EVERY position they are live, not only at the
+//       call op. This is NOT an optional refinement: it is a hard coloring
+//       constraint, and the one the old "total vs k" metric hid — a function
+//       can sit at total <= k yet have far more call-crossing values than
+//       callee-saved registers.
+//   (b) TOTAL: live virtuals + distinct fixed registers <= k. Fixed pseudo-
+//       ranges are counted by distinct physical register, which removes the
+//       call-site over-count (overlapping same-register clobber / arg-setup
+//       pins count once) that previously demanded unspillable "excess".
 //
 // Selection uses inline selection (no Array.sort), deterministic tie-break by
 // LARGER valueId. Rematerializable values are pushed to spilledRanges like
 // any other — Belady is a pressure-relief pass, not a cost-minimization pass;
 // insertSpillCode decides remat-vs-stack downstream.
-export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, func IrFunction, rpo RpoInfo, cfg CfgInfo, regTarget RegAllocTarget, opQuery TargetOpQuery, desc TargetRegAlloc) returns SpillDecision
+export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, func IrFunction, rpo RpoInfo, cfg CfgInfo, regTarget RegAllocTarget, desc TargetRegAlloc) returns SpillDecision
 	var decision = SpillDecision.create()
 
-	let kGpr = desc.gprPoolSize
-	let kFp = desc.fpPoolSize
-	let kCalleeGpr = desc.gprPoolSize - desc.callerSavedGprs.count()
-	let kCalleeFp = desc.fpPoolSize - desc.callerSavedFps.count()
+	let kGpr = poolSizeFor(RegClass.gpr, desc: desc)
+	let kFp = poolSizeFor(RegClass.fp, desc: desc)
+	let kCalleeGpr = calleeSavedSizeFor(RegClass.gpr, desc: desc)
+	let kCalleeFp = calleeSavedSizeFor(RegClass.fp, desc: desc)
 
 	let blockMaxPos = blockMaxPositions(module, func: func)
 	let blockArgPlumbing = buildBlockArgPlumbingSet(module, func: func)
 	let nextUse = buildNextUseMap(ranges, module: module, func: func, rpo: rpo, regTarget: regTarget)
-	let callPositions = buildCallPositionsPerBlock(module, func: func, opQuery: opQuery)
 
 	// `chosen` carries forward across all positions and blocks within this
 	// round: once a value is selected to spill, it relieves every position it
@@ -517,8 +783,8 @@ export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, fun
 		ci = ci + 1
 	end 'initChosen'
 
-	pickForClass(ranges, regClass: RegClass.gpr, k: kGpr, kCallee: kCalleeGpr, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, callPositions: callPositions, decision: decision, rpo: rpo, cfg: cfg)
-	pickForClass(ranges, regClass: RegClass.fp, k: kFp, kCallee: kCalleeFp, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, callPositions: callPositions, decision: decision, rpo: rpo, cfg: cfg)
+	pickForClass(ranges, regClass: RegClass.gpr, k: kGpr, kCallee: kCalleeGpr, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc)
+	pickForClass(ranges, regClass: RegClass.fp, k: kFp, kCallee: kCalleeFp, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc)
 
 	return decision
 end 'pickBeladySpills'
@@ -549,9 +815,15 @@ end 'pickBeladySpills'
 // slot in `liveSet` (or -1 when not live) for O(1) swap-remove on exit; it is
 // allocated once for the whole class pass and only the entries this block
 // touched are reset between blocks.
-function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCallee RegInt, blockMaxPos RegIntArray, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, callPositions RegIntArrayArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
+function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCallee RegInt, blockMaxPos RegIntArray, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo, desc TargetRegAlloc)
 	let numBlockSlots = blockMaxPos.count()
 	let numRanges = ranges.count()
+	let regOrdCap = maxPoolOrdinalFor(regClass, desc: desc) + 1
+
+	// Incremental sub-pool demand, kept in sync with the live set by applyEnters /
+	// applyExits and by relievePressureAt's markChosen on each commit, so the
+	// per-position relief reads demand in O(1) instead of rescanning the live set.
+	var tracker = DemandTracker.create(regClass, regOrdCap: regOrdCap, desc: desc)
 
 	// Range-index -> slot in `liveSet`, or -1 when not live. Allocated once for
 	// the whole class pass; entered ranges are reset to -1 after each block.
@@ -569,8 +841,6 @@ function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCalle
 			b = b + 1
 			continue
 		end 'notInFunc'
-
-		let callBucket = try callPositions.get(b) otherwise panic("invariant: callPositions sized to maxBlockId+1 but get({b}) failed")
 
 		// Per-position enter/exit event buckets for this block. Positions run
 		// 1..maxPos; endPos can be maxPos+1, so we size to maxPos+2 to give that
@@ -615,14 +885,14 @@ function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCalle
 		// Sweep positions, maintaining the live set. `liveSet` holds the range
 		// indices live at the current position; `liveSlot[idx]` is its slot.
 		var liveSet = RegIntArray.create()
+		tracker.reset()
 
 		var p = 1
 		while p <= maxPos 'eachPos'
-			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"))
-			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"))
+			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: chosen)
+			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: chosen)
 
-			let isCallPos = bucketContains(callBucket, value: p)
-			relievePressureAt(ranges, liveSet: liveSet, regClass: regClass, blockId: b, pos: p, k: k, kCallee: kCallee, isCallPos: isCallPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, decision: decision, rpo: rpo, cfg: cfg)
+			relievePressureAt(ranges, liveSet: liveSet, regClass: regClass, blockId: b, pos: p, k: k, kCallee: kCallee, tracker: tracker, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, decision: decision, rpo: rpo, cfg: cfg)
 			p = p + 1
 		end 'eachPos'
 
@@ -638,8 +908,10 @@ end 'pickForClass'
 
 // Apply interval exits at the current position: each range in `exitBucket`
 // dies strictly before this position (endPos == pos), so remove it from the
-// live set via O(1) swap-remove keyed by its recorded slot.
-function applyExits(liveSet RegIntArray, liveSlot RegIntArray, exitBucket RegIntArray)
+// live set via O(1) swap-remove keyed by its recorded slot and decrement the
+// demand tracker. Only ranges of `tracker`'s class are tracked; others affect
+// membership only.
+function applyExits(liveSet RegIntArray, liveSlot RegIntArray, exitBucket RegIntArray, ranges LiveRangeArray, regClass RegClass, tracker DemandTracker, chosen BoolArray)
 	for idx in exitBucket 'each'
 		let slot = try liveSlot.get(idx) otherwise panic("invariant: liveSlot.get({idx}) OOB on exit")
 		if slot < 0 'notLive'
@@ -647,6 +919,10 @@ function applyExits(liveSet RegIntArray, liveSlot RegIntArray, exitBucket RegInt
 			// already exited, or it never entered); nothing to remove.
 			continue
 		end 'notLive'
+		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx OOB in ranges on exit")
+		if rangeIsClass(range, regClass: regClass) 'sameClass'
+			tracker.exit(range, chosen: chosen)
+		end 'sameClass'
 		let lastIdx = liveSet.count() - 1
 		let moved = try liveSet.get(lastIdx) otherwise panic("invariant: liveSet non-empty when slot>=0 but get(last) failed")
 		try liveSet.set(slot, value: moved) otherwise panic("invariant: liveSet.set OOB on swap-remove")
@@ -657,10 +933,11 @@ function applyExits(liveSet RegIntArray, liveSlot RegIntArray, exitBucket RegInt
 end 'applyExits'
 
 // Apply interval enters at the current position: each range in `enterBucket`
-// becomes live at this position (startPos == pos). Append to the live set and
-// record its slot. Guards against double-enter (a range with two intervals in
-// the same block both starting at pos would otherwise corrupt the slot map).
-function applyEnters(liveSet RegIntArray, liveSlot RegIntArray, enterBucket RegIntArray)
+// becomes live at this position (startPos == pos). Append to the live set,
+// record its slot, and increment the demand tracker. Guards against double-enter
+// (a range with two intervals in the same block both starting at pos would
+// otherwise corrupt the slot map and double-count demand).
+function applyEnters(liveSet RegIntArray, liveSlot RegIntArray, enterBucket RegIntArray, ranges LiveRangeArray, regClass RegClass, tracker DemandTracker, chosen BoolArray)
 	for idx in enterBucket 'each'
 		let slot = try liveSlot.get(idx) otherwise panic("invariant: liveSlot.get({idx}) OOB on enter")
 		if slot >= 0 'alreadyLive'
@@ -668,100 +945,62 @@ function applyEnters(liveSet RegIntArray, liveSlot RegIntArray, enterBucket RegI
 			// this block); membership is unchanged.
 			continue
 		end 'alreadyLive'
+		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx OOB in ranges on enter")
+		if rangeIsClass(range, regClass: regClass) 'sameClass'
+			tracker.enter(range, chosen: chosen)
+		end 'sameClass'
 		try liveSlot.set(idx, value: liveSet.count()) otherwise panic("invariant: liveSlot.set OOB on enter")
 		liveSet.push(idx)
 	end 'each'
 end 'applyEnters'
 
-// True if the sorted call-position bucket contains `value`. Buckets are tiny
-// (calls per block), so a linear scan beats a binary search's overhead.
-function bucketContains(bucket RegIntArray, value RegInt) returns bool
-	for v in bucket 'each'
-		if v == value 'found'
-			return true
-		end 'found'
-	end 'each'
-	return false
-end 'bucketContains'
-
-// At one (block, pos), relieve both the total-pressure budget (k) and, when
-// this is a call position, the callee-saved budget for call-crossing values
-// (kCallee). Operates on `liveSet` — the O(pressure) set of range indices live
-// at this position — rather than rescanning all ranges. Selects farthest-next-
-// use spillable ranges via inline selection.
-function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, blockId BlockId, pos RegInt, k RegInt, kCallee RegInt, isCallPos bool, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, blockMaxPos RegIntArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
-	// Total-pressure relief: count live ranges of this class not yet chosen,
-	// then spill the excess.
-	let liveCount = countLiveNotChosen(ranges, liveSet: liveSet, regClass: regClass, chosen: chosen)
-	var excess = liveCount - k
-	while excess > 0 'spillForTotal'
-		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: false, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
+// At one (block, pos), relieve BOTH sub-pool budgets the colorer must satisfy
+// (see MaxLiveResult):
+//
+//   (a) CALLEE-saved: live call-crossing virtuals + distinct callee-pinned
+//       fixed registers <= kCallee. A crossesCall value can ONLY live in a
+//       callee-saved register (a caller-saved one is clobbered by the call it
+//       spans), so this constraint binds at EVERY position the value is live,
+//       not only at the call op. Relieved by spilling call-crossing values.
+//
+//   (b) TOTAL: live virtuals + distinct fixed registers <= k. Fixed pseudo-
+//       ranges are deduplicated by physical register (an arg-setup phys-dest
+//       and the call's clobber both pinning x0 consume ONE register, not two),
+//       which removes the call-site over-count that made the old raw "live
+//       count vs k" metric demand spills that can never help. Relieved by
+//       spilling any spillable virtual.
+//
+// Callee relief runs FIRST: a call-crossing spill also reduces the total, so
+// relieving the tighter sub-pool first avoids over-spilling for (b). Demand is
+// read in O(1) from `tracker` (kept in sync by the sweep); each committed spill
+// updates the tracker via markChosen so the loop sees demand shrink.
+function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, blockId BlockId, pos RegInt, k RegInt, kCallee RegInt, tracker DemandTracker, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, blockMaxPos RegIntArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
+	// (a) Callee-saved relief: spill call-crossing values until the callee-saved
+	// demand fits. A crossesCall value is callee-saved-only everywhere it lives.
+	while tracker.callee() > kCallee 'spillForCallee'
+		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: true, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
 		if not picked.found 'noCandidate'
-			// Remaining excess is fixed/infinite/block-arg — architecture-
-			// limited; the reactive loop handles it.
+			// Remaining callee excess is callee-pinned fixed / unspillable /
+			// block-arg — architecture-limited; the reactive loop handles it.
 			break
 		end 'noCandidate'
 		commitSpill(decision, range: picked.range, chosen: chosen)
-		excess = excess - 1
+		tracker.markChosen(picked.range)
+	end 'spillForCallee'
+
+	// (b) Total relief: spill any spillable virtual until total distinct-register
+	// demand fits the whole pool.
+	while tracker.total() > k 'spillForTotal'
+		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: false, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
+		if not picked.found 'noCandidate'
+			// Remaining excess is fixed / unspillable / block-arg —
+			// architecture-limited; the reactive loop handles it.
+			break
+		end 'noCandidate'
+		commitSpill(decision, range: picked.range, chosen: chosen)
+		tracker.markChosen(picked.range)
 	end 'spillForTotal'
-
-	// Callee-saved relief at call positions: count live crossesCall ranges of
-	// this class not yet chosen, then spill the excess over kCallee.
-	if isCallPos 'calleeCheck'
-		let liveCross = countLiveCrossesCallNotChosen(ranges, liveSet: liveSet, regClass: regClass, chosen: chosen)
-		var crossExcess = liveCross - kCallee
-		while crossExcess > 0 'spillForCallee'
-			let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: true, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
-			if not picked.found 'noCandidate'
-				break
-			end 'noCandidate'
-			commitSpill(decision, range: picked.range, chosen: chosen)
-			crossExcess = crossExcess - 1
-		end 'spillForCallee'
-	end 'calleeCheck'
 end 'relievePressureAt'
-
-// Count live ranges of `regClass` in `liveSet` that haven't been chosen to
-// spill yet — this is the demand the colorer would see. `liveSet` already
-// holds exactly the ranges live at this position (see pickForClass sweep), so
-// no rangeLiveAt rescan is needed.
-function countLiveNotChosen(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, chosen BoolArray) returns RegInt
-	var count = 0
-	for idx in liveSet 'each'
-		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx {idx} OOB in ranges")
-		if not rangeIsClass(range, regClass: regClass) 'wrongClass'
-			continue
-		end 'wrongClass'
-		let already = try chosen.get(range.valueId) otherwise false
-		if already 'skip'
-			continue
-		end 'skip'
-		count = count + 1
-	end 'each'
-	return count
-end 'countLiveNotChosen'
-
-// Count live crossesCall ranges of `regClass` in `liveSet` not yet chosen.
-// Fixed pseudo-ranges are never crossesCall (built with default false), so
-// they don't count here — only real values do.
-function countLiveCrossesCallNotChosen(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, chosen BoolArray) returns RegInt
-	var count = 0
-	for idx in liveSet 'each'
-		let range = try ranges.get(idx) otherwise panic("invariant: liveSet idx {idx} OOB in ranges")
-		if not rangeIsClass(range, regClass: regClass) 'wrongClass'
-			continue
-		end 'wrongClass'
-		if not range.crossesCall 'notCross'
-			continue
-		end 'notCross'
-		let already = try chosen.get(range.valueId) otherwise false
-		if already 'skip'
-			continue
-		end 'skip'
-		count = count + 1
-	end 'each'
-	return count
-end 'countLiveCrossesCallNotChosen'
 
 // Result of an inline farthest-next-use selection.
 type PickResult

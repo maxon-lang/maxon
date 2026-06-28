@@ -838,41 +838,54 @@ type FunctionRegAllocator
 	// we never spin; the reactive loop is the fallback for whatever remains.
 	// BELADY_MAX_ROUNDS is a final safety belt.
 	function runBeladyPressureReduction()
-		let kGpr = state.desc.gprPoolSize
-		let kFp = state.desc.fpPoolSize
+		// Per-class budgets, measured per disjoint sub-pool the way the colorer
+		// allocates (see MaxLiveResult): the TOTAL distinct-register demand must
+		// fit the whole pool, and the CALLEE-saved demand (call-crossing values
+		// plus callee-pinned fixed ranges) must fit the callee-saved sub-pool.
+		// Both must hold at every point for the chordal SSA graph to color
+		// without the eviction / last-chance-recolor machinery.
+		let kGpr = poolSizeFor(RegClass.gpr, desc: state.desc)
+		let kFp = poolSizeFor(RegClass.fp, desc: state.desc)
+		let kCalleeGpr = calleeSavedSizeFor(RegClass.gpr, desc: state.desc)
+		let kCalleeFp = calleeSavedSizeFor(RegClass.fp, desc: state.desc)
 
-		var prevGpr = i64.max
-		var prevFp = i64.max
+		// Sum of how far each sub-pool demand exceeds its budget: the quantity
+		// each round must strictly shrink, or further rounds cannot help.
+		var prevOverBudget = i64.max
 		var round = 0
 
 		while round < BELADY_MAX_ROUNDS 'beladyLoop'
-			let maxLive = computeMaxLivePerBlock(ranges, module: module, func: func)
+			let maxLive = computeMaxLivePerBlock(ranges, module: module, func: func, desc: state.desc)
+
+			let overGpr = pressureExcess(maxLive.gpr, budget: kGpr) + pressureExcess(maxLive.gprCallee, budget: kCalleeGpr)
+			let overFp = pressureExcess(maxLive.fp, budget: kFp) + pressureExcess(maxLive.fpCallee, budget: kCalleeFp)
+			let overBudget = overGpr + overFp
 
 			if round == 0 'firstRound'
-				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} enter maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} kGpr={kGpr} kFp={kFp}")
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} enter gpr={maxLive.gpr}/{kGpr} gprCallee={maxLive.gprCallee}/{kCalleeGpr} fp={maxLive.fp}/{kFp} fpCallee={maxLive.fpCallee}/{kCalleeFp}")
 			end 'firstRound'
 
-			if maxLive.gpr <= kGpr and maxLive.fp <= kFp 'withinBudget'
-				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} within budget after rounds={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp}")
+			if overBudget == 0 'withinBudget'
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} within budget after rounds={round}")
 				break
 			end 'withinBudget'
 
 			// Convergence guard: if a previous round's spills did not strictly
-			// reduce MaxLive for either class, further Belady rounds won't help
+			// reduce the over-budget magnitude, further Belady rounds won't help
 			// (reloads re-pressurized at other points). Hand off to the reactive
 			// loop rather than spin.
-			if round > 0 and maxLive.gpr >= prevGpr and maxLive.fp >= prevFp 'noImprovement'
-				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no MaxLive improvement at round={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} — handing off to reactive loop")
+			if round > 0 and overBudget >= prevOverBudget 'noImprovement'
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no improvement at round={round} overBudget={overBudget} — handing off to reactive loop")
 				break
 			end 'noImprovement'
 
-			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, opQuery: opQuery, desc: state.desc)
+			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, desc: state.desc)
 
 			if spillDec.spilledRanges.count() == 0 'noCandidate'
 				// Architecture-limited point: every over-pressured clique is
 				// fixed / unspillable / block-arg. The reactive loop (and its
 				// recolor backstop) handle it.
-				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no spillable candidate at round={round} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp} — handing off to reactive loop")
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no spillable candidate at round={round} overBudget={overBudget} — handing off to reactive loop")
 				break
 			end 'noCandidate'
 
@@ -887,10 +900,9 @@ type FunctionRegAllocator
 			unionReloadIds(rematerializeIds, source: spillDec.rematerializeIds)
 			unionRematValues(rematerializeValueByValueId, source: spillDec.rematerializeValue, ids: spillDec.rematerializeIds)
 
-			logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} round={round} spilled={spillDec.spilledRanges.count()} maxLiveGpr={maxLive.gpr} maxLiveFp={maxLive.fp}")
+			logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} round={round} spilled={spillDec.spilledRanges.count()} overBudget={overBudget}")
 
-			prevGpr = maxLive.gpr
-			prevFp = maxLive.fp
+			prevOverBudget = overBudget
 
 			self.runLivenessAndRanges()
 
