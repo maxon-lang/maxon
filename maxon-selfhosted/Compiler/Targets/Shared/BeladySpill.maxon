@@ -1131,8 +1131,17 @@ function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass 
 		tracker.markChosen(picked.range)
 	end 'splitForCallee'
 
-	// (b) Total relief: spill any spillable virtual until total distinct-register
-	// demand fits the whole pool.
+	// (b) Total relief: reduce total distinct-register demand to fit the whole
+	// pool. A picked virtual is relieved by SPILLING it ONLY when it does not
+	// cross a call; a call-crossing pick is relieved by SPLITTING (commitSplit)
+	// instead. This is the same invariant as phase (a), extended to the total
+	// path: spilling ANY cross-call value re-creates the unresolvable cluster —
+	// its reload still needs a callee-saved register at the far-side use and
+	// re-crosses the call as a SPILL_WEIGHT_INFINITE range, and a crowd of such
+	// reloads is uncolorable at iteration-0 BEFORE the reactive splitter (Pass
+	// 1a trySplitAtCall) ever runs, so the split never gets a chance. Routing
+	// the cross-call pick to commitSplit leaves it as a NORMAL-weight uncolored
+	// range that the reactive loop's call-boundary splitter then resolves.
 	while tracker.total() > k 'spillForTotal'
 		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: false, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
 		if not picked.found 'noCandidate'
@@ -1140,7 +1149,11 @@ function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass 
 			// architecture-limited; the reactive loop handles it.
 			break
 		end 'noCandidate'
-		commitSpill(decision, range: picked.range, chosen: chosen)
+		if picked.range.crossesCall 'crossCall'
+			commitSplit(decision, range: picked.range, chosen: chosen)
+		end 'crossCall' else 'safeToSpill'
+			commitSpill(decision, range: picked.range, chosen: chosen)
+		end 'safeToSpill'
 		tracker.markChosen(picked.range)
 	end 'spillForTotal'
 end 'relievePressureAt'
