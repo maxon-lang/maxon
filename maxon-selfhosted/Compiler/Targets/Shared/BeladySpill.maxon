@@ -157,6 +157,145 @@ function blockMaxPositions(module TargetModule, func IrFunction) returns RegIntA
 	return result
 end 'blockMaxPositions'
 
+// Per-block bucketed interval events, built in a SINGLE pass over all ranges.
+//
+// Both register-pressure sweeps (computeClassDemand and pickForClass) used to
+// re-scan EVERY range for EVERY block to collect that block's interval events —
+// an O(numBlocks × numRanges × intervals) wall on functions with thousands of
+// blocks (Testing.parseSpecFile: 2223 blocks × thousands of ranges, the
+// self-compile's dominant frame). Since each interval belongs to exactly one
+// block, a single pass can bucket every (rangeIdx, startPos, endPos) event into
+// its block's list. The per-block sweep then reads only its own bucket, making
+// the total bucketing O(numRanges × intervals) once instead of per block.
+//
+// Parallel arrays keyed by `base[blockId] .. base[blockId+1]`: `rangeIdx[i]` is
+// the range index, `startPos[i]` / `endPos[i]` its already-clamped half-open
+// interval bounds in that block. Empty / out-of-bounds intervals are dropped at
+// build time (they were dropped per-block before), so a consumer never re-tests
+// them. `endPos` is clamped to maxPos+1 exactly as the old inline code did, so
+// the event-bucket sizing (maxPos+2) still has a landing slot.
+type BlockIntervalEvents
+	// Flat (rangeIdx, startPos, endPos) triples, sliced per block by `base`.
+	export var rangeIdx as RegIntArray
+	export var startPos as RegIntArray
+	export var endPos as RegIntArray
+	// base[blockId] is the flat-array offset of block's first event; sized to
+	// numBlockSlots+1 so base[blockId+1] is always the slice end.
+	export var base as RegIntArray
+
+	export static function build(ranges LiveRangeArray, blockMaxPos RegIntArray) returns BlockIntervalEvents
+		let numBlockSlots = blockMaxPos.count()
+		let numRanges = ranges.count()
+
+		// Pass 1: per-block event counts, so we can prefix-sum into slice offsets
+		// and fill the flat arrays positionally without per-block dynamic growth.
+		var counts = RegIntArray.create()
+		var ci = 0
+		while ci < numBlockSlots 'initCounts'
+			counts.push(0)
+			ci = ci + 1
+		end 'initCounts'
+
+		var ri = 0
+		while ri < numRanges 'countRange'
+			let range = try ranges.get(ri) otherwise panic("BlockIntervalEvents.build: ri < numRanges but ranges.get({ri}) failed")
+			for iv in range.intervals 'eachInterval'
+				if eventIsLive(iv, blockMaxPos: blockMaxPos, numBlockSlots: numBlockSlots) 'keep'
+					let prev = try counts.get(iv.blockId) otherwise panic("invariant: counts.get({iv.blockId}) OOB; eventIsLive bounds-checked blockId")
+					try counts.set(iv.blockId, value: prev + 1) otherwise panic("invariant: counts.set OOB")
+				end 'keep'
+			end 'eachInterval'
+			ri = ri + 1
+		end 'countRange'
+
+		// Prefix-sum counts into base offsets (one extra entry for the final end).
+		var base = RegIntArray.create()
+		var total = 0
+		var bi = 0
+		while bi < numBlockSlots 'initBase'
+			base.push(total)
+			let c = try counts.get(bi) otherwise panic("invariant: counts.get({bi}) OOB during base")
+			total = total + c
+			bi = bi + 1
+		end 'initBase'
+		base.push(total)
+
+		// Pass 2: fill the flat triple arrays. `cursor[blockId]` tracks the next
+		// free slot in each block's slice.
+		var rangeIdxArr = RegIntArray.create()
+		var startPosArr = RegIntArray.create()
+		var endPosArr = RegIntArray.create()
+		var fi = 0
+		while fi < total 'initFlat'
+			rangeIdxArr.push(0)
+			startPosArr.push(0)
+			endPosArr.push(0)
+			fi = fi + 1
+		end 'initFlat'
+
+		var cursor = RegIntArray.create()
+		var cu = 0
+		while cu < numBlockSlots 'initCursor'
+			let b0 = try base.get(cu) otherwise panic("invariant: base.get({cu}) OOB during cursor init")
+			cursor.push(b0)
+			cu = cu + 1
+		end 'initCursor'
+
+		var ri2 = 0
+		while ri2 < numRanges 'fillRange'
+			let range = try ranges.get(ri2) otherwise panic("BlockIntervalEvents.build: ri2 < numRanges but ranges.get({ri2}) failed")
+			for iv in range.intervals 'eachInterval2'
+				if eventIsLive(iv, blockMaxPos: blockMaxPos, numBlockSlots: numBlockSlots) 'keep2'
+					let maxPos = try blockMaxPos.get(iv.blockId) otherwise panic("invariant: blockMaxPos.get({iv.blockId}) OOB; eventIsLive bounds-checked")
+					var endIdx = iv.endPos
+					if endIdx > maxPos + 1 'clampEnd'
+						endIdx = maxPos + 1
+					end 'clampEnd'
+					let slot = try cursor.get(iv.blockId) otherwise panic("invariant: cursor.get({iv.blockId}) OOB")
+					try rangeIdxArr.set(slot, value: ri2) otherwise panic("invariant: rangeIdxArr.set OOB")
+					try startPosArr.set(slot, value: iv.startPos) otherwise panic("invariant: startPosArr.set OOB")
+					try endPosArr.set(slot, value: endIdx) otherwise panic("invariant: endPosArr.set OOB")
+					try cursor.set(iv.blockId, value: slot + 1) otherwise panic("invariant: cursor.set OOB")
+				end 'keep2'
+			end 'eachInterval2'
+			ri2 = ri2 + 1
+		end 'fillRange'
+
+		return Self{rangeIdx: rangeIdxArr, startPos: startPosArr, endPos: endPosArr, base: base}
+	end 'build'
+
+	// Slice start for `blockId`'s events.
+	export function sliceStart(blockId BlockId) returns RegInt
+		return try base.get(blockId) otherwise panic("BlockIntervalEvents.sliceStart: base.get({blockId}) OOB")
+	end 'sliceStart'
+
+	// Slice end (exclusive) for `blockId`'s events.
+	export function sliceEnd(blockId BlockId) returns RegInt
+		return try base.get(blockId + 1) otherwise panic("BlockIntervalEvents.sliceEnd: base.get({blockId + 1}) OOB")
+	end 'sliceEnd'
+end 'BlockIntervalEvents'
+
+// Shared keep-filter for a single interval event, byte-identical to the guards
+// the two sweeps applied inline: in a block that exists in this func, non-empty,
+// startPos in [0, maxPos+1]. Lifts the duplicated test into one place so the
+// count pass and the fill pass cannot drift.
+function eventIsLive(iv Interval, blockMaxPos RegIntArray, numBlockSlots RegInt) returns bool
+	if iv.blockId < 0 or iv.blockId >= numBlockSlots 'badBlock'
+		return false
+	end 'badBlock'
+	let maxPos = try blockMaxPos.get(iv.blockId) otherwise panic("invariant: eventIsLive blockMaxPos.get({iv.blockId}) OOB; just bounds-checked")
+	if maxPos < 0 'notInFunc'
+		return false
+	end 'notInFunc'
+	if iv.startPos >= iv.endPos 'emptyInterval'
+		return false
+	end 'emptyInterval'
+	if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
+		return false
+	end 'badStart'
+	return true
+end 'eventIsLive'
+
 // True if a RegClass is the FP class. Mirrors the gpr/fp discrimination used
 // throughout the allocator (LocalSplitter's poolSizeFor pattern).
 function regClassIsFp(regClass RegClass) returns bool
@@ -190,9 +329,58 @@ end 'rangeIsClass'
 // emitFixedRegRanges / emitPerBitParamRanges (regClass gpr/fp); they pin real
 // registers at the call/arg-setup windows. Reading pressure off `ranges` (not
 // a liveIn/liveOut walk) is required because the pseudo-ranges live only here.
+// Per-position enter/exit range-index buckets for one block, indexed by
+// position (0..maxPos+1). `enters[p]` holds the range indices whose interval
+// starts at p; `exits[p]` those whose (clamped) interval end is p. Consumed by
+// the linear-scan sweep in computeClassDemand / pickForClass.
+type PositionEventBuckets
+	export var enters as RegIntArrayArray
+	export var exits as RegIntArrayArray
+
+	export static function create(enters RegIntArrayArray, exits RegIntArrayArray) returns PositionEventBuckets
+		return Self{enters: enters, exits: exits}
+	end 'create'
+end 'PositionEventBuckets'
+
+// Scatter `blockId`'s precomputed interval events into per-position enter/exit
+// buckets (positions 1..maxPos; endPos can reach maxPos+1, so the arrays are
+// sized to maxPos+2 to land that exit). Reads only the block's own event slice,
+// so this is O(block events), replacing the former O(numRanges) per-block scan.
+function buildPositionEventBuckets(events BlockIntervalEvents, blockId BlockId, maxPos RegInt) returns PositionEventBuckets
+	var entersAt = RegIntArrayArray.create()
+	var exitsAt = RegIntArrayArray.create()
+	var ei = 0
+	while ei <= maxPos + 1 'initEvents'
+		entersAt.push(RegIntArray.create())
+		exitsAt.push(RegIntArray.create())
+		ei = ei + 1
+	end 'initEvents'
+
+	let lo = events.sliceStart(blockId)
+	let hi = events.sliceEnd(blockId)
+	var e = lo
+	while e < hi 'eachEvent'
+		let ri = try events.rangeIdx.get(e) otherwise panic("invariant: events.rangeIdx.get({e}) OOB in slice")
+		let sp = try events.startPos.get(e) otherwise panic("invariant: events.startPos.get({e}) OOB in slice")
+		let ep = try events.endPos.get(e) otherwise panic("invariant: events.endPos.get({e}) OOB in slice")
+		var enterBucket = try entersAt.get(sp) otherwise panic("invariant: entersAt sized to maxPos+2 but get({sp}) failed")
+		enterBucket.push(ri)
+		var exitBucket = try exitsAt.get(ep) otherwise panic("invariant: exitsAt sized to maxPos+2 but get({ep}) failed")
+		exitBucket.push(ri)
+		e = e + 1
+	end 'eachEvent'
+
+	return PositionEventBuckets.create(entersAt, exits: exitsAt)
+end 'buildPositionEventBuckets'
+
 export function computeMaxLivePerBlock(ranges LiveRangeArray, module TargetModule, func IrFunction, desc TargetRegAlloc) returns MaxLiveResult
-	let gpr = computeClassDemand(ranges, module: module, func: func, regClass: RegClass.gpr, desc: desc)
-	let fp = computeClassDemand(ranges, module: module, func: func, regClass: RegClass.fp, desc: desc)
+	// Per-block interval events bucketed ONCE (class-independent — the
+	// per-position sweep filters by class). Shared across both class passes so
+	// the old per-block × all-ranges scan happens a single time, not 2 × blocks.
+	let blockMaxPos = blockMaxPositions(module, func: func)
+	let events = BlockIntervalEvents.build(ranges, blockMaxPos: blockMaxPos)
+	let gpr = computeClassDemand(ranges, regClass: RegClass.gpr, desc: desc, blockMaxPos: blockMaxPos, events: events)
+	let fp = computeClassDemand(ranges, regClass: RegClass.fp, desc: desc, blockMaxPos: blockMaxPos, events: events)
 	return MaxLiveResult.create(gpr.total, fp: fp.total, gprCallee: gpr.callee, fpCallee: fp.callee)
 end 'computeMaxLivePerBlock'
 
@@ -339,8 +527,7 @@ type DemandTracker
 	end 'markChosen'
 end 'DemandTracker'
 
-function computeClassDemand(ranges LiveRangeArray, module TargetModule, func IrFunction, regClass RegClass, desc TargetRegAlloc) returns ClassDemand
-	let blockMaxPos = blockMaxPositions(module, func: func)
+function computeClassDemand(ranges LiveRangeArray, regClass RegClass, desc TargetRegAlloc, blockMaxPos RegIntArray, events BlockIntervalEvents) returns ClassDemand
 	let numBlockSlots = blockMaxPos.count()
 	let numRanges = ranges.count()
 	let regOrdCap = maxPoolOrdinalFor(regClass, desc: desc) + 1
@@ -374,45 +561,12 @@ function computeClassDemand(ranges LiveRangeArray, module TargetModule, func IrF
 			continue
 		end 'notInFunc'
 
-		// Per-position enter/exit event buckets for this block (positions 1..maxPos;
-		// endPos can reach maxPos+1, so size to maxPos+2 to land that exit).
-		var entersAt = RegIntArrayArray.create()
-		var exitsAt = RegIntArrayArray.create()
-		var ei = 0
-		while ei <= maxPos + 1 'initEvents'
-			entersAt.push(RegIntArray.create())
-			exitsAt.push(RegIntArray.create())
-			ei = ei + 1
-		end 'initEvents'
-
-		var ri = 0
-		while ri < numRanges 'eachRange'
-			let range = try ranges.get(ri) otherwise panic("computeClassDemand: ri < numRanges but ranges.get({ri}) failed")
-			if not rangeIsClass(range, regClass: regClass) 'wrongClass'
-				ri = ri + 1
-				continue
-			end 'wrongClass'
-			for iv in range.intervals 'eachInterval'
-				if iv.blockId != b 'otherBlock'
-					continue
-				end 'otherBlock'
-				if iv.startPos >= iv.endPos 'emptyInterval'
-					continue
-				end 'emptyInterval'
-				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
-					continue
-				end 'badStart'
-				var endIdx = iv.endPos
-				if endIdx > maxPos + 1 'clampEnd'
-					endIdx = maxPos + 1
-				end 'clampEnd'
-				var enterBucket = try entersAt.get(iv.startPos) otherwise panic("invariant: entersAt sized to maxPos+2 but get({iv.startPos}) failed")
-				enterBucket.push(ri)
-				var exitBucket = try exitsAt.get(endIdx) otherwise panic("invariant: exitsAt sized to maxPos+2 but get({endIdx}) failed")
-				exitBucket.push(ri)
-			end 'eachInterval'
-			ri = ri + 1
-		end 'eachRange'
+		// Per-position enter/exit event buckets for this block, filled from the
+		// block's precomputed event slice (O(block events) instead of the old
+		// O(numRanges) per-block scan).
+		let buckets = buildPositionEventBuckets(events, blockId: b, maxPos: maxPos)
+		let entersAt = buckets.enters
+		let exitsAt = buckets.exits
 
 		var liveSet = RegIntArray.create()
 		tracker.reset()
@@ -766,6 +920,10 @@ export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, fun
 	let blockMaxPos = blockMaxPositions(module, func: func)
 	let blockArgPlumbing = buildBlockArgPlumbingSet(module, func: func)
 	let nextUse = buildNextUseMap(ranges, module: module, func: func, rpo: rpo, regTarget: regTarget)
+	// Per-block interval events bucketed ONCE and shared across both class
+	// passes, the same single-pass technique computeMaxLivePerBlock uses — the
+	// former per-block × all-ranges scan was the spill picker's quadratic wall.
+	let events = BlockIntervalEvents.build(ranges, blockMaxPos: blockMaxPos)
 
 	// `chosen` carries forward across all positions and blocks within this
 	// round: once a value is selected to spill, it relieves every position it
@@ -783,8 +941,8 @@ export function pickBeladySpills(ranges LiveRangeArray, module TargetModule, fun
 		ci = ci + 1
 	end 'initChosen'
 
-	pickForClass(ranges, regClass: RegClass.gpr, k: kGpr, kCallee: kCalleeGpr, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc)
-	pickForClass(ranges, regClass: RegClass.fp, k: kFp, kCallee: kCalleeFp, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc)
+	pickForClass(ranges, regClass: RegClass.gpr, k: kGpr, kCallee: kCalleeGpr, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc, events: events)
+	pickForClass(ranges, regClass: RegClass.fp, k: kFp, kCallee: kCalleeFp, blockMaxPos: blockMaxPos, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, decision: decision, rpo: rpo, cfg: cfg, desc: desc, events: events)
 
 	return decision
 end 'pickBeladySpills'
@@ -815,7 +973,7 @@ end 'pickBeladySpills'
 // slot in `liveSet` (or -1 when not live) for O(1) swap-remove on exit; it is
 // allocated once for the whole class pass and only the entries this block
 // touched are reset between blocks.
-function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCallee RegInt, blockMaxPos RegIntArray, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo, desc TargetRegAlloc)
+function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCallee RegInt, blockMaxPos RegIntArray, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo, desc TargetRegAlloc, events BlockIntervalEvents)
 	let numBlockSlots = blockMaxPos.count()
 	let numRanges = ranges.count()
 	let regOrdCap = maxPoolOrdinalFor(regClass, desc: desc) + 1
@@ -842,45 +1000,15 @@ function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCalle
 			continue
 		end 'notInFunc'
 
-		// Per-position enter/exit event buckets for this block. Positions run
-		// 1..maxPos; endPos can be maxPos+1, so we size to maxPos+2 to give that
-		// exit a landing slot (it falls past the swept range and never fires,
-		// matching the old code where such ranges stay live through maxPos).
-		var entersAt = RegIntArrayArray.create()
-		var exitsAt = RegIntArrayArray.create()
-		var ei = 0
-		while ei <= maxPos + 1 'initEvents'
-			entersAt.push(RegIntArray.create())
-			exitsAt.push(RegIntArray.create())
-			ei = ei + 1
-		end 'initEvents'
-
-		// Collect this block's interval events. Empty intervals (startPos ==
-		// endPos) are never live under rangeLiveAt, so they contribute nothing.
-		var ri = 0
-		while ri < numRanges 'eachRange'
-			let range = try ranges.get(ri) otherwise panic("pickForClass: ri < numRanges but ranges.get({ri}) failed")
-			for iv in range.intervals 'eachInterval'
-				if iv.blockId != b 'otherBlock'
-					continue
-				end 'otherBlock'
-				if iv.startPos >= iv.endPos 'emptyInterval'
-					continue
-				end 'emptyInterval'
-				if iv.startPos < 0 or iv.startPos > maxPos + 1 'badStart'
-					continue
-				end 'badStart'
-				var endIdx = iv.endPos
-				if endIdx > maxPos + 1 'clampEnd'
-					endIdx = maxPos + 1
-				end 'clampEnd'
-				var enterBucket = try entersAt.get(iv.startPos) otherwise panic("invariant: entersAt sized to maxPos+2 but get({iv.startPos}) failed")
-				enterBucket.push(ri)
-				var exitBucket = try exitsAt.get(endIdx) otherwise panic("invariant: exitsAt sized to maxPos+2 but get({endIdx}) failed")
-				exitBucket.push(ri)
-			end 'eachInterval'
-			ri = ri + 1
-		end 'eachRange'
+		// Per-position enter/exit event buckets, filled from the block's
+		// precomputed event slice (O(block events), not the old O(numRanges)
+		// per-block scan). Positions run 1..maxPos; endPos can be maxPos+1, so
+		// the arrays are sized to maxPos+2 to give that exit a landing slot (it
+		// falls past the swept range and never fires, matching the old code
+		// where such ranges stay live through maxPos).
+		let buckets = buildPositionEventBuckets(events, blockId: b, maxPos: maxPos)
+		let entersAt = buckets.enters
+		let exitsAt = buckets.exits
 
 		// Sweep positions, maintaining the live set. `liveSet` holds the range
 		// indices live at the current position; `liveSlot[idx]` is its slot.
