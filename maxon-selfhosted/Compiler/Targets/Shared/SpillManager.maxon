@@ -12,6 +12,20 @@ let SPILL_SLOT_SIZE = 8
 
 export type SpillDecision
 	export var spilledRanges as LiveRangeArray
+	// Cross-call ranges Belady's callee-saved relief selected to be SPLIT around
+	// their crossing call rather than spilled. Spilling a call-crossing value
+	// does NOT relieve callee-saved pressure — its reload must still occupy a
+	// callee-saved register at the far-side use, so the reload re-crosses the
+	// same call as an infinite-weight range; a cluster of such reloads is the
+	// unresolvable-reload panic. Splitting around the call (keep only the short
+	// post-call piece live across it, spillable to memory) is the only transform
+	// that drops callee-saved demand. Belady records these here INSTEAD of
+	// spilledRanges (so it mints no reload) and hands off; the actual split is
+	// performed by the reactive spill loop (runSpillColorLoop), whose
+	// trySplitAtCall has a callee-saved-aware pressure gate. Never fed to
+	// insertSpillCode — runBeladyPressureReduction reads it only for its
+	// hand-off diagnostic.
+	export var splitRanges as LiveRangeArray
 	export var nonSpilledRanges as LiveRangeArray
 	export var spillSlotAssignment as RegIntArray
 	export var totalSpillSize as RegInt
@@ -39,6 +53,7 @@ export type SpillDecision
 	export static function create() returns SpillDecision
 		return Self{
 			spilledRanges: LiveRangeArray.create(),
+			splitRanges: LiveRangeArray.create(),
 			nonSpilledRanges: LiveRangeArray.create(),
 			spillSlotAssignment: RegIntArray.create(),
 			totalSpillSize: 0,

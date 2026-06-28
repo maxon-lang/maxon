@@ -150,7 +150,7 @@ function poolSizeFor(range LiveRange, gprPoolSize RegInt, fpPoolSize RegInt) ret
 	end 'rc'
 end 'poolSizeFor'
 
-export function trySplitAtCall(range LiveRange, func IrFunction, module TargetModule, regTarget RegAllocTarget, callPositionsPerBlock RegIntArrayArray, stageByValueId RegIntArray, nextId SplitNextId, pressure LivePressureMap, gprPoolSize RegInt, fpPoolSize RegInt) returns bool
+export function trySplitAtCall(range LiveRange, func IrFunction, module TargetModule, regTarget RegAllocTarget, callPositionsPerBlock RegIntArrayArray, stageByValueId RegIntArray, nextId SplitNextId, pressure LivePressureMap, gprPoolSize RegInt, fpPoolSize RegInt, gprCalleeSize RegInt, fpCalleeSize RegInt) returns bool
 	// Gates 1-3 (stage, fixed-reg, infinite-weight): shared with trySplitAtUse.
 	if rejectByCommonGates(range) 'rejected'
 		return false
@@ -247,10 +247,28 @@ export function trySplitAtCall(range LiveRange, func IrFunction, module TargetMo
 	// suffer pressure at the call, multiplying the spiller's working set
 	// without making coloring progress. pool_size - 2 matches LLVM
 	// Greedy's threshold and the use-point splitter's setting.
+	//
+	// Two sub-pool tests, ORed: a call-crossing value over-subscribes whichever
+	// sub-pool binds first. The colorer partitions the pool — a crossesCall value
+	// can ONLY take a callee-saved register at the call — so a crowd of call-
+	// crossing values that exceeds the (small) CALLEE-saved sub-pool is
+	// uncolorable even when TOTAL live count sits below the whole-pool threshold.
+	// That callee-saved over-subscription was the unresolvable-reload panic: many
+	// cross-call values, each spilled instead of split, produced infinite-weight
+	// reloads re-crossing the same call. Splitting the value around the call lets
+	// the colorer keep only the short post-call piece live across it (or spill
+	// just that piece to memory), which is the transform that actually relieves
+	// callee-saved demand. So fire the split when EITHER total pressure exceeds
+	// poolSize-2 OR (the range crosses a call and) callee pressure exceeds the
+	// callee-saved sub-pool size.
 	let poolSize = poolSizeFor(range, gprPoolSize: gprPoolSize, fpPoolSize: fpPoolSize)
+	let calleeSize = poolSizeFor(range, gprPoolSize: gprCalleeSize, fpPoolSize: fpCalleeSize)
 	let liveCount = pressure.countAt(targetBlockId, pos: chosenCallPos)
-	if liveCount < poolSize - 2 'lowPressure'
-		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} low pressure ({liveCount} < {poolSize - 2}) at call pos {chosenCallPos}")
+	let calleeCount = pressure.countCalleeAt(targetBlockId, pos: chosenCallPos)
+	let totalOverPressure = liveCount >= poolSize - 2
+	let calleeOverPressure = range.crossesCall and calleeCount > calleeSize
+	if not totalOverPressure and not calleeOverPressure 'lowPressure'
+		logTrace(LogCategory.ir, message: function() gives "regalloc.split: reject v{range.valueId} low pressure (total {liveCount} < {poolSize - 2}, callee {calleeCount} <= {calleeSize}) at call pos {chosenCallPos}")
 		return false
 	end 'lowPressure'
 
@@ -384,8 +402,16 @@ end 'trySplitAtUse'
 // `pressure[base.get(blockId) + pos]` is the live count at (blockId, pos);
 // positions outside any block's swept range read 0 via `countAt`'s bounds check.
 export type LivePressureMap
-	// Flat per-block pressure, sliced by `base[blockId] .. base[blockId+1]`.
+	// Flat per-block pressure (TOTAL live virtuals), sliced by
+	// `base[blockId] .. base[blockId+1]`.
 	export var pressure as RegIntArray
+	// Flat per-block CALLEE-saved pressure: counts only crossesCall ranges, the
+	// values the colorer can place ONLY in callee-saved registers. Same flat
+	// layout / base / width as `pressure`. Used by the call-splitter's
+	// eligibility gate so it fires on callee-saved over-subscription (a crowd of
+	// call-crossing values exceeding the small callee-saved sub-pool) even when
+	// TOTAL pressure sits below the whole-pool threshold.
+	export var calleePressure as RegIntArray
 	// base[blockId] is the flat-array offset of (blockId, pos=0). Sized to
 	// maxBlockId + 2 so base[blockId+1] is always readable as the slice end.
 	export var base as RegIntArray
@@ -442,12 +468,17 @@ export type LivePressureMap
 		end 'initBase'
 		base.push(total)
 
-		// Delta array over the flat space: +1 at each interval start, -1 at its
+		// Delta arrays over the flat space: +1 at each interval start, -1 at its
 		// end. A per-block prefix sweep then turns the deltas into live counts.
+		// `pressure` counts every non-fixed range; `calleePressure` counts only
+		// crossesCall ranges (callee-saved-only values). Both share the same flat
+		// layout so a single sweep finalizes each.
 		var pressure = RegIntArray.create()
+		var calleePressure = RegIntArray.create()
 		var pi = 0
 		while pi < total 'initPressure'
 			pressure.push(0)
+			calleePressure.push(0)
 			pi = pi + 1
 		end 'initPressure'
 
@@ -461,6 +492,10 @@ export type LivePressureMap
 				let endIdx = blockBase + iv.endPos
 				let prevStart = try pressure.get(startIdx) otherwise panic("LivePressureMap.build: pressure.get({startIdx}) start OOB")
 				try pressure.set(startIdx, value: prevStart + 1) otherwise panic("LivePressureMap.build: pressure.set start OOB")
+				if r.crossesCall 'calleeStart'
+					let prevCalleeStart = try calleePressure.get(startIdx) otherwise panic("LivePressureMap.build: calleePressure.get({startIdx}) start OOB")
+					try calleePressure.set(startIdx, value: prevCalleeStart + 1) otherwise panic("LivePressureMap.build: calleePressure.set start OOB")
+				end 'calleeStart'
 				// endPos can equal width (the slice end) — that delta lands on
 				// base[b]+width[b] == base[b+1], the next block's slot 0. Skip it
 				// when it would cross into the next block's slice (endPos == width)
@@ -469,28 +504,37 @@ export type LivePressureMap
 				if iv.endPos < blockWidth 'endInBlock'
 					let prevEnd = try pressure.get(endIdx) otherwise panic("LivePressureMap.build: pressure.get({endIdx}) end OOB")
 					try pressure.set(endIdx, value: prevEnd - 1) otherwise panic("LivePressureMap.build: pressure.set end OOB")
+					if r.crossesCall 'calleeEnd'
+						let prevCalleeEnd = try calleePressure.get(endIdx) otherwise panic("LivePressureMap.build: calleePressure.get({endIdx}) end OOB")
+						try calleePressure.set(endIdx, value: prevCalleeEnd - 1) otherwise panic("LivePressureMap.build: calleePressure.set end OOB")
+					end 'calleeEnd'
 				end 'endInBlock'
 			end 'eachIv3'
 		end 'scanDeltas'
 
-		// Per-block prefix sum: convert deltas to live counts in place.
+		// Per-block prefix sum: convert deltas to live counts in place, for both
+		// the total and callee-saved arrays.
 		var b = 0
 		while b <= maxBlockId 'sweepBlocks'
 			let blockBase = try base.get(b) otherwise panic("LivePressureMap.build: base.get({b}) OOB during sweep")
 			let w = try width.get(b) otherwise panic("LivePressureMap.build: width.get({b}) OOB during sweep")
 			var running = 0
+			var calleeRunning = 0
 			var p = 0
 			while p < w 'sweepPos'
 				let idx = blockBase + p
 				let delta = try pressure.get(idx) otherwise panic("LivePressureMap.build: pressure.get({idx}) OOB during sweep")
 				running = running + delta
 				try pressure.set(idx, value: running) otherwise panic("LivePressureMap.build: pressure.set OOB during sweep")
+				let calleeDelta = try calleePressure.get(idx) otherwise panic("LivePressureMap.build: calleePressure.get({idx}) OOB during sweep")
+				calleeRunning = calleeRunning + calleeDelta
+				try calleePressure.set(idx, value: calleeRunning) otherwise panic("LivePressureMap.build: calleePressure.set OOB during sweep")
 				p = p + 1
 			end 'sweepPos'
 			b = b + 1
 		end 'sweepBlocks'
 
-		return Self{pressure: pressure, base: base, width: width}
+		return Self{pressure: pressure, calleePressure: calleePressure, base: base, width: width}
 	end 'build'
 
 	// Live-range count at (blockId, pos), O(1). Returns 0 for any (block, pos)
@@ -506,6 +550,20 @@ export type LivePressureMap
 		let blockBase = try base.get(blockId) otherwise panic("LivePressureMap.countAt: base.get({blockId}) OOB")
 		return try pressure.get(blockBase + pos) otherwise panic("LivePressureMap.countAt: pressure.get OOB")
 	end 'countAt'
+
+	// Callee-saved (crossesCall) live-range count at (blockId, pos), O(1).
+	// Same bounds convention as countAt.
+	export function countCalleeAt(blockId BlockId, pos RegInt) returns RegInt
+		if blockId < 0 or blockId >= width.count() 'noBlock'
+			return 0
+		end 'noBlock'
+		let w = try width.get(blockId) otherwise panic("LivePressureMap.countCalleeAt: width.get({blockId}) OOB")
+		if pos < 0 or pos >= w 'noPos'
+			return 0
+		end 'noPos'
+		let blockBase = try base.get(blockId) otherwise panic("LivePressureMap.countCalleeAt: base.get({blockId}) OOB")
+		return try calleePressure.get(blockBase + pos) otherwise panic("LivePressureMap.countCalleeAt: calleePressure.get OOB")
+	end 'countCalleeAt'
 end 'LivePressureMap'
 
 // Shared MIR-surgery core used by both trySplitAtCall and

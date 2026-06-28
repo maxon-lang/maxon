@@ -850,7 +850,7 @@ type FunctionRegAllocator
 		let kCalleeFp = calleeSavedSizeFor(RegClass.fp, desc: state.desc)
 
 		// Sum of how far each sub-pool demand exceeds its budget: the quantity
-		// each round must strictly shrink, or further rounds cannot help.
+		// each spill round must strictly shrink, or further rounds cannot help.
 		var prevOverBudget = i64.max
 		var round = 0
 
@@ -870,22 +870,32 @@ type FunctionRegAllocator
 				break
 			end 'withinBudget'
 
-			// Convergence guard: if a previous round's spills did not strictly
-			// reduce the over-budget magnitude, further Belady rounds won't help
-			// (reloads re-pressurized at other points). Hand off to the reactive
-			// loop rather than spin.
+			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, desc: state.desc)
+
+			// Total-pressure relief by spilling. Convergence guard: if a prior
+			// spill round did not strictly reduce the over-budget magnitude, further
+			// spill rounds won't help (reloads re-pressurized at other points). Hand
+			// off to the reactive loop rather than spin.
 			if round > 0 and overBudget >= prevOverBudget 'noImprovement'
 				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no improvement at round={round} overBudget={overBudget} — handing off to reactive loop")
 				break
 			end 'noImprovement'
 
-			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, desc: state.desc)
-
 			if spillDec.spilledRanges.count() == 0 'noCandidate'
-				// Architecture-limited point: every over-pressured clique is
-				// fixed / unspillable / block-arg. The reactive loop (and its
-				// recolor backstop) handle it.
-				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no spillable candidate at round={round} overBudget={overBudget} — handing off to reactive loop")
+				// Nothing spillable remains for TOTAL relief. The over-budget here
+				// is callee-saved over-subscription (spillDec.splitRanges holds the
+				// call-crossing values Belady would relieve) and/or fixed / block-arg
+				// excess. Belady deliberately does NOT spill call-crossing values for
+				// callee relief: spilling one cannot drop callee-saved demand (its
+				// infinite-weight reload still must occupy a callee-saved register at
+				// the far-side use and re-crosses the same call), and a cluster of
+				// such reloads is exactly what made coloring unresolvable. The only
+				// transform that relieves callee demand is splitting the value around
+				// the call so just the short post-call piece needs a register across
+				// it — which only pays off AFTER coloring assigns/spills that piece.
+				// That belongs to the reactive loop (runSpillColorLoop), whose
+				// trySplitAtCall + eviction-recolor backstop resolves it. Hand off.
+				logTrace(LogCategory.ir, message: function() gives "belady: func={state.funcName} no spillable candidate at round={round} overBudget={overBudget} splitCandidates={spillDec.splitRanges.count()} — handing off to reactive loop")
 				break
 			end 'noCandidate'
 
@@ -1097,7 +1107,7 @@ type FunctionRegAllocator
 					afterCallSplit.push(ur)
 					continue
 				end 'skip'
-				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtCall(ur, func: func, module: module, regTarget: regTarget, callPositionsPerBlock: callPositions, stageByValueId: stageByValueId, nextId: nextId, pressure: livePressure, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize) 'splitOk'
+				if ur.spillWeight != SPILL_WEIGHT_INFINITE and trySplitAtCall(ur, func: func, module: module, regTarget: regTarget, callPositionsPerBlock: callPositions, stageByValueId: stageByValueId, nextId: nextId, pressure: livePressure, gprPoolSize: desc.gprPoolSize, fpPoolSize: desc.fpPoolSize, gprCalleeSize: calleeSavedSizeFor(RegClass.gpr, desc: desc), fpCalleeSize: calleeSavedSizeFor(RegClass.fp, desc: desc)) 'splitOk'
 					anySplit = true
 				end 'splitOk' else 'noSplit'
 					afterCallSplit.push(ur)

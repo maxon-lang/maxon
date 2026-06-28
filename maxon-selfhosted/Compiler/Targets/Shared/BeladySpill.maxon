@@ -1103,18 +1103,33 @@ end 'applyEnters'
 // read in O(1) from `tracker` (kept in sync by the sweep); each committed spill
 // updates the tracker via markChosen so the loop sees demand shrink.
 function relievePressureAt(ranges LiveRangeArray, liveSet RegIntArray, regClass RegClass, blockId BlockId, pos RegInt, k RegInt, kCallee RegInt, tracker DemandTracker, blockArgPlumbing BoolArray, nextUse NextUseMap, chosen BoolArray, blockMaxPos RegIntArray, decision SpillDecision, rpo RpoInfo, cfg CfgInfo)
-	// (a) Callee-saved relief: spill call-crossing values until the callee-saved
-	// demand fits. A crossesCall value is callee-saved-only everywhere it lives.
-	while tracker.callee() > kCallee 'spillForCallee'
+	// (a) Callee-saved relief: do NOT spill call-crossing values — queue them
+	// for splitting instead. A crossesCall value is callee-saved-only everywhere
+	// it lives, so the only transform that relieves callee pressure is live-range
+	// splitting around the call (store the short post-call piece to memory, keep
+	// it out of a callee-saved register across the call) — NOT spilling the whole
+	// value. Spilling a call-crossing value is counterproductive: its infinite-
+	// weight reload still has to occupy a callee-saved register at the far-side
+	// use, re-crossing the same call, so a cluster of such reloads exceeds the
+	// callee-saved pool and reaches coloring unresolvable (the panic this fix
+	// removes). commitSplit records the value in decision.splitRanges (NOT
+	// spilledRanges, so no reload cluster is created) and marks it `chosen` so
+	// the sweep's demand tracker drops it — modeling the relieved post-split
+	// state. The splitting itself is performed by the reactive spill loop
+	// (runSpillColorLoop), whose trySplitAtCall has a callee-saved-aware
+	// pressure gate and an eviction-recolor backstop. runBeladyPressureReduction
+	// detects pure callee over-subscription (nothing spillable for TOTAL relief)
+	// and hands off to that loop.
+	while tracker.callee() > kCallee 'splitForCallee'
 		let picked = selectFarthest(ranges, liveSet: liveSet, regClass: regClass, blockId: blockId, pos: pos, calleeOnly: true, blockArgPlumbing: blockArgPlumbing, nextUse: nextUse, chosen: chosen, blockMaxPos: blockMaxPos, rpo: rpo, cfg: cfg)
 		if not picked.found 'noCandidate'
 			// Remaining callee excess is callee-pinned fixed / unspillable /
 			// block-arg — architecture-limited; the reactive loop handles it.
 			break
 		end 'noCandidate'
-		commitSpill(decision, range: picked.range, chosen: chosen)
+		commitSplit(decision, range: picked.range, chosen: chosen)
 		tracker.markChosen(picked.range)
-	end 'spillForCallee'
+	end 'splitForCallee'
 
 	// (b) Total relief: spill any spillable virtual until total distinct-register
 	// demand fits the whole pool.
@@ -1185,3 +1200,17 @@ function commitSpill(decision SpillDecision, range LiveRange, chosen BoolArray)
 	decision.spilledRanges.push(range)
 	logTrace(LogCategory.ir, message: function() gives "belady: spill v={range.valueId} class={range.regClass.name} weight={range.spillWeight} crossesCall={range.crossesCall}")
 end 'commitSpill'
+
+// Mark `range` chosen and queue it for SPLITTING around its crossing call
+// (see relievePressureAt phase (a)). Unlike commitSpill this does NOT add the
+// range to spilledRanges, so Belady creates no reload for it — the reactive
+// spill loop performs the call-boundary split later (its trySplitAtCall ends
+// the value's interval before the call so it no longer consumes a callee-saved
+// register across it). Marking chosen here keeps the sweep's demand tracker
+// consistent with the post-split state. splitRanges is consumed only for the
+// hand-off diagnostic in runBeladyPressureReduction.
+function commitSplit(decision SpillDecision, range LiveRange, chosen BoolArray)
+	try chosen.set(range.valueId, value: true) otherwise panic("invariant: commitSplit chosen.set OOB; sized to maxVid+1")
+	decision.splitRanges.push(range)
+	logTrace(LogCategory.ir, message: function() gives "belady: split-at-call v={range.valueId} class={range.regClass.name} weight={range.spillWeight} crossesCall={range.crossesCall}")
+end 'commitSplit'
