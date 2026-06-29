@@ -22,6 +22,7 @@ public class MachOWriter {
   private const uint LC_MAIN = 0x80000028;
   private const uint LC_LOAD_DYLIB = 0x0C;
   private const uint LC_LOAD_DYLINKER = 0x0E;
+  private const uint LC_UUID = 0x1B;
   private const uint LC_BUILD_VERSION = 0x32;
   private const uint LC_DYLD_CHAINED_FIXUPS = 0x80000034;
   private const uint LC_DYLD_EXPORTS_TRIE = 0x80000033;
@@ -354,6 +355,15 @@ public class MachOWriter {
     writer.Write(mainCmdSize);
     writer.Write(entryOff);
     writer.Write(0UL);
+
+    // === LC_UUID ===
+    // dyld on macOS 26+ rejects an executable that has no LC_UUID ("missing LC_UUID
+    // load command"). Derive a deterministic 16-byte UUID from the (already
+    // fixup-resolved) code bytes so repeated builds of the same input stay
+    // binary-identical, while distinct binaries get distinct UUIDs.
+    writer.Write(LC_UUID);
+    writer.Write(24u);
+    writer.Write(SHA256.HashData(code)[..16]);
 
     // === LC_LOAD_DYLIB ===
     writer.Write(LC_LOAD_DYLIB);

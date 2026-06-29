@@ -35,6 +35,9 @@ public record MachOLayout {
     var symtabCmdSize = 24u;
     var dysymtabCmdSize = 80u;
     var mainCmdSize = 24u;
+    // LC_UUID: 8-byte header + 16-byte uuid. Required by dyld on macOS 26+ — a
+    // binary without it fails to load ("missing LC_UUID load command").
+    var uuidCmdSize = 24u;
     var buildVersionCmdSize = 24u;
     var codeSignatureCmdSize = 16u;
     var chainedFixupsCmdSize = hasImports ? 16u : 0u;
@@ -47,11 +50,12 @@ public record MachOLayout {
 
     var loadCommandsSize = segmentCmdBaseSize + textCmdSize + dataCmdSize + segmentCmdBaseSize +
       symtabCmdSize + dysymtabCmdSize + mainCmdSize + dylibCmdSize + buildVersionCmdSize +
-      dylinkerCmdSize + codeSignatureCmdSize + chainedFixupsCmdSize + exportTrieCmdSize;
+      dylinkerCmdSize + codeSignatureCmdSize + chainedFixupsCmdSize + exportTrieCmdSize + uuidCmdSize;
     var headerSize = 32u;
 
     var numCmds = 9u; // __PAGEZERO, __TEXT, LC_MAIN, LC_LOAD_DYLIB, LC_BUILD_VERSION, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB, LC_LOAD_DYLINKER
     numCmds++; // LC_CODE_SIGNATURE
+    numCmds++; // LC_UUID
     if (hasData) numCmds++;
     if (hasImports) numCmds += 2;
 

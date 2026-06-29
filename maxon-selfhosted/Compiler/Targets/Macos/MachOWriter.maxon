@@ -24,6 +24,7 @@ let LC_CODE_SIGNATURE = 0x1D
 let LC_MAIN = 0x80000028
 let LC_LOAD_DYLIB = 0x0C
 let LC_LOAD_DYLINKER = 0x0E
+let LC_UUID = 0x1B
 let LC_BUILD_VERSION = 0x32
 let LC_DYLD_CHAINED_FIXUPS = 0x80000034
 let LC_DYLD_EXPORTS_TRIE = 0x80000033
@@ -646,6 +647,16 @@ end 'buildMachoDataPageStarts'
 
 // --- Main Mach-O writer ---
 
+// One 32-bit FNV-1a stream over `code` from `seed`. Four distinct seeds compose the
+// 128-bit LC_UUID. Uses the same fnvUpdate the stdlib cache uses (StdlibCache.maxon).
+function machoUuidStream(code ByteArray, seed CacheChecksum) returns CacheChecksum
+	var h = seed
+	for b in code 'eachByte'
+		h = fnvUpdate(h, b: b)
+	end 'eachByte'
+	return h
+end 'machoUuidStream'
+
 export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
 	logInfo(LogCategory.binary, message: function() gives "Writing Mach-O file: {outputPath} ({targetToString(target)})")
 
@@ -687,8 +698,11 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// dylib: "/usr/lib/libSystem.B.dylib" = 25 chars + null = 26, cmd = 24 + 26 = 50, aligned to 8 = 56
 	let dylibCmdSize = 56
 
-	let loadCommandsSize = segCmdBase + textCmdSize + dataCmdSize + segCmdBase + symtabCmdSize + dysymtabCmdSize + dylinkerCmdSize + mainCmdSize + dylibCmdSize + buildVersionCmdSize + chainedFixupsCmdSize + exportTrieCmdSize + codeSignatureCmdSize
-	let numCmds = 13
+	// LC_UUID: 8-byte header + 16-byte uuid. dyld on macOS 26+ rejects an executable
+	// that lacks it ("missing LC_UUID load command").
+	let uuidCmdSize = 24
+	let loadCommandsSize = segCmdBase + textCmdSize + dataCmdSize + segCmdBase + symtabCmdSize + dysymtabCmdSize + dylinkerCmdSize + mainCmdSize + dylibCmdSize + buildVersionCmdSize + chainedFixupsCmdSize + exportTrieCmdSize + codeSignatureCmdSize + uuidCmdSize
+	let numCmds = 14
 	let headerSize = 32
 
 	let textSectionOffset = alignUp(headerSize + loadCommandsSize, alignment: 4)
@@ -896,6 +910,17 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: mainCmdSize)
 	writeQword(macho, value: entryOff)
 	writeQword(macho, value: 0)  // stacksize
+
+	// === LC_UUID ===
+	// Required by dyld on macOS 26+. A deterministic 128-bit value from four FNV-1a
+	// streams over the code bytes (distinct seeds) — deterministic so repeated builds
+	// of identical input stay binary-identical, distinct binaries get distinct UUIDs.
+	writeDword(macho, value: LC_UUID)
+	writeDword(macho, value: uuidCmdSize)
+	writeDword(macho, value: machoUuidStream(code, seed: FNV_OFFSET_BASIS))
+	writeDword(macho, value: machoUuidStream(code, seed: 0x01000193))
+	writeDword(macho, value: machoUuidStream(code, seed: 0x9E3779B1))
+	writeDword(macho, value: machoUuidStream(code, seed: 0x85EBCA77))
 
 	// === LC_LOAD_DYLIB ===
 	writeDword(macho, value: LC_LOAD_DYLIB)
