@@ -111,6 +111,27 @@ export type IrBlock
 		}
 	end 'create'
 
+	// Deep-clone a block: a fresh IrBlock with independent copies of opRefs,
+	// terminator, blockArgs, and branchEdges. The op indices in opRefs/terminator
+	// are copied by value (the underlying module ops are immutable and shared by
+	// index), so the clone references the same pristine ops while owning its own
+	// lists. Used by the register allocator's spill-everywhere fallback to snapshot
+	// a function's pre-regalloc MIR so a failed SSA-coloring attempt can be undone
+	// (register allocation only appends new ops and rewrites block.opRefs in place;
+	// restoring the cloned block contents recovers the original MIR exactly).
+	export static function clone(src IrBlock) returns IrBlock
+		var dst = Self.create(src.id, label: src.label)
+		dst.opRefs = src.opRefs.clone()
+		dst.terminator = src.terminator
+		for arg in src.blockArgs 'eachArg'
+			dst.blockArgs.push(IrBlockArg.cloneOf(arg))
+		end 'eachArg'
+		for edge in src.branchEdges 'eachEdge'
+			dst.branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
+		end 'eachEdge'
+		return dst
+	end 'clone'
+
 	// True when the block has a real terminator op (returns / branches).
 	// Dead and fallthrough blocks return false — they have no op to
 	// reference even though they are effectively terminated.

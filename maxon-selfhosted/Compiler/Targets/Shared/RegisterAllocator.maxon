@@ -648,9 +648,118 @@ end 'ssaGetEntryBlockId'
 // ============================================================
 
 function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery, fastRegalloc bool)
+	// Snapshot the function's PRISTINE pre-regalloc MIR before attempt 1: the
+	// SSA-coloring path mutates blocks in place (insertSpillCode rewrites
+	// block.opRefs and bumps func.spillSize/stackSize) before it can report
+	// failure, so the clone must be taken up front. The clone is O(blocks +
+	// op-refs) per function — cheap next to the allocation itself. This is the
+	// guaranteed-progress safety net: if the SSA path can't allocate the
+	// function, we rewind to here and retry in spill-everywhere mode.
+	let snapshot = MirSnapshot.capture(module, func: srcFunc)
+
+	// Attempt 1: normal SSA-coloring allocation.
 	var allocator = FunctionRegAllocator.create(srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery, fastRegalloc: fastRegalloc)
-	allocator.run()
+	let ok = allocator.run()
+	if ok 'attempt1Ok'
+		return
+	end 'attempt1Ok'
+
+	// Attempt 1 failed without applying a partial coloring. Restore the pristine
+	// MIR, then retry in spill-everywhere mode — which spills every spillable
+	// value so per-point register demand is trivially within budget and coloring
+	// cannot fail to converge.
+	logDebug(LogCategory.ir, message: function() gives "regalloc: func={srcFunc.name} falling back to spill-everywhere")
+	snapshot.restore(module, func: srcFunc)
+
+	var fallback = FunctionRegAllocator.create(srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery, fastRegalloc: fastRegalloc, spillEverywhere: true)
+	let fallbackOk = fallback.run()
+	if not fallbackOk 'fallbackFailed'
+		// Even spilling everything could not allocate this function — a genuine
+		// architecture limit (e.g. more concurrent fixed-reg constraints at one
+		// point than the pool has registers, which no spilling can relieve).
+		// Fire the rich diagnostic. Find a still-uncolored use to name in it.
+		panicSpillEverywhereFailed(module, func: srcFunc, fallback: fallback, regTarget: regTarget)
+	end 'fallbackFailed'
 end 'allocateRegistersForFunc'
+
+// Snapshot of a single function's pre-regalloc MIR, sufficient to rewind every
+// mutation register allocation makes to that function. The register allocator
+// only APPENDS new ops to module.x64Ops/arm64Ops and new trampoline blocks to
+// module.blocks (it never mutates an existing op in place — see
+// X64/Arm64 emit helpers, which always push then reference the new index), so
+// the pristine MIR is fully captured by:
+//   * a deep clone of every IrBlock the function references (its opRefs list,
+//     terminator, blockArgs, branchEdges — the op indices they hold point at
+//     immutable, shared ops), and
+//   * the function fields regalloc writes: blockRefs (destroySSA appends
+//     trampoline refs), nextBlockId (destroySSA), spillSize and stackSize
+//     (insertSpillCode).
+// `restore` overwrites each original block slot in module.blocks with its
+// pristine clone and rewinds the function fields. Ops/blocks appended by the
+// failed attempt become unreferenced garbage — harmless, since this function is
+// allocated before any later function appends, so the stale tail is never read.
+type MirSnapshot
+	export var blockRefs as BlockRefList
+	export var blocks as IrBlockArray
+	export var nextBlockId as BlockId
+	export var spillSize as RegInt
+	export var stackSize as RegInt
+
+	export static function capture(module TargetModule, func IrFunction) returns MirSnapshot
+		var clonedRefs = BlockRefList.create()
+		var clonedBlocks = IrBlockArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			clonedRefs.append(blockRef)
+			clonedBlocks.push(IrBlock.clone(block))
+		end 'eachBlock'
+		return Self{blockRefs: clonedRefs, blocks: clonedBlocks, nextBlockId: func.nextBlockId, spillSize: func.spillSize, stackSize: func.stackSize}
+	end 'capture'
+
+	export function restore(module TargetModule, func IrFunction)
+		// Overwrite each pristine block slot with a FRESH clone of the snapshot
+		// (cloning again so a second attempt's mutations don't alias the
+		// snapshot's blocks, keeping the snapshot reusable / immutable).
+		var i = 0
+		let n = self.blockRefs.count()
+		while i < n 'eachBlock'
+			let blockRef = try self.blockRefs.get(i) otherwise panic("invariant: i < blockRefs.count() by guard")
+			let pristine = try self.blocks.get(i) otherwise panic("invariant: blocks parallel to blockRefs")
+			try module.blocks.set(blockRef, value: IrBlock.clone(pristine)) otherwise panic("invariant: snapshot blockRef must index module.blocks")
+			i = i + 1
+		end 'eachBlock'
+
+		// Rewind the function fields the failed attempt may have written. Replace
+		// blockRefs with a fresh copy of the pristine list (dropping any
+		// trampoline refs the failed attempt appended).
+		var restoredRefs = BlockRefList.create()
+		for r in self.blockRefs 'copyRefs'
+			restoredRefs.append(r)
+		end 'copyRefs'
+		func.blockRefs = restoredRefs
+		func.nextBlockId = self.nextBlockId
+		func.spillSize = self.spillSize
+		func.stackSize = self.stackSize
+	end 'restore'
+end 'MirSnapshot'
+
+// Fire the genuine architecture-limit panic after even the spill-everywhere
+// fallback could not allocate the function. Names a still-uncolored operand
+// use (the value the colorLookup would have failed on) and, when that value
+// has a live range, the rich `panicUnresolvableReload` diagnostic (block,
+// position, competing live set). Reaching here means the demand at some
+// program point structurally exceeds the pool and no spilling can relieve it.
+function panicSpillEverywhereFailed(module TargetModule, func IrFunction, fallback FunctionRegAllocator, regTarget RegAllocTarget)
+	let badUse = firstUncoloredUse(module, func: func, coloring: fallback.coloring, regTarget: regTarget)
+	// If the failing value has a live range, emit the position-and-live-set
+	// diagnostic. A used-but-no-range value (no def recorded) has no range to
+	// describe — fall through to the structural message below.
+	let badRange = findRangeByVid(fallback.ranges, valueId: badUse)
+	if badRange.valueId == badUse and badUse >= 0 'hasRange'
+		panicUnresolvableReload(fallback.ranges, ur: badRange, funcName: func.name, iteration: -1)
+	end 'hasRange'
+	panic("regalloc: cannot allocate registers for function `{func.name}` even after spilling every spillable value (first uncolored use: v{badUse}, unresolvableReload={fallback.unresolvableReload}). The register demand at some program point structurally exceeds the register pool and no spilling can relieve it — likely more concurrent fixed-register constraints (call-convention pins, clobbers) at one point than the pool has registers, or a used-but-no-range vreg the def-scanner never recorded. Reduce simultaneous fixed-register pressure at the failure site (e.g. fewer call arguments live at once, or split the function).")
+end 'panicSpillEverywhereFailed'
 
 // Per-function register allocator.
 //
@@ -673,6 +782,21 @@ type FunctionRegAllocator
 	// expensive quality machinery that dominates compile time. Default false
 	// (today's exact behavior).
 	export var fastRegalloc as bool
+	// Robustness-fallback mode. When true, `run()` replaces the Belady/MIN
+	// pre-pass with `runSpillEverywhere()` — a guaranteed-progress pass that
+	// stack-spills EVERY spillable value so no value is held across more than
+	// one op, making per-point register demand trivially within budget. This is
+	// attempt 2 of allocateRegistersForFunc: it runs only after the normal SSA
+	// path (attempt 1) returned false and the function's pristine MIR was
+	// restored. Default false (the normal allocation path).
+	export var spillEverywhere as bool
+	// Set true by `runSpillColorLoop` when it hits a reload it cannot place (the
+	// former `panicUnresolvableReload` site). Instead of panicking, the loop
+	// records the failure and exits; `run()` reads this and returns false so
+	// allocateRegistersForFunc can fall back to spill-everywhere. The genuine
+	// architecture-limit panic now lives in allocateRegistersForFunc, fired only
+	// when even attempt 2 fails.
+	export var unresolvableReload as bool
 
 	// --- Phase 0: CFG analysis outputs ---
 	export var cfg as CfgInfo
@@ -738,7 +862,7 @@ type FunctionRegAllocator
 	// runSpillColorLoop's former local so Belady can seed it.
 	export var spillBaseOffset as RegInt
 
-	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery, fastRegalloc bool) returns FunctionRegAllocator
+	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery, fastRegalloc bool, spillEverywhere bool = false) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
 		// by run(); they exist only so the type can be constructed up front.
 		return Self{
@@ -748,6 +872,8 @@ type FunctionRegAllocator
 			regTarget: regTarget,
 			opQuery: opQuery,
 			fastRegalloc: fastRegalloc,
+			spillEverywhere: spillEverywhere,
+			unresolvableReload: false,
 			cfg: createCfgInfo(0),
 			rpo: RpoInfo.create(BlockIdArray.create(), index: ValueIdArray.create()),
 			domInfo: DomInfo.create(ValueIdArray.create()),
@@ -1190,11 +1316,16 @@ type FunctionRegAllocator
 					end 'isSubRange'
 
 					// A reload vreg that can't be colored is the genuine
-					// "register pressure unresolvable" case. Future phases
-					// (memory-operand folding, eviction, last-chance
-					// recoloring) will rescue this; until then it's a hard
-					// stop with the richest diagnostic we can produce.
-					panicUnresolvableReload(ranges, ur: ur, funcName: state.funcName, iteration: iteration)
+					// "register pressure unresolvable" case for THIS attempt.
+					// Rather than panic, record the failure and unwind: the
+					// caller (allocateRegistersForFunc) restores the pristine
+					// MIR and retries in spill-everywhere mode. Only if that
+					// fallback ALSO fails does a panic fire (see
+					// allocateRegistersForFunc), so this is no longer a hard
+					// stop on the normal path.
+					logTrace(LogCategory.ir, message: function() gives "regalloc: unresolvable reload v{ur.valueId} in {state.funcName} (iteration={iteration}) — failing attempt for fallback")
+					self.unresolvableReload = true
+					break
 				end 'cannotRespill'
 
 				// Rematerializable ranges (constants) "spill" by re-emitting
@@ -1220,6 +1351,14 @@ type FunctionRegAllocator
 				logTrace(LogCategory.ir, message: function() gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
 				spillDec.spilledRanges.push(ur)
 			end 'pass2'
+
+			// An unresolvable reload was hit this iteration: abandon the loop
+			// without applying a partial spill decision. `run()` reads
+			// `unresolvableReload` and returns false so the caller falls back
+			// to spill-everywhere mode.
+			if self.unresolvableReload 'failedAttempt'
+				break
+			end 'failedAttempt'
 
 			if spillDec.spilledRanges.count() == 0 and spillDec.rematerializeIds.count() == 0 'nothingToSpill'
 				// findUncoloredRanges reported uncolored ranges, neither
@@ -1253,32 +1392,174 @@ type FunctionRegAllocator
 		logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 	end 'runSpillColorLoop'
 
-	export function run()
+	// Allocate registers for the function. Returns true when allocation
+	// succeeded (coloring applied, SSA destroyed). Returns false WITHOUT
+	// mutating the function past coloring (no applyColoring / destroySSA) when
+	// the SSA-coloring path cannot allocate it — the caller
+	// (allocateRegistersForFunc) then restores the pristine MIR and retries in
+	// spill-everywhere mode. Three failure modes route here as a `false` return
+	// rather than a panic:
+	//   1. An unresolvable reload in runSpillColorLoop (self.unresolvableReload).
+	//   2. Non-convergence — the spill loop exits with ranges still uncolored.
+	//   3. A vreg that applyColoring would look up but that has no coloring
+	//      assignment (including a used-but-no-range vreg with no def recorded).
+	// Modes 2 and 3 are both caught by the pre-applyColoring `firstUncoloredUse`
+	// scan over the function's actual operand uses+defs.
+	export function run() returns bool
 		// Phase 0: CFG analysis
 		self.runCfgAnalysis()
 
 		// Phases 1-3: liveness, live ranges, coalescing
 		self.runLivenessAndRanges()
 
-		// Phase 3.5: pre-coloring Belady/MIN pressure reduction. Spills the
-		// farthest-next-use values at every over-pressured point so MaxLive <= k
-		// per class. On the chordal SSA interference graph this makes the
-		// subsequent first-fit coloring provably succeed, so the eviction /
-		// last-chance-recolor path (the self-compile wall) never fires.
-		self.runBeladyPressureReduction()
+		if self.spillEverywhere 'fallbackMode'
+			// Robustness fallback: stack-spill every spillable value so no value
+			// is held across more than one op. Per-point demand is then trivially
+			// within budget and coloring succeeds. Replaces the Belady pre-pass.
+			self.runSpillEverywhere()
+		end 'fallbackMode' else 'normalMode'
+			// Phase 3.5: pre-coloring Belady/MIN pressure reduction. Spills the
+			// farthest-next-use values at every over-pressured point so
+			// MaxLive <= k per class. On the chordal SSA interference graph this
+			// makes the subsequent first-fit coloring provably succeed, so the
+			// eviction / last-chance-recolor path (the self-compile wall) never
+			// fires.
+			self.runBeladyPressureReduction()
+		end 'normalMode'
 
 		// Phase 4-5: spill/color loop (now a rare backstop for architecture-
 		// limited points Belady cannot relieve).
 		self.runColoring()
 		self.runSpillColorLoop()
 
+		// Failure mode 1: the spill loop hit a reload it could not place. Bail
+		// for the spill-everywhere fallback without applying a partial coloring.
+		if self.unresolvableReload 'reloadFailed'
+			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} attempt failed (unresolvable reload) — needs fallback")
+			return false
+		end 'reloadFailed'
+
+		// Failure modes 2 and 3: scan the function's REAL operand uses+defs for
+		// any vreg that applyColoring will look up but that has no coloring
+		// assignment. This catches both a range left uncolored by a
+		// non-converged spill loop AND a used-but-no-range vreg (no def
+		// recorded, so no LiveRange and thus no assignment — the colorLookup
+		// panic class). Either way, fall back rather than panic in applyColoring.
+		let uncoloredUse = firstUncoloredUse(module, func: func, coloring: coloring, regTarget: regTarget)
+		if uncoloredUse >= 0 'uncoloredFailed'
+			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} attempt failed (vreg v{uncoloredUse} has no coloring assignment) — needs fallback")
+			return false
+		end 'uncoloredFailed'
+
 		// Phase 6: Apply coloring (virtual -> physical)
 		applyColoring(module, func: func, coloring: coloring, ranges: ranges, state: state, regTarget: regTarget)
 
 		// Phase 7: Destroy SSA (parallel copies at CFG edges)
 		destroySSA(module, func: func, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
+		return true
 	end 'run'
+
+	// Robustness-fallback pre-coloring phase: build a SpillDecision that spills
+	// EVERY spillable value in the function (isSpillCandidate true), then run the
+	// exact store-after-def / load-before-use bookkeeping the Belady and reactive
+	// paths use. After this, the only values live at any program point are the
+	// short one-op reload vregs insertSpillCode mints (block-args / phi plumbing
+	// / fixed pseudo-ranges are excluded by isSpillCandidate), so per-point
+	// register demand is tiny and the subsequent coloring is trivial. Guarantees
+	// progress and termination — the spill loop finds nothing to do.
+	function runSpillEverywhere()
+		let blockArgPlumbing = buildBlockArgPlumbingSet(module, func: func)
+		// `chosen` tracks values already pushed this pass so a value with
+		// duplicate range entries is not spilled twice. isSpillCandidate reads
+		// it as a BoolArray (false = not yet chosen).
+		var chosen = BoolArray.create()
+
+		var spillDec = SpillDecision.create()
+		for range in ranges 'eachRange'
+			let isGpr = isSpillCandidate(range, regClass: RegClass.gpr, blockArgPlumbing: blockArgPlumbing, chosen: chosen)
+			let isFp = isSpillCandidate(range, regClass: RegClass.fp, blockArgPlumbing: blockArgPlumbing, chosen: chosen)
+			if isGpr or isFp 'spillIt'
+				markChosenSpill(chosen, valueId: range.valueId)
+				spillDec.spilledRanges.push(range)
+			end 'spillIt'
+		end 'eachRange'
+
+		logTrace(LogCategory.ir, message: function() gives "spill-everywhere: func={state.funcName} spilling {spillDec.spilledRanges.count()} of {ranges.count()} ranges")
+
+		if spillDec.spilledRanges.count() == 0 'nothingSpillable'
+			// No spillable value at all — the function is already within budget
+			// (or pressure is entirely fixed/block-arg). Coloring proceeds on the
+			// ranges as built; the spill loop / pre-applyColoring scan still gate
+			// the outcome.
+			return
+		end 'nothingSpillable'
+
+		self.spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: self.spillBaseOffset)
+		insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: state.desc)
+
+		// Identical reload/remat bookkeeping to the Belady and reactive paths so
+		// the freshly-minted reload vregs get SPILL_WEIGHT_INFINITE on rebuild.
+		unionReloadIds(reloadIds, source: spillDec.reloadIds)
+		unionReloadIds(rematerializeIds, source: spillDec.rematerializeIds)
+		unionRematValues(rematerializeValueByValueId, source: spillDec.rematerializeValue, ids: spillDec.rematerializeIds)
+
+		self.runLivenessAndRanges()
+	end 'runSpillEverywhere'
 end 'FunctionRegAllocator'
+
+// Mark `valueId` as chosen-to-spill in the BoolArray runSpillEverywhere passes
+// to isSpillCandidate. Grows the array on demand (absent slots default false).
+function markChosenSpill(chosen BoolArray, valueId ValueId)
+	while chosen.count() <= valueId 'grow'
+		chosen.push(false)
+	end 'grow'
+	try chosen.set(valueId, value: true) otherwise panic("invariant: markChosenSpill.set OOB after grow")
+end 'markChosenSpill'
+
+// Scan the function's REAL operand uses and defs (via the target's
+// countOpReads / noteOpDefs scanners — the same ones that drive substituteOp's
+// coloring lookups in applyColoring) for the first virtual valueId that has no
+// coloring assignment. Returns that valueId, or -1 if every used/defined vreg
+// is colored. This is what makes the colorLookup panic class (a vreg with no
+// LiveRange — used-but-no-def — or a range the spill loop left uncolored) a
+// clean `false` return from run() instead of an applyColoring panic. Walks both
+// the regular ops and the terminator of every block, matching applyColoring's
+// substitution surface exactly.
+function firstUncoloredUse(module TargetModule, func IrFunction, coloring ColoringResult, regTarget RegAllocTarget) returns RegInt
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for packed in block.opRefs 'eachOp'
+			let bad = firstUncoloredOperand(module, packed: packed, coloring: coloring, regTarget: regTarget)
+			if bad >= 0 'badOp'
+				return bad
+			end 'badOp'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let bad = firstUncoloredOperand(module, packed: block.terminatorIndex(), coloring: coloring, regTarget: regTarget)
+			if bad >= 0 'badTerm'
+				return bad
+			end 'badTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+	return -1
+end 'firstUncoloredUse'
+
+// Gather one op's read and def vregs, returning the first whose coloring
+// assignment is RM_NONE (or -1 if all are colored). Negative ids (physical
+// registers) are dropped by collectRead/collectDef, so only real virtuals are
+// checked — exactly the set applyColoring's substituteOp resolves.
+function firstUncoloredOperand(module TargetModule, packed OpIndex, coloring ColoringResult, regTarget RegAllocTarget) returns RegInt
+	let operands = RegIntArray.create()
+	regTarget.countOpReads(module, reads: operands, packed: packed)
+	regTarget.noteOpDefs(module, defs: operands, packed: packed)
+	for id in operands 'eachId'
+		let assigned = getOr(coloring.assignment, index: id, fallback: RM_NONE)
+		if assigned == RM_NONE 'uncolored'
+			return id
+		end 'uncolored'
+	end 'eachId'
+	return -1
+end 'firstUncoloredOperand'
 
 // If `subRangeValueId` matches one of the anchor sub-ranges minted by the
 // LiveRangeSplitter, return the parent merge's valueId. Otherwise -1.

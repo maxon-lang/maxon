@@ -441,11 +441,38 @@ provably terminating:
 - `MAX_CASCADE = 8` caps eviction depth.
 - Last-chance recoloring depth cap of 3.
 
-If all backstops fail, `panicUnresolvableReload` emits a structured
-diagnostic naming the failing vreg, function, block, position, and
-the full live set with each interferer's spill weight. This signals
-a true structural impossibility (e.g. more concurrent fixed-reg
-constraints than the pool size) rather than an allocator bug.
+## Robustness Fallback (spill-everywhere)
+
+`FunctionRegAllocator.run()` returns `bool`: `true` on success, `false`
+when the SSA-coloring path cannot allocate the function. Three failure
+modes route to a clean `false` (no panic, no partial coloring applied):
+
+1. An unresolvable reload in `runSpillColorLoop` (`self.unresolvableReload`).
+2. Non-convergence — the spill loop exits with ranges still uncolored.
+3. A vreg that `applyColoring` would look up but that has no coloring
+   assignment, including a *used-but-no-range* vreg (no def recorded).
+   Modes 2 and 3 are caught by `firstUncoloredUse`, a pre-`applyColoring`
+   scan over the function's real operand uses+defs (via the target's
+   `countOpReads`/`noteOpDefs`, the same scanners `substituteOp` drives).
+
+`allocateRegistersForFunc` snapshots the function's pristine pre-regalloc
+MIR (`MirSnapshot.capture` — a deep clone of every block plus the func
+fields regalloc writes), runs attempt 1 normally, and on `false` restores
+the snapshot and retries in **spill-everywhere** mode. That mode replaces
+the Belady pre-pass with `runSpillEverywhere`, which stack-spills every
+`isSpillCandidate` value so no value is held across more than one op —
+per-point register demand becomes trivially within budget and coloring
+cannot fail to converge. It reuses the same `insertSpillCode` /
+`runLivenessAndRanges` / `runColoring` / `runSpillColorLoop` machinery, so
+it always terminates and the allocator never crashes on a function the SSA
+path can't handle.
+
+Only if **attempt 2 also** returns `false` does `panicSpillEverywhereFailed`
+fire (reusing `panicUnresolvableReload`'s structured diagnostic — failing
+vreg, function, block, position, full live set). That signals a true
+structural impossibility (e.g. more concurrent fixed-reg constraints than
+the pool size, or a used-but-no-range vreg the def-scanner never recorded)
+rather than an allocator bug.
 
 ## File Map
 
