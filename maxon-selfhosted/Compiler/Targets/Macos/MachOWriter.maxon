@@ -115,9 +115,12 @@ export let MACHO_IMPORT_SLOT_FCNTL = 34
 
 // Tier-4 multi-M (GMP) scheduler runtime (Arm64MacosGreenThread.maxon multi-M port):
 // a pthread worker pool, each OS thread's ProcContext* held in a pthread TLS key,
-// dispatch semaphores for worker park/wake, sysconf for the CPU count, kqueue/kevent
-// for multi-M I/O completion, and sigaction/sigaltstack for the per-thread CPU-fault
-// handler. All resolve in libSystem (libpthread + libdispatch are part of it).
+// sysconf for the CPU count, kqueue/kevent for multi-M I/O completion, and
+// sigaction/sigaltstack for the per-thread CPU-fault handler. The dispatch_semaphore
+// slots 40..43 below are LEGACY (no longer called): worker park/wake moved to the
+// pthread mutex+cond wake lock block at slots 48..54 (see there) to avoid the
+// dispatch_semaphore UE-wedge on kill. They stay bound for slot-numbering stability.
+// All resolve in libSystem (libpthread + libdispatch are part of it).
 export let MACHO_IMPORT_SLOT_PTHREAD_CREATE = 35
 export let MACHO_IMPORT_SLOT_PTHREAD_KEY_CREATE = 36
 export let MACHO_IMPORT_SLOT_PTHREAD_SETSPECIFIC = 37
@@ -132,9 +135,25 @@ export let MACHO_IMPORT_SLOT_KEVENT = 45
 export let MACHO_IMPORT_SLOT_SIGACTION = 46
 export let MACHO_IMPORT_SLOT_SIGALTSTACK = 47
 
+// slots 48..56: Go-style worker M park/wake via a pthread mutex+cond+count wake lock
+// block (replaces the libdispatch dispatch_semaphore at slots 40..43, which is
+// Mach-port-backed and not async-signal-safe — it wedged killed processes in macOS
+// 'UE' state). Plus sigprocmask + raise for the dieFromSignal SIGTERM/SIGINT handler
+// (async-signal-safe re-raise so a catchable kill terminates with the correct
+// disposition). All resolve in libSystem (libpthread is part of it).
+export let MACHO_IMPORT_SLOT_PTHREAD_MUTEX_INIT = 48
+export let MACHO_IMPORT_SLOT_PTHREAD_MUTEX_LOCK = 49
+export let MACHO_IMPORT_SLOT_PTHREAD_MUTEX_UNLOCK = 50
+export let MACHO_IMPORT_SLOT_PTHREAD_COND_INIT = 51
+export let MACHO_IMPORT_SLOT_PTHREAD_COND_WAIT = 52
+export let MACHO_IMPORT_SLOT_PTHREAD_COND_TIMEDWAIT_RELATIVE_NP = 53
+export let MACHO_IMPORT_SLOT_PTHREAD_COND_SIGNAL = 54
+export let MACHO_IMPORT_SLOT_SIGPROCMASK = 55
+export let MACHO_IMPORT_SLOT_RAISE = 56
+
 // usleep(microseconds) is already imported at slot 18 (MACHO_IMPORT_SLOT_USLEEP);
 // the wait-collect timeout poll loop reuses it for its inter-poll sleep.
-let MACHO_IMPORT_COUNT = 48
+let MACHO_IMPORT_COUNT = 57
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -206,8 +225,10 @@ function machoImportNames() returns StringArray
 	// slot 34: fcntl, for setting the streaming pipe read ends O_NONBLOCK.
 	names.push("_fcntl")
 	// slots 35..47: Tier-4 multi-M scheduler (pthread worker pool + a TLS key for
-	// the per-OS-thread P*, dispatch semaphores for park/wake, sysconf for the CPU
-	// count, kqueue/kevent for multi-M I/O, sigaction/sigaltstack for the fault handler).
+	// the per-OS-thread P*, sysconf for the CPU count, kqueue/kevent for multi-M I/O,
+	// sigaction/sigaltstack for the fault handler). The dispatch_semaphore_* +
+	// dispatch_time at slots 40..43 are legacy/unused (park/wake moved to the pthread
+	// wake lock block at slots 48..54) but stay bound for slot-numbering stability.
 	names.push("_pthread_create")
 	names.push("_pthread_key_create")
 	names.push("_pthread_setspecific")
@@ -221,6 +242,17 @@ function machoImportNames() returns StringArray
 	names.push("_kevent")
 	names.push("_sigaction")
 	names.push("_sigaltstack")
+	// slots 48..56: Go-style worker park/wake (pthread mutex+cond+count wake lock
+	// block) + the dieFromSignal SIGTERM/SIGINT handler's sigprocmask + raise.
+	names.push("_pthread_mutex_init")
+	names.push("_pthread_mutex_lock")
+	names.push("_pthread_mutex_unlock")
+	names.push("_pthread_cond_init")
+	names.push("_pthread_cond_wait")
+	names.push("_pthread_cond_timedwait_relative_np")
+	names.push("_pthread_cond_signal")
+	names.push("_sigprocmask")
+	names.push("_raise")
 	return names
 end 'machoImportNames'
 

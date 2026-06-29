@@ -125,8 +125,8 @@ let GtPOffLocalQueueLen = 0x10
 let GtPOffCurrentGt = 0x18  // currently-running GT on this processor
 let GtPOffId = 0x20  // processor id (worker #N; shard index for the slab mcache)
 let GtPOffRng = 0x28  // xorshift64 seed (work-steal fairness)
-let GtPOffIdleFlag = 0x30  // 1 = worker parked on its wake semaphore
-let GtPOffWakeSemaphore = 0x38  // dispatch_semaphore_t for park/wake (macOS; x64 uses an Event here)
+let GtPOffIdleFlag = 0x30  // 1 = worker parked on its wake lock block
+let GtPOffWakeSemaphore = 0x38  // ptr to the {mutex,cond,count} wake lock block (macOS; x64 uses an Event here)
 let GtPOffOsThreadHandle = 0x40  // pthread_t of this P's worker (8-byte opaque ptr)
 let GtPOffStatus = 0x48  // 0 = stopped, 1 = active
 let GtPOffPendingWaiter = 0x50  // GT to wake after a context switch (deferred)
@@ -137,6 +137,21 @@ let GtPOffSystemStackSP = 0x70  // top of the per-P scheduler/system stack (pari
 let GtPOffRemoteFreeHead = 0x78  // per-P remote-free MPSC head (Treiber stack; slab cross-P frees)
 let GtPOffMainThread = 0x80  // inline GT struct (the OS thread's own GT)
 let GtPStructSize = 0x158  // 0x80 + 0xD8
+
+// macOS wake lock block (Go semasleep/semawakeup primitive). On macOS the worker
+// park/wake uses a Go-style {pthread_mutex_t mutex; pthread_cond_t cond; long count}
+// block instead of a libdispatch dispatch_semaphore (Mach-port-backed and NOT
+// async-signal-safe — it wedged killed processes in the uninterruptible 'UE' state).
+// The block is mmap'd separately and a POINTER to it lives in the 8-byte
+// GtPOffWakeSemaphore slot, so the P struct layout is unchanged. Darwin arm64 sizes:
+// pthread_mutex_t = 64 bytes, pthread_cond_t = 48 bytes. `count` is the semaphore
+// counter, preserving the signal-before-wait (early-wakeup-not-lost) property the
+// counting dispatch_semaphore provided. Byte-identical to the C# GtLayout WakeLockBlk*.
+let GtWakeLockBlkOffMutex = 0x00  // pthread_mutex_t (64 bytes)
+let GtWakeLockBlkOffCond = 0x40  // pthread_cond_t (48 bytes)
+let GtWakeLockBlkOffCount = 0x70  // long semaphore count (0 = worker parked)
+let GtWakeLockBlkSize = 0x78  // 120 bytes; mmap rounds up to a page
+
 let GtPSystemStackSize = 0x10000  // 64 KB per-P system stack (parity with x64)
 let GtMaxFreeListLen = 64  // per-P GT-struct free-list cap; beyond this __gt_await __slab_frees
 
@@ -227,6 +242,19 @@ let FaultFpeIntDiv = 7  // SIGFPE si_code for integer divide-by-zero (FPE_INTDIV
 let FaultSigBus = 10
 let FaultSigSegv = 11
 let FaultSigFpe = 8
+
+// Terminating signals handled by the Go-style dieFromSignal thunk so the process
+// exits cleanly (correct WIFSIGNALED status) instead of wedging in macOS 'UE' state.
+let FaultSigTerm = 15
+let FaultSigInt = 2
+
+// sigprocmask(how) — Darwin: SIG_BLOCK=1, SIG_UNBLOCK=2, SIG_SETMASK=3.
+let FaultSigUnblock = 2
+
+// dieFromSignal sa_flags: SA_SIGINFO|SA_RESTART (NO SA_ONSTACK — these are
+// asynchronous signals, not stack-overflow faults, so the normal stack is fine and
+// there is no altstack dependency).
+let FaultDieSaFlags = FaultSaSigInfo or FaultSaRestart  // 0x42
 
 // sigaction / sigaltstack flags + struct field offsets (Darwin arm64).
 let FaultSaSigInfo = 0x40
@@ -913,6 +941,104 @@ function emitArm64GtInstallFaultHandler(code ByteArray, relocations RelocationAr
 end 'emitArm64GtInstallFaultHandler'
 
 // =============================================================================
+// __gt_die_from_signal_thunk(int sig=x0, siginfo_t* info=x1, void* uctx=x2): the
+// Go dieFromSignal handler for the asynchronous terminating signals SIGTERM(15) and
+// SIGINT(2). One thunk serves both — it reads the signal number from x0 (homed at
+// [x29+16] by the prologue). The body is strictly async-signal-safe (sigprocmask,
+// sigaction, raise only) — it must NOT touch the pthread wake primitive (could
+// self-deadlock if the interrupted M holds the wake mutex), the per-thread P, or the
+// mcontext. It unblocks the signal, resets it to SIG_DFL, then re-raises so the
+// kernel's default action (terminate) fires with the correct disposition, rather than
+// the process wedging in idle workers / munmap on kill. Mirrors the C#
+// EmitDieFromSignalThunk (ARM64CodeEmitter.Runtime.cs) and Go's runtime.dieFromSignal.
+//
+// Frame: sig/info/uctx homed at [x29+16/+24/+32] ; mask (4B) @ [x29+0x28] ; a zeroed
+// struct sigaction (sa_handler=SIG_DFL) @ [x29+0x30..].
+// =============================================================================
+function emitArm64GtDieFromSignalThunk(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_die_from_signal_thunk", offset: code.count())
+	let frameSize = 0x50
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)  // sig@[x29+16], info@[x29+24], uctx@[x29+32]
+
+	let maskSlot = 0x28  // sigset mask (32-bit word)
+	let actBase = 0x30  // struct sigaction (24 bytes: handler@0, tramp@8, mask@0x10, flags@0x14)
+
+	// mask = 1 << (sig - 1)  (Darwin sigset_t is a single 32-bit word).
+	arm64GtReloadArg(code, dest: 1, argIndex: 0)  // sig
+	arm64EmitSubImm(code, rd: 1, rn: 1, imm12: 1)  // sig - 1
+	arm64EmitMovImm(code, rd: 0, value: 1)
+	arm64EmitInsn(code, insn: 0x9AC02000 or (1 shl 16) or (0 shl 5) or 0)  // LSLV x0, x0, x1
+	arm64EmitStrWord(code, rt: 0, rn: GtRegX29, offset: maskSlot)  // mask (32-bit)
+
+	// sigprocmask(SIG_UNBLOCK, &mask, NULL) — make the signal deliverable.
+	arm64EmitMovImm(code, rd: 0, value: FaultSigUnblock)
+	arm64GtLeaFrame(code, rd: 1, disp: maskSlot)  // &mask
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGPROCMASK)
+
+	// Zero the struct sigaction at [x29+actBase] and set sa_handler = SIG_DFL (= 0).
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffTramp, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffMask, src: GtRegXzr)  // sa_mask + sa_flags (8B zero)
+
+	// sigaction(sig, &act, NULL) — reset to default disposition.
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // sig
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)  // &act
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	// raise(sig) — re-deliver; the kernel default action now terminates the process.
+	arm64GtReloadArg(code, dest: 0, argIndex: 0)  // sig
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_RAISE)
+
+	// Unreached (raise terminates), but unwind for well-formedness.
+	arm64GtEpilogue(code, frameSize: frameSize)
+end 'emitArm64GtDieFromSignalThunk'
+
+// =============================================================================
+// __gt_install_die_from_signal_handler(): install the dieFromSignal thunk for
+// SIGTERM(15) and SIGINT(2). Reuses the sigaction machinery of the fault-handler
+// install, but with SA_SIGINFO|SA_RESTART only (NO SA_ONSTACK — these are
+// asynchronous signals, not stack-overflow faults, so the normal stack is fine and
+// there is no altstack dependency). Process-global, so installing once on the main M
+// in __gt_init covers every M. Mirrors the C# EmitInstallDieFromSignalHandler.
+//
+// Frame: struct sigaction @ [x29+0x10..] (24 bytes).
+// =============================================================================
+function emitArm64GtInstallDieFromSignalHandler(code ByteArray, relocations RelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
+	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_install_die_from_signal_handler", offset: code.count())
+	let frameSize = 0x40
+	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
+
+	let actBase = 0x10  // struct sigaction local
+
+	// Zero the struct, set sa_handler = &thunk, sa_flags = SA_SIGINFO|SA_RESTART.
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffTramp, src: GtRegXzr)
+	arm64GtStore(code, disp: actBase + FaultSigactionOffMask, src: GtRegXzr)
+
+	arm64GtFuncAddr(code, adrFixups: adrFixups, dest: 9, name: "__gt_die_from_signal_thunk")
+	arm64GtStore(code, disp: actBase + FaultSigactionOffHandler, src: 9)
+
+	arm64EmitMovImm(code, rd: 9, value: FaultDieSaFlags)  // SA_SIGINFO|SA_RESTART (0x42), 32-bit field
+	arm64EmitStrWord(code, rt: 9, rn: GtRegX29, offset: actBase + FaultSigactionOffFlags)
+
+	// sigaction(sig, &act, NULL) for sig in {SIGTERM, SIGINT}. The struct lives on the
+	// x29 frame, so it survives each import's x0-x18 clobber.
+	arm64EmitMovImm(code, rd: 0, value: FaultSigTerm)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64EmitMovImm(code, rd: 0, value: FaultSigInt)
+	arm64GtLeaFrame(code, rd: 1, disp: actBase)
+	arm64EmitMovImm(code, rd: 2, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_SIGACTION)
+
+	arm64GtEpilogue(code, frameSize: frameSize)
+end 'emitArm64GtInstallDieFromSignalHandler'
+
+// =============================================================================
 // Top-level driver — emit every hand-rolled green-thread / sleep runtime
 // function. Called from concatArm64FunctionChunks under `if isMacosOs`, after the
 // stdlib link pass, so these labels override the runtime.std stubs.
@@ -940,6 +1066,11 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtFaultDiagnostic(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtFaultThunk(code, relocations: relocations, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtInstallFaultHandler(code, relocations: relocations, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	// Go dieFromSignal handler for SIGTERM/SIGINT so the process terminates cleanly on
+	// kill instead of wedging in macOS 'UE' state. Thunk first (its label is ADR'd by
+	// the install), then the install (BL'd from __gt_init's tail).
+	emitArm64GtDieFromSignalThunk(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
+	emitArm64GtInstallDieFromSignalHandler(code, relocations: relocations, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtInit(code, relocations: relocations, rdataRelocs: rdataRelocs, callFixups: callFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtSpawn(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, adrFixups: adrFixups, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTrampoline(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -1128,7 +1259,7 @@ end 'arm64GtDmbIsh'
 function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__sched_worker_loop", offset: code.count())
 	let frameSize = 0x40
-	var state = Arm64MacosGtState.create(6)
+	var state = Arm64MacosGtState.create(8)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 1)  // P homed at [x29+16]
 
 	let loopTop = 0
@@ -1137,6 +1268,8 @@ function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, c
 	let reallyPark = 3
 	let exitBlock = 4
 	let decActive = 5  // in-place active-worker decrement retry loop (exit teardown)
+	let semaCheck = 6  // arm64GtSemaSleep re-check-count loop head (park's semasleep)
+	let semaHave = 7  // arm64GtSemaSleep count>0 exit (park's semasleep)
 
 	let slotG = 0x18
 	let slotSs = 0x20  // per-thread sigaltstack stack_t local (24 bytes, fits 0x20..0x38)
@@ -1223,22 +1356,16 @@ function emitArm64SchedWorkerLoop(code ByteArray, relocations RelocationArray, c
 	arm64GtBranch(code, state: state, targetBlock: runGt)
 
 	// really_park: re-check shutdown (an enqueuer that set __sched_shutdown_flag
-	// before our idleFlag store would skip our semaphore signal), then block on the
-	// per-P wake semaphore with a 100 ms missed-wakeup safety-net timeout, then unmark
-	// idle and loop.
+	// before our idleFlag store would skip our semaphore signal), then park on the
+	// per-P wake lock block (Go semasleep) with a 100 ms missed-wakeup safety-net
+	// timeout — a timeout just loops back to re-check count. Load the block pointer
+	// from P->wakeSemaphore first; semasleep clobbers x0-x18, so re-read P after.
 	arm64GtMarkBlock(state, code: code, blockId: reallyPark)
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 9, name: "__sched_shutdown_flag")
 	arm64GtCbnz(code, state: state, rn: 9, targetBlock: exitBlock)
-	// timeout = dispatch_time(DISPATCH_TIME_NOW=0, 100ms = 100_000_000 ns).
-	arm64EmitMovImm(code, rd: 0, value: 0)
-	arm64EmitMovImm(code, rd: 1, value: 100000000)
-	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_TIME)  // x0 = token
-	// dispatch_semaphore_wait(P->wakeSemaphore, token). MOV x1=token BEFORE the sem
-	// load overwrites x0 (order matters — the C# reference notes this).
-	arm64EmitMovRegReg(code, rd: 1, rn: 0)  // x1 = timeout token
 	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
-	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtPOffWakeSemaphore)
-	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_WAIT)
+	arm64GtLoadField(code, dest: 9, baseReg: 9, disp: GtPOffWakeSemaphore)  // x9 = wake lock block
+	arm64GtSemaSleep(code, relocations: relocations, state: state, blkReg: 9, timed: true, checkBlock: semaCheck, haveBlock: semaHave)
 	// Unmark idle and loop.
 	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 9)  // re-read P
 	arm64GtStoreField(code, baseReg: 9, disp: GtPOffIdleFlag, src: GtRegXzr)
@@ -1616,11 +1743,12 @@ function emitArm64GtEnqueue(code ByteArray, relocations RelocationArray, callFix
 	// if P_i->idleFlag == 0 → not parked, advance.
 	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffIdleFlag)
 	arm64GtCbz(code, state: state, rn: 9, targetBlock: wakeNext)
-	// Parked worker: clear idleFlag, then WakeWorker(P_i) =
-	// dispatch_semaphore_signal(P_i->wakeSemaphore).
+	// Parked worker: clear idleFlag, then WakeWorker(P_i) = Go semawakeup on
+	// P_i->wakeSemaphore's lock block (mutex+cond+count). semawakeup clobbers
+	// x0-x18, but this is the last action before wakeDone (no live loop local held).
 	arm64GtStoreField(code, baseReg: 10, disp: GtPOffIdleFlag, src: GtRegXzr)
-	arm64GtLoadField(code, dest: 0, baseReg: 10, disp: GtPOffWakeSemaphore)
-	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_SIGNAL)
+	arm64GtLoadField(code, dest: 9, baseReg: 10, disp: GtPOffWakeSemaphore)
+	arm64GtSemaWakeup(code, relocations: relocations, blkReg: 9)
 	arm64GtBranch(code, state: state, targetBlock: wakeDone)
 
 	arm64GtMarkBlock(state, code: code, blockId: wakeNext)
@@ -1948,11 +2076,11 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)  // i + 1
 	arm64GtStoreField(code, baseReg: 9, disp: GtPOffRng, src: 0)
 
-	// P[i].wakeSemaphore = dispatch_semaphore_create(0): a worker starts parked, so the
-	// initial count is 0. The import clobbers x0-x18 → reload P[i] from its frame slot.
-	arm64EmitMovImm(code, rd: 0, value: 0)
-	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_DISPATCH_SEMAPHORE_CREATE)
-	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i] (clobbered by the import)
+	// P[i].wakeSemaphore = wake lock block {mutex,cond,count} (Go semasleep/semawakeup,
+	// replacing dispatch_semaphore_create(0)). count starts 0 (parked). The mmap + init
+	// calls clobber x0-x18 → reload P[i] from its frame slot.
+	arm64GtCreateWakeLockBlock(code, relocations: relocations)  // x0 = block ptr
+	arm64GtLoad(code, dest: 9, disp: slotPi)  // P[i] (clobbered by the calls)
 	arm64GtStoreField(code, baseReg: 9, disp: GtPOffWakeSemaphore, src: 0)
 
 	// i++ ; loop.
@@ -2010,10 +2138,17 @@ function emitArm64GtInit(code ByteArray, relocations RelocationArray, rdataReloc
 	arm64GtMmapAnonReg(code, relocations: relocations)
 	arm64GtStoreGlobal(code, rdataRelocs: rdataRelocs, src: 0, name: "__io_kevent_bufs_base", scratch: 9)
 
-	// Arm the CPU-fault handler (sigaction + main-thread sigaltstack). Runs once here
-	// on the main M before any worker spawns, mirroring the x64 install at the tail of
-	// emitX64GtInit. Worker Ms install their own sigaltstack at __sched_worker_loop entry.
+	// Arm the CPU-fault handler (sigaction + main-thread sigaltstack) and the
+	// dieFromSignal SIGTERM/SIGINT handler. BOTH run once here on the main M BEFORE any
+	// worker M spawns (workers are pthread_create'd lazily by __gt_enqueue's spawn-scan,
+	// which only fires after __gt_init returns) — so a fault or a catchable kill on any
+	// worker is CAUGHT, not silent. The fault handler mirrors the x64 install at the
+	// tail of emitX64GtInit; the dieFromSignal install replaces the dispatch_semaphore
+	// UE-wedge with Go's clean re-raise teardown. Worker Ms install their own sigaltstack
+	// at __sched_worker_loop entry (sigaction/the dieFromSignal disposition are
+	// process-global, so installing once here covers every M).
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_install_fault_handler")
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_install_die_from_signal_handler")
 
 	arm64GtMarkBlock(state, code: code, blockId: doneBlock)
 	arm64GtEpilogue(code, frameSize: frameSize)
@@ -2041,6 +2176,146 @@ function arm64GtMmapAnon(code ByteArray, relocations RelocationArray, length Mac
 	arm64EmitMovImm(code, rd: 1, value: length)
 	arm64GtMmapAnonReg(code, relocations: relocations)
 end 'arm64GtMmapAnon'
+
+// =============================================================================
+// macOS wake lock block (Go semasleep/semawakeup, replaces dispatch_semaphore).
+// Each parked worker P owns a {pthread_mutex_t, pthread_cond_t, long count} block,
+// mmap'd here and pointed to from the 8-byte wake slot. dispatch_semaphore is
+// Mach-port-backed and not async-signal-safe, which wedged processes in macOS 'UE'
+// state on kill; a pthread mutex+cond mirrors Go's os_darwin.go and parks/wakes
+// cleanly. These three helpers mirror the C# EmitCreateWakeLockBlock / EmitSemaSleep
+// / EmitSemaWakeup byte-for-byte. They are INLINED into their callers (not standalone
+// functions), so each carves its own SP scratch ([SP+...]) and homes the block
+// pointer across the pthread calls (which clobber x0..x18); the caller must reload P
+// afterwards. The SP carve sits below x29, so it never disturbs the caller's
+// x29-relative frame slots.
+// =============================================================================
+
+// Allocate and initialise a wake lock block; the block pointer is returned in x0.
+// mmap zero-fills the page (count starts 0 = parked), then pthread_mutex_init and
+// pthread_cond_init run with NULL attrs (the default initialisers match
+// PTHREAD_MUTEX_INITIALIZER / PTHREAD_COND_INITIALIZER). Carves 0x10 SP scratch to
+// home the block pointer across the two init calls.
+function arm64GtCreateWakeLockBlock(code ByteArray, relocations RelocationArray)
+	arm64EmitSubImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x10)
+
+	arm64GtMmapAnon(code, relocations: relocations, length: GtWakeLockBlkSize)
+	arm64EmitStrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x00)  // home block ptr
+
+	// pthread_mutex_init(&blk->mutex, NULL)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: GtWakeLockBlkOffMutex)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_MUTEX_INIT)
+
+	// pthread_cond_init(&blk->cond, NULL)
+	arm64EmitLdrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x00)  // reload blk
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: GtWakeLockBlkOffCond)
+	arm64EmitMovImm(code, rd: 1, value: 0)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_COND_INIT)
+
+	// Return block ptr in x0.
+	arm64EmitLdrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x00)
+	arm64EmitAddImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x10)
+end 'arm64GtCreateWakeLockBlock'
+
+// Go semasleep: park on the wake lock block in `blkReg` until count>0.
+//   pthread_mutex_lock(&blk->mutex);
+//   while (count == 0) { timed ? cond_timedwait_relative_np(&cond,&mutex,&ts{0,100ms})
+//                              : cond_wait(&cond,&mutex); }
+//   count--; pthread_mutex_unlock(&blk->mutex);
+// The while-loop re-checks count (cond can wake spuriously, unlike dispatch_semaphore);
+// the counting `count` field preserves the signal-before-wait property. When timed, a
+// 100ms timeout just loops back to re-check (the missed-wakeup safety net the old
+// dispatch_time(NOW,100ms) park provided). Carves 0x20 SP scratch: [SP+0]=blk pointer
+// homed across calls, [SP+0x10..+0x18]=relative timespec {0,100000000}. Clobbers
+// x0..x18 and the scratch; the caller must reload P afterwards. checkBlock/haveBlock
+// are caller-allocated block ids in `state` for the re-check loop labels.
+function arm64GtSemaSleep(code ByteArray, relocations RelocationArray, state Arm64MacosGtState, blkReg MachineWord, timed bool, checkBlock BlockId, haveBlock BlockId)
+	arm64EmitSubImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x20)
+	if blkReg != 0 'mov'
+		arm64EmitMovRegReg(code, rd: 0, rn: blkReg)
+	end 'mov'
+	arm64EmitStrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x00)  // home blk
+
+	// pthread_mutex_lock(&blk->mutex)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: GtWakeLockBlkOffMutex)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_MUTEX_LOCK)
+
+	arm64GtMarkBlock(state, code: code, blockId: checkBlock)
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtWakeLockBlkOffCount)  // count
+	arm64GtCbnz(code, state: state, rn: 0, targetBlock: haveBlock)
+
+	if timed 'wait'
+		// Build relative timespec {tv_sec=0, tv_nsec=100_000_000} on the frame.
+		arm64EmitMovImm(code, rd: 0, value: 0)
+		arm64EmitStrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x10)
+		arm64EmitMovImm(code, rd: 0, value: 100000000)
+		arm64EmitStrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x18)
+		// pthread_cond_timedwait_relative_np(&blk->cond, &blk->mutex, &ts)
+		arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+		arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtWakeLockBlkOffCond)
+		arm64EmitAddImm(code, rd: 1, rn: 9, imm12: GtWakeLockBlkOffMutex)
+		arm64EmitAddImm(code, rd: 2, rn: GtRegSp, imm12: 0x10)
+		arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_COND_TIMEDWAIT_RELATIVE_NP)
+	end 'wait' else 'forever'
+		// pthread_cond_wait(&blk->cond, &blk->mutex)
+		arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+		arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtWakeLockBlkOffCond)
+		arm64EmitAddImm(code, rd: 1, rn: 9, imm12: GtWakeLockBlkOffMutex)
+		arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_COND_WAIT)
+	end 'forever'
+	arm64GtBranch(code, state: state, targetBlock: checkBlock)  // re-check count (timeout or spurious wakeup)
+
+	arm64GtMarkBlock(state, code: code, blockId: haveBlock)
+	// count--
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtWakeLockBlkOffCount)
+	arm64EmitSubImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtWakeLockBlkOffCount, src: 0)
+
+	// pthread_mutex_unlock(&blk->mutex)
+	arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtWakeLockBlkOffMutex)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_MUTEX_UNLOCK)
+
+	arm64EmitAddImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x20)
+end 'arm64GtSemaSleep'
+
+// Go semawakeup: wake a parker on the wake lock block in `blkReg`.
+//   pthread_mutex_lock(&blk->mutex); count++; pthread_cond_signal(&blk->cond);
+//   pthread_mutex_unlock(&blk->mutex);
+// count++ before the signal preserves the dispatch_semaphore early-signal-not-lost
+// property: a wake delivered before the parker reaches its while(count==0) test is
+// seen (the parker returns immediately). Carves 0x10 SP scratch to home the block
+// pointer across the calls. Clobbers x0..x18 and the scratch. No internal branches.
+function arm64GtSemaWakeup(code ByteArray, relocations RelocationArray, blkReg MachineWord)
+	arm64EmitSubImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x10)
+	if blkReg != 0 'mov'
+		arm64EmitMovRegReg(code, rd: 0, rn: blkReg)
+	end 'mov'
+	arm64EmitStrRegOffset(code, rt: 0, baseReg: GtRegSp, offset: 0x00)  // home blk
+
+	// pthread_mutex_lock(&blk->mutex)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: GtWakeLockBlkOffMutex)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_MUTEX_LOCK)
+
+	// count++
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+	arm64GtLoadField(code, dest: 0, baseReg: 9, disp: GtWakeLockBlkOffCount)
+	arm64EmitAddImm(code, rd: 0, rn: 0, imm12: 1)
+	arm64GtStoreField(code, baseReg: 9, disp: GtWakeLockBlkOffCount, src: 0)
+
+	// pthread_cond_signal(&blk->cond)
+	arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtWakeLockBlkOffCond)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_COND_SIGNAL)
+
+	// pthread_mutex_unlock(&blk->mutex)
+	arm64EmitLdrRegOffset(code, rt: 9, baseReg: GtRegSp, offset: 0x00)  // blk
+	arm64EmitAddImm(code, rd: 0, rn: 9, imm12: GtWakeLockBlkOffMutex)
+	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_PTHREAD_MUTEX_UNLOCK)
+
+	arm64EmitAddImm(code, rd: GtRegSp, rn: GtRegSp, imm12: 0x10)
+end 'arm64GtSemaWakeup'
 
 // =============================================================================
 // __gt_spawn(func_ptr=x0, arg_count=x1, arg_buf=x2) -> x0 (the promise = GT ptr).
