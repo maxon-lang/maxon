@@ -2562,6 +2562,43 @@ typealias InterfaceWitnessValueIdMap = Map with (ValueId, ValueId)
 // builtin-lowering recover the literal bytes for label-shaped arguments.
 typealias StringLiteralProvenanceMap = Map with (ValueId, StringId)
 
+// Deferred struct-backed-enum `.rawValue` projection record. When EVERY use
+// of a `.rawValue` result is a scalar-leaf field read, the backing struct is
+// NOT materialized (no `__mm_alloc` + per-field select-chains over every
+// case — the large cross-alloc value cluster that stalls the register
+// allocator). Instead each `.rawValue.field` read emits only that one field's
+// select-chain. This record carries what the projection needs: the enum's
+// name (to re-fetch its EnumType and walk cases/ordinals), the backing
+// struct's name (to resolve the projected field's declared type + leaf bits),
+// and the SSA ValueId of the receiver ordinal that drives the select chain.
+// Keyed by the `.rawValue` result name in `deferredStructRawValues`.
+type DeferredStructRawValue
+	export let enumName as String
+	export let backingStructName as String
+	export let ordinalId as ValueId
+
+	export static function create(enumName String, backingStructName String, ordinalId ValueId) returns DeferredStructRawValue
+		return Self{enumName: enumName, backingStructName: backingStructName, ordinalId: ordinalId}
+	end 'create'
+end 'DeferredStructRawValue'
+
+typealias DeferredStructRawValueMap = Map with (ByteArray, DeferredStructRawValue)
+
+// Outcome of classifying one op against a deferred `.rawValue` result in the
+// forward use-analysis (`allRawValueUsesProjectable`):
+//   - notAUse:        the op does not reference the result at all.
+//   - projectable:    the op is exactly `fieldLoad(_, <result>, F)` with F a
+//                     scalar leaf (integer / bool / enum) field — the only
+//                     shape the projection can synthesize directly.
+//   - nonProjectable: the op references the result in any other position (a
+//                     non-leaf field, a float leaf, an arg, a store, a return,
+//                     a match scrutinee, ...) — forces materialization.
+enum RawValueUseKind
+	notAUse
+	projectable
+	nonProjectable
+end 'RawValueUseKind'
+
 // Thrown by `resolveLabelToSlot` when a `name:` label doesn't bind to a
 // user-visible parameter slot — covers both the unknown-label case and the
 // resolves-to-hidden-prefix case (e.g. `__self`). Callers `if let` to take
@@ -2820,6 +2857,14 @@ type MaxonToStdLowering
 	// is a move (the producer's reference transfers, no incref). Reset per
 	// function in `lower()`. See `maxonTypeIsDropTracked`.
 	var aliasValues as BoolArray
+	// Per-function map from a deferred struct-backed-enum `.rawValue` result
+	// name to its projection record. Populated by `lowerFieldLoad`'s
+	// struct-backed `.rawValue` branch when `allRawValueUsesProjectable`
+	// confirms every use is a scalar-leaf field read, in which case the
+	// backing struct is NOT materialized; each later `.rawValue.field` read is
+	// projected to that one field's select-chain. Reset per function in
+	// `lower()`. See `DeferredStructRawValue`.
+	var deferredStructRawValues as DeferredStructRawValueMap
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -2855,7 +2900,8 @@ type MaxonToStdLowering
 			pendingEnumRawStringHelpers: EnumNameHelperSet.create(),
 			pendingFnRefThunks: EnumNameHelperSet.create(),
 			pendingFnRefThunkTargets: StringArray.create(),
-			aliasValues: BoolArray.create()
+			aliasValues: BoolArray.create(),
+			deferredStructRawValues: DeferredStructRawValueMap.create()
 		}
 	end 'create'
 
@@ -3301,6 +3347,10 @@ type MaxonToStdLowering
 			self.currentMaxonFunc = srcFunc
 			// Drop-tracking: clear the per-function alias flags (see aliasValues).
 			self.aliasValues = BoolArray.create()
+			// Clear the deferred struct-backed-enum `.rawValue` projection map so
+			// a previous function's deferred result names can't be misread as
+			// projections here (see deferredStructRawValues).
+			self.deferredStructRawValues = DeferredStructRawValueMap.create()
 			// C1.c: rebuild the interface-witness-slot side map for this
 			// function. Cheap walk over slotMaxonTypes; runs once per
 			// function and only pays for itself when the function actually
@@ -9730,6 +9780,16 @@ type MaxonToStdLowering
 	// the named field's offset, emit the indirect load. Records the field's
 	// declared type so chained field accesses keep resolving.
 	function lowerFieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, dstBlock IrBlock)
+		// Deferred struct-backed-enum `.rawValue` scalar projection: when a
+		// prior `.rawValue` whose every use is a scalar-leaf field read was
+		// recorded in `deferredStructRawValues` (rather than materializing its
+		// backing struct), emit ONLY this field's select-chain. `resolveName`
+		// on the receiver is intentionally skipped — the deferred `.rawValue`
+		// result was never bound to an SSA value.
+		if let deferred = try self.deferredStructRawValues.get(receiver) 'deferredRawValueProjection'
+			self.emitDeferredRawValueFieldProjection(result, deferred: deferred, fieldName: fieldName, dstBlock: dstBlock)
+			return
+		end 'deferredRawValueProjection'
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
@@ -9775,6 +9835,21 @@ type MaxonToStdLowering
 						// const-fold path handles only a const-case receiver;
 						// this covers a NON-constant receiver — a parameter, a
 						// method-call result, or a field.)
+						//
+						// Optimization: materializing the WHOLE backing struct
+						// (heap alloc + one select-chain per field over every
+						// case) just to read a single scalar field builds a large
+						// cross-`__mm_alloc` value cluster the register allocator
+						// struggles to place. When EVERY use of this `.rawValue`
+						// result is a scalar-leaf field read, DEFER: record the
+						// projection and emit nothing now; each `.rawValue.field`
+						// read then lowers to only that one field's select-chain
+						// (no alloc, no other-field work). Any non-projectable use
+						// falls through to the unchanged materialization below.
+						if self.allRawValueUsesProjectable(result, backingStructName: structBackingName) 'deferScalarProjection'
+							self.deferredStructRawValues.upsert(result, value: DeferredStructRawValue.create(enumType.name, backingStructName: structBackingName, ordinalId: receiverId))
+							return
+						end 'deferScalarProjection'
 						self.lowerStructBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, backingStructName: structBackingName, dstBlock: dstBlock)
 						return
 					end 'isStructBacked'
@@ -10461,32 +10536,147 @@ type MaxonToStdLowering
 				self.setValueType(increfRetId, t: MaxonType.integer)
 				continue
 			end 'nestedStruct'
-			// Leaf field: emit `sum += (ordinal == case_i.ordinal) * field_value_i`
-			// over every case (default 0). The select-chain result is the i64 bit
-			// pattern of the matching case's constant for this field; store it at
-			// the field's offset, narrowing to the field's width. A float field's
-			// constant already carries IEEE-754 bits, so the plain GP-width store
-			// is bit-correct (the matching float `.field` load reads the same
-			// bytes through the SSE path) — matching C#'s "store raw bits" shape.
+			// Leaf field: the select-chain result is the i64 bit pattern of the
+			// matching case's constant for this field; store it at the field's
+			// offset, narrowing to the field's width. A float field's constant
+			// already carries IEEE-754 bits, so the plain GP-width store is
+			// bit-correct (the matching float `.field` load reads the same bytes
+			// through the SSE path) — matching C#'s "store raw bits" shape.
 			let fieldStdType = maxonTypeToStdType(self.project, ref: field.fieldType)
 			let fieldWidth = storeWidthOfStdType(fieldStdType)
-			var runningSumId = self.emitConstI64(0, dstBlock: dstBlock)
-			for i in 0 upto enumType.cases.count() 'eachCase'
-				let c = try enumType.cases.get(i) otherwise panic("emitStructRawValueFields: cases.get OOB at {i}")
-				let fold = resolveStructBackingFieldChain(self.project, rootExprId: c.backingStructExprId, fieldChain: qualifiedChain)
-				if not fold.found 'foldFailed'
-					panic("emitStructRawValueFields: could not fold backing field '{self.joinFieldChain(qualifiedChain)}' for case '{enumType.name}.{c.name}' — verify the case's struct literal declares this field")
-				end 'foldFailed'
-				let leafBits = fold.floatBits if fold.isFloat else fold.intValue
-				let ordinalConstId = self.emitConstI64(c.ordinal, dstBlock: dstBlock)
-				let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: ordinalId, rightId: ordinalConstId, dstBlock: dstBlock)
-				let fieldValId = self.emitConstI64(leafBits, dstBlock: dstBlock)
-				let contribId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: cmpId, rightId: fieldValId, dstBlock: dstBlock)
-				runningSumId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: runningSumId, rightId: contribId, dstBlock: dstBlock)
-			end 'eachCase'
+			let runningSumId = self.emitStructRawValueScalarFieldSelect(ordinalId, enumType: enumType, fieldChain: qualifiedChain, dstBlock: dstBlock)
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: runningSumId, width: fieldWidth, isFloat: false)))
 		end 'eachField'
 	end 'emitStructRawValueFields'
+
+	// Emit the branchless per-field select-chain that reconstructs ONE scalar
+	// leaf field's value from `ordinalId`: `sum += (ordinal == case_i.ordinal)
+	// * leafBits_i` over every case. Exactly one comparison is 1, so the
+	// running sum equals the matching case's compile-time constant for the leaf
+	// named by `fieldChain` (the dotted path from the backing-struct root to
+	// the leaf). Returns the i64 SSA value holding the selected bit pattern.
+	// Shared by `emitStructRawValueFields` (full materialization, which stores
+	// the result) and `emitDeferredRawValueFieldProjection` (single-field
+	// projection, which binds the result directly) — the cmp/mul/add loop lives
+	// only here.
+	function emitStructRawValueScalarFieldSelect(ordinalId ValueId, enumType EnumType, fieldChain StringArray, dstBlock IrBlock) returns ValueId
+		var runningSumId = self.emitConstI64(0, dstBlock: dstBlock)
+		for i in 0 upto enumType.cases.count() 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("emitStructRawValueScalarFieldSelect: cases.get OOB at {i}")
+			let fold = resolveStructBackingFieldChain(self.project, rootExprId: c.backingStructExprId, fieldChain: fieldChain)
+			if not fold.found 'foldFailed'
+				panic("emitStructRawValueScalarFieldSelect: could not fold backing field '{self.joinFieldChain(fieldChain)}' for case '{enumType.name}.{c.name}' — verify the case's struct literal declares this field")
+			end 'foldFailed'
+			let leafBits = fold.floatBits if fold.isFloat else fold.intValue
+			let ordinalConstId = self.emitConstI64(c.ordinal, dstBlock: dstBlock)
+			let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: ordinalId, rightId: ordinalConstId, dstBlock: dstBlock)
+			let fieldValId = self.emitConstI64(leafBits, dstBlock: dstBlock)
+			let contribId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: cmpId, rightId: fieldValId, dstBlock: dstBlock)
+			runningSumId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: runningSumId, rightId: contribId, dstBlock: dstBlock)
+		end 'eachCase'
+		return runningSumId
+	end 'emitStructRawValueScalarFieldSelect'
+
+	// Deferred struct-backed-enum `.rawValue.field` projection: emit ONLY the
+	// requested scalar leaf field's select-chain (no backing-struct alloc, no
+	// other-field work). `result` aliases the select value; its Maxon type is
+	// the field's declared type so downstream resolution (e.g. `match pattern`
+	// on an ordinal-backed enum field) sees the right shape — the i64 select
+	// result IS the enum / bool / int value, identical to what a
+	// materialized-then-loaded read would yield for a scalar leaf (a managed /
+	// float / nested field never reaches here; `allRawValueUsesProjectable`
+	// excluded those, leaving them to materialization).
+	function emitDeferredRawValueFieldProjection(result ByteArray, deferred DeferredStructRawValue, fieldName ByteArray, dstBlock IrBlock)
+		let enumType = try self.project.enumTypes.get(deferred.enumName) otherwise panic("emitDeferredRawValueFieldProjection: enum '{deferred.enumName}' missing from project.enumTypes — it was present at deferral time")
+		let fieldNameStr = String.from(fieldName)
+		let hit = try self.lookupFieldByStructName(deferred.backingStructName, fieldName: fieldNameStr) otherwise panic("emitDeferredRawValueFieldProjection: field '{fieldNameStr}' missing on backing struct '{deferred.backingStructName}' — allRawValueUsesProjectable validated it before deferral")
+		var fieldChain = StringArray.create()
+		fieldChain.push(fieldNameStr)
+		let selectId = self.emitStructRawValueScalarFieldSelect(deferred.ordinalId, enumType: enumType, fieldChain: fieldChain, dstBlock: dstBlock)
+		self.aliasName(result, toId: selectId)
+		self.setValueType(selectId, t: hit.fieldType)
+	end 'emitDeferredRawValueFieldProjection'
+
+	// Forward use-analysis backing the deferred `.rawValue` projection: true iff
+	// EVERY use of `rawValueResultName` in the current function is a projectable
+	// scalar-leaf field read of the backing struct AND there is at least one
+	// such use. Deliberately conservative — any op that references the name
+	// outside a scalar-leaf `fieldLoad` receiver position (including a reference
+	// this analysis cannot positively classify, via `maxonOpUsesValue`'s
+	// errs-toward-"uses" coverage) forces materialization (returns false). A
+	// missed use would leave a deferred value with no SSA definition (a silent
+	// miscompile), hence the conservatism. A never-used `.rawValue` returns
+	// false too, so it materializes exactly as before the optimization.
+	function allRawValueUsesProjectable(rawValueResultName ByteArray, backingStructName String) returns bool
+		var foundProjectableUse = false
+		for blockRef in self.currentMaxonFunc.blockRefs 'eachBlock'
+			let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("allRawValueUsesProjectable: blockRef from blockRefs not in maxonModule.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try self.maxonModule.ops.get(opIdx) otherwise panic("allRawValueUsesProjectable: opRef not in maxonModule.ops")
+				match self.classifyRawValueUse(op, rawValueResultName: rawValueResultName, backingStructName: backingStructName) 'kind'
+					nonProjectable then return false
+					projectable then foundProjectableUse = true
+					notAUse then break 'kind'
+				end 'kind'
+			end 'eachOp'
+			// Terminators (condBr / ret / throw / enumMatchArm / ...) live
+			// separately from `opRefs` and can never be a projectable fieldLoad
+			// receiver, so any reference to the name in one is fatal to deferral.
+			if block.hasTerminatorOp() 'hasTerm'
+				let termOp = try self.maxonModule.ops.get(block.terminatorIndex()) otherwise panic("allRawValueUsesProjectable: terminatorIndex not in maxonModule.ops")
+				if maxonOpUsesValue(termOp, name: rawValueResultName) 'termUsesIt'
+					return false
+				end 'termUsesIt'
+			end 'hasTerm'
+		end 'eachBlock'
+		return foundProjectableUse
+	end 'allRawValueUsesProjectable'
+
+	// Classify one op's relationship to a deferred `.rawValue` result. The
+	// general operand-use check is the gate: an op that does not reference the
+	// name is irrelevant; one that does is projectable only if it is exactly a
+	// scalar-leaf `fieldLoad` on the result, otherwise it forces materialization.
+	function classifyRawValueUse(op MaxonOp, rawValueResultName ByteArray, backingStructName String) returns RawValueUseKind
+		if not maxonOpUsesValue(op, name: rawValueResultName) 'notUsed'
+			return RawValueUseKind.notAUse
+		end 'notUsed'
+		if self.isProjectableRawValueFieldLoad(op, rawValueResultName: rawValueResultName, backingStructName: backingStructName) 'projectable'
+			return RawValueUseKind.projectable
+		end 'projectable'
+		return RawValueUseKind.nonProjectable
+	end 'classifyRawValueUse'
+
+	// True iff `op` is exactly `fieldLoad(_, <rawValueResultName>, F)` with F a
+	// scalar leaf (integer / bool / enum) field of the backing struct — the one
+	// shape the deferred projection can synthesize directly. Every other op
+	// shape (and a non-scalar-leaf field) is false.
+	function isProjectableRawValueFieldLoad(op MaxonOp, rawValueResultName ByteArray, backingStructName String) returns bool
+		return match op 'fl'
+			fieldLoad(_, receiver, fieldName, _) gives byteArraysEqual(receiver, b: rawValueResultName) and self.backingFieldIsScalarLeaf(backingStructName, fieldName: String.from(fieldName))
+			literal to structAlloc gives false
+			fieldStore to sizeofType gives false
+		end 'fl'
+	end 'isProjectableRawValueFieldLoad'
+
+	// True iff the named backing-struct field is a scalar leaf the projection
+	// can synthesize directly: NOT a nested struct (those are materialized by
+	// recursion in `emitStructRawValueFields`) and NOT a float (a float leaf is
+	// stored as raw bits and read back through the SSE path — a projected i64
+	// select would mistype the float consumer). Integer / bool / enum (ordinal)
+	// leaves are GP-shaped select results. A missing field is treated as
+	// non-leaf (false) so the use stays non-projectable. Mirrors the
+	// leaf-vs-nested split in `emitStructRawValueFields`.
+	function backingFieldIsScalarLeaf(backingStructName String, fieldName String) returns bool
+		let hit = try self.lookupFieldByStructName(backingStructName, fieldName: fieldName) otherwise return false
+		if not self.structNameOfFieldType(hit.fieldType).isEmpty() 'nestedStruct'
+			return false
+		end 'nestedStruct'
+		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
+		if stdTypeIsFloat(fieldStdType) 'floatLeaf'
+			return false
+		end 'floatLeaf'
+		return true
+	end 'backingFieldIsScalarLeaf'
 
 	// Join a dotted field chain for diagnostics (`a.b.c`). The chain is never
 	// empty at a leaf-fold call site, but guard the empty case to avoid an OOB.
@@ -14284,6 +14474,110 @@ export function byteArraysEqual(a ByteArray, b ByteArray) returns bool
 	end 'each'
 	return true
 end 'byteArraysEqual'
+
+// True iff any value-name operand in `args` equals `name`. Used by
+// `maxonOpUsesValue` for the variadic argument lists on call-shaped ops.
+function argsContainName(args ByteArrayArray, name ByteArray) returns bool
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise panic("argsContainName: args.get OOB despite i < count")
+		if byteArraysEqual(a, b: name) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'argsContainName'
+
+// True iff any interpolation `expr` part references value-name `name`. Literal
+// parts carry no operand. Used by `maxonOpUsesValue` for `stringInterp`.
+function interpPartsUseName(parts StringInterpPartArray, name ByteArray) returns bool
+	for i in 0 upto parts.count() 'each'
+		let part = try parts.get(i) otherwise panic("interpPartsUseName: parts.get OOB despite i < count")
+		let partReferencesName = match part 'p'
+			literal gives false
+			expr(valueName, _, _) gives byteArraysEqual(valueName, b: name)
+		end 'p'
+		if partReferencesName 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'interpPartsUseName'
+
+// True iff `capturedNames` (a closure's outer-variable capture list) names the
+// value `name`. Captures are by source-level variable name, so a synthesized
+// `.rawValue` temp is never among them in practice; the scan keeps the use
+// check precise (and conservative) rather than blanket-failing every closure.
+function capturedNamesUseName(capturedNames StringArray, name ByteArray) returns bool
+	let nameStr = String.from(name)
+	for i in 0 upto capturedNames.count() 'each'
+		let cn = try capturedNames.get(i) otherwise panic("capturedNamesUseName: get OOB despite i < count")
+		if cn == nameStr 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'capturedNamesUseName'
+
+// Conservative "does `op` reference value-name `name` in any OPERAND (use)
+// position?" — the deferred-`.rawValue` use-walk's safety net. Result /
+// definition positions (e.g. a `fieldLoad` result, a `tryCall` errorBoundName,
+// match payload binding names) are NOT uses and return false; every read of a
+// value name is covered. When a variant could plausibly reference the name and
+// the position is ambiguous, this errs toward `true` (forcing materialization)
+// — a false negative would defer a still-used value and miscompile, whereas a
+// false positive merely declines the optimization.
+function maxonOpUsesValue(op MaxonOp, name ByteArray) returns bool
+	return match op 'op'
+		literal to byteStringLiteral gives false
+		stringInterp(_, parts, _) gives interpPartsUseName(parts, name: name)
+		varDecl(_, value, _, _) gives byteArraysEqual(value, b: name)
+		varLoad gives false
+		varStore(_, value, _) gives byteArraysEqual(value, b: name)
+		globalLoad gives false
+		globalStore(_, value, _, _) gives byteArraysEqual(value, b: name)
+		binop(_, left, right, _, _, _) gives byteArraysEqual(left, b: name) or byteArraysEqual(right, b: name)
+		unop(_, operand, _, _, _) gives byteArraysEqual(operand, b: name)
+		convert(_, operand, _, _, _, _) gives byteArraysEqual(operand, b: name)
+		castCheck(value, _, _) gives byteArraysEqual(value, b: name)
+		cmp(_, left, right, _, _, _, _, _) gives byteArraysEqual(left, b: name) or byteArraysEqual(right, b: name)
+		refEq(_, left, right, _, _) gives byteArraysEqual(left, b: name) or byteArraysEqual(right, b: name)
+		condBr(cond, _, _, _) gives byteArraysEqual(cond, b: name)
+		br gives false
+		call(_, callee, _, args, _, _, _, _) gives byteArraysEqual(callee, b: name) or argsContainName(args, name: name)
+		methodCall(_, receiver, _, args, _, _, _, _) gives byteArraysEqual(receiver, b: name) or argsContainName(args, name: name)
+		ret(retVal, _) gives byteArraysEqual(retVal, b: name)
+		panic gives false
+		panicDynamic(stringValue, _) gives byteArraysEqual(stringValue, b: name)
+		structAlloc gives false
+		fieldLoad(_, receiver, _, _) gives byteArraysEqual(receiver, b: name)
+		fieldStore(receiver, _, value, _, _) gives byteArraysEqual(receiver, b: name) or byteArraysEqual(value, b: name)
+		selfFieldLoad gives false
+		selfFieldStore(_, value, _) gives byteArraysEqual(value, b: name)
+		unresolvedRead gives false
+		unresolvedAssign(_, value, _) gives byteArraysEqual(value, b: name)
+		enumMatchArm(scrutineeName, _, _, _, _, _, _, _, _, _) gives byteArraysEqual(scrutineeName, b: name)
+		enumConstruct(_, _, _, payloadValues, _) gives argsContainName(payloadValues, name: name)
+		enumTag(_, enumValName, _) gives byteArraysEqual(enumValName, b: name)
+		enumPayloadRead(_, enumValName, _, _, _, _) gives byteArraysEqual(enumValName, b: name)
+		enumPayloadStore(enumValName, _, _, _, newValueName, _) gives byteArraysEqual(enumValName, b: name) or byteArraysEqual(newValueName, b: name)
+		rangeMatchArm(scrutineeName, _, _, _, _, _, _, _, _, _, _, _) gives byteArraysEqual(scrutineeName, b: name)
+		error gives false
+		throw (_, _, payloadValueName, _) gives byteArraysEqual(payloadValueName, b: name)
+		tryCall(_, callee, _, args, _, _, _, _, _) gives byteArraysEqual(callee, b: name) or argsContainName(args, name: name)
+		tryMethodCall(_, receiver, _, args, _, _, _, _, _) gives byteArraysEqual(receiver, b: name) or argsContainName(args, name: name)
+		rethrow(flagName, _) gives byteArraysEqual(flagName, b: name)
+		functionRef gives false
+		closureCreate(_, _, _, capturedNames, _, _, _) gives capturedNamesUseName(capturedNames, name: name)
+		closureEnvLoad gives false
+		indirectCall(_, callee, _, args, _, _, _, _) gives byteArraysEqual(callee, b: name) or argsContainName(args, name: name)
+		forInIterable(_, _, _, sourceValue, _, _, _, _, _) gives byteArraysEqual(sourceValue, b: name)
+		asyncCall(_, callee, _, args, _, _, _, _, _, _, _) gives byteArraysEqual(callee, b: name) or argsContainName(args, name: name)
+		awaitPromise(_, promise, _, _, _) gives byteArraysEqual(promise, b: name)
+		tryAwait(_, promise, _, _, _, _) gives byteArraysEqual(promise, b: name)
+		cancelPromise(promise, _) gives byteArraysEqual(promise, b: name)
+		sizeofType gives false
+	end 'op'
+end 'maxonOpUsesValue'
 
 // ============================================================
 // Helper functions
