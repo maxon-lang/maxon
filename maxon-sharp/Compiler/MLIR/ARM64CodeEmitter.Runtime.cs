@@ -161,6 +161,137 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("mmap");
   }
 
+  // --- macOS wake lock block (Go semasleep/semawakeup, replaces dispatch_semaphore) ---
+  // Each parked worker P (and the I/O sync worker) owns a {pthread_mutex_t, pthread_cond_t,
+  // long count} block, mmap'd here and pointed to from the 8-byte wake slot. dispatch_semaphore
+  // is Mach-port-backed and not async-signal-safe, which wedged processes in macOS 'UE' state
+  // on kill; a pthread mutex+cond mirrors Go's os_darwin.go and parks/wakes cleanly.
+
+  /// Allocate and initialise a wake lock block; the block pointer is returned in X0.
+  /// mmap zero-fills the page (count starts 0 = parked), then pthread_mutex_init and
+  /// pthread_cond_init run with NULL attrs. Carves its own 0x10 SP scratch to home the
+  /// block pointer across the two init calls (which clobber X0..X18). The default
+  /// initialisers match PTHREAD_MUTEX_INITIALIZER / PTHREAD_COND_INITIALIZER.
+  private void EmitCreateWakeLockBlock() {
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x10, isAdd: false);
+
+    EmitMovRegImm(ARM64Register.X1, WakeLockBlkSize);
+    EmitMmapAnon();
+    EmitStoreToSp(0x00, ARM64Register.X0); // home block ptr
+
+    // pthread_mutex_init(&blk->mutex, NULL)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, WakeLockBlkOffMutex, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("pthread_mutex_init");
+
+    // pthread_cond_init(&blk->cond, NULL)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.Sp, 0x00, 8); // reload blk
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, WakeLockBlkOffCond, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("pthread_cond_init");
+
+    // Return block ptr in X0.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.Sp, 0x00, 8);
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x10, isAdd: true);
+  }
+
+  /// Go semasleep: park on the wake lock block at <paramref name="blkReg"/> until count>0.
+  ///   pthread_mutex_lock(&blk->mutex);
+  ///   while (count == 0) { timed ? cond_timedwait_relative_np(&cond,&mutex,&ts{0,100ms})
+  ///                              : cond_wait(&cond,&mutex); }
+  ///   count--; pthread_mutex_unlock(&blk->mutex);
+  /// The while-loop re-checks count (cond can wake spuriously, unlike dispatch_semaphore);
+  /// the counting `count` field preserves the signal-before-wait property. When timed, a
+  /// 100ms timeout just loops back to re-check (the missed-wakeup safety net the old
+  /// dispatch_time(NOW,100ms) park provided). Carves 0x20 SP scratch: [SP+0]=blk pointer
+  /// homed across calls, [SP+0x10..+0x18]=relative timespec {0,100000000}.
+  /// Clobbers X0..X18 and the scratch; the caller must reload P afterwards.
+  private void EmitSemaSleep(ARM64Register blkReg, bool timed) {
+    var prefix = $"__sema_sleep_{_code.Count}";
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
+    if (blkReg != ARM64Register.X0)
+      EmitMovRegReg(ARM64Register.X0, blkReg);
+    EmitStoreToSp(0x00, ARM64Register.X0); // home blk
+
+    // pthread_mutex_lock(&blk->mutex)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, WakeLockBlkOffMutex, isAdd: true);
+    EmitCallImport("pthread_mutex_lock");
+
+    DefineLabel($"{prefix}_check");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCount, 8);         // count
+    EmitCbnz(ARM64Register.X0, $"{prefix}_have");
+
+    if (timed) {
+      // Build relative timespec {tv_sec=0, tv_nsec=100_000_000} on the frame.
+      EmitMovRegImm(ARM64Register.X0, 0);
+      EmitStoreToSp(0x10, ARM64Register.X0);
+      EmitMovRegImm(ARM64Register.X0, 100_000_000);
+      EmitStoreToSp(0x18, ARM64Register.X0);
+      // pthread_cond_timedwait_relative_np(&blk->cond, &blk->mutex, &ts)
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8); // blk
+      EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCond, isAdd: true);
+      EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
+      EmitAddSubImm(ARM64Register.X2, ARM64Register.Sp, 0x10, isAdd: true);
+      EmitCallImport("pthread_cond_timedwait_relative_np");
+    } else {
+      // pthread_cond_wait(&blk->cond, &blk->mutex)
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8); // blk
+      EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCond, isAdd: true);
+      EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
+      EmitCallImport("pthread_cond_wait");
+    }
+    EmitBranch($"{prefix}_check"); // re-check count (timeout or spurious wakeup)
+
+    DefineLabel($"{prefix}_have");
+    // count--
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCount, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
+    EmitStoreIndirect(ARM64Register.X9, WakeLockBlkOffCount, ARM64Register.X0, 8);
+
+    // pthread_mutex_unlock(&blk->mutex)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
+    EmitCallImport("pthread_mutex_unlock");
+
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: true);
+  }
+
+  /// Go semawakeup: wake a parker on the wake lock block at <paramref name="blkReg"/>.
+  ///   pthread_mutex_lock(&blk->mutex); count++; pthread_cond_signal(&blk->cond);
+  ///   pthread_mutex_unlock(&blk->mutex);
+  /// count++ before the signal preserves the dispatch_semaphore early-signal-not-lost
+  /// property: a wake delivered before the parker reaches its while(count==0) test is
+  /// seen (the parker returns immediately). Carves 0x10 SP scratch to home the block
+  /// pointer across the calls. Clobbers X0..X18 and the scratch.
+  private void EmitSemaWakeup(ARM64Register blkReg) {
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x10, isAdd: false);
+    if (blkReg != ARM64Register.X0)
+      EmitMovRegReg(ARM64Register.X0, blkReg);
+    EmitStoreToSp(0x00, ARM64Register.X0); // home blk
+
+    // pthread_mutex_lock(&blk->mutex)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, WakeLockBlkOffMutex, isAdd: true);
+    EmitCallImport("pthread_mutex_lock");
+
+    // count++
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCount, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitStoreIndirect(ARM64Register.X9, WakeLockBlkOffCount, ARM64Register.X0, 8);
+
+    // pthread_cond_signal(&blk->cond)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCond, isAdd: true);
+    EmitCallImport("pthread_cond_signal");
+
+    // pthread_mutex_unlock(&blk->mutex)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
+    EmitCallImport("pthread_mutex_unlock");
+
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x10, isAdd: true);
+  }
+
   // --- GMP scheduler TLS helpers ---
 
   /// Emit code to load P* (ProcContext) into the given register.
@@ -3015,7 +3146,7 @@ public partial class ARM64CodeEmitter {
     // Sync I/O request queue (protected by __sched_io_lock)
     DefineGlobal("__io_sync_req_head", 8, 0);
     DefineGlobal("__io_sync_req_tail", 8, 0);
-    DefineGlobal("__io_sync_req_semaphore", 8, 0);   // dispatch_semaphore_t to wake I/O worker
+    DefineGlobal("__io_sync_req_semaphore", 8, 0);   // ptr to wake lock block (mutex+cond+count) to wake I/O worker
 
     // I/O completion queue (posted by sync worker, drained by scheduler)
     DefineGlobal("__io_done_head", 8, 0);
@@ -3102,6 +3233,9 @@ public partial class ARM64CodeEmitter {
     // Epilog continues from there and emits the function exit (returns to OS).
     EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
     EmitFaultHandlerEpilog();
+    // Go-style dieFromSignal handler for SIGTERM/SIGINT so the process terminates
+    // cleanly on kill instead of wedging in macOS uninterruptible ('UE') state.
+    EmitDieFromSignalThunk("__gt_die_from_signal_thunk");
   }
 
   /// <summary>
@@ -3173,9 +3307,9 @@ public partial class ARM64CodeEmitter {
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
 
-    // Create wake semaphore: dispatch_semaphore_create(0)
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitCallImport("dispatch_semaphore_create");
+    // Create wake lock block: {pthread_mutex_t, pthread_cond_t, count} (Go semasleep/
+    // semawakeup, replacing dispatch_semaphore_create(0)). count starts 0 (parked).
+    EmitCreateWakeLockBlock();
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffWakeSemaphore, 8);
 
@@ -3236,10 +3370,19 @@ public partial class ARM64CodeEmitter {
     EmitMmapAnon();
     EmitGlobalStoreReg(ARM64Register.X0, "__io_kevent_bufs_base");
 
-    // Step 7: Create I/O sync request semaphore
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitCallImport("dispatch_semaphore_create");
+    // Step 7: Create I/O sync request wake lock block (mutex+cond+count)
+    EmitCreateWakeLockBlock();
     EmitGlobalStoreReg(ARM64Register.X0, "__io_sync_req_semaphore");
+
+    // Install signal handlers BEFORE spawning any worker thread, so a fault on a
+    // worker (e.g. during its first park) — or in the dieFromSignal install itself —
+    // is CAUGHT and diagnosed instead of crashing silently before any handler exists.
+    // Step 10: Install the CPU-fault handler (sigaction on macOS).
+    EmitInstallFaultHandler("__gt_fault_handler_thunk");
+
+    // Step 11: Install the dieFromSignal handler for SIGTERM/SIGINT so the process
+    // terminates cleanly on kill (no wedge in idle workers / munmap).
+    EmitInstallDieFromSignalHandler("__gt_die_from_signal_thunk");
 
     // Step 8: Spawn the I/O sync worker thread
     // pthread_create(&tid, NULL, __io_sync_worker_loop, NULL)
@@ -3251,9 +3394,6 @@ public partial class ARM64CodeEmitter {
 
     // Step 9: Initialize slab allocator
     EmitBranchLink("__slab_init");
-
-    // Step 10: Install the CPU-fault handler (sigaction on macOS).
-    EmitInstallFaultHandler("__gt_fault_handler_thunk");
 
     EmitRuntimeFunctionEnd();
   }
@@ -3419,16 +3559,12 @@ public partial class ARM64CodeEmitter {
     EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
     EmitBranchCond(ARM64ConditionCode.Hs, "__sched_worker_loop_exit"); // id >= num_procs → retire
 
-    // dispatch_semaphore_wait(P->wakeSemaphore, timeout)
-    // timeout = dispatch_time(DISPATCH_TIME_NOW, 100ms * NSEC_PER_MSEC)
-    EmitMovRegImm(ARM64Register.X0, 0); // DISPATCH_TIME_NOW = 0
-    EmitMovRegImm(ARM64Register.X1, 100_000_000); // 100ms in nanoseconds
-    EmitCallImport("dispatch_time");
-    // X0 = timeout value; now call dispatch_semaphore_wait
-    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // X1 = timeout
+    // Park on the wake lock block (Go semasleep) with a 100ms timed wait — the
+    // missed-wakeup safety net: a timeout just loops back to re-check count. Load
+    // the block pointer from P->wakeSemaphore first.
     EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffWakeSemaphore, 8);
-    EmitCallImport("dispatch_semaphore_wait");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X9, POffWakeSemaphore, 8);
+    EmitSemaSleep(ARM64Register.X9, timed: true);
     // Clear idle flag
     EmitLoadP(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, 0);
@@ -4319,9 +4455,9 @@ public partial class ARM64CodeEmitter {
     // --- Step 0: Set shutdown flag and wake I/O worker so it exits ---
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_shutdown_flag");
-    // Signal I/O worker semaphore so it checks shutdown and exits
-    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
-    EmitCallImport("dispatch_semaphore_signal");
+    // Wake the I/O worker (semawakeup) so it checks shutdown and exits
+    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
+    EmitSemaWakeup(ARM64Register.X9);
 
     // --- Step 1: Cancel all live threads ---
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_all_head");
@@ -4409,21 +4545,26 @@ public partial class ARM64CodeEmitter {
     EmitBranch("__gt_cleanup_drain");
 
     DefineLabel("__gt_cleanup_done");
-    // Wake all worker threads so they exit (shutdown flag is set)
-    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
-    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
+    // Wake all worker threads (semawakeup) so they exit (shutdown flag is set).
+    // EmitSemaWakeup clobbers X0..X18, so the loop index is homed in [x29+24]
+    // and procs/num_procs are reloaded from their (immutable here) globals each pass.
     EmitMovRegImm(ARM64Register.X12, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X12, ARM64Register.X29, 24, 8); // i = 1
     DefineLabel("__gt_cleanup_wake_loop");
-    // CMP X12, X11
-    EmitWord(0xEB0B019F);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // i
+    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
+    EmitCmpRegReg(ARM64Register.X12, ARM64Register.X11);
     EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_drain_free_lists");
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
     // LDR X13, [X10, X12, LSL #3]
     EmitWord(0xF86C794D);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffWakeSemaphore, 8);
-    EmitCbz(ARM64Register.X0, "__gt_cleanup_wake_next");
-    EmitCallImport("dispatch_semaphore_signal");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X13, POffWakeSemaphore, 8);
+    EmitCbz(ARM64Register.X9, "__gt_cleanup_wake_next");
+    EmitSemaWakeup(ARM64Register.X9);
     DefineLabel("__gt_cleanup_wake_next");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // i
     EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X12, ARM64Register.X29, 24, 8); // i++
     EmitBranch("__gt_cleanup_wake_loop");
 
     // --- Drain free lists on all P structs ---
@@ -4984,10 +5125,10 @@ public partial class ARM64CodeEmitter {
 
     DefineLabel("__io_sync_worker_loop_top");
 
-    // Wait for a request to be enqueued (blocks until signaled)
-    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
-    EmitMovRegImm(ARM64Register.X1, -1); // DISPATCH_TIME_FOREVER = ~0ULL
-    EmitCallImport("dispatch_semaphore_wait");
+    // Wait for a request to be enqueued (blocks forever until signaled) on the
+    // I/O sync wake lock block (Go semasleep, no timeout — pthread_cond_wait).
+    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
+    EmitSemaSleep(ARM64Register.X9, timed: false);
 
     // Check shutdown flag
     EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
@@ -5052,9 +5193,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // req
     EmitBranchLink("__io_enqueue_sync_req");
 
-    // Signal the I/O worker thread that a new request is available
-    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
-    EmitCallImport("dispatch_semaphore_signal");
+    // Wake the I/O worker thread (semawakeup): a new request is available
+    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
+    EmitSemaWakeup(ARM64Register.X9);
 
     EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
@@ -5858,9 +5999,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X1, POffStatus, 8);
     EmitCbz(ARM64Register.X0, "__set_single_retire_next");
 
-    // Signal P[i]->wakeSemaphore so the parked M wakes and retires.
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X1, POffWakeSemaphore, 8);
-    EmitCallImport("dispatch_semaphore_signal");
+    // Wake P[i] (semawakeup) so the parked M wakes and retires.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X1, POffWakeSemaphore, 8);
+    EmitSemaWakeup(ARM64Register.X9);
 
     DefineLabel("__set_single_retire_next");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
@@ -6789,6 +6930,12 @@ public partial class ARM64CodeEmitter {
   private const int SignalSegv = 11;
   private const int SignalBus = 10;
   private const int SignalFpe = 8;
+  // Terminating signals handled by the Go-style dieFromSignal thunk so the process
+  // exits cleanly (correct WIFSIGNALED status) instead of wedging in macOS 'UE' state.
+  private const int SignalTerm = 15;
+  private const int SignalInt = 2;
+  // sigprocmask(how) — Darwin: SIG_BLOCK=1, SIG_UNBLOCK=2, SIG_SETMASK=3.
+  private const int SigUnblock = 2;
 
   // 32 KB altstack — enough room for a handful of diagnostic frames.
   private const long SigaltstackSize = 0x8000;
@@ -6960,6 +7107,88 @@ public partial class ARM64CodeEmitter {
     EmitLoadFromStack(ARM64Register.X0, 16, 8);
     EmitCallImport("raise");
     EmitRuntimeFunctionEnd();
+  }
+
+  /// Go dieFromSignal handler for the asynchronous terminating signals SIGTERM(15)
+  /// and SIGINT(2). One thunk serves both — it reads the signal number from x0
+  /// (spilled at [fp+16]). The body is strictly async-signal-safe (sigprocmask,
+  /// sigaction, raise only) — it must NOT touch the pthread wake primitive (could
+  /// self-deadlock if the interrupted M holds the wake mutex), X28/P->currentGt, or
+  /// the mcontext. It unblocks the signal, resets it to SIG_DFL, then re-raises so
+  /// the kernel's default action (terminate) fires with the correct disposition,
+  /// rather than the process wedging in idle workers / munmap on kill. Mirrors Go's
+  /// runtime.dieFromSignal (os_darwin / signal_unix.go).
+  internal void EmitDieFromSignalThunk(string thunkLabel) {
+    // void thunk(int sig, siginfo_t* info, void* ucontext); AAPCS64 X0/X1/X2 spilled
+    // at [fp+16/+24/+32]. Carve 0x20 SP scratch: [SP+0]=sigset mask (4B), [SP+0x10..]
+    // = zeroed struct sigaction (sa_handler=SIG_DFL).
+    EmitRuntimeFunctionStart(thunkLabel, 3, 0x40);
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
+
+    // mask = 1 << (sig - 1)  (Darwin sigset_t is a single 32-bit word)
+    EmitLoadFromStack(ARM64Register.X1, 16, 8);                                 // sig
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false);         // sig - 1
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitWord(0x9AC02000 | ((uint)Reg(ARM64Register.X1) << 16)
+             | ((uint)Reg(ARM64Register.X0) << 5) | (uint)Reg(ARM64Register.X0)); // LSLV X0, X0, X1
+    EmitStoreIndirect(ARM64Register.Sp, 0x00, ARM64Register.X0, 4);             // mask (32-bit)
+
+    // sigprocmask(SIG_UNBLOCK, &mask, NULL) — make the signal deliverable
+    EmitMovRegImm(ARM64Register.X0, SigUnblock);
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.Sp);                          // &mask
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitCallImport("sigprocmask");
+
+    // Zero the struct sigaction at [SP+0x10] and set sa_handler = SIG_DFL (= 0).
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitStoreToSp(0x10, ARM64Register.X0);                                      // sa_handler
+    EmitStoreToSp(0x18, ARM64Register.X0);                                      // sa_tramp
+    EmitStoreToSp(0x10 + SigactionOffFlags, ARM64Register.X0);                  // sa_mask + sa_flags (8B zero)
+
+    // sigaction(sig, &act, NULL) — reset to default disposition
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);                                 // sig
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.Sp, 0x10, isAdd: true);       // &act
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitCallImport("sigaction");
+
+    // raise(sig) — re-deliver; kernel default action now terminates the process.
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);
+    EmitCallImport("raise");
+
+    // Unreached (raise terminates), but unwind the scratch for well-formedness.
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: true);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// Install the dieFromSignal thunk for SIGTERM(15) and SIGINT(2). Reuses the
+  /// EmitInstallFaultHandler sigaction machinery but with SA_RESTART only (NO
+  /// SA_ONSTACK — these are asynchronous signals, not stack-overflow faults, so the
+  /// normal stack is fine and there is no altstack dependency). Process-global, so
+  /// installing once on the main thread in __gt_init covers every M.
+  internal void EmitInstallDieFromSignalHandler(string thunkLabel) {
+    // Carve 0x20 of SP scratch for the struct sigaction (24 bytes).
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
+
+    // Zero the struct, set sa_handler = &thunk, sa_flags = SA_SIGINFO|SA_RESTART.
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitStoreToSp(0x00, ARM64Register.X0); // sa_handler (overwritten below)
+    EmitStoreToSp(0x08, ARM64Register.X0); // sa_tramp
+    EmitStoreToSp(0x10, ARM64Register.X0); // sa_mask + sa_flags
+
+    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, thunkLabel);
+    EmitStoreToSp(SigactionOffHandler, ARM64Register.X0);
+
+    EmitMovRegImm(ARM64Register.X0, SaSiginfo | SaRestart);
+    EmitStoreIndirect(ARM64Register.Sp, SigactionOffFlags, ARM64Register.X0, 4);
+
+    foreach (var sig in new[] { SignalTerm, SignalInt }) {
+      EmitMovRegImm(ARM64Register.X0, sig);
+      EmitMovRegReg(ARM64Register.X1, ARM64Register.Sp);
+      EmitMovRegImm(ARM64Register.X2, 0);
+      EmitCallImport("sigaction");
+    }
+
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: true);
   }
 
   // ============================================================================

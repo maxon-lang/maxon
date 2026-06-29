@@ -619,9 +619,10 @@ public partial class ARM64CodeEmitter {
     }
 
     public void WakeWorker(VReg p) {
-      // dispatch_semaphore_signal(p->wakeSemaphore); POffWakeSemaphore = 0x38
-      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, R(p), 0x38, 8);
-      _e.EmitCallImport("dispatch_semaphore_signal");
+      // Go semawakeup on p->wakeSemaphore's lock block (mutex+cond+count).
+      // POffWakeSemaphore = 0x38. Loads the block pointer into X9, then signals.
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, R(p), 0x38, 8);
+      _e.EmitSemaWakeup(ARM64Register.X9);
     }
 
     public void SpawnWorker(VReg p) {

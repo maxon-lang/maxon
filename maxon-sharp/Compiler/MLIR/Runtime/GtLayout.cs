@@ -42,7 +42,9 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x20  id                       processor ID
 ///   0x28  rng                      xorshift64 PRNG state (for fairness)
 ///   0x30  idle_flag                0=busy, 1=idle (for wakeup protocol)
-///   0x38  wake_event               Win32 Event handle / dispatch_semaphore (SetEvent to wake parked worker)
+///   0x38  wake_event               Win32 Event handle (Windows) / ptr to {mutex,cond,count}
+///                                  lock block (macOS) — see WakeLockBlk* below (SetEvent /
+///                                  pthread_cond_signal to wake the parked worker)
 ///   0x40  os_thread_handle         OS thread handle
 ///   0x48  status                   0=unused, 1=active
 ///   0x50  pending_waiter           GT to wake after context-switch (deferred from trampoline)
@@ -114,7 +116,7 @@ public static class GtLayout {
   public const int POffRng = 0x28;
   public const int POffIdleFlag = 0x30;
   public const int POffWakeEvent = 0x38;        // Windows Event handle
-  public const int POffWakeSemaphore = 0x38;    // alias: macOS dispatch_semaphore
+  public const int POffWakeSemaphore = 0x38;    // alias: macOS ptr to wake lock block (see WakeLockBlk*)
   public const int POffOsThreadHandle = 0x40;
   public const int POffStatus = 0x48;
   public const int POffPendingWaiter = 0x50;
@@ -128,6 +130,21 @@ public static class GtLayout {
   public const int POffRemoteFreeHead = 0x78;
   public const int POffMainThread = 0x80;
   public const int PStructSize = POffMainThread + GtStructSize;   // 0x80 + 0xD8 = 0x158 = 344 bytes
+
+  // ---- macOS wake lock block (Go semasleep/semawakeup primitive) ----
+  // On macOS the worker park/wake (and the I/O sync worker's wake) use a Go-style
+  // {pthread_mutex_t mutex; pthread_cond_t cond; long count} block instead of a
+  // libdispatch dispatch_semaphore (which is Mach-port-backed and not
+  // async-signal-safe — it wedged processes in the uninterruptible 'UE' state on
+  // kill). The block is mmap'd separately and a POINTER to it lives in the 8-byte
+  // POffWakeSemaphore slot (and in __io_sync_req_semaphore), so the P struct layout
+  // is unchanged. Darwin arm64 sizes: pthread_mutex_t = 64 bytes, pthread_cond_t =
+  // 48 bytes. count is the semaphore counter, preserving the signal-before-wait
+  // (early-wakeup-not-lost) property the counting dispatch_semaphore provided.
+  public const int WakeLockBlkOffMutex = 0x00;   // pthread_mutex_t (64 bytes)
+  public const int WakeLockBlkOffCond = 0x40;    // pthread_cond_t (48 bytes)
+  public const int WakeLockBlkOffCount = 0x70;   // long semaphore count (0 = worker parked)
+  public const int WakeLockBlkSize = 0x78;       // 120 bytes; mmap rounds up to a page
 
   // ---- Per-P system stack size ----
   // Used for two purposes:
