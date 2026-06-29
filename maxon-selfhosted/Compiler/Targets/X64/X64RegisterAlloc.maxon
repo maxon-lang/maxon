@@ -608,202 +608,102 @@ function collectX64OpReads(reads RegIntArray, x64Op X64Op)
 end 'collectX64OpReads'
 
 // Append the valueIds this op DEFINES into the sparse `defs` id list.
+//
+// Mirrors `collectX64OpReads`: ONE flat `match` over every X64Op variant so the
+// inliner sees a single small dispatch instead of a fan-out into ~15 helpers
+// (each itself a full-enum match). Each def-producing variant extracts its dest
+// vreg(s) and calls noteX64DefId / noteX64FpDefId directly; non-defining
+// variants are grouped into `... then break` arms. The variant -> def mapping
+// here must stay identical to the OpPattern routing it replaced.
 function noteX64OpDefs(defs RegIntArray, x64Op X64Op)
-	let pat = x64Op.rawValue.pattern
-	match pat 'patDef'
-		passThrough then break 'patDef'
-		singleDef then noteX64SingleDef(defs, op: x64Op)
-		singleUse then break 'patDef'
-		defUse then noteX64DefUse(defs, op: x64Op)
-		twoAddr then noteX64TwoAddr(defs, op: x64Op)
-		useDefImm then noteX64UseDefImm(defs, op: x64Op)
-		unaryInPlace then noteX64UnaryInPlace(defs, op: x64Op)
-		threeAddr to baseUseSrcUse then break 'patDef'
-		baseUseDest then noteX64BaseUseDest(defs, op: x64Op)
-		fpSingleDef then noteX64FpDef(defs, op: x64Op, pat: pat)
-		fpSingleUse then break 'patDef'
-		fpDefUse then noteX64FpDef(defs, op: x64Op, pat: pat)
-		fpTwoAddr then noteX64FpDef(defs, op: x64Op, pat: pat)
-		fpThreeAddr to fpTwoUse then break 'patDef'
-		fpMov then noteX64FpDef(defs, op: x64Op, pat: pat)
-		gprToFp then noteX64FpDef(defs, op: x64Op, pat: pat)
-		fpToGpr then noteX64FpToGprDef(defs, op: x64Op)
-		baseUseFpUse then break 'patDef'
-		baseUseFpDef then noteX64FpDef(defs, op: x64Op, pat: pat)
-		movRegReg then noteX64MovRegRegDef(defs, op: x64Op)
-		constImm then noteX64ConstImm(defs, op: x64Op)
-		shift then noteX64Shift(defs, op: x64Op)
-		divReg to csel then break 'patDef'
-		baseUseUseDef then noteX64BaseUseUseDef(defs, op: x64Op)
-		baseTwoUse then break 'patDef'
-		defUseImm then noteX64DefUseImm(defs, op: x64Op)
-		fourAddr then break 'patDef'
-	end 'patDef'
-end 'noteX64OpDefs'
-
-function noteX64DefId(defs RegIntArray, vreg X64VReg)
-	collectDef(defs, id: x64VRegId(vreg))
-end 'noteX64DefId'
-
-function noteX64SingleDef(defs RegIntArray, op X64Op)
-	match op 'extract'
+	match x64Op 'scan'
+		prologue to ret then break 'scan'
+		movRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		movRegImm32(dest, _) then noteX64DefId(defs, vreg: dest)
+		movSlot then break 'scan'
 		loadSlot(dest, _) then noteX64DefId(defs, vreg: dest)
+		addRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		subRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		addRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		subRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		imulRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		idivRcx to iremRcx then break 'scan'
+		negReg(reg) then noteX64DefId(defs, vreg: reg)
+		bitNotReg(reg) then noteX64DefId(defs, vreg: reg)
+		andRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		orRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		xorRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
+		shlRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		sarRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		shrRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		cmpRaxRcx to movRspOffsetReg then break 'scan'
 		loadRegRbpOffset(dest, _) then noteX64DefId(defs, vreg: dest)
+		callDirect to memcpyOp then break 'scan'
+		movRegReg(destReg, _) then noteX64DefId(defs, vreg: destReg)
+		cmpRegReg to idivReg then break 'scan'
+		spillToStack then break 'scan'
 		reloadFromStack(dest, _) then noteX64DefId(defs, vreg: dest)
 		xorRegRegSelf(reg) then noteX64DefId(defs, vreg: reg)
+		callIndirect to xchgRegReg then break 'scan'
+		movXmmXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		spillXmmToStack then break 'scan'
+		reloadXmmFromStack(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		movXmmRipRel(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		addXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		subXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		mulXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		divXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		minXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		maxXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		sqrtXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		roundXmm(dest, _, _, _) then noteX64FpDefId(defs, vreg: dest)
+		ucomisXmm then break 'scan'
+		cvtSi2Float(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		cvttFloat2Si(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		cvtSd2Ss(dest, _) then noteX64FpDefId(defs, vreg: dest)
+		cvtSs2Sd(dest, _) then noteX64FpDefId(defs, vreg: dest)
+		movqXmmToGpr(dest, _) then noteX64DefId(defs, vreg: dest)
+		movqGprToXmm(dest, _) then noteX64FpDefId(defs, vreg: dest)
+		andMaskRipRel to storeIndirect then break 'scan'
+		loadIndirect(dest, _, _, _, _) then noteX64DefId(defs, vreg: dest)
+		storeIndirectXmm then break 'scan'
+		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defs, vreg: dest)
 		globalLoad(dest, _, _) then noteX64DefId(defs, vreg: dest)
+		globalStore then break 'scan'
+		globalLoadXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
+		globalStoreXmm then break 'scan'
 		leaFromStack(dest, _) then noteX64DefId(defs, vreg: dest)
 		leaRipRelative(dest, _) then noteX64DefId(defs, vreg: dest)
 		leaFuncAddr(dest, _) then noteX64DefId(defs, vreg: dest)
 		setcc(dest, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64SingleDef'
-
-function noteX64DefUse(defs RegIntArray, op X64Op)
-	match op 'extract'
+		cmov(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		movsxd(dest, _) then noteX64DefId(defs, vreg: dest)
 		movzx32(dest, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64DefUse'
-
-function noteX64TwoAddr(defs RegIntArray, op X64Op)
-	match op 'extract'
-		addRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		subRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		imulRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		andRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		orRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		xorRegReg(dest, _) then noteX64DefId(defs, vreg: dest)
-		cmov(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		lockXaddMemReg(valReg, _) then noteX64DefId(defs, vreg: valReg)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64TwoAddr'
-
-function noteX64UseDefImm(defs RegIntArray, op X64Op)
-	match op 'extract'
-		addRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		subRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		andRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		orRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		xorRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64UseDefImm'
-
-function noteX64UnaryInPlace(defs RegIntArray, op X64Op)
-	match op 'extract'
-		negReg(reg) then noteX64DefId(defs, vreg: reg)
-		bitNotReg(reg) then noteX64DefId(defs, vreg: reg)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64UnaryInPlace'
-
-function noteX64BaseUseDest(defs RegIntArray, op X64Op)
-	match op 'extract'
-		loadIndirect(dest, _, _, _, _) then noteX64DefId(defs, vreg: dest)
 		nullSafeLoad(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64BaseUseDest'
-
-// Phase 2: memory-operand ALU. Dest is both used and (re)defined.
-function noteX64BaseUseUseDef(defs RegIntArray, op X64Op)
-	match op 'extract'
+		repMovsb to lockDecMemory then break 'scan'
+		lockXaddMemReg(valReg, _) then noteX64DefId(defs, vreg: valReg)
+		lockCmpxchgMemReg to stashEntryArgv then break 'scan'
 		addRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		subRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		andRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		orRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		xorRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		imulRegMem(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64BaseUseUseDef'
-
-// Phase 2: three-operand immediate form. Dest is def-only.
-function noteX64DefUseImm(defs RegIntArray, op X64Op)
-	match op 'extract'
+		cmpRegMem then break 'scan'
+		andRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		orRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
+		xorRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
 		imulRegImm(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64DefUseImm'
+	end 'scan'
+end 'noteX64OpDefs'
 
-function noteX64MovRegRegDef(defs RegIntArray, op X64Op)
-	match op 'extract'
-		movRegReg(destReg, _) then noteX64DefId(defs, vreg: destReg)
-		prologue to memcpyOp then break 'extract'
-		cmpRegReg to imulRegImm then break 'extract'
-	end 'extract'
-end 'noteX64MovRegRegDef'
+function noteX64DefId(defs RegIntArray, vreg X64VReg)
+	collectDef(defs, id: x64VRegId(vreg))
+end 'noteX64DefId'
 
 function noteX64FpDefId(defs RegIntArray, vreg X64FpVReg)
 	collectDef(defs, id: x64FpVRegId(vreg))
 end 'noteX64FpDefId'
-
-function noteX64FpDef(defs RegIntArray, op X64Op, pat OpPattern)
-	match pat 'which'
-		fpSingleDef then noteX64FpDefId(defs, vreg: x64GetFpSingleDef(op))
-		fpDefUse then noteX64FpDefId(defs, vreg: x64GetFpDefUseOperands(op).0)
-		fpTwoAddr then noteX64FpDefId(defs, vreg: x64GetFpTwoAddrOperands(op).0)
-		fpMov then noteX64FpMovDef(defs, op: op)
-		gprToFp then noteX64FpDefId(defs, vreg: x64GetGprToFpOperands(op).0)
-		baseUseFpDef then noteX64BaseUseFpDefDef(defs, op: op)
-		passThrough to baseUseDest then break 'which'
-		fpSingleUse then break 'which'
-		fpThreeAddr then break 'which'
-		fpTwoUse then break 'which'
-		fpToGpr then break 'which'
-		baseUseFpUse then break 'which'
-		movRegReg to csel then break 'which'
-		baseUseUseDef to defUseImm then break 'which'
-		fourAddr then break 'which'
-	end 'which'
-end 'noteX64FpDef'
-
-function noteX64FpMovDef(defs RegIntArray, op X64Op)
-	match op 'extract'
-		movXmmXmm(dest, _, _) then noteX64FpDefId(defs, vreg: dest)
-		prologue to xchgRegReg then break 'extract'
-		spillXmmToStack to imulRegImm then break 'extract'
-	end 'extract'
-end 'noteX64FpMovDef'
-
-function noteX64FpToGprDef(defs RegIntArray, op X64Op)
-	match op 'extract'
-		cvttFloat2Si(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		movqXmmToGpr(dest, _) then noteX64DefId(defs, vreg: dest)
-		prologue to cvtSi2Float then break 'extract'
-		cvtSd2Ss to cvtSs2Sd then break 'extract'
-		movqGprToXmm to imulRegImm then break 'extract'
-	end 'extract'
-end 'noteX64FpToGprDef'
-
-function noteX64BaseUseFpDefDef(defs RegIntArray, op X64Op)
-	match op 'extract'
-		loadIndirectXmm(dest, _, _, _) then noteX64FpDefId(defs, vreg: dest)
-		prologue to storeIndirectXmm then break 'extract'
-		globalLoad to imulRegImm then break 'extract'
-	end 'extract'
-end 'noteX64BaseUseFpDefDef'
-
-function noteX64ConstImm(defs RegIntArray, op X64Op)
-	match op 'extract'
-		movRegImm(dest, _) then noteX64DefId(defs, vreg: dest)
-		movRegImm32(dest, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64ConstImm'
-
-function noteX64Shift(defs RegIntArray, op X64Op)
-	match op 'extract'
-		shlRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		sarRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		shrRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
-		default panic("noteX64: unexpected op for pattern")
-	end 'extract'
-end 'noteX64Shift'
 
 // Physical-GPR DEST mask of an op. The call-lowering arg setup and the spill
 // inserter's reload folding produce mov/load/lea ops whose DEST is an explicit
@@ -818,153 +718,77 @@ end 'noteX64Shift'
 // `Array.push` received the ARRAY pointer as its LAYOUT descriptor (the sort
 // int-corruption miscompile).
 //
-// Mirrors `noteX64OpDefs`'s pattern dispatch; per-pattern extractors return
-// the phys mask of the GPR dest (a virtual dest contributes 0 via
-// `x64PhysRegMask`). FP-dest patterns contribute 0 — XMM clobbers are not
-// GPR constraints.
+// Mirrors `noteX64OpDefs`: ONE flat `match` over every X64Op variant (instead
+// of a pattern dispatch fanning out into ~12 full-enum helpers, which the
+// inliner flattens into a giant high-pressure block). Each GPR-def variant
+// returns the phys mask of its GPR dest (a virtual dest contributes 0 via
+// `x64PhysRegMask`); FP-dest and non-defining variants return 0 — an XMM clobber
+// is not a GPR constraint. The variant -> mask mapping matches `noteX64OpDefs`
+// arm-for-arm: every variant that defs a GPR there returns its dest mask here.
 function x64OpPhysGprDestMask(x64Op X64Op) returns RegMask
-	let pat = x64Op.rawValue.pattern
-	return match pat 'patMask'
-		passThrough gives 0
-		singleDef gives x64PhysMaskSingleDef(x64Op)
-		singleUse gives 0
-		defUse gives x64PhysMaskDefUse(x64Op)
-		twoAddr gives x64PhysMaskTwoAddr(x64Op)
-		useDefImm gives x64PhysMaskUseDefImm(x64Op)
-		unaryInPlace gives x64PhysMaskUnaryInPlace(x64Op)
-		threeAddr to baseUseSrcUse gives 0
-		baseUseDest gives x64PhysMaskBaseUseDest(x64Op)
-		fpSingleDef to fpTwoUse gives 0
-		fpMov gives 0
-		gprToFp gives 0
-		fpToGpr gives x64PhysMaskFpToGpr(x64Op)
-		baseUseFpUse gives 0
-		baseUseFpDef gives 0
-		movRegReg gives x64PhysMaskMovRegReg(x64Op)
-		constImm gives x64PhysMaskConstImm(x64Op)
-		shift gives x64PhysMaskShift(x64Op)
-		divReg to csel gives 0
-		baseUseUseDef gives x64PhysMaskBaseUseUseDef(x64Op)
-		baseTwoUse gives 0
-		defUseImm gives x64PhysMaskDefUseImm(x64Op)
-		fourAddr gives 0
-	end 'patMask'
-end 'x64OpPhysGprDestMask'
-
-function x64PhysMaskSingleDef(op X64Op) returns RegMask
-	return match op 'extract'
+	return match x64Op 'scan'
+		prologue to ret gives 0
+		movRegImm(dest, _) gives x64PhysRegMask(dest)
+		movRegImm32(dest, _) gives x64PhysRegMask(dest)
+		movSlot gives 0
 		loadSlot(dest, _) gives x64PhysRegMask(dest)
+		addRegReg(dest, _) gives x64PhysRegMask(dest)
+		subRegReg(dest, _) gives x64PhysRegMask(dest)
+		addRegImm(dest, _) gives x64PhysRegMask(dest)
+		subRegImm(dest, _) gives x64PhysRegMask(dest)
+		imulRegReg(dest, _) gives x64PhysRegMask(dest)
+		idivRcx to iremRcx gives 0
+		negReg(reg) gives x64PhysRegMask(reg)
+		bitNotReg(reg) gives x64PhysRegMask(reg)
+		andRegReg(dest, _) gives x64PhysRegMask(dest)
+		orRegReg(dest, _) gives x64PhysRegMask(dest)
+		xorRegReg(dest, _) gives x64PhysRegMask(dest)
+		shlRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		sarRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		shrRegCl(dest, _, _) gives x64PhysRegMask(dest)
+		cmpRaxRcx to movRspOffsetReg gives 0
 		loadRegRbpOffset(dest, _) gives x64PhysRegMask(dest)
+		callDirect to memcpyOp gives 0
+		movRegReg(destReg, _) gives x64PhysRegMask(destReg)
+		cmpRegReg to idivReg gives 0
+		spillToStack gives 0
 		reloadFromStack(dest, _) gives x64PhysRegMask(dest)
 		xorRegRegSelf(reg) gives x64PhysRegMask(reg)
+		callIndirect to ucomisXmm gives 0
+		cvtSi2Float gives 0
+		cvttFloat2Si(dest, _, _) gives x64PhysRegMask(dest)
+		cvtSd2Ss to cvtSs2Sd gives 0
+		movqXmmToGpr(dest, _) gives x64PhysRegMask(dest)
+		movqGprToXmm to storeIndirect gives 0
+		loadIndirect(dest, _, _, _, _) gives x64PhysRegMask(dest)
+		storeIndirectXmm to loadIndirectXmm gives 0
 		globalLoad(dest, _, _) gives x64PhysRegMask(dest)
+		globalStore gives 0
+		globalLoadXmm to globalStoreXmm gives 0
 		leaFromStack(dest, _) gives x64PhysRegMask(dest)
 		leaRipRelative(dest, _) gives x64PhysRegMask(dest)
 		leaFuncAddr(dest, _) gives x64PhysRegMask(dest)
 		setcc(dest, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskSingleDef: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskSingleDef'
-
-function x64PhysMaskDefUse(op X64Op) returns RegMask
-	return match op 'extract'
+		cmov(dest, _, _) gives x64PhysRegMask(dest)
 		movsxd(dest, _) gives x64PhysRegMask(dest)
 		movzx32(dest, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskDefUse: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskDefUse'
-
-function x64PhysMaskTwoAddr(op X64Op) returns RegMask
-	return match op 'extract'
-		addRegReg(dest, _) gives x64PhysRegMask(dest)
-		subRegReg(dest, _) gives x64PhysRegMask(dest)
-		imulRegReg(dest, _) gives x64PhysRegMask(dest)
-		andRegReg(dest, _) gives x64PhysRegMask(dest)
-		orRegReg(dest, _) gives x64PhysRegMask(dest)
-		xorRegReg(dest, _) gives x64PhysRegMask(dest)
-		cmov(dest, _, _) gives x64PhysRegMask(dest)
-		lockXaddMemReg(valReg, _) gives x64PhysRegMask(valReg)
-		default panic("x64PhysMaskTwoAddr: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskTwoAddr'
-
-function x64PhysMaskUseDefImm(op X64Op) returns RegMask
-	return match op 'extract'
-		addRegImm(dest, _) gives x64PhysRegMask(dest)
-		subRegImm(dest, _) gives x64PhysRegMask(dest)
-		andRegImm(dest, _) gives x64PhysRegMask(dest)
-		orRegImm(dest, _) gives x64PhysRegMask(dest)
-		xorRegImm(dest, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskUseDefImm: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskUseDefImm'
-
-function x64PhysMaskUnaryInPlace(op X64Op) returns RegMask
-	return match op 'extract'
-		negReg(reg) gives x64PhysRegMask(reg)
-		bitNotReg(reg) gives x64PhysRegMask(reg)
-		default panic("x64PhysMaskUnaryInPlace: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskUnaryInPlace'
-
-function x64PhysMaskBaseUseDest(op X64Op) returns RegMask
-	return match op 'extract'
-		loadIndirect(dest, _, _, _, _) gives x64PhysRegMask(dest)
 		nullSafeLoad(dest, _, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskBaseUseDest: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskBaseUseDest'
-
-function x64PhysMaskFpToGpr(op X64Op) returns RegMask
-	return match op 'extract'
-		cvttFloat2Si(dest, _, _) gives x64PhysRegMask(dest)
-		movqXmmToGpr(dest, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskFpToGpr: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskFpToGpr'
-
-function x64PhysMaskMovRegReg(op X64Op) returns RegMask
-	return match op 'extract'
-		movRegReg(destReg, _) gives x64PhysRegMask(destReg)
-		default panic("x64PhysMaskMovRegReg: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskMovRegReg'
-
-function x64PhysMaskConstImm(op X64Op) returns RegMask
-	return match op 'extract'
-		movRegImm(dest, _) gives x64PhysRegMask(dest)
-		movRegImm32(dest, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskConstImm: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskConstImm'
-
-function x64PhysMaskShift(op X64Op) returns RegMask
-	return match op 'extract'
-		shlRegCl(dest, _, _) gives x64PhysRegMask(dest)
-		sarRegCl(dest, _, _) gives x64PhysRegMask(dest)
-		shrRegCl(dest, _, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskShift: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskShift'
-
-function x64PhysMaskBaseUseUseDef(op X64Op) returns RegMask
-	return match op 'extract'
+		repMovsb to lockDecMemory gives 0
+		lockXaddMemReg(valReg, _) gives x64PhysRegMask(valReg)
+		lockCmpxchgMemReg to stashEntryArgv gives 0
 		addRegMem(dest, _, _) gives x64PhysRegMask(dest)
 		subRegMem(dest, _, _) gives x64PhysRegMask(dest)
 		andRegMem(dest, _, _) gives x64PhysRegMask(dest)
 		orRegMem(dest, _, _) gives x64PhysRegMask(dest)
 		xorRegMem(dest, _, _) gives x64PhysRegMask(dest)
 		imulRegMem(dest, _, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskBaseUseUseDef: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskBaseUseUseDef'
-
-function x64PhysMaskDefUseImm(op X64Op) returns RegMask
-	return match op 'extract'
+		cmpRegMem gives 0
+		andRegImm(dest, _) gives x64PhysRegMask(dest)
+		orRegImm(dest, _) gives x64PhysRegMask(dest)
+		xorRegImm(dest, _) gives x64PhysRegMask(dest)
 		imulRegImm(dest, _, _) gives x64PhysRegMask(dest)
-		default panic("x64PhysMaskDefUseImm: unexpected op for pattern")
-	end 'extract'
-end 'x64PhysMaskDefUseImm'
+	end 'scan'
+end 'x64OpPhysGprDestMask'
 
 function collectX64TwoReads(reads RegIntArray, reg1 X64VReg, reg2 X64VReg)
 	collectRead(reads, id: x64VRegId(reg1))
