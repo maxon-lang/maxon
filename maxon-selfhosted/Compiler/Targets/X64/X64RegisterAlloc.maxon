@@ -837,21 +837,21 @@ function preSeedX64ParamRegisters(module TargetModule, state RegState, srcFunc I
 end 'preSeedX64ParamRegisters'
 
 function preSeedIfNotDivResult(module TargetModule, state RegState, x64Op X64Op, opRefs OpIndexList, opIdx RegInt)
-	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
-		match x64Op 'extractMov'
-			movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(module, state: state, destReg: destReg, srcReg: srcReg, opRefs: opRefs, opIdx: opIdx)
-			prologue to memcpyOp then break 'extractMov'
-			cmpRegReg to imulRegImm then break 'extractMov'
-		end 'extractMov'
-	end 'isMov' else 'checkFp'
-		if x64Op.rawValue.pattern == OpPattern.fpMov 'isFpMov'
-			match x64Op 'extractFpMov'
-				movXmmXmm(dest, src, _) then preSeedFpParam(state, dest: dest, src: src)
-				prologue to xchgRegReg then break 'extractFpMov'
-				spillXmmToStack to imulRegImm then break 'extractFpMov'
-			end 'extractFpMov'
-		end 'isFpMov'
-	end 'checkFp'
+	// Dispatch directly on the op variant. A movRegReg pre-seeds a GPR param and
+	// a movXmmXmm pre-seeds an FP param; every other op is a no-op here. The
+	// variant match IS the discriminator — guarding it with a prior
+	// `x64Op.rawValue.pattern == ...` check would be redundant (only movRegReg
+	// carries OpPattern.movRegReg and only movXmmXmm carries OpPattern.fpMov),
+	// and reading `.rawValue` materializes the whole per-op metadata struct (a
+	// heap alloc plus an N-case select-chain per field), which bloated this
+	// function by thousands of ops. The match reads only the discriminant tag.
+	match x64Op 'dispatch'
+		prologue to memcpyOp then break 'dispatch'
+		movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(module, state: state, destReg: destReg, srcReg: srcReg, opRefs: opRefs, opIdx: opIdx)
+		cmpRegReg to xchgRegReg then break 'dispatch'
+		movXmmXmm(dest, src, _) then preSeedFpParam(state, dest: dest, src: src)
+		spillXmmToStack to imulRegImm then break 'dispatch'
+	end 'dispatch'
 end 'preSeedIfNotDivResult'
 
 function preSeedMovIfNotDivResult(module TargetModule, state RegState, destReg X64VReg, srcReg X64VReg, opRefs OpIndexList, opIdx RegInt)
