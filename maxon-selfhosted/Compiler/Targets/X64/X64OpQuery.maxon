@@ -132,6 +132,21 @@ export type X64OpQuery implements TargetOpQuery
 		return probe
 	end 'decodeReturnMovProbe'
 
+	// --- Param mov probe ---
+
+	function decodeParamMov(module TargetModule, packed OpIndex) returns ParamMovProbe
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		var probe = ParamMovProbe.notFound()
+		match x64Op 'extractMov'
+			movRegReg(destReg, srcReg) then probe = decodeX64ParamMovRegs(destReg, srcReg: srcReg)
+			movXmmXmm then break 'extractMov'
+			prologue to memcpyOp then break 'extractMov'
+			cmpRegReg to xchgRegReg then break 'extractMov'
+			spillXmmToStack to imulRegImm then break 'extractMov'
+		end 'extractMov'
+		return probe
+	end 'decodeParamMov'
+
 	// --- Copy hints ---
 
 	function extractCopyHints(module TargetModule, packed OpIndex, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
@@ -192,6 +207,22 @@ function extractX64FpVRegId(vreg X64FpVReg) returns RegInt
 		physical gives -1
 	end 'getId'
 end 'extractX64FpVRegId'
+
+// Decode a `movRegReg`'s operands as a GPR param materialization mov: a virtual
+// destination fed from a physical (argument-register) source. Returns a `found`
+// ParamMovProbe only when BOTH hold; otherwise `notFound` (e.g. a vreg-to-vreg
+// move or a mov INTO a physical register, neither of which is a register param).
+function decodeX64ParamMovRegs(destReg X64VReg, srcReg X64VReg) returns ParamMovProbe
+	let destId = extractX64VRegId(destReg)
+	if destId < 0 'destNotVirtual'
+		return ParamMovProbe.notFound()
+	end 'destNotVirtual'
+	let srcOrd = x64VRegOrdinal(srcReg)
+	if srcOrd == RM_NONE 'srcNotPhysical'
+		return ParamMovProbe.notFound()
+	end 'srcNotPhysical'
+	return ParamMovProbe.gpr(destId, srcOrd: srcOrd)
+end 'decodeX64ParamMovRegs'
 
 function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	let destId = extractX64VRegId(destReg)

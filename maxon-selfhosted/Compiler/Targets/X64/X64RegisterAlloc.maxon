@@ -29,6 +29,15 @@ function emitMovImmX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdi
 	appendIntImmToReg(module, dstBlock: dstBlock, dest: physReg(ordinalToX64(regOrdinal)), value: value)
 end 'emitMovImmX64'
 
+// Flag-preserving immediate load: same result as emitMovImmX64 but never emits
+// the value-0 `xor reg, reg` idiom (which clears the flags). `allowXorZero: false`
+// routes value 0 through `mov r32, 0` instead — MOV leaves the flags untouched —
+// so this is safe to emit between a flag-setting compare and a flag-reading
+// conditional branch.
+function emitMovImmFlagSafeX64(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
+	appendIntImmToReg(module, dstBlock: dstBlock, dest: physReg(ordinalToX64(regOrdinal)), value: value, allowXorZero: false)
+end 'emitMovImmFlagSafeX64'
+
 function emitMovRegX64(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 	appendX64Op(module, block: dstBlock, op: X64Op.movRegReg(physReg(ordinalToX64(destOrd)), srcReg: physReg(ordinalToX64(srcOrd))))
 end 'emitMovRegX64'
@@ -2362,6 +2371,10 @@ export type X64RegAllocTarget implements RegAllocTarget
 	function emitMovImm(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 		emitMovImmX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 	end 'emitMovImm'
+
+	function emitMovImmFlagSafe(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
+		emitMovImmFlagSafeX64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
+	end 'emitMovImmFlagSafe'
 
 	function emitMovReg(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 		emitMovRegX64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)

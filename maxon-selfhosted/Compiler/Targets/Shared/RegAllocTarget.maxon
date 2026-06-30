@@ -17,6 +17,16 @@ export interface RegAllocTarget
 
 	function emitMovImm(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
 
+	// Flag-PRESERVING immediate load. Identical result to emitMovImm but
+	// guaranteed not to touch the condition flags on ANY target — in particular
+	// it must NOT use x64's value-0 `xor reg, reg` zeroing idiom (which clears the
+	// flags). The greedy allocator uses this to rematerialize a constant block-arg
+	// (phi) source on the shared path between a block's flag-setting compare and
+	// its flag-reading conditional branch, where a flag-clobbering materialization
+	// would corrupt the branch condition. arm64's movz is already flag-safe, so
+	// its impl delegates to emitMovImm.
+	function emitMovImmFlagSafe(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
+
 	function emitMovReg(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 
 	// --- FP emission ---

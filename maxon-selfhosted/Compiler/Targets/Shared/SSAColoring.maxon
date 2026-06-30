@@ -2178,6 +2178,34 @@ export type ReturnMovProbe
 	end 'ok'
 end 'ReturnMovProbe'
 
+// (destId, srcOrd) describing an entry-block ABI parameter materialization mov
+// as decoded by a target-specific helper. ISel emits one
+// movRegReg(virtual(destId), physical(srcOrd)) per incoming register argument at
+// the top of the entry block, copying the argument register into the param's
+// vreg. destId is the destination's virtual-register id; srcOrd is the source's
+// physical (argument-register) ordinal. `found` is true ONLY for a genuine GPR
+// param mov (virtual dest + physical src); it is false for every other op —
+// including FP param movs and stack-param loads. The greedy allocator (GPR-only
+// this phase) consumes this to pre-seed the incoming argument registers into its
+// register file by scanning the LEADING contiguous run of param movs; a `found`
+// of false stops that scan, so a later physical-source mov (e.g. an idiv result
+// extraction `mov vQ, rax`, which always follows compute ops) is never seeded,
+// and an FP param op falls through to the existing FP-not-supported panic when
+// the forward walk reaches it.
+export type ParamMovProbe
+	export var destId as RegInt
+	export var srcOrd as RegOrdinal
+	export var found as bool
+
+	export static function notFound() returns ParamMovProbe
+		return Self{destId: -1, srcOrd: RM_NONE, found: false}
+	end 'notFound'
+
+	export static function gpr(destId RegInt, srcOrd RegOrdinal) returns ParamMovProbe
+		return Self{destId: destId, srcOrd: srcOrd, found: true}
+	end 'gpr'
+end 'ParamMovProbe'
+
 // For each block that ends in a `ret` terminator, walk opRefs in reverse and
 // find the first `movRegReg(physical retReg, virtual src)`. Force src's range
 // hint to the return register, overriding any earlier forward-pass hint.

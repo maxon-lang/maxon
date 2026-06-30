@@ -106,6 +106,12 @@ export type MaxonArgs
 	// run via the per-fragment path (used when the batch rewriter rejected
 	// them mid-batch). Subprocess-isolated to contain compile-time panics.
 	export var workerFallback as String
+	// `maxon build --greedy-only=NAME <file>`: force the named function through
+	// the alternative single-pass greedy register allocator instead of the SSA
+	// coloring pipeline. Test/dev trigger for the multi-phase greedy-allocator
+	// port (Phase 1: single-block, GPR-only, call-free). Empty = greedy path
+	// never fires (normal compilation).
+	export var greedyOnly as String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -133,7 +139,8 @@ export type MaxonArgs
 			workerPersistent: false,
 			workerSpec: "",
 			workerSingles: "",
-			workerFallback: ""
+			workerFallback: "",
+			greedyOnly: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -247,7 +254,10 @@ export type MaxonArgs
 				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
 			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
 				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerFallback' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkerFallback' else if arg.startsWith("--greedy-only=") 'isGreedyOnly'
+				// Sentinel: empty value leaves the greedy path disabled (normal compilation).
+				args.greedyOnly = try CommandLine.optionValue(arg) otherwise ""
+			end 'isGreedyOnly' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

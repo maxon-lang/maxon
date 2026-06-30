@@ -1,0 +1,1083 @@
+// Target-neutral greedy register allocator (GPR-only, cross-block via
+// spill-at-boundaries).
+//
+// PHASE 1 + PHASE 2 of the greedy-allocator port. This is the foundational scaffold for an
+// alternative to the SSA-coloring pipeline (colorSSA -> Belady -> reactive spill
+// loop -> applyColoring). That pipeline hangs non-deterministically on a few very
+// dense functions during self-compile (unbounded op emission in applyColoring),
+// so a few functions are better served by a simpler allocator whose work is
+// bounded by op count.
+//
+// The algorithm is ported from maxon-sharp's RegisterManagerBase: a register file
+// (registerContents / valueToRegister / lastUsed / stackHome / constants) driven
+// by a single forward walk over the function's ops. For each op it ensures every
+// read operand is resident (reloading or rematerializing as needed), frees reads
+// that die at the op, then allocates a register for each def (evicting the LRU
+// occupant on pressure). Unlike the C# version — which allocates DURING lowering
+// and emits physical-register ops inline — this runs as a PASS over MIR that
+// already carries virtual registers, so it must emit the FINAL PHYSICAL MIR
+// itself, bypassing ColoringResult + applyColoring.
+//
+// Direct physical emission reuses the EXISTING per-op substitution machinery: the
+// greedy walk builds a per-op ColoringResult (vreg -> the physical register it
+// chose for THIS op) and hands it to regTarget.substituteOp — the same call
+// applyColoring makes. Spill / reload / rematerialize ops are emitted through the
+// same RegAllocTarget.emitSpill / emitReload / emitMovImm primitives the SSA
+// spill path uses. No new target interface is introduced: RegAllocTarget +
+// TargetOpQuery already expose every emit and analysis hook the greedy allocator
+// needs.
+//
+// CROSS-BLOCK MODEL (Phase 2 — spill-at-boundaries, correctness-first):
+//   * Blocks are processed in layout order. At each block START the register
+//     file is EMPTY — every value live INTO a block lives in its stack home and
+//     is reloaded on first use (greedyEnsureInReg reloads from the home).
+//   * At each block EXIT (before the terminator) every value live-OUT of the
+//     block that is still resident is spilled to its stack home so successors
+//     can reload it. Values evicted mid-block are already in their home; constant
+//     values are rematerialized in the successor and never spilled.
+//   * BLOCK-ARGS / PHI: a branch passes block-args (the source vreg) to a
+//     successor's block-params (a different vreg — the SSA edge rename). Greedy
+//     routes the rename through the PARAM's stack home: at the predecessor exit
+//     each arg's value is stored into its successor-param's home, and the
+//     successor body reloads the param from that home. The arg SOURCES are read
+//     into registers FIRST, on the path SHARED by all the block's out-edges, so a
+//     self-referential phi permutation (arg == another param of the same edge,
+//     e.g. a loop body that swaps its carried values) reads every source before
+//     any store overwrites a home. The param-home STORES are then placed on each
+//     edge's OWN dynamic path — exactly like destroySSA's critical-edge splitting:
+//     the fallthrough edge's stores go inline after the branch, the taken edge's
+//     stores go in a freshly-inserted trampoline block. This is REQUIRED, not an
+//     optimization: a param's home double-serves as the current live value (for a
+//     sibling edge whose successor reads the param's PRE-iteration value) AND as
+//     the next-iteration phi destination (the back-edge), distinguishable only by
+//     which edge is dynamically taken. Storing unconditionally before the branch
+//     would let a loop latch's back-edge clobber the home a side-exit still needs.
+//   * To make reload offsets valid regardless of block processing order (a loop
+//     header reloads a param whose home a not-yet-processed latch writes), every
+//     GLOBAL value — block params plus every value in any block's live-out set —
+//     is assigned a stack home UP FRONT, in numeric value-id order (deterministic).
+//   * Spill/reload ops emitted between a flag-setting compare and a flag-reading
+//     conditional branch are flag-neutral on both targets (x64 mov / arm64
+//     ldr/str). The one exception is constant REMATERIALIZATION: x64's value-0
+//     `xor reg, reg` zeroing idiom CLEARS the flags, so an edge-arg source that is
+//     a rematerialized constant must use the flag-preserving emit at a conditional
+//     boundary — greedyReadEdgeArgs passes flagSafe there so the materialization
+//     never clobbers the branch condition (arm64's movz is already flag-safe).
+//
+// SCOPE / DEFERRALS:
+//   * GPR-only, call-free (FP register file and call-arg/clobber handling are
+//     later phases). Any FP-pattern, FP block-arg, or call op routed here panics
+//     with a clear message rather than miscompiling.
+//   * Routing is a forced test trigger (--greedy-only=NAME); the real
+//     budget-then-greedy fallback trigger comes later. The greedy path therefore
+//     never fires during normal compilation.
+
+// ============================================================
+// Forced-route configuration (test trigger)
+// ============================================================
+
+// Module-level config holder. Maxon does not allow a module-level `var` to be
+// initialized with a String literal directly, so the name lives inside a holder
+// type (the same pattern as SSAColoring's diagContext).
+type GreedyConfig
+	export var onlyFuncName as String
+
+	export static function create() returns GreedyConfig
+		return Self{onlyFuncName: ""}
+	end 'create'
+end 'GreedyConfig'
+
+var greedyConfig = GreedyConfig.create()
+
+// Set the single function name the greedy path should claim (from
+// `--greedy-only=NAME`). Empty disables the greedy path entirely.
+export function setGreedyOnlyFunc(name String)
+	greedyConfig.onlyFuncName = name
+end 'setGreedyOnlyFunc'
+
+// True iff `funcName` is the force-routed greedy function. Always false when no
+// `--greedy-only` was given, so normal compilation never takes the greedy path.
+export function greedyOnlyFuncMatches(funcName String) returns bool
+	if greedyConfig.onlyFuncName.isEmpty() 'noTrigger'
+		return false
+	end 'noTrigger'
+	return funcName == greedyConfig.onlyFuncName
+end 'greedyOnlyFuncMatches'
+
+// ============================================================
+// Mask helpers (a small set of register ordinals, as a bitset)
+// ============================================================
+
+// Protect masks track the physical registers that must NOT be evicted while
+// allocating the current op (its still-live source operands). Ordinals are small
+// (<= 31 on every supported target) so a plain RegInt bitset suffices.
+function greedyMaskSet(mask RegInt, ord RegOrdinal) returns RegInt
+	if ord < 0 'invalid'
+		return mask
+	end 'invalid'
+	return mask or (1 shl ord)
+end 'greedyMaskSet'
+
+function greedyMaskHas(mask RegInt, ord RegOrdinal) returns bool
+	if ord < 0 'invalid'
+		return false
+	end 'invalid'
+	return ((mask shr ord) and 1) != 0
+end 'greedyMaskHas'
+
+// ============================================================
+// Op-class guard
+// ============================================================
+
+// True for OpPattern values that touch the FP register file. The greedy
+// allocator is GPR-only this phase; an FP op must not be silently treated as GPR.
+// The FP-class patterns are contiguous in the OpPattern declaration
+// (fpSingleDef..baseUseFpDef), so the surrounding ranges are pure GPR/control.
+function greedyIsFpPattern(pat OpPattern) returns bool
+	return match pat 'check'
+		passThrough to baseUseDest gives false
+		fpSingleDef to baseUseFpDef gives true
+		movRegReg to fourAddr gives false
+	end 'check'
+end 'greedyIsFpPattern'
+
+// Panic loudly when a force-routed function contains an op the Phase-1 greedy
+// allocator cannot handle (FP or a call). Misrouting is a test/dev error, so a
+// clear panic beats a silent miscompile. Later phases replace each panic with
+// real handling.
+function greedyGuardOpSupported(state RegState, opQuery TargetOpQuery, module TargetModule, packed OpIndex)
+	if opQuery.isCallOp(module, packed: packed) 'isCall'
+		panic("greedy Phase 1: call op in func `{state.funcName}` is not supported yet (calls are deferred to a later phase) — do not route functions with calls via --greedy-only")
+	end 'isCall'
+
+	let patOrd = opQuery.getOpPatternOrdinal(module, packed: packed)
+	let pat = try OpPattern.fromRawValue(patOrd) otherwise OpPattern.passThrough
+	if greedyIsFpPattern(pat) 'isFp'
+		panic("greedy Phase 1: FP op (pattern {pat.name}) in func `{state.funcName}` is not supported yet (the FP register file is deferred to a later phase) — do not route functions with floating-point via --greedy-only")
+	end 'isFp'
+end 'greedyGuardOpSupported'
+
+// ============================================================
+// Register-file primitives (ported from RegisterManagerBase)
+// ============================================================
+
+// True iff physical register `ord` currently holds no value.
+function greedyRegisterIsFree(state RegState, ord RegOrdinal) returns bool
+	return getOr(state.registerContents, index: ord, fallback: RM_NONE) == RM_NONE
+end 'greedyRegisterIsFree'
+
+// Bind value `vid` to physical register `ord`. Clears any stale mapping from a
+// register the value previously occupied (mirrors RegisterManagerBase.Assign).
+function greedyAssign(state RegState, ord RegOrdinal, vid RegInt)
+	var info = getValueInfo(state, valueId: vid)
+	let oldReg = info.gprOrdinal
+	if oldReg != RM_NONE and oldReg != ord 'clearOld'
+		let oldOccupant = getOr(state.registerContents, index: oldReg, fallback: RM_NONE)
+		if oldOccupant == vid 'stillOurs'
+			set(state.registerContents, index: oldReg, value: RM_NONE, sentinel: RM_NONE)
+			set(state.lastUsed, index: oldReg, value: 0, sentinel: 0)
+		end 'stillOurs'
+	end 'clearOld'
+
+	set(state.registerContents, index: ord, value: vid, sentinel: RM_NONE)
+	info.gprOrdinal = ord
+	set(state.lastUsed, index: ord, value: state.currentOpIndex, sentinel: 0)
+end 'greedyAssign'
+
+// Record that `vid` is an integer constant `value`, so a later reload can
+// rematerialize it (movImm) instead of round-tripping through a stack slot, and
+// so eviction need not spill it at all (mirrors RegisterManagerBase constants).
+function greedyRecordConstant(state RegState, vid RegInt, value RegInt)
+	var info = getValueInfo(state, valueId: vid)
+	info.constantValue = value
+	info.isConstant = true
+end 'greedyRecordConstant'
+
+// Allocate the next spill-slot offset, respecting the target's stack-growth
+// direction. Matches RegState's spill-offset convention so the spill/reload ops
+// reference the same [fp/rbp + offset] slots the prologue/epilogue pass reserves
+// for via func.spillSize.
+function greedyAllocateSpillSlot(state RegState) returns RegInt
+	if state.desc.spillsGrowDown 'growDown'
+		state.nextSpillOffset = state.nextSpillOffset - 8
+		return state.nextSpillOffset
+	end 'growDown' else 'growUp'
+		let slot = state.nextSpillOffset
+		state.nextSpillOffset = state.nextSpillOffset + 8
+		return slot
+	end 'growUp'
+end 'greedyAllocateSpillSlot'
+
+// Find the least-recently-used evictable register, optionally constrained to
+// registers whose occupant is a constant (preferred — free to rematerialize) or
+// whose home is already in-sync (preferred next — eviction needs no fresh spill
+// store). Returns RM_NONE if no register matches. Mirrors
+// RegisterManagerBase.FindLruRegister.
+//
+// `requireInSync` keys on `homeInSync`, NOT merely on `stackHome` being
+// reserved: greedyPreassignHomes gives every cross-block value a `stackHome` up
+// front, so a reserved-but-unpopulated home does NOT mean the slot holds the
+// value. Preferring such a victim and skipping its store (the old behavior)
+// left the home holding garbage that the successor then reloaded.
+function greedyFindLruRegister(state RegState, protectMask RegInt, requireConstant bool, requireInSync bool) returns RegOrdinal
+	var bestReg = RM_NONE
+	var bestLastUsed = i64.max
+	for ord in state.desc.gprPool 'eachReg'
+		let occupant = getOr(state.registerContents, index: ord, fallback: RM_NONE)
+		if occupant == RM_NONE 'free'
+			continue
+		end 'free'
+		if greedyMaskHas(protectMask, ord: ord) 'protected'
+			continue
+		end 'protected'
+
+		let info = getValueInfo(state, valueId: occupant)
+		if requireConstant and not info.isConstant 'notConst'
+			continue
+		end 'notConst'
+		if requireInSync and not info.homeInSync 'notInSync'
+			continue
+		end 'notInSync'
+
+		let lu = getOr(state.lastUsed, index: ord, fallback: 0)
+		if lu < bestLastUsed 'better'
+			bestLastUsed = lu
+			bestReg = ord
+		end 'better'
+	end 'eachReg'
+	return bestReg
+end 'greedyFindLruRegister'
+
+// Free physical register `ord`, spilling its occupant to its stack home first
+// unless the value is rematerializable (constant) or its home is already
+// in-sync (a prior store populated it and the SSA value has not changed since).
+// Mirrors RegisterManagerBase.SpillRegisterIfOccupied.
+//
+// A reserved-but-not-yet-in-sync home is the common case here: every
+// cross-block value gets a `stackHome` from greedyPreassignHomes but no store,
+// so the FIRST eviction must actually emit the spill (and mark the home
+// in-sync). Skipping it because a home was merely reserved is the garbage-spill
+// bug this decoupling fixes.
+function greedySpillRegisterIfOccupied(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, ord RegOrdinal)
+	let occupant = getOr(state.registerContents, index: ord, fallback: RM_NONE)
+	if occupant == RM_NONE 'empty'
+		return
+	end 'empty'
+
+	var info = getValueInfo(state, valueId: occupant)
+	if not info.isConstant and not info.homeInSync 'needsSpill'
+		if info.stackHome == RM_NO_STACK_HOME 'allocHome'
+			info.stackHome = greedyAllocateSpillSlot(state)
+		end 'allocHome'
+		regTarget.emitSpill(module, dstBlock: block, regOrdinal: ord, stackOffset: info.stackHome)
+		info.homeInSync = true
+	end 'needsSpill'
+
+	info.gprOrdinal = RM_NONE
+	set(state.registerContents, index: ord, value: RM_NONE, sentinel: RM_NONE)
+	set(state.lastUsed, index: ord, value: 0, sentinel: 0)
+end 'greedySpillRegisterIfOccupied'
+
+// Evict one register so a new value can be placed. Prefers evicting a constant
+// (no spill), then a value whose home is already in-sync (no fresh spill
+// store), then any value (greedySpillRegisterIfOccupied emits the store).
+// Mirrors RegisterManagerBase.Evict.
+function greedyEvict(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, protectMask RegInt)
+	var victim = greedyFindLruRegister(state, protectMask: protectMask, requireConstant: true, requireInSync: false)
+	if victim == RM_NONE 'tryInSync'
+		victim = greedyFindLruRegister(state, protectMask: protectMask, requireConstant: false, requireInSync: true)
+	end 'tryInSync'
+	if victim == RM_NONE 'tryAny'
+		victim = greedyFindLruRegister(state, protectMask: protectMask, requireConstant: false, requireInSync: false)
+	end 'tryAny'
+
+	if victim == RM_NONE 'noVictim'
+		panic("greedy: no register available to evict in func `{state.funcName}` (every pooled register is protected for the current op — register demand exceeds the pool)")
+	end 'noVictim'
+
+	greedySpillRegisterIfOccupied(state, regTarget: regTarget, module: module, block: block, ord: victim)
+end 'greedyEvict'
+
+// Allocate a physical register for value `vid`. Tries the next fresh pool slot,
+// then any free register, then evicts the LRU occupant. `protectMask` names
+// registers that must survive (the current op's still-live source operands).
+// Mirrors RegisterManagerBase.AllocateRegister.
+function greedyAllocateReg(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, vid RegInt, protectMask RegInt) returns RegOrdinal
+	// 1. Next sequential fresh slot.
+	if state.nextFreshIndex < state.desc.gprPool.count() 'tryFresh'
+		let cand = try state.desc.gprPool.get(state.nextFreshIndex) otherwise panic("greedy: gprPool.get OOB at nextFreshIndex={state.nextFreshIndex}")
+		if greedyRegisterIsFree(state, ord: cand) and not greedyMaskHas(protectMask, ord: cand) 'freshUsable'
+			state.nextFreshIndex = state.nextFreshIndex + 1
+			greedyAssign(state, ord: cand, vid: vid)
+			return cand
+		end 'freshUsable'
+	end 'tryFresh'
+
+	// 2. Any free register in pool order.
+	for ord in state.desc.gprPool 'anyFree'
+		if greedyRegisterIsFree(state, ord: ord) and not greedyMaskHas(protectMask, ord: ord) 'usable'
+			greedyAssign(state, ord: ord, vid: vid)
+			return ord
+		end 'usable'
+	end 'anyFree'
+
+	// 3. All occupied — evict the LRU, then take the freed register.
+	greedyEvict(state, regTarget: regTarget, module: module, block: block, protectMask: protectMask)
+	for ord in state.desc.gprPool 'afterEvict'
+		if greedyRegisterIsFree(state, ord: ord) 'nowFree'
+			greedyAssign(state, ord: ord, vid: vid)
+			return ord
+		end 'nowFree'
+	end 'afterEvict'
+
+	panic("greedy: failed to allocate a register for v{vid} in func `{state.funcName}` after eviction")
+end 'greedyAllocateReg'
+
+// Ensure value `vid` is resident in a physical register, reloading from its
+// stack home or rematerializing a constant as needed. Returns the holding
+// ordinal. Mirrors RegisterManagerBase.EnsureInRegister.
+//
+// `flagSafe` (default false) forbids the flag-clobbering value-0 zeroing idiom
+// when rematerializing a constant: it routes the materialization through
+// emitMovImmFlagSafe instead of emitMovImm. Callers that emit between a block's
+// flag-setting compare and its flag-reading conditional branch (the edge-arg
+// source reads at a conditional boundary) pass true; everywhere else the cheaper
+// emitMovImm is used. Reloads and evictions are flag-neutral on every target, so
+// only the constant-remat path is affected.
+function greedyEnsureInReg(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, vid RegInt, protectMask RegInt, flagSafe bool = false) returns RegOrdinal
+	let info = getValueInfo(state, valueId: vid)
+
+	if info.gprOrdinal != RM_NONE 'resident'
+		set(state.lastUsed, index: info.gprOrdinal, value: state.currentOpIndex, sentinel: 0)
+		return info.gprOrdinal
+	end 'resident'
+
+	if info.isConstant 'remat'
+		let reg = greedyAllocateReg(state, regTarget: regTarget, module: module, block: block, vid: vid, protectMask: protectMask)
+		if flagSafe 'flagSafeRemat'
+			regTarget.emitMovImmFlagSafe(module, dstBlock: block, regOrdinal: reg, value: info.constantValue)
+		end 'flagSafeRemat' else 'plainRemat'
+			regTarget.emitMovImm(module, dstBlock: block, regOrdinal: reg, value: info.constantValue)
+		end 'plainRemat'
+		return reg
+	end 'remat'
+
+	if info.stackHome != RM_NO_STACK_HOME 'reload'
+		let reg = greedyAllocateReg(state, regTarget: regTarget, module: module, block: block, vid: vid, protectMask: protectMask)
+		regTarget.emitReload(module, dstBlock: block, regOrdinal: reg, stackOffset: info.stackHome)
+		return reg
+	end 'reload'
+
+	panic("greedy: value v{vid} in func `{state.funcName}` has no register, no stack home, and is not a constant — it is read before any def or boundary store reached it. Every cross-block (global) value is pre-assigned a stack home, so this means a value was read in a block that neither defines it nor receives it as a live-in (a malformed CFG / liveness mismatch).")
+end 'greedyEnsureInReg'
+
+// Mark `vid` dead: release its register. Mirrors RegisterManagerBase.NoteValueDead
+// (GPR side only — FP is a later phase).
+function greedyNoteValueDead(state RegState, vid RegInt)
+	var info = getValueInfo(state, valueId: vid)
+	let ord = info.gprOrdinal
+	if ord != RM_NONE 'inReg'
+		info.gprOrdinal = RM_NONE
+		set(state.registerContents, index: ord, value: RM_NONE, sentinel: RM_NONE)
+		set(state.lastUsed, index: ord, value: 0, sentinel: 0)
+	end 'inReg'
+end 'greedyNoteValueDead'
+
+// ============================================================
+// Per-block last-use scan
+// ============================================================
+
+// Result of the pre-walk: per-value last-use op index (RM_NONE = never read) and
+// the maximum value id referenced (for sizing the per-op coloring + scratch).
+type GreedyLastUse
+	export var lastUse as RegIntArray
+	export var maxValueId as RegInt
+
+	export static function create(lastUse RegIntArray, maxValueId RegInt) returns GreedyLastUse
+		return Self{lastUse: lastUse, maxValueId: maxValueId}
+	end 'create'
+end 'GreedyLastUse'
+
+// Scan the block (regular ops then terminator) recording, per read value, the
+// index of its last reading op. The terminator's reads are attributed to index
+// `block.opRefs.count()` — one past the last regular op — matching the op index
+// the driver uses when it processes the terminator.
+function greedyBuildLastUse(module TargetModule, block IrBlock, regTarget RegAllocTarget) returns GreedyLastUse
+	var lastUse = RegIntArray.create()
+	var maxValueId = 0
+	var opIdx = 0
+
+	for packed in block.opRefs 'eachOp'
+		let reads = RegIntArray.create()
+		regTarget.countOpReads(module, reads: reads, packed: packed)
+		for r in reads 'eachRead'
+			if r > maxValueId 'biggerR'
+				maxValueId = r
+			end 'biggerR'
+			set(lastUse, index: r, value: opIdx, sentinel: RM_NONE)
+		end 'eachRead'
+
+		let defs = RegIntArray.create()
+		regTarget.noteOpDefs(module, defs: defs, packed: packed)
+		for d in defs 'eachDef'
+			if d > maxValueId 'biggerD'
+				maxValueId = d
+			end 'biggerD'
+		end 'eachDef'
+
+		opIdx = opIdx + 1
+	end 'eachOp'
+
+	if block.hasTerminatorOp() 'hasTerm'
+		let treads = RegIntArray.create()
+		regTarget.countOpReads(module, reads: treads, packed: block.terminatorIndex())
+		for r in treads 'eachTermRead'
+			if r > maxValueId 'biggerT'
+				maxValueId = r
+			end 'biggerT'
+			set(lastUse, index: r, value: opIdx, sentinel: RM_NONE)
+		end 'eachTermRead'
+	end 'hasTerm'
+
+	// Block-arg (phi) SOURCE vregs carried on outgoing edges are read at the block
+	// BOUNDARY (greedyReadEdgeArgs), at the same index the terminator uses — one
+	// past the last regular op. An edge-arg source is NOT in dataflow liveOut
+	// (liveness attributes it to the successor's renamed PARAM, not to the source),
+	// so without recording its boundary use here greedyProcessOp's freeDead would
+	// free it at its last REGULAR read and the boundary edge copy would then find it
+	// with no register, no home, and not constant — a panic. Recording it as a
+	// boundary use keeps it resident (or spilled with a home) until the edge copy.
+	// Mirrors LiveRangeBuilder's recordArgIdsLastUses.
+	for edge in block.branchEdges 'eachEdge'
+		for argId in edge.argIds 'eachArg'
+			if argId > maxValueId 'biggerArg'
+				maxValueId = argId
+			end 'biggerArg'
+			set(lastUse, index: argId, value: opIdx, sentinel: RM_NONE)
+		end 'eachArg'
+	end 'eachEdge'
+
+	return GreedyLastUse.create(lastUse, maxValueId: maxValueId)
+end 'greedyBuildLastUse'
+
+function greedyIsLastUse(lastUse RegIntArray, vid RegInt, opIdx RegInt) returns bool
+	return getOr(lastUse, index: vid, fallback: RM_NONE) == opIdx
+end 'greedyIsLastUse'
+
+// ============================================================
+// Per-op driver
+// ============================================================
+
+// Resize `arr` to exactly `n` entries holding `fill` (used to pre-size the
+// per-op coloring + constant-detection scratch so index writes are in bounds).
+function greedyMakeIntArray(n RegInt, fill RegInt) returns RegIntArray
+	var arr = RegIntArray.create()
+	var i = 0
+	while i < n 'init'
+		arr.push(fill)
+		i = i + 1
+	end 'init'
+	return arr
+end 'greedyMakeIntArray'
+
+function greedyMakeBoolArray(n RegInt) returns BoolArray
+	var arr = BoolArray.create()
+	var i = 0
+	while i < n 'init'
+		arr.push(false)
+		i = i + 1
+	end 'init'
+	return arr
+end 'greedyMakeBoolArray'
+
+// If `packed` defines `valueId` with an integer constant, record it for
+// rematerialization. Uses the target's existing constant-detection query.
+function greedyMaybeRecordConstant(state RegState, opQuery TargetOpQuery, module TargetModule, packed OpIndex, valueId RegInt, isConstScratch BoolArray, constValScratch RegIntArray)
+	opQuery.detectConstant(module, packed: packed, valueId: valueId, isConst: isConstScratch, constVal: constValScratch)
+	let isConst = try isConstScratch.get(valueId) otherwise false
+	if isConst 'recordIt'
+		let value = try constValScratch.get(valueId) otherwise 0
+		greedyRecordConstant(state, vid: valueId, value: value)
+	end 'recordIt'
+end 'greedyMaybeRecordConstant'
+
+// Allocate registers for one op and emit its physical form into block.opRefs.
+// Order mirrors a standard linear greedy allocator: ensure reads resident ->
+// free reads that die here (so a def can reuse a dying source's register) ->
+// allocate defs (protecting still-live sources) -> substitute.
+function greedyProcessOp(state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery, module TargetModule, block IrBlock, packed OpIndex, coloring ColoringResult, lastUse RegIntArray, isConstScratch BoolArray, constValScratch RegIntArray, opIdx RegInt, liveOut LiveSet)
+	let reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
+	let defs = RegIntArray.create()
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
+
+	// 1. Ensure every read operand is resident; protect each resolved read from
+	// eviction while resolving the remaining reads of the same op.
+	var readProtect = 0
+	for r in reads 'ensureReads'
+		let ord = greedyEnsureInReg(state, regTarget: regTarget, module: module, block: block, vid: r, protectMask: readProtect)
+		try coloring.assignment.set(r, value: ord) otherwise panic("greedy: coloring.assignment.set OOB for v{r}")
+		readProtect = greedyMaskSet(readProtect, ord: ord)
+	end 'ensureReads'
+
+	// 2. Free reads that die at this op so a def can reuse the register. A value
+	// that is ALSO defined here (in-place use+def, e.g. addRegImm) keeps its
+	// register through the op — it is neither freed nor reallocated. Live-after
+	// reads (and in-place defs) are protected so def allocation can't evict them.
+	//
+	// A value that is LIVE-OUT of this block is never freed here even at its last
+	// in-block use: it is needed by a successor and must reach the block-exit
+	// boundary spill in a register (or already in its stack home via an eviction).
+	// Freeing it with greedyNoteValueDead would clear its register WITHOUT spilling
+	// — if it had no stack home yet (a fresh in-block def with no later in-block
+	// read), the value would be lost. Keeping it live routes it through the
+	// boundary spill instead.
+	var liveProtect = 0
+	for r in reads 'freeDead'
+		let dies = greedyIsLastUse(lastUse, vid: r, opIdx: opIdx) and not liveOut.contains(r)
+		let inPlaceDef = idListContains(defs, target: r)
+		if dies and not inPlaceDef 'free'
+			greedyNoteValueDead(state, vid: r)
+		end 'free' else 'keep'
+			let ord = getValueInfo(state, valueId: r).gprOrdinal
+			liveProtect = greedyMaskSet(liveProtect, ord: ord)
+		end 'keep'
+	end 'freeDead'
+
+	// 3. Allocate a register for each def. A def already resident (it was a read
+	// of this same op — the in-place case) keeps its register.
+	for d in defs 'allocDefs'
+		let info = getValueInfo(state, valueId: d)
+		if info.gprOrdinal != RM_NONE 'alreadyResident'
+			try coloring.assignment.set(d, value: info.gprOrdinal) otherwise panic("greedy: coloring.assignment.set OOB for v{d}")
+		end 'alreadyResident' else 'fresh'
+			let ord = greedyAllocateReg(state, regTarget: regTarget, module: module, block: block, vid: d, protectMask: liveProtect)
+			try coloring.assignment.set(d, value: ord) otherwise panic("greedy: coloring.assignment.set OOB for v{d}")
+		end 'fresh'
+
+		greedyMaybeRecordConstant(state, opQuery: opQuery, module: module, packed: packed, valueId: d, isConstScratch: isConstScratch, constValScratch: constValScratch)
+	end 'allocDefs'
+
+	// 4. Emit the op with the chosen physical registers, reusing the SSA path's
+	// per-op substitution (identity moves are elided by it).
+	regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+end 'greedyProcessOp'
+
+// Substitute the terminator (resolving any read operands) and reattach it,
+// mirroring applyColoring's terminator handling.
+function greedyProcessTerminator(state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery, module TargetModule, block IrBlock, coloring ColoringResult)
+	let term = block.terminatorIndex()
+	greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: term)
+
+	let reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: term)
+	var readProtect = 0
+	for r in reads 'ensureReads'
+		let ord = greedyEnsureInReg(state, regTarget: regTarget, module: module, block: block, vid: r, protectMask: readProtect)
+		try coloring.assignment.set(r, value: ord) otherwise panic("greedy: coloring.assignment.set OOB for v{r}")
+		readProtect = greedyMaskSet(readProtect, ord: ord)
+	end 'ensureReads'
+
+	let termOps = OpIndexList.create()
+	regTarget.substituteOp(module, packed: term, coloring: coloring, opRefs: termOps)
+	if termOps.count() > 0 'hasResult'
+		let newTerm = try termOps.get(0) otherwise term
+		block.terminator = Terminator.opIndex(newTerm)
+	end 'hasResult' else 'noResult'
+		// Identity-move elimination dropped the terminator: promote the last
+		// regular op (mirrors applyColoring).
+		let lastOp = try block.opRefs.removeLast() otherwise 'emptyBlock'
+			block.terminator = Terminator.unset
+			return
+		end 'emptyBlock'
+		block.terminator = Terminator.opIndex(lastOp)
+	end 'noResult'
+end 'greedyProcessTerminator'
+
+// ============================================================
+// Cross-block support (Phase 2): globals, homes, boundary spills
+// ============================================================
+
+// The id of the function's entry block (the first block in layout order).
+function greedyEntryBlockId(module TargetModule, func IrFunction) returns BlockId
+	let blockRef = try func.blockRefs.get(0) otherwise panic("greedy: func `{func.name}` has no blocks")
+	let entry = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+	return entry.id
+end 'greedyEntryBlockId'
+
+// blockId -> blockRef (index into module.blocks), built once per function so a
+// branch edge's target-block lookup during the boundary spill is O(1).
+typealias GreedyBlockIdToRef = Map with (BlockId, BlockRef)
+
+function greedyBuildBlockIdToRef(module TargetModule, func IrFunction) returns GreedyBlockIdToRef
+	var map = GreedyBlockIdToRef.create()
+	for blockRef in func.blockRefs 'each'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		map.upsert(block.id, value: blockRef)
+	end 'each'
+	return map
+end 'greedyBuildBlockIdToRef'
+
+// Empty live-out set (for the entry point's per-block lookup fallback and for
+// single-block functions whose only block has no successors).
+function greedyGetLiveOut(liveness LivenessInfo, blockId BlockId) returns LiveSet
+	return try liveness.liveOut.get(blockId) otherwise panic("greedy: liveOut missing for block {blockId} (liveOut sized to numBlocks)")
+end 'greedyGetLiveOut'
+
+// Mark value `vid` as GLOBAL: it crosses a block boundary (a block param or a
+// value live-out of some block) and therefore needs a stable stack home.
+function greedyMarkGlobal(globals BoolArray, vid RegInt)
+	if vid < 0 'invalid'
+		return
+	end 'invalid'
+	try globals.set(vid, value: true) otherwise panic("greedy: globals.set OOB for v{vid} (globals sized to maxValueId+1)")
+end 'greedyMarkGlobal'
+
+// Compute the set of GLOBAL value ids: every block param (phi dest) plus every
+// value in any block's live-out set. These are exactly the values whose lifetime
+// crosses a block boundary and that must round-trip through a stable stack home.
+function greedyComputeGlobals(module TargetModule, func IrFunction, liveness LivenessInfo, arraySize RegInt) returns BoolArray
+	var globals = greedyMakeBoolArray(arraySize)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachParam'
+			greedyMarkGlobal(globals, vid: arg.valueId)
+		end 'eachParam'
+		let liveOut = greedyGetLiveOut(liveness, blockId: block.id)
+		for vid in liveOut.members 'eachLiveOut'
+			greedyMarkGlobal(globals, vid: vid)
+		end 'eachLiveOut'
+	end 'eachBlock'
+	return globals
+end 'greedyComputeGlobals'
+
+// Assign a stack home to every GLOBAL value UP FRONT, in numeric value-id order
+// (deterministic, independent of block processing order). Doing this before any
+// block is walked guarantees a reload's home offset is valid even when the
+// writer of that home is a block processed later (a loop back-edge).
+function greedyPreassignHomes(state RegState, globals BoolArray)
+	var vid = 0
+	while vid < globals.count() 'eachVid'
+		let isGlobal = try globals.get(vid) otherwise false
+		if isGlobal 'assign'
+			var info = getValueInfo(state, valueId: vid)
+			if info.stackHome == RM_NO_STACK_HOME 'noHome'
+				info.stackHome = greedyAllocateSpillSlot(state)
+			end 'noHome'
+		end 'assign'
+		vid = vid + 1
+	end 'eachVid'
+end 'greedyPreassignHomes'
+
+// Empty the register file at a block boundary: the cross-block model assumes NO
+// value is resident at block start (every live-in is reloaded from its home).
+// Clears the physical-register contents and every value's GPR binding, but
+// PRESERVES each value's stackHome / isConstant / constantValue (those persist
+// for the whole function so reloads and rematerialization stay consistent).
+function greedyResetRegisterFile(state RegState)
+	var ord = 0
+	while ord < state.registerContents.count() 'clearRegs'
+		set(state.registerContents, index: ord, value: RM_NONE, sentinel: RM_NONE)
+		set(state.lastUsed, index: ord, value: 0, sentinel: 0)
+		ord = ord + 1
+	end 'clearRegs'
+
+	var vi = 0
+	while vi < state.values.count() 'clearVals'
+		var info = try state.values.get(vi) otherwise panic("greedy: values.get OOB at {vi} (vi < count by guard)")
+		info.gprOrdinal = RM_NONE
+		vi = vi + 1
+	end 'clearVals'
+
+	state.nextFreshIndex = 0
+end 'greedyResetRegisterFile'
+
+// Seed the register file with the entry block's incoming ABI argument registers.
+//
+// Function parameters arrive as leading entry-block movRegReg(virtual(vP),
+// physical(argReg)) ops. The physical source reports NO read (collectRead drops
+// physical operands), so without this seeding the forward walk would think every
+// argument register is free and could hand a later value an argument register that
+// still holds an as-yet-unconsumed earlier param — clobbering it (a function with
+// >= 4 register params would return a wrong argument, since later param movs
+// overwrite earlier params' argument registers). Mirroring
+// preSeedX64ParamRegisters / preAssignParam, each param vreg is pre-bound to its
+// incoming argument register: the param-mov then becomes an identity (vP already
+// resides in argReg) and is elided during substitution, and the argument register
+// stays occupied — never handed to another value — until the param dies.
+//
+// Only the LEADING contiguous run of GPR param movs is seeded; the scan stops at
+// the first op decodeParamMov does not recognize as a virtual<-physical GPR mov.
+// This excludes later physical-source movs (e.g. an idiv result extraction
+// `mov vQ, rax`), which always follow compute ops and so are never in the leading
+// run, and stops at an FP register param (recorded but unsupported this phase) —
+// the forward walk then hits the existing FP-not-supported panic on that FP op.
+// Driven entirely by the actual entry ops via the target's decodeParamMov hook, so
+// it stays target-neutral and never miscompiles a misrouted function.
+function greedySeedEntryParams(state RegState, opQuery TargetOpQuery, module TargetModule, entryBlock IrBlock)
+	var i = 0
+	let opCount = entryBlock.opRefs.count()
+	while i < opCount 'seedLeading'
+		let packed = try entryBlock.opRefs.get(i) otherwise panic("greedy: entryBlock.opRefs.get OOB at {i} (i < opCount by guard)")
+		let probe = opQuery.decodeParamMov(module, packed: packed)
+		if not probe.found 'notParamMov'
+			break
+		end 'notParamMov'
+		greedyAssign(state, ord: probe.srcOrd, vid: probe.destId)
+		i = i + 1
+	end 'seedLeading'
+end 'greedySeedEntryParams'
+
+// Spill every value that is live-OUT of `block` and still resident to its stack
+// home, so successors can reload it. Constant values are skipped (the successor
+// rematerializes them); values already evicted mid-block are already in their
+// home. Homes are pre-assigned for every global, but the RM_NO_STACK_HOME guard
+// keeps this self-contained.
+function greedyBoundarySpillLiveOut(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, liveOut LiveSet)
+	for vid in liveOut.members 'eachLiveOut'
+		var info = getValueInfo(state, valueId: vid)
+		if info.isConstant 'remat'
+			continue
+		end 'remat'
+		if info.gprOrdinal == RM_NONE 'notResident'
+			continue
+		end 'notResident'
+
+		if info.stackHome == RM_NO_STACK_HOME 'noHome'
+			info.stackHome = greedyAllocateSpillSlot(state)
+		end 'noHome'
+		regTarget.emitSpill(module, dstBlock: block, regOrdinal: info.gprOrdinal, stackOffset: info.stackHome)
+	end 'eachLiveOut'
+end 'greedyBoundarySpillLiveOut'
+
+// A resolved block-arg (phi) edge: the physical register holding each arg value
+// plus the successor PARAM value id whose stack home receives it (the two arrays
+// are parallel). Produced by greedyReadEdgeArgs — which reads the sources into
+// registers on the path SHARED by all out-edges (before the terminator) — and
+// consumed by greedyEmitEdgeStores, which writes each param home on the edge's
+// OWN dynamic path. Splitting read (shared) from store (per-path) is what makes a
+// param home that double-serves as a live value AND a phi destination correct:
+// the store that overwrites it executes only when its edge is actually taken.
+type GreedyEdgePlan
+	export var targetBlockId as BlockId
+	export var argOrds as RegIntArray
+	export var paramValueIds as RegIntArray
+
+	export static function create(targetBlockId BlockId) returns GreedyEdgePlan
+		return Self{targetBlockId: targetBlockId, argOrds: RegIntArray.create(), paramValueIds: RegIntArray.create()}
+	end 'create'
+
+	export function hasStores() returns bool
+		return self.argOrds.count() > 0
+	end 'hasStores'
+end 'GreedyEdgePlan'
+
+typealias GreedyEdgePlanArray = Array with GreedyEdgePlan
+
+// Read every outgoing edge's block-arg (phi) SOURCE values into registers, BEFORE
+// the block's terminator — i.e. on the path shared by all of the block's out-edges.
+// Returns one plan per edge recording, per successor-param position, the holding
+// ordinal + the param's value id.
+//
+// Reading on the shared path (rather than on each edge's own path) keeps the two
+// dynamic paths' register state identical, so the per-path STORES can reference the
+// recorded ordinals without re-deriving register state per path. A reload only
+// LOADS a value; it never writes the param home that the store phase targets, so
+// hoisting it before the branch cannot corrupt the home-aliasing the store phase
+// is being careful about. Args of ALL edges are protected from eviction across the
+// whole read so one edge's source register is never reused before its store; within
+// an edge every arg is read before any store, so a self-referential phi permutation
+// cannot lose a source.
+//
+// FLAG SAFETY: when this runs at a CONDITIONAL boundary it executes AFTER the
+// block's flag-setting compare and BEFORE the appended condJump, so it must not
+// clobber the condition flags. Reloads and evictions are flag-neutral on every
+// target, but rematerializing a CONSTANT source would, on x64, use the value-0
+// `xor reg, reg` zeroing idiom — which CLEARS the flags and corrupts the branch
+// condition. The caller passes `flagSafe: true` at conditional boundaries so
+// constant sources are materialized through the flag-preserving emit instead
+// (arm64's movz is already flag-safe). The plain single-successor boundary has no
+// flag-reading terminator, so it leaves `flagSafe` at its default false.
+function greedyReadEdgeArgs(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, blockIdToRef GreedyBlockIdToRef, flagSafe bool = false) returns GreedyEdgePlanArray
+	var plans = GreedyEdgePlanArray.create()
+	var protect = 0
+	for edge in block.branchEdges 'eachEdge'
+		let succRef = try blockIdToRef.get(edge.targetBlockId) otherwise panic("greedy: branch edge targets blockId {edge.targetBlockId} not in func.blockRefs")
+		let succ = try module.blocks.get(succRef) otherwise panic("invariant: blockRef from blockIdToRef not in module.blocks")
+		var plan = GreedyEdgePlan.create(edge.targetBlockId)
+		if succ.blockArgs.count() == 0 'noArgs'
+			plans.push(plan)
+			continue
+		end 'noArgs'
+		if succ.blockArgs.count() != edge.argIds.count() 'argMismatch'
+			panic("greedy: edge {block.id}->{edge.targetBlockId} has {edge.argIds.count()} args but successor has {succ.blockArgs.count()} params")
+		end 'argMismatch'
+
+		var argIdx = 0
+		for param in succ.blockArgs 'readArgs'
+			if stdTypeIsFloat(param.argType) 'fpArg'
+				panic("greedy: FP block-arg (v{param.valueId}) in func `{state.funcName}` is not supported yet (the FP register file is deferred to a later phase)")
+			end 'fpArg'
+			let argId = try edge.argIds.get(argIdx) otherwise panic("greedy: edge.argIds.get OOB at {argIdx} (count just checked)")
+			let ord = greedyEnsureInReg(state, regTarget: regTarget, module: module, block: block, vid: argId, protectMask: protect, flagSafe: flagSafe)
+			protect = greedyMaskSet(protect, ord: ord)
+			plan.argOrds.push(ord)
+			plan.paramValueIds.push(param.valueId)
+			argIdx = argIdx + 1
+		end 'readArgs'
+		plans.push(plan)
+	end 'eachEdge'
+	return plans
+end 'greedyReadEdgeArgs'
+
+// Store each arg value (already resident in the ordinal greedyReadEdgeArgs recorded)
+// into its successor-param's stack home, emitting into `dstBlock` — the predecessor
+// itself for the fallthrough edge, a critical-edge trampoline for the taken edge.
+// Stores read fixed registers and write distinct (per value id) param homes, so the
+// store order is irrelevant and no source register is ever clobbered.
+function greedyEmitEdgeStores(plan GreedyEdgePlan, state RegState, regTarget RegAllocTarget, module TargetModule, dstBlock IrBlock)
+	var i = 0
+	while i < plan.argOrds.count() 'eachStore'
+		let ord = try plan.argOrds.get(i) otherwise panic("greedy: plan.argOrds.get OOB at {i}")
+		let paramId = try plan.paramValueIds.get(i) otherwise panic("greedy: plan.paramValueIds.get OOB at {i}")
+		var pinfo = getValueInfo(state, valueId: paramId)
+		if pinfo.stackHome == RM_NO_STACK_HOME 'noHome'
+			pinfo.stackHome = greedyAllocateSpillSlot(state)
+		end 'noHome'
+		regTarget.emitSpill(module, dstBlock: dstBlock, regOrdinal: ord, stackOffset: pinfo.stackHome)
+		i = i + 1
+	end 'eachStore'
+end 'greedyEmitEdgeStores'
+
+// The plan for the edge targeting `targetBlockId`. Both the then- and else-targets
+// of a conditional branch are outgoing edges of the block, so both are present.
+function greedyFindEdgePlan(plans GreedyEdgePlanArray, targetBlockId BlockId) returns GreedyEdgePlan
+	for plan in plans 'each'
+		if plan.targetBlockId == targetBlockId 'match'
+			return plan
+		end 'match'
+	end 'each'
+	panic("greedy: no edge plan for target block {targetBlockId}")
+end 'greedyFindEdgePlan'
+
+// Place a conditional branch's per-edge block-arg copies on each edge's OWN dynamic
+// path, mirroring destroySSA's critical-edge splitting:
+//   * the fallthrough (then) edge's copies go inline AFTER the re-emitted condJump,
+//     before the jump to the real then-target;
+//   * the taken (else) edge's copies go in a freshly-inserted trampoline block that
+//     the condJump is retargeted to and which then jumps to the real else-target.
+// The arg sources were already loaded into registers by greedyReadEdgeArgs on the
+// shared path, so the stores here only emit register->home writes. Returns the
+// updated `nextBlockId` (advanced by one when a trampoline is created). The caller
+// has already removed/withheld the condJump from block.opRefs and emitted the
+// both-paths boundary spills before it.
+function greedyEmitConditionalBoundary(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, blockIdToRef GreedyBlockIdToRef, condBrInfo CondBrInfo, condJumpPacked OpIndex, trampolineRefs BlockRefList, nextBlockId BlockId) returns BlockId
+	let elseTarget = condBrInfo.elseTarget
+	let thenTarget = pickThenTarget(block, elseTarget: elseTarget)
+
+	// flagSafe: this runs between the block's flag-setting compare and the
+	// re-emitted condJump, so a constant source's rematerialization must not
+	// clobber the condition flags (see greedyReadEdgeArgs).
+	let plans = greedyReadEdgeArgs(state, regTarget: regTarget, module: module, block: block, blockIdToRef: blockIdToRef, flagSafe: true)
+	let thenPlan = greedyFindEdgePlan(plans, targetBlockId: thenTarget)
+	let elsePlan = greedyFindEdgePlan(plans, targetBlockId: elseTarget)
+
+	// Taken (else) edge: split the critical edge with a trampoline so its copies run
+	// ONLY when the branch is taken. Skipped entirely when the else-edge has no args.
+	var condTarget = elseTarget
+	var newNextBlockId = nextBlockId
+	if elsePlan.hasStores() 'elseTrampoline'
+		let trampolineId = nextBlockId
+		let trampIdx = module.blocks.count()
+		var tramp = IrBlock.create(trampolineId, label: "__greedy_phi_tramp_{block.id}_{elseTarget}")
+		greedyEmitEdgeStores(elsePlan, state: state, regTarget: regTarget, module: module, dstBlock: tramp)
+		tramp.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: elseTarget))
+		module.blocks.push(tramp)
+		trampolineRefs.append(trampIdx)
+		condTarget = trampolineId
+		newNextBlockId = trampolineId + 1
+	end 'elseTrampoline'
+
+	// Re-emit the condJump (retargeted to the trampoline when one was built), then
+	// the fallthrough (then) edge copies, then an explicit jump to the real
+	// then-target. The condJump carries no register operand, so it needs no
+	// coloring substitution — only its branch target may change.
+	var condOut = condJumpPacked
+	if condTarget != elseTarget 'retarget'
+		condOut = regTarget.rewriteCondBrTarget(module, packed: condJumpPacked, newTarget: condTarget)
+	end 'retarget'
+	block.opRefs.append(condOut)
+
+	if thenPlan.hasStores() 'thenStores'
+		greedyEmitEdgeStores(thenPlan, state: state, regTarget: regTarget, module: module, dstBlock: block)
+	end 'thenStores'
+
+	block.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: thenTarget))
+	return newNextBlockId
+end 'greedyEmitConditionalBoundary'
+
+// Append every trampoline blockRef to the function's blockRef list. Taking
+// `blockRefs` as a List PARAMETER (rather than calling `.append` directly on
+// `srcFunc.blockRefs`) keeps the mutation off the IrFunction: a mutating method
+// invoked on a struct field would flag the containing function as a mutated
+// parameter and force every regalloc caller to thread a mutable function (E3019).
+// Mirrors IrModule.createAndRegisterBlock's `blockRefs.append`.
+function greedyAppendBlockRefs(blockRefs BlockRefList, trampRefs BlockRefList)
+	for trampRef in trampRefs 'each'
+		blockRefs.append(trampRef)
+	end 'each'
+end 'greedyAppendBlockRefs'
+
+// The packed op index of the block's conditional-branch op: the terminator slot
+// (Layout 2, condJump promoted by eliminateFallthroughJumps) or the last op of the
+// original op list (Layout 1, condJump trailing in opRefs).
+function greedyCondJumpPacked(block IrBlock, oldOps OpIndexList, condBrInfo CondBrInfo) returns OpIndex
+	if condBrInfo.inTerminator 'inTerm'
+		return block.terminatorIndex()
+	end 'inTerm'
+	return try oldOps.get(oldOps.count() - 1) otherwise panic("greedy: condBr Layout 1 but original op list is empty")
+end 'greedyCondJumpPacked'
+
+// ============================================================
+// Entry point
+// ============================================================
+
+// Greedily allocate `srcFunc` and emit its final physical MIR, processing every
+// block in layout order with the cross-block spill-at-boundaries model. Returns
+// true on success (the function is fully allocated, same MIR contract as
+// applyColoring), or false when the greedy path declines the function, so the
+// caller can fall back to the SSA pipeline. The caller is responsible for
+// snapshotting/restoring the pristine MIR around this call when it intends to
+// fall back.
+export function runGreedyAllocation(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery) returns bool
+	var state = createRegState(desc)
+	state.funcName = srcFunc.name
+
+	// Phase 0: CFG + liveness (live-out sets drive the boundary spills).
+	let cfg = buildIrFunctionCfg(srcFunc, module: module, opQuery: opQuery)
+	let entryBlockId = greedyEntryBlockId(module, func: srcFunc)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
+	let liveness = computeLiveness(module, func: srcFunc, cfg: cfg, rpo: rpo, regTarget: regTarget)
+
+	// liveness.maxValueId is already (highest valueId + 1) — the array size.
+	let arraySize = liveness.maxValueId
+	var coloring = ColoringResult.create(arraySize)
+	let isConstScratch = greedyMakeBoolArray(arraySize)
+	let constValScratch = greedyMakeIntArray(arraySize, fill: 0)
+
+	// Pre-assign a stable stack home to every cross-block value.
+	let globals = greedyComputeGlobals(module, func: srcFunc, liveness: liveness, arraySize: arraySize)
+	greedyPreassignHomes(state, globals: globals)
+
+	let blockIdToRef = greedyBuildBlockIdToRef(module, func: srcFunc)
+
+	// Critical-edge trampolines (taken-edge phi copies) are appended to the function
+	// AFTER the block walk so they don't disturb its iteration; nextBlockId is
+	// threaded across blocks so each trampoline gets a fresh block id. Mirrors
+	// destroySSA's trampoline collection.
+	var nextBlockId = srcFunc.nextBlockId
+	var trampolineRefs = BlockRefList.create()
+
+	for blockRef in srcFunc.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+
+		// Per-block last-use must be scanned BEFORE opRefs is replaced.
+		let scan = greedyBuildLastUse(module, block: block, regTarget: regTarget)
+		let liveOut = greedyGetLiveOut(liveness, blockId: block.id)
+
+		// The conditional-branch shape (if any) must be read off the block BEFORE its
+		// op list is rebuilt: a condBr's per-edge copies are placed on their own
+		// dynamic path around the re-emitted condJump.
+		let condBrInfo = detectCondBrPattern(module, block: block, regTarget: regTarget, opQuery: opQuery)
+
+		// The register file starts empty: every live-in is reloaded from its home.
+		greedyResetRegisterFile(state)
+
+		// Entry block only: seed the incoming ABI argument registers from the
+		// leading param-movs so each param vreg already resides in its argument
+		// register (the param-mov elides) and that register is not handed to a later
+		// value before the param is consumed. Runs AFTER the reset (which would
+		// otherwise wipe the seed) and BEFORE the op walk.
+		if block.id == entryBlockId 'seedEntryParams'
+			state.currentOpIndex = 0
+			greedySeedEntryParams(state, opQuery: opQuery, module: module, entryBlock: block)
+		end 'seedEntryParams'
+
+		// Replace the block's op list; the walk re-emits the physical ops into it.
+		let oldOps = block.opRefs
+		let boundaryOpIdx = oldOps.count()
+		block.opRefs = OpIndexList.create()
+
+		// Process the regular ops. When a condBr's condJump trails in opRefs
+		// (Layout 1), withhold it here: it is re-emitted at the boundary so the
+		// both-paths boundary spills land BEFORE it and each edge's copies land on
+		// their own path. Withholding only the final op preserves the op-index
+		// alignment greedyBuildLastUse used for freeDead — the condJump reads
+		// nothing, so it contributes no last-use entry to lose.
+		var regularOpCount = oldOps.count()
+		if condBrInfo.hasCondBr and not condBrInfo.inTerminator 'condJumpInOpRefs'
+			regularOpCount = oldOps.count() - 1
+		end 'condJumpInOpRefs'
+
+		var opIdx = 0
+		for packed in oldOps 'eachOp'
+			if opIdx >= regularOpCount 'doneRegular'
+				break
+			end 'doneRegular'
+			state.currentOpIndex = opIdx
+			greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: packed)
+			greedyProcessOp(state, regTarget: regTarget, opQuery: opQuery, module: module, block: block, packed: packed, coloring: coloring, lastUse: scan.lastUse, isConstScratch: isConstScratch, constValScratch: constValScratch, opIdx: opIdx, liveOut: liveOut)
+			opIdx = opIdx + 1
+		end 'eachOp'
+
+		// Block-exit boundary (before the terminator): spill live-out values to their
+		// homes so successors can reload them. These run on EVERY out-edge, so they
+		// must precede the conditional branch. Boundary spills are stores only
+		// (constants are skipped), so they are flag-neutral and safe between a
+		// flag-setting compare and a flag-reading conditional branch. The subsequent
+		// edge-arg source reads CAN rematerialize a constant; greedyEmitConditionalBoundary
+		// passes flagSafe so that materialization stays flag-neutral too.
+		state.currentOpIndex = boundaryOpIdx
+		greedyBoundarySpillLiveOut(state, regTarget: regTarget, module: module, block: block, liveOut: liveOut)
+
+		if condBrInfo.hasCondBr 'condBrBoundary'
+			// Conditional branch: place each edge's block-arg copies on that edge's
+			// own dynamic path (fallthrough inline, taken edge in a trampoline).
+			let condJumpPacked = greedyCondJumpPacked(block, oldOps: oldOps, condBrInfo: condBrInfo)
+			greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: condJumpPacked)
+			nextBlockId = greedyEmitConditionalBoundary(state, regTarget: regTarget, module: module, block: block, blockIdToRef: blockIdToRef, condBrInfo: condBrInfo, condJumpPacked: condJumpPacked, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId)
+		end 'condBrBoundary' else 'plainBoundary'
+			// Single successor (or none): all block-arg copies run on the one path, so
+			// they go inline before the (re-emitted) terminator. A multi-edge block
+			// with no detected conditional branch can't have its copies path-separated
+			// — that is a malformed/unsupported terminator shape, not a silent case.
+			if block.branchEdges.count() > 1 'multiEdgeNoCondBr'
+				panic("greedy: block {block.id} in func `{state.funcName}` has {block.branchEdges.count()} outgoing edges but no detected conditional branch — per-edge copies cannot be placed on separate dynamic paths (malformed CFG / unsupported terminator)")
+			end 'multiEdgeNoCondBr'
+
+			let plans = greedyReadEdgeArgs(state, regTarget: regTarget, module: module, block: block, blockIdToRef: blockIdToRef)
+			for plan in plans 'eachPlan'
+				greedyEmitEdgeStores(plan, state: state, regTarget: regTarget, module: module, dstBlock: block)
+			end 'eachPlan'
+
+			if block.hasTerminatorOp() 'hasTerm'
+				state.currentOpIndex = boundaryOpIdx
+				greedyProcessTerminator(state, regTarget: regTarget, opQuery: opQuery, module: module, block: block, coloring: coloring)
+			end 'hasTerm'
+		end 'plainBoundary'
+	end 'eachBlock'
+
+	// Append the critical-edge trampolines the conditional boundaries inserted, then
+	// publish the bumped block-id counter (mirrors destroySSA).
+	greedyAppendBlockRefs(srcFunc.blockRefs, trampRefs: trampolineRefs)
+	srcFunc.nextBlockId = nextBlockId
+
+	// Reserve frame space for any spill slots used (0 when nothing spilled). The
+	// prologue/epilogue pass reads func.spillSize / func.stackSize.
+	let spillBytes = totalStackSize(state)
+	srcFunc.spillSize = srcFunc.spillSize + spillBytes
+	srcFunc.stackSize = srcFunc.stackSize + spillBytes
+
+	logDebug(LogCategory.ir, message: function() gives "greedy: func={srcFunc.name} allocated via greedy path (blocks={srcFunc.blockRefs.count()}, spillBytes={spillBytes}, maxValueId={arraySize})")
+	return true
+end 'runGreedyAllocation'

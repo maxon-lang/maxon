@@ -631,8 +631,14 @@ end 'x64VRegMatchesId'
 //   otherwise        -> movRegImm       (full 10-byte mov r64, imm64)
 // Doing this at the X64-op-construction layer rather than in the encoder
 // keeps the IR dumps and downstream passes seeing a single canonical form.
-export function appendIntImmToReg(target TargetModule, dstBlock IrBlock, dest X64VReg, value MachineWord)
-	if value == 0 'zeroImm'
+//
+// `allowXorZero` (default true) selects the value-0 `xor reg, reg` zeroing
+// idiom. Callers that emit between a flag-setting compare and a flag-reading
+// branch pass false: `xor` CLEARS the condition flags, so for those sites the
+// 0 case must instead use the flag-neutral `mov r32, 0` form (movRegImm32). Both
+// MOV forms leave the flags untouched.
+export function appendIntImmToReg(target TargetModule, dstBlock IrBlock, dest X64VReg, value MachineWord, allowXorZero bool = true)
+	if value == 0 and allowXorZero 'zeroImm'
 		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(dest))
 		return
 	end 'zeroImm'

@@ -1819,6 +1819,14 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
 	end 'emitMovImm'
 
+	// ARM64's movImm (movz/movk) never touches the condition flags, so the
+	// flag-preserving variant is identical to emitMovImm. (The flag hazard the
+	// flag-safe path guards against is x64-specific: its value-0 `xor reg, reg`
+	// zeroing idiom clears the flags.)
+	function emitMovImmFlagSafe(module TargetModule, dstBlock IrBlock, regOrdinal RegOrdinal, value RegInt)
+		emitMovImmArm64(module, dstBlock: dstBlock, regOrdinal: regOrdinal, value: value)
+	end 'emitMovImmFlagSafe'
+
 	function emitMovReg(module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
 		emitMovRegArm64(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
 	end 'emitMovReg'

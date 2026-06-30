@@ -76,9 +76,20 @@ export type ValueInfo
 	export var previousFp as RegOrdinal
 	export var deferred as bool
 	export var remainingUses as RegInt
+	// Greedy allocator (Phase 2): true once an actual store has written this
+	// value into its `stackHome`, so the home holds the value's current
+	// contents. `stackHome` alone only reserves a slot (greedyPreassignHomes
+	// reserves one for every cross-block value up front) — it does NOT imply the
+	// slot is populated. Because greedy values are SSA-immutable, once a store
+	// makes the home in-sync it stays valid for the rest of the function, so a
+	// later eviction of the same value needs no fresh store. Decoupling these is
+	// what lets greedyEvict prefer a no-store victim WITHOUT assuming a merely
+	// reserved home already holds the value (which would reload garbage).
+	// Unused by the SSA-coloring path.
+	export var homeInSync as bool
 
 	export static function default() returns ValueInfo
-		return Self{gprOrdinal: RM_NONE, stackHome: RM_NO_STACK_HOME, constantValue: 0, isConstant: false, fpOrdinal: RM_NONE, fpStackHome: RM_NO_STACK_HOME, previousFp: RM_NONE, deferred: false, remainingUses: 0}
+		return Self{gprOrdinal: RM_NONE, stackHome: RM_NO_STACK_HOME, constantValue: 0, isConstant: false, fpOrdinal: RM_NONE, fpStackHome: RM_NO_STACK_HOME, previousFp: RM_NONE, deferred: false, remainingUses: 0, homeInSync: false}
 	end 'default'
 end 'ValueInfo'
 
@@ -386,7 +397,7 @@ end 'updateSpillWatermark'
 // spillBaseOffset is where spills start; minSpillOffset tracks the watermark
 // (lowest offset for downward growth, highest for upward). The absolute
 // distance between them is the spill extent, rounded up to 16-byte alignment.
-function totalStackSize(state RegState) returns RegInt
+export function totalStackSize(state RegState) returns RegInt
 	updateSpillWatermark(state)
 	let raw = trunc(abs(state.spillBaseOffset - state.minSpillOffset))
 	if raw > 0 'hasSpills'
@@ -648,6 +659,27 @@ end 'ssaGetEntryBlockId'
 // ============================================================
 
 function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery, fastRegalloc bool)
+	// Phase-1 greedy route (test trigger). When `--greedy-only=NAME` named this
+	// function, run the alternative single-pass greedy allocator instead of the
+	// SSA-coloring pipeline. The greedy path emits final physical MIR directly
+	// (its own substitution + spill/reload emission), bypassing
+	// ColoringResult + applyColoring. It claims only single-block, GPR-only,
+	// call-free functions this phase; if it declines (e.g. multi-block), the
+	// pristine MIR is restored and the normal SSA path runs. The real
+	// budget-then-greedy fallback trigger arrives in a later phase — for now the
+	// greedy path never fires unless explicitly force-routed, so normal
+	// compilation is unaffected.
+	if greedyOnlyFuncMatches(srcFunc.name) 'greedyRoute'
+		let greedySnapshot = MirSnapshot.capture(module, func: srcFunc)
+		if runGreedyAllocation(srcFunc, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery) 'greedyOk'
+			return
+		end 'greedyOk'
+		// Greedy declined this function — rewind any partial mutation and fall
+		// through to the SSA path so the function still compiles correctly.
+		greedySnapshot.restore(module, func: srcFunc)
+		logDebug(LogCategory.ir, message: function() gives "greedy: func={srcFunc.name} declined by greedy path — using SSA pipeline")
+	end 'greedyRoute'
+
 	// Snapshot the function's PRISTINE pre-regalloc MIR before attempt 1: the
 	// SSA-coloring path mutates blocks in place (insertSpillCode rewrites
 	// block.opRefs and bumps func.spillSize/stackSize) before it can report
@@ -1722,7 +1754,10 @@ end 'panicUnresolvableReload'
 // promotes a trailing condJump back into the terminator slot (the trailing
 // unconditional jmp was a fall-through and got dropped). In that case the
 // trampoline-rewrite path must update the terminator, not opRefs.
-type CondBrInfo
+//
+// Exported so the greedy allocator's cross-block boundary placement can reuse
+// the same condBr-shape detection (and `pickThenTarget`) as destroySSA.
+export type CondBrInfo
 	export var hasCondBr as bool
 	export var condBrIdx as RegInt
 	export var elseTarget as RegInt
@@ -1750,7 +1785,7 @@ end 'CondBrInfo'
 //      condJump back into the terminator slot.
 // `CondBrInfo.inTerminator` distinguishes the two so callers can rewrite the
 // right slot when inserting a trampoline.
-function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget, opQuery TargetOpQuery) returns CondBrInfo
+export function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget, opQuery TargetOpQuery) returns CondBrInfo
 	// Layout 1: condJump is the last op in opRefs.
 	let opsCount = block.opRefs.count()
 	if opsCount > 0 'hasOps'
@@ -1813,7 +1848,7 @@ end 'emitEdgeCopies'
 // the fall-through-jump elimination pass. Conditional branches always have
 // at least one non-else edge; missing one means the upstream lowering failed
 // to record both edges, which is a compiler bug.
-function pickThenTarget(block IrBlock, elseTarget BlockId) returns BlockId
+export function pickThenTarget(block IrBlock, elseTarget BlockId) returns BlockId
 	for edge in block.branchEdges 'each'
 		if edge.targetBlockId != elseTarget 'isThen'
 			return edge.targetBlockId
