@@ -210,4 +210,22 @@ export interface RegAllocTarget
 	// two return registers. A virtual source (the void-result receiver alias) or
 	// a non-return physical source returns none.
 	function classifyCallResultCapture(module TargetModule, packed OpIndex, coloring ColoringResult) returns CallArgKind
+
+	// Coloring-FREE shape test used by the greedy walk to DETECT a call-arg-setup
+	// op before its source operands are colored. Returns true for exactly the ops
+	// classifyCallArgSetup would classify as non-`none`, but tests op SHAPE only
+	// (dest is a physical call-conv register, or a stack-arg store) without
+	// resolving any source ordinal through the coloring. The greedy walk colors
+	// the source AFTER this probe, then re-runs classifyCallArgSetup to resolve the
+	// move's srcOrd; the SSA path never needs this (it classifies post-coloring).
+	function isCallArgSetupShape(module TargetModule, packed OpIndex) returns bool
+
+	// Coloring-FREE shape test used by the greedy walk to DETECT a post-call
+	// result-capture op before its destination vreg is colored — the capture op IS
+	// that vreg's defining op, so classifyCallResultCapture's eager dstOrd resolve
+	// (colorGpr/colorFp) would panic on the still-uncolored dest. Returns true for
+	// exactly the ops classifyCallResultCapture would classify as non-`none`
+	// (virtual dest, physical return-register source), testing SHAPE only. The
+	// greedy walk colors the dest AFTER this probe, then re-runs the classifier.
+	function isCallResultCaptureShape(module TargetModule, packed OpIndex) returns bool
 end 'RegAllocTarget'

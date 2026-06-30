@@ -64,10 +64,38 @@
 //     boundary — greedyReadEdgeArgs passes flagSafe there so the materialization
 //     never clobbers the branch condition (arm64's movz is already flag-safe).
 //
+// CALL MODEL (Phase 3 — direct calls, GPR-only):
+//   A call lowers (pre-regalloc) to a run of arg-setup movs (`mov physArgReg,
+//   virtual(srcId)` plus stack-overflow stores), the call op, then post-call
+//   result-capture movs (`mov virtual(resultId), physReturnReg`). The greedy walk
+//   recognizes these regions exactly as ApplyColoring's walkBlockWithCallArgBuffer
+//   does, and REUSES the same parallel-copy sequencer:
+//     * Before the call, every live-across value resident in a register the call
+//       destroys (caller-saved GPRs, plus any callee-saved reg used as an arg slot
+//       — e.g. x64's rbx 7th-arg) is spilled to its stack home so it survives
+//       (mirrors RegisterManagerBase.SpillAllLiveRegisters). Values dead at the
+//       call (consumed args) are skipped.
+//     * Arg sources are made resident greedily and their chosen registers recorded
+//       in the per-op coloring, so classifyCallArgSetup resolves each move to a
+//       physical ordinal; the buffered moves go through sequentializeCallArgSetup,
+//       which breaks source->dest cycles (xchg / scratch) — the reason a value that
+//       is another arg's destination is placed correctly.
+//     * The call op is substituted, then the destroyed registers are invalidated in
+//       the register file (mirrors InvalidateCallerSavedRegisters): their pre-call
+//       values are in homes or dead, so later uses reload.
+//     * Result/error-flag captures allocate the dest vregs greedily and run through
+//       sequentializeCallResultCapture, which breaks the swap/chain the two return
+//       registers can form. Callee-saved-resident values survive the call untouched
+//       (no spill, no invalidate).
+//
 // SCOPE / DEFERRALS:
-//   * GPR-only, call-free (FP register file and call-arg/clobber handling are
-//     later phases). Any FP-pattern, FP block-arg, or call op routed here panics
-//     with a clear message rather than miscompiling.
+//   * GPR-only. The FP register file is a later phase: any FP-pattern op or FP
+//     block-arg routed here panics with a clear message rather than miscompiling.
+//   * DIRECT calls only. An indirect/witness call (the callee or fn-ptr arrives in
+//     a virtual register, possibly via an interleaved load) panics — pinning that
+//     operand outside the arg/clobber set is a later phase.
+//   * Implicit-GPR-clobber ops (idiv/cqo and friends, which write a FIXED register
+//     the allocator does not model) panic — also a later phase (P4).
 //   * Routing is a forced test trigger (--greedy-only=NAME); the real
 //     budget-then-greedy fallback trigger comes later. The greedy path therefore
 //     never fires during normal compilation.
@@ -141,20 +169,34 @@ function greedyIsFpPattern(pat OpPattern) returns bool
 	end 'check'
 end 'greedyIsFpPattern'
 
-// Panic loudly when a force-routed function contains an op the Phase-1 greedy
-// allocator cannot handle (FP or a call). Misrouting is a test/dev error, so a
-// clear panic beats a silent miscompile. Later phases replace each panic with
-// real handling.
-function greedyGuardOpSupported(state RegState, opQuery TargetOpQuery, module TargetModule, packed OpIndex)
+// Panic loudly when a force-routed function contains an op the greedy allocator
+// cannot handle yet (an FP op or an implicit-GPR-clobber op). Misrouting is a
+// test/dev error, so a clear panic beats a silent miscompile. Later phases
+// replace each panic with real handling.
+//
+// CALL ops are NOT guarded here — Phase 3 handles direct calls in the dedicated
+// call-region path (greedyProcessCall), and they legitimately carry implicit
+// caller-saved clobbers, so the implicit-clobber guard below must skip them.
+function greedyGuardOpSupported(state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery, module TargetModule, packed OpIndex)
 	if opQuery.isCallOp(module, packed: packed) 'isCall'
-		panic("greedy Phase 1: call op in func `{state.funcName}` is not supported yet (calls are deferred to a later phase) — do not route functions with calls via --greedy-only")
+		return
 	end 'isCall'
 
 	let patOrd = opQuery.getOpPatternOrdinal(module, packed: packed)
 	let pat = try OpPattern.fromRawValue(patOrd) otherwise OpPattern.passThrough
 	if greedyIsFpPattern(pat) 'isFp'
-		panic("greedy Phase 1: FP op (pattern {pat.name}) in func `{state.funcName}` is not supported yet (the FP register file is deferred to a later phase) — do not route functions with floating-point via --greedy-only")
+		panic("greedy: FP op (pattern {pat.name}) in func `{state.funcName}` is not supported yet (the FP register file is deferred to a later phase) — do not route functions with floating-point via --greedy-only")
 	end 'isFp'
+
+	// Implicit-GPR-clobber ops (x64 idiv/cqo write RAX:RDX; widening integer
+	// multiply writes the hi:lo pair) destroy a FIXED register the greedy
+	// allocator does not yet model. A value the allocator believes survives the op
+	// would be silently clobbered. Modeling these fixed clobbers is a later phase
+	// (P4); until then, refuse rather than miscompile. Calls are excluded above —
+	// their caller-saved clobbers ARE modeled (greedyProcessCall).
+	if regTarget.getImplicitGprDefs(module, packed: packed) != 0 'implicitClobber'
+		panic("greedy: op with an implicit GPR clobber (e.g. x64 idiv/cqo) in func `{state.funcName}` is not supported yet (fixed-register clobbers are modeled in a later phase) — do not route functions with integer division/modulo via --greedy-only")
+	end 'implicitClobber'
 end 'greedyGuardOpSupported'
 
 // ============================================================
@@ -567,7 +609,7 @@ end 'greedyProcessOp'
 // mirroring applyColoring's terminator handling.
 function greedyProcessTerminator(state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery, module TargetModule, block IrBlock, coloring ColoringResult)
 	let term = block.terminatorIndex()
-	greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: term)
+	greedyGuardOpSupported(state, regTarget: regTarget, opQuery: opQuery, module: module, packed: term)
 
 	let reads = RegIntArray.create()
 	regTarget.countOpReads(module, reads: reads, packed: term)
@@ -593,6 +635,313 @@ function greedyProcessTerminator(state RegState, regTarget RegAllocTarget, opQue
 		block.terminator = Terminator.opIndex(lastOp)
 	end 'noResult'
 end 'greedyProcessTerminator'
+
+// ============================================================
+// Call handling (Phase 3): direct calls, GPR-only
+// ============================================================
+
+// Walk a block's regular ops with greedy allocation, recognizing CALL regions the
+// way ApplyColoring's walkBlockWithCallArgBuffer does — but choosing each move's
+// registers greedily instead of reading a precomputed coloring. A call lowers to
+// arg-setup movs, the call op, then result-capture movs (see the CALL MODEL note
+// at the top of the file). Each region is buffered and handed to the SAME parallel-
+// copy sequencer the SSA path uses; the greedy walk just records the registers it
+// chose in `coloring.assignment` so the existing classifiers resolve the moves to
+// physical ordinals exactly as they do after SSA coloring.
+//
+// `opIdx` stays aligned with the position in `oldOps` (every op, whatever its role,
+// advances it by one) so the last-use scan that drives freeDead / boundary spills
+// stays valid.
+function greedyWalkBlockOps(state RegState, regTarget RegAllocTarget, opQuery TargetOpQuery, module TargetModule, block IrBlock, oldOps OpIndexList, regularOpCount RegInt, coloring ColoringResult, scan GreedyLastUse, isConstScratch BoolArray, constValScratch RegIntArray, liveOut LiveSet)
+	var argBuffer = CallArgKindArray.create()
+	var argSourceVids = RegIntArray.create()
+	var argProtect = 0
+	var resultBuffer = CallArgKindArray.create()
+	var resultProtect = 0
+
+	var opIdx = 0
+	for packed in oldOps 'eachOp'
+		if opIdx >= regularOpCount 'doneRegular'
+			break
+		end 'doneRegular'
+		state.currentOpIndex = opIdx
+
+		// Post-call result-capture region: `mov virtual(resultId), physReturnReg`.
+		// Detected by the coloring-FREE SHAPE predicate: the capture op IS its dest
+		// vreg's defining op, so it is still uncolored here — classifyCallResultCapture
+		// would panic resolving the dest ordinal (colorGpr). greedyAllocateCaptureDefs
+		// then colors the dest, so the re-classification below resolves the move's
+		// dstOrd. Captures accumulate so a value+error-flag pair is sequenced together
+		// (the colorer-equivalent greedy choice can place them in a swap a naive
+		// two-mov emit would miscompile — see sequentializeCallResultCapture).
+		if regTarget.isCallResultCaptureShape(module, packed: packed) 'isCapture'
+			resultProtect = greedyAllocateCaptureDefs(state, regTarget: regTarget, module: module, block: block, packed: packed, coloring: coloring, protectMask: resultProtect)
+			let kind = regTarget.classifyCallResultCapture(module, packed: packed, coloring: coloring)
+			resultBuffer.push(kind)
+			opIdx = opIdx + 1
+			continue
+		end 'isCapture'
+
+		// Any non-capture op ends the capture region: sequence the buffered captures
+		// (so the result vregs are materialized and resident) before emitting it.
+		if resultBuffer.count() > 0 'flushResults'
+			sequentializeCallResultCapture(module, kinds: resultBuffer, dstBlock: block, state: state, regTarget: regTarget)
+			resultBuffer.clear()
+			resultProtect = 0
+		end 'flushResults'
+
+		if opQuery.isCallOp(module, packed: packed) 'isCall'
+			greedyProcessCall(state, regTarget: regTarget, module: module, block: block, packed: packed, argBuffer: argBuffer, argSourceVids: argSourceVids, coloring: coloring, lastUse: scan.lastUse, liveOut: liveOut, callOpIdx: opIdx)
+			argBuffer.clear()
+			argSourceVids.clear()
+			argProtect = 0
+			opIdx = opIdx + 1
+			continue
+		end 'isCall'
+
+		// Arg-setup op (`mov physArgReg, virtual(srcId)` / overflow stack store)?
+		// Detected by the coloring-FREE SHAPE predicate: the source vreg is colored
+		// by greedyPrepareArgSource below, AFTER this probe, so classifyCallArgSetup's
+		// eager srcOrd resolve (colorGpr) would panic on an as-yet-uncolored source.
+		// Once resident and colored, the re-classification resolves the move's srcOrd
+		// and buffers it for the parallel-copy sequencer.
+		if regTarget.isCallArgSetupShape(module, packed: packed) 'isArg'
+			argProtect = greedyPrepareArgSource(state, regTarget: regTarget, module: module, block: block, packed: packed, coloring: coloring, argSourceVids: argSourceVids, protectMask: argProtect)
+			let kind = regTarget.classifyCallArgSetup(module, packed: packed, coloring: coloring)
+			argBuffer.push(kind)
+			opIdx = opIdx + 1
+			continue
+		end 'isArg'
+
+		// A non-arg, non-call op while args are buffered ends the arg-setup region
+		// WITHOUT a terminating call: DRAIN the buffered moves as a standalone
+		// parallel copy, then process this op normally. Mirrors ApplyColoring's
+		// walkBlockWithCallArgBuffer routing such an interloper to drainAndSubstitute.
+		// The common shape is a function's RETURN-VALUE setup (`mov argReg0, vResult`):
+		// arg-reg-0 doubles as the GPR return register (arm64 x0, x64 rax/rcx), so the
+		// return-value mov has the exact arg0-setup shape but is followed by the
+		// epilogue/ret, not a call — draining emits it as the correct return-value copy.
+		// A genuine indirect/witness call (a fn-ptr load interleaved here) still drains
+		// its partial args, processes the load, then panics at greedyProcessCall's
+		// indirect guard when the call op (which READS the loaded operand) is reached —
+		// so that unsupported shape keeps a clear panic.
+		if argBuffer.count() > 0 'interloper'
+			greedyDrainArgBuffer(module, argBuffer: argBuffer, argSourceVids: argSourceVids, block: block, state: state, regTarget: regTarget)
+			argProtect = 0
+		end 'interloper'
+
+		greedyGuardOpSupported(state, regTarget: regTarget, opQuery: opQuery, module: module, packed: packed)
+		greedyProcessOp(state, regTarget: regTarget, opQuery: opQuery, module: module, block: block, packed: packed, coloring: coloring, lastUse: scan.lastUse, isConstScratch: isConstScratch, constValScratch: constValScratch, opIdx: opIdx, liveOut: liveOut)
+		opIdx = opIdx + 1
+	end 'eachOp'
+
+	// Block ends mid-region: flush captures (a block can end on the last call's
+	// result capture). A buffered arg region with no terminating call is the
+	// return-value setup at the end of a block (`mov argReg0, vResult` with the ret in
+	// the terminator slot) — DRAIN it as a standalone parallel copy, mirroring
+	// ApplyColoring's tail flush, rather than panicking.
+	if resultBuffer.count() > 0 'tailResults'
+		sequentializeCallResultCapture(module, kinds: resultBuffer, dstBlock: block, state: state, regTarget: regTarget)
+	end 'tailResults'
+	if argBuffer.count() > 0 'tailArgs'
+		greedyDrainArgBuffer(module, argBuffer: argBuffer, argSourceVids: argSourceVids, block: block, state: state, regTarget: regTarget)
+	end 'tailArgs'
+end 'greedyWalkBlockOps'
+
+// Drain a buffered arg-setup region that is NOT terminated by a call, emitting it as
+// a standalone parallel copy through the SAME cycle-safe sequencer the call path uses
+// (sequentializeCallArgSetup reads the srcOrd greedyPrepareArgSource recorded in the
+// coloring and the fixed-ABI dstOrd). The buffer is then cleared so the interrupting
+// op — or the next region — is processed fresh. Mirrors ApplyColoring's
+// drainAndSubstitute. No register-file surgery is needed: a copy does not destroy its
+// source, so each source value remains valid in the register the walk bound it to.
+function greedyDrainArgBuffer(module TargetModule, argBuffer CallArgKindArray, argSourceVids RegIntArray, block IrBlock, state RegState, regTarget RegAllocTarget)
+	sequentializeCallArgSetup(module, kinds: argBuffer, dstBlock: block, state: state, regTarget: regTarget)
+	argBuffer.clear()
+	argSourceVids.clear()
+end 'greedyDrainArgBuffer'
+
+// Ensure every source operand of an arg-setup op is resident, record the chosen
+// register in `coloring.assignment` (so classifyCallArgSetup resolves the move's
+// srcOrd), protect it from eviction while the rest of the region's sources are
+// resolved, and remember the source vid so it can be freed after the call. Returns
+// the updated protect mask. Mirrors greedyProcessOp's read-ensure step.
+function greedyPrepareArgSource(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, packed OpIndex, coloring ColoringResult, argSourceVids RegIntArray, protectMask RegInt) returns RegInt
+	var mask = protectMask
+	let reads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: reads, packed: packed)
+	for r in reads 'eachRead'
+		let ord = greedyEnsureInReg(state, regTarget: regTarget, module: module, block: block, vid: r, protectMask: mask)
+		try coloring.assignment.set(r, value: ord) otherwise panic("greedy: coloring.assignment.set OOB for arg source v{r}")
+		mask = greedyMaskSet(mask, ord: ord)
+		argSourceVids.push(r)
+	end 'eachRead'
+	return mask
+end 'greedyPrepareArgSource'
+
+// Allocate a physical register for each virtual DEST of a result-capture op and
+// record it in `coloring.assignment` (so classifyCallResultCapture resolves the
+// move's dstOrd). The return registers (the capture SOURCES) are already free —
+// greedyProcessCall's caller-saved invalidation cleared them — so a dest can even
+// land back in its own return register (an identity capture the sequencer drops).
+// Protects previously-allocated capture dests from eviction. Returns the updated
+// protect mask. Mirrors greedyProcessOp's def-allocation step (a result capture is
+// never a constant materialization, so no constant recording is needed).
+function greedyAllocateCaptureDefs(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, packed OpIndex, coloring ColoringResult, protectMask RegInt) returns RegInt
+	var mask = protectMask
+	let defs = RegIntArray.create()
+	regTarget.noteOpDefs(module, defs: defs, packed: packed)
+	for d in defs 'eachDef'
+		let ord = greedyAllocateReg(state, regTarget: regTarget, module: module, block: block, vid: d, protectMask: mask)
+		try coloring.assignment.set(d, value: ord) otherwise panic("greedy: coloring.assignment.set OOB for capture dest v{d}")
+		mask = greedyMaskSet(mask, ord: ord)
+	end 'eachDef'
+	return mask
+end 'greedyAllocateCaptureDefs'
+
+// Process a CALL op together with its buffered arg-setup region:
+//   1. Build the clobber set — caller-saved GPRs plus any callee-saved register
+//      this call uses as an arg slot (e.g. x64's rbx 7th-arg) — and spill every
+//      live-across resident value there to its stack home so it survives the call
+//      (mirrors RegisterManagerBase.SpillAllLiveRegisters). Values dead at the call
+//      (consumed args) are skipped.
+//   2. Sequence the buffered arg-setup parallel copy into the ABI registers,
+//      cycle-safe, reusing sequentializeCallArgSetup with the greedily-chosen
+//      sources recorded in `coloring`.
+//   3. Emit the (substituted) call op.
+//   4. Invalidate the clobber set: those registers no longer hold their pre-call
+//      values (spilled to homes above, or dead), so later uses reload (mirrors
+//      InvalidateCallerSavedRegisters).
+//   5. Free dead arg sources still resident in surviving (callee-saved) registers.
+// The post-call result capture is handled by the caller's buffered walk.
+function greedyProcessCall(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, packed OpIndex, argBuffer CallArgKindArray, argSourceVids RegIntArray, coloring ColoringResult, lastUse RegIntArray, liveOut LiveSet, callOpIdx RegInt)
+	// An indirect/witness call reads its callee (or loaded fn-ptr) through a virtual
+	// register; a direct call reads nothing virtual. Pinning that callee operand
+	// outside the arg/clobber set is a later phase, so refuse here.
+	let callReads = RegIntArray.create()
+	regTarget.countOpReads(module, reads: callReads, packed: packed)
+	if callReads.count() > 0 'indirect'
+		panic("greedy: indirect/witness call in func `{state.funcName}` is not supported by the greedy path yet (only direct calls) — the callee operand would need pinning outside the arg/clobber set")
+	end 'indirect'
+
+	let clobberMask = greedyBuildCallClobberMask(state, argBuffer: argBuffer)
+
+	greedySpillAcrossCall(state, regTarget: regTarget, module: module, block: block, clobberMask: clobberMask, lastUse: lastUse, liveOut: liveOut, callOpIdx: callOpIdx)
+
+	sequentializeCallArgSetup(module, kinds: argBuffer, dstBlock: block, state: state, regTarget: regTarget)
+
+	regTarget.substituteOp(module, packed: packed, coloring: coloring, opRefs: block.opRefs)
+
+	greedyInvalidateAcrossCall(state, clobberMask: clobberMask)
+
+	greedyFreeDeadArgSources(state, argSourceVids: argSourceVids, lastUse: lastUse, liveOut: liveOut, callOpIdx: callOpIdx)
+end 'greedyProcessCall'
+
+// Build the bitset of GPR ordinals this call destroys: every caller-saved GPR
+// (clobbered by the callee) plus every callee-saved GPR used as an arg slot for
+// THIS call (clobbered by the arg-setup parallel copy — e.g. x64's rbx 7th-arg
+// slot). On targets whose arg registers are all caller-saved (arm64 x0-x7), this
+// is exactly the caller-saved set.
+function greedyBuildCallClobberMask(state RegState, argBuffer CallArgKindArray) returns RegInt
+	var mask = 0
+	for ord in state.desc.callerSavedGprs 'callerSaved'
+		mask = greedyMaskSet(mask, ord: ord)
+	end 'callerSaved'
+	for kind in argBuffer 'argDests'
+		mask = greedyAddArgDestToMask(mask, kind: kind)
+	end 'argDests'
+	return mask
+end 'greedyBuildCallClobberMask'
+
+// Add a GPR arg-setup move's destination register to the clobber mask. Stack
+// writes have no register dest; an FP dest lives in a separate ordinal space the
+// GPR clobber mask must not touch (FP is unsupported this phase regardless).
+function greedyAddArgDestToMask(mask RegInt, kind CallArgKind) returns RegInt
+	return match kind 'k'
+		regToReg(_, dstOrd, isFloat) gives greedyMaskAddGprOrd(mask, ord: dstOrd, isFloat: isFloat)
+		spillReload(dstOrd, _, isFloat) gives greedyMaskAddGprOrd(mask, ord: dstOrd, isFloat: isFloat)
+		stackWrite gives mask
+		none gives mask
+	end 'k'
+end 'greedyAddArgDestToMask'
+
+function greedyMaskAddGprOrd(mask RegInt, ord RegOrdinal, isFloat bool) returns RegInt
+	if isFloat 'fp'
+		return mask
+	end 'fp'
+	return greedyMaskSet(mask, ord: ord)
+end 'greedyMaskAddGprOrd'
+
+// True iff value `vid` is needed AFTER the call at `callOpIdx`: it is either
+// live-out of the block or has an in-block use strictly after the call. Such a
+// value must survive the call (spilled to its home); a value dead at the call
+// (e.g. a consumed argument) need not be.
+function greedyValueLiveAcrossCall(vid RegInt, lastUse RegIntArray, liveOut LiveSet, callOpIdx RegInt) returns bool
+	if liveOut.contains(vid) 'liveOut'
+		return true
+	end 'liveOut'
+	return getOr(lastUse, index: vid, fallback: RM_NONE) > callOpIdx
+end 'greedyValueLiveAcrossCall'
+
+// Spill every live-across value currently resident in a clobbered register to its
+// stack home so it can be reloaded after the call. Constants (rematerializable) and
+// values whose home is already in sync are skipped. The register stays OCCUPIED —
+// the value's bits are still needed by the arg-setup parallel copy that runs next;
+// greedyInvalidateAcrossCall clears the bindings after the call. Mirrors
+// RegisterManagerBase.SpillAllLiveRegisters.
+function greedySpillAcrossCall(state RegState, regTarget RegAllocTarget, module TargetModule, block IrBlock, clobberMask RegInt, lastUse RegIntArray, liveOut LiveSet, callOpIdx RegInt)
+	var ord = 0
+	while ord < state.registerContents.count() 'eachReg'
+		if greedyMaskHas(clobberMask, ord: ord) 'clobbered'
+			let occupant = getOr(state.registerContents, index: ord, fallback: RM_NONE)
+			if occupant != RM_NONE 'occupied'
+				var info = getValueInfo(state, valueId: occupant)
+				let mustSpill = not info.isConstant and not info.homeInSync and greedyValueLiveAcrossCall(occupant, lastUse: lastUse, liveOut: liveOut, callOpIdx: callOpIdx)
+				if mustSpill 'needsSpill'
+					if info.stackHome == RM_NO_STACK_HOME 'allocHome'
+						info.stackHome = greedyAllocateSpillSlot(state)
+					end 'allocHome'
+					regTarget.emitSpill(module, dstBlock: block, regOrdinal: ord, stackOffset: info.stackHome)
+					info.homeInSync = true
+				end 'needsSpill'
+			end 'occupied'
+		end 'clobbered'
+		ord = ord + 1
+	end 'eachReg'
+end 'greedySpillAcrossCall'
+
+// Clear the register-file bindings for every clobbered register after the call:
+// they no longer hold their pre-call values (spilled to homes by
+// greedySpillAcrossCall, or dead). Subsequent uses reload from the home. Mirrors
+// RegisterManagerBase.InvalidateCallerSavedRegisters.
+function greedyInvalidateAcrossCall(state RegState, clobberMask RegInt)
+	var ord = 0
+	while ord < state.registerContents.count() 'eachReg'
+		if greedyMaskHas(clobberMask, ord: ord) 'clobbered'
+			let occupant = getOr(state.registerContents, index: ord, fallback: RM_NONE)
+			if occupant != RM_NONE 'occupied'
+				var info = getValueInfo(state, valueId: occupant)
+				info.gprOrdinal = RM_NONE
+				set(state.registerContents, index: ord, value: RM_NONE, sentinel: RM_NONE)
+				set(state.lastUsed, index: ord, value: 0, sentinel: 0)
+			end 'occupied'
+		end 'clobbered'
+		ord = ord + 1
+	end 'eachReg'
+end 'greedyInvalidateAcrossCall'
+
+// Free any arg-source value dead at the call (its last use was the arg move, and
+// it is not live-out) that is still resident — this only matters for a source that
+// lived in a surviving callee-saved register, since clobbered registers were
+// already invalidated. Keeps the register file tight; correctness does not depend
+// on it (a lingering dead value would simply be a future eviction candidate).
+function greedyFreeDeadArgSources(state RegState, argSourceVids RegIntArray, lastUse RegIntArray, liveOut LiveSet, callOpIdx RegInt)
+	for vid in argSourceVids 'each'
+		if not greedyValueLiveAcrossCall(vid, lastUse: lastUse, liveOut: liveOut, callOpIdx: callOpIdx) 'dead'
+			greedyNoteValueDead(state, vid: vid)
+		end 'dead'
+	end 'each'
+end 'greedyFreeDeadArgSources'
 
 // ============================================================
 // Cross-block support (Phase 2): globals, homes, boundary spills
@@ -1019,16 +1368,7 @@ export function runGreedyAllocation(srcFunc IrFunction, module TargetModule, reg
 			regularOpCount = oldOps.count() - 1
 		end 'condJumpInOpRefs'
 
-		var opIdx = 0
-		for packed in oldOps 'eachOp'
-			if opIdx >= regularOpCount 'doneRegular'
-				break
-			end 'doneRegular'
-			state.currentOpIndex = opIdx
-			greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: packed)
-			greedyProcessOp(state, regTarget: regTarget, opQuery: opQuery, module: module, block: block, packed: packed, coloring: coloring, lastUse: scan.lastUse, isConstScratch: isConstScratch, constValScratch: constValScratch, opIdx: opIdx, liveOut: liveOut)
-			opIdx = opIdx + 1
-		end 'eachOp'
+		greedyWalkBlockOps(state, regTarget: regTarget, opQuery: opQuery, module: module, block: block, oldOps: oldOps, regularOpCount: regularOpCount, coloring: coloring, scan: scan, isConstScratch: isConstScratch, constValScratch: constValScratch, liveOut: liveOut)
 
 		// Block-exit boundary (before the terminator): spill live-out values to their
 		// homes so successors can reload them. These run on EVERY out-edge, so they
@@ -1044,7 +1384,7 @@ export function runGreedyAllocation(srcFunc IrFunction, module TargetModule, reg
 			// Conditional branch: place each edge's block-arg copies on that edge's
 			// own dynamic path (fallthrough inline, taken edge in a trampoline).
 			let condJumpPacked = greedyCondJumpPacked(block, oldOps: oldOps, condBrInfo: condBrInfo)
-			greedyGuardOpSupported(state, opQuery: opQuery, module: module, packed: condJumpPacked)
+			greedyGuardOpSupported(state, regTarget: regTarget, opQuery: opQuery, module: module, packed: condJumpPacked)
 			nextBlockId = greedyEmitConditionalBoundary(state, regTarget: regTarget, module: module, block: block, blockIdToRef: blockIdToRef, condBrInfo: condBrInfo, condJumpPacked: condJumpPacked, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId)
 		end 'condBrBoundary' else 'plainBoundary'
 			// Single successor (or none): all block-arg copies run on the one path, so

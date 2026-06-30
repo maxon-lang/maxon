@@ -508,6 +508,90 @@ function buildX64ResultFpCaptureFromPhys(srcReg X64XmmRegister, dest X64FpVReg, 
 	return CallArgKind.regToReg(srcReg.rawValue, dstOrd: dstOrd, isFloat: true)
 end 'buildX64ResultFpCaptureFromPhys'
 
+// Coloring-FREE shape predicate for an arg-setup op (see RegAllocTarget.
+// isCallArgSetupShape). Mirrors classifyX64CallArgSetup arm-for-arm, returning
+// true exactly where the classifier returns non-`none`, but without resolving any
+// source ordinal through the coloring (which is not yet populated at detection).
+function isX64CallArgSetupShape(x64Op X64Op) returns bool
+	return match x64Op 'shape'
+		movRspOffsetReg gives true
+		movRegReg(destReg, _) gives x64DestIsCallConvGpr(destReg)
+		reloadFromStack(destReg, _) gives x64DestIsCallConvGpr(destReg)
+		movXmmXmm(dest, _, _) gives x64DestIsCallConvXmm(dest)
+		reloadXmmFromStack(dest, _, _) gives x64DestIsCallConvXmm(dest)
+		prologue to addRspImm gives false
+		loadRegRbpOffset to memcpyOp gives false
+		cmpRegReg to spillToStack gives false
+		xorRegRegSelf to xchgRegReg gives false
+		spillXmmToStack gives false
+		movXmmRipRel to imulRegImm gives false
+	end 'shape'
+end 'isX64CallArgSetupShape'
+
+// True iff `vreg` is a physical GPR in the x64 call-conv argument set — the
+// shape that makes a mov/reload into it an arg-setup move.
+function x64DestIsCallConvGpr(vreg X64VReg) returns bool
+	return match vreg 'pick'
+		virtual gives false
+		physical(reg) gives isX64CallConvGpr(reg)
+	end 'pick'
+end 'x64DestIsCallConvGpr'
+
+function x64DestIsCallConvXmm(vreg X64FpVReg) returns bool
+	return match vreg 'pick'
+		virtual gives false
+		physical(reg) gives isX64CallConvXmm(reg)
+	end 'pick'
+end 'x64DestIsCallConvXmm'
+
+// Coloring-FREE shape predicate for a result-capture op (see RegAllocTarget.
+// isCallResultCaptureShape). Mirrors classifyX64CallResultCapture arm-for-arm.
+function isX64CallResultCaptureShape(x64Op X64Op) returns bool
+	return match x64Op 'shape'
+		movRspOffsetReg gives false
+		movRegReg(destReg, srcReg) gives x64IsResultMovCaptureShape(destReg, srcReg: srcReg)
+		reloadFromStack gives false
+		movXmmXmm(dest, src, _) gives x64IsResultFpMovCaptureShape(dest, src: src)
+		reloadXmmFromStack gives false
+		prologue to addRspImm gives false
+		loadRegRbpOffset to memcpyOp gives false
+		cmpRegReg to spillToStack gives false
+		xorRegRegSelf to xchgRegReg gives false
+		spillXmmToStack gives false
+		movXmmRipRel to imulRegImm gives false
+	end 'shape'
+end 'isX64CallResultCaptureShape'
+
+// A capture has a VIRTUAL dest and a physical RETURN-register source (r8/rdx).
+function x64IsResultMovCaptureShape(destReg X64VReg, srcReg X64VReg) returns bool
+	return match destReg 'pickDest'
+		physical gives false
+		virtual gives x64SrcIsReturnGpr(srcReg)
+	end 'pickDest'
+end 'x64IsResultMovCaptureShape'
+
+function x64SrcIsReturnGpr(srcReg X64VReg) returns bool
+	return match srcReg 'pickSrc'
+		virtual gives false
+		physical(reg) gives isX64ReturnGpr(reg)
+	end 'pickSrc'
+end 'x64SrcIsReturnGpr'
+
+function x64IsResultFpMovCaptureShape(dest X64FpVReg, src X64FpVReg) returns bool
+	return match dest 'pickDest'
+		physical gives false
+		virtual gives x64SrcIsReturnFp(src)
+	end 'pickDest'
+end 'x64IsResultFpMovCaptureShape'
+
+// xmm0 is the sole FP return register, so an FP value capture can only be from it.
+function x64SrcIsReturnFp(src X64FpVReg) returns bool
+	return match src 'pickSrc'
+		virtual gives false
+		physical(reg) gives reg == X64XmmRegister.xmm0
+	end 'pickSrc'
+end 'x64SrcIsReturnFp'
+
 // Extract virtual value ID from an X64VReg, or -1 if physical.
 function x64VRegId(vreg X64VReg) returns RegInt
 	return match vreg 'getId'
@@ -2682,6 +2766,16 @@ export type X64RegAllocTarget implements RegAllocTarget
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		return classifyX64CallResultCapture(x64Op, coloring: coloring)
 	end 'classifyCallResultCapture'
+
+	function isCallArgSetupShape(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		return isX64CallArgSetupShape(x64Op)
+	end 'isCallArgSetupShape'
+
+	function isCallResultCaptureShape(module TargetModule, packed OpIndex) returns bool
+		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		return isX64CallResultCaptureShape(x64Op)
+	end 'isCallResultCaptureShape'
 
 	function emitSlotToSlotMove(module TargetModule, ops OpIndexList, srcStackOffset RegInt, destStackOffset RegInt, regClass RegInt)
 		if regClass == 1 'fp'

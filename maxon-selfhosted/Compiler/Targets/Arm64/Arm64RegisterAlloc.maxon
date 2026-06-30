@@ -276,6 +276,89 @@ function buildArm64ResultFpCaptureFromPhys(srcReg Arm64FloatRegister, dest Arm64
 	return CallArgKind.regToReg(srcReg.rawValue, dstOrd: dstOrd, isFloat: true)
 end 'buildArm64ResultFpCaptureFromPhys'
 
+// Coloring-FREE shape predicate for an arg-setup op (see RegAllocTarget.
+// isCallArgSetupShape). Mirrors classifyArm64CallArgSetup arm-for-arm, returning
+// true exactly where the classifier returns non-`none`, but without resolving any
+// source ordinal through the coloring (which is not yet populated at detection).
+function isArm64CallArgSetupShape(a64Op Arm64Op) returns bool
+	return match a64Op 'shape'
+		movRegReg(dest, _) gives arm64DestIsCallConvGpr(dest)
+		reloadFromStack(dest, _) gives arm64DestIsCallConvGpr(dest)
+		loadIncomingArg gives false
+		strToSpOffset gives true
+		fmovRegReg(dest, _, _) gives arm64DestIsCallConvFp(dest)
+		reloadFpFromStack(dest, _, _) gives arm64DestIsCallConvFp(dest)
+		prologue to memcpyOp gives false
+		spillToStack gives false
+		branchLinkReg to addSpImm gives false
+		spillFpToStack gives false
+		fmovToFloat to xorRegImm gives false
+	end 'shape'
+end 'isArm64CallArgSetupShape'
+
+// True iff `vreg` is a physical GPR in the arm64 AAPCS64 argument set (x0..x7) —
+// the shape that makes a mov/reload into it an arg-setup move.
+function arm64DestIsCallConvGpr(vreg Arm64VReg) returns bool
+	return match vreg 'pick'
+		virtual gives false
+		physical(reg) gives isArm64CallConvGpr(reg)
+	end 'pick'
+end 'arm64DestIsCallConvGpr'
+
+function arm64DestIsCallConvFp(vreg Arm64FpVReg) returns bool
+	return match vreg 'pick'
+		virtual gives false
+		physical(reg) gives isArm64CallConvFp(reg)
+	end 'pick'
+end 'arm64DestIsCallConvFp'
+
+// Coloring-FREE shape predicate for a result-capture op (see RegAllocTarget.
+// isCallResultCaptureShape). Mirrors classifyArm64CallResultCapture arm-for-arm.
+function isArm64CallResultCaptureShape(a64Op Arm64Op) returns bool
+	return match a64Op 'shape'
+		movRegReg(dest, src) gives arm64IsResultMovCaptureShape(dest, src: src)
+		reloadFromStack to loadIncomingArg gives false
+		strToSpOffset gives false
+		fmovRegReg(dest, src, _) gives arm64IsResultFpMovCaptureShape(dest, src: src)
+		reloadFpFromStack gives false
+		prologue to memcpyOp gives false
+		spillToStack gives false
+		branchLinkReg to addSpImm gives false
+		spillFpToStack gives false
+		fmovToFloat to xorRegImm gives false
+	end 'shape'
+end 'isArm64CallResultCaptureShape'
+
+// A capture has a VIRTUAL dest and a physical RETURN-register source (x0/x1).
+function arm64IsResultMovCaptureShape(dest Arm64VReg, src Arm64VReg) returns bool
+	return match dest 'pickDest'
+		physical gives false
+		virtual gives arm64SrcIsReturnGpr(src)
+	end 'pickDest'
+end 'arm64IsResultMovCaptureShape'
+
+function arm64SrcIsReturnGpr(src Arm64VReg) returns bool
+	return match src 'pickSrc'
+		virtual gives false
+		physical(reg) gives isArm64ReturnGpr(reg)
+	end 'pickSrc'
+end 'arm64SrcIsReturnGpr'
+
+function arm64IsResultFpMovCaptureShape(dest Arm64FpVReg, src Arm64FpVReg) returns bool
+	return match dest 'pickDest'
+		physical gives false
+		virtual gives arm64SrcIsReturnFp(src)
+	end 'pickDest'
+end 'arm64IsResultFpMovCaptureShape'
+
+// d0 is the sole FP return register, so an FP value capture can only be from it.
+function arm64SrcIsReturnFp(src Arm64FpVReg) returns bool
+	return match src 'pickSrc'
+		virtual gives false
+		physical(reg) gives reg == Arm64FloatRegister.d0
+	end 'pickSrc'
+end 'arm64SrcIsReturnFp'
+
 function buildArm64CallArgRegToReg(destPhys Arm64Register, src Arm64VReg, coloring ColoringResult) returns CallArgKind
 	if not isArm64CallConvGpr(destPhys) 'notArgSlot'
 		return CallArgKind.none
@@ -2104,6 +2187,16 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 		return classifyArm64CallResultCapture(arm64Op, coloring: coloring)
 	end 'classifyCallResultCapture'
+
+	function isCallArgSetupShape(module TargetModule, packed OpIndex) returns bool
+		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return isArm64CallArgSetupShape(arm64Op)
+	end 'isCallArgSetupShape'
+
+	function isCallResultCaptureShape(module TargetModule, packed OpIndex) returns bool
+		let arm64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		return isArm64CallResultCaptureShape(arm64Op)
+	end 'isCallResultCaptureShape'
 
 	// Slot-to-slot move via x16, the arm64 indirect-call scratch register
 	// (also reserved for register-allocator use). Mirrors the x64 impl.
