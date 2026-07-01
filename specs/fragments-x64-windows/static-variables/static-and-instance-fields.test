@@ -25,7 +25,7 @@ module {
   func @Thing.make(rcx: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov r12, rcx
+    x64.mov rbx, rcx
     x64.lea r8, [rip+__data_Thing.created]
     x64.mov r9, [r8+0] (8b)
     x64.lea r8, [rip+__data_Thing.created]
@@ -34,11 +34,11 @@ module {
     x64.xor edx, edx
     x64.mov ecx, 8
     x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov rcx, r13
+    x64.mov r12, r8
+    x64.mov rcx, r12
     x64.call stdlib.__mm_incref
-    x64.mov [r13+0], r12 (8b)
-    x64.mov r8, r13
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   }
@@ -47,27 +47,27 @@ module {
     x64.prologue stack_size=32
     x64.mov ecx, 10
     x64.call Thing.make
-    x64.mov r12, r8
+    x64.mov rbx, r8
     x64.mov ecx, 20
     x64.call Thing.make
-    x64.mov r13, r8
+    x64.mov r12, r8
     x64.lea r8, [rip+__data_Thing.created]
-    x64.mov r14, [r12+0] (8b)
-    x64.mov r15, [r8+0] (8b)
+    x64.mov r13, [rbx+0] (8b)
+    x64.mov r14, [r8+0] (8b)
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rbx, [r12+0] (8b)
     x64.mov rcx, r12
     x64.call __mm_decref_maybenull_helper
-    x64.mov r12, [r13+0] (8b)
-    x64.mov rcx, r13
-    x64.call __mm_decref_maybenull_helper
-    x64.add r15, r14
+    x64.add r14, r13
     x64.mov r9d, 4294967295
-    x64.mov r8, r15
-    x64.add r8, r12
+    x64.mov r8, r14
+    x64.add r8, rbx
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_915f2e1444e007c8]
-    x64.mov rcx, r12
+    x64.lea rbx, [rip+__panic_msg_915f2e1444e007c8]
+    x64.mov rcx, rbx
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

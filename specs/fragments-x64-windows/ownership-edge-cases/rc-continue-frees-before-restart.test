@@ -29,44 +29,41 @@ ExitCode: 8
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=128
+    x64.prologue stack_size=96
     x64.xor r8d, r8d
     x64.xor r9d, r9d
+    x64.mov rbx, r8
   loop_0.header:
     x64.mov [rbp+-48], r9
-    x64.mov [rbp+-56], r8
-    x64.mov r8, [rbp+-56]
-    x64.cmp r8, 5
+    x64.cmp rbx, 5
     x64.jge loop_0.exit
   loop_0:
     x64.xor r8d, r8d
-    x64.mov [rbp+-64], r8
     x64.mov r8d, 8
   inlined_stdlib.__mm_alloc_0_0:
     x64.xor r9d, r9d
-    x64.mov [rbp+-72], r9
     x64.cmp r8, 1
-    x64.jge inlined_stdlib.__mm_alloc_2_0
+    x64.jge __phi_trampoline_7_0
   inlined_stdlib.__mm_alloc_1_0:
     x64.mov r8d, 1
+    x64.mov r12, r8
   inlined_stdlib.__mm_alloc_2_0:
-    x64.mov [rbp+-80], r8
     x64.lea r8, [rip+__mm_alloc_count]
     x64.lock inc qword ptr [r8]
-    x64.mov r12, [rbp+-80]
-    x64.add r12, 32
+    x64.mov r13, r12
+    x64.add r13, 32
   inlined_stdlib.__slab_alloc_0_0:
-    x64.xor r13d, r13d
-    x64.cmp r12, 32768
+    x64.xor r8d, r8d
+    x64.cmp r13, 32768
     x64.jle inlined_stdlib.__slab_alloc_2_0
   inlined_stdlib.__slab_alloc_1_0:
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_acquire
   inlined_stdlib.__slab_os_direct_alloc_0_0:
     x64.mov r8, -8192
-    x64.add r12, 8191
-    x64.and r12, r8
-    x64.mov [rbp-8], r12
+    x64.add r13, 8191
+    x64.and r13, r8
+    x64.mov [rbp-8], r13
     x64.xor eax, eax
     x64.mov [rbp-16], rax
     x64.mov rax, 12288
@@ -74,15 +71,14 @@ module {
     x64.mov rax, 4
     x64.mov [rbp-32], rax
     x64.call_import slot_7
-    x64.mov rbx, [rbp-40]
+    x64.mov r14, [rbp-40]
   inlined_stdlib.__slab_assert_os_alloc_0_0:
-    x64.test rbx, rbx
-    x64.jne __phi_trampoline_37_0
+    x64.test r14, r14
+    x64.jne inline_cont_main_0
   inlined_stdlib.__slab_assert_os_alloc_1_0:
     x64.mov r8d, 137
     x64.mov [rbp-8], r8
     x64.call_import slot_0
-    x64.mov r13, rbx
   inline_cont_main_0:
     x64.lea r8, [rip+__slab_os_direct_capacity]
     x64.mov r9, [r8+0] (8b)
@@ -129,9 +125,9 @@ module {
     x64.mov r9, r8
     x64.shl r9, r9, rcx
     x64.add rsi, r9
-    x64.mov [rsi+0], r13 (8b)
+    x64.mov [rsi+0], r14 (8b)
     x64.add rsi, 8
-    x64.mov [rsi+0], r12 (8b)
+    x64.mov [rsi+0], r13 (8b)
     x64.lea r9, [rip+__slab_os_direct_count]
     x64.add r8, 1
     x64.mov [r9+0], r8 (8b)
@@ -140,15 +136,16 @@ module {
     x64.call __rt_oslock_release
     x64.jmp inline_cont_main_4
   inlined_stdlib.__slab_alloc_2_0:
-    x64.mov r14, r13
-    x64.mov r15, r13
+    x64.mov rcx, 0
+    x64.mov r14, rcx
+    x64.mov r15, rcx
   inlined_stdlib.__slab_alloc_3_0:
     x64.cmp r15, 18
     x64.jge inlined_stdlib.__slab_alloc_6_0
   inlined_stdlib.__slab_alloc_4_0:
     x64.mov rcx, r14
     x64.call stdlib.__slab_class_size
-    x64.cmp r8, r12
+    x64.cmp r8, r13
     x64.jl inlined_stdlib.__slab_alloc_12_0
     x64.jmp inlined_stdlib.__slab_alloc_7_0
   inlined_stdlib.__slab_alloc_5_0:
@@ -159,13 +156,17 @@ module {
     x64.mov r8d, 136
     x64.mov [rbp-8], r8
     x64.call_import slot_0
+    x64.mov r8, 0
+    x64.mov r14, r8
     x64.jmp inline_cont_main_4
   inlined_stdlib.__slab_alloc_7_0:
     x64.mov r8, -1
     x64.test r8, r8
+    x64.mov r8, 0
     x64.jge inlined_stdlib.__slab_alloc_9_0
   inlined_stdlib.__slab_proc_at_0_0:
-    x64.test r13, r13
+    x64.mov r8, 0
+    x64.test r8, r8
     x64.jge inlined_stdlib.__slab_proc_at_2_0
   inlined_stdlib.__slab_proc_at_1_0:
     x64.xor r8d, r8d
@@ -180,59 +181,58 @@ module {
     x64.jmp inline_cont_main_3
   inlined_stdlib.__slab_proc_at_4_0:
     x64.mov ecx, 3
-    x64.shl r13, r13, rcx
-    x64.add r9, r13
+    x64.mov r8, 0
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
     x64.mov r8, [r9+0] (8b)
   inline_cont_main_3:
     x64.test r8, r8
-    x64.setne r13
+    x64.setne r8
   inlined_stdlib.__slab_alloc_9_0:
-    x64.test r13, r13
+    x64.test r8, r8
     x64.je inlined_stdlib.__slab_alloc_11_0
   inlined_stdlib.__slab_alloc_10_0:
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_acquire
     x64.mov rcx, r14
     x64.call stdlib.__slab_alloc_class
-    x64.mov r12, r8
+    x64.mov r13, r8
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_release
-    x64.mov r13, r12
+    x64.mov r14, r13
     x64.jmp inline_cont_main_4
   inlined_stdlib.__slab_alloc_11_0:
     x64.mov rcx, r14
     x64.call stdlib.__slab_alloc_class
-    x64.mov r13, r8
+    x64.mov r14, r8
     x64.jmp inline_cont_main_4
   inlined_stdlib.__slab_alloc_12_0:
     x64.mov rcx, r14
     x64.add rcx, 1
     x64.jmp inlined_stdlib.__slab_alloc_5_0
   inline_cont_main_4:
-    x64.mov r8, [rbp+-72]
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r9, r13
-    x64.add r9, 8
-    x64.mov rsi, [rbp+-64]
-    x64.mov [r9+0], rsi (8b)
-    x64.mov r9, r13
-    x64.add r9, 16
-    x64.mov rsi, [rbp+-80]
-    x64.mov [r9+0], rsi (8b)
-    x64.mov r9, r13
-    x64.add r9, 24
-    x64.mov [r9+0], r8 (8b)
-    x64.mov r12, r13
+    x64.mov r8, 0
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8, r14
+    x64.add r8, 8
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r8, r14
+    x64.add r8, 16
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r8, r14
+    x64.add r8, 24
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r12, r14
     x64.add r12, 32
     x64.mov r13, r12
   inline_cont_main_5:
     x64.mov rcx, r12
     x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp+-56]
-    x64.mov [r13+0], r8 (8b)
+    x64.mov [r13+0], rbx (8b)
     x64.mov r8, [r13+0] (8b)
-    x64.mov r12, [rbp+-56]
-    x64.add r12, 1
+    x64.add rbx, 1
     x64.cmp r8, 2
     x64.jne skip_0.after
     x64.jmp __rc_edge_10_0
@@ -243,30 +243,28 @@ module {
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   skip_0.after:
-    x64.mov r14, [r13+0] (8b)
+    x64.mov r12, [r13+0] (8b)
     x64.mov rcx, r13
     x64.call mm_drop
     x64.mov r9, [rbp+-48]
-    x64.add r9, r14
-    x64.mov r8, r12
+    x64.add r9, r12
     x64.jmp loop_0.header
   __rc_edge_10_0:
     x64.mov rcx, r13
     x64.call mm_drop
     x64.mov r9, [rbp+-48]
-    x64.mov r8, r12
     x64.jmp loop_0.header
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_9e363aa55fbb96b7]
-    x64.mov rcx, r12
+    x64.lea rbx, [rip+__panic_msg_9e363aa55fbb96b7]
+    x64.mov rcx, rbx
     x64.call mrt_panic
   __range_ok_0:
     x64.mov r8, [rbp+-48]
     x64.epilogue
     x64.ret
-  __phi_trampoline_37_0:
-    x64.mov r13, rbx
-    x64.jmp inline_cont_main_0
+  __phi_trampoline_7_0:
+    x64.mov r12, r8
+    x64.jmp inlined_stdlib.__mm_alloc_2_0
   }
 }
 ---

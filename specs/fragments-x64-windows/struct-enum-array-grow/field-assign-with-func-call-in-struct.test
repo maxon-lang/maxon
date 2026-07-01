@@ -68,46 +68,9 @@ module {
   func @Database.create(rcx: i64, rdx: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
-    x64.mov r12, rcx
-    x64.mov r13, rdx
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
     x64.lea rdx, [rip+__destruct_Database]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.xor r8d, r8d
-    x64.mov [r14+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r14+8], r8 (8b)
-    x64.mov [r14+0], r12 (8b)
-    x64.mov [r14+8], r13 (8b)
-    x64.mov r8, r14
-    x64.epilogue
-    x64.ret
-  }
-  func @initProject(rcx: i64) {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov r12, rcx
-    x64.movsx r8, [r12+8] (1b)
-    x64.mov r9d, 1
-    x64.xor r8, r9
-    x64.je init_0.after
-  init_0:
-    x64.lea rcx, [rip+__layout_Array_Integer]
-    x64.call Array.create
-    x64.mov r13, r8
-    x64.lea rdx, [rip+__destruct_Module]
-    x64.mov ecx, 8
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.xor r8d, r8d
-    x64.mov [r14+0], r8 (8b)
-    x64.mov [r14+0], r13 (8b)
-    x64.lea rdx, [rip+__destruct_Memo]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
     x64.mov r13, r8
@@ -115,56 +78,23 @@ module {
     x64.call stdlib.__mm_incref
     x64.xor r8d, r8d
     x64.mov [r13+0], r8 (8b)
-    x64.mov [r13+0], r14 (8b)
     x64.xor r8d, r8d
     x64.mov [r13+8], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_Integer]
-    x64.call Array.create
-    x64.mov rcx, r13
-    x64.mov rdx, r8
-    x64.call Database.create
-    x64.mov r13, r8
-    x64.mov rcx, [r12+0] (8b)
-    x64.call __mm_decref_maybenull_helper
-    x64.mov [r12+0], r13 (8b)
-    x64.mov r8d, 1
-    x64.mov [r12+8], r8 (1b)
-  init_0.after:
+    x64.mov [r13+0], rbx (8b)
+    x64.mov [r13+8], r12 (8b)
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }
-  func @useProject(rcx: i64) -> i64 {
+  func @initProject(rcx: i64) {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r12, rcx
-    x64.mov r8, [r12+0] (8b)
-    x64.mov r13, [r8+8] (8b)
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov edx, 1
-    x64.mov rcx, r13
-    x64.call Array.push
-    x64.mov r8, [r12+0] (8b)
-    x64.mov r13, [r8+8] (8b)
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov edx, 2
-    x64.mov rcx, r13
-    x64.call Array.push
-    x64.mov r8, [r12+0] (8b)
-    x64.mov r13, [r8+8] (8b)
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov edx, 3
-    x64.mov rcx, r13
-    x64.call Array.push
-    x64.mov r8, [r12+0] (8b)
-    x64.mov rcx, [r8+8] (8b)
-    x64.lea rdx, [rip+__layout_Array_Integer]
-    x64.call Array.count
-    x64.epilogue
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.movsx r8, [rbx+8] (1b)
+    x64.mov r9d, 1
+    x64.xor r8, r9
+    x64.je init_0.after
+  init_0:
     x64.lea rcx, [rip+__layout_Array_Integer]
     x64.call Array.create
     x64.mov r12, r8
@@ -194,31 +124,101 @@ module {
     x64.mov rdx, r8
     x64.call Database.create
     x64.mov r12, r8
+    x64.mov rcx, [rbx+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8d, 1
+    x64.mov [rbx+8], r8 (1b)
+  init_0.after:
+    x64.epilogue
+    x64.ret
+  }
+  func @useProject(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 1
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 2
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.lea rax, [rip+__layout_Array_Integer]
+    x64.mov edx, 3
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov rcx, [r8+8] (8b)
+    x64.lea rdx, [rip+__layout_Array_Integer]
+    x64.call Array.count
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rcx, [rip+__layout_Array_Integer]
+    x64.call Array.create
+    x64.mov rbx, r8
+    x64.lea rdx, [rip+__destruct_Module]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+0], rbx (8b)
+    x64.lea rdx, [rip+__destruct_Memo]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.xor r8d, r8d
+    x64.mov [rbx+8], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_Integer]
+    x64.call Array.create
+    x64.mov rcx, rbx
+    x64.mov rdx, r8
+    x64.call Database.create
+    x64.mov rbx, r8
     x64.lea rdx, [rip+__destruct_Project]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.xor r8d, r8d
-    x64.mov [r13+0], r8 (8b)
-    x64.mov [r13+0], r12 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r13+8], r8 (1b)
-    x64.mov rcx, r13
-    x64.call initProject
-    x64.mov rcx, r13
-    x64.call useProject
     x64.mov r12, r8
-    x64.mov rcx, r13
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+0], rbx (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (1b)
+    x64.mov rcx, r12
+    x64.call initProject
+    x64.mov rcx, r12
+    x64.call useProject
+    x64.mov rbx, r8
+    x64.mov rcx, r12
     x64.call mm_drop
     x64.mov r8d, 4294967295
-    x64.cmp r12, r8
+    x64.cmp rbx, r8
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea r12, [rip+__panic_msg_dbca8d4c6a24087c]
-    x64.mov rcx, r12
+    x64.lea rbx, [rip+__panic_msg_dbca8d4c6a24087c]
+    x64.mov rcx, rbx
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov r8, rbx
     x64.epilogue
     x64.ret
   }
