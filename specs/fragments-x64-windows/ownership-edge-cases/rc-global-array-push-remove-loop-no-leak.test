@@ -37,20 +37,18 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=48
-    x64.xor r8d, r8d
-    x64.mov r8, 0
-    x64.mov rbx, r8
+    x64.xor ebx, ebx
+    x64.mov r12, rbx
   push_0.header:
-    x64.cmp rbx, 10
-    x64.mov r8, 0
+    x64.cmp r12, 10
     x64.jge __phi_trampoline_1_0
   push_0:
     x64.lea r8, [rip+__data_globalArr]
-    x64.mov r12, [r8+0] (8b)
-    x64.xor r13d, r13d
+    x64.mov r13, [r8+0] (8b)
+    x64.xor r14d, r14d
     x64.mov r8d, 8
   inlined_stdlib.__mm_alloc_0_0:
-    x64.xor r14d, r14d
+    x64.xor r9d, r9d
     x64.cmp r8, 1
     x64.jge __phi_trampoline_10_0
   inlined_stdlib.__mm_alloc_1_0:
@@ -62,28 +60,29 @@ module {
     x64.mov rcx, r15
     x64.add rcx, 32
     x64.call stdlib.__slab_alloc
-    x64.mov [r8+0], r14 (8b)
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
     x64.mov r9, r8
     x64.add r9, 8
-    x64.mov [r9+0], r13 (8b)
+    x64.mov [r9+0], r14 (8b)
     x64.mov r9, r8
     x64.add r9, 16
     x64.mov [r9+0], r15 (8b)
     x64.mov r9, r8
     x64.add r9, 24
-    x64.mov [r9+0], r14 (8b)
-    x64.mov r13, r8
-    x64.add r13, 32
-    x64.mov r14, r13
+    x64.mov rsi, 0
+    x64.mov [r9+0], rsi (8b)
+    x64.mov rcx, r8
+    x64.add rcx, 32
+    x64.mov r14, rcx
   inline_cont_main_0:
-    x64.mov rcx, r13
     x64.call stdlib.__mm_incref
-    x64.mov [r14+0], rbx (8b)
+    x64.mov [r14+0], r12 (8b)
     x64.lea rax, [rip+__layout_Array_Item]
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.mov rdx, r14
     x64.call Array.push
-    x64.add rbx, 1
+    x64.add r12, 1
     x64.jmp push_0.header
   remove_0.header:
     x64.lea r8, [rip+__data_globalArr]
@@ -96,7 +95,7 @@ module {
     x64.lea r8, [rip+__data_globalArr]
     x64.mov rcx, [r8+0] (8b)
     x64.lea rax, [rip+__layout_Array_Item]
-    x64.mov rdx, 0
+    x64.mov rdx, rbx
     x64.call Array.remove
     x64.mov r9, r8
     x64.test rdx, rdx
@@ -104,7 +103,7 @@ module {
     x64.jmp try_0.otherwise
   remove_0.exit:
     x64.mov r8d, 4294967295
-    x64.cmp r12, r8
+    x64.cmp r13, r8
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   try_0.otherwise:
@@ -112,22 +111,21 @@ module {
     x64.epilogue
     x64.ret
   try_0.merge:
-    x64.mov r13, [r9+0] (8b)
+    x64.mov r14, [r9+0] (8b)
     x64.mov rcx, r9
     x64.call __mm_decref_maybenull_helper
-    x64.add rbx, 1
-    x64.add r12, r13
+    x64.add r12, 1
+    x64.add r13, r14
     x64.jmp remove_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_73001cafa7412d8e]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_73001cafa7412d8e]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   __phi_trampoline_1_0:
-    x64.mov r12, r8
+    x64.mov r13, rbx
     x64.jmp remove_0.header
   __phi_trampoline_10_0:
     x64.mov r15, r8

@@ -65,19 +65,32 @@ end 'maxOf'
 // as the new (mutated) receiver, so each target emits a synthetic
 // `mov virtual(R), virtual(receiver)` after the call.
 //
+// The alias is only emitted when `R` actually has readers (`resultUsed`,
+// from the function's MIR use counts). Most void-call result ids are dead
+// defs — LowerMaxonToStd's voidChainAlias renames chained uses to the
+// receiver's ValueId up front — and materializing a dead post-call read of
+// the receiver extends the receiver's live range ACROSS the call. That
+// flips the range to crossesCall, which bans caller-saved registers and
+// discards the arg-register copy hint, so e.g. a panic-message `lea` ends
+// up staged through a callee-saved register (`lea rbx` + `mov rcx, rbx`)
+// instead of targeting the arg register directly.
+//
 // Returns the receiver value-id when an alias should be emitted. Throws
-// `VoidResultAliasNotApplicable.notApplicable` when no alias is needed,
-// either because resultId is the tailCall sentinel (0) or because the
+// `VoidResultAliasNotApplicable.notApplicable` when no alias is needed:
+// resultId is the tailCall sentinel (0), resultId has no uses, or the
 // call has no arguments to use as the receiver. Callers `try ... otherwise
 // return` to short-circuit, then issue their target-specific mov.
 export enum VoidResultAliasNotApplicable implements Error
 	notApplicable
 end 'VoidResultAliasNotApplicable'
 
-export function voidResultAliasReceiverId(resultId ValueId, argIds ValueIdArray) returns ValueId throws VoidResultAliasNotApplicable
+export function voidResultAliasReceiverId(resultId ValueId, argIds ValueIdArray, resultUsed bool) returns ValueId throws VoidResultAliasNotApplicable
 	if resultId == 0 'noResult'
 		throw VoidResultAliasNotApplicable.notApplicable
 	end 'noResult'
+	if not resultUsed 'deadResult'
+		throw VoidResultAliasNotApplicable.notApplicable
+	end 'deadResult'
 	if argIds.count() == 0 'noArgs'
 		throw VoidResultAliasNotApplicable.notApplicable
 	end 'noArgs'

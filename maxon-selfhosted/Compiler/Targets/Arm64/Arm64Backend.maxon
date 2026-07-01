@@ -67,6 +67,10 @@ export type Arm64Backend implements TargetBackend
 	// GPR args; `lowerFunctionToArm64` reads it back to set the function's
 	// `outgoingArgSize` so the prologue reserves the area. Reset per function.
 	var currentOutgoingArgSize as StackSize = 0
+	// MIR use counts for the function currently being lowered; consulted by
+	// `emitArm64VoidResultAliasIfNeeded` so a dead void-call result id is not
+	// materialized as a post-call receiver copy. Rebuilt per function.
+	var useCounts as MirUseCountMap = MirUseCountMap.create()
 
 	export static function create(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns Self
 		return Self{mirModule: module, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions, calleeSigMap: buildCalleeSigMap(module.functions, stdlibFunctions: stdlibFunctions)}
@@ -219,6 +223,8 @@ export type Arm64Backend implements TargetBackend
 		// Reset the per-function outgoing-stack-arg budget before lowering any
 		// call sites in this function.
 		currentOutgoingArgSize = 0
+
+		useCounts = buildMirUseCountMap(mirModule, func: srcFunc)
 
 		// Phase 1: Compute variable stack space from memref slots.
 		let loadedSlots = scanLoadedSlots(mirModule, func: srcFunc)
@@ -993,7 +999,7 @@ export type Arm64Backend implements TargetBackend
 	// the X64 path. Without this, the SSA backend would fail to color the
 	// resultId vreg because no op in the lowered code defines it.
 	function emitArm64VoidResultAliasIfNeeded(resultId ValueId, argIds ValueIdArray, dstBlock IrBlock)
-		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds) otherwise return
+		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds, resultUsed: mirUseCount(useCounts, valueId: resultId) > 0) otherwise return
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: Arm64VReg.virtual(receiverId)))
 	end 'emitArm64VoidResultAliasIfNeeded'
 

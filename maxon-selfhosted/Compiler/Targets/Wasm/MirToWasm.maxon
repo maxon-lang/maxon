@@ -1632,6 +1632,10 @@ type WasmFunctionLowering
 	// findFloatValueIds and read by emitIndirectCall when synthesizing
 	// the call-site signature for type-section dedup.
 	var funcFloatSet as BoolArray
+	// MIR use counts for the current function; consulted by
+	// emitVoidResultAliasIfNeeded so a dead void-call result id is not
+	// materialized as a post-call receiver copy. Rebuilt per function.
+	var useCounts as MirUseCountMap
 	// True iff any of osGetArgc/osGetArgv/osGetExecutablePath appears in
 	// the current function. When set, three additional i32 scratch locals
 	// are reserved at the tail of the locals declaration (after any dispatch
@@ -1684,6 +1688,7 @@ type WasmFunctionLowering
 			loopDepth: 0,
 			blockIndex: BlockIndexMap.create(),
 			funcFloatSet: BoolArray.create(),
+			useCounts: MirUseCountMap.create(),
 			hasArgvOp: false,
 			argvScratchLocal: 0 as Wasm32Index,
 			argvScanLocal: 0,
@@ -1821,6 +1826,7 @@ type WasmFunctionLowering
 		typeFixups = tyFixups
 		funcAddrFixups = addrFixups
 		globalAddrFixups = gaddrFixups
+		useCounts = buildMirUseCountMap(module, func: srcFunc)
 
 		// Build the per-function blockId → blockRefs-index map up front.
 		// Without this, every emitted branch / cond_branch did a linear
@@ -2466,7 +2472,7 @@ type WasmFunctionLowering
 	// earlier value), and the next use of `arr` dereferences garbage —
 	// observed as `Array.push: set OOB` and similar runtime panics on wasm.
 	function emitVoidResultAliasIfNeeded(resultId ValueId, argIds ValueIdArray)
-		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds) otherwise return
+		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds, resultUsed: mirUseCount(useCounts, valueId: resultId) > 0) otherwise return
 		body.push(opLocalGet)
 		writeUleb128(body, value: receiverId as Wasm32Index)
 		body.push(opLocalSet)

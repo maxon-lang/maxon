@@ -790,8 +790,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_9083dd3838d7ca20]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_9083dd3838d7ca20]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -858,8 +857,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_fea5c1de7fb1df46]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_fea5c1de7fb1df46]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -942,8 +940,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_21624daf49be2c6a]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_21624daf49be2c6a]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1056,8 +1053,7 @@ module {
     x64.mov rdi, rax
     x64.jmp loop_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_e449517a4b4af179]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_e449517a4b4af179]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1182,8 +1178,7 @@ module {
     x64.add r8, 1
     x64.jmp loop_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_aea90f7456a1aa52]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_aea90f7456a1aa52]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1293,8 +1288,7 @@ module {
     x64.add r9, 1
     x64.jmp outer_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_1dbec400299d1eb2]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_1dbec400299d1eb2]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1407,8 +1401,7 @@ module {
     x64.add r9, 1
     x64.jmp outer_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_d8bcae5a113f3996]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_d8bcae5a113f3996]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1516,8 +1509,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_c8a3486f5d92e518]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_c8a3486f5d92e518]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1763,8 +1755,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_65da0ac706b41d36]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_65da0ac706b41d36]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1883,8 +1874,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_3e90fd62943769c1]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_3e90fd62943769c1]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -1974,8 +1964,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_289b40fc57b8fe49]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_289b40fc57b8fe49]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2070,8 +2059,7 @@ module {
     x64.add rsi, 1
     x64.jmp inner_0.header
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_34b9b0cb2410b454]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_34b9b0cb2410b454]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2182,8 +2170,7 @@ module {
     x64.cmp r8, rdi
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_5ffb4c10096b25df]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_5ffb4c10096b25df]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2323,8 +2310,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_04f881d71f72fcd2]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_04f881d71f72fcd2]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2402,8 +2388,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_bf3600189d269600]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_bf3600189d269600]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2553,8 +2538,7 @@ module {
     x64.cmp rsi, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_e2f81ed7640ab46a]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_e2f81ed7640ab46a]
     x64.call mrt_panic
   __range_ok_0:
     x64.mov r8, rsi
@@ -2688,8 +2672,7 @@ module {
     x64.xor r8d, r8d
     x64.jmp process_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_388127f7ac41c7d7]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_388127f7ac41c7d7]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2836,8 +2819,7 @@ module {
     x64.add r8, 30
     x64.jmp cascade_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_6ac6ec73b5bac89c]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_6ac6ec73b5bac89c]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -2919,8 +2901,7 @@ module {
     x64.xor r8d, r8d
     x64.jmp eval_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_c4227e4f5df12c9a]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_c4227e4f5df12c9a]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3007,8 +2988,7 @@ module {
     x64.xor r8d, r8d
     x64.jmp eval_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_628d51227dda8cbd]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_628d51227dda8cbd]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3098,8 +3078,7 @@ module {
     x64.xor r8d, r8d
     x64.jmp eval_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_27e6ae53d7b1aeee]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_27e6ae53d7b1aeee]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3192,8 +3171,7 @@ module {
     x64.xor r8d, r8d
     x64.jmp process_0.merge
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_4ec22f4a8f937639]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_4ec22f4a8f937639]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3323,8 +3301,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_52fc415dc3ac3fb2]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_52fc415dc3ac3fb2]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3403,8 +3380,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_765ddc695c2d01c9]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_765ddc695c2d01c9]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3509,8 +3485,7 @@ module {
     x64.cmp r8, rsi
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_4088112a38757a69]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_4088112a38757a69]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -3652,8 +3627,7 @@ module {
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_f84624c80ce4f2a5]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_f84624c80ce4f2a5]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

@@ -94,8 +94,7 @@ module {
     x64.cmp r8, 2
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_1d6478d2da2dc6e8]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_1d6478d2da2dc6e8]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -514,16 +513,16 @@ module {
     x64.lea rdx, [rip+__layout_Array_Tagged]
     x64.mov rcx, r15
     x64.call Array.count
-    x64.mov [rbp+-24], r8
+    x64.mov rbx, r8
     x64.mov r8, 1
     x64.mov r9, [rbp+-152]
-    x64.mov rbx, r8
     x64.mov r12, r9
     x64.mov r13, r9
   walk_0.header:
+    x64.mov [rbp+-24], r8
     x64.mov [rbp+-32], r9
     x64.mov r8, [rbp+-32]
-    x64.cmp r8, [rbp+-24]
+    x64.cmp r8, rbx
     x64.jge walk_0.exit
   inlined_Array.get_0_0:
     x64.mov r8, [rbp+-16]
@@ -552,7 +551,8 @@ module {
   walk_0.exit:
     x64.mov rcx, [rbp+-16]
     x64.call __mm_decref_maybenull_helper
-    x64.test rbx, rbx
+    x64.mov r8, [rbp+-24]
+    x64.test r8, r8
     x64.je no_0
     x64.jmp ok_0
   try_0.otherwise:
@@ -577,16 +577,17 @@ module {
     x64.mov rcx, r14
     x64.call __mm_decref_maybenull_helper
     x64.cmp r15, 100
-    x64.mov r8, 1
+    x64.mov r8, [rbp+-24]
+    x64.mov r9, 1
     x64.jl isLeft_0
-    x64.mov r13, r8
+    x64.mov r13, r9
     x64.jmp isRight_0.merge
   isLeft_0:
     x64.test r13, r13
+    x64.mov r8, [rbp+-24]
     x64.je leftAfterRight_0.after
   leftAfterRight_0:
     x64.mov r8, 0
-    x64.mov rbx, r8
   leftAfterRight_0.after:
   isRight_0.merge:
     x64.jmp walk_0.step
@@ -616,8 +617,7 @@ module {
     x64.mov [r15+8], r8 (8b)
     x64.mov r8, [r15+0] (8b)
     x64.mov rdx, [r8+8] (8b)
-    x64.mov r14, [r8+0] (8b)
-    x64.mov rcx, r14
+    x64.mov rcx, [r8+0] (8b)
     x64.call mrt_write_stdout
     x64.mov rcx, r15
     x64.call mm_drop
@@ -648,8 +648,7 @@ module {
     x64.mov [r15+8], r8 (8b)
     x64.mov r8, [r15+0] (8b)
     x64.mov rdx, [r8+8] (8b)
-    x64.mov r14, [r8+0] (8b)
-    x64.mov rcx, r14
+    x64.mov rcx, [r8+0] (8b)
     x64.call mrt_write_stdout
     x64.mov rcx, r15
     x64.call mm_drop
@@ -660,7 +659,6 @@ module {
   __rc_edge_20_0:
     x64.mov rcx, [rbp+-40]
     x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp+-40]
     x64.mov rcx, [rbp+-40]
     x64.mov rdx, 0
     x64.mov r14, rcx

@@ -90,7 +90,7 @@ type ScheduleState
 		// Extract terminator uses so the dependency graph includes the virtual sink.
 		var terminatorUseIds = ValueIdArray.create()
 		match terminator 'hasTerm'
-			opIndex(idx) then terminatorUseIds = extractUseValueIdsPacked(module, packed: idx)
+			opIndex(idx) then terminatorUseIds = extractMirUsesPacked(module, packed: idx)
 			unset then break 'hasTerm'
 			dead then break 'hasTerm'
 			fallthrough then break 'hasTerm'
@@ -178,7 +178,7 @@ type ScheduleState
 
 			// Decrement use counts for values used by this op.
 			let bestPacked = try opRefsArray.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but opRefs.get failed")
-			let bestUseIds = extractUseValueIdsPacked(module, packed: bestPacked)
+			let bestUseIds = extractMirUsesPacked(module, packed: bestPacked)
 			for uid in bestUseIds 'decUse'
 				let oldUC = schedLookupZero(useCount, index: uid)
 				if oldUC > 0 'decrement'
@@ -241,7 +241,7 @@ type ScheduleState
 		for packed in opRefs 'buildDeps'
 
 			// Data dependencies: for each use, add edge from definer -> this op.
-			let useIds = extractUseValueIdsPacked(module, packed: packed)
+			let useIds = extractMirUsesPacked(module, packed: packed)
 			for useId in useIds 'eachUse'
 				let defIdx = schedLookup(defMap, index: useId)
 				if defIdx != SCHED_NONE 'hasDef'
@@ -525,7 +525,7 @@ type ScheduleState
 			delta = delta + 1
 		end 'hasDef'
 
-		let useIds = extractUseValueIdsPacked(module, packed: packed)
+		let useIds = extractMirUsesPacked(module, packed: packed)
 		var seenUses = ValueIdArray.create()
 		for useId in useIds 'eachUse'
 			var alreadySeen = false
@@ -568,7 +568,7 @@ type ScheduleState
 	// each valueId is used as an operand.
 	function buildUseCountMap()
 		for packed in opRefs 'eachOp'
-			let useIds = extractUseValueIdsPacked(module, packed: packed)
+			let useIds = extractMirUsesPacked(module, packed: packed)
 			for uid in useIds 'eachUse'
 				schedGrowZero(useCount, size: uid + 1)
 				let old = try useCount.get(uid) otherwise panic("buildUseCountMap: useCount grown to uid+1={uid + 1} but get({uid}) failed")
@@ -595,7 +595,7 @@ type ScheduleState
 
 		// Each use: if this is the first time we see this value used (bottom-up),
 		// mark it as live (we're seeing its use for first time).
-		let useIds = extractUseValueIdsPacked(module, packed: packed)
+		let useIds = extractMirUsesPacked(module, packed: packed)
 		for useId in useIds 'eachUse'
 			let currentLive = schedLookupZero(liveVregs, index: useId)
 			if currentLive == 0 'newLive'
@@ -717,91 +717,6 @@ function extractMirDef(op MirOp) returns SchedInt
 	end 'def'
 end 'extractMirDef'
 
-// Extract all ValueIds used as operands by this MIR op.
-function extractUseValueIdsPacked(module MirModule, packed OpIndex) returns ValueIdArray
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return extractMirUses(op)
-end 'extractUseValueIdsPacked'
-
-function extractMirUses(op MirOp) returns ValueIdArray
-	var result = ValueIdArray.create()
-	match op 'uses'
-		movImm then break 'uses'
-		movReg(_, srcId) then result.push(srcId)
-		binOp(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
-		unaryOp(_, operandId, _) then result.push(operandId)
-		cmp(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
-		condBranch(condId, _, thenArgs, _, elseArgs) then extractMirCondBrUses(result, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
-		branch(_, args) then appendAll(result, from: args)
-		call(_, _, argIds) then appendAll(result, from: argIds)
-		indirectCall(_, calleeId, argIds, _, _, _) then extractMirIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
-		witnessCall(_, witnessAddrId, _, _, argIds) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
-		ret(retValId) then result.push(retValId)
-		param then break 'uses'
-		load(_, baseId, _, _, _, _) then result.push(baseId)
-		store(valueId, baseId, _, _, _) then pushTwo(result, a: valueId, b: baseId)
-		loadSlot then break 'uses'
-		storeSlot(_, valueId) then result.push(valueId)
-		stackSlotAddr then break 'uses'
-		globalAddr then break 'uses'
-		funcAddr then break 'uses'
-		loadFramePtr then break 'uses'
-		osExit(codeId) then result.push(codeId)
-		osSleep(msId) then result.push(msId)
-		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
-		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
-		osRead(_, ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
-		osOpenWrite(_, pathPtrId, pathLenId) then pushTwo(result, a: pathPtrId, b: pathLenId)
-		osWriteFd(fdId, ptrId, lenId) then pushThree(result, a: fdId, b: ptrId, c: lenId)
-		osClose(fdId) then result.push(fdId)
-		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then pushFour(result, a: namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId)
-		osGetArgc then break 'uses'
-		osClockMs then break 'uses'
-		osGetArgv(_, indexId) then result.push(indexId)
-		osGetExecutablePath(_, bufPtrId, bufSizeId) then pushTwo(result, a: bufPtrId, b: bufSizeId)
-		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
-		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
-		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
-		osAllocPages(_, sizeId) then result.push(sizeId)
-		osAllocPagesLarge(_, sizeId) then result.push(sizeId)
-		osFreePages(ptrId, sizeId) then pushTwo(result, a: ptrId, b: sizeId)
-		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then pushThree(result, a: cStringPtrId, b: flagsId, c: fileModeId)
-		osFileRead(_, fdId, bufPtrId, countId) then pushThree(result, a: fdId, b: bufPtrId, c: countId)
-		osFileWrite(_, fdId, bufPtrId, countId) then pushThree(result, a: fdId, b: bufPtrId, c: countId)
-		osFileClose(_, fdId) then result.push(fdId)
-		osFileLseek(_, fdId, offsetId, whenceId) then pushThree(result, a: fdId, b: offsetId, c: whenceId)
-		osFileStat(_, cStringPtrId, statBufPtrId) then pushTwo(result, a: cStringPtrId, b: statBufPtrId)
-		osFileAccess(_, cStringPtrId, modeId) then pushTwo(result, a: cStringPtrId, b: modeId)
-		osFileUnlink(_, cStringPtrId) then result.push(cStringPtrId)
-		osFileRename(_, oldPathPtrId, newPathPtrId) then pushTwo(result, a: oldPathPtrId, b: newPathPtrId)
-		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then pushThree(result, a: fdId, b: bufPtrId, c: bufSizeId)
-		osDirGetcwd(_, bufPtrId, bufSizeId) then pushTwo(result, a: bufPtrId, b: bufSizeId)
-		osDirMkdir(_, cStringPtrId, modeId) then pushTwo(result, a: cStringPtrId, b: modeId)
-		atomicInc(addrId) then result.push(addrId)
-		atomicDec(addrId) then result.push(addrId)
-		atomicXadd(_, addrId, valId) then pushTwo(result, a: addrId, b: valId)
-		atomicCas(_, addrId, oldId, newId) then pushThree(result, a: addrId, b: oldId, c: newId)
-		osLockInit(addrId) then result.push(addrId)
-		osLockAcquire(addrId) then result.push(addrId)
-		osLockRelease(addrId) then result.push(addrId)
-		tryCall(_, _, argIds, _) then appendAll(result, from: argIds)
-		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
-		errorReturn(retValId, errorFlagId) then pushTwo(result, a: retValId, b: errorFlagId)
-	end 'uses'
-	return result
-end 'extractMirUses'
-
-function extractMirCondBrUses(result ValueIdArray, condId ValueId, thenArgs ValueIdArray, elseArgs ValueIdArray)
-	result.push(condId)
-	appendAll(result, from: thenArgs)
-	appendAll(result, from: elseArgs)
-end 'extractMirCondBrUses'
-
-function extractMirIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds ValueIdArray)
-	result.push(calleeId)
-	appendAll(result, from: argIds)
-end 'extractMirIndirectCallUses'
-
 // Extract the cond_br's condition valueId from a terminator, or
 // SCHED_NONE if the terminator isn't a cond_br.
 function terminatorCondId(module MirModule, terminator Terminator) returns SchedInt
@@ -830,34 +745,6 @@ end 'terminatorCondId'
 // ============================================================
 // Utility helpers
 // ============================================================
-
-// Push two values to a ValueIdArray.
-function pushTwo(arr ValueIdArray, a ValueId, b ValueId)
-	arr.push(a)
-	arr.push(b)
-end 'pushTwo'
-
-// Push three values to a ValueIdArray.
-function pushThree(arr ValueIdArray, a ValueId, b ValueId, c ValueId)
-	arr.push(a)
-	arr.push(b)
-	arr.push(c)
-end 'pushThree'
-
-// Push four values to a ValueIdArray.
-function pushFour(arr ValueIdArray, a ValueId, b ValueId, c ValueId, d ValueId)
-	arr.push(a)
-	arr.push(b)
-	arr.push(c)
-	arr.push(d)
-end 'pushFour'
-
-// Append all values from one ValueIdArray to another.
-function appendAll(dst ValueIdArray, from ValueIdArray)
-	for v in from 'copy'
-		dst.push(v)
-	end 'copy'
-end 'appendAll'
 
 // Count how many times `target` appears in `useIds`. Used by the
 // pressure-delta estimator to handle ops that read the same value in

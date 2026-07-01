@@ -31,73 +31,69 @@ ExitCode: 30
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.xor edx, edx
     x64.mov ecx, 24
     x64.call stdlib.__mm_alloc
-    x64.mov rbx, r8
-    x64.xor r8d, r8d
-    x64.mov [rbx+0], r8 (8b)
-    x64.mov r8d, 10
-    x64.mov [rbx+8], r8 (8b)
-    x64.mov r8d, 20
-    x64.mov [rbx+16], r8 (8b)
-    x64.mov r8, [rbx+0] (8b)
-    x64.test r8, r8
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9d, 10
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r9d, 20
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
     x64.jne handle_0.next0
   handle_0.case0:
-    x64.mov r12, [rbx+16] (8b)
-    x64.mov r13, [rbx+8] (8b)
-    x64.mov rcx, rbx
+    x64.mov rbx, [r8+16] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.mov rcx, r8
     x64.call mm_drop
     x64.mov r9d, 4294967295
-    x64.mov r8, r13
-    x64.add r8, r12
+    x64.mov r8, r12
+    x64.add r8, rbx
     x64.cmp r8, r9
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   handle_0.next0:
-    x64.mov r8, [rbx+0] (8b)
-    x64.cmp r8, 1
+    x64.mov r9, [r8+0] (8b)
+    x64.cmp r9, 1
     x64.jne handle_0.next1
   handle_0.case1:
-    x64.mov r12, [rbx+16] (8b)
-    x64.mov r13, [rbx+8] (8b)
-    x64.mov rcx, rbx
+    x64.mov rbx, [r8+16] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.mov rcx, r8
     x64.call mm_drop
-    x64.mov r8, r13
-    x64.imul r8, r12
+    x64.mov r8, r12
+    x64.imul r8, rbx
     x64.mov r9d, 4294967295
     x64.cmp r8, r9
     x64.jbe __range_ok_1
     x64.jmp __range_panic_1
   handle_0.next1:
-    x64.mov r12, [rbx+0] (8b)
-    x64.mov rcx, rbx
+    x64.mov rbx, [r8+0] (8b)
+    x64.mov rcx, r8
     x64.call mm_drop
-    x64.cmp r12, 2
+    x64.cmp rbx, 2
     x64.jne handle_0.next2
   handle_0.case2:
     x64.xor r8d, r8d
     x64.epilogue
     x64.ret
   handle_0.next2:
-    x64.lea rbx, [rip+__panic_msg_96c7daeb3f9a871f]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_96c7daeb3f9a871f]
     x64.call mrt_panic
     x64.xor r8d, r8d
     x64.epilogue
     x64.ret
   __range_panic_0:
-    x64.lea rbx, [rip+__panic_msg_d425ab30e50c943b]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_d425ab30e50c943b]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   __range_panic_1:
-    x64.lea rbx, [rip+__panic_msg_d425ab30e50c943b]
-    x64.mov rcx, rbx
+    x64.lea rcx, [rip+__panic_msg_d425ab30e50c943b]
     x64.call mrt_panic
   __range_ok_1:
     x64.epilogue

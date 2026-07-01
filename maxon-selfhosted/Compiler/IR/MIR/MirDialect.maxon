@@ -342,6 +342,142 @@ function mirStoreToString(valueId ValueId, baseId ValueId, offset MachineWord, w
 	return "mir.store %{valueId}, %{baseId}, {offset} width: {storeWidthName(width)}"
 end 'mirStoreToString'
 
+// ============================================================
+// Use scanning — canonical enumeration of MirOp operand reads
+// ============================================================
+
+// Number of times a value is read as an operand within one function.
+export typealias MirUseCount = int(0 to u64.max)
+
+// Per-function use-count map, indexed by ValueId. Shared by the backends
+// (const absorption, flags-only cmp detection, dead void-call-result
+// detection) and the instruction scheduler.
+export typealias MirUseCountMap = Array with MirUseCount
+
+// Every ValueId this op reads as an operand. This is the single source of
+// truth for MirOp use enumeration — the scheduler's dependency graph and
+// the backends' use counting are all built on it, so a new MirOp case only
+// has to declare its reads here.
+export function extractMirUses(op MirOp) returns ValueIdArray
+	var result = ValueIdArray.create()
+	match op 'uses'
+		movImm then break 'uses'
+		movReg(_, srcId) then result.push(srcId)
+		binOp(_, leftId, rightId, _) then pushTwo(leftId, b: rightId, into: result)
+		unaryOp(_, operandId, _) then result.push(operandId)
+		cmp(_, leftId, rightId, _) then pushTwo(leftId, b: rightId, into: result)
+		condBranch(condId, _, thenArgs, _, elseArgs) then extractMirCondBrUses(result, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
+		branch(_, args) then appendAll(args, into: result)
+		call(_, _, argIds) then appendAll(argIds, into: result)
+		indirectCall(_, calleeId, argIds, _, _, _) then extractMirIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
+		witnessCall(_, witnessAddrId, _, _, argIds) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
+		ret(retValId) then result.push(retValId)
+		param then break 'uses'
+		load(_, baseId, _, _, _, _) then result.push(baseId)
+		store(valueId, baseId, _, _, _) then pushTwo(valueId, b: baseId, into: result)
+		loadSlot then break 'uses'
+		storeSlot(_, valueId) then result.push(valueId)
+		stackSlotAddr to loadFramePtr then break 'uses'
+		osExit(codeId) then result.push(codeId)
+		osSleep(msId) then result.push(msId)
+		osWrite(ptrId, lenId) then pushTwo(ptrId, b: lenId, into: result)
+		osWriteErr(ptrId, lenId) then pushTwo(ptrId, b: lenId, into: result)
+		osRead(_, ptrId, lenId) then pushTwo(ptrId, b: lenId, into: result)
+		osOpenWrite(_, pathPtrId, pathLenId) then pushTwo(pathPtrId, b: pathLenId, into: result)
+		osWriteFd(fdId, ptrId, lenId) then pushThree(fdId, b: ptrId, c: lenId, into: result)
+		osClose(fdId) then result.push(fdId)
+		osGetEnv(_, namePtrId, nameLenId, outBufPtrId, outBufLenId) then pushFour(namePtrId, b: nameLenId, c: outBufPtrId, d: outBufLenId, into: result)
+		osGetArgc then break 'uses'
+		osClockMs then break 'uses'
+		osGetArgv(_, indexId) then result.push(indexId)
+		osGetExecutablePath(_, bufPtrId, bufSizeId) then pushTwo(bufPtrId, b: bufSizeId, into: result)
+		memcpy(dstId, srcId, lenId) then pushThree(dstId, b: srcId, c: lenId, into: result)
+		storeByte(baseId, offsetId, byteId) then pushThree(baseId, b: offsetId, c: byteId, into: result)
+		loadByte(_, baseId, offsetId) then pushTwo(baseId, b: offsetId, into: result)
+		osAllocPages(_, sizeId) then result.push(sizeId)
+		osAllocPagesLarge(_, sizeId) then result.push(sizeId)
+		osFreePages(ptrId, sizeId) then pushTwo(ptrId, b: sizeId, into: result)
+		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then pushThree(cStringPtrId, b: flagsId, c: fileModeId, into: result)
+		osFileRead(_, fdId, bufPtrId, countId) then pushThree(fdId, b: bufPtrId, c: countId, into: result)
+		osFileWrite(_, fdId, bufPtrId, countId) then pushThree(fdId, b: bufPtrId, c: countId, into: result)
+		osFileClose(_, fdId) then result.push(fdId)
+		osFileLseek(_, fdId, offsetId, whenceId) then pushThree(fdId, b: offsetId, c: whenceId, into: result)
+		osFileStat(_, cStringPtrId, statBufPtrId) then pushTwo(cStringPtrId, b: statBufPtrId, into: result)
+		osFileAccess(_, cStringPtrId, modeId) then pushTwo(cStringPtrId, b: modeId, into: result)
+		osFileUnlink(_, cStringPtrId) then result.push(cStringPtrId)
+		osFileRename(_, oldPathPtrId, newPathPtrId) then pushTwo(oldPathPtrId, b: newPathPtrId, into: result)
+		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then pushThree(fdId, b: bufPtrId, c: bufSizeId, into: result)
+		osDirGetcwd(_, bufPtrId, bufSizeId) then pushTwo(bufPtrId, b: bufSizeId, into: result)
+		osDirMkdir(_, cStringPtrId, modeId) then pushTwo(cStringPtrId, b: modeId, into: result)
+		atomicInc(addrId) then result.push(addrId)
+		atomicDec(addrId) then result.push(addrId)
+		atomicXadd(_, addrId, valId) then pushTwo(addrId, b: valId, into: result)
+		atomicCas(_, addrId, oldId, newId) then pushThree(addrId, b: oldId, c: newId, into: result)
+		osLockInit(addrId) then result.push(addrId)
+		osLockAcquire(addrId) then result.push(addrId)
+		osLockRelease(addrId) then result.push(addrId)
+		tryCall(_, _, argIds, _) then appendAll(argIds, into: result)
+		witnessTryCall(_, witnessAddrId, _, _, argIds, _) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
+		errorReturn(retValId, errorFlagId) then pushTwo(retValId, b: errorFlagId, into: result)
+	end 'uses'
+	return result
+end 'extractMirUses'
+
+function extractMirCondBrUses(result ValueIdArray, condId ValueId, thenArgs ValueIdArray, elseArgs ValueIdArray)
+	result.push(condId)
+	appendAll(thenArgs, into: result)
+	appendAll(elseArgs, into: result)
+end 'extractMirCondBrUses'
+
+function extractMirIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds ValueIdArray)
+	result.push(calleeId)
+	appendAll(argIds, into: result)
+end 'extractMirIndirectCallUses'
+
+// Packed-index convenience over extractMirUses.
+export function extractMirUsesPacked(module MirModule, packed OpIndex) returns ValueIdArray
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
+	return extractMirUses(op)
+end 'extractMirUsesPacked'
+
+export function mirUseCountIncrement(uc MirUseCountMap, valueId ValueId)
+	while uc.count() <= valueId 'grow'
+		uc.push(0)
+	end 'grow'
+	let current = try uc.get(valueId) otherwise panic("mirUseCountIncrement: uc grown to include valueId={valueId} but get failed (count={uc.count()})")
+	try uc.set(valueId, value: current + 1) otherwise panic("invariant: uc.set OOB")
+end 'mirUseCountIncrement'
+
+export function mirUseCount(uc MirUseCountMap, valueId ValueId) returns MirUseCount
+	if valueId < 0 or valueId >= uc.count() 'outOfRange'
+		return 0
+	end 'outOfRange'
+	return try uc.get(valueId) otherwise panic("mirUseCount: 0 <= valueId < uc.count() just checked but get({valueId}) failed")
+end 'mirUseCount'
+
+// Record every operand read of this op into the use-count map.
+export function countMirOpUses(op MirOp, uc MirUseCountMap)
+	for useId in extractMirUses(op) 'each'
+		mirUseCountIncrement(uc, valueId: useId)
+	end 'each'
+end 'countMirOpUses'
+
+// Whole-function use counting: one entry per ValueId covering every op and
+// terminator in the function.
+export function buildMirUseCountMap(module MirModule, func IrFunction) returns MirUseCountMap
+	var uc = MirUseCountMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			countMirOpUses(try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops"), uc: uc)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			countMirOpUses(try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: block.terminatorIndex not in module.ops"), uc: uc)
+		end 'hasTerm'
+	end 'eachBlock'
+	return uc
+end 'buildMirUseCountMap'
+
 function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks IrBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenBlock, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseBlock, blocks: blocks)
