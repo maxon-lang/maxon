@@ -288,7 +288,13 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // destructor flows in from the caller. A v84 reader lacks the new MaxonTypeArray
 // in both the StdModule per-function records and the arity map, so the version
 // gate forces clean regeneration.
-let CACHE_FORMAT_VERSION = 85
+//
+// v86: the header's second fingerprint word changed meaning from the compiler
+// executable's whole-second mtime to a content hash of its bytes (see
+// getCompilerFingerprint). A v85 header would be misread — its mtime qword
+// compared against the new content hash — so the version gate forces clean
+// regeneration of every existing cache.
+let CACHE_FORMAT_VERSION = 86
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -755,32 +761,73 @@ export function computeStdlibChecksum(files FilePathArray, runtimePath FilePath)
 	return checksum
 end 'computeStdlibChecksum'
 
-// Get compiler executable fingerprint: file size and modification time.
+// Process-lifetime memo for getCompilerFingerprint (the executable is immutable
+// while the compiler runs). A (0, 0) degraded fingerprint is intentionally NOT
+// memoized — `compilerFingerprintComputed` stays false so a transient path/read
+// failure is retried rather than pinned for the whole process.
+var compilerFingerprintSize = 0
+var compilerFingerprintHash = 0
+var compilerFingerprintComputed = false
+
+// Get compiler executable fingerprint: file size and a content hash of the
+// executable's bytes.
+//
+// The content hash — NOT (size, mtime) — is what makes this correct. Two
+// different compiler builds routinely share the same byte size (toggling a
+// small change, or reverting to a prior source state), and rapid rebuilds land
+// in the same whole-second `mtime` bucket (stat's `st_mtime` is second-
+// granular on Windows). A `(size, mtime)` fingerprint therefore collides across
+// distinct compilers, letting a stdlib cache produced by one compiler be reused
+// by another whose codegen differs — silent runtime corruption. Hashing the
+// executable's actual bytes changes the fingerprint whenever the compiler's
+// code changes, immune to both failure modes. `size` is kept as a cheap first-
+// word discriminator; the hash is the real guard.
+//
+// A degraded `(0, 0)` fingerprint (executable path / file-info / read failure)
+// is the correctness backstop: the header check treats a `(0, 0)` current
+// fingerprint as never matching a real cache (a cache is only reused when both
+// words equal the current compiler's), so a lookup failure forces a rebuild
+// rather than risking a stale hit.
 export function getCompilerFingerprint() returns (MachineWord, MachineWord)
+	// Memoized: the executable never changes during a single compiler process, so
+	// hashing its ~15MB of bytes once (rather than on every write/validate/token
+	// call) keeps the correctness win free of per-lookup cost.
+	if compilerFingerprintComputed 'cached'
+		return (compilerFingerprintSize, compilerFingerprintHash)
+	end 'cached'
+
 	let exePath = try Process.executablePath() otherwise return (0, 0)
 	let info = try File.info(exePath) otherwise return (0, 0)
+	let bytes = try File.readBinary(exePath) otherwise return (0, 0)
 
-	return (info.size, info.modifiedTime)
+	var contentHash = FNV_OFFSET_BASIS
+	for b in bytes 'eachByte'
+		contentHash = fnvUpdate(contentHash, b: b)
+	end 'eachByte'
+
+	compilerFingerprintSize = info.size
+	compilerFingerprintHash = contentHash
+	compilerFingerprintComputed = true
+	return (info.size, contentHash)
 end 'getCompilerFingerprint'
 
 // Short, filename-safe hex token derived from the compiler fingerprint
-// (`getCompilerFingerprint`'s size + mtime), used as a filename component so
-// distinct compiler versions write distinct, coexisting cache files instead of
-// stomping each other (see *Cache validity key* in the libraries plan). The
-// raw `(size, mtime)` tuple isn't filename-shaped; this folds both words
+// (`getCompilerFingerprint`'s size + content hash), used as a filename component
+// so distinct compiler versions write distinct, coexisting cache files instead
+// of stomping each other (see *Cache validity key* in the libraries plan). The
+// raw `(size, contentHash)` tuple isn't filename-shaped; this folds both words
 // through the same 32-bit FNV-1a the source checksum uses, then formats the
 // result as 8 lowercase hex digits.
 //
-// A degraded `(0, 0)` fingerprint (executable path / file-info lookup failed)
+// A degraded `(0, 0)` fingerprint (executable path / file-info / read failed)
 // folds to a fixed token like any other input — the on-disk header's
-// fingerprint check (and, in a later phase, disabling caching on a `(0, 0)`
-// fingerprint) remains the correctness backstop; the token only governs
-// filename coexistence.
+// fingerprint check (which rejects any cache when the current content hash is 0)
+// is the correctness backstop; the token only governs filename coexistence.
 export function compilerFingerprintToken() returns String
-	let (size, mtime) = getCompilerFingerprint()
+	let (size, contentHash) = getCompilerFingerprint()
 	var h = FNV_OFFSET_BASIS
 	h = fnvFoldWord(h, word: size)
-	h = fnvFoldWord(h, word: mtime)
+	h = fnvFoldWord(h, word: contentHash)
 	return toHex8(h)
 end 'compilerFingerprintToken'
 
@@ -1032,9 +1079,9 @@ function writeCacheHeader(buf ByteArray, target Target, contentChecksum CacheChe
 	writeDword(buf, value: CACHE_FORMAT_VERSION)
 	writeDword(buf, value: contentChecksum)
 
-	let (compilerSize, compilerMtime) = getCompilerFingerprint()
+	let (compilerSize, compilerContentHash) = getCompilerFingerprint()
 	writeDword(buf, value: compilerSize)
-	writeQword(buf, value: compilerMtime)
+	writeQword(buf, value: compilerContentHash)
 
 	writeCpuArch(buf, cpu: target.cpu)
 	writeOs(buf, os: target.os)
@@ -1874,10 +1921,12 @@ function validateCacheHeader(buf ByteArray, expectedChecksum CacheChecksum) retu
 	end 'badChecksum'
 
 	let cachedCompilerSize = try readDword(buf, offset: 12) otherwise throw CacheCorruption.invalidEncoding
-	let cachedCompilerMtime = try readQword(buf, offset: 16) otherwise throw CacheCorruption.invalidEncoding
-	let (currentCompilerSize, currentCompilerMtime) = getCompilerFingerprint()
+	let cachedCompilerContentHash = try readQword(buf, offset: 16) otherwise throw CacheCorruption.invalidEncoding
+	let (currentCompilerSize, currentCompilerContentHash) = getCompilerFingerprint()
 
-	if cachedCompilerSize != currentCompilerSize or cachedCompilerMtime != currentCompilerMtime 'staleCompiler'
+	// A degraded current fingerprint (0, 0) never matches a real cache, so a
+	// lookup failure forces a rebuild instead of risking a stale hit.
+	if currentCompilerContentHash == 0 or cachedCompilerSize != currentCompilerSize or cachedCompilerContentHash != currentCompilerContentHash 'staleCompiler'
 		return CacheHeaderCheck.invalid()
 	end 'staleCompiler'
 

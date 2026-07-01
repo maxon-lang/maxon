@@ -43,7 +43,7 @@
 let USER_CHUNK_CACHE_VERSION = 2
 
 // Fixed 32-byte header: magic(4)@0 + version(4)@4 + sourceChecksum(4)@8 +
-// optsHash(4)@12 + upstreamApiHash(4)@16 + compilerFp(4)@20 [folded size+mtime] +
+// optsHash(4)@12 + upstreamApiHash(4)@16 + compilerFp(4)@20 [folded size+contentHash] +
 // chunkCount(4)@24 + totalLength(4)@28. CPU/OS are folded into the filename's
 // <target> component (a wrong-target file simply won't exist under the
 // target-keyed name). The total-length integrity field is the last dword,
@@ -173,10 +173,10 @@ type UserChunkValidityKey
 	export let compilerFp as CacheChecksum
 
 	export static function compute(project Project) returns UserChunkValidityKey
-		let (size, mtime) = getCompilerFingerprint()
+		let (size, contentHash) = getCompilerFingerprint()
 		var fp = FNV_OFFSET_BASIS
 		fp = fnvFoldWord(fp, word: size)
-		fp = fnvFoldWord(fp, word: mtime)
+		fp = fnvFoldWord(fp, word: contentHash)
 		return Self{
 			sourceChecksum: userProgramSourceChecksum(project),
 			optsHash: compileOptionsHash(project),
