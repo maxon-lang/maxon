@@ -7,6 +7,12 @@
 //   source: { kind: "file", path } | { kind: "snippet", code }
 //   dumpStages?: bool   — when true, also returns per-stage .N-maxon.ir files
 //
+// Each artifact carries `{ label, path, content, truncated }`. `path` is the
+// on-disk location the IR was written to. For `kind: "file"` sources this is a
+// stable path the caller can re-read; for `kind: "snippet"` sources it points
+// into the per-call `temp/` scratch dir, which is deleted once the tool
+// returns, so the snippet `path` is informational only.
+//
 // Asm emission and `-O` toggling were originally on the wish-list, but
 // neither the C# bootstrap nor the self-hosted compiler exposes them yet.
 // The shape of this tool intentionally tracks only the flags the compiler
@@ -80,11 +86,12 @@ end 'emitIr'
 
 type IrArtifact
 	export var label as String
+	export var path as String
 	export var content as String
 	export var truncated as bool = false
 
-	export static function create(label String, content String, truncated bool) returns IrArtifact
-		return Self{label: label, content: content, truncated: truncated}
+	export static function create(label String, path String, content String, truncated bool) returns IrArtifact
+		return Self{label: label, path: path, content: content, truncated: truncated}
 	end 'create'
 end 'IrArtifact'
 
@@ -138,11 +145,11 @@ function addArtifactIfPresent(out IrArtifactArray, label String, path FilePath)
 	let bytes = raw.toByteArray()
 	let n = bytes.count()
 	if n <= irMaxBytes 'fits'
-		out.push(IrArtifact.create(label, content: raw, truncated: false))
+		out.push(IrArtifact.create(label, path: path.path, content: raw, truncated: false))
 		return
 	end 'fits'
 	let trimmed = sliceBytes(bytes, from: 0, until: irMaxBytes)
-	out.push(IrArtifact.create(label, content: trimmed, truncated: true))
+	out.push(IrArtifact.create(label, path: path.path, content: trimmed, truncated: true))
 end 'addArtifactIfPresent'
 
 // =============================================================================
@@ -165,12 +172,15 @@ function buildOutcome(mainFile ResolvedSource, result CollectedOutput, dumpStage
 			panic("buildOutcome: artifacts.get OOB — i bounded by an")
 		end 'gErr'
 		let labelId = doc.add(JsonNode.stringNode(art.label))
+		let pathId = doc.add(JsonNode.stringNode(art.path))
 		let contentId = doc.add(JsonNode.stringNode(art.content))
 		let truncId = doc.add(JsonNode.boolNode(art.truncated))
 		var aKeys = StringArray.create()
 		var aChildren = JsonNodeIdArray.create()
 		aKeys.push("label")
 		aChildren.push(labelId)
+		aKeys.push("path")
+		aChildren.push(pathId)
 		aKeys.push("content")
 		aChildren.push(contentId)
 		aKeys.push("truncated")
