@@ -557,7 +557,11 @@ function resolveCallFixups(code ByteArray, labelOffsetMap CodeLabelOffsetMap, ca
 		let targetOffset = lookupLabel(labelOffsetMap, name: fixup.targetName)
 		let callEnd = fixup.codeOffset + 4
 		let rel = targetOffset - callEnd
-		patchDword(code, offset: fixup.codeOffset, value: rel)
+		// Reach-guarded: call rel32 AND leaFuncAddr's RIP-relative lea route
+		// through these fixups, so a >±2 GiB .text would otherwise silently
+		// wrap a function address (the x64 analogue of the arm64 single-ADR
+		// leaFuncAddr truncation).
+		patchX64Rel32(code, codeOffset: fixup.codeOffset, rel: rel, what: "x64CallRel32", targetAddr: targetOffset)
 	end 'resolve'
 end 'resolveCallFixups'
 
@@ -567,7 +571,7 @@ function resolveBlockFixups(code ByteArray, blockOffsets CodeOffsetArray, blockF
 		let targetOffset = try blockOffsets.get(fixup.targetBlockId) otherwise 0
 		let jumpEnd = fixup.codeOffset + 4
 		let rel = targetOffset - jumpEnd
-		patchDword(code, offset: fixup.codeOffset, value: rel)
+		patchX64Rel32(code, codeOffset: fixup.codeOffset, rel: rel, what: "x64BlockJumpRel32", targetAddr: targetOffset)
 	end 'resolve'
 end 'resolveBlockFixups'
 

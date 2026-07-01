@@ -704,7 +704,7 @@ function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRv
 		let ripAtReloc = textRva + reloc.codeOffset + 4
 		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex)
 		let rel = iatEntryRva - ripAtReloc
-		patchDword(code, offset: reloc.codeOffset, value: rel)
+		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel, what: "x64IatDisp32", targetAddr: iatEntryRva)
 	end 'patch'
 end 'patchRelocationsX86'
 
@@ -712,10 +712,10 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + 4
 		match reloc.kind 'kind'
-			ripRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: rdataRva + reloc.rdataOffset - ripAtReloc)
-			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataRva - ripAtReloc)
-			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataRva + reloc.rdataOffset - ripAtReloc)
-			covdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: covdataRva + reloc.rdataOffset - ripAtReloc)
+			ripRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rdataRva + reloc.rdataOffset - ripAtReloc, what: "x64RdataDisp32", targetAddr: rdataRva + reloc.rdataOffset)
+			symdataRipRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: symdataRva - ripAtReloc, what: "x64SymdataDisp32", targetAddr: symdataRva)
+			dataSectionRipRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: dataRva + reloc.rdataOffset - ripAtReloc, what: "x64DataDisp32", targetAddr: dataRva + reloc.rdataOffset)
+			covdataRipRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: covdataRva + reloc.rdataOffset - ripAtReloc, what: "x64CovdataDisp32", targetAddr: covdataRva + reloc.rdataOffset)
 			arm64Adr to covdataArm64PageOff then break 'kind'
 			funcAbs64InRdata then break 'kind'
 		end 'kind'

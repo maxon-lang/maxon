@@ -156,6 +156,16 @@ function assertSignedReach(byteOff MachineWord, bits MachineWord, what String, c
 	end 'overflow'
 end 'assertSignedReach'
 
+// Patch an x64 rel32/disp32 field (call rel32, jcc/jmp rel32, RIP-relative
+// disp32). Guards the ±2 GiB reach so an overflow is a loud link error, never a
+// silently wrapped displacement — the x64 mirror of the ARM64 patchers below,
+// which grew the same guards when the single-ADR leaFuncAddr truncation
+// miscompiled function addresses past ±1 MiB.
+export function patchX64Rel32(code ByteArray, codeOffset CodeOffset, rel MachineWord, what String, targetAddr MachineWord)
+	assertSignedReach(rel, bits: 32, what: what, codeOffset: codeOffset, targetAddr: targetAddr)
+	patchDword(code, offset: codeOffset, value: rel)
+end 'patchX64Rel32'
+
 // Patch an ARM64 ADR instruction (imm21, byte-scaled, ±1 MiB) to point to a target
 // address. Guards the ±1 MiB reach so an overflow is a loud link error, not a wrong
 // address. Used by the small-reach single-ADR data/symdata/covdata global accessors.
