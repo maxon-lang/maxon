@@ -718,6 +718,31 @@ end 'currentStdlibChecksum'
 // `stdlib.helpers.string`. Decl-registration in the parser then qualifies
 // every free function under the file's directory namespace, matching the
 // C# bootstrap's behavior.
+// Pre-parse pass over every stdlib file: seed the builtin-literal type-name
+// caches (char/string/array/dictionary) from each `type ... implements
+// Builtin*Literal` header before any file's body is parsed. Without this, a file
+// sorted before the implementor (e.g. `Ascii.maxon` before `Character.maxon`)
+// parses its bodies against an empty cache — the concrete symptom was
+// `Ascii.isWhitespace`'s `match c` over a Character silently pointer-comparing
+// the boxed scrutinee (the codepoint() unbox was skipped) and always returning
+// its default arm. Runs only on the from-source (cache-miss) path; the tokens
+// are re-tokenized in the subsequent parse loop, an acceptable one-time cost.
+function prescanStdlibBuiltinLiteralTypes(project Project, stdlibFiles FilePathArray, stdlibRoot FilePath)
+	for fp in stdlibFiles 'eachFile'
+		if File.exists(fp) 'exists'
+			let content = try File.readText(fp) otherwise 'readErr'
+				continue
+			end 'readErr'
+			let tokens = try tokenize(content) otherwise 'lexErr'
+				continue
+			end 'lexErr'
+			let ns = deriveNamespace(fp, rootPath: stdlibRoot)
+			var parser = try Parser.create(project, tokens: tokens, filePath: fp, rootPath: stdlibRoot, namespace: ns) otherwise continue
+			parser.prescanBuiltinLiteralTypes()
+		end 'exists'
+	end 'eachFile'
+end 'prescanStdlibBuiltinLiteralTypes'
+
 function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, rootPath FilePath, content String)
 	logDebug(LogCategory.compiler, message: function() gives "  Parsing {filePath}")
 	let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {filePath}")
@@ -921,6 +946,17 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	var allModule = MaxonModule.create()
 	let stdlibRoot = findStdlibProjectRoot()
+
+	// Pre-parse builtin-literal discovery across ALL stdlib files, before any
+	// body is parsed. The single-pass per-file parse discovers each
+	// `implements Builtin*Literal` conformance only when it reaches that type's
+	// own decl, so a `match`/literal in a file sorted before the implementor
+	// (e.g. `Ascii.maxon`'s Character `match` vs `Character.maxon`) would see an
+	// empty cache and mis-lower. Seeding the caches up front closes that gap.
+	// Mirrors the `preRegisterInterfaceNames` / `preRegisterFunctionThrows`
+	// cross-file prescans on the user-file path.
+	prescanStdlibBuiltinLiteralTypes(project, stdlibFiles: stdlibFiles, stdlibRoot: stdlibRoot)
+
 	let parseStart = passTimerStart()
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'

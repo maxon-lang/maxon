@@ -638,6 +638,78 @@ export type Parser
 		prescanFunctionThrows()
 	end 'prescanThrowsHeaders'
 
+	// Project-wide pre-parse entry point: discover which `type` declares each of
+	// the builtin-literal protocols (`BuiltinCharLiteral` / `BuiltinStringLiteral`
+	// / `BuiltinArrayLiteral` / `BuiltinDictionaryLiteral`) and seed the shared
+	// caches, WITHOUT parsing bodies. `parseTypeDecl` performs the same discovery
+	// during the full parse, but only once its OWN file's type decl is reached —
+	// so a `match`/literal in a file parsed BEFORE the implementor sees an empty
+	// cache. The concrete failure: a `match` over a `Character`-typed scrutinee in
+	// a file sorted before `Character.maxon` (e.g. `Ascii.maxon`'s `isWhitespace`)
+	// found `getCachedBuiltinCharLiteralTypeName()` empty, so `matchScrutineeIsCharacter`
+	// returned false, the codepoint() unbox was skipped, and every arm silently
+	// pointer-compared the boxed Character envelope against a byte constant — the
+	// match never fired and the function always returned its default arm. Running
+	// this over every stdlib file up front closes the intra-stdlib ordering gap.
+	// Idempotent (each setCached short-circuits on a non-empty prior), so the
+	// first implementor in sorted order wins, exactly as parseTypeDecl's discovery.
+	export function prescanBuiltinLiteralTypes()
+		let tokenCount = tokens.count()
+		var i = 0 as ElementCount
+		while i < tokenCount 'scan'
+			let tok = try tokens.get(i) otherwise break
+			if tok.kind == TokenKind.type 'typeOpener'
+				let nameTok = try tokens.get(i + 1) otherwise Token.eof()
+				if nameTok.kind == TokenKind.identifier 'haveName'
+					scanTypeHeaderForBuiltinLiterals(nameTok.value, headerStart: i + 2)
+				end 'haveName'
+			end 'typeOpener'
+			i = i + 1
+		end 'scan'
+	end 'prescanBuiltinLiteralTypes'
+
+	// Scan a `type NAME implements ...` header (from `headerStart` up to the
+	// terminating newline — Maxon headers are single-line) for the builtin-literal
+	// protocol names and seed the matching cache. Bounded at the newline so a
+	// method/field body identifier can never be mistaken for a header conformance.
+	function scanTypeHeaderForBuiltinLiterals(typeName String, headerStart ElementCount)
+		let tokenCount = tokens.count()
+		var j = headerStart
+		while j < tokenCount 'header'
+			let t = try tokens.get(j) otherwise break
+			if t.kind == TokenKind.newline 'endHeader'
+				break
+			end 'endHeader'
+			if t.kind == TokenKind.identifier 'ident'
+				recordBuiltinLiteralConformance(t.value, typeName: typeName)
+			end 'ident'
+			j = j + 1
+		end 'header'
+	end 'scanTypeHeaderForBuiltinLiterals'
+
+	// Seed the cache for whichever builtin-literal protocol `interfaceName` names.
+	// Mirrors the discovery block in `parseTypeDecl`; each setter short-circuits on
+	// a non-empty prior so the first (sorted-stable) implementor is canonical.
+	function recordBuiltinLiteralConformance(interfaceName String, typeName String)
+		if interfaceName == "BuiltinCharLiteral" 'char'
+			if getCachedBuiltinCharLiteralTypeName().isEmpty() 'firstChar'
+				setCachedBuiltinCharLiteralTypeName(typeName)
+			end 'firstChar'
+		end 'char' else if interfaceName == "BuiltinStringLiteral" 'string'
+			if getCachedBuiltinStringLiteralTypeName().isEmpty() 'firstString'
+				setCachedBuiltinStringLiteralTypeName(typeName)
+			end 'firstString'
+		end 'string' else if interfaceName == "BuiltinArrayLiteral" 'array'
+			if getCachedBuiltinArrayLiteralTypeName().isEmpty() 'firstArray'
+				setCachedBuiltinArrayLiteralTypeName(typeName)
+			end 'firstArray'
+		end 'array' else if interfaceName == "BuiltinDictionaryLiteral" 'dict'
+			if getCachedBuiltinDictionaryLiteralTypeName().isEmpty() 'firstDict'
+				setCachedBuiltinDictionaryLiteralTypeName(typeName)
+			end 'firstDict'
+		end 'dict'
+	end 'recordBuiltinLiteralConformance'
+
 	// Header prescan that registers `funcThrowsTypes` for every throwing
 	// `function`/method declared in this file, so the single-pass main parse can
 	// resolve a try-block body call to a forward-declared throwing sibling/free

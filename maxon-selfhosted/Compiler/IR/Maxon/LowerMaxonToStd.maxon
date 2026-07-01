@@ -5366,7 +5366,18 @@ type MaxonToStdLowering
 			if self.tryLowerNamedEqualityViaEquals(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock) 'didNamedEq'
 				return
 			end 'didNamedEq'
-		end 'maybeNamedEq'
+		end 'maybeNamedEq' else 'maybeNamedOrdering'
+			// Ordering (`<`/`<=`/`>`/`>=`) on a concrete struct that implements
+			// Comparable dispatches to `<StructName>.compare` and folds the
+			// resulting Ordering ordinal into a bool. Without this, an ordering
+			// op on a reference type falls through to `cmpPredicateToArithOpcode`
+			// below and pointer-compares the two struct addresses — a silent
+			// wrong answer (e.g. `StringIndex <` in String.trim/charAt iteration).
+			// Mirrors the C# bootstrap's EmitOrderingCheck / Comparable path.
+			if self.tryLowerNamedOrderingViaCompare(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock) 'didNamedOrdering'
+				return
+			end 'didNamedOrdering'
+		end 'maybeNamedOrdering'
 		var leftId = self.resolveName(left)
 		var rightId = self.resolveName(right)
 		let operandIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType))
@@ -5474,6 +5485,70 @@ type MaxonToStdLowering
 		end 'plain'
 		return true
 	end 'tryLowerNamedEqualityViaEquals'
+
+	// Ordering counterpart of `tryLowerNamedEqualityViaEquals`: dispatch a
+	// `<`/`<=`/`>`/`>=` cmp on a concrete named type conforming to `Comparable`
+	// to `<TypeName>.compare(a, b)`, then fold the returned `Ordering` ordinal
+	// (lessThan=0, equalTo=1, greaterThan=2) into a bool. Returns false when the
+	// operand isn't a Comparable struct so the caller falls back to raw cmp.
+	//
+	// Ordinal fold (matches the C# bootstrap's OrderingCheckForOperator):
+	//   lt → ordinal == 0     gt → ordinal == 2
+	//   le → ordinal != 2     ge → ordinal != 0
+	function tryLowerNamedOrderingViaCompare(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock) returns bool
+		let typeName = operandType.nameOrEmpty(self.project)
+		if typeName.isEmpty() 'notNamed'
+			return false
+		end 'notNamed'
+		if not project.structTypes.contains(typeName) 'notStruct'
+			return false
+		end 'notStruct'
+		if not project.conformances.contains(typeName, interfaceName: "Comparable") 'notComparable'
+			return false
+		end 'notComparable'
+		let compareName = "{typeName}.compare"
+		if not project.funcSignatures.contains(compareName) 'noCompare'
+			return false
+		end 'noCompare'
+
+		var argIds = ValueIdArray.create()
+		// Same char-byte-literal materialization guard as the equals path: a
+		// bare `'a'` operand is a raw int on the fast path; `Character.compare`
+		// dereferences both args as struct pointers, so promote first.
+		argIds.push(self.materializeCharByteOperand(left, structName: typeName, dstBlock: dstBlock))
+		argIds.push(self.materializeCharByteOperand(right, structName: typeName, dstBlock: dstBlock))
+
+		let ordinalId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(ordinalId, callee: compareName, argIds: argIds)))
+		self.setValueType(ordinalId, t: MaxonType.integer)
+		self.setIsFloat(ordinalId, isFloat: false)
+
+		// (comparison opcode, ordinal to test against) for each ordering predicate.
+		let foldOpcode = match predicate 'foldOp'
+			lt gives StdArithBinaryOpcode.cmpI64Eq
+			gt gives StdArithBinaryOpcode.cmpI64Eq
+			le gives StdArithBinaryOpcode.cmpI64Ne
+			ge gives StdArithBinaryOpcode.cmpI64Ne
+			default panic("tryLowerNamedOrderingViaCompare: non-ordering predicate reached ordering fold")
+		end 'foldOp'
+		let foldOrdinal = match predicate 'foldVal'
+			lt gives 0
+			ge gives 0
+			gt gives 2
+			le gives 2
+			default panic("tryLowerNamedOrderingViaCompare: non-ordering predicate reached ordinal select")
+		end 'foldVal'
+
+		let ordinalConstId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: ordinalConstId, value: foldOrdinal))))
+		self.setValueType(ordinalConstId, t: MaxonType.integer)
+
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(foldOpcode, resultId: resultId, leftId: ordinalId, rightId: ordinalConstId))))
+		self.setIsFloat(resultId, isFloat: false)
+		self.setValueType(resultId, t: MaxonType.boolean)
+		return true
+	end 'tryLowerNamedOrderingViaCompare'
 
 	function lowerRefEq(result ByteArray, left ByteArray, right ByteArray, negate bool, dstBlock IrBlock)
 		let leftId = self.resolveName(left)
