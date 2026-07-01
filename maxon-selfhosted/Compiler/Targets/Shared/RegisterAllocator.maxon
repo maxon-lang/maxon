@@ -1750,29 +1750,30 @@ end 'panicUnresolvableReload'
 // Result of checking whether a block has the condBr pattern.
 //
 // `inTerminator` is true when the condJump lives in `block.terminator` rather
-// than `block.opRefs[condBrIdx]`. This happens after `eliminateFallthroughJumps`
+// than in `block.opRefs`. This happens after `eliminateFallthroughJumps`
 // promotes a trailing condJump back into the terminator slot (the trailing
-// unconditional jmp was a fall-through and got dropped). In that case the
-// trampoline-rewrite path must update the terminator, not opRefs.
+// unconditional jmp was a fall-through and got dropped). The trampoline-rewrite
+// path (`rewriteAllCondBrsToTarget`) sweeps both slots regardless, so callers
+// use `inTerminator` only to decide whether the canonical-layout restore for
+// then-edge copies is needed.
 //
 // Exported so the greedy allocator's cross-block boundary placement can reuse
 // the same condBr-shape detection (and `pickThenTarget`) as destroySSA.
 export type CondBrInfo
 	export var hasCondBr as bool
-	export var condBrIdx as RegInt
 	export var elseTarget as RegInt
 	export var inTerminator as bool
 
 	static function none() returns CondBrInfo
-		return Self{hasCondBr: false, condBrIdx: -1, elseTarget: -1, inTerminator: false}
+		return Self{hasCondBr: false, elseTarget: -1, inTerminator: false}
 	end 'none'
 
-	static function found(condBrIdx RegInt, elseTarget RegInt) returns CondBrInfo
-		return Self{hasCondBr: true, condBrIdx: condBrIdx, elseTarget: elseTarget, inTerminator: false}
+	static function found(elseTarget RegInt) returns CondBrInfo
+		return Self{hasCondBr: true, elseTarget: elseTarget, inTerminator: false}
 	end 'found'
 
 	static function foundInTerminator(elseTarget RegInt) returns CondBrInfo
-		return Self{hasCondBr: true, condBrIdx: -1, elseTarget: elseTarget, inTerminator: true}
+		return Self{hasCondBr: true, elseTarget: elseTarget, inTerminator: true}
 	end 'foundInTerminator'
 end 'CondBrInfo'
 
@@ -1795,7 +1796,7 @@ export function detectCondBrPattern(module TargetModule, block IrBlock, regTarge
 		if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
 			let target = regTarget.getCondBrTarget(module, packed: lastOp)
 			if target >= 0 'validTarget'
-				return CondBrInfo.found(lastIdx, elseTarget: target)
+				return CondBrInfo.found(target)
 			end 'validTarget'
 		end 'isCondBr'
 	end 'hasOps'
@@ -1860,11 +1861,12 @@ end 'pickThenTarget'
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
 //
-// `inTerminator` controls where the rewritten condJump op-index is patched
-// back: when true the condJump is `block.terminator`, otherwise it lives at
-// `block.opRefs[condBrIdx]`. Both layouts arise post-`eliminateFallthroughJumps`
-// (see `detectCondBrPattern`).
-function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block IrBlock, condBrIdx RegInt, inTerminator bool, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
+// Every condJump targeting `elseTarget` — whether it lives in `block.opRefs` or
+// in the terminator slot (the two layouts eliminateFallthroughJumps can leave) —
+// is redirected through the trampoline. An f64 compare realizes one else edge
+// with two condJumps, so keying off a single condBr index would leave one path
+// bypassing the phi copies (see `rewriteAllCondBrsToTarget`).
+function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block IrBlock, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
 	if elseTarget < 0 'invalid'
 		return nextBlockId
 	end 'invalid'
@@ -1892,23 +1894,54 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	module.blocks.push(tramp)
 	trampolineRefs.append(trampIdx)
 
-	if inTerminator 'patchTerminator'
-		// The condJump is in the terminator slot — after eliminateFallthroughJumps
-		// dropped the trailing jmp and promoted the condJump back. Patch the
-		// terminator index in place.
-		let condPacked = block.terminatorIndex()
-		let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-		block.terminator = Terminator.opIndex(rewritten)
-	end 'patchTerminator' else 'patchOpRefs'
-		// Rewrite the condJump in block.opRefs to target the trampoline.
-		// condBrIdx came from detectCondBrPattern (lastIdx of a non-empty opRefs), so it's a valid index.
-		let condPacked = try block.opRefs.get(condBrIdx) otherwise panic("invariant: condBrIdx is the lastIdx of a non-empty opRefs but get failed")
-		let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-		try block.opRefs.remove(condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
-		try block.opRefs.insert(condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
-	end 'patchOpRefs'
+	// Redirect EVERY conditional jump that realizes the block -> elseTarget edge
+	// through the trampoline — both the one in the terminator slot AND any in
+	// opRefs. A single CFG edge can be realized by MORE THAN ONE physical
+	// conditional jump: an f64 compare lowers to a two-jump sequence
+	// (`jp elseTarget` + `jae elseTarget`, see emitFltCondBr et al.) that route
+	// unordered/ordered-false to the same else successor. After
+	// eliminateFallthroughJumps one of the pair may sit in the terminator and the
+	// other in opRefs. Rewiring only one leaves the sibling jumping straight to
+	// elseTarget, bypassing the block-arg (phi) copies the trampoline carries —
+	// which left the phi destination register holding a stale value on that path.
+	// This was the mrt_f64_to_string is_negative miscompile: the positive-value
+	// `jae` edge skipped the `r12 = 0` copy. The sweep is location-agnostic, so
+	// both the opRefs and terminator slots are covered regardless of which one
+	// detectCondBrPattern reported as the canonical condBr.
+	rewriteAllCondBrsToTarget(module, block: block, oldTarget: elseTarget, newTarget: trampolineId, regTarget: regTarget)
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
+
+// Rewrite every conditional-branch op in `block.opRefs` whose target is
+// `oldTarget` so it targets `newTarget` instead. `getCondBrTarget` returns a
+// non-negative BlockId only for conditional-branch ops (it yields -1 for any
+// other op), so probing every op ref is safe: non-condBr ops are skipped by the
+// target mismatch. Rewrites happen via remove+insert at the same index to
+// preserve op ordering. Used to redirect all physical jumps that realize one
+// CFG edge (an f64 compare emits two) through a single phi-copy trampoline.
+function rewriteAllCondBrsToTarget(module TargetModule, block IrBlock, oldTarget RegInt, newTarget BlockId, regTarget RegAllocTarget)
+	var idx = 0
+	let n = block.opRefs.count()
+	while idx < n 'eachOp'
+		let packed = try block.opRefs.get(idx) otherwise panic("invariant: idx < opRefs.count() but get({idx}) failed")
+		if regTarget.getCondBrTarget(module, packed: packed) == oldTarget 'matchesEdge'
+			let rewritten = regTarget.rewriteCondBrTarget(module, packed: packed, newTarget: newTarget)
+			try block.opRefs.remove(idx) otherwise panic("invariant: idx valid but remove failed")
+			try block.opRefs.insert(idx, value: rewritten) otherwise panic("invariant: insert at idx (== count after remove) must succeed")
+		end 'matchesEdge'
+		idx = idx + 1
+	end 'eachOp'
+
+	// The condJump promoted into the terminator slot (by eliminateFallthroughJumps)
+	// is not in opRefs, so sweep it separately.
+	if block.hasTerminatorOp() 'hasTerm'
+		let termPacked = block.terminatorIndex()
+		if regTarget.getCondBrTarget(module, packed: termPacked) == oldTarget 'termMatches'
+			let rewritten = regTarget.rewriteCondBrTarget(module, packed: termPacked, newTarget: newTarget)
+			block.terminator = Terminator.opIndex(rewritten)
+		end 'termMatches'
+	end 'hasTerm'
+end 'rewriteAllCondBrsToTarget'
 
 // Replace SSA block arguments with explicit register moves at CFG edges.
 // After applyColoring, every value has a physical register, but block arguments
@@ -1952,7 +1985,6 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			//   block.opRefs: [..., condJump(cond, elseTarget)]
 			//   block.terminator: cf/mir condBr or x64 jmp(thenTarget)
 			let elseTarget = condBrInfo.elseTarget
-			var condBrIdx = condBrInfo.condBrIdx
 			var inTerminator = condBrInfo.inTerminator
 			let thenTarget = pickThenTarget(block, elseTarget: elseTarget)
 
@@ -1966,7 +1998,6 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			if inTerminator and edgeHasCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks) 'restoreLayout'
 				let condPacked = block.terminatorIndex()
 				block.opRefs.append(condPacked)
-				condBrIdx = block.opRefs.count() - 1
 				block.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: thenTarget))
 				inTerminator = false
 			end 'restoreLayout'
@@ -1978,7 +2009,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			// Else-edge copies: execute when condJump IS taken.
 			// Since condJump branches directly to elseTarget, we need a trampoline
 			// block to insert the copies between the condJump and the else-target.
-			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, inTerminator: inTerminator, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
+			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.

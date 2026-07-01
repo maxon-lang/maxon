@@ -120,4 +120,38 @@ end 'main'
 3
 ```
 
+
+<!-- test: float-print-negative-and-repeat -->
+```maxon
+function main() returns ExitCode
+	let a = 3.14159
+	let b = 2.71828
+	// Print `a` twice so its value must survive across the first print's
+	// mrt_f64_to_string call, then print a negative and a zero. Regression for
+	// an x64 SSA-destruction bug: an f64 compare lowers to a two-conditional-jump
+	// else edge (`jp` + `jae`), and only one jump was routed through the phi-copy
+	// trampoline. The other bypassed the copy that zeroed mrt_f64_to_string's
+	// is_negative flag, so on the second call a positive value was formatted as
+	// negative (a stray '-' plus a runaway digit loop that spewed megabytes).
+	print("{a}\n")
+	print("{a}\n")
+	print("{b}\n")
+	print("{a + b}\n")
+	print("{0.0 - a}\n")
+	print("{0.0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.14159
+3.14159
+2.71828
+5.85987
+-3.14159
+0.0
+```
+
 Note: Tests for many float parameters (>4) and float parameter preservation across calls are currently disabled due to known codegen bugs with float register allocation. See test fragments for the disabled tests.
