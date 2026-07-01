@@ -67,12 +67,12 @@ type LiveRange
     defBlock      BlockId       // block where the def lives
     defPosition   OpPos         // 1-indexed op position within defBlock
     intervals     IntervalArray // disjoint (block, startPos, endPos) segments
-    spillWeight   RegInt        // sum(uses * loopWeight) / totalLength
+    spillWeight   RegInt        // remat: 0; else max(1, sum(uses*loopWeight)/totalLength)
     regClass      RegClass      // gpr | fp
     fixedReg      RegOrdinal    // != RM_NONE for physical pseudo-ranges
     assignedReg   RegOrdinal    // populated by coloring
     spillSlot     RegInt        // -1 if unspilled
-    isRematerializable bool     // true for movRegImm/movRegImm32 defs
+    isRematerializable bool     // true for movRegImm/movRegImm32/xorRegRegSelf defs
     constantValue RegInt        // the integer constant when rematerializable
     hint          RegOrdinal    // preferred physical register
     copyHintValueId ValueId     // copy-link for hint propagation
@@ -97,6 +97,18 @@ virtual ranges do.
 `spillWeight` follows the LLVM convention: `SPILL_WEIGHT_INFINITE` is
 the unspillable marker for reload vregs (so the spill picker never
 re-spills them, guaranteeing termination).
+
+Between those extremes, `computeSpillWeight` places every range in one of
+two tiers so the eviction picker's strict-lower-weight rule can always
+prefer the cheaper displacement. Rematerializable ranges (constants: a
+`movRegImm`/`movRegImm32`, or the `xor reg,reg` zeroing idiom) get
+`REMAT_SPILL_WEIGHT` (0) — re-emitting their defining constant is free, so
+they are the preferred eviction victim. Every non-rematerializable range is
+floored to `MIN_NONREMAT_SPILL_WEIGHT` (1): the raw use-density metric
+`sum(uses*loopWeight)/totalLength` is integer division and floors to 0 for a
+long-lived, low-use-count value (e.g. a pointer live across a whole block
+with one use), which would otherwise tie a constant at 0 and let the colorer
+spill the pointer to memory instead of rematerializing the constant.
 
 ## Phi-Merge Splitting
 

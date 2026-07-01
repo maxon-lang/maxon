@@ -62,8 +62,18 @@ export type X64OpQuery implements TargetOpQuery
 		match x64Op 'check'
 			movRegImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			movRegImm32(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
+			// `xor reg, reg` is the zeroing idiom emitted for `mov_imm 0` (see
+			// appendIntImmToReg's allowXorZero path). It defines the constant 0
+			// and is trivially rematerializable — the spill loop re-emits it as
+			// `mov reg, 0` (emitRematConst) at each use. Without this, a zeroed
+			// value spilled across a call would round-trip through a stack slot
+			// instead of being re-zeroed in caller-saved scratch, and it would
+			// wrongly tie non-rematerializable pointers for a scarce callee-
+			// saved register.
+			xorRegRegSelf then markConstant(valueId, value: 0, isConst: isConst, constVal: constVal)
 			prologue to ret then break 'check'
-			movSlot to imulRegImm then break 'check'
+			movSlot to reloadFromStack then break 'check'
+			callIndirect to imulRegImm then break 'check'
 		end 'check'
 	end 'detectConstant'
 

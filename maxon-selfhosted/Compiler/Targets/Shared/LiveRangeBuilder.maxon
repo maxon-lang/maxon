@@ -789,9 +789,36 @@ end 'liveGetBool'
 // Spill weight computation
 // ============================================================
 
+// The spill-weight tier a rematerializable range always sits in. Spilling a
+// rematerializable value costs nothing but re-emitting its defining constant
+// (a single `mov`/`xor` in caller-saved scratch after each call), so it is
+// strictly cheaper to displace than ANY value that would have to round-trip
+// through a stack slot. Pinning it to the lowest possible weight makes it the
+// eviction picker's preferred victim whenever a non-rematerializable value
+// needs its register (see pickEvictionVictim in SSAColoring.maxon).
+let REMAT_SPILL_WEIGHT = 0
+
+// The minimum weight of a non-rematerializable range. The use-density metric
+// `totalUses / totalLength` floors to 0 for any long-lived, low-use-count
+// value (e.g. a pointer live across a whole block with a single use) because
+// it is integer division. Without a floor, such a range would tie a
+// rematerializable constant at weight 0, and the eviction picker's
+// strict-lower-weight rule could then never prefer to rematerialize the
+// constant over spilling the pointer to memory. Flooring non-remat ranges at
+// 1 guarantees REMAT_SPILL_WEIGHT (0) is a strictly-cheaper tier of its own.
+let MIN_NONREMAT_SPILL_WEIGHT = 1
+
 // spillWeight = sum(uses_in_block * loopWeight) / totalLength
 // loopWeight = 10^loopDepth (capped to avoid overflow)
 function computeSpillWeight(range LiveRange, loopDepth RegIntArray) returns RegInt
+	// Rematerializable values are the cheapest possible spill: they occupy a
+	// weight tier strictly below every non-rematerializable range, so the
+	// colorer always prefers to re-emit their constant rather than spill a
+	// live value. The use-density metric is irrelevant for them.
+	if range.isRematerializable 'remat'
+		return REMAT_SPILL_WEIGHT
+	end 'remat'
+
 	var totalUses = 0
 	var totalLength = 0
 
@@ -812,15 +839,17 @@ function computeSpillWeight(range LiveRange, loopDepth RegIntArray) returns RegI
 	end 'eachInterval'
 
 	if totalLength == 0 'noLength'
-		return 0
+		return MIN_NONREMAT_SPILL_WEIGHT
 	end 'noLength'
 
-	// Rematerializable values get reduced weight (cheaper to spill)
-	if range.isRematerializable 'remat'
-		return totalUses / totalLength / 2
-	end 'remat'
+	// Floor at MIN_NONREMAT_SPILL_WEIGHT so a low-use-density range that would
+	// otherwise floor to 0 stays strictly above the rematerializable tier.
+	let density = totalUses / totalLength
+	if density < MIN_NONREMAT_SPILL_WEIGHT 'floor'
+		return MIN_NONREMAT_SPILL_WEIGHT
+	end 'floor'
 
-	return totalUses / totalLength
+	return density
 end 'computeSpillWeight'
 
 function loopWeightForDepth(depth RegInt) returns RegInt
