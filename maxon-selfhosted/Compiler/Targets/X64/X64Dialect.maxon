@@ -153,7 +153,13 @@ let REG_RSI = 64
 let REG_RDI = 128
 let REG_R8 = 256
 let REG_R9 = 512
-let X64_CALLER_SAVED = 975
+
+// Caller-saved (volatile) GPRs clobbered by a call: rax,rcx,rdx,rsi,rdi,r8,r9.
+// Must match createX64CallerSavedGprs (X64RegisterAlloc.maxon). rbx (bit 3) is
+// CALLEE-saved and is deliberately excluded — a call preserves rbx, so marking
+// it clobbered would falsely pin it out of the callee-saved pool at every call
+// (mirrors arm64 branchLink, whose clobber mask is its caller-saved set only).
+let X64_CALLER_SAVED = REG_RAX or REG_RCX or REG_RDX or REG_RSI or REG_RDI or REG_R8 or REG_R9
 
 export type X64OpMeta
 	export let latency as Latency
@@ -206,7 +212,11 @@ export union X64Op
 	movRspOffsetReg(offset StackSize, srcReg X64VReg) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
 	loadRegRbpOffset(destReg X64VReg, offset StackSize) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Calls
-	callDirect(target String) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 975}
+	// implicitGprDefs = X64_CALLER_SAVED (967). Enum-case defaults require a
+	// literal here, but the value MUST equal X64_CALLER_SAVED — rax,rcx,rdx,
+	// rsi,rdi,r8,r9. rbx (bit 3) is callee-saved: a call preserves it, so it
+	// is NOT clobbered (mirrors arm64 branchLink).
+	callDirect(target String) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 967}
 	// StdSystemOp lowering: x86-64 syscall instruction
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
 	// StdSystemOp lowering: indirect call through IAT slot
@@ -232,7 +242,8 @@ export union X64Op
 	reloadFromStack(destReg X64VReg, offset MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	xorRegRegSelf(reg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Call support ops
-	callIndirect(reg X64VReg) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.callIndirect, implicitGprReads: 0, implicitGprDefs: 975}
+	// implicitGprDefs = X64_CALLER_SAVED (967) — see callDirect. rbx excluded.
+	callIndirect(reg X64VReg) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.callIndirect, implicitGprReads: 0, implicitGprDefs: 967}
 	xchgRegReg(reg1 X64VReg, reg2 X64VReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.exchange, implicitGprReads: 0, implicitGprDefs: 0}
 	// XMM FP ops
 	movXmmXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpMov, implicitGprReads: 0, implicitGprDefs: 0}
