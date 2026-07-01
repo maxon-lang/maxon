@@ -436,11 +436,15 @@ function arm64GtStoreGlobal(code ByteArray, rdataRelocs RdataRelocationArray, sr
 	arm64EmitStrRegOffset(code, rt: src, baseReg: scratch, offset: 0)
 end 'arm64GtStoreGlobal'
 
-// dest = address of a function: `ADR dest, #0` recorded as an Arm64AdrFixup that
-// arm64ResolveAdrFixups patches once every label offset is known.
+// dest = address of a function: `ADRP dest, page(name)` + `ADD dest, dest,
+// #pageoff(name)` recorded as an Arm64AdrFixup (at the ADRP; the ADD sits at +4)
+// that arm64ResolveFuncAdrpFixups resolves once every label offset is known. The
+// ADRP+ADD pair reaches ±4 GiB — the single ADR this used to emit truncated any
+// target past ±1 MiB to a garbage mid-function address in a large binary.
 function arm64GtFuncAddr(code ByteArray, adrFixups Arm64AdrFixupArray, dest MachineWord, name String)
 	adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: dest, targetName: name))
-	arm64EmitAdr(code, rd: dest, offset: 0)
+	arm64EmitAdrp(code, rd: dest)
+	arm64EmitAddImm(code, rd: dest, rn: dest, imm12: 0)
 end 'arm64GtFuncAddr'
 
 // IAT (GOT) import call: ADRP x16,GOT[slot] ; LDR x16,[x16] ; BLR x16.

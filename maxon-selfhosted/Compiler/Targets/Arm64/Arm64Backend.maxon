@@ -2695,7 +2695,11 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
 	arm64ResolveCallFixups(code, labelOffsetMap: labelOffsetMap, callFixups: callFixups)
-	arm64ResolveAdrFixups(code, labelOffsetMap: labelOffsetMap, adrFixups: adrFixups)
+	// Function-address fixups become text-section-targeting ADRP+ADD relocations
+	// that the binary writer patches with absolute VAs (±4 GiB reach). Resolving
+	// the name→`.text`-offset lookup here (where `labelOffsetMap` is complete)
+	// keeps the writer's job a pure absolute-address patch.
+	let funcAdrpRelocs = arm64ResolveFuncAdrpFixups(labelOffsetMap, adrFixups: adrFixups)
 
 	let startOffset = arm64LookupLabel(labelOffsetMap, name: "mrt_start")
 
@@ -2707,6 +2711,7 @@ export function concatArm64FunctionChunks(project Project, chunks FunctionCodeCh
 	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
 	var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes, globalData: globalData)
+	result.arm64FuncAdrpRelocs = funcAdrpRelocs
 	result.dataPrelude = dataPrelude
 	result.debugSymbols = buildDebugSymbols(labelNames, labelOffsets: labelOffsets)
 	return result

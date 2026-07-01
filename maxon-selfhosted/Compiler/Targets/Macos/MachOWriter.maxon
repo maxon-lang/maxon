@@ -867,6 +867,10 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// Patch rdata relocations in code (ADR/LDR-literal -> __const section, now in __DATA)
 	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr, heapSectionVMAddr: heapSectionVMAddr)
 
+	// Patch function-address ADRP+ADD pairs (±4 GiB reach) into the `.text`
+	// section. PC-relative, so PIE-slide-safe — no chained-fixup rebase needed.
+	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textBase: textSectionVMAddr)
+
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	// macOS arm64 requires PIE (the kernel kills a non-PIE main executable with
 	// SIGKILL). MH_PIE lets dyld slide the image; PC-relative code (ADRP/ADD) is

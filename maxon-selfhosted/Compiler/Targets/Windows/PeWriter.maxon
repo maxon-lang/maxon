@@ -890,6 +890,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchRdata'
 
+	// Function-address ADRP+ADD pairs (±4 GiB reach) target the `.text` section.
+	// RVA-based like the arm64 rdata relocs above: the ADRP page delta and the
+	// within-page ADD offset are invariant under the page-aligned ImageBase.
+	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textBase: textRva)
+
 	// Phase 11.2: patch the rdata-internal funcAbs64 slots (layout-descriptor
 	// copy/destroy, witness-table methods). PE ImageBase is fixed at
 	// 0x140000000 below; absolute VAs we write here assume the loader places

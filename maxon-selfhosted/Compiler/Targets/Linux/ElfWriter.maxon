@@ -171,6 +171,9 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		wasm32 then panic("ELF writer not used for WASM targets")
 	end 'patchRdata'
 
+	// Function-address ADRP+ADD pairs (±4 GiB reach) target the `.text` section.
+	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textBase: textVAddr)
+
 	// Phase 11.2: bake absolute VAs of layout-descriptor copy/destroy
 	// thunks (and witness-table methods) into the on-disk rdata image.
 	// ELF mirrors PE's strategy: a static ET_EXEC at a fixed load address

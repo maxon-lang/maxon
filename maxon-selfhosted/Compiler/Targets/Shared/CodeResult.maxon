@@ -373,8 +373,15 @@ export type CodeResult
 	// by backends after stdlib linking; consumed by PE/ELF/Mach-O writers to
 	// emit standard symbol tables that debuggers can consume.
 	export var debugSymbols as DebugSymbolArray
+	// ARM64 function-address ADRP+ADD relocations (leaFuncAddr / green-thread
+	// func pointers), resolved to absolute `.text` offsets by
+	// `concatArm64FunctionChunks`. The PE/ELF/Mach-O writers patch each pair with
+	// the target's absolute VA (`patchArm64FuncAdrpRelocs`) once the `.text` base
+	// is known — the ±4 GiB-reach replacement for the old single-ADR func fixups.
+	// Empty for X64/WASM builds.
+	export var arm64FuncAdrpRelocs as Arm64FuncAdrpRelocArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
-		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create(), debugSymbols: DebugSymbolArray.create()}
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create(), debugSymbols: DebugSymbolArray.create(), arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create()}
 	end 'create'
 end 'CodeResult'

@@ -508,8 +508,10 @@ export function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, of
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdrb'
 
-// ADR Xd, #offset (PC-relative, +/- 1MB range)
-export function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
+// ADR Xd, #offset (PC-relative, +/- 1MB range). File-local: the only remaining
+// user is the `__symtable` load in `arm64EmitLeaFuncAddrOp` (writer-resolved with
+// a ±1 MiB reach guard); function addresses now use the ±4 GiB ADRP+ADD pair.
+function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
 	let immlo = offset and 0x3
 	let immhi = (offset shr 2) and 0x7FFFF
 	let insn = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
@@ -764,22 +766,51 @@ export function arm64ResolveBlockJumpFixups(code ByteArray, blockOffsets BlockOf
 	end 'resolve'
 end 'arm64ResolveBlockJumpFixups'
 
-// Patch an ADR instruction at instrOffset with a PC-relative offset.
-function arm64PatchAdr(code ByteArray, instrOffset Arm64Offset, rd MachineWord, targetOffset Arm64Offset)
-	let relBytes = targetOffset - instrOffset
-	let immlo = relBytes and 0x3
-	let immhi = (relBytes shr 2) and 0x7FFFF
-	let insn = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
-	patchDword(code, offset: instrOffset, value: insn)
-end 'arm64PatchAdr'
+// A resolved function-address ADRP+ADD relocation. `adrpCodeOffset` is the
+// absolute `.text` offset of the ADRP (its paired ADD is at +4);
+// `targetCodeOffset` is the target function's absolute `.text` offset. The
+// per-target binary writer computes both absolute VAs (`textBase + offset`) and
+// patches the pair via `patchArm64FuncAdrpRelocs`. This is the ±4 GiB-reach
+// replacement for the old single-ADR function fixups (see arm64EmitLeaFuncAddrOp).
+export type Arm64FuncAdrpReloc
+	export var adrpCodeOffset as Arm64Offset
+	export var targetCodeOffset as Arm64Offset
 
-// Resolve ADR fixups using function name -> offset labels.
-export function arm64ResolveAdrFixups(code ByteArray, labelOffsetMap Arm64LabelOffsetMap, adrFixups Arm64AdrFixupArray)
+	export static function create(adrpCodeOffset Arm64Offset, targetCodeOffset Arm64Offset) returns Arm64FuncAdrpReloc
+		return Self{adrpCodeOffset: adrpCodeOffset, targetCodeOffset: targetCodeOffset}
+	end 'create'
+end 'Arm64FuncAdrpReloc'
+
+export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
+
+// Resolve function-address ADR fixups (leaFuncAddr / green-thread func pointers)
+// to text-section-targeting ADRP+ADD relocations, looking each target up in the
+// function name -> `.text` offset map. The binary writer patches the pairs once
+// the `.text` VM base is known (`patchArm64FuncAdrpRelocs`), giving ±4 GiB reach
+// — the single-ADR form this replaced silently truncated any target past ±1 MiB.
+export function arm64ResolveFuncAdrpFixups(labelOffsetMap Arm64LabelOffsetMap, adrFixups Arm64AdrFixupArray) returns Arm64FuncAdrpRelocArray
+	var relocs = Arm64FuncAdrpRelocArray.create()
 	for fixup in adrFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelOffsetMap, name: fixup.targetName)
-		arm64PatchAdr(code, instrOffset: fixup.instrOffset, rd: fixup.destReg, targetOffset: targetOffset)
+		relocs.push(Arm64FuncAdrpReloc.create(fixup.instrOffset, targetCodeOffset: targetOffset))
 	end 'resolve'
-end 'arm64ResolveAdrFixups'
+	return relocs
+end 'arm64ResolveFuncAdrpFixups'
+
+// Patch every function-address ADRP+ADD pair with the target function's absolute
+// `.text` VA. Shared by all three binary writers; `textBase` is the `.text`
+// section's runtime base (Mach-O __text VM addr / ELF text VAddr / PE text RVA —
+// the ADRP page delta is invariant under a page-aligned image base, so the RVA
+// form patches identically to the VA form). ADRP+ADD is PC-relative, so a PIE
+// slide moves the instruction and its target together — no rebase entry needed.
+export function patchArm64FuncAdrpRelocs(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, textBase MachineWord)
+	for reloc in funcAdrpRelocs 'patch'
+		let instrVA = textBase + reloc.adrpCodeOffset
+		let targetVA = textBase + reloc.targetCodeOffset
+		patchArm64Adrp(code, codeOffset: reloc.adrpCodeOffset, instrAddr: instrVA, targetAddr: targetVA)
+		patchArm64PageOff(code, codeOffset: reloc.adrpCodeOffset + 4, targetAddr: targetVA)
+	end 'patch'
+end 'patchArm64FuncAdrpRelocs'
 
 // Resolve call fixups using function name -> offset labels.
 export function arm64ResolveCallFixups(code ByteArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray)
@@ -1743,16 +1774,34 @@ function arm64EmitLoadByteWidth(code ByteArray, rt MachineWord, rn MachineWord, 
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLoadByteWidth'
 
-// leaFuncAddr: ADR dest, funcName — patched after layout via fixup or rdata relocation
+// leaFuncAddr: materialize a function's `.text` address into `dest`.
+//
+// A function pointer needs ±4 GiB reach: the single `ADR` this used to emit
+// reaches only ±1 MiB, and `arm64PatchAdr` SILENTLY truncated the fixup to 21
+// bits once the target sat farther than that in a large binary — wrapping the
+// address to a garbage mid-function offset. That was the self-built compiler's
+// startup crash: a heap object's destructor pointer (`__mm_alloc`'s
+// `funcAddr __destruct___ManagedMemory`) was ~6.86 MiB from its use in
+// `__module_init_3`, so the ADR wrapped and `__mm_free` jumped into the middle
+// of an unrelated function. Emit an `ADRP dest, page(func)` + `ADD dest, dest,
+// #pageoff(func)` pair instead (the shape `Arm64Dialect` already names for
+// leaFuncAddr); the per-target writer patches both with the absolute VA via
+// `arm64ResolveFuncAdrpFixups` -> `patchArm64FuncAdrpRelocs`.
+//
+// `__symtable` stays a single ADR against the separate `.symtab` section: it is
+// resolved through the writer's `symdataArm64Adr` reloc, which guards its ±1 MiB
+// reach with `assertSignedReach` (a loud link error, never a silent wrap).
 function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName String, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray)
 	let rd = resolveArm64Gpr(dest).rawValue
-	// __symtable lives in a separate .symtab section
 	if funcName == "__symtable" 'isSymtable'
 		rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__symtable", kind: RdataRelocKind.symdataArm64Adr))
+		arm64EmitAdr(code, rd: rd, offset: 0)
 	end 'isSymtable' else 'isFunc'
+		// Record the fixup at the ADRP; the paired ADD sits at instrOffset + 4.
 		adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: rd, targetName: funcName))
+		arm64EmitAdrp(code, rd: rd)
+		arm64EmitAddImm(code, rd: rd, rn: rd, imm12: 0)
 	end 'isFunc'
-	arm64EmitAdr(code, rd: rd, offset: 0)
 end 'arm64EmitLeaFuncAddrOp'
 
 // sys.stackAddr: ADD Xd, X29, #offset to get address of a stack slot
