@@ -5242,11 +5242,6 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: termOp)
 		end 'hasTerm'
 	end 'eachBlock'
-
-	// E2028 deferred ternary arms-match check: the producer-type map is now
-	// fully populated for this function, so each pinned ternary slot's two
-	// arm `varStore`s carry resolved value types. Compare them.
-	checkPendingTernaryArmTypes(project, module: module, func: func, producerTypes: producerTypes)
 end 'recordFuncOpResults'
 
 enum VarStoreSlotMiss implements Error
@@ -5270,6 +5265,35 @@ function storeValueIfSlotMatches(slotId VarSlot, value ByteArray, slot VarSlot) 
 	end 'otherSlot'
 	return value
 end 'storeValueIfSlotMatches'
+
+// E2028 deferred ternary arms-match check, run ONCE over the whole module
+// after producer types have converged. Previously this ran from inside
+// `recordFuncOpResults`, so it fired on every build + every converge pass +
+// every on-demand rebuild — re-scanning all pending entries for each of the
+// module's functions (O(functions x entries)) and re-emitting the same
+// diagnostic each time. Here it runs a single time on the fully-resolved
+// producer maps: build a set of the functions that actually own a pending
+// entry, then visit only those functions (each with its converged
+// `producerTypesPerFunc` map). O(functions + entries), one emission per
+// mismatch.
+function checkAllPendingTernaryArmTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray)
+	if project.pendingTernaryArmChecks.count() == 0 'noneToCheck'
+		return
+	end 'noneToCheck'
+	var funcsWithChecks = StringSet.create()
+	for entryIdx in 0 upto project.pendingTernaryArmChecks.count() 'collect'
+		let entry = try project.pendingTernaryArmChecks.get(entryIdx) otherwise panic("checkAllPendingTernaryArmTypes: entryIdx OOB")
+		funcsWithChecks.insert(entry.funcName)
+	end 'collect'
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("checkAllPendingTernaryArmTypes: funcIdx OOB")
+		if not funcsWithChecks.contains(func.name) 'noEntries'
+			continue
+		end 'noEntries'
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("checkAllPendingTernaryArmTypes: producerTypesPerFunc.get({funcIdx}) failed")
+		checkPendingTernaryArmTypes(project, module: module, func: func, producerTypes: producerTypes)
+	end 'eachFunc'
+end 'checkAllPendingTernaryArmTypes'
 
 // Drain the parser-recorded ternary arm-match entries that belong to `func`.
 // For each pinned result slot we collect the resolved value type of every
@@ -9426,6 +9450,13 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// body and trip the `resolveMaxonTypeToStd` sentinel guard.
 	propagateClosureArgTypesFromCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 
+	// E2028 ternary arms-match check: run once here, after every producer-map
+	// refinement (converge + closure-arg propagation) has settled, so each
+	// ternary's arm types are as resolved as they'll get. Previously this ran
+	// from inside `recordFuncOpResults` on every build / converge pass / on-
+	// demand rebuild, re-scanning all pending entries per function each time.
+	checkAllPendingTernaryArmTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
+
 	// E3097: reject `enumVal.name`/`.ordinal`/`.rawValue` `==`/`!=` comparisons.
 	// Runs BEFORE coerceEnumRawValueCompareOperands so its synthetic `.rawValue`
 	// loads (inserted to lower a legitimate `enumVal == "str"`) are never misread
@@ -11308,6 +11339,12 @@ end 'validateCallArities'
 // parser captured in `argRanges`, matching the original parse-time
 // emission position (the first token of the unnamed positional arg).
 function validateCallArgLabels(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	// Precompute once: the set of inner-alias names (across every struct) that
+	// resolve to a `__`-prefixed builtin type. Without this, each qualified-call
+	// arg-label check re-scanned all `structTypes` looking for such an alias —
+	// O(qualifiedCalls x structs), which dominated the tail on the compiler's
+	// own module. The lookup below is now O(1) per call site.
+	let builtinAliasPrefixes = collectBuiltinInnerAliasPrefixes(project)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateCallArgLabels: funcIdx < count but get failed")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateCallArgLabels: producerTypesPerFunc.get({funcIdx}) failed")
@@ -11317,15 +11354,15 @@ function validateCallArgLabels(project Project, module MaxonModule, producerType
 				let op = try module.ops.get(opIdx) otherwise panic("validateCallArgLabels: opIdx OOB")
 				if op.rawValue.category == OpCategory.callMethod 'isMethodCall'
 					match op 'extractMC'
-						methodCall(_, receiver, _, args, argLabels, _, argRanges, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
-						tryMethodCall(_, receiver, _, args, argLabels, _, argRanges, _, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
+						methodCall(_, receiver, _, args, argLabels, _, argRanges, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, builtinAliasPrefixes: builtinAliasPrefixes, filePath: filePath)
+						tryMethodCall(_, receiver, _, args, argLabels, _, argRanges, _, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, builtinAliasPrefixes: builtinAliasPrefixes, filePath: filePath)
 						default panic("unreachable: already checked name in [methodCall, tryMethodCall]")
 					end 'extractMC'
 				end 'isMethodCall'
 				if op.rawValue.category == OpCategory.callFree 'isCall'
 					match op 'extractC'
-						call(_, callee, _, args, argLabels, _, argRanges, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
-						tryCall(_, callee, _, args, argLabels, _, argRanges, _, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
+						call(_, callee, _, args, argLabels, _, argRanges, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, builtinAliasPrefixes: builtinAliasPrefixes, filePath: filePath)
+						tryCall(_, callee, _, args, argLabels, _, argRanges, _, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, builtinAliasPrefixes: builtinAliasPrefixes, filePath: filePath)
 						default panic("unreachable: already checked name in [call, tryCall]")
 					end 'extractC'
 				end 'isCall'
@@ -11334,6 +11371,46 @@ function validateCallArgLabels(project Project, module MaxonModule, producerType
 	end 'eachFunc'
 end 'validateCallArgLabels'
 
+// One-time reverse index for `validateQualifiedCallArgLabels`: every struct's
+// inner typealias whose resolved target is a `__`-prefixed builtin type
+// (e.g. `typealias ByteMemory = __ManagedMemory with Byte` inside a struct).
+// A qualified call `<prefix>.method(...)` whose prefix is in this set names a
+// builtin static and is exempt from the "second-and-subsequent args must be
+// named" rule, matching the C# bootstrap's `allowAllPositional: true`.
+function collectBuiltinInnerAliasPrefixes(project Project) returns StringSet
+	var prefixes = StringSet.create()
+	for (_, st) in project.structTypes 'eachStruct'
+		for (aliasName, innerResolved) in st.innerAliases 'eachInner'
+			if innerResolved.nameOrEmpty(project).startsWith("__") 'isBuiltin'
+				prefixes.insert(aliasName)
+			end 'isBuiltin'
+		end 'eachInner'
+	end 'eachStruct'
+	return prefixes
+end 'collectBuiltinInnerAliasPrefixes'
+
+// True when `name` denotes a compiler-builtin type — directly (the reserved
+// `__` name prefix), via a generic typealias that resolves to a `__`-prefixed
+// type (`typealias ByteMemory = __ManagedMemory with Byte`), or via a struct
+// inner alias that does the same (recorded in `builtinAliasPrefixes` by
+// `collectBuiltinInnerAliasPrefixes`). Shared by the qualified-call arg-label
+// check and the method-call receiver check so the three builtin-recognition
+// paths stay in lockstep.
+function nameResolvesToBuiltinType(project Project, name String, builtinAliasPrefixes StringSet) returns bool
+	if name.startsWith("__") 'directBuiltin'
+		return true
+	end 'directBuiltin'
+	if name.isEmpty() 'noName'
+		return false
+	end 'noName'
+	if let resolved = try project.genericTypealiases.get(name) 'isGenAlias'
+		if resolved.nameOrEmpty(project).startsWith("__") 'aliasIsBuiltin'
+			return true
+		end 'aliasIsBuiltin'
+	end 'isGenAlias'
+	return builtinAliasPrefixes.contains(name)
+end 'nameResolvesToBuiltinType'
+
 // E3005 for qualified static calls (`Type.method(...)`). The parser routes
 // every qualified call through the deferred path because it cannot tell a
 // builtin like `__ManagedMemory.create(...)` (or its typealias
@@ -11341,7 +11418,7 @@ end 'validateCallArgLabels'
 // resolution, we look at the callee's type prefix and skip the check when
 // the prefix resolves to a `__`-prefixed builtin type — matching the C#
 // bootstrap's `allowAllPositional: true` for builtin static methods.
-function validateQualifiedCallArgLabels(project Project, callee ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, filePath FilePath)
+function validateQualifiedCallArgLabels(project Project, callee ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, builtinAliasPrefixes StringSet, filePath FilePath)
 	let calleeStr = String.from(callee)
 	let calleeBytes = calleeStr.toByteArray()
 	var dotIdx = -1 as ParsedInt
@@ -11361,30 +11438,12 @@ function validateQualifiedCallArgLabels(project Project, callee ByteArray, args 
 	end 'noDot'
 	let prefixBytes = try calleeBytes.slice(0, endIndex: dotIdx) otherwise return
 	let prefix = String.from(prefixBytes)
-	// Builtin types are `__`-prefixed by convention; user-defined names
-	// cannot start with `__`.
-	if prefix.startsWith("__") 'isBuiltin'
+	// Builtin static methods (`__ManagedMemory.create`, or a user typealias /
+	// inner-alias that resolves to one) are exempt from the named-arg rule,
+	// matching the C# bootstrap's `allowAllPositional: true`.
+	if nameResolvesToBuiltinType(project, name: prefix, builtinAliasPrefixes: builtinAliasPrefixes) 'isBuiltin'
 		return
 	end 'isBuiltin'
-	// A typealias resolving to a `__`-prefixed builtin (e.g.
-	// `typealias ByteMemory = __ManagedMemory with Byte`) shows up in
-	// `project.genericTypealiases` after the resolver drain.
-	if let resolved = try project.genericTypealiases.get(prefix) 'isGenAlias'
-		let resolvedName = resolved.nameOrEmpty(project)
-		if resolvedName.startsWith("__") 'aliasIsBuiltin'
-			return
-		end 'aliasIsBuiltin'
-	end 'isGenAlias'
-	// Or it shows up as an inner alias on a struct (`typealias ByteMemory
-	// = __ManagedMemory with Byte` inside `type Character ... end`).
-	for (_, st) in project.structTypes 'eachStruct'
-		if let innerResolved = try st.innerAliases.get(prefix) 'innerHit'
-			let innerName = innerResolved.nameOrEmpty(project)
-			if innerName.startsWith("__") 'innerIsBuiltin'
-				return
-			end 'innerIsBuiltin'
-		end 'innerHit'
-	end 'eachStruct'
 	for i in 1 upto args.count() 'each'
 		let label = try argLabels.get(i) otherwise ""
 		if not label.isEmpty() 'hasLabel'
@@ -11396,7 +11455,7 @@ function validateQualifiedCallArgLabels(project Project, callee ByteArray, args 
 	end 'each'
 end 'validateQualifiedCallArgLabels'
 
-function validateMethodCallArgLabels(project Project, receiver ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, producerTypes ProducerTypeMap, filePath FilePath)
+function validateMethodCallArgLabels(project Project, receiver ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, producerTypes ProducerTypeMap, builtinAliasPrefixes StringSet, filePath FilePath)
 	let receiverType = lookupProducerType(producerTypes, name: receiver)
 	// E2052 (first arg cannot be named) is deferred from parse time for ALL
 	// method calls because the receiver type isn't known there (parseCallArgsRaw
@@ -11407,7 +11466,7 @@ function validateMethodCallArgLabels(project Project, receiver ByteArray, args B
 	// of which reject it. `methodCallReceiverRejectsNamedFirstArg` replicates
 	// that split. The first user arg is `args[0]` here (the receiver is a
 	// separate op field, not arg slot 0), so its label is `argLabels[0]`.
-	if methodCallReceiverRejectsNamedFirstArg(project, receiverType: receiverType) and args.count() >= 1 'maybeFirstNamed'
+	if methodCallReceiverRejectsNamedFirstArg(project, receiverType: receiverType, builtinAliasPrefixes: builtinAliasPrefixes) and args.count() >= 1 'maybeFirstNamed'
 		let firstLabel = try argLabels.get(0) otherwise ""
 		if not firstLabel.isEmpty() 'firstNamed'
 			let firstRange = try argRanges.get(0) otherwise SourceRange.none()
@@ -11455,7 +11514,7 @@ end 'validateMethodCallArgLabels'
 //     conservatively as ALLOWED so the validator never emits a false positive
 //     before the receiver's type is known — matching the unresolved-receiver
 //     early-return that the E3005 path below also relies on.
-function methodCallReceiverRejectsNamedFirstArg(project Project, receiverType MaxonType) returns bool
+function methodCallReceiverRejectsNamedFirstArg(project Project, receiverType MaxonType, builtinAliasPrefixes StringSet) returns bool
 	// Interface / type-parameter receivers permit a named first arg (C#
 	// routes them through `ParseTypeParamMethodCallStatement`), so they never
 	// reject. Every other arm falls through to the struct/enum/builtin checks.
@@ -11483,40 +11542,12 @@ function methodCallReceiverRejectsNamedFirstArg(project Project, receiverType Ma
 	// its `__`-prefixed base name — directly or through a generic-typealias /
 	// inner-alias that chases to a `__`-prefixed type — and reject the named
 	// first arg to match `ParseBuiltinArgs`.
-	if maxonTypeIsBuiltinReceiver(project, t: receiverType) 'isBuiltinRecv'
+	if nameResolvesToBuiltinType(project, name: receiverType.nameOrEmpty(project), builtinAliasPrefixes: builtinAliasPrefixes) 'isBuiltinRecv'
 		return true
 	end 'isBuiltinRecv'
 	// Unresolved / unknown receiver — conservatively allow.
 	return false
 end 'methodCallReceiverRejectsNamedFirstArg'
-
-// True iff `t` denotes a compiler-builtin receiver type — a `__`-prefixed
-// type either directly, via a generic instance whose base is `__`-prefixed
-// (`__ManagedMemory with Byte`), or via a typealias / struct-inner-alias that
-// resolves to a `__`-prefixed type (`typealias ByteMemory = __ManagedMemory
-// with Byte`). Builtins are recognised by the reserved `__` name prefix.
-function maxonTypeIsBuiltinReceiver(project Project, t MaxonType) returns bool
-	let baseName = t.nameOrEmpty(project)
-	if baseName.startsWith("__") 'directBuiltin'
-		return true
-	end 'directBuiltin'
-	if baseName.isEmpty() 'noName'
-		return false
-	end 'noName'
-	if let resolved = try project.genericTypealiases.get(baseName) 'isGenAlias'
-		if resolved.nameOrEmpty(project).startsWith("__") 'aliasIsBuiltin'
-			return true
-		end 'aliasIsBuiltin'
-	end 'isGenAlias'
-	for (_, st) in project.structTypes 'eachStruct'
-		if let innerResolved = try st.innerAliases.get(baseName) 'innerHit'
-			if innerResolved.nameOrEmpty(project).startsWith("__") 'innerIsBuiltin'
-				return true
-			end 'innerIsBuiltin'
-		end 'innerHit'
-	end 'eachStruct'
-	return false
-end 'maxonTypeIsBuiltinReceiver'
 
 // --- E3059: try/otherwise type-mismatch validation ---
 //
