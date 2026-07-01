@@ -204,22 +204,24 @@ type RecolorBudget
 end 'RecolorBudget'
 
 // The effective last-chance-recolor recursion depth for a coloring pass.
-// In `--fast` mode this is 0, which makes `tryLastChanceRecolor` return
-// immediately (its `depth <= 0` early-out), so a range that simple eviction
-// couldn't place just spills instead of triggering the recursive recolor
-// search. That search explores up to `MAX_RECOLOR_DEPTH * fanout * poolSize`
-// nodes per uncolored range — hundreds of thousands of nodes for a handful of
-// successful recolors on pressured functions — and is the single largest
-// regalloc cost. Quality mode keeps the full depth so its codegen is identical
-// to today.
-function effectiveRecolorDepth(fastRegalloc bool) returns RegInt
-	if fastRegalloc 'fast'
+// In the cheap-coloring path (`cheapColoring` — set by the global `--fast`
+// flag OR the per-function density gate; see FunctionRegAllocator.useCheapRegalloc)
+// this is 0, which makes `tryLastChanceRecolor` return immediately (its
+// `depth <= 0` early-out), so a range that simple eviction couldn't place just
+// spills instead of triggering the recursive recolor search. That search
+// explores up to `MAX_RECOLOR_DEPTH * fanout * poolSize` nodes per uncolored
+// range — hundreds of thousands of nodes for a handful of successful recolors
+// on pressured functions, and the memory blow-up that walls the self-compile —
+// and is the single largest regalloc cost. Full-quality coloring keeps the full
+// depth so its codegen is identical to today.
+function effectiveRecolorDepth(cheapColoring bool) returns RegInt
+	if cheapColoring 'cheap'
 		return 0
-	end 'fast'
+	end 'cheap'
 	return MAX_RECOLOR_DEPTH
 end 'effectiveRecolorDepth'
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, fastRegalloc bool) returns ColoringResult
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, cheapColoring bool) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -242,8 +244,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
-	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
 
 	logDebug(LogCategory.ir, message: function() gives "ssa-color: gpr={gprRanges.count()} fp={fpRanges.count()} maxVal={maxValueId}")
 	return result
@@ -253,7 +255,7 @@ end 'colorSSA'
 // Per-class coloring
 // ============================================================
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, fastRegalloc bool)
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -434,7 +436,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// evictee weight or smaller cascade at equal weight) plus the
 	// MAX_CASCADE bound guarantees termination — see the LiveRange.cascade
 	// comment for the proof sketch.
-	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
+	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
 end 'colorClass'
 
 // Attempt to color a single range, writing the assignment to `rangeColors` and
@@ -557,13 +559,13 @@ end 'tryColorRange'
 // Ranges left uncolored after this pass fall through to the spill loop
 // (RegisterAllocator.runSpillColorLoop) just as before — the fixup never
 // makes the picker fail where the first-fit pass succeeded.
-function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, cascadeByValueId RegIntArray, fastRegalloc bool)
+function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, vidToRangeIdx RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, poolSize RegInt, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool)
 	let numRanges = ranges.count()
 	// Effective last-chance-recolor depth. 0 in fast mode disables the
 	// recursive recolor search (the dominant regalloc cost) — the simple
 	// cascade-eviction below still runs, so termination and correctness are
 	// unaffected; a range eviction can't place just spills.
-	let recolorDepth = effectiveRecolorDepth(fastRegalloc)
+	let recolorDepth = effectiveRecolorDepth(cheapColoring)
 	// Single work budget shared by EVERY last-chance-recolor in this coloring
 	// pass. A per-entry budget bounds one search but not the count of entries:
 	// a dense function leaves many ranges uncolored, each triggering a fresh

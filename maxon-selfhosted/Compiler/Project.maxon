@@ -817,6 +817,15 @@ export type Project
 	// override into a worker's real spec builds. Internal/testing use only.
 	export var cacheRootOverride as FilePath
 
+	// `maxon build -o PATH` / `--output PATH`: overrides the output executable
+	// path. Empty = derive the path from the build name / first source file (the
+	// normal behavior). Consulted FIRST by resolveBuildOutputPath. Its purpose is
+	// to give the self-hosted `build maxon-selfhosted` output a distinct filename
+	// from the same-basename C#-built invoker in the sibling `.maxon/` dir, so
+	// validation cannot accidentally run the wrong binary. Empty on a normal build
+	// (zero behavioral impact).
+	export var outputPathOverride as String
+
 	// Phase 6: external library directories this build links (from `--library=DIR`
 	// flags ∪ `build.maxon` `library("...")` manifest entries, deduped by absolute
 	// path). Each is registered into the library registry — parsed under its own
@@ -1090,6 +1099,7 @@ export type Project
 			fastRegalloc: false,
 			cacheStatsEnabled: false,
 			cacheRootOverride: FilePath from "",
+			outputPathOverride: "",
 			libraryDirs: FilePathArray.create(),
 			covSites: CovSiteTable.create(),
 			irDump: IrDumpOptions.disabled(),

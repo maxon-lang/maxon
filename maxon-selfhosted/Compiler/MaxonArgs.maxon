@@ -106,12 +106,19 @@ export type MaxonArgs
 	// run via the per-fragment path (used when the batch rewriter rejected
 	// them mid-batch). Subprocess-isolated to contain compile-time panics.
 	export var workerFallback as String
-	// `maxon build --greedy-only=NAME <file>`: force the named function through
-	// the alternative single-pass greedy register allocator instead of the SSA
+	// `maxon build --greedy-only=NAME <file>` (or the comma-separated
+	// `--greedy-only=NAME1,NAME2,...`): force the named function(s) through the
+	// alternative single-pass greedy register allocator instead of the SSA
 	// coloring pipeline. Test/dev trigger for the multi-phase greedy-allocator
 	// port (Phase 1: single-block, GPR-only, call-free). Empty = greedy path
-	// never fires (normal compilation).
+	// never fires (normal compilation). The comma-separated list is split in
+	// setGreedyOnlyFunc; this raw value is passed through verbatim.
 	export var greedyOnly as String
+	// `maxon build -o PATH` / `--output PATH` (also `--output=PATH`): overrides
+	// the output executable path. Empty = derive it from the build name / first
+	// source file (the normal behavior). Threaded through compile() into
+	// project.outputPathOverride, which resolveBuildOutputPath consults first.
+	export var outputOverride as String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -140,7 +147,8 @@ export type MaxonArgs
 			workerSpec: "",
 			workerSingles: "",
 			workerFallback: "",
-			greedyOnly: ""
+			greedyOnly: "",
+			outputOverride: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -177,7 +185,17 @@ export type MaxonArgs
 			args.command = Command.unknown
 		end 'unknown'
 
+		// Set true when a flag consumed the FOLLOWING token as its value (e.g.
+		// `-o PATH`); the loop then skips that token so it is not misread as the
+		// positional path argument.
+		var skipNext = false
+
 		for i in firstFlagIndex upto allArgs.count() 'scan'
+			if skipNext 'consumedByPrevFlag'
+				skipNext = false
+				continue
+			end 'consumedByPrevFlag'
+
 			let arg = try allArgs.get(i) otherwise panic("MaxonArgs.scan: i < allArgs.count() by loop guard but get({i}) failed")
 			if arg.startsWith("--log=") 'isLog'
 				// Sentinel: empty string signals malformed --log=; handled by isEmpty() check below.
@@ -257,7 +275,15 @@ export type MaxonArgs
 			end 'isWorkerFallback' else if arg.startsWith("--greedy-only=") 'isGreedyOnly'
 				// Sentinel: empty value leaves the greedy path disabled (normal compilation).
 				args.greedyOnly = try CommandLine.optionValue(arg) otherwise ""
-			end 'isGreedyOnly' else if not arg.startsWith("--") 'isPositional'
+			end 'isGreedyOnly' else if arg == "-o" or arg == "--output" 'isOutputSpaced'
+				// `-o PATH` / `--output PATH`: the output path is the NEXT token.
+				args.outputOverride = try allArgs.get(i + 1) otherwise throw ArgError.invalidOption(arg)
+				skipNext = true
+			end 'isOutputSpaced' else if arg.startsWith("--output=") 'isOutputEq'
+				// `--output=PATH`: value is inline. Empty flows through as "" =
+				// no override (normal path derivation).
+				args.outputOverride = try CommandLine.optionValue(arg) otherwise ""
+			end 'isOutputEq' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

@@ -11,6 +11,62 @@ export let RM_NO_STACK_HOME = -i64.max
 
 export typealias RegMask = int(0 to u32.max)
 
+// ============================================================
+// Per-function density gate for the two costly quality-mode knobs.
+//
+// A function is register-allocation "dense" — expensive enough that the
+// quality-mode last-chance-recolor recursion (a memory blow-up, observed to
+// ~13 GB on the worst functions) and/or the live-range splitter's per-split
+// full liveness+coloring rebuild (the dominant self-compile TIME cost: each
+// rebuild is ~O(ranges^2) on a dense interference graph, run up to
+// `maxReactiveSplitIterations` times per pressure-bound function) make it a
+// self-compile wall — once EITHER its live-range count or its incoming MIR op
+// count crosses a threshold below.
+//
+// For such a function BOTH knobs are forced to the cheap path (last-chance
+// recolor depth -> 0 AND live-range splitting off) via
+// `FunctionRegAllocator.useCheapRegalloc()`. This is always CORRECTNESS-safe:
+// the eviction colorer plus the guaranteed-progress spill-everywhere backstop
+// (allocateRegistersForFunc's two-attempt path) still color or spill every
+// range, so a gated function only loses a little codegen QUALITY (a few extra
+// spills), never correctness.
+//
+// Choosing the thresholds. Two forces set them:
+//   * They must sit well BELOW the smallest observed hanger (machoImportNames at
+//     1758 ops / 4736 live ranges; the module initializers, decodeLibraryMeta,
+//     parseSpecFile, etc. are far larger) so every memory-blowup function is
+//     caught with margin.
+//   * The splitting TIME cost is not concentrated in those few giants — it is
+//     the AGGREGATE of every pressure-bound function that keeps splitting. A
+//     full self-compile measurement (Σ ranges^2 as the splitting-cost proxy)
+//     showed that gating only ranges>=3500 leaves ~20% of that cost ungated,
+//     and the default self-compile then ran past the ~30-minute budget. Gating
+//     down to the values below leaves ~4% ungated, bringing the default build
+//     comfortably under budget.
+// Gating this far down is nearly codegen-free for the many functions it now
+// also covers: a function whose register pressure never exceeds the pool colors
+// entirely in the first-fit pass, so neither the recolor recursion nor the
+// splitter ever fires for it — gated or not, its code is byte-identical. Only
+// genuinely pressure-bound functions see any change, which is why the spec
+// suite stays essentially churn-free. Live-range count is the primary signal
+// (it directly measures interference-graph size / register pressure, what
+// drives both blow-ups); the op-count bound is a backstop for a large function
+// whose density the range count alone might understate.
+let DENSE_FUNC_RANGE_THRESHOLD = 1000
+let DENSE_FUNC_OP_THRESHOLD = 500
+
+// Total MIR op count across all of a function's blocks — a cheap upfront proxy
+// for function size feeding the density gate above, computed before the
+// expensive recolor/split work runs.
+function functionOpCount(func IrFunction, module TargetModule) returns RegInt
+	var total = 0
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionOpCount: blockRef from func.blockRefs not in module.blocks")
+		total = total + block.opRefs.count()
+	end 'eachBlock'
+	return total
+end 'functionOpCount'
+
 export enum OpPattern
 	// No register operands — just push the op through
 	passThrough
@@ -812,8 +868,16 @@ type FunctionRegAllocator
 	// `--fast`: when true, the colorer uses depth-0 last-chance recoloring and
 	// the spill loop skips the call/use range splitters — disabling the
 	// expensive quality machinery that dominates compile time. Default false
-	// (today's exact behavior).
+	// (today's exact behavior). The per-function density gate (denseFunc) turns
+	// the SAME two knobs off for individual pathological functions even when this
+	// global flag is false; both feed `useCheapRegalloc()`.
 	export var fastRegalloc as bool
+	// Per-function density gate result, computed once in `run()` from the initial
+	// live-range count and MIR op count (see DENSE_FUNC_RANGE_THRESHOLD /
+	// DENSE_FUNC_OP_THRESHOLD). When true this function is dense enough that the
+	// quality-mode recolor recursion and split loop become a self-compile wall,
+	// so both are disabled for it (via `useCheapRegalloc()`). Default false.
+	export var denseFunc as bool
 	// Robustness-fallback mode. When true, `run()` replaces the Belady/MIN
 	// pre-pass with `runSpillEverywhere()` — a guaranteed-progress pass that
 	// stack-spills EVERY spillable value so no value is held across more than
@@ -904,6 +968,7 @@ type FunctionRegAllocator
 			regTarget: regTarget,
 			opQuery: opQuery,
 			fastRegalloc: fastRegalloc,
+			denseFunc: false,
 			spillEverywhere: spillEverywhere,
 			unresolvableReload: false,
 			cfg: createCfgInfo(0),
@@ -949,8 +1014,18 @@ type FunctionRegAllocator
 		splitInfo = splitMultiAnchorMerges(ranges, func: func, module: module, stageByValueId: stageByValueId)
 	end 'runLivenessAndRanges'
 
+	// The per-function decision to use the cheap register-allocation path: skip
+	// the last-chance-recolor recursion (depth -> 0) AND the live-range splitter.
+	// True when the global `--fast` flag is set OR the per-function density gate
+	// (denseFunc) fired. Consulted by both runColoring (recolor depth, via
+	// colorSSA) and runSpillColorLoop (splitting), so a gated function disables
+	// BOTH knobs together.
+	function useCheapRegalloc() returns bool
+		return fastRegalloc or denseFunc
+	end 'useCheapRegalloc'
+
 	function runColoring()
-		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId, fastRegalloc: fastRegalloc)
+		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId, cheapColoring: self.useCheapRegalloc())
 	end 'runColoring'
 
 	// Pre-coloring Belady/MIN register-pressure reduction. Runs AFTER
@@ -1134,16 +1209,18 @@ type FunctionRegAllocator
 		// is the correctness fallback). Small enough to bound the churn, far above
 		// any normal function's split count so ordinary codegen is unchanged.
 		let maxReactiveSplitIterations = 24
-		// Fast mode skips the call/use range splitters entirely. Splitting is a
-		// pure quality pass (it shortens live ranges so they color without a
-		// spill) but each successful split forces a FULL liveness+coloring
-		// rebuild, and a function can split up to `2 * ranges.count()` times —
-		// it is a dominant slice of the spill-loop's cross-pass redundant cost.
-		// Disabling it makes an over-pressured range spill directly instead;
-		// correctness is unaffected (a spilled range still gets a stack slot and
-		// reloads). The eviction-based colorer plus the spiller already
-		// guarantee every range is either colored or spilled.
-		var splittingHelps = not fastRegalloc
+		// The cheap regalloc path (global `--fast` OR the per-function density
+		// gate — see useCheapRegalloc) skips the call/use range splitters entirely.
+		// Splitting is a pure quality pass (it shortens live ranges so they color
+		// without a spill) but each successful split forces a FULL liveness+coloring
+		// rebuild, and a function can split up to `2 * ranges.count()` times — it is
+		// a dominant slice of the spill-loop's cross-pass redundant cost and the
+		// dominant self-compile time cost on dense functions. Disabling it makes an
+		// over-pressured range spill directly instead; correctness is unaffected (a
+		// spilled range still gets a stack slot and reloads). The eviction-based
+		// colorer plus the spiller already guarantee every range is either colored
+		// or spilled.
+		var splittingHelps = not self.useCheapRegalloc()
 		// Track whether remat-only iterations make progress. Without this,
 		// a constant `2` that fails to color at its (high-pressure) use
 		// re-rematerializes every iteration: the fresh `movRegImm`-defined
@@ -1443,6 +1520,13 @@ type FunctionRegAllocator
 
 		// Phases 1-3: liveness, live ranges, coalescing
 		self.runLivenessAndRanges()
+
+		// Density gate: decide ONCE — before the expensive recolor/split work —
+		// whether this function should take the cheap regalloc path. Based on the
+		// initial live-range count (interference-graph size) and MIR op count; see
+		// the DENSE_FUNC_* thresholds. Stored on `denseFunc` and consumed via
+		// `useCheapRegalloc()` by both runColoring and runSpillColorLoop.
+		self.denseFunc = ranges.count() >= DENSE_FUNC_RANGE_THRESHOLD or functionOpCount(func, module: module) >= DENSE_FUNC_OP_THRESHOLD
 
 		if self.spillEverywhere 'fallbackMode'
 			// Robustness fallback: stack-spill every spillable value so no value

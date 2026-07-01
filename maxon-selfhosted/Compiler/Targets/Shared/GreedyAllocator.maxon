@@ -105,31 +105,51 @@
 // ============================================================
 
 // Module-level config holder. Maxon does not allow a module-level `var` to be
-// initialized with a String literal directly, so the name lives inside a holder
+// initialized with a String literal directly, so the names live inside a holder
 // type (the same pattern as SSAColoring's diagContext).
 type GreedyConfig
-	export var onlyFuncName as String
+	// The set of function names the greedy path should claim. Empty disables
+	// the greedy path entirely.
+	export var onlyFuncNames as StringArray
 
 	export static function create() returns GreedyConfig
-		return Self{onlyFuncName: ""}
+		return Self{onlyFuncNames: StringArray.create()}
 	end 'create'
 end 'GreedyConfig'
 
 var greedyConfig = GreedyConfig.create()
 
-// Set the single function name the greedy path should claim (from
-// `--greedy-only=NAME`). Empty disables the greedy path entirely.
-export function setGreedyOnlyFunc(name String)
-	greedyConfig.onlyFuncName = name
+// Set the function names the greedy path should claim (from
+// `--greedy-only=NAME` or the comma-separated `--greedy-only=NAME1,NAME2,...`).
+// Each name is trimmed and empty entries are dropped. An empty spec disables the
+// greedy path entirely.
+export function setGreedyOnlyFunc(spec String)
+	var parsed = StringArray.create()
+
+	if not spec.isEmpty() 'hasSpec'
+		for entry in spec.split(",") 'eachEntry'
+			let trimmed = entry.trim()
+
+			if not trimmed.isEmpty() 'nonEmpty'
+				parsed.push(trimmed)
+			end 'nonEmpty'
+		end 'eachEntry'
+	end 'hasSpec'
+
+	greedyConfig.onlyFuncNames = parsed
 end 'setGreedyOnlyFunc'
 
-// True iff `funcName` is the force-routed greedy function. Always false when no
-// `--greedy-only` was given, so normal compilation never takes the greedy path.
+// True iff `funcName` is one of the force-routed greedy functions. Always false
+// when no `--greedy-only` was given, so normal compilation never takes the
+// greedy path.
 export function greedyOnlyFuncMatches(funcName String) returns bool
-	if greedyConfig.onlyFuncName.isEmpty() 'noTrigger'
-		return false
-	end 'noTrigger'
-	return funcName == greedyConfig.onlyFuncName
+	for name in greedyConfig.onlyFuncNames 'eachName'
+		if funcName == name 'hit'
+			return true
+		end 'hit'
+	end 'eachName'
+
+	return false
 end 'greedyOnlyFuncMatches'
 
 // ============================================================

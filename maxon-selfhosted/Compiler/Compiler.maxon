@@ -1,7 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false) returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false, outputPathOverride String = "") returns FilePath throws CompileError
 	// Persisting the lazily-grown stdlib cache back to disk is safe from ANY
 	// project (Phase 3.5 made the cache codec project-independent — it resolves
 	// through the cache's own snapshot tables, not the consumer's interner), so
@@ -20,6 +20,9 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// throwaway temp dir. Both default off / empty, so a normal build is unchanged.
 	project.cacheStatsEnabled = cacheStats
 	project.cacheRootOverride = cacheRoot
+	// `-o PATH` / `--output PATH`: override the output executable path (empty =
+	// normal name derivation). See resolveBuildOutputPath.
+	project.outputPathOverride = outputPathOverride
 	// Phase 6: the external libraries to link = `--library=DIR` flags
 	// (`libraryDirs`) ∪ `build.maxon` `library("...")` manifest entries, deduped
 	// by absolute path. The manifest is resolved against the project DIRECTORY
@@ -363,8 +366,15 @@ function emitCacheStatsLine(project Project)
 	print("CACHE_STATS regalloc_hits={hits} regalloc_misses={misses} stdlib_funcs={stdlibFuncs} stdlib_valid={stdlibValid} phase7_preserved={lastPreservedTierCCount}\n")
 end 'emitCacheStatsLine'
 
-// Resolves the output path: uses build name if available, otherwise falls back to first source file.
+// Resolves the output path. An explicit `-o`/`--output` override wins; otherwise
+// uses the build name if available, falling back to the first source file.
 function resolveBuildOutputPath(project Project, ext String) returns FilePath throws CompileError
+	if not project.outputPathOverride.isEmpty() 'hasOverride'
+		// Append the platform executable extension so `-o foo` still yields
+		// `foo.exe` on Windows; `ext` is empty on macOS/Linux, so the override is
+		// used verbatim there.
+		return try FilePath.from("{project.outputPathOverride}{ext}") otherwise panic("resolveBuildOutputPath: invalid -o/--output path '{project.outputPathOverride}'")
+	end 'hasOverride'
 	if let buildName = try parseBuildName(project.rootPath) 'hasBuildName'
 		return project.rootPath.join("{buildName}{ext}")
 	end 'hasBuildName'
