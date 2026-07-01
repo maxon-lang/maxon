@@ -571,7 +571,16 @@ function computeClassDemand(ranges LiveRangeArray, regClass RegClass, desc Targe
 		var liveSet = RegIntArray.create()
 		tracker.reset()
 
-		var p = 1
+		// Sweep from position 0, not 1: live-in / live-through intervals have
+		// startPos == 0 (buildIntervalsForValue), so their enter events sit in
+		// entersAt[0]. Starting at 1 never applied those enters, leaving every
+		// value that flows INTO a block invisible to the demand count for the
+		// whole block — an undercount that let genuinely over-pressured blocks
+		// read "within budget", so the colorer (whose interference graph counts
+		// position 0) then couldn't color and the reactive loop force-spilled.
+		// applyExits(exitsAt[0]) is a no-op (min endPos is 1), so p=0 only adds
+		// the position-0 enters, matching the interference graph exactly.
+		var p = 0
 		while p <= maxPos 'eachPos'
 			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: noneChosen)
 			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: noneChosen)
@@ -1015,7 +1024,11 @@ function pickForClass(ranges LiveRangeArray, regClass RegClass, k RegInt, kCalle
 		var liveSet = RegIntArray.create()
 		tracker.reset()
 
-		var p = 1
+		// Start at position 0 so live-in / live-through ranges (startPos == 0)
+		// enter the live set — see the matching note in computeClassDemand. The
+		// spill picker must relieve at every position the demand tracker counts,
+		// including position 0, or it would relieve against the same undercount.
+		var p = 0
 		while p <= maxPos 'eachPos'
 			applyExits(liveSet, liveSlot: liveSlot, exitBucket: try exitsAt.get(p) otherwise panic("invariant: exitsAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: chosen)
 			applyEnters(liveSet, liveSlot: liveSlot, enterBucket: try entersAt.get(p) otherwise panic("invariant: entersAt get({p}) failed"), ranges: ranges, regClass: regClass, tracker: tracker, chosen: chosen)
