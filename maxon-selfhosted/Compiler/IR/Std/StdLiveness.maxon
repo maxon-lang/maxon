@@ -278,13 +278,19 @@ end 'BorrowInfo'
 // terminator, for completeness) for a POINTER-width `loadIndirect` and record
 // `baseOf[result] = addr`. Only `qword` non-float loads qualify — narrower or
 // float loads are never interior pointers subject to the UAF hazard.
-function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns BorrowInfo
+function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, domInfo DomInfo, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns BorrowInfo
 	var baseOf = ValueIdArray.create()
 	var i = 0
 	while i < maxVal 'init'
 		baseOf.push(BORROW_NO_BASE)
 		i = i + 1
 	end 'init'
+
+	// Per-value definition block, used to gate the store-borrow coupling on
+	// dominance (see `applyStoreBorrow`): a base R may only be coupled to an
+	// allocation A when R's def dominates A's — otherwise the coupling would
+	// extend R's live range to program points BEFORE R is defined.
+	let defBlockOf = buildDefBlockMap(module, func: func, maxVal: maxVal)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildBorrowInfo: blockRef not in module.blocks")
@@ -313,7 +319,13 @@ function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, func
 	//   STORE: `store [A+_] = V` where V borrows base R ⇒ A borrows R (the
 	//     allocation now holds a live interior pointer into R, so R must outlive
 	//     A). Only when A has no nearer base, so a direct interior pointer keeps
-	//     its precise base.
+	//     its precise base — AND only when R's def DOMINATES A's def (see
+	//     `applyStoreBorrow`'s dominance gate): the coupling extends R's live
+	//     range to cover A's, which is only sound where R is defined at every
+	//     point A is live. Coupling a long-lived A (e.g. an entry-block struct)
+	//     to a base R created LATER would extend R backward before its own def,
+	//     and the release planner would then decref R's uninitialized slot at
+	//     exits that precede R — a crash / over-release.
 	//   PHI:   a block-arg whose incoming edge values all resolve to the same
 	//     borrow root R (and R is not the phi itself) borrows R. The fixpoint
 	//     handles the cyclic loop-carried phi (it appears on its own back-edge).
@@ -322,11 +334,48 @@ function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, func
 	// imprecise entry risks a late release (leak, recoverable), never a premature
 	// free (UAF). The store rule fires ONLY for a stored value that is itself a
 	// borrow (a freshRc0/owned value stored into a field — e.g. the
-	// managed-field-reassignment case — has no base, so it is untouched).
-	propagateBorrows(module, func: func, baseOf: baseOf)
+	// managed-field-reassignment case — has no base, so it is untouched), and
+	// only when the base dominates the allocation (see the STORE rule note above).
+	propagateBorrows(module, func: func, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo)
 
 	return BorrowInfo.create(baseOf)
 end 'buildBorrowInfo'
+
+// Build a per-ValueId map from value to the id of the block that DEFINES it
+// (block-args are defined at their block head; op results at the op's block).
+// Values with no recorded def get `BLOCK_NONE`. Consumed by `applyStoreBorrow`'s
+// dominance gate.
+function buildDefBlockMap(module StdModule, func IrFunction, maxVal ValueId) returns ValueIdArray
+	var defBlockOf = ValueIdArray.create()
+	var i = 0
+	while i < maxVal 'init'
+		defBlockOf.push(BLOCK_NONE)
+		i = i + 1
+	end 'init'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildDefBlockMap: blockRef not in module.blocks")
+		for blockArg in block.blockArgs 'eachArg'
+			recordDefBlock(defBlockOf, valueId: blockArg.valueId, blockId: block.id)
+		end 'eachArg'
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildDefBlockMap: opIdx not in module.ops")
+			let operands = extractStdOpOperands(op)
+			for d in operands.writeIds 'eachDef'
+				recordDefBlock(defBlockOf, valueId: d, blockId: block.id)
+			end 'eachDef'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return defBlockOf
+end 'buildDefBlockMap'
+
+function recordDefBlock(defBlockOf ValueIdArray, valueId ValueId, blockId BlockId)
+	if valueId >= defBlockOf.count() 'oob'
+		return
+	end 'oob'
+	try defBlockOf.set(valueId, value: blockId) otherwise panic("recordDefBlock: set OOB despite bound check")
+end 'recordDefBlock'
 
 // The (addr, value) pairs of every heap store, collected once so the borrow
 // fixpoint can re-evaluate them as stored values gain bases.
@@ -343,7 +392,7 @@ typealias StoreEdgeArray = Array with StoreEdge
 
 // Combined store + phi borrow-base propagation to a fixpoint (see
 // `buildBorrowInfo`'s rules + soundness note).
-function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray)
+function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray, defBlockOf ValueIdArray, domInfo DomInfo)
 	let storeEdges = collectStoreEdges(module, func: func)
 	let phiEdges = buildPhiIncomingMap(module, func: func)
 
@@ -355,7 +404,7 @@ function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray
 	while changed and guard < guardLimit 'fixpoint'
 		changed = false
 		guard = guard + 1
-		if propagateStoreBorrows(storeEdges, baseOf: baseOf) 'storeChanged'
+		if propagateStoreBorrows(storeEdges, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo) 'storeChanged'
 			changed = true
 		end 'storeChanged'
 		if propagatePhiBorrows(module, func: func, phiEdges: phiEdges, baseOf: baseOf) 'phiChanged'
@@ -365,17 +414,17 @@ function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray
 end 'propagateBorrows'
 
 // One sweep of the STORE rule. Returns true iff any base changed.
-function propagateStoreBorrows(storeEdges StoreEdgeArray, baseOf ValueIdArray) returns bool
+function propagateStoreBorrows(storeEdges StoreEdgeArray, baseOf ValueIdArray, defBlockOf ValueIdArray, domInfo DomInfo) returns bool
 	var changed = false
 	for e in storeEdges 'each'
-		if applyStoreBorrow(e, baseOf: baseOf) 'updated'
+		if applyStoreBorrow(e, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo) 'updated'
 			changed = true
 		end 'updated'
 	end 'each'
 	return changed
 end 'propagateStoreBorrows'
 
-function applyStoreBorrow(e StoreEdge, baseOf ValueIdArray) returns bool
+function applyStoreBorrow(e StoreEdge, baseOf ValueIdArray, defBlockOf ValueIdArray, domInfo DomInfo) returns bool
 	if e.addrId >= baseOf.count() 'oob'
 		return false
 	end 'oob'
@@ -397,9 +446,40 @@ function applyStoreBorrow(e StoreEdge, baseOf ValueIdArray) returns bool
 	if existing != BORROW_NO_BASE 'hasBase'
 		return false
 	end 'hasBase'
+	// DOMINANCE GATE: only couple allocation A (e.addrId) to base R (valueRoot)
+	// when R's definition DOMINATES A's — i.e. R is defined at every program point
+	// A is live. The store rule's purpose (keep a collection R alive while an
+	// iterator/allocation A holds an interior pointer into it) always has R
+	// created BEFORE and dominating A. When R does NOT dominate A (R is a value
+	// created LATER, e.g. a temporary built in a branch and copied into a
+	// long-lived struct A that was allocated in the entry block), coupling A→R
+	// would extend R's live range BACKWARD to blocks that precede R's definition.
+	// The release planner then emits a decref of R at those earlier exits (early
+	// returns / throw paths) where R's spill slot holds uninitialized garbage —
+	// a decref of an undefined value (crash / over-release). Skipping the coupling
+	// here keeps R's live range local to where it is actually defined; R's release
+	// then lands correctly at its true last use (no leak, no premature free).
+	if not borrowBaseDominatesAlloc(valueRoot, alloc: e.addrId, defBlockOf: defBlockOf, domInfo: domInfo) 'notDominating'
+		return false
+	end 'notDominating'
 	try baseOf.set(e.addrId, value: valueRoot) otherwise panic("applyStoreBorrow: baseOf.set OOB")
 	return true
 end 'applyStoreBorrow'
+
+// True iff base value R's defining block dominates allocation A's defining
+// block — the soundness precondition for coupling A's live range to R (R must
+// be defined at every point A is live). A missing def block for either value
+// (BLOCK_NONE — should not occur for real defs) is treated as NON-dominating so
+// the coupling is conservatively skipped (risking a late release/leak, never a
+// premature free of an undefined value).
+function borrowBaseDominatesAlloc(baseRoot ValueId, alloc ValueId, defBlockOf ValueIdArray, domInfo DomInfo) returns bool
+	let baseBlock = try defBlockOf.get(baseRoot) otherwise BLOCK_NONE
+	let allocBlock = try defBlockOf.get(alloc) otherwise BLOCK_NONE
+	if baseBlock == BLOCK_NONE or allocBlock == BLOCK_NONE 'unknownDef'
+		return false
+	end 'unknownDef'
+	return dominates(baseBlock, b: allocBlock, domInfo: domInfo)
+end 'borrowBaseDominatesAlloc'
 
 // One sweep of the PHI rule over every block-arg. Returns true iff any changed.
 function propagatePhiBorrows(module StdModule, func IrFunction, phiEdges PhiIncomingMap, baseOf ValueIdArray) returns bool
@@ -938,7 +1018,7 @@ end 'appendBorrowBases'
 // Public entry point
 // ============================================================
 
-export function computeStdLiveness(module StdModule, func IrFunction, cfg CfgInfo, rpo RpoInfo, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns StdLivenessInfo
+export function computeStdLiveness(module StdModule, func IrFunction, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcParamConsumes FuncParamConsumesMap) returns StdLivenessInfo
 	let numBlocks = func.nextBlockId
 
 	// Phase 1: max valueId + the interior-borrow relation + per-block use/def
@@ -946,7 +1026,7 @@ export function computeStdLiveness(module StdModule, func IrFunction, cfg CfgInf
 	// borrowed pointer's read also generates a read of its base (keeping the base
 	// live wherever the pointer is) — see `buildBorrowInfo` / the UAF note.
 	let maxVal = scanMaxValueId(module, func: func) + 1
-	let borrows = buildBorrowInfo(module, func: func, maxVal: maxVal, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
+	let borrows = buildBorrowInfo(module, func: func, maxVal: maxVal, domInfo: domInfo, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcParamConsumes: funcParamConsumes)
 	let udSets = buildUseDefSets(module, func: func, numBlocks: numBlocks, maxVal: maxVal, borrows: borrows)
 	let useSets = udSets.useSets
 	let defSets = udSets.defSets
