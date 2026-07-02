@@ -432,6 +432,21 @@ function buildBodyScanCaches(ctx RcContext)
 	var blockIndex = BlockRefArray.create()
 	blockIndex.resize(ctx.numBlocks)
 
+	// Presize the per-block `computeBlockLiveAfter` cache (indexed by block.id).
+	// Entries are filled lazily by `blockLiveAfterFor`; `present` gates each slot.
+	// New blocks from later edge splitting have ids >= numBlocks and are never
+	// queried by the (pre-edit) planning sweeps, so numBlocks slots suffice.
+	var liveAfterCache = StdLiveAfterArray.create()
+	var liveAfterPresent = BoolArray.create()
+	liveAfterPresent.resize(ctx.numBlocks)
+	var lac = 0
+	while lac < ctx.numBlocks 'presizeLiveAfter'
+		liveAfterCache.push(emptyStdLiveAfter(ctx.liveness.maxValueId))
+		lac = lac + 1
+	end 'presizeLiveAfter'
+	ctx.blockLiveAfterCache = liveAfterCache
+	ctx.blockLiveAfterPresent = liveAfterPresent
+
 	// Stamped header-address maps for the inlined-acquire pattern. Values are
 	// stored +1 so 0 means absent; stamps hold (block ordinal + 1).
 	var vidToAddr = ValueIdArray.create()
@@ -442,6 +457,13 @@ function buildBodyScanCaches(ctx RcContext)
 	addrToVid.resize(maxVal + 1)
 	var addrToVidStamp = ValueIdArray.create()
 	addrToVidStamp.resize(maxVal + 1)
+
+	// Per-value count of ops (body + terminator) that DIRECTLY read the value
+	// (op-presence granularity, so a value read twice by ONE op counts once).
+	// Rides this single O(ops) walk; consumed by `valueDirectlyReadElsewhere`.
+	var readCounts = ValueIdArray.create()
+	readCounts.resize(maxVal + 1)
+	var readScratch = StdOpOperands.create()
 
 	var ordinal = 0
 	for blockRef in ctx.func.blockRefs 'eachBlock'
@@ -455,6 +477,7 @@ function buildBodyScanCaches(ctx RcContext)
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("buildBodyScanCaches: opIdx not in module.ops")
 			markBodyReleaseArgs(op, released: released)
 			markConstantZeroResult(op, constZero: constZero)
+			tallyOpDirectReads(op, readCounts: readCounts, scratch: readScratch)
 
 			let increfArg = increfCallArgOrSentinel(op)
 			if increfArg != REFCOUNT_NO_VALUE and increfArg >= 0 and increfArg < acquired.count() 'callAcquire'
@@ -486,13 +509,89 @@ function buildBodyScanCaches(ctx RcContext)
 				end 'ownerHit'
 			end 'inlinedAcquire'
 		end 'eachOp'
+
+		// The terminator is a distinct op (not in `opRefs`) that reads its branch
+		// args / condition — `valueDirectlyReadElsewhere` counts those, so the
+		// read-count tally must include it too.
+		if block.hasTerminatorOp() 'hasTerm'
+			let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise panic("buildBodyScanCaches: terminatorIndex not in module.ops")
+			tallyOpDirectReads(term, readCounts: readCounts, scratch: readScratch)
+		end 'hasTerm'
 	end 'eachBlock'
 
 	ctx.bodyReleasedValues = released
 	ctx.bodyAcquiredValues = acquired
 	ctx.constantZeroValues = constZero
 	ctx.blockRefIndex = blockIndex
+	ctx.totalDirectReadingOps = readCounts
 end 'buildBodyScanCaches'
+
+// Increment `readCounts[v]` once for every DISTINCT value `op` directly reads
+// (op-presence granularity). A value read at several operand positions of one op
+// counts as a single reading-op. Uses the caller's reusable operand buffer.
+function tallyOpDirectReads(op StdOp, readCounts ValueIdArray, scratch StdOpOperands)
+	extractStdOpOperandsInto(op, operands: scratch)
+	var counted = 0
+	for readId in scratch.readIds 'eachRead'
+		// Dedupe within this op: skip a read already tallied for this op (an id
+		// appearing earlier in this op's own read list).
+		if readIdAlreadySeenBefore(scratch.readIds, upto: counted, vid: readId) 'dup'
+			counted = counted + 1
+			continue
+		end 'dup'
+		if readId >= 0 and readId < readCounts.count() 'inRange'
+			let prev = try readCounts.get(readId) otherwise 0
+			try readCounts.set(readId, value: prev + 1) otherwise panic("tallyOpDirectReads: readCounts.set OOB despite bound check")
+		end 'inRange'
+		counted = counted + 1
+	end 'eachRead'
+end 'tallyOpDirectReads'
+
+// True iff `vid` occurs among the first `upto` entries of `readIds` — the
+// within-op dedupe check for `tallyOpDirectReads` (so a value read twice by one
+// op is counted once). `upto` is the index of the CURRENT read being examined.
+function readIdAlreadySeenBefore(readIds ValueIdArray, upto NodeIndex, vid ValueId) returns bool
+	var i = 0
+	while i < upto 'each'
+		let prior = try readIds.get(i) otherwise panic("readIdAlreadySeenBefore: readIds.get({i}) OOB despite i < upto")
+		if prior == vid 'hit'
+			return true
+		end 'hit'
+		i = i + 1
+	end 'each'
+	return false
+end 'readIdAlreadySeenBefore'
+
+// An empty placeholder `StdLiveAfter` for the per-block cache's unfilled slots.
+// Never queried (the `blockLiveAfterPresent` gate rejects it before any read);
+// it only makes the pre-sized cache array element-addressable so a real result
+// can be stored in place when `blockLiveAfterFor` first builds it.
+function emptyStdLiveAfter(maxVal ValueId) returns StdLiveAfter
+	return StdLiveAfter.create(StdLiveSetArray.create(), liveAfterBody: StdLiveSetArray.create(), maxValueId: maxVal)
+end 'emptyStdLiveAfter'
+
+// The per-op-position liveness for `block`, computed once and cached by block.id.
+// The 4-5 planning sweeps all query the SAME read-only pre-edit IR, so the first
+// call builds `computeBlockLiveAfter` and every later call for the same block
+// returns the cached result — eliminating the redundant O(ops × maxVal) rebuilds.
+function blockLiveAfterFor(ctx RcContext, block IrBlock) returns StdLiveAfter
+	let bid = block.id
+	if bid >= 0 and bid < ctx.blockLiveAfterPresent.count() 'inRange'
+		let present = try ctx.blockLiveAfterPresent.get(bid) otherwise false
+		if present 'cached'
+			return try ctx.blockLiveAfterCache.get(bid) otherwise panic("blockLiveAfterFor: present set but cache.get({bid}) OOB")
+		end 'cached'
+		let built = computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+		try ctx.blockLiveAfterCache.set(bid, value: built) otherwise panic("blockLiveAfterFor: cache.set({bid}) OOB despite bound check")
+		try ctx.blockLiveAfterPresent.set(bid, value: true) otherwise panic("blockLiveAfterFor: present.set({bid}) OOB despite bound check")
+		return built
+	end 'inRange'
+
+	// A block with an id outside the pre-sized cache window (created after
+	// `buildBodyScanCaches` — should never be queried by the pre-edit sweeps).
+	// Fall back to a direct compute so correctness never depends on the cache.
+	return computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+end 'blockLiveAfterFor'
 
 // The result id of an `arith.const 0` op, marked into `constZero`.
 function markConstantZeroResult(op StdOp, constZero BoolArray)
@@ -833,6 +932,25 @@ type RcContext
 	// not yet minted). One const per ordinal serves every per-ordinal
 	// drop/retain call in the function — the entry block dominates all uses.
 	export var ordinalConstIds as ValueIdArray
+	// Per-block `computeBlockLiveAfter` result cache, indexed by block.id and
+	// built lazily on first request (`blockLiveAfterFor`). Every planning sweep
+	// (planInBlockDeaths / planDeadDefDrops / planConsumedArgCopyIncrefs /
+	// planHeapStoreIncrefs / the consumed-earlier probe) used to recompute this
+	// per-op-position liveness independently — 4-5 full O(ops × maxVal) rebuilds
+	// per block. All those sweeps run on the SAME read-only IR before any edit is
+	// applied (edge splitting / plan application happen strictly later), so the
+	// result is identical across sweeps and computed exactly once here.
+	// `blockLiveAfterPresent[block.id]` gates the cached slot (0 = not yet built).
+	export var blockLiveAfterCache as StdLiveAfterArray
+	export var blockLiveAfterPresent as BoolArray
+	// Per-ValueId count of ops (body ops + terminators, across the whole function)
+	// that DIRECTLY read the value at least once. Built in one O(ops) pass by
+	// `buildBodyScanCaches` and consumed by `valueDirectlyReadElsewhere` to answer
+	// "is `argId` read anywhere other than this block's ops at/before the consume"
+	// with an O(pos) prefix probe instead of the former O(ops) rescan of EVERY
+	// other block per consumed arg (the O(ops²) consumed-arg scan). Indexed by
+	// ValueId, sized to maxValueId+1; out-of-range ids count 0.
+	export var totalDirectReadingOps as ValueIdArray
 
 	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet) returns RcContext
 		return Self{
@@ -864,7 +982,10 @@ type RcContext
 			edgeReleases: RcEdgeReleaseArray.create(),
 			funcParamConsumes: funcParamConsumes,
 			funcReturnsConsumedArg: funcReturnsConsumedArg,
-			ordinalConstIds: ValueIdArray.create()
+			ordinalConstIds: ValueIdArray.create(),
+			blockLiveAfterCache: StdLiveAfterArray.create(),
+			blockLiveAfterPresent: BoolArray.create(),
+			totalDirectReadingOps: ValueIdArray.create()
 		}
 	end 'create'
 
@@ -1428,21 +1549,22 @@ end 'markIfStackAddrSysSlot'
 // Acquire fires for freshRc0 / incomingOwner / selfReturnBorrow; it is skipped
 // for callReturnRc1 (consume the call's +1), borrowed (never owned), and params.
 function planAcquireIncrefs(ctx RcContext)
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planAcquireIncrefs: blockRef not in module.blocks")
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
-			planAcquireForOp(ctx, blockRef: blockRef, opIdx: opIdx, pos: pos)
+			planAcquireForOp(ctx, blockRef: blockRef, opIdx: opIdx, pos: pos, scratch: scratch)
 			pos = pos + 1
 		end 'eachOp'
 	end 'eachBlock'
 end 'planAcquireIncrefs'
 
-function planAcquireForOp(ctx RcContext, blockRef BlockRef, opIdx OpIndex, pos NodeIndex)
+function planAcquireForOp(ctx RcContext, blockRef BlockRef, opIdx OpIndex, pos NodeIndex, scratch StdOpOperands)
 	let op = try ctx.module.ops.get(opIdx) otherwise panic("planAcquireForOp: opIdx not in module.ops")
-	let operands = extractStdOpOperands(op)
+	extractStdOpOperandsInto(op, operands: scratch)
 	let defBlock = try ctx.module.blocks.get(blockRef) otherwise panic("planAcquireForOp: blockRef not in module.blocks")
-	for defId in operands.writeIds 'eachDef'
+	for defId in scratch.writeIds 'eachDef'
 		if shouldAcquire(ctx, id: defId) 'acquire'
 			logTrace(LogCategory.ir, message: function() gives "RC-ACQUIRE func={ctx.func.name} val=%{defId} class={ownershipClassName(ctx.classOf(defId))}")
 			let incIdx = buildIncrefOp(ctx.module, valueId: defId, idRef: ctx.idRef)
@@ -1532,14 +1654,16 @@ function computeIncomingOwnerAcquire(ctx RcContext)
 	// (returned or moved/consumed into a durable owner). Scanned once over all ops.
 	let transferred = collectOwnershipTransferredValues(ctx, maxVal: maxVal)
 
-	// Decide each managed `incomingOwner` body value.
+	// Decide each managed `incomingOwner` body value. One reusable operand
+	// buffer for the whole scan (refilled per op by `extractStdOpOperandsInto`).
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("computeIncomingOwnerAcquire: blockRef not in module.blocks")
 		markIncomingOwnerBlockArgs(ctx, block: block)
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("computeIncomingOwnerAcquire: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for defId in operands.writeIds 'eachDef'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for defId in scratch.writeIds 'eachDef'
 				decideIncomingOwnerAcquire(ctx, id: defId, transferred: transferred)
 			end 'eachDef'
 		end 'eachOp'
@@ -1645,12 +1769,14 @@ function collectOwnershipTransferredValues(ctx RcContext, maxVal ValueId) return
 	end 'eachReturned'
 
 	// Moved/consumed values: any op that is a consuming move of one of its
-	// operands (the same set the inserter suppresses the local decref for).
+	// operands (the same set the inserter suppresses the local decref for). One
+	// reusable operand buffer for the whole scan.
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("collectOwnershipTransferredValues: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("collectOwnershipTransferredValues: opIdx not in module.ops")
-			markOpTransferredOperands(ctx, op: op, transferred: transferred)
+			markOpTransferredOperands(ctx, op: op, transferred: transferred, scratch: scratch)
 		end 'eachOp'
 	end 'eachBlock'
 
@@ -1665,9 +1791,9 @@ end 'collectOwnershipTransferredValues'
 // reasons (`moveIntoContainerArg`/`moveIntoIntrinsicConsumer`/`moveIntoTransparentWrap`)
 // are the same callee facts the release sweep reads — so the acquire analysis and
 // the release suppression cannot drift (the one-definition-of-move guarantee).
-function markOpTransferredOperands(ctx RcContext, op StdOp, transferred BoolArray)
-	let operands = extractStdOpOperands(op)
-	for argId in operands.readIds 'eachArg'
+function markOpTransferredOperands(ctx RcContext, op StdOp, transferred BoolArray, scratch StdOpOperands)
+	extractStdOpOperandsInto(op, operands: scratch)
+	for argId in scratch.readIds 'eachArg'
 		if opTransfersOperand(ctx, op: op, argId: argId) 'moved'
 			setBoolAt(transferred, id: argId, value: true)
 		end 'moved'
@@ -1787,11 +1913,12 @@ end 'valueEscapes'
 // `valueEscapes` itself via `returnedValues`, so it is not duplicated here.
 function buildEscapingValuesSet(ctx RcContext) returns BoolArray
 	var escaping = BoolArray.create()
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise continue
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise continue
-			markOpTransferredOperands(ctx, op: op, transferred: escaping)
+			markOpTransferredOperands(ctx, op: op, transferred: escaping, scratch: scratch)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			markPhiMovedValues(ctx, fromBlock: block, escaping: escaping)
@@ -1884,7 +2011,7 @@ function planHeapStoreIncrefs(ctx RcContext)
 		// ownership MOVE (no incref) only when the stored value is DEAD after the
 		// store; if the value lives past the store, the global needs its own +1
 		// (incref-for-store), so the global-store skip must consult liveness.
-		let liveAfter = computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+		let liveAfter = blockLiveAfterFor(ctx, block: block)
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
 			planHeapStoreForOp(ctx, blockRef: blockRef, block: block, liveAfter: liveAfter, opIdx: opIdx, pos: pos)
@@ -2472,9 +2599,10 @@ end 'planReturnIncrefValue'
 //     terminator — and it has no out-edge death because it does not survive into
 //     any successor), so decref it right before the terminator.
 function planLastUseDecrefs(ctx RcContext)
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planLastUseDecrefs: blockRef not in module.blocks")
-		planInBlockDeaths(ctx, blockRef: blockRef, block: block)
+		planInBlockDeaths(ctx, blockRef: blockRef, block: block, scratch: scratch)
 		planEdgeDeaths(ctx, block: block)
 		planTerminatorDeaths(ctx, blockRef: blockRef, block: block)
 	end 'eachBlock'
@@ -2503,16 +2631,17 @@ end 'planLastUseDecrefs'
 // dead-drops there lands the acquire before the drop (the same-pos plan-order tie
 // rule in `applyPlansForBlock`).
 function planDeadDefDrops(ctx RcContext)
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planDeadDefDrops: blockRef not in module.blocks")
-		let liveAfter = computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+		let liveAfter = blockLiveAfterFor(ctx, block: block)
 		var pos = 0
 		let opCount = block.opRefs.count()
 		while pos < opCount 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("planDeadDefDrops: opRefs.get({pos}) failed despite pos < count")
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planDeadDefDrops: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for defId in operands.writeIds 'eachDef'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for defId in scratch.writeIds 'eachDef'
 				if deadDefNeedsDrop(ctx, block: block, liveAfter: liveAfter, pos: pos, defId: defId) 'dead'
 					logTrace(LogCategory.ir, message: function() gives "RC-DEADDROP func={ctx.func.name} val=%{defId} atpos={pos} class={ownershipClassName(ctx.classOf(defId))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: defId))}")
 					let relIdx = buildReleaseOp(ctx, id: defId)
@@ -2581,33 +2710,25 @@ function deadValueDropGates(ctx RcContext, block IrBlock, vid ValueId) returns b
 	return true
 end 'deadValueDropGates'
 
-// True iff any body op or the terminator of `block` reads `vid`.
+// True iff any body op or the terminator of `block` reads `vid`. One reusable
+// operand buffer is shared across the whole block scan (`stdOpReadsValueInto`
+// refills it per op) so the probe allocates nothing per op.
 function blockReadsValue(ctx RcContext, block IrBlock, vid ValueId) returns bool
+	var scratch = StdOpOperands.create()
 	for opIdx in block.opRefs 'eachOp'
 		let op = try ctx.module.ops.get(opIdx) otherwise panic("blockReadsValue: opIdx not in module.ops")
-		if stdOpReadsValue(op, vid: vid) 'reads'
+		if stdOpReadsValueInto(op, vid: vid, scratch: scratch) 'reads'
 			return true
 		end 'reads'
 	end 'eachOp'
 	if block.hasTerminatorOp() 'hasTerm'
 		let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise panic("blockReadsValue: terminator opIdx not in module.ops")
-		if stdOpReadsValue(term, vid: vid) 'termReads'
+		if stdOpReadsValueInto(term, vid: vid, scratch: scratch) 'termReads'
 			return true
 		end 'termReads'
 	end 'hasTerm'
 	return false
 end 'blockReadsValue'
-
-// True iff `op` reads `vid` through any operand position.
-function stdOpReadsValue(op StdOp, vid ValueId) returns bool
-	let operands = extractStdOpOperands(op)
-	for readId in operands.readIds 'eachRead'
-		if readId == vid 'hit'
-			return true
-		end 'hit'
-	end 'eachRead'
-	return false
-end 'stdOpReadsValue'
 
 // True iff `defId` (defined by the op at `pos` in `block`) owns a +1 that needs
 // releasing yet is DEAD ON ARRIVAL — never live, so no last-use sweep will drop
@@ -2648,13 +2769,14 @@ function planBorrowedElementContainerRetains(ctx RcContext)
 	if ctx.layoutValueId == RELEASE_NO_LAYOUT 'noLayout'
 		return
 	end 'noLayout'
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planBorrowedElementContainerRetains: blockRef not in module.blocks")
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planBorrowedElementContainerRetains: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for argId in operands.readIds 'eachArg'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for argId in scratch.readIds 'eachArg'
 				if borrowedElementConsumedByContainer(ctx, op: op, argId: argId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-ELEM-RETAIN func={ctx.func.name} val=%{argId} atpos={pos}")
 					let retIdx = buildRetainForValue(ctx, valueId: argId)
@@ -2686,19 +2808,20 @@ end 'planBorrowedElementContainerRetains'
 // plain increfs — they keep the consumed-earlier release suppression in
 // `isInBlockDeathPoint`.
 function planConsumedArgCopyIncrefs(ctx RcContext)
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planConsumedArgCopyIncrefs: blockRef not in module.blocks")
-		let liveAfter = computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+		let liveAfter = blockLiveAfterFor(ctx, block: block)
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planConsumedArgCopyIncrefs: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
+			extractStdOpOperandsInto(op, operands: scratch)
 			// The same value can be consumed at SEVERAL argument positions of one
 			// call (`Outer.create(shared, second: shared)` stores it twice) — the
 			// callee takes one +1 PER consumed position, so the copy count is
 			// per-position, planned once per distinct value.
 			var retainedHere = ValueIdArray.create()
-			for argId in operands.readIds 'eachArg'
+			for argId in scratch.readIds 'eachArg'
 				if not valueIdArrayContains(retainedHere, vid: argId) 'notYetRetained'
 					retainedHere.push(argId)
 					let copies = consumedArgCopyCount(ctx, liveAfter: liveAfter, block: block, op: op, pos: pos, argId: argId)
@@ -2835,49 +2958,48 @@ end 'consumedPositionsIn'
 // live-after at the consume, and a spuriously-copied value's extended death point
 // still releases the extra +1 (`valueConsumedEarlierInBlock` only suppresses when
 // NO copy was minted).
+//
+// Computed as `total > prefix`, where `total` = ops (body + terminator) across
+// the WHOLE function that directly read `argId` (precomputed once in
+// `buildBodyScanCaches`), and `prefix` = ops in THIS block at positions [0..pos]
+// (body ops only — the terminator is not a body op) that read `argId`. The
+// difference counts exactly the reads NOT at/before the consume point: this
+// block's later body ops + its terminator + every other block — the same set the
+// former per-arg full-function rescan visited, but with the cross-block term
+// replaced by an O(1) array probe and only the bounded in-block prefix walked
+// (killing the O(ops²) consumed-arg scan). Op-presence granularity on both sides
+// makes the comparison exact, not an over-approximation, so the `borrowed`-only
+// survival cases (`valueDirectlyReadElsewhere` must stay FALSE for a purely
+// borrow-extended value — the CodepointView leak) are preserved verbatim.
 function valueDirectlyReadElsewhere(ctx RcContext, block IrBlock, pos NodeIndex, argId ValueId) returns bool
-	let opCount = block.opRefs.count()
-	var p = pos + 1
-	while p < opCount 'laterOps'
-		let opIdx = try block.opRefs.get(p) otherwise panic("valueDirectlyReadElsewhere: opRefs.get({p}) failed despite p < count")
-		if opDirectlyReads(ctx, opIdx: opIdx, argId: argId) 'read'
-			return true
-		end 'read'
-		p = p + 1
-	end 'laterOps'
+	let total = try ctx.totalDirectReadingOps.get(argId) otherwise 0
+	if total == 0 'neverRead'
+		return false
+	end 'neverRead'
 
-	if blockTerminatorDirectlyReads(ctx, block: block, argId: argId) 'termRead'
-		return true
-	end 'termRead'
-
-	for otherRef in ctx.func.blockRefs 'otherBlocks'
-		let other = try ctx.module.blocks.get(otherRef) otherwise panic("valueDirectlyReadElsewhere: blockRef not in module.blocks")
-		if other.id == block.id 'sameBlock'
-			continue
-		end 'sameBlock'
-		for opIdx in other.opRefs 'eachOp'
-			if opDirectlyReads(ctx, opIdx: opIdx, argId: argId) 'read'
-				return true
-			end 'read'
-		end 'eachOp'
-		if blockTerminatorDirectlyReads(ctx, block: other, argId: argId) 'otherTermRead'
-			return true
-		end 'otherTermRead'
-	end 'otherBlocks'
-	return false
+	let prefix = blockBodyReadingOpsUpTo(ctx, block: block, pos: pos, argId: argId)
+	return total > prefix
 end 'valueDirectlyReadElsewhere'
 
-function opDirectlyReads(ctx RcContext, opIdx OpIndex, argId ValueId) returns bool
-	let op = try ctx.module.ops.get(opIdx) otherwise panic("opDirectlyReads: opIdx not in module.ops")
-	return valueIdArrayContains(extractStdOpOperands(op).readIds, vid: argId)
-end 'opDirectlyReads'
-
-function blockTerminatorDirectlyReads(ctx RcContext, block IrBlock, argId ValueId) returns bool
-	if not block.hasTerminatorOp() 'noTerm'
-		return false
-	end 'noTerm'
-	return opDirectlyReads(ctx, opIdx: block.terminatorIndex(), argId: argId)
-end 'blockTerminatorDirectlyReads'
+// Count of body ops of `block` at positions [0, pos] (inclusive) that DIRECTLY
+// read `argId` at least once — the "reads at/before the consume in this block"
+// term subtracted from the global read-op count. Bounded by `pos + 1` (the
+// block prefix), never the whole function. One reusable operand buffer.
+function blockBodyReadingOpsUpTo(ctx RcContext, block IrBlock, pos NodeIndex, argId ValueId) returns NodeIndex
+	var count = 0
+	var scratch = StdOpOperands.create()
+	let opCount = block.opRefs.count()
+	var p = 0
+	while p <= pos and p < opCount 'prefix'
+		let opIdx = try block.opRefs.get(p) otherwise panic("blockBodyReadingOpsUpTo: opRefs.get({p}) failed despite p < count")
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("blockBodyReadingOpsUpTo: opIdx not in module.ops")
+		if stdOpReadsValueInto(op, vid: argId, scratch: scratch) 'reads'
+			count = count + 1
+		end 'reads'
+		p = p + 1
+	end 'prefix'
+	return count
+end 'blockBodyReadingOpsUpTo'
 
 // Incref a NO-+1 value at the op that TRANSPARENTLY WRAPS it (`Array.init` /
 // `Vector.init` / `String.init` arg 0). The wrap's result owns the pointer (its
@@ -2886,13 +3008,14 @@ end 'blockTerminatorDirectlyReads'
 // wrap — owning classes transfer their existing +1 via the move instead and are
 // excluded by the `noPlusOne` gate.
 function planBorrowedWrapRetains(ctx RcContext)
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planBorrowedWrapRetains: blockRef not in module.blocks")
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planBorrowedWrapRetains: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for argId in operands.readIds 'eachArg'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for argId in scratch.readIds 'eachArg'
 				if noPlusOneValueTransparentlyWrapped(ctx, op: op, argId: argId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-WRAP-RETAIN func={ctx.func.name} val=%{argId} atpos={pos}")
 					let incIdx = buildIncrefOp(ctx.module, valueId: argId, idRef: ctx.idRef)
@@ -2943,13 +3066,14 @@ function planReturnedBorrowRetains(ctx RcContext)
 	if ctx.layoutValueId == RELEASE_NO_LAYOUT 'noLayout'
 		return
 	end 'noLayout'
+	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planReturnedBorrowRetains: blockRef not in module.blocks")
 		var pos = 0
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planReturnedBorrowRetains: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for defId in operands.writeIds 'eachDef'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for defId in scratch.writeIds 'eachDef'
 				if returnedBorrowNeedsRetainCtx(ctx, id: defId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-RETBORROW-RETAIN func={ctx.func.name} val=%{defId} atpos={pos}")
 					let retIdx = buildRetainForValue(ctx, valueId: defId)
@@ -3098,7 +3222,7 @@ function planTerminatorDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 		// dies here, but the +1 is the callee's now). Releasing here strips the new
 		// owner's reference. A consume site that minted a copy-incref does not
 		// suppress (the original +1 is still owed its release).
-		if valueConsumedEarlierInBlock(ctx, block: block, liveAfter: computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness), beforePos: opCount, vid: vid) 'consumedEarlier'
+		if valueConsumedEarlierInBlock(ctx, block: block, liveAfter: blockLiveAfterFor(ctx, block: block), beforePos: opCount, vid: vid) 'consumedEarlier'
 			logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP-CONSUMED-SUPPRESS func={ctx.func.name} val=%{vid} block_{block.id} (unconditional move earlier in block)")
 			continue
 		end 'consumedEarlier'
@@ -3664,15 +3788,15 @@ end 'releaseIsNullGuarded'
 
 // In-block deaths: scan the block's per-op-position liveness for values whose
 // last use is a body op (live before, dead after) and that are NOT live-out.
-function planInBlockDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
-	let liveAfter = computeBlockLiveAfter(ctx.module, block: block, liveness: ctx.liveness)
+function planInBlockDeaths(ctx RcContext, blockRef BlockRef, block IrBlock, scratch StdOpOperands)
+	let liveAfter = blockLiveAfterFor(ctx, block: block)
 	let opCount = block.opRefs.count()
 
 	var pos = 0
 	while pos < opCount 'eachOp'
 		let opIdx = try block.opRefs.get(pos) otherwise panic("planInBlockDeaths: opRefs.get({pos}) failed despite pos < count")
 		let op = try ctx.module.ops.get(opIdx) otherwise panic("planInBlockDeaths: opIdx not in module.ops")
-		let operands = extractStdOpOperands(op)
+		extractStdOpOperandsInto(op, operands: scratch)
 		// A value dies at this op iff it is read here, live BEFORE this op, and
 		// not live AFTER it. Each read operand is a death candidate — and so is
 		// the BASE of any interior pointer read here (`expandReadsWithBorrows`):
@@ -3682,7 +3806,7 @@ function planInBlockDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 		// extended death — no longer a syntactic operand of this op — would be
 		// invisible to the inserter and never released (a leak), or, with the old
 		// non-extended liveness, released too early (the UAF this fixes).
-		let candidates = expandReadsWithBorrows(operands.readIds, borrows: ctx.liveness.borrows)
+		let candidates = expandReadsWithBorrows(scratch.readIds, borrows: ctx.liveness.borrows)
 		// A value can appear MORE THAN ONCE in `candidates` — as a direct read AND
 		// as the borrow base of an interior pointer read at the SAME op (e.g.
 		// `print(s)` reads `s` and `s.buffer` which borrows from `s`). Each death

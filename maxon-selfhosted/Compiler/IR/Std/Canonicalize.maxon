@@ -11,22 +11,8 @@
 // Sentinel meaning "no known constant for this ValueId"
 let CONST_UNKNOWN = i64.max
 
-// Per-block constant map: maps ValueId -> known constant value.
-// CONST_UNKNOWN means the ValueId is not a known constant.
-
-function constMapSet(map ValueIdArray, valueId ValueId, value ParsedInt)
-	while map.count() <= valueId 'grow'
-		map.push(CONST_UNKNOWN)
-	end 'grow'
-	try map.set(valueId, value: value) otherwise panic("invariant: map.set OOB")
-end 'constMapSet'
-
-function constMapGet(map ValueIdArray, valueId ValueId) returns ParsedInt
-	if valueId >= map.count() 'outOfBounds'
-		return CONST_UNKNOWN
-	end 'outOfBounds'
-	return try map.get(valueId) otherwise CONST_UNKNOWN
-end 'constMapGet'
+// The "no entry" marker for the descriptor-label map (an empty label).
+let DESC_NO_LABEL = ""
 
 // Phase 11.6 descriptor-fold helper map. ValueId → rdata label of the
 // `loadLayoutDescriptor` op that produced it. Stored as a parallel array;
@@ -34,50 +20,134 @@ end 'constMapGet'
 // marker, and `descLabelGet` throws to communicate that to callers.
 typealias DescriptorLabelMap = Array with String
 
+// Per-FUNCTION fold state: both maps are allocated ONCE (sized to maxValueId+1)
+// and shared across every block, instead of being re-created per block. Constant
+// folding is intra-block, so each block must START with empty maps — that is
+// restored by `resetDirtyForBlock`, which resets ONLY the slots written during
+// the just-processed block (recorded in `dirty`) back to their sentinels. This
+// preserves the per-block-fresh-map semantics exactly while avoiding the former
+// per-block `while map.count() <= valueId push(...)` growth that, at post-inline
+// value ids, pushed tens of thousands of sentinels into a fresh array for EVERY
+// block (the constMapSet ← registerAndPassConst churn).
+//   constMap — ValueId → known integer constant (CONST_UNKNOWN = not constant).
+//   descMap  — ValueId → loadLayoutDescriptor rdata label (empty = no entry).
+//   dirty    — ValueIds written to EITHER map in the current block (drives the
+//              between-block reset). A value written to only one map still resets
+//              both slots, which is a harmless no-op on the untouched map.
+type CanonFoldState
+	export var constMap as ValueIdArray
+	export var descMap as DescriptorLabelMap
+	export var dirty as ValueIdArray
+
+	export static function create(maxValueId ValueId) returns CanonFoldState
+		// constMap holds plain integers: resize zero-fills, then stamp every slot
+		// with the CONST_UNKNOWN sentinel.
+		var constMap = ValueIdArray.create()
+		constMap.resize(maxValueId + 1)
+		var i = 0
+		while i <= maxValueId 'initConst'
+			try constMap.set(i, value: CONST_UNKNOWN) otherwise panic("CanonFoldState.create: constMap.set OOB despite resize")
+			i = i + 1
+		end 'initConst'
+
+		// descMap holds Strings: build it by PUSHING real empty-string slots (not
+		// `resize`, whose zero-initialized managed-String slots would be null
+		// pointers that crash `descLabelGet`'s `label.isEmpty()`). Mirrors the
+		// original per-block `descLabelSet` growth, done once per function.
+		var descMap = DescriptorLabelMap.create()
+		var j = 0
+		while j <= maxValueId 'initDesc'
+			descMap.push(DESC_NO_LABEL)
+			j = j + 1
+		end 'initDesc'
+
+		return Self{constMap: constMap, descMap: descMap, dirty: ValueIdArray.create()}
+	end 'create'
+
+	// Reset every slot written during the block just processed back to its
+	// sentinel, then clear the dirty list — leaving both maps empty for the next
+	// block (intra-block folding semantics).
+	export function resetDirtyForBlock()
+		for valueId in self.dirty 'each'
+			if valueId < self.constMap.count() 'constInRange'
+				try self.constMap.set(valueId, value: CONST_UNKNOWN) otherwise panic("resetDirtyForBlock: constMap.set OOB despite bound check")
+			end 'constInRange'
+			if valueId < self.descMap.count() 'descInRange'
+				try self.descMap.set(valueId, value: DESC_NO_LABEL) otherwise panic("resetDirtyForBlock: descMap.set OOB despite bound check")
+			end 'descInRange'
+		end 'each'
+		self.dirty.clear()
+	end 'resetDirtyForBlock'
+end 'CanonFoldState'
+
+// Record a known integer constant for `valueId` and mark the slot dirty. The map
+// is pre-sized to maxValueId+1, so a `set` past the end is an invariant break
+// (an id larger than the function's scanned max) rather than a grow point.
+function constMapSet(state CanonFoldState, valueId ValueId, value ParsedInt)
+	if valueId >= state.constMap.count() 'oob'
+		panic("constMapSet: valueId {valueId} past pre-sized constMap (maxValueId scan stale?)")
+	end 'oob'
+	try state.constMap.set(valueId, value: value) otherwise panic("invariant: constMap.set OOB despite bound check")
+	state.dirty.push(valueId)
+end 'constMapSet'
+
+function constMapGet(state CanonFoldState, valueId ValueId) returns ParsedInt
+	if valueId >= state.constMap.count() 'outOfBounds'
+		return CONST_UNKNOWN
+	end 'outOfBounds'
+	return try state.constMap.get(valueId) otherwise CONST_UNKNOWN
+end 'constMapGet'
+
 enum DescLabelError implements Error
 	notRecorded
 end 'DescLabelError'
 
-function descLabelGet(map DescriptorLabelMap, valueId ValueId) returns String throws DescLabelError
-	if valueId >= map.count() 'outOfBounds'
+function descLabelGet(state CanonFoldState, valueId ValueId) returns String throws DescLabelError
+	if valueId >= state.descMap.count() 'outOfBounds'
 		throw DescLabelError.notRecorded
 	end 'outOfBounds'
-	let label = try map.get(valueId) otherwise throw DescLabelError.notRecorded
+	let label = try state.descMap.get(valueId) otherwise throw DescLabelError.notRecorded
 	if label.isEmpty() 'noEntry'
 		throw DescLabelError.notRecorded
 	end 'noEntry'
 	return label
 end 'descLabelGet'
 
-function descLabelSet(map DescriptorLabelMap, valueId ValueId, label String)
-	while map.count() <= valueId 'grow'
-		map.push("")
-	end 'grow'
-	try map.set(valueId, value: label) otherwise panic("invariant: descLabel map.set OOB")
+function descLabelSet(state CanonFoldState, valueId ValueId, label String)
+	if valueId >= state.descMap.count() 'oob'
+		panic("descLabelSet: valueId {valueId} past pre-sized descMap (maxValueId scan stale?)")
+	end 'oob'
+	try state.descMap.set(valueId, value: label) otherwise panic("invariant: descMap.set OOB despite bound check")
+	state.dirty.push(valueId)
 end 'descLabelSet'
 
 export function canonicalize(module StdModule, project Project) returns StdModule
 	for func in module.functions 'eachFunc'
+		// Per-FUNCTION fold maps, allocated once and reset between blocks (see
+		// `CanonFoldState`). Sizing to the function's max value id up front avoids
+		// the former per-block sentinel-push growth over post-inline value ids.
+		let maxValueId = scanMaxValueId(func, module: module)
+		var foldState = CanonFoldState.create(maxValueId)
+
 		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
-
-			// Per-block tracking: integer constants for arith folding, plus
-			// rdata-label provenance for `descriptorField` folding (11.6).
-			var constMap = ValueIdArray.create()
-			var descMap = DescriptorLabelMap.create()
 
 			let oldOps = block.opRefs
 			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'eachOp'
-				tryFoldPackedOp(module, project: project, opIdx: packed, constMap: constMap, descMap: descMap, dstBlock: block)
+				tryFoldPackedOp(module, project: project, opIdx: packed, state: foldState, dstBlock: block)
 			end 'eachOp'
 
 			// Fold a condBr terminator when its condition is a known constant.
 			// Replaces it with an unconditional branch to the taken target.
 			// Dead block removal is left to the DCE pass.
 			if block.hasTerminatorOp() 'hasTerm'
-				tryFoldCondBr(module, block: block, constMap: constMap)
+				tryFoldCondBr(module, block: block, state: foldState)
 			end 'hasTerm'
+
+			// Constant folding is intra-block: reset the slots this block touched
+			// so the next block starts with empty maps.
+			foldState.resetDirtyForBlock()
 		end 'eachBlock'
 	end 'eachFunc'
 
@@ -87,10 +157,10 @@ end 'canonicalize'
 // If the block's terminator is a condBr whose condition is a known constant,
 // replace it with an unconditional branch to the taken target.
 // The untaken target block may become dead; DCE will remove it later.
-function tryFoldCondBr(module StdModule, block IrBlock, constMap ValueIdArray)
+function tryFoldCondBr(module StdModule, block IrBlock, state CanonFoldState)
 	let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminator opIdx not in module.ops")
 	match termOp 'checkTerm'
-		control(op) then tryFoldControlTerminator(module, block: block, constMap: constMap, op: op)
+		control(op) then tryFoldControlTerminator(module, block: block, state: state, op: op)
 		arith then return
 		call then return
 		memory then return
@@ -99,9 +169,9 @@ function tryFoldCondBr(module StdModule, block IrBlock, constMap ValueIdArray)
 end 'tryFoldCondBr'
 
 // If op is a condBr whose condition is a known constant, fold it to a br.
-function tryFoldControlTerminator(module StdModule, block IrBlock, constMap ValueIdArray, op StdControlOp)
+function tryFoldControlTerminator(module StdModule, block IrBlock, state CanonFoldState, op StdControlOp)
 	match op 'checkCondBr'
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then applyCondBrFold(module, block: block, constMap: constMap, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then applyCondBrFold(module, block: block, state: state, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds)
 		br then return
 	end 'checkCondBr'
 end 'tryFoldControlTerminator'
@@ -117,7 +187,7 @@ end 'tryFoldControlTerminator'
 //      because pickThenTarget looks for an edge whose target differs from
 //      `elseTarget` and finds none.
 //   2. The condition is a known integer constant — pick the taken arm.
-function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
+function applyCondBrFold(module StdModule, block IrBlock, state CanonFoldState, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
 	if thenTarget == elseTarget 'sameTarget'
 		// Edge args may differ structurally (the parser/DCE both emit
 		// independent arg vectors for each arm), but for this fold the
@@ -127,7 +197,7 @@ function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray,
 		logTrace(LogCategory.ir, message: function() gives "canonicalize: folded condBr (both arms -> block_{thenTarget})")
 		return
 	end 'sameTarget'
-	let condVal = constMapGet(constMap, valueId: condId)
+	let condVal = constMapGet(state, valueId: condId)
 	if condVal == CONST_UNKNOWN 'notConst'
 		return
 	end 'notConst'
@@ -142,17 +212,17 @@ end 'applyCondBrFold'
 // Try to fold a std op. If it is a foldable std.arith.binary with both
 // operands known constant, replace with std.arith.const. Otherwise pass
 // through unchanged. Also populates constMap for std.arith.const ops.
-function tryFoldPackedOp(module StdModule, project Project, opIdx OpIndex, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
+function tryFoldPackedOp(module StdModule, project Project, opIdx OpIndex, state CanonFoldState, dstBlock IrBlock)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		dstBlock.opRefs.append(opIdx)
 		return
 	end 'noOp'
 	match stdOp 'outer'
-		arith(a) then tryFoldArithOp(module, op: a, constMap: constMap, dstBlock: dstBlock)
+		arith(a) then tryFoldArithOp(module, op: a, state: state, dstBlock: dstBlock)
 		control then dstBlock.opRefs.append(opIdx)
 		call then dstBlock.opRefs.append(opIdx)
 		memory then dstBlock.opRefs.append(opIdx)
-		system(s) then tryFoldSysOp(module, project: project, opIdx: opIdx, op: s, constMap: constMap, descMap: descMap, dstBlock: dstBlock)
+		system(s) then tryFoldSysOp(module, project: project, opIdx: opIdx, op: s, state: state, dstBlock: dstBlock)
 	end 'outer'
 end 'tryFoldPackedOp'
 
@@ -164,10 +234,10 @@ end 'tryFoldPackedOp'
 //     the bytes are present in `project.staticRdataValues`, replace the
 //     load with an `arith.const(constI64)` of the field value.
 // Every other system op passes through unchanged.
-function tryFoldSysOp(module StdModule, project Project, opIdx OpIndex, op StdSystemOp, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
+function tryFoldSysOp(module StdModule, project Project, opIdx OpIndex, op StdSystemOp, state CanonFoldState, dstBlock IrBlock)
 	match op 'shape'
-		loadLayoutDescriptor(resultId, label) then recordDescriptorLoad(opIdx, resultId: resultId, label: label, descMap: descMap, dstBlock: dstBlock)
-		descriptorField(resultId, descAddrId, field) then tryFoldDescriptorField(module, project: project, opIdx: opIdx, resultId: resultId, descAddrId: descAddrId, field: field, constMap: constMap, descMap: descMap, dstBlock: dstBlock)
+		loadLayoutDescriptor(resultId, label) then recordDescriptorLoad(opIdx, resultId: resultId, label: label, state: state, dstBlock: dstBlock)
+		descriptorField(resultId, descAddrId, field) then tryFoldDescriptorField(module, project: project, opIdx: opIdx, resultId: resultId, descAddrId: descAddrId, field: field, state: state, dstBlock: dstBlock)
 		globalAddr to storeIndirect then dstBlock.opRefs.append(opIdx)
 		drop then dstBlock.opRefs.append(opIdx)
 		osAllocPages to osLockRelease then dstBlock.opRefs.append(opIdx)
@@ -179,13 +249,13 @@ function tryFoldSysOp(module StdModule, project Project, opIdx OpIndex, op StdSy
 	end 'shape'
 end 'tryFoldSysOp'
 
-function recordDescriptorLoad(opIdx OpIndex, resultId ValueId, label String, descMap DescriptorLabelMap, dstBlock IrBlock)
-	descLabelSet(descMap, valueId: resultId, label: label)
+function recordDescriptorLoad(opIdx OpIndex, resultId ValueId, label String, state CanonFoldState, dstBlock IrBlock)
+	descLabelSet(state, valueId: resultId, label: label)
 	dstBlock.opRefs.append(opIdx)
 end 'recordDescriptorLoad'
 
-function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex, resultId ValueId, descAddrId ValueId, field DescriptorField, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
-	let label = try descLabelGet(descMap, valueId: descAddrId) otherwise 'unknownSource'
+function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex, resultId ValueId, descAddrId ValueId, field DescriptorField, state CanonFoldState, dstBlock IrBlock)
+	let label = try descLabelGet(state, valueId: descAddrId) otherwise 'unknownSource'
 		dstBlock.opRefs.append(opIdx)
 		return
 	end 'unknownSource'
@@ -194,7 +264,7 @@ function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex
 		dstBlock.opRefs.append(opIdx)
 		return
 	end 'cannotFold'
-	constMapSet(constMap, valueId: resultId, value: foldedVal)
+	constMapSet(state, valueId: resultId, value: foldedVal)
 	logTrace(LogCategory.ir, message: function() gives "canonicalize: folded descriptorField %{resultId} = @{label}.{descriptorFieldName(field)} -> const {foldedVal}")
 	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: foldedVal))))
 end 'tryFoldDescriptorField'
@@ -243,19 +313,19 @@ function isFunctionSlot(field DescriptorField) returns bool
 	end 'check'
 end 'isFunctionSlot'
 
-function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, dstBlock IrBlock)
+function tryFoldArithOp(module StdModule, op StdArithOp, state CanonFoldState, dstBlock IrBlock)
 	match op 'dispatch'
-		const(c) then registerAndPassConst(module, c: c, constMap: constMap, dstBlock: dstBlock)
-		binary(b) then tryFoldBinaryOp(module, b: b, constMap: constMap, dstBlock: dstBlock)
+		const(c) then registerAndPassConst(module, c: c, state: state, dstBlock: dstBlock)
+		binary(b) then tryFoldBinaryOp(module, b: b, state: state, dstBlock: dstBlock)
 		unary(u) then module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(u)))
 	end 'dispatch'
 end 'tryFoldArithOp'
 
 // Register a std.arith.const value in the constant map and emit it unchanged.
-function registerAndPassConst(module StdModule, c StdArithConst, constMap ValueIdArray, dstBlock IrBlock)
+function registerAndPassConst(module StdModule, c StdArithConst, state CanonFoldState, dstBlock IrBlock)
 	// Only track integer constants for folding (float folding is future work)
 	match c.opcode 'checkOpcode'
-		constI64 then constMapSet(constMap, valueId: c.resultId, value: c.value)
+		constI64 then constMapSet(state, valueId: c.resultId, value: c.value)
 		constF64 then break 'checkOpcode'
 	end 'checkOpcode'
 	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(c)))
@@ -263,9 +333,9 @@ end 'registerAndPassConst'
 
 // Try to fold a binary op. If both operands are known integer constants
 // and the opcode is one we can fold, produce a new std.arith.const.
-function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdArray, dstBlock IrBlock)
-	let leftVal = constMapGet(constMap, valueId: b.leftId)
-	let rightVal = constMapGet(constMap, valueId: b.rightId)
+function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, state CanonFoldState, dstBlock IrBlock)
+	let leftVal = constMapGet(state, valueId: b.leftId)
+	let rightVal = constMapGet(state, valueId: b.rightId)
 
 	// If either operand is not a known constant, emit the op unchanged
 	if leftVal == CONST_UNKNOWN or rightVal == CONST_UNKNOWN 'notFoldable'
@@ -282,7 +352,7 @@ function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdA
 
 	// Successfully folded: emit a new std.arith.const with the binary op's resultId
 	// Register the folded value so downstream ops can also fold
-	constMapSet(constMap, valueId: b.resultId, value: foldResult)
+	constMapSet(state, valueId: b.resultId, value: foldResult)
 	logTrace(LogCategory.ir, message: function() gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
 	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: b.resultId, value: foldResult))))
 end 'tryFoldBinaryOp'

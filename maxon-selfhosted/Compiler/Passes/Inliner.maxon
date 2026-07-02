@@ -205,10 +205,11 @@ end 'ensureCallerAnalysis'
 // `opsBefore` to the current count belongs to this splice; terminators in
 // that range have no writeIds and fall through harmlessly.
 function absorbSplicedDefs(module StdModule, defs ValueDefMap, opsBefore OpIndex)
+	var scratch = StdOpOperands.create()
 	for idx in opsBefore upto module.ops.count() 'eachNew'
 		let op = try module.ops.get(idx) otherwise panic("absorbSplicedDefs: appended index {idx} not in module.ops")
-		let operands = extractStdOpOperands(op)
-		for writeId in operands.writeIds 'eachDef'
+		extractStdOpOperandsInto(op, operands: scratch)
+		for writeId in scratch.writeIds 'eachDef'
 			defs.set(writeId, opIdx: idx)
 		end 'eachDef'
 	end 'eachNew'

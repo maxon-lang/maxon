@@ -1355,12 +1355,13 @@ end 'buildValueDefMap'
 // scan just to size the map.
 export function buildValueDefMapSized(module StdModule, func IrFunction, maxValueId ValueId) returns ValueDefMap
 	var defs = ValueDefMap.create(maxValueId)
+	var scratch = StdOpOperands.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildValueDefMap: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("buildValueDefMap: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for writeId in operands.writeIds 'eachDef'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for writeId in scratch.writeIds 'eachDef'
 				defs.set(writeId, opIdx: opIdx)
 			end 'eachDef'
 		end 'eachOp'

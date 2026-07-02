@@ -170,6 +170,17 @@ export type StdOpOperands
 	export static function create() returns StdOpOperands
 		return Self{readIds: ValueIdArray.create(), writeIds: ValueIdArray.create()}
 	end 'create'
+
+	// Reset both arrays' lengths to zero WITHOUT freeing their backing storage
+	// (`Array.clear` truncates to empty and keeps capacity). Lets a caller reuse
+	// one `StdOpOperands` across a per-op loop with `extractStdOpOperandsInto`
+	// instead of allocating two fresh ValueIdArrays per op — the allocation-free
+	// hot-path form (`extractStdOpOperands` stays the create-and-delegate wrapper
+	// for cold sites).
+	export function clear()
+		self.readIds.clear()
+		self.writeIds.clear()
+	end 'clear'
 end 'StdOpOperands'
 
 // Per-op-position liveness within a single block. `liveAfterBody[i]` is the
@@ -200,6 +211,8 @@ export type StdLiveAfter
 		return set.contains(vid)
 	end 'isLiveBeforeBodyOp'
 end 'StdLiveAfter'
+
+export typealias StdLiveAfterArray = Array with StdLiveAfter
 
 // 0-based position of a body op within a block's opRefs list.
 typealias NodePos = int(0 to u64.max)
@@ -353,6 +366,7 @@ function buildDefBlockMap(module StdModule, func IrFunction, maxVal ValueId) ret
 		i = i + 1
 	end 'init'
 
+	var scratch = StdOpOperands.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildDefBlockMap: blockRef not in module.blocks")
 		for blockArg in block.blockArgs 'eachArg'
@@ -360,8 +374,8 @@ function buildDefBlockMap(module StdModule, func IrFunction, maxVal ValueId) ret
 		end 'eachArg'
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("buildDefBlockMap: opIdx not in module.ops")
-			let operands = extractStdOpOperands(op)
-			for d in operands.writeIds 'eachDef'
+			extractStdOpOperandsInto(op, operands: scratch)
+			for d in scratch.writeIds 'eachDef'
 				recordDefBlock(defBlockOf, valueId: d, blockId: block.id)
 			end 'eachDef'
 		end 'eachOp'
@@ -988,6 +1002,15 @@ end 'recordPointerLoadBorrow'
 // Returns a NEW array (original `readIds` order preserved, bases appended) so
 // callers may keep the raw reads where they need the syntactic operands.
 export function expandReadsWithBorrows(readIds ValueIdArray, borrows BorrowInfo) returns ValueIdArray
+	// Fast path: the vast majority of ops read no interior-borrow pointer, so no
+	// base is ever appended. When NONE of the reads has a borrow base, the
+	// expansion equals the input verbatim — return it directly and skip the
+	// per-op copy that would otherwise allocate a fresh array for every op in
+	// every liveness scan.
+	if not anyReadHasBorrowBase(readIds, borrows: borrows) 'noBorrow'
+		return readIds
+	end 'noBorrow'
+
 	var expanded = ValueIdArray.create()
 	for r in readIds 'eachRead'
 		expanded.push(r)
@@ -995,6 +1018,18 @@ export function expandReadsWithBorrows(readIds ValueIdArray, borrows BorrowInfo)
 	end 'eachRead'
 	return expanded
 end 'expandReadsWithBorrows'
+
+// True iff at least one id in `readIds` is an interior-borrow pointer (has a
+// base). Gates `expandReadsWithBorrows`'s copy: with no borrow among the reads
+// the expansion is identical to the input and the copy is pure waste.
+function anyReadHasBorrowBase(readIds ValueIdArray, borrows BorrowInfo) returns bool
+	for r in readIds 'eachRead'
+		if borrows.isBorrow(r) 'hasBase'
+			return true
+		end 'hasBase'
+	end 'eachRead'
+	return false
+end 'anyReadHasBorrowBase'
 
 // Walk `vid`'s borrow chain (vid → base → base-of-base → …) appending each base
 // to `into`, stopping at the first non-borrow root or a repeat. Does NOT append
@@ -1129,6 +1164,10 @@ function buildUseDefSets(module StdModule, func IrFunction, numBlocks BlockId, m
 		bi = bi + 1
 	end 'initSets'
 
+	// One reusable operand buffer for the whole use/def scan (refilled per op by
+	// `scanOpUseDef` via `extractStdOpOperandsInto`).
+	var scratch = StdOpOperands.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
@@ -1136,7 +1175,7 @@ function buildUseDefSets(module StdModule, func IrFunction, numBlocks BlockId, m
 		var useSet = try useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
 		var defSet = try defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
 
-		scanBlockUseDef(module, block: block, useSet: useSet, defSet: defSet, borrows: borrows)
+		scanBlockUseDef(module, block: block, useSet: useSet, defSet: defSet, borrows: borrows, scratch: scratch)
 	end 'eachBlock'
 
 	return UseDefSets.create(useSets, defSets: defSets)
@@ -1147,7 +1186,7 @@ end 'buildUseDefSets'
 // Order matters: block-args are defined at the block head, then body ops are
 // scanned forward (each op's uses checked against the running def set, then
 // its defs added), then the terminator's uses/condition are folded in last.
-function scanBlockUseDef(module StdModule, block IrBlock, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo)
+function scanBlockUseDef(module StdModule, block IrBlock, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo, scratch StdOpOperands)
 	// (a) Block-args are DEFS at the top of the block.
 	for blockArg in block.blockArgs 'eachArg'
 		_ = defSet.add(blockArg.valueId)
@@ -1156,7 +1195,7 @@ function scanBlockUseDef(module StdModule, block IrBlock, useSet StdLiveSet, def
 	// Body ops, forward.
 	for opIdx in block.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
-		scanOpUseDef(op, useSet: useSet, defSet: defSet, borrows: borrows)
+		scanOpUseDef(op, useSet: useSet, defSet: defSet, borrows: borrows, scratch: scratch)
 	end 'eachOp'
 
 	// (b)+(c) Terminator: its argIds (and condBr condId) are uses in THIS
@@ -1164,7 +1203,7 @@ function scanBlockUseDef(module StdModule, block IrBlock, useSet StdLiveSet, def
 	// itself produces no value, so it contributes only uses.
 	if block.hasTerminatorOp() 'hasTerm'
 		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
-		scanOpUseDef(term, useSet: useSet, defSet: defSet, borrows: borrows)
+		scanOpUseDef(term, useSet: useSet, defSet: defSet, borrows: borrows, scratch: scratch)
 	end 'hasTerm'
 end 'scanBlockUseDef'
 
@@ -1173,9 +1212,9 @@ end 'scanBlockUseDef'
 // added unconditionally. Each read is expanded with its interior-borrow bases
 // (`expandReadsWithBorrows`) so a base stays live wherever a pointer borrowed
 // out of it is read — the UAF fix's liveness extension.
-function scanOpUseDef(op StdOp, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo)
-	let operands = extractStdOpOperands(op)
-	let reads = expandReadsWithBorrows(operands.readIds, borrows: borrows)
+function scanOpUseDef(op StdOp, useSet StdLiveSet, defSet StdLiveSet, borrows BorrowInfo, scratch StdOpOperands)
+	extractStdOpOperandsInto(op, operands: scratch)
+	let reads = expandReadsWithBorrows(scratch.readIds, borrows: borrows)
 
 	for u in reads 'eachUse'
 		if not defSet.contains(u) 'notLocallyDef'
@@ -1183,7 +1222,7 @@ function scanOpUseDef(op StdOp, useSet StdLiveSet, defSet StdLiveSet, borrows Bo
 		end 'notLocallyDef'
 	end 'eachUse'
 
-	for d in operands.writeIds 'eachDef'
+	for d in scratch.writeIds 'eachDef'
 		_ = defSet.add(d)
 	end 'eachDef'
 end 'scanOpUseDef'
@@ -1192,6 +1231,9 @@ end 'scanOpUseDef'
 // block-arg). Returns the max id itself; callers add 1 for array sizing.
 function scanMaxValueId(module StdModule, func IrFunction) returns ValueId
 	var maxVal = 0
+	// One reusable operand buffer for the whole scan — `maxStdOpValueIdInto`
+	// refills it per op instead of allocating two arrays each time.
+	var scratch = StdOpOperands.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -1204,36 +1246,17 @@ function scanMaxValueId(module StdModule, func IrFunction) returns ValueId
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
-			maxVal = maxOpValueId(op, current: maxVal)
+			maxVal = maxStdOpValueIdInto(op, current: maxVal, scratch: scratch)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
-			maxVal = maxOpValueId(term, current: maxVal)
+			maxVal = maxStdOpValueIdInto(term, current: maxVal, scratch: scratch)
 		end 'hasTerm'
 	end 'eachBlock'
 
 	return maxVal
 end 'scanMaxValueId'
-
-function maxOpValueId(op StdOp, current ValueId) returns ValueId
-	var maxVal = current
-	let operands = extractStdOpOperands(op)
-
-	for u in operands.readIds 'eachUse'
-		if u > maxVal 'updUse'
-			maxVal = u
-		end 'updUse'
-	end 'eachUse'
-
-	for d in operands.writeIds 'eachDef'
-		if d > maxVal 'updDef'
-			maxVal = d
-		end 'updDef'
-	end 'eachDef'
-
-	return maxVal
-end 'maxOpValueId'
 
 // ============================================================
 // Per-op operand extraction (exhaustive over all StdOp variants)
@@ -1243,6 +1266,19 @@ end 'maxOpValueId'
 
 export function extractStdOpOperands(op StdOp) returns StdOpOperands
 	var operands = StdOpOperands.create()
+	extractStdOpOperandsInto(op, operands: operands)
+	return operands
+end 'extractStdOpOperands'
+
+// Allocation-free operand extraction: fill a CALLER-PROVIDED `StdOpOperands`
+// (cleared first, so the caller can reuse ONE buffer across a per-op loop) with
+// the op's read/write ids. This is the single source of truth for WHICH ids an
+// op reads and writes; `extractStdOpOperands` is the create-and-delegate wrapper
+// kept for cold call sites. The hot midend walks (InsertRefcounts /
+// ReturnBorrowAnalysis / StdLiveness / Inliner) call this with a reused buffer
+// to avoid allocating two fresh ValueIdArrays per op.
+export function extractStdOpOperandsInto(op StdOp, operands StdOpOperands)
+	operands.clear()
 	match op 'outer'
 		arith(inner) then extractArithOperands(inner, operands: operands)
 		control(inner) then extractControlOperands(inner, operands: operands)
@@ -1250,8 +1286,41 @@ export function extractStdOpOperands(op StdOp) returns StdOpOperands
 		memory(inner) then extractMemoryOperands(inner, operands: operands)
 		system(inner) then extractSystemOperands(inner, operands: operands)
 	end 'outer'
-	return operands
-end 'extractStdOpOperands'
+end 'extractStdOpOperandsInto'
+
+// The highest ValueId `op` references (any read, write, or borrow-independent
+// operand), or `current` if the op references nothing larger. Allocation-free:
+// fills the caller's reusable `scratch` buffer and scans it, so `scanMaxValueId`
+// no longer materializes two fresh arrays per op just to take a max.
+// `extractStdOpOperandsInto` keeps the extract logic the single source of truth.
+function maxStdOpValueIdInto(op StdOp, current ValueId, scratch StdOpOperands) returns ValueId
+	extractStdOpOperandsInto(op, operands: scratch)
+	var maxVal = current
+
+	for u in scratch.readIds 'eachUse'
+		if u > maxVal 'updUse'
+			maxVal = u
+		end 'updUse'
+	end 'eachUse'
+
+	for d in scratch.writeIds 'eachDef'
+		if d > maxVal 'updDef'
+			maxVal = d
+		end 'updDef'
+	end 'eachDef'
+
+	return maxVal
+end 'maxStdOpValueIdInto'
+
+// True iff `op` reads `vid` through any operand position. Allocation-free: fills
+// the caller's reusable `scratch` buffer and scans its reads, so the hot
+// dead-def / consumed-arg sweeps no longer allocate two arrays per probe.
+// Routed through `extractStdOpOperandsInto` to stay in lockstep with the
+// definition of WHICH ids an op reads.
+export function stdOpReadsValueInto(op StdOp, vid ValueId, scratch StdOpOperands) returns bool
+	extractStdOpOperandsInto(op, operands: scratch)
+	return valueIdArrayContains(scratch.readIds, vid: vid)
+end 'stdOpReadsValueInto'
 
 function extractArithOperands(op StdArithOp, operands StdOpOperands)
 	match op 'arith'
@@ -1512,11 +1581,14 @@ export function computeBlockLiveAfter(module StdModule, block IrBlock, liveness 
 	let blockLiveOut = try liveness.liveOut.get(block.id) otherwise panic("computeBlockLiveAfter: liveOut missing for block id={block.id}")
 	_ = stdLiveSetUnionInto(running, from: blockLiveOut)
 
+	// One reusable operand buffer for the whole backward walk of this block.
+	var scratch = StdOpOperands.create()
+
 	// Apply the terminator backward first (its argIds / condId are uses; it
 	// defines nothing). This yields the live set just after the last body op.
 	if block.hasTerminatorOp() 'hasTerm'
 		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
-		applyOpBackward(term, running: running, borrows: liveness.borrows)
+		applyOpBackwardInto(term, running: running, borrows: liveness.borrows, scratch: scratch)
 	end 'hasTerm'
 
 	let opCount = block.opRefs.count()
@@ -1541,7 +1613,7 @@ export function computeBlockLiveAfter(module StdModule, block IrBlock, liveness 
 		var afterSet = try liveAfter.get(pos) otherwise panic("computeBlockLiveAfter: liveAfter.get({pos}) failed despite pre-size")
 		_ = stdLiveSetUnionInto(afterSet, from: running)
 
-		applyOpBackward(op, running: running, borrows: liveness.borrows)
+		applyOpBackwardInto(op, running: running, borrows: liveness.borrows, scratch: scratch)
 
 		var beforeSet = try liveBefore.get(pos) otherwise panic("computeBlockLiveAfter: liveBefore.get({pos}) failed despite pre-size")
 		_ = stdLiveSetUnionInto(beforeSet, from: running)
@@ -1566,22 +1638,31 @@ end 'computeBlockLiveAfter'
 // upward to its own def — exactly the direct-use liveness; the EXTENSION happens
 // at the LATER ops that read `r`, where `r`'s read now also re-adds `base`.
 export function applyOpBackward(op StdOp, running StdLiveSet, borrows BorrowInfo)
-	let operands = extractStdOpOperands(op)
+	var scratch = StdOpOperands.create()
+	applyOpBackwardInto(op, running: running, borrows: borrows, scratch: scratch)
+end 'applyOpBackward'
+
+// Allocation-free `applyOpBackward`: fills a caller-provided reusable buffer
+// rather than allocating a fresh `StdOpOperands` per op. `computeBlockLiveAfter`
+// calls this per body op with one shared buffer; `applyOpBackward` is the
+// create-and-delegate wrapper for the once-per-block terminator callers.
+function applyOpBackwardInto(op StdOp, running StdLiveSet, borrows BorrowInfo, scratch StdOpOperands)
+	extractStdOpOperandsInto(op, operands: scratch)
 
 	// Remove defs: a value defined here is dead above this op (its
 	// definition point). Rebuild `running.members` excluding the defs and
 	// clear their bits.
-	for d in operands.writeIds 'eachDef'
+	for d in scratch.writeIds 'eachDef'
 		removeFromLiveSet(running, vid: d)
 	end 'eachDef'
 
 	// Add uses (borrow-expanded): each operand — and the base of any interior
 	// pointer it reads — is live immediately above this op.
-	let reads = expandReadsWithBorrows(operands.readIds, borrows: borrows)
+	let reads = expandReadsWithBorrows(scratch.readIds, borrows: borrows)
 	for u in reads 'eachUse'
 		_ = running.add(u)
 	end 'eachUse'
-end 'applyOpBackward'
+end 'applyOpBackwardInto'
 
 // Remove a single value from a StdLiveSet (clear its bit and drop it from the
 // sparse member list). StdLiveSet is normally monotonic, but the within-block
