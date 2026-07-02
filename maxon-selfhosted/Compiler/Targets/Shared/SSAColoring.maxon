@@ -291,6 +291,66 @@ function validatedInterference(ranges LiveRangeArray, callerSavedByOrdinal BoolA
 	return ig
 end 'validatedInterference'
 
+// Shared register picker: given a range and the interference-derived
+// usedRegs / hintReservedRegs sets (plus the raw neighbor list for the
+// fixed-neighbor hint check), decide which register this range should take.
+// Both the first-fit pass in `colorClass` and `tryColorRange` (the eviction
+// fixup's per-range recolor) call this, so the two paths provably agree on
+// register selection. The picker only READS `range`.
+//
+// Order: hard fixed-reg constraint → copy-link hint resolution → soft hint
+// eval (must be free, must not conflict with a fixed neighbor, must be class-
+// safe for a call-crossing range) → tiered pool fallback. Returns RM_NONE when
+// no register of the required class is available.
+function pickRegisterForRange(range LiveRange, usedRegs BoolArray, hintReservedRegs BoolArray, nbrs RegIntArray, pool RegIntArray, callerSavedMask BoolArray, poolIndexOf RegIntArray, vidToRangeIdx RegIntArray, rangeColors RegIntArray, ranges LiveRangeArray) returns RegOrdinal
+	var chosenReg = RM_NONE
+
+	// Hard constraint: fixed register
+	if range.fixedReg != RM_NONE 'hasFixed'
+		chosenReg = range.fixedReg
+	end 'hasFixed' else 'pickReg'
+
+		// Soft constraint: register hint.
+		// Check both already-colored neighbors AND uncolored fixed-reg
+		// neighbors (which will inevitably get their fixed register).
+		var effectiveHint = range.hint
+
+		// Resolve copy-link hint: if no physical hint but a copy partner
+		// has been colored, use the partner's color as the hint.
+		// If the partner isn't colored yet, check its static hint (e.g.,
+		// from the loop body's two-address coalescing) and use that.
+		if effectiveHint == RM_NONE and range.copyHintValueId >= 0 'resolveCopyHint'
+			effectiveHint = resolveCopyLinkHint(range.copyHintValueId, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
+		end 'resolveCopyHint'
+
+		if effectiveHint != RM_NONE 'hasHint'
+			let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
+
+			// Honor the hint only when its class is safe for this range.
+			// A call-crossing range cannot live in a caller-saved hint;
+			// the call would clobber it silently.
+			let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
+			let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
+
+			if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
+				chosenReg = effectiveHint
+			end 'hintAvail'
+		end 'hasHint'
+
+		// Fallback: walk the pool, preferring caller-saved or callee-saved
+		// based on whether the range survives across a call. The picker
+		// also defers registers that an uncolored interfering neighbor
+		// has explicitly hinted, falling back to them only when nothing
+		// else of the right class is free.
+		if chosenReg == RM_NONE 'needFallback'
+			let preferCallerSaved = not range.crossesCall
+			chosenReg = pickRegFromPool(pool, callerSavedMask: callerSavedMask, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, preferCallerSaved: preferCallerSaved)
+		end 'needFallback'
+	end 'pickReg'
+
+	return chosenReg
+end 'pickRegisterForRange'
+
 function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
@@ -417,51 +477,9 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			end 'uncoloredNbr'
 		end 'eachNbr'
 
-		// Choose a register
-		var chosenReg = RM_NONE
-
-		// Hard constraint: fixed register
-		if range.fixedReg != RM_NONE 'hasFixed'
-			chosenReg = range.fixedReg
-		end 'hasFixed' else 'pickReg'
-
-			// Soft constraint: register hint.
-			// Check both already-colored neighbors AND uncolored fixed-reg
-			// neighbors (which will inevitably get their fixed register).
-			var effectiveHint = range.hint
-
-			// Resolve copy-link hint: if no physical hint but a copy partner
-			// has been colored, use the partner's color as the hint.
-			// If the partner isn't colored yet, check its static hint (e.g.,
-			// from the loop body's two-address coalescing) and use that.
-			if effectiveHint == RM_NONE and range.copyHintValueId >= 0 'resolveCopyHint'
-				effectiveHint = resolveCopyLinkHint(range.copyHintValueId, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
-			end 'resolveCopyHint'
-
-			if effectiveHint != RM_NONE 'hasHint'
-				let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
-
-				// Honor the hint only when its class is safe for this range.
-				// A call-crossing range cannot live in a caller-saved hint;
-				// the call would clobber it silently.
-				let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
-				let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
-
-				if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
-					chosenReg = effectiveHint
-				end 'hintAvail'
-			end 'hasHint'
-
-			// Fallback: walk the pool, preferring caller-saved or callee-saved
-			// based on whether the range survives across a call. The picker
-			// also defers registers that an uncolored interfering neighbor
-			// has explicitly hinted, falling back to them only when nothing
-			// else of the right class is free.
-			if chosenReg == RM_NONE 'needFallback'
-				let preferCallerSaved = not range.crossesCall
-				chosenReg = pickRegFromPool(pool, callerSavedMask: callerSavedMask, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, preferCallerSaved: preferCallerSaved)
-			end 'needFallback'
-		end 'pickReg'
+		// Choose a register via the shared picker so this first-fit pass and
+		// the eviction fixup's tryColorRange never disagree on register choice.
+		let chosenReg = pickRegisterForRange(range, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, nbrs: nbrs, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
 
 		// Store the assignment
 		try rangeColors.set(sortedIdx, value: chosenReg) otherwise panic("invariant: rangeColors.set OOB")
@@ -547,51 +565,9 @@ function tryColorRange(sortedIdx RegInt, ranges LiveRangeArray, ig InterferenceG
 		end 'uncoloredNbr'
 	end 'eachNbr'
 
-	// Choose a register
-	var chosenReg = RM_NONE
-
-	// Hard constraint: fixed register
-	if range.fixedReg != RM_NONE 'hasFixed'
-		chosenReg = range.fixedReg
-	end 'hasFixed' else 'pickReg'
-
-		// Soft constraint: register hint.
-		// Check both already-colored neighbors AND uncolored fixed-reg
-		// neighbors (which will inevitably get their fixed register).
-		var effectiveHint = range.hint
-
-		// Resolve copy-link hint: if no physical hint but a copy partner
-		// has been colored, use the partner's color as the hint.
-		// If the partner isn't colored yet, check its static hint (e.g.,
-		// from the loop body's two-address coalescing) and use that.
-		if effectiveHint == RM_NONE and range.copyHintValueId >= 0 'resolveCopyHint'
-			effectiveHint = resolveCopyLinkHint(range.copyHintValueId, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
-		end 'resolveCopyHint'
-
-		if effectiveHint != RM_NONE 'hasHint'
-			let hintConflictsFixed = hintConflictsWithFixedNeighbor(effectiveHint, nbrs: nbrs, ranges: ranges, rangeColors: rangeColors)
-
-			// Honor the hint only when its class is safe for this range.
-			// A call-crossing range cannot live in a caller-saved hint;
-			// the call would clobber it silently.
-			let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
-			let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
-
-			if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
-				chosenReg = effectiveHint
-			end 'hintAvail'
-		end 'hasHint'
-
-		// Fallback: walk the pool, preferring caller-saved or callee-saved
-		// based on whether the range survives across a call. The picker
-		// also defers registers that an uncolored interfering neighbor
-		// has explicitly hinted, falling back to them only when nothing
-		// else of the right class is free.
-		if chosenReg == RM_NONE 'needFallback'
-			let preferCallerSaved = not range.crossesCall
-			chosenReg = pickRegFromPool(pool, callerSavedMask: callerSavedMask, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, preferCallerSaved: preferCallerSaved)
-		end 'needFallback'
-	end 'pickReg'
+	// Choose a register via the shared picker (same logic as the first-fit
+	// pass in colorClass) so the eviction fixup and first-fit never disagree.
+	let chosenReg = pickRegisterForRange(range, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, nbrs: nbrs, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
 
 	// Store the assignment
 	try rangeColors.set(sortedIdx, value: chosenReg) otherwise panic("invariant: rangeColors.set OOB")
