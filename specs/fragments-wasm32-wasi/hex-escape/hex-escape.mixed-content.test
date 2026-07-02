@@ -130,9 +130,39 @@ module {
     mir.memcpy %78, %59, %60
     %79 = mir.add.i64 %78, %60
     mir.memcpy %79, %61, %0
-    %81 = mir.call @stdlib.__mm_decref(%49)
-    %82 = mir.call @stdlib.__mm_decref(%54)
-    %83 = mir.call @stdlib.__mm_decref(%59)
+    %141 = mir.mov_imm 8 : i64
+    %142 = mir.sub.i64 %49, %141
+    %144 = mir.mov_imm -1 : i64
+    %143 = mir.atomic_xadd %142, %144
+    %145 = mir.mov_imm 1 : i64
+    %146 = mir.cmp eq, %143, %145
+    mir.cond_br %146 [then: __decref_free_0(), else: __decref_cont_0()]
+  __decref_free_0:
+    %147 = mir.call @mm_free(%49)
+    mir.br __decref_cont_0()
+  __decref_cont_0:
+    %148 = mir.mov_imm 8 : i64
+    %149 = mir.sub.i64 %54, %148
+    %151 = mir.mov_imm -1 : i64
+    %150 = mir.atomic_xadd %149, %151
+    %152 = mir.mov_imm 1 : i64
+    %153 = mir.cmp eq, %150, %152
+    mir.cond_br %153 [then: __decref_free_1(), else: __decref_cont_1()]
+  __decref_free_1:
+    %154 = mir.call @mm_free(%54)
+    mir.br __decref_cont_1()
+  __decref_cont_1:
+    %155 = mir.mov_imm 8 : i64
+    %156 = mir.sub.i64 %59, %155
+    %158 = mir.mov_imm -1 : i64
+    %157 = mir.atomic_xadd %156, %158
+    %159 = mir.mov_imm 1 : i64
+    %160 = mir.cmp eq, %157, %159
+    mir.cond_br %160 [then: __decref_free_2(), else: __decref_cont_2()]
+  __decref_free_2:
+    %161 = mir.call @mm_free(%59)
+    mir.br __decref_cont_2()
+  __decref_cont_2:
     %84 = mir.mov_imm 48 : i64
     %85 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %86 = mir.call @mrt_alloc_with_dtor(%84, %85)
@@ -149,7 +179,9 @@ module {
     mir.store %86, %90, 0 width: qword
     mir.store %0, %90, 8 width: qword
     %131 = mir.load %90, 0 width: qword
-    %135 = mir.call @stdlib.__mm_incref(%131)
+    %139 = mir.mov_imm 8 : i64
+    %140 = mir.sub.i64 %131, %139
+    mir.atomic_inc %140
     %132 = mir.load %131, 0 width: qword
     %133 = mir.load %131, 8 width: qword
     %134 = mir.call @mrt_write_stdout(%132, %133)
@@ -158,12 +190,12 @@ module {
     %96 = mir.global_addr @__layout_Array_Int
     %97 = mir.call @Array.count(%12, %96)
     %138 = mir.call @mm_drop(%12)
-    %139 = mir.mov_imm 125 : i64
-    %140 = mir.cmp ugt, %97, %139
-    mir.cond_br %140 [then: __range_panic_0(), else: __range_ok_0()]
+    %162 = mir.mov_imm 125 : i64
+    %163 = mir.cmp ugt, %97, %162
+    mir.cond_br %163 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %141 = mir.global_addr @__panic_msg_68d6dba99b10fb26
-    %142 = mir.call @mrt_panic(%141)
+    %164 = mir.global_addr @__panic_msg_68d6dba99b10fb26
+    %165 = mir.call @mrt_panic(%164)
   __range_ok_0:
     mir.ret %97
   }

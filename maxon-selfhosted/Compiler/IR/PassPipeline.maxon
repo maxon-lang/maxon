@@ -90,6 +90,15 @@ export union PassKind
 	// cannot see callees); runs right before `insertRefcounts`.
 	analyzeReturnBorrows
 	insertRefcounts
+	// Inline the refcount fast paths: rewrite the strict `mm_incref` /
+	// `mm_decref` call sites insertRefcounts just emitted into their primitive
+	// `subI64 + atomic` (+ free-on-last-ref branch) shape, so the backend keeps
+	// the pointer in a register instead of spilling around a call. Runs
+	// IMMEDIATELY AFTER insertRefcounts (its sole producer) and BEFORE
+	// insertRangeChecks. Ordering after insertRefcounts is load-bearing: the
+	// inserter pattern-matches pre-existing `subi;atomic_inc` acquire shapes, so
+	// this pass must not run before it (see InlineRefcounts.maxon header).
+	inlineRefcounts
 	mem2reg
 	canonicalize
 	cse
@@ -339,6 +348,7 @@ export type PassPipeline
 			// the shared singleton-wrap loop; `inliner` and `dceFunctions` stay
 			// whole-module.
 			insertRefcounts then runStdPassPerFunction(self, kind: pass)
+			inlineRefcounts then runStdPassPerFunction(self, kind: pass)
 			mem2reg then runStdPassPerFunction(self, kind: pass)
 			canonicalize then runStdPassPerFunction(self, kind: pass)
 			cse then runStdPassPerFunction(self, kind: pass)
@@ -624,6 +634,7 @@ function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
 		var singleton = packSingletonStdModule(pipeline.stdModule, func: func)
 		match kind 'invoke'
 			insertRefcounts then _ = insertRefcounts(singleton, funcParamConsumes: pipeline.project.funcParamConsumes, funcReturnsConsumedArg: pipeline.project.funcReturnsConsumedArg, funcReturnsBorrow: pipeline.project.funcReturnsBorrow, funcReturnsReceiverInterior: pipeline.project.funcReturnsReceiverInterior)
+			inlineRefcounts then _ = inlineRefcounts(singleton)
 			mem2reg then _ = promoteMem2Reg(singleton)
 			canonicalize then _ = canonicalize(singleton, project: pipeline.project)
 			cse then _ = eliminateCommonSubexpressions(singleton)
@@ -723,6 +734,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		instrumentCoverage gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		insertRefcounts gives PassClassification.perFunction
+		inlineRefcounts gives PassClassification.perFunction
 		mem2reg gives PassClassification.perFunction
 		canonicalize gives PassClassification.perFunction
 		cse gives PassClassification.perFunction
@@ -847,6 +859,13 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// classification — subsuming the removed pre-mem2reg injectDrops. Runs on the
 	// post-mem2reg block-arg/phi form, after inlining/DCE settle the value graph.
 	passes.push(PassKind.insertRefcounts)
+	// Inline the refcount fast paths right after the inserter emits them and
+	// before insertRangeChecks: rewrite every strict `mm_incref` / `mm_decref`
+	// call into its primitive `subI64 + atomic` (+ free-on-last-ref branch)
+	// shape so the backend need not spill caller-saved registers around a call.
+	// Ordering after insertRefcounts is required — the inserter pattern-matches
+	// pre-existing `subi;atomic_inc` shapes (see InlineRefcounts.maxon).
+	passes.push(PassKind.inlineRefcounts)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.lowerABI)
 	if project.coverageEnabled 'cov'
@@ -944,6 +963,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		analyzeParamConsumes gives PipelinePhase.std
 		analyzeReturnBorrows gives PipelinePhase.std
 		insertRefcounts gives PipelinePhase.std
+		inlineRefcounts gives PipelinePhase.std
 		mem2reg gives PipelinePhase.std
 		canonicalize gives PipelinePhase.std
 		cse gives PipelinePhase.std
@@ -1081,6 +1101,7 @@ function passKindToString(pass PassKind) returns String
 		constantArrayLiteralRdata gives "constant-array-literal-rdata"
 		maxonBorrowCheck gives "maxon-borrow-check"
 		insertRefcounts gives "insert-refcounts"
+		inlineRefcounts gives "inline-refcounts"
 		insertRangeChecks gives "insert-range-checks"
 		lowerMaxonToStd gives "lower-maxon-to-std"
 		analyzeParamConsumes gives "analyze-param-consumes"

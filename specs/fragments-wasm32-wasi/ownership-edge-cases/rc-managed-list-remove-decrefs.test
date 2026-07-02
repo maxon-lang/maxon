@@ -30,7 +30,9 @@ module {
     %17 = mir.mov_imm 8 : i64
     %18 = mir.mov_imm 0 : i64
     %19 = mir.call @stdlib.__mm_alloc(%17, %18)
-    %20 = mir.call @stdlib.__mm_incref(%19)
+    %23 = mir.mov_imm 8 : i64
+    %24 = mir.sub.i64 %19, %23
+    mir.atomic_inc %24
     mir.store %6, %19, 0 width: qword
     %8 = mir.call @mrt_managed_list_insert_first_value(%4, %19)
     %11 = mir.call @mrt_managed_list_remove(%4, %8)
@@ -39,12 +41,12 @@ module {
     %21 = mir.call @__mm_decref_maybenull_helper(%4)
     %16 = mir.add.i64 %13, %15
     %22 = mir.call @__mm_decref_maybenull_helper(%11)
-    %23 = mir.mov_imm 125 : i64
-    %24 = mir.cmp ugt, %16, %23
-    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+    %25 = mir.mov_imm 125 : i64
+    %26 = mir.cmp ugt, %16, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %25 = mir.global_addr @__panic_msg_cf227bee1a7bc176
-    %26 = mir.call @mrt_panic(%25)
+    %27 = mir.global_addr @__panic_msg_cf227bee1a7bc176
+    %28 = mir.call @mrt_panic(%27)
   __range_ok_0:
     mir.ret %16
   }

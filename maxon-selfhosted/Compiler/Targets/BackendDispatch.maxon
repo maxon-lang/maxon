@@ -889,6 +889,15 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'win32Helpers'
 		seedRuntimeReachName("mrt_alloc", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("mm_decref", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// `mm_free` is called directly by the inlined strict-decref fast path
+		// (InlineRefcounts: prior-rc==1 → `call mm_free`). Seed it unconditionally
+		// in the cache-off DCE leg exactly like `mm_decref` and `mm_drop` below, to
+		// mirror the cache-on `appendX64Win32RuntimeSeeds` seed — else cache-on
+		// links `mm_free` while the cache-off runtime DFE prunes it (or vice versa
+		// for a program whose only `mm_free` reference is an inlined decref),
+		// diverging the cache-parity `.text`. `mm_decref` stays: the maybenull
+		// helper still routes through it.
+		seedRuntimeReachName("mm_free", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// The `mrt_win32_free_argv_cache` teardown helper (emitted alongside the
 		// other win32 helpers) calls `__mm_decref_maybenull_helper` to release the
 		// argv cache. Seed it here unconditionally — the helper's call fixup must

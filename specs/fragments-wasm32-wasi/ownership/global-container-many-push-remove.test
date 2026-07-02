@@ -158,7 +158,9 @@ module {
     %93 = mir.add.i64 %111, %92
     mir.br inline_cont_main_2(%93)
   inline_cont_main_2(%94: i64):
-    %145 = mir.call @stdlib.__mm_incref(%93)
+    %146 = mir.mov_imm 8 : i64
+    %147 = mir.sub.i64 %93, %146
+    mir.atomic_inc %147
     mir.store %68, %94, 0 width: qword
     %10 = mir.global_addr @__layout_Array_Item
     %11 = mir.call @Array.push(%7, %94, %10)
@@ -196,7 +198,25 @@ module {
     mir.memcpy %46, %35, %36
     %47 = mir.add.i64 %46, %36
     mir.memcpy %47, %37, %38
-    %49 = mir.call @stdlib.__mm_decref(%35)
+    %150 = mir.mov_imm 8 : i64
+    %151 = mir.sub.i64 %35, %150
+    %153 = mir.mov_imm -1 : i64
+    %152 = mir.atomic_xadd %151, %153
+    %154 = mir.mov_imm 1 : i64
+    %155 = mir.cmp eq, %152, %154
+    mir.cond_br %155 [then: __decref_free_0(), else: __decref_cont_0()]
+  try_0.otherwise:
+    %62 = mir.mov_imm 99 : i64
+    mir.ret %62
+  try_0.merge:
+    %66 = mir.load %26, 0 width: qword
+    %67 = mir.add.i64 %69, %66
+    %144 = mir.call @__mm_decref_maybenull_helper(%26)
+    mir.br remove_0.header(%67)
+  __decref_free_0:
+    %156 = mir.call @mm_free(%35)
+    mir.br __decref_cont_0()
+  __decref_cont_0:
     %50 = mir.mov_imm 48 : i64
     %51 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %52 = mir.call @mrt_alloc_with_dtor(%50, %51)
@@ -214,21 +234,15 @@ module {
     mir.store %52, %56, 0 width: qword
     mir.store %0, %56, 8 width: qword
     %73 = mir.load %56, 0 width: qword
-    %141 = mir.call @stdlib.__mm_incref(%73)
+    %148 = mir.mov_imm 8 : i64
+    %149 = mir.sub.i64 %73, %148
+    mir.atomic_inc %149
     %74 = mir.load %73, 0 width: qword
     %75 = mir.load %73, 8 width: qword
     %76 = mir.call @mrt_write_stdout(%74, %75)
     %143 = mir.call @mm_drop(%56)
     %142 = mir.call @__mm_decref_maybenull_helper(%73)
     mir.ret %0
-  try_0.otherwise:
-    %62 = mir.mov_imm 99 : i64
-    mir.ret %62
-  try_0.merge:
-    %66 = mir.load %26, 0 width: qword
-    %67 = mir.add.i64 %69, %66
-    %144 = mir.call @__mm_decref_maybenull_helper(%26)
-    mir.br remove_0.header(%67)
   }
 }
 ---

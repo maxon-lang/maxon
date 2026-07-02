@@ -1,0 +1,386 @@
+// InlineRefcounts Pass — inline the refcount fast paths so `incref` / `decref`
+// stop being `call` ops.
+//
+// Profiling of the self-hosted compiler shows `mm_incref` at ~14% and
+// `mm_decref` at ~9% of all cycles, and every one of those call sites forces
+// caller-saved register spills around it. This pass rewrites the strict
+// (non-null) `incref` / `decref` runtime calls into the same primitive
+// arithmetic + atomic + branch shape their bodies would execute — so the
+// backend can keep the pointer in a register across the operation instead of
+// spilling to satisfy the call ABI.
+//
+// Scheduling: this is a Std-level per-function pass, run IMMEDIATELY AFTER
+// insertRefcounts (which is the sole producer of the `mm_incref` / `mm_decref`
+// call sites) and BEFORE insertRangeChecks. Running after insertRefcounts is
+// load-bearing: insertRefcounts.buildBodyScanCaches pattern-matches
+// pre-existing `subi;atomic_inc` acquire shapes (the inliner-spliced inline
+// incref form) to avoid double-counting a phi's +1 — this pass emits exactly
+// that shape, so it must run AFTER insertRefcounts has already read the body,
+// never before.
+//
+// Header layout (32 bytes preceding the user pointer; see runtime.std / the
+// stdlib `__mm_*` bodies in Internals.maxon):
+//   [ptr - 32] = reserved (always 0)
+//   [ptr - 24] = destructor function pointer (i64, 0 if no destructor)
+//   [ptr - 16] = size in bytes (i64)
+//   [ptr -  8] = refcount (i64)   ← the word incref/decref maintain
+//
+// STAGE 1 — incref. Rewrite `call mm_incref(ptr)` (single pointer arg, dead
+// i64 result) into:
+//   hdr = arith.subI64 ptr, REFCOUNT_HEADER_OFFSET   ; &[ptr - 8]
+//   sys.atomicInc hdr
+// This is the exact `subi;atomic_inc` shape the IR inliner already splices for
+// stdlib `__mm_incref` bodies, so downstream handling is proven. No block split
+// is needed — the two replacement ops go where the call was.
+//
+// STAGE 2 — strict decref. Rewrite `call mm_decref(ptr)` (single pointer arg,
+// dead result) into:
+//   hdr   = arith.subI64 ptr, REFCOUNT_HEADER_OFFSET  ; &[ptr - 8]
+//   prior = sys.atomicXadd hdr, -1                     ; fetch-and-add, returns old rc
+//   one   = arith.constI64 1
+//   isLast = arith.cmpI64Eq prior, one                 ; prior == 1  ⇒ rc hit 0
+//   cf.cond_br isLast → slow, cont
+// slow:  call mm_free(ptr) ; cf.br cont
+// cont:  <the remaining ops of the original block after the decref>
+//
+// We KEEP the runtime `__mm_decref`'s over-release trap (panic on prior <= 0)
+// OFF the inline fast path deliberately: that check only ever caught refcount-
+// INSERTER bugs, never user bugs, and the full spec suite runs under leak
+// checking (exit code 101) — which is a strictly stronger guard than a per-op
+// prior<=0 panic. Paying a compare+branch for it on every decref in the whole
+// compiler is not worth it.
+//
+// IMPORTANT: only the STRICT non-null forms are rewritten. The null-guarded
+// helper `__mm_decref_maybenull_helper`, the owner-drop wrapper `mm_drop`, and
+// every type-parameter form (`sys.dropTypeParam`, `mm_drop_type_param_at`, …)
+// are left as-is — an inlined header dereference on a NULL pointer would fault
+// at address ~0xfffffff8 (0 - 8), which is exactly why the maybenull path keeps
+// its call.
+
+// The refcount word sits at [ptr - 8] — the trailing word of the 32-byte MM
+// header. `subI64 ptr, 8` computes its address.
+let REFCOUNT_HEADER_OFFSET = 8
+
+// atomicXadd(-1) fetch-and-add operand: decrement the refcount by one, return
+// the prior value so we can detect the 1 → 0 transition uniformly across
+// targets (the raw `atomicDec` op produces no result Id).
+let DECREF_XADD_DELTA = -1
+
+// The prior refcount value that means "this decref drove rc to zero" — the
+// allocation must now be freed.
+let REFCOUNT_LAST_REFERENCE = 1
+
+// Entry point. Constructs a RefcountInliner and runs it over every function in
+// the module. Mutation is in place; the return echoes the input for symmetry
+// with the other std-phase passes (insertRangeChecks etc.).
+export function inlineRefcounts(module StdModule) returns StdModule
+	var inliner = RefcountInliner.create(module)
+	inliner.run()
+	return module
+end 'inlineRefcounts'
+
+// Stateful refcount inliner. Groups the module with the evolving per-function
+// state: `nextValueIdRef` (fresh SSA id allocator, reset per function) and
+// `blockCounter` (monotonic counter for the decref slow/cont block labels).
+type RefcountInliner
+	export var module as StdModule
+	// Per-function fresh-id allocator, reset by runFunction. StdModule id scopes
+	// are per-function, so sharing one counter across the whole module would
+	// over-allocate. Mirrors RangeCheckInserter.nextValueIdRef.
+	export var nextValueIdRef as ValueIdRef
+	// Monotonic counter for __decref_free_N / __decref_cont_N block labels.
+	// These are function-internal CFG block labels, so a per-function counter
+	// would suffice — but a module-wide monotonic counter is just as correct and
+	// avoids a reset, matching RangeCheckInserter.rangeCheckCounter's style.
+	export var blockCounter as ParsedInt
+
+	export static function create(module StdModule) returns RefcountInliner
+		return Self{
+			module: module,
+			nextValueIdRef: ValueIdRef.create(0),
+			blockCounter: 0
+		}
+	end 'create'
+
+	export function run()
+		for funcIdx in 0 upto module.functions.count() 'eachFunc'
+			var func = try module.functions.get(funcIdx) otherwise panic("invariant: funcIdx < functions.count() but get failed")
+			self.runFunction(func)
+			try module.functions.set(funcIdx, value: func) otherwise panic("invariant: module.functions.set OOB")
+		end 'eachFunc'
+	end 'run'
+
+	// Process one function: seed the per-function id allocator, then walk every
+	// block. Stage 1 (incref) rewrites in place; Stage 2 (decref) splits the
+	// block and pushes the continuation onto a worklist so a block that holds
+	// several strict decrefs is fully lowered.
+	function runFunction(func IrFunction)
+		// Each function gets its own ValueIdRef seeded from its current max id.
+		// Per-function allocation mirrors Mem2Reg / RangeCheckInserter.
+		let maxFuncId = scanMaxValueId(func, module: module)
+		nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
+
+		// Worklist of block ids still to process. A decref split appends the
+		// continuation block's id, so its own (possibly further) decrefs are
+		// lowered too. Seeded from a snapshot of the current block set: addBlock
+		// appends to func.blocks, and continuation blocks enter via the worklist,
+		// so we must not iterate the live list while splitting.
+		var worklist = BlockIdArray.create()
+		for br in func.blockRefs 'seedWorklist'
+			let block = try module.blocks.get(br) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			worklist.push(block.id)
+		end 'seedWorklist'
+
+		var i = 0
+		while i < worklist.count() 'processBlocks'
+			let blockId = try worklist.get(i) otherwise panic("invariant: i < worklist.count() but get failed")
+			var block = try module.getBlockByIdIn(func, id: blockId) otherwise panic("invariant: worklist blockId not in func")
+			self.rewriteIncrefsInBlock(block)
+			let contId = self.splitAtFirstDecref(func, block: block)
+			if contId != NO_CONTINUATION_BLOCK 'didSplit'
+				worklist.push(contId)
+			end 'didSplit'
+			i = i + 1
+		end 'processBlocks'
+	end 'runFunction'
+
+	// Stage 1: rewrite every strict `incref` call in `block` in place. Increfs
+	// have no control-flow effect, so the whole block's op list is rebuilt once,
+	// substituting `subI64 + atomicInc` for each matched call. Non-incref ops are
+	// carried through unchanged.
+	function rewriteIncrefsInBlock(block IrBlock)
+		if not blockHasIncref(block, module: module) 'noIncref'
+			return
+		end 'noIncref'
+
+		var newRefs = OpIndexList.create()
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("rewriteIncrefsInBlock: opIdx not in module.ops")
+			let ptrId = increfPtrArg(op)
+			if ptrId == NO_REFCOUNT_ARG 'passthrough'
+				newRefs.append(opIdx)
+			end 'passthrough' else 'rewrite'
+				self.emitInlineIncref(newRefs, ptrId: ptrId)
+			end 'rewrite'
+		end 'eachOp'
+		block.opRefs = newRefs
+	end 'rewriteIncrefsInBlock'
+
+	// Append `hdr = subI64 ptr, 8; atomicInc hdr` onto `refs`, minting fresh ids.
+	// Shared by Stage 1's in-place rewrite; also the acquire half of the shape
+	// the IR inliner already splices, so downstream passes handle it identically.
+	function emitInlineIncref(refs OpIndexList, ptrId ValueId)
+		let hdrId = self.emitHeaderAddr(refs, ptrId: ptrId)
+		self.appendOpTo(refs, op: StdOp.system(StdSystemOp.atomicInc(hdrId)))
+	end 'emitInlineIncref'
+
+	// Stage 2: find the FIRST strict `decref` call in `block`, split the block
+	// there, and lower the decref into an atomic-dec + free-on-last-ref branch.
+	// Returns the continuation block's id, or NO_CONTINUATION_BLOCK when the
+	// block held no strict decref (nothing to split).
+	//
+	// The block is split exactly like RangeCheckInserter moves a return into its
+	// continuation: ops before the decref stay in `block`, the decref's inline
+	// prologue + cond_br terminate `block`, the free call lands in a fresh slow
+	// block, and every op AFTER the decref (plus the original terminator) moves
+	// into a fresh continuation block.
+	function splitAtFirstDecref(func IrFunction, block IrBlock) returns BlockId
+		let decrefPosOpt = firstDecrefPos(block, module: module)
+		if not decrefPosOpt.found 'noDecref'
+			return NO_CONTINUATION_BLOCK
+		end 'noDecref'
+		let decrefPos = decrefPosOpt.pos
+
+		let decrefOpIdx = try block.opRefs.get(decrefPos) otherwise panic("splitAtFirstDecref: decrefPos out of opRefs range")
+		let decrefOp = try module.ops.get(decrefOpIdx) otherwise panic("splitAtFirstDecref: decref opIdx not in module.ops")
+		let ptrId = decrefPtrArg(decrefOp)
+		if ptrId == NO_REFCOUNT_ARG 'notDecref'
+			panic("splitAtFirstDecref: firstDecrefPos returned a non-decref op")
+		end 'notDecref'
+
+		// Snapshot the tail (ops strictly after the decref) and the original
+		// terminator before mutating `block` — the split relocates both into the
+		// continuation.
+		var tailRefs = OpIndexList.create()
+		for pos in (decrefPos + 1) upto block.opRefs.count() 'collectTail'
+			let opIdx = try block.opRefs.get(pos) otherwise panic("splitAtFirstDecref: tail opRefs.get OOB")
+			tailRefs.append(opIdx)
+		end 'collectTail'
+		let originalTerminator = block.terminator
+
+		let labelId = blockCounter
+		blockCounter = blockCounter + 1
+		var slowBlock = module.addBlock(func, label: "__decref_free_{labelId}")
+		var contBlock = module.addBlock(func, label: "__decref_cont_{labelId}")
+
+		// Rebuild `block`'s body: keep the prefix (ops before the decref), then
+		// splice the inline decref prologue in place of the call. The original
+		// call op is dropped from the block (it becomes an orphan reclaimed by the
+		// post-pass compaction).
+		var headRefs = OpIndexList.create()
+		for pos in 0 upto decrefPos 'collectHead'
+			let opIdx = try block.opRefs.get(pos) otherwise panic("splitAtFirstDecref: head opRefs.get OOB")
+			headRefs.append(opIdx)
+		end 'collectHead'
+		let hdrId = self.emitHeaderAddr(headRefs, ptrId: ptrId)
+		let priorId = allocValueId(nextValueIdRef)
+		let deltaId = allocValueId(nextValueIdRef)
+		self.appendOpTo(headRefs, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: deltaId, value: DECREF_XADD_DELTA))))
+		self.appendOpTo(headRefs, op: StdOp.system(StdSystemOp.atomicXadd(priorId, addrId: hdrId, valId: deltaId)))
+		let oneId = allocValueId(nextValueIdRef)
+		self.appendOpTo(headRefs, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: oneId, value: REFCOUNT_LAST_REFERENCE))))
+		let isLastId = allocValueId(nextValueIdRef)
+		self.appendOpTo(headRefs, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.cmpI64Eq, resultId: isLastId, leftId: priorId, rightId: oneId))))
+		block.opRefs = headRefs
+		module.setTerminator(block, op: StdOp.control(StdControlOp.condBr(isLastId, thenTarget: slowBlock.id, thenArgIds: ValueIdArray.create(), elseTarget: contBlock.id, elseArgIds: ValueIdArray.create())))
+
+		// slow block: free the allocation (runs the destructor + slab-frees +
+		// decrements the alloc count — the full `mm_free` runtime wrapper), then
+		// rejoin the continuation.
+		let freeResultId = allocValueId(nextValueIdRef)
+		var freeArgs = ValueIdArray.create()
+		freeArgs.push(ptrId)
+		module.appendOp(slowBlock, op: StdOp.call(StdCallOp.call(freeResultId, callee: "mm_free", argIds: freeArgs)))
+		module.setTerminator(slowBlock, op: StdOp.control(StdControlOp.br(contBlock.id, argIds: ValueIdArray.create())))
+
+		// continuation block: the relocated tail + the original terminator. The
+		// tail ops keep their flat indices; only their owning block changes.
+		for opIdx in tailRefs 'moveTail'
+			contBlock.opRefs.append(opIdx)
+		end 'moveTail'
+		contBlock.terminator = originalTerminator
+
+		return contBlock.id
+	end 'splitAtFirstDecref'
+
+	// Append `hdr = subI64 ptr, REFCOUNT_HEADER_OFFSET` onto `refs` and return
+	// the fresh hdr id. Shared by the incref and decref lowerings — both operate
+	// on the refcount word at [ptr - 8].
+	function emitHeaderAddr(refs OpIndexList, ptrId ValueId) returns ValueId
+		let offsetId = allocValueId(nextValueIdRef)
+		self.appendOpTo(refs, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: offsetId, value: REFCOUNT_HEADER_OFFSET))))
+		let hdrId = allocValueId(nextValueIdRef)
+		self.appendOpTo(refs, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.subI64, resultId: hdrId, leftId: ptrId, rightId: offsetId))))
+		return hdrId
+	end 'emitHeaderAddr'
+
+	// Push `op` into the module's flat ops array and record its index in `refs`.
+	// The Stage 1 / Stage 2 body rebuilds work on a fresh OpIndexList that
+	// becomes the block's opRefs, so this is `appendOp` without the block wiring.
+	function appendOpTo(refs OpIndexList, op StdOp)
+		let idx = module.ops.count()
+		module.ops.push(op)
+		refs.append(idx)
+	end 'appendOpTo'
+end 'RefcountInliner'
+
+// Sentinels. ValueId / BlockId are all >= 0, so i64.max never collides with a
+// real one.
+let NO_REFCOUNT_ARG = i64.max
+let NO_CONTINUATION_BLOCK = i64.max
+
+// Result of scanning a block for its first strict decref: whether one was found
+// and, if so, its position (index into `block.opRefs`). Modeled as a struct
+// rather than a sentinel position so the position stays a plain `NodeIndex`
+// (matching `List.get`) with no negative-sentinel range widening.
+type FirstDecref
+	export let found as bool
+	export let pos as NodeIndex
+
+	static function none() returns FirstDecref
+		return Self{found: false, pos: 0}
+	end 'none'
+
+	static function at(pos NodeIndex) returns FirstDecref
+		return Self{found: true, pos: pos}
+	end 'at'
+end 'FirstDecref'
+
+// True iff `callee` is one of the strict (non-null) incref runtime entry points.
+// The lowering emits `stdlib.__mm_incref`; the runtime.std `mm_incref` wrapper
+// and any legacy `__mm_incref` name route through the same body.
+function calleeIsStrictIncref(callee String) returns bool
+	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
+end 'calleeIsStrictIncref'
+
+// True iff `callee` is one of the strict (non-null) decref runtime entry points.
+// Deliberately EXCLUDES `__mm_decref_maybenull_helper` (null-guarded), `mm_drop`
+// (owner-drop wrapper), and every type-parameter form — those keep their calls
+// (see the file header). The lowering emits `stdlib.__mm_decref`; the runtime.std
+// `mm_decref` wrapper and any legacy `__mm_decref` name route through the same body.
+function calleeIsStrictDecref(callee String) returns bool
+	return callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "mm_decref"
+end 'calleeIsStrictDecref'
+
+// If `op` is a strict `incref` call, return its single pointer arg; else
+// NO_REFCOUNT_ARG.
+function increfPtrArg(op StdOp) returns ValueId
+	return match op 'dispatch'
+		call(c) gives refcountCallArg(c, wantIncref: true)
+		arith gives NO_REFCOUNT_ARG
+		control gives NO_REFCOUNT_ARG
+		memory gives NO_REFCOUNT_ARG
+		system gives NO_REFCOUNT_ARG
+	end 'dispatch'
+end 'increfPtrArg'
+
+// If `op` is a strict `decref` call, return its single pointer arg; else
+// NO_REFCOUNT_ARG.
+function decrefPtrArg(op StdOp) returns ValueId
+	return match op 'dispatch'
+		call(c) gives refcountCallArg(c, wantIncref: false)
+		arith gives NO_REFCOUNT_ARG
+		control gives NO_REFCOUNT_ARG
+		memory gives NO_REFCOUNT_ARG
+		system gives NO_REFCOUNT_ARG
+	end 'dispatch'
+end 'decrefPtrArg'
+
+// Shared call-op matcher: return the pointer arg of a strict incref/decref call
+// (selected by `wantIncref`), or NO_REFCOUNT_ARG if `c` isn't that call shape.
+function refcountCallArg(c StdCallOp, wantIncref bool) returns ValueId
+	return match c 'check'
+		call(_, callee, argIds) gives refcountCallArgIfMatch(callee, argIds: argIds, wantIncref: wantIncref)
+		ret gives NO_REFCOUNT_ARG
+		tryCall to errorReturn gives NO_REFCOUNT_ARG
+	end 'check'
+end 'refcountCallArg'
+
+function refcountCallArgIfMatch(callee String, argIds ValueIdArray, wantIncref bool) returns ValueId
+	let isMatch = (calleeIsStrictIncref(callee) if wantIncref else calleeIsStrictDecref(callee))
+	if not isMatch 'noMatch'
+		return NO_REFCOUNT_ARG
+	end 'noMatch'
+	// A strict incref/decref takes exactly one pointer arg. A malformed call
+	// (arity != 1) is an upstream bug — refuse to rewrite it rather than emit a
+	// header dereference of a garbage value.
+	if argIds.count() != 1 'badArity'
+		panic("refcountCallArgIfMatch: strict refcount call '{callee}' has {argIds.count()} args, expected 1")
+	end 'badArity'
+	return try argIds.get(0) otherwise panic("refcountCallArgIfMatch: argIds.get(0) OOB after count check")
+end 'refcountCallArgIfMatch'
+
+// True iff `block` contains at least one strict incref call — a cheap gate so
+// blocks without any incref skip the opRefs rebuild.
+function blockHasIncref(block IrBlock, module StdModule) returns bool
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("blockHasIncref: opIdx not in module.ops")
+		if increfPtrArg(op) != NO_REFCOUNT_ARG 'found'
+			return true
+		end 'found'
+	end 'eachOp'
+	return false
+end 'blockHasIncref'
+
+// Position (index into `block.opRefs`) of the first strict decref call, wrapped
+// in a FirstDecref so callers get a plain `NodeIndex` position.
+function firstDecrefPos(block IrBlock, module StdModule) returns FirstDecref
+	for pos in 0 upto block.opRefs.count() 'eachOp'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("firstDecrefPos: opRefs.get OOB at {pos}")
+		let op = try module.ops.get(opIdx) otherwise panic("firstDecrefPos: opIdx not in module.ops")
+		if decrefPtrArg(op) != NO_REFCOUNT_ARG 'found'
+			return FirstDecref.at(pos)
+		end 'found'
+	end 'eachOp'
+	return FirstDecref.none()
+end 'firstDecrefPos'

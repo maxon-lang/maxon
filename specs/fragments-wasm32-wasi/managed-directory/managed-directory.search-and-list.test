@@ -111,7 +111,9 @@ module {
     %13 = mir.mov_imm 8 : i64
     %15 = mir.func_addr @__destruct_TestFile
     %14 = mir.call @stdlib.__mm_alloc(%13, %15)
-    %20 = mir.call @stdlib.__mm_incref(%14)
+    %22 = mir.mov_imm 8 : i64
+    %23 = mir.sub.i64 %14, %22
+    mir.atomic_inc %23
     mir.store %1, %14, 0 width: qword
     mir.store %6, %14, 0 width: qword
     mir.error_return %14, %1
@@ -130,7 +132,9 @@ module {
     %12 = mir.mov_imm 8 : i64
     %14 = mir.func_addr @__destruct_TestDir
     %13 = mir.call @stdlib.__mm_alloc(%12, %14)
-    %19 = mir.call @stdlib.__mm_incref(%13)
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.sub.i64 %13, %20
+    mir.atomic_inc %21
     mir.store %1, %13, 0 width: qword
     mir.store %4, %13, 0 width: qword
     mir.error_return %13, %1
@@ -353,7 +357,9 @@ module {
     mir.store %162, %166, 0 width: qword
     mir.store %0, %166, 8 width: qword
     %170 = mir.load %166, 0 width: qword
-    %696 = mir.call @stdlib.__mm_incref(%170)
+    %731 = mir.mov_imm 8 : i64
+    %732 = mir.sub.i64 %170, %731
+    mir.atomic_inc %732
     %171, %172 = mir.try_call @TestDir.search(%170)
     %705 = mir.call @mm_drop(%166)
     %704 = mir.call @__mm_decref_maybenull_helper(%170)
@@ -808,7 +814,9 @@ module {
     %449 = mir.add.i64 %507, %448
     mir.br inline_cont_main_23(%449)
   inline_cont_main_23(%450: i64):
-    %729 = mir.call @stdlib.__mm_incref(%449)
+    %733 = mir.mov_imm 8 : i64
+    %734 = mir.sub.i64 %449, %733
+    mir.atomic_inc %734
     mir.store %257, %450, 0 width: qword
     mir.store %12, %450, 8 width: qword
     %267 = mir.call @String.equals(%490, %450)
@@ -847,7 +855,9 @@ module {
     mir.store %294, %298, 0 width: qword
     mir.store %0, %298, 8 width: qword
     %302 = mir.load %298, 0 width: qword
-    %697 = mir.call @stdlib.__mm_incref(%302)
+    %735 = mir.mov_imm 8 : i64
+    %736 = mir.sub.i64 %302, %735
+    mir.atomic_inc %736
     %303, %304 = mir.try_call @mrt_file_delete(%302)
     %713 = mir.call @mm_drop(%298)
     %712 = mir.call @__mm_decref_maybenull_helper(%302)
@@ -973,7 +983,9 @@ module {
     %467 = mir.add.i64 %524, %466
     mir.br inline_cont_main_25(%467)
   inline_cont_main_25(%468: i64):
-    %730 = mir.call @stdlib.__mm_incref(%467)
+    %737 = mir.mov_imm 8 : i64
+    %738 = mir.sub.i64 %467, %737
+    mir.atomic_inc %738
     mir.store %312, %468, 0 width: qword
     mir.store %12, %468, 8 width: qword
     %322 = mir.call @String.equals(%490, %468)
@@ -1022,7 +1034,9 @@ module {
     mir.store %351, %355, 0 width: qword
     mir.store %0, %355, 8 width: qword
     %359 = mir.load %355, 0 width: qword
-    %698 = mir.call @stdlib.__mm_incref(%359)
+    %739 = mir.mov_imm 8 : i64
+    %740 = mir.sub.i64 %359, %739
+    mir.atomic_inc %740
     %360, %361 = mir.try_call @mrt_file_delete(%359)
     %718 = mir.call @mm_drop(%355)
     %717 = mir.call @__mm_decref_maybenull_helper(%359)
@@ -1055,7 +1069,23 @@ module {
     mir.memcpy %386, %375, %376
     %387 = mir.add.i64 %386, %376
     mir.memcpy %387, %377, %0
-    %389 = mir.call @stdlib.__mm_decref(%375)
+    %741 = mir.mov_imm 8 : i64
+    %742 = mir.sub.i64 %375, %741
+    %744 = mir.mov_imm -1 : i64
+    %743 = mir.atomic_xadd %742, %744
+    %745 = mir.mov_imm 1 : i64
+    %746 = mir.cmp eq, %743, %745
+    mir.cond_br %746 [then: __decref_free_0(), else: __decref_cont_0()]
+  __rc_edge_14_0:
+    %724 = mir.call @__mm_decref_maybenull_helper(%197)
+    mir.br shortAnd.merge(%0)
+  __rc_edge_40_0:
+    %727 = mir.call @__mm_decref_maybenull_helper(%490)
+    mir.br shortAnd.merge(%0)
+  __decref_free_0:
+    %747 = mir.call @mm_free(%375)
+    mir.br __decref_cont_0()
+  __decref_cont_0:
     %391 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %392 = mir.call @mrt_alloc_with_dtor(%6, %391)
     mir.store %0, %392, 40 width: qword
@@ -1075,12 +1105,6 @@ module {
     %719 = mir.call @mm_drop(%396)
     %401 = mir.mov_imm 3 : i64
     mir.ret %401
-  __rc_edge_14_0:
-    %724 = mir.call @__mm_decref_maybenull_helper(%197)
-    mir.br shortAnd.merge(%0)
-  __rc_edge_40_0:
-    %727 = mir.call @__mm_decref_maybenull_helper(%490)
-    mir.br shortAnd.merge(%0)
   }
 }
 ---

@@ -144,7 +144,9 @@ module {
     %37 = mir.add.i64 %55, %36
     mir.br inline_cont_main_2(%37)
   inline_cont_main_2(%38: i64):
-    %86 = mir.call @stdlib.__mm_incref(%37)
+    %87 = mir.mov_imm 8 : i64
+    %88 = mir.sub.i64 %37, %87
+    mir.atomic_inc %88
     mir.store %17, %38, 0 width: qword
     %10 = mir.load %38, 0 width: qword
     %11 = mir.add.i64 %16, %10
@@ -153,12 +155,12 @@ module {
     %14 = mir.add.i64 %17, %13
     mir.br loop_0.header(%11, %14)
   loop_0.exit:
-    %87 = mir.mov_imm 125 : i64
-    %88 = mir.cmp ugt, %16, %87
-    mir.cond_br %88 [then: __range_panic_0(), else: __range_ok_0()]
+    %89 = mir.mov_imm 125 : i64
+    %90 = mir.cmp ugt, %16, %89
+    mir.cond_br %90 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %89 = mir.global_addr @__panic_msg_232552b6b6b495af
-    %90 = mir.call @mrt_panic(%89)
+    %91 = mir.global_addr @__panic_msg_232552b6b6b495af
+    %92 = mir.call @mrt_panic(%91)
   __range_ok_0:
     mir.ret %16
   }

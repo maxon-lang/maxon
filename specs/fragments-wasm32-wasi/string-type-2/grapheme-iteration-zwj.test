@@ -207,11 +207,15 @@ module {
     %130 = mir.add.i64 %152, %129
     mir.br inline_cont_main_3(%130)
   inline_cont_main_3(%131: i64):
-    %196 = mir.call @stdlib.__mm_incref(%130)
+    %197 = mir.mov_imm 8 : i64
+    %198 = mir.sub.i64 %130, %197
+    mir.atomic_inc %198
     mir.store %49, %131, 0 width: qword
     mir.store %0, %131, 8 width: qword
     %153 = mir.load %131, 0 width: qword
-    %186 = mir.call @stdlib.__mm_incref(%153)
+    %199 = mir.mov_imm 8 : i64
+    %200 = mir.sub.i64 %153, %199
+    mir.atomic_inc %200
     %154 = mir.load %153, 0 width: qword
     %155 = mir.load %153, 8 width: qword
     %156 = mir.call @mrt_write_stdout(%154, %155)
@@ -234,7 +238,24 @@ module {
     mir.memcpy %76, %65, %66
     %77 = mir.add.i64 %76, %66
     mir.memcpy %77, %67, %10
-    %79 = mir.call @stdlib.__mm_decref(%65)
+    %203 = mir.mov_imm 8 : i64
+    %204 = mir.sub.i64 %65, %203
+    %206 = mir.mov_imm -1 : i64
+    %205 = mir.atomic_xadd %204, %206
+    %207 = mir.mov_imm 1 : i64
+    %208 = mir.cmp eq, %205, %207
+    mir.cond_br %208 [then: __decref_free_0(), else: __decref_cont_0()]
+  __rc_edge_0_0:
+    %193 = mir.call @mm_drop(%12)
+    mir.br loop_0.exit(%0)
+  __rc_edge_8_0:
+    %194 = mir.call @__mm_decref_maybenull_helper(%18)
+    %195 = mir.call @mm_drop(%12)
+    mir.br loop_0.exit(%60)
+  __decref_free_0:
+    %209 = mir.call @mm_free(%65)
+    mir.br __decref_cont_0()
+  __decref_cont_0:
     %80 = mir.mov_imm 48 : i64
     %81 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %82 = mir.call @mrt_alloc_with_dtor(%80, %81)
@@ -251,20 +272,15 @@ module {
     mir.store %82, %86, 0 width: qword
     mir.store %0, %86, 8 width: qword
     %132 = mir.load %86, 0 width: qword
-    %187 = mir.call @stdlib.__mm_incref(%132)
+    %201 = mir.mov_imm 8 : i64
+    %202 = mir.sub.i64 %132, %201
+    mir.atomic_inc %202
     %133 = mir.load %132, 0 width: qword
     %134 = mir.load %132, 8 width: qword
     %135 = mir.call @mrt_write_stdout(%133, %134)
     %192 = mir.call @mm_drop(%86)
     %191 = mir.call @__mm_decref_maybenull_helper(%132)
     mir.ret %0
-  __rc_edge_0_0:
-    %193 = mir.call @mm_drop(%12)
-    mir.br loop_0.exit(%0)
-  __rc_edge_8_0:
-    %194 = mir.call @__mm_decref_maybenull_helper(%18)
-    %195 = mir.call @mm_drop(%12)
-    mir.br loop_0.exit(%60)
   }
 }
 ---

@@ -87,6 +87,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    mir.ret %1
+  }
+}
+
+```
+
 <!-- test: float-var-if-else -->
 ```maxon
 function main() returns ExitCode
@@ -138,6 +149,25 @@ module {
   other_0:
     arm64.mov x0, #0
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989087 : f64
+    %2 = mir.mov_imm 4614253070214989087 : f64
+    %3 = mir.cmp feq, %0, %2
+    mir.cond_br %3 [then: check_0(), else: other_0()]
+  check_0:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  other_0:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
   }
 }
 

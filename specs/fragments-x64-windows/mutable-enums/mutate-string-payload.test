@@ -22,7 +22,7 @@ ExitCode: 5
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor
@@ -42,8 +42,9 @@ module {
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
     x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
+    x64.mov r8, r14
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
     x64.mov [r14+0], rbx (8b)
     x64.mov [r14+8], r13 (8b)
     x64.lea rdx, [rip+__destruct_Named]
@@ -80,13 +81,13 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov [r15+0], r14 (8b)
-    x64.mov [r15+8], r13 (8b)
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r13 (8b)
     x64.mov rcx, [rbx+8] (8b)
-    x64.mov [rbx+8], r15 (8b)
+    x64.mov [rbx+8], r8 (8b)
     x64.call __mm_decref_maybenull_helper
     x64.jmp update_0.merge
   update_0.next0:

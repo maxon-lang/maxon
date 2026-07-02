@@ -100,21 +100,25 @@ module {
     x64.add r9, 0
     x64.add r9, 1
     x64.add r9, r13
-    x64.add r9, 0
-    x64.mov rcx, r9
-    x64.add rcx, 1
     x64.mov [rbp+-40], r9
-    x64.mov [rbp+-48], r8
-    x64.call mrt_alloc
+    x64.mov r9, [rbp+-40]
+    x64.add r9, 0
+    x64.mov [rbp+-40], r9
+    x64.mov rcx, [rbp+-40]
+    x64.add rcx, 1
     x64.mov [rbp+-56], r8
+    x64.mov r8, [rbp+-40]
+    x64.mov r8, [rbp+-40]
+    x64.call mrt_alloc
+    x64.mov [rbp+-48], r8
     x64.lea r8, [rip+__istr_1]
-    x64.mov r9, [rbp+-56]
+    x64.mov r9, [rbp+-48]
     x64.mov [rbp-8], r9
     x64.mov [rbp-16], r8
     x64.mov r8, 0
     x64.mov [rbp-24], r8
     x64.rep_movsb
-    x64.mov r8, [rbp+-56]
+    x64.mov r8, [rbp+-48]
     x64.add r8, 0
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r14
@@ -124,7 +128,7 @@ module {
     x64.add r8, rbx
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r9
-    x64.mov r9, [rbp+-48]
+    x64.mov r9, [rbp+-56]
     x64.mov [rbp-32], r9
     x64.rep_movsb
     x64.add r8, 1
@@ -139,17 +143,33 @@ module {
     x64.mov r8, 0
     x64.mov [rbp-24], r8
     x64.rep_movsb
+    x64.mov r8, -1
+    x64.mov r9, r14
+    x64.sub r9, 8
+    x64.lock xadd qword ptr [r9], r8
+    x64.cmp r8, 1
+    x64.jne __decref_cont_0
+  __decref_free_0:
     x64.mov rcx, r14
-    x64.call stdlib.__mm_decref
+    x64.call mm_free
+  __decref_cont_0:
+    x64.mov r8, -1
+    x64.mov r9, r15
+    x64.sub r9, 8
+    x64.lock xadd qword ptr [r9], r8
+    x64.cmp r8, 1
+    x64.jne __decref_cont_1
+  __decref_free_1:
     x64.mov rcx, r15
-    x64.call stdlib.__mm_decref
+    x64.call mm_free
+  __decref_cont_1:
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor
     x64.mov rbx, r8
     x64.mov r8, 0
     x64.mov [rbx+40], r8 (8b)
-    x64.mov r8, [rbp+-56]
+    x64.mov r8, [rbp+-48]
     x64.mov [rbx+0], r8 (8b)
     x64.mov r8, [rbp+-40]
     x64.mov [rbx+8], r8 (8b)
@@ -166,8 +186,9 @@ module {
     x64.mov r8, 0
     x64.mov [r13+8], r8 (8b)
     x64.mov rbx, [r13+0] (8b)
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
+    x64.mov r8, rbx
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
     x64.mov rdx, [rbx+8] (8b)
     x64.mov rcx, [rbx+0] (8b)
     x64.call mrt_write_stdout

@@ -286,13 +286,13 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.mov [r14+0], r13 (8b)
-    x64.mov r8d, 1
-    x64.mov [r14+8], r8 (8b)
-    x64.mov r13, r14
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9d, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r13, r8
   try_0.merge:
     x64.mov rcx, r13
     x64.call stdlib.__int_fromString
@@ -318,8 +318,9 @@ module {
     x64.epilogue
     x64.ret
   __rc_edge_11_0:
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
     x64.mov rcx, rbx
     x64.call __mm_decref_maybenull_helper
     x64.mov rdx, 0
@@ -1073,7 +1074,9 @@ module {
     %21 = mir.mov_imm 16 : i64
     %22 = mir.func_addr @__destruct_String
     %20 = mir.call @stdlib.__mm_alloc(%21, %22)
-    %52 = mir.call @stdlib.__mm_incref(%20)
+    %58 = mir.mov_imm 8 : i64
+    %59 = mir.sub.i64 %20, %58
+    mir.atomic_inc %59
     mir.store %14, %20, 0 width: qword
     %23 = mir.mov_imm 1 : i64
     mir.store %23, %20, 8 width: qword
@@ -1096,7 +1099,9 @@ module {
     %51 = mir.mov_imm 3 : i64
     mir.ret %51
   __rc_edge_11_0:
-    %56 = mir.call @stdlib.__mm_incref(%41)
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.sub.i64 %41, %60
+    mir.atomic_inc %61
     %57 = mir.call @__mm_decref_maybenull_helper(%2)
     mir.br inline_cont_main_0(%41, %47)
   }
@@ -1174,13 +1179,13 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.mov [r14+0], r13 (8b)
-    x64.mov r8d, 1
-    x64.mov [r14+8], r8 (8b)
-    x64.mov r13, r14
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9d, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.mov r13, r8
   try_0.merge:
     x64.mov rcx, r13
     x64.call stdlib.__int_fromString
@@ -1206,8 +1211,9 @@ module {
     x64.epilogue
     x64.ret
   __rc_edge_11_0:
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
     x64.mov rcx, rbx
     x64.call __mm_decref_maybenull_helper
     x64.mov rdx, 0
@@ -1965,7 +1971,9 @@ module {
     %21 = mir.mov_imm 16 : i64
     %22 = mir.func_addr @__destruct_String
     %20 = mir.call @stdlib.__mm_alloc(%21, %22)
-    %52 = mir.call @stdlib.__mm_incref(%20)
+    %58 = mir.mov_imm 8 : i64
+    %59 = mir.sub.i64 %20, %58
+    mir.atomic_inc %59
     mir.store %14, %20, 0 width: qword
     %23 = mir.mov_imm 1 : i64
     mir.store %23, %20, 8 width: qword
@@ -1988,7 +1996,9 @@ module {
     %51 = mir.mov_imm 6 : i64
     mir.ret %51
   __rc_edge_11_0:
-    %56 = mir.call @stdlib.__mm_incref(%41)
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.sub.i64 %41, %60
+    mir.atomic_inc %61
     %57 = mir.call @__mm_decref_maybenull_helper(%2)
     mir.br inline_cont_main_0(%41, %47)
   }

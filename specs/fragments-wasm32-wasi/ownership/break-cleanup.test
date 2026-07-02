@@ -151,7 +151,9 @@ module {
     %79 = mir.add.i64 %97, %78
     mir.br inline_cont_main_2(%79)
   inline_cont_main_2(%80: i64):
-    %132 = mir.call @stdlib.__mm_incref(%79)
+    %133 = mir.mov_imm 8 : i64
+    %134 = mir.sub.i64 %79, %133
+    mir.atomic_inc %134
     mir.store %55, %80, 0 width: qword
     %9 = mir.mov_imm 3 : i64
     %10 = mir.cmp eq, %55, %9
@@ -173,7 +175,29 @@ module {
     mir.memcpy %26, %15, %16
     %27 = mir.add.i64 %26, %16
     mir.memcpy %27, %17, %18
-    %29 = mir.call @stdlib.__mm_decref(%15)
+    %137 = mir.mov_imm 8 : i64
+    %138 = mir.sub.i64 %15, %137
+    %140 = mir.mov_imm -1 : i64
+    %139 = mir.atomic_xadd %138, %140
+    %141 = mir.mov_imm 1 : i64
+    %142 = mir.cmp eq, %139, %141
+    mir.cond_br %142 [then: __decref_free_0(), else: __decref_cont_0()]
+  brk_0:
+    %44 = mir.load %80, 0 width: qword
+    %45 = mir.add.i64 %53, %44
+    %130 = mir.call @mm_drop(%80)
+    mir.br loop_0.exit(%45)
+  brk_0.after:
+    %48 = mir.load %80, 0 width: qword
+    %49 = mir.add.i64 %53, %48
+    %131 = mir.call @mm_drop(%80)
+    %51 = mir.mov_imm 1 : i64
+    %52 = mir.add.i64 %55, %51
+    mir.br loop_0.header(%49, %52)
+  __decref_free_0:
+    %143 = mir.call @mm_free(%15)
+    mir.br __decref_cont_0()
+  __decref_cont_0:
     %30 = mir.mov_imm 48 : i64
     %31 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %32 = mir.call @mrt_alloc_with_dtor(%30, %31)
@@ -191,25 +215,15 @@ module {
     mir.store %32, %36, 0 width: qword
     mir.store %0, %36, 8 width: qword
     %59 = mir.load %36, 0 width: qword
-    %127 = mir.call @stdlib.__mm_incref(%59)
+    %135 = mir.mov_imm 8 : i64
+    %136 = mir.sub.i64 %59, %135
+    mir.atomic_inc %136
     %60 = mir.load %59, 0 width: qword
     %61 = mir.load %59, 8 width: qword
     %62 = mir.call @mrt_write_stdout(%60, %61)
     %129 = mir.call @mm_drop(%36)
     %128 = mir.call @__mm_decref_maybenull_helper(%59)
     mir.ret %0
-  brk_0:
-    %44 = mir.load %80, 0 width: qword
-    %45 = mir.add.i64 %53, %44
-    %130 = mir.call @mm_drop(%80)
-    mir.br loop_0.exit(%45)
-  brk_0.after:
-    %48 = mir.load %80, 0 width: qword
-    %49 = mir.add.i64 %53, %48
-    %131 = mir.call @mm_drop(%80)
-    %51 = mir.mov_imm 1 : i64
-    %52 = mir.add.i64 %55, %51
-    mir.br loop_0.header(%49, %52)
   }
 }
 ---
