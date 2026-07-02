@@ -114,6 +114,11 @@ export type MaxonArgs
 	// never fires (normal compilation). The comma-separated list is split in
 	// setGreedyOnlyFunc; this raw value is passed through verbatim.
 	export var greedyOnly as String
+	// `maxon build --sweep-mode=MODE <file>`: interference-construction mode for
+	// the SSA colorer. `legacy` (default) = the pre-existing buildInterferenceGraph;
+	// `sweep` = the unified LiveSetSweep; `validate` = build both and assert their
+	// edge sets match (Track-A rewrite validation). Passed to setSweepMode.
+	export var sweepMode as String
 	// `maxon build -o PATH` / `--output PATH` (also `--output=PATH`): overrides
 	// the output executable path. Empty = derive it from the build name / first
 	// source file (the normal behavior). Threaded through compile() into
@@ -148,6 +153,7 @@ export type MaxonArgs
 			workerSingles: "",
 			workerFallback: "",
 			greedyOnly: "",
+			sweepMode: "",
 			outputOverride: ""
 		}
 
@@ -275,7 +281,10 @@ export type MaxonArgs
 			end 'isWorkerFallback' else if arg.startsWith("--greedy-only=") 'isGreedyOnly'
 				// Sentinel: empty value leaves the greedy path disabled (normal compilation).
 				args.greedyOnly = try CommandLine.optionValue(arg) otherwise ""
-			end 'isGreedyOnly' else if arg == "-o" or arg == "--output" 'isOutputSpaced'
+			end 'isGreedyOnly' else if arg.startsWith("--sweep-mode=") 'isSweepMode'
+				// legacy (default) | sweep | validate — see setSweepMode.
+				args.sweepMode = try CommandLine.optionValue(arg) otherwise ""
+			end 'isSweepMode' else if arg == "-o" or arg == "--output" 'isOutputSpaced'
 				// `-o PATH` / `--output PATH`: the output path is the NEXT token.
 				args.outputOverride = try allArgs.get(i + 1) otherwise throw ArgError.invalidOption(arg)
 				skipNext = true

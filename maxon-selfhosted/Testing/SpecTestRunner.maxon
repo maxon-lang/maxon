@@ -3131,7 +3131,7 @@ type PersistentWorkerHandle
 	// std handles in its own STARTUPINFOW, never sibling spawns' pipes. Without
 	// that runtime fix (in X86CodeEmitter.Runtime.cs's __subp_spawn_core), this
 	// pipeline pattern races and corrupts IPC.
-	export static function spawnNoWait(exe String, workerId WorkerId, targetStr String, filter String, verbose bool) returns PersistentWorkerHandle throws SubprocessError
+	export static function spawnNoWait(exe String, workerId WorkerId, targetStr String, filter String, verbose bool, sweepMode String = "") returns PersistentWorkerHandle throws SubprocessError
 		let exeFile = try FilePath.from(exe) otherwise 'badExe'
 			throw SubprocessError.spawnFailed("worker {workerId}: invalid exe path '{exe}'")
 		end 'badExe'
@@ -3146,6 +3146,11 @@ type PersistentWorkerHandle
 		if verbose 'isVerbose'
 			argv.push("--verbose")
 		end 'isVerbose'
+		// Forward the interference-construction mode so parallel workers honor
+		// --sweep-mode=validate/sweep (Track-A rewrite validation). Empty = legacy.
+		if not sweepMode.isEmpty() 'hasSweepMode'
+			argv.push("--sweep-mode={sweepMode}")
+		end 'hasSweepMode'
 		let c = try StreamingSubprocess.spawn(Executable.path(exeFile), arguments: argv)
 		return PersistentWorkerHandle{child: c, workerId: workerId}
 	end 'spawnNoWait'
@@ -3276,7 +3281,7 @@ end 'VarHolder'
 // slowest-first queue (one singles job per spec), so the long-pole specs start
 // first and the OS-level parallelism gates wall time on the heaviest individual
 // compile rather than on a static round-robin chunk.
-export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
+export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false, sweepMode String = "") returns ExitCode
 	// This dispatcher is an I/O multiplexer: the parallelism is the N persistent
 	// worker SUBPROCESSES, and the per-worker drain green threads only need to be
 	// cooperatively multiplexed on one OS thread (via the kqueue/IOCP poller).
@@ -3428,7 +3433,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// whatever's buffered when the child exits.
 	var workers = PersistentWorkerHandleArray.create()
 	for i in 0 upto numWorkers 'spawnLoop'
-		let h = try PersistentWorkerHandle.spawnNoWait(exePath, workerId: i as WorkerId, targetStr: targetStr, filter: filter, verbose: verbose) otherwise panic("worker {i}: PersistentWorkerHandle.spawnNoWait failed (see SubprocessError above)")
+		let h = try PersistentWorkerHandle.spawnNoWait(exePath, workerId: i as WorkerId, targetStr: targetStr, filter: filter, verbose: verbose, sweepMode: sweepMode) otherwise panic("worker {i}: PersistentWorkerHandle.spawnNoWait failed (see SubprocessError above)")
 		workers.push(h)
 	end 'spawnLoop'
 	for i in 0 upto numWorkers 'readyLoop'

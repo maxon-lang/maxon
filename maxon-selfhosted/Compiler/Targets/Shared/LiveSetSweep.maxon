@@ -1,0 +1,299 @@
+// Unified interference-construction sweep for register allocation.
+//
+// The SSA-chordal colorer (SSAColoring.colorClass) and the Belady pressure pass
+// (BeladySpill) each walk every block's live-range intervals in ascending
+// start-position order, maintaining an `active` set. buildInterferenceGraph does
+// this to emit interference edges; BeladySpill does it (via BlockIntervalEvents)
+// to measure per-position register demand. They are the SAME sweep done twice.
+//
+// LiveSetSweep runs that block sweep ONCE off a shared BlockIntervalEvents and
+// produces a SweptAdjacency whose edge set is BYTE-IDENTICAL to
+// buildInterferenceGraph — so the first-fit colorer consumes it with no change
+// to any coloring decision. The win at this step is eliminating the duplicate
+// flatten + duplicate sweep (buildInterferenceGraph re-flattens the per-block
+// interval triples that BlockIntervalEvents already holds).
+//
+// Edge-witness model (why one start-ordered sweep captures every edge): an
+// interference edge {R, N} is emitted when the LATER-STARTING endpoint arrives,
+// against the earlier one still in `active`. So a range's neighborhood includes
+// ranges whose intervals start AFTER its def (e.g. a mid-block call-clobber
+// pseudo-range) — which a def-point live-set snapshot would miss. Coloring order
+// (dominance-tree preorder) is a SEPARATE concern handled unchanged by
+// colorClass; this file only reproduces the graph's edge set.
+
+// Selects how colorClass obtains interference. `legacy` = buildInterferenceGraph
+// (the pre-existing materialized graph). `sweep` = LiveSetSweep (the unified
+// shared sweep). `validate` = build both, assert the edge sets match, and return
+// the legacy graph so a latent sweep bug can never change codegen while
+// validation is on.
+export union SweepMode
+	legacy
+	sweep
+	validate
+end 'SweepMode'
+
+// Process-global interference-construction mode, defaulting to `legacy` so normal
+// compilation is unchanged. Set once at startup from a CLI flag (mirrors the
+// greedy-only / fast-regalloc process-global pattern). `runColoring` reads it via
+// getSweepMode(). During the Track-A rewrite this lets the spec suite + self-
+// compile run under `validate` (assert sweep == legacy edge sets) or `sweep`
+// (use the unified sweep) without threading a flag through every call site.
+var currentSweepMode = SweepMode.legacy
+
+// Parse a --sweep-mode=MODE spec. Unknown/empty → legacy (unchanged behavior).
+export function setSweepMode(spec String)
+	if spec.equals("validate") 'v'
+		currentSweepMode = SweepMode.validate
+		return
+	end 'v'
+	if spec.equals("sweep") 's'
+		currentSweepMode = SweepMode.sweep
+		return
+	end 's'
+	currentSweepMode = SweepMode.legacy
+end 'setSweepMode'
+
+export function getSweepMode() returns SweepMode
+	return currentSweepMode
+end 'getSweepMode'
+
+// Per-range neighbor lists, structurally identical to InterferenceGraph.neighbors
+// (a RegIntArray per range index). Produced by one block sweep so the edge set
+// equals buildInterferenceGraph's. colorClass reads `.neighbors` exactly as it
+// read `ig.neighbors`.
+export type SweptAdjacency
+	export var neighbors as RegIntArrayArray
+	export var numRanges as RegInt
+
+	export static function create(numRanges RegInt) returns SweptAdjacency
+		var nbrs = RegIntArrayArray.create()
+		var i = 0
+		while i < numRanges 'init'
+			nbrs.push(RegIntArray.create())
+			i = i + 1
+		end 'init'
+		return Self{neighbors: nbrs, numRanges: numRanges}
+	end 'create'
+
+	// Wrap existing neighbor lists (shares the arrays, no copy).
+	export static function fromNeighbors(neighbors RegIntArrayArray, numRanges RegInt) returns SweptAdjacency
+		return Self{neighbors: neighbors, numRanges: numRanges}
+	end 'fromNeighbors'
+
+	// Wrap into an InterferenceGraph for consumers still typed on it (the
+	// eviction fixup reads only `.neighbors`). No copy — shares the arrays.
+	export function asInterferenceGraph() returns InterferenceGraph
+		return InterferenceGraph.wrap(self.neighbors, numRanges: self.numRanges)
+	end 'asInterferenceGraph'
+end 'SweptAdjacency'
+
+// One-pass interference builder over a shared BlockIntervalEvents. `ranges` is a
+// single register class's ranges (gpr or fp), exactly as colorClass receives
+// them, so range indices index this partition and match SweptAdjacency slots 1:1.
+export type LiveSetSweep
+	export var events as BlockIntervalEvents
+	export var blockMaxPos as RegIntArray
+	export var callerSavedByOrdinal as BoolArray
+
+	export static function build(ranges LiveRangeArray, callerSavedByOrdinal BoolArray) returns LiveSetSweep
+		let blockMaxPos = blockMaxPosFromRanges(ranges)
+		let events = BlockIntervalEvents.build(ranges, blockMaxPos: blockMaxPos)
+		return Self{events: events, blockMaxPos: blockMaxPos, callerSavedByOrdinal: callerSavedByOrdinal}
+	end 'build'
+
+	// Produce the neighbor adjacency, byte-identical to
+	// buildInterferenceGraph(ranges, callerSavedByOrdinal).
+	export function buildAdjacency(ranges LiveRangeArray) returns SweptAdjacency
+		return buildAdjacencyFromEvents(self.events, ranges: ranges, blockMaxPos: self.blockMaxPos, callerSavedByOrdinal: self.callerSavedByOrdinal)
+	end 'buildAdjacency'
+end 'LiveSetSweep'
+
+// Derive per-block max positions so BlockIntervalEvents' endPos clamp is a NO-OP
+// versus buildInterferenceGraph (which never clamps). BlockIntervalEvents.build
+// clamps every interval's endPos to blockMaxPos[blockId]+1 and, via eventIsLive,
+// drops a block whose maxPos < 0. We therefore set:
+//   blockMaxPos[b] = max over intervals in b of (endPos - 1)   (blocks with intervals)
+//   blockMaxPos[b] = -1                                        (blocks with none)
+// Then endPos <= maxPos+1 holds for every real interval (clamp never fires), and
+// startPos in [0, maxPos+1] holds (startPos < endPos <= maxPos+1, startPos >= 0),
+// so eventIsLive keeps exactly the intervals buildInterferenceGraph would emit
+// edges for. Sized to maxBlockId+1 to match buildInterferenceGraph's numBlocks.
+function blockMaxPosFromRanges(ranges LiveRangeArray) returns RegIntArray
+	var maxBlockId = 0
+	for range in ranges 'findMaxBlock'
+		for interval in range.intervals 'eachInt'
+			if interval.blockId > maxBlockId 'higher'
+				maxBlockId = interval.blockId
+			end 'higher'
+		end 'eachInt'
+	end 'findMaxBlock'
+
+	let numBlocks = maxBlockId + 1
+	var blockMaxPos = RegIntArray.create()
+	var bi = 0
+	while bi < numBlocks 'initNeg'
+		blockMaxPos.push(-1)
+		bi = bi + 1
+	end 'initNeg'
+
+	for range in ranges 'eachRange'
+		for interval in range.intervals 'eachInt2'
+			let b = interval.blockId
+			if b >= 0 and b < numBlocks 'inRange'
+				// The event lives at positions [startPos, endPos); its highest
+				// occupied position is endPos-1, so maxPos must be at least that
+				// for the clamp (to maxPos+1) to leave endPos unchanged.
+				let want = interval.endPos - 1
+				let cur = try blockMaxPos.get(b) otherwise panic("blockMaxPosFromRanges: get({b}) OOB after init")
+				if want > cur 'grow'
+					try blockMaxPos.set(b, value: want) otherwise panic("blockMaxPosFromRanges: set({b}) OOB")
+				end 'grow'
+			end 'inRange'
+		end 'eachInt2'
+	end 'eachRange'
+
+	return blockMaxPos
+end 'blockMaxPosFromRanges'
+
+// The unified block sweep. Transplants buildInterferenceGraph's active-set sweep
+// (SSAColoring.maxon) onto BlockIntervalEvents' flat per-block slices: walk each
+// block's events in ascending start order, retire active entries whose endPos
+// <= the arriving start (half-open), and emit an edge to each survivor unless
+// isCopyBoundaryOverlap or interferenceEdgeIsRedundant. Same overlap test, same
+// two filters, same argument order (ri1 = the arriving range), same dedup
+// (addInterference) — so the produced edge set equals buildInterferenceGraph's.
+function buildAdjacencyFromEvents(events BlockIntervalEvents, ranges LiveRangeArray, blockMaxPos RegIntArray, callerSavedByOrdinal BoolArray) returns SweptAdjacency
+	let numRanges = ranges.count()
+	// Reuse InterferenceGraph as the adjacency+dedup accumulator; return its
+	// neighbor lists wrapped in SweptAdjacency.
+	var ig = InterferenceGraph.create(numRanges)
+
+	let numBlocks = blockMaxPos.count()
+	var active = RegIntArray.create()
+	var blockId = 0
+	while blockId < numBlocks 'eachBlock'
+		let sliceStart = try events.base.get(blockId) otherwise panic("buildAdjacencyFromEvents: base.get({blockId}) OOB")
+		let sliceEnd = try events.base.get(blockId + 1) otherwise panic("buildAdjacencyFromEvents: base.get({blockId + 1}) OOB")
+		let count = sliceEnd - sliceStart
+		if count <= 0 'emptyBlock'
+			blockId = blockId + 1
+			continue
+		end 'emptyBlock'
+
+		// Local start array for this block's slice, so sortBlockIndicesByStart
+		// yields the SAME permutation buildInterferenceGraph computes over its
+		// per-block blockStarts array.
+		var bs = RegIntArray.create()
+		var k = 0
+		while k < count 'collectStarts'
+			bs.push(try events.startPos.get(sliceStart + k) otherwise panic("buildAdjacencyFromEvents: startPos.get OOB collecting"))
+			k = k + 1
+		end 'collectStarts'
+		let order = sortBlockIndicesByStart(bs)
+
+		active.clear()
+		var oi = 0
+		while oi < count 'sweep'
+			let localIdx = try order.get(oi) otherwise panic("buildAdjacencyFromEvents: order.get({oi}) OOB")
+			let flatIdx = sliceStart + localIdx
+			let ri1 = try events.rangeIdx.get(flatIdx) otherwise panic("buildAdjacencyFromEvents: rangeIdx.get OOB")
+			let s1 = try events.startPos.get(flatIdx) otherwise panic("buildAdjacencyFromEvents: s1 OOB")
+			let e1 = try events.endPos.get(flatIdx) otherwise panic("buildAdjacencyFromEvents: e1 OOB")
+
+			// Retire active entries whose interval ended at or before s1
+			// (half-open). Swap-pop: O(1) unordered removal, same as the graph.
+			var ai = 0
+			while ai < active.count() 'retire'
+				let aFlat = try active.get(ai) otherwise panic("buildAdjacencyFromEvents: active.get({ai}) OOB")
+				let aEnd = try events.endPos.get(aFlat) otherwise panic("buildAdjacencyFromEvents: aEnd OOB")
+				if aEnd <= s1 'expired'
+					let lastPos = active.count() - 1
+					if ai != lastPos 'notLast'
+						let tail = try active.get(lastPos) otherwise panic("buildAdjacencyFromEvents: active tail OOB")
+						try active.set(ai, value: tail) otherwise panic("buildAdjacencyFromEvents: active.set OOB")
+					end 'notLast'
+					try active.pop() otherwise panic("buildAdjacencyFromEvents: active.pop on non-empty")
+				end 'expired' else 'stillLive'
+					ai = ai + 1
+				end 'stillLive'
+			end 'retire'
+
+			// Emit an edge to each survivor — same filters, same call order.
+			var ei = 0
+			while ei < active.count() 'emit'
+				let aFlat = try active.get(ei) otherwise panic("buildAdjacencyFromEvents: emit active.get({ei}) OOB")
+				let ri2 = try events.rangeIdx.get(aFlat) otherwise panic("buildAdjacencyFromEvents: ri2 OOB")
+				let s2 = try events.startPos.get(aFlat) otherwise panic("buildAdjacencyFromEvents: s2 OOB")
+				let e2 = try events.endPos.get(aFlat) otherwise panic("buildAdjacencyFromEvents: e2 OOB")
+
+				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
+				if not isCopyBoundary 'realOverlap'
+					if not interferenceEdgeIsRedundant(ranges, ri1: ri1, ri2: ri2, callerSavedByOrdinal: callerSavedByOrdinal) 'notRedundant'
+						addInterference(ig, a: ri1, b: ri2)
+					end 'notRedundant'
+				end 'realOverlap'
+
+				ei = ei + 1
+			end 'emit'
+
+			active.push(flatIdx)
+			oi = oi + 1
+		end 'sweep'
+
+		blockId = blockId + 1
+	end 'eachBlock'
+
+	return SweptAdjacency.fromNeighbors(ig.neighbors, numRanges: numRanges)
+end 'buildAdjacencyFromEvents'
+
+// Validation harness (used under SweepMode.validate). Builds the sweep adjacency
+// and asserts, per range, that its neighbor SET equals the legacy graph's — order
+// independent, since addInterference append order can differ. Panics on the first
+// divergence, naming the range so any clamp/order/filter discrepancy is caught
+// deterministically at the edge level, before any color is chosen.
+export function assertAdjacencyMatches(ig InterferenceGraph, swept SweptAdjacency, ranges LiveRangeArray)
+	let n = ig.numRanges
+	if swept.numRanges != n 'countMismatch'
+		panic("LiveSetSweep adjacency size {swept.numRanges} != ig {n}")
+	end 'countMismatch'
+	var i = 0
+	while i < n 'eachRange'
+		let a = try ig.neighbors.get(i) otherwise panic("assertAdjacencyMatches: ig.neighbors.get({i}) OOB")
+		let b = try swept.neighbors.get(i) otherwise panic("assertAdjacencyMatches: swept.neighbors.get({i}) OOB")
+		if not sameNeighborSet(a, b: b) 'diff'
+			let r = try ranges.get(i) otherwise panic("assertAdjacencyMatches: ranges.get({i}) OOB")
+			panic("LiveSetSweep adjacency divergence at range {i} v{r.valueId} defBlock={r.defBlock} defPos={r.defPosition}: igNbrs={dumpSet(a)} sweepNbrs={dumpSet(b)}")
+		end 'diff'
+		i = i + 1
+	end 'eachRange'
+end 'assertAdjacencyMatches'
+
+// Set equality of two neighbor lists (small degree; membership scan is fine).
+// Equal iff same length and every element of `a` is in `b` — with equal lengths,
+// mutual containment follows, and both lists are already deduped by addInterference.
+function sameNeighborSet(a RegIntArray, b RegIntArray) returns bool
+	if a.count() != b.count() 'lenDiff'
+		return false
+	end 'lenDiff'
+	for x in a 'eachA'
+		if not regIntArrayContains(b, value: x) 'missing'
+			return false
+		end 'missing'
+	end 'eachA'
+	return true
+end 'sameNeighborSet'
+
+// Render a neighbor list for a divergence diagnostic.
+function dumpSet(arr RegIntArray) returns String
+	var out = "["
+	var first = true
+	for e in arr 'each'
+		if first 'f'
+			out = "{out}{e}"
+			first = false
+		end 'f' else 'rest'
+			out = "{out},{e}"
+		end 'rest'
+	end 'each'
+	return "{out}]"
+end 'dumpSet'

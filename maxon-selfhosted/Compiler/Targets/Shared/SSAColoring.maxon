@@ -8,7 +8,7 @@ export typealias RegIntArrayArray = Array with RegIntArray
 // Types
 // ============================================================
 
-type InterferenceGraph
+export type InterferenceGraph
 	export var neighbors as RegIntArrayArray
 	export var numRanges as RegInt
 
@@ -21,6 +21,12 @@ type InterferenceGraph
 		end 'init'
 		return Self{neighbors: nbrs, numRanges: numRanges}
 	end 'create'
+
+	// Wrap existing neighbor lists without copying — lets LiveSetSweep hand its
+	// swept adjacency to consumers still typed on InterferenceGraph.
+	export static function wrap(neighbors RegIntArrayArray, numRanges RegInt) returns InterferenceGraph
+		return Self{neighbors: neighbors, numRanges: numRanges}
+	end 'wrap'
 end 'InterferenceGraph'
 
 export type ColoringResult
@@ -221,7 +227,7 @@ function effectiveRecolorDepth(cheapColoring bool) returns RegInt
 	return MAX_RECOLOR_DEPTH
 end 'effectiveRecolorDepth'
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, cheapColoring bool) returns ColoringResult
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -244,8 +250,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
-	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
 
 	logDebug(LogCategory.ir, message: function() gives "ssa-color: gpr={gprRanges.count()} fp={fpRanges.count()} maxVal={maxValueId}")
 	return result
@@ -255,7 +261,37 @@ end 'colorSSA'
 // Per-class coloring
 // ============================================================
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool)
+// Build the per-range interference adjacency for one register class, choosing the
+// construction path by SweepMode. `legacy` = buildInterferenceGraph (the
+// pre-existing dedicated sweep). `sweep` = LiveSetSweep off a shared
+// BlockIntervalEvents (byte-identical edge set, one fewer flatten+sweep).
+// `validate` = build both, assert per-range neighbor-set equality, and return the
+// LEGACY graph so validation can never change codegen even if the sweep has a bug.
+function selectInterference(ranges LiveRangeArray, callerSavedByOrdinal BoolArray, sweepMode SweepMode) returns InterferenceGraph
+	return match sweepMode 'mode'
+		legacy gives buildInterferenceGraph(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+		sweep gives sweptInterference(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+		validate gives validatedInterference(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	end 'mode'
+end 'selectInterference'
+
+// SweepMode.sweep: build interference via the unified LiveSetSweep.
+function sweptInterference(ranges LiveRangeArray, callerSavedByOrdinal BoolArray) returns InterferenceGraph
+	let s = LiveSetSweep.build(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	return s.buildAdjacency(ranges).asInterferenceGraph()
+end 'sweptInterference'
+
+// SweepMode.validate: build BOTH, assert the edge sets match, return the legacy
+// graph (so a latent sweep bug cannot change codegen while validation runs).
+function validatedInterference(ranges LiveRangeArray, callerSavedByOrdinal BoolArray) returns InterferenceGraph
+	let ig = buildInterferenceGraph(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	let s = LiveSetSweep.build(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	let swept = s.buildAdjacency(ranges)
+	assertAdjacencyMatches(ig, swept: swept, ranges: ranges)
+	return ig
+end 'validatedInterference'
+
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -284,8 +320,10 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// See `buildCallerSavedByOrdinal` / `interferenceEdgeIsRedundant`.
 	let callerSavedByOrdinal = buildCallerSavedByOrdinal(pool, callerSaved: callerSaved)
 
-	// Step 1: Build interference graph
-	let ig = buildInterferenceGraph(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	// Step 1: Build interference graph. `legacy` uses buildInterferenceGraph;
+	// `sweep` uses the unified LiveSetSweep (byte-identical edge set); `validate`
+	// builds both, asserts the edge sets match, and returns the legacy graph.
+	let ig = selectInterference(ranges, callerSavedByOrdinal: callerSavedByOrdinal, sweepMode: sweepMode)
 
 	// Step 2: Compute dominance-tree preorder index for sorting
 	let domIndex = buildDomPreorderIndex(domPreorder)
@@ -1619,7 +1657,7 @@ end 'buildInterferenceGraph'
 // bs[idx] ascending. Per-block live-range counts are bounded (typically
 // 10-100), so insertion sort is faster than a recursive quicksort once
 // constants are folded in, and trivially stable.
-function sortBlockIndicesByStart(bs RegIntArray) returns RegIntArray
+export function sortBlockIndicesByStart(bs RegIntArray) returns RegIntArray
 	let count = bs.count()
 	var order = RegIntArray.create()
 	var i = 0
@@ -1658,7 +1696,7 @@ end 'sortBlockIndicesByStart'
 // a block-arg destination had multiple predecessors, because the last writer
 // to `copyHintValueId` won the suppression for every other edge too. Now we
 // require the overlap to coincide with a recorded edge on either range.
-function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, blockId BlockId, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
+export function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, blockId BlockId, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
 	// Half-open overlap size: min(e1,e2) - max(s1,s2). Exactly 1 means
 	// they share a single position — the copy boundary.
 	var minEnd = e1
@@ -1750,7 +1788,7 @@ end 'buildCallerSavedByOrdinal'
 // So the virtual would never occupy the fixed range's register regardless of
 // the edge; removing it changes no `usedRegs`/hint/victim/recolor outcome but
 // lowers the virtual's degree, reducing first-fit failures and recolor work.
-function interferenceEdgeIsRedundant(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt, callerSavedByOrdinal BoolArray) returns bool
+export function interferenceEdgeIsRedundant(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt, callerSavedByOrdinal BoolArray) returns bool
 	let r1 = try ranges.get(ri1) otherwise panic("interferenceEdgeIsRedundant: ri1={ri1} OOB in ranges")
 	let r2 = try ranges.get(ri2) otherwise panic("interferenceEdgeIsRedundant: ri2={ri2} OOB in ranges")
 	return edgeRedundantOrdered(r1, other: r2, callerSavedByOrdinal: callerSavedByOrdinal) or edgeRedundantOrdered(r2, other: r1, callerSavedByOrdinal: callerSavedByOrdinal)
@@ -1783,7 +1821,7 @@ function edgeRedundantOrdered(fixed LiveRange, other LiveRange, callerSavedByOrd
 	return try callerSavedByOrdinal.get(fixed.fixedReg) otherwise false
 end 'edgeRedundantOrdered'
 
-function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
+export function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	// Add edge a <-> b, deduplicating against the existing neighbor set. The edge
 	// is symmetric and both neighbor lists are updated together, so a single
 	// membership scan of nbrsA covers both call orders (addInterference(a,b) and
@@ -1803,7 +1841,7 @@ function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	nbrsB.push(a)
 end 'addInterference'
 
-function regIntArrayContains(arr RegIntArray, value RegInt) returns bool
+export function regIntArrayContains(arr RegIntArray, value RegInt) returns bool
 	for v in arr 'each'
 		if v == value 'found'
 			return true

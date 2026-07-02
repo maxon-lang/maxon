@@ -17,6 +17,10 @@ function main() returns ExitCode
 	// greedy allocator during register allocation. Empty (the default) is a no-op.
 	setGreedyOnlyFunc(args.greedyOnly)
 
+	// Track-A rewrite: interference-construction mode (legacy | sweep | validate).
+	// Empty (the default) → legacy, so normal compilation is unchanged.
+	setSweepMode(args.sweepMode)
+
 	let exit = match args.command 'cmd'
 		build gives runBuild(args)
 		specTest gives runSpecTests(args)
@@ -206,7 +210,7 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	// Parallel mode: spawn `workers` persistent worker subprocesses and
 	// dispatch jobs from a single slowest-first queue, draining whichever
 	// worker has results ready (no head-of-line blocking on slow specs).
-	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose)
+	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose, sweepMode: args.sweepMode)
 end 'runSpecTestsForTarget'
 
 function runAllTargetTests(filter String) returns ExitCode
