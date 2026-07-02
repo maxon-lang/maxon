@@ -47,19 +47,7 @@ module {
     mir.memcpy %25, %12, %2
     %26 = mir.add.i64 %25, %2
     mir.memcpy %26, %14, %15
-    %43 = mir.mov_imm 8 : i64
-    %44 = mir.sub.i64 %8, %43
-    %46 = mir.mov_imm -1 : i64
-    %45 = mir.atomic_xadd %44, %46
-    %47 = mir.mov_imm 1 : i64
-    %48 = mir.cmp eq, %45, %47
-    mir.cond_br %48 [then: __decref_free_0(), else: __decref_cont_0()]
-  check_0.after:
-    mir.ret %2
-  __decref_free_0:
-    %49 = mir.call @mm_free(%8)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
+    %28 = mir.call @stdlib.__mm_decref(%8)
     %29 = mir.mov_imm 48 : i64
     %30 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %31 = mir.call @mrt_alloc_with_dtor(%29, %30)
@@ -81,6 +69,8 @@ module {
     %41 = mir.call @mrt_panic(%40)
     %42 = mir.call @mm_drop(%35)
     mir.br check_0.after()
+  check_0.after:
+    mir.ret %2
   }
 }
 ---

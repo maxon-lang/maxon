@@ -32,9 +32,7 @@ module {
     %38 = mir.mov_imm 8 : i64
     %39 = mir.mov_imm 0 : i64
     %40 = mir.call @stdlib.__mm_alloc(%38, %39)
-    %77 = mir.mov_imm 8 : i64
-    %78 = mir.sub.i64 %40, %77
-    mir.atomic_inc %78
+    %68 = mir.call @stdlib.__mm_incref(%40)
     mir.store %6, %40, 0 width: qword
     %8 = mir.global_addr @__layout_Array_Item
     %9 = mir.call @Array.push(%4, %40, %8)
@@ -42,9 +40,7 @@ module {
     %41 = mir.mov_imm 8 : i64
     %42 = mir.mov_imm 0 : i64
     %43 = mir.call @stdlib.__mm_alloc(%41, %42)
-    %79 = mir.mov_imm 8 : i64
-    %80 = mir.sub.i64 %43, %79
-    mir.atomic_inc %80
+    %69 = mir.call @stdlib.__mm_incref(%43)
     mir.store %12, %43, 0 width: qword
     mir.br inlined_Array.set_0_0()
   inlined_Array.set_0_0:
@@ -92,26 +88,22 @@ module {
     %65 = mir.mov_imm 8 : i64
     %66 = mir.mov_imm 0 : i64
     %67 = mir.call @stdlib.__mm_alloc(%65, %66)
-    %81 = mir.mov_imm 8 : i64
-    %82 = mir.sub.i64 %67, %81
-    mir.atomic_inc %82
+    %70 = mir.call @stdlib.__mm_incref(%67)
     mir.store %32, %67, 0 width: qword
     mir.br try_1.merge(%67)
   try_1.merge(%37: i64):
     %36 = mir.load %37, 0 width: qword
     %71 = mir.call @__mm_decref_maybenull_helper(%37)
-    %85 = mir.mov_imm 125 : i64
-    %86 = mir.cmp ugt, %36, %85
-    mir.cond_br %86 [then: __range_panic_0(), else: __range_ok_0()]
+    %77 = mir.mov_imm 125 : i64
+    %78 = mir.cmp ugt, %36, %77
+    mir.cond_br %78 [then: __range_panic_0(), else: __range_ok_0()]
   __rc_edge_13_0:
-    %83 = mir.mov_imm 8 : i64
-    %84 = mir.sub.i64 %56, %83
-    mir.atomic_inc %84
+    %75 = mir.call @stdlib.__mm_incref(%56)
     %76 = mir.call @__mm_decref_maybenull_helper(%4)
     mir.br inline_cont_main_3(%56, %62)
   __range_panic_0:
-    %87 = mir.global_addr @__panic_msg_038a3a34d0818f4f
-    %88 = mir.call @mrt_panic(%87)
+    %79 = mir.global_addr @__panic_msg_038a3a34d0818f4f
+    %80 = mir.call @mrt_panic(%79)
   __range_ok_0:
     mir.ret %36
   }

@@ -117,18 +117,19 @@ module {
     x64.lea rdx, [rip+__destruct_TestFile]
     x64.mov ecx, 8
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov [r8+0], r13 (8b)
-    x64.mov [r8+0], r12 (8b)
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov [rbx+0], r13 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8, rbx
     x64.mov rdx, r13
     x64.epilogue
     x64.ret
   }
   func @TestDir.search(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
     x64.call mrt_directory_open_search
     x64.mov rbx, r8
     x64.xor r12d, r12d
@@ -143,11 +144,12 @@ module {
     x64.lea rdx, [rip+__destruct_TestDir]
     x64.mov ecx, 8
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov [r8+0], r12 (8b)
-    x64.mov [r8+0], rbx (8b)
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.mov [r13+0], rbx (8b)
+    x64.mov r8, r13
     x64.mov rdx, r12
     x64.epilogue
     x64.ret
@@ -509,9 +511,8 @@ module {
     x64.mov r8, 0
     x64.mov [r12+8], r8 (8b)
     x64.mov rbx, [r12+0] (8b)
-    x64.mov r8, rbx
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
     x64.mov rcx, rbx
     x64.call TestDir.search
     x64.mov [rbp+-40], r8
@@ -563,75 +564,75 @@ module {
     x64.call mrt_directory_filename
     x64.mov rcx, r8
     x64.call String.init
-    x64.mov rbx, r8
+    x64.mov [rbp+-48], r8
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
-    x64.mov r12, r8
+    x64.mov rbx, r8
     x64.mov r8, 0
-    x64.mov [r12+40], r8 (8b)
+    x64.mov [rbx+40], r8 (8b)
     x64.lea r8, [rip+__istr_9]
-    x64.mov [r12+0], r8 (8b)
+    x64.mov [rbx+0], r8 (8b)
     x64.mov r8, 1
-    x64.mov [r12+8], r8 (8b)
+    x64.mov [rbx+8], r8 (8b)
     x64.mov r8, -2
-    x64.mov [r12+16], r8 (8b)
+    x64.mov [rbx+16], r8 (8b)
     x64.mov r8, 1
-    x64.mov [r12+24], r8 (8b)
+    x64.mov [rbx+24], r8 (8b)
     x64.mov r8, 0
-    x64.mov [r12+32], r8 (8b)
+    x64.mov [rbx+32], r8 (8b)
     x64.lea rdx, [rip+__destruct_String]
     x64.mov rcx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov [r13+0], r12 (8b)
-    x64.mov r8, 1
-    x64.mov [r13+8], r8 (8b)
-    x64.mov rcx, rbx
-    x64.mov rdx, r13
-    x64.call String.equals
     x64.mov r12, r8
-    x64.mov rcx, r13
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-48]
+    x64.call String.equals
+    x64.mov rbx, r8
+    x64.mov rcx, r12
     x64.call mm_drop
     x64.mov r8, 1
-    x64.xor r12, r8
+    x64.xor rbx, r8
     x64.je __rc_edge_14_0
   shortAnd.rhs:
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
-    x64.mov r12, r8
+    x64.mov rbx, r8
     x64.mov r8, 0
-    x64.mov [r12+40], r8 (8b)
+    x64.mov [rbx+40], r8 (8b)
     x64.lea r8, [rip+__istr_10]
-    x64.mov [r12+0], r8 (8b)
+    x64.mov [rbx+0], r8 (8b)
     x64.mov r8d, 2
-    x64.mov [r12+8], r8 (8b)
+    x64.mov [rbx+8], r8 (8b)
     x64.mov r8, -2
-    x64.mov [r12+16], r8 (8b)
+    x64.mov [rbx+16], r8 (8b)
     x64.mov r8, 1
-    x64.mov [r12+24], r8 (8b)
+    x64.mov [rbx+24], r8 (8b)
     x64.mov r8, 0
-    x64.mov [r12+32], r8 (8b)
+    x64.mov [rbx+32], r8 (8b)
     x64.lea rdx, [rip+__destruct_String]
     x64.mov rcx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r13, r8
-    x64.mov [r13+0], r12 (8b)
-    x64.mov r8, 1
-    x64.mov [r13+8], r8 (8b)
-    x64.mov rcx, rbx
-    x64.mov rdx, r13
-    x64.call String.equals
     x64.mov r12, r8
-    x64.mov rcx, r13
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-48]
+    x64.call String.equals
+    x64.mov rbx, r8
+    x64.mov rcx, r12
     x64.call mm_drop
-    x64.mov rcx, rbx
+    x64.mov rcx, [rbp+-48]
     x64.call __mm_decref_maybenull_helper
     x64.mov r8, 1
-    x64.xor r12, r8
+    x64.xor rbx, r8
   shortAnd.merge:
-    x64.test r12, r12
+    x64.test rbx, rbx
     x64.mov r8, 0
     x64.je notDot1_0.after
   notDot1_0:
@@ -639,7 +640,7 @@ module {
     x64.add r8, 1
   notDot1_0.after:
   loop_0.header:
-    x64.mov [rbp+-56], r8
+    x64.mov [rbp+-64], r8
     x64.mov r8, [rbp+-40]
     x64.mov rcx, [r8+0] (8b)
     x64.call mrt_directory_next
@@ -661,7 +662,7 @@ module {
     x64.mov r8, [rbp+-40]
     x64.mov rcx, [r8+0] (8b)
     x64.call mrt_directory_filename
-    x64.mov [rbp+-48], r8
+    x64.mov [rbp+-56], r8
     x64.lea rbx, [rip+__destruct_String]
     x64.mov r8d, 16
   inlined_stdlib.__mm_alloc_0_0:
@@ -779,8 +780,8 @@ module {
     x64.add r13, 32
     x64.mov r8, r13
   inline_cont_main_3:
-    x64.mov [rbp+-64], r8
-    x64.mov r8, [rbp+-64]
+    x64.mov [rbp+-72], r8
+    x64.mov r8, [rbp+-72]
     x64.sub r8, 8
     x64.lock inc qword ptr [r8]
     x64.lea rbx, [rip+stdlib.__destruct___ManagedMemory]
@@ -915,22 +916,22 @@ module {
     x64.mov [r8+32], r9 (8b)
     x64.xor r9d, r9d
     x64.mov [r8+40], r9 (8b)
-    x64.mov r9, [rbp+-64]
+    x64.mov r9, [rbp+-72]
     x64.mov [r9+0], r8 (8b)
     x64.mov rcx, [r9+0] (8b)
     x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-64]
-    x64.mov r9, [rbp+-48]
+    x64.mov r8, [rbp+-72]
+    x64.mov r9, [rbp+-56]
     x64.mov [r8+0], r9 (8b)
-    x64.mov rcx, [rbp+-48]
+    x64.mov rcx, [rbp+-56]
     x64.call stdlib.scanIsAscii
-    x64.mov r9, [rbp+-64]
+    x64.mov r9, [rbp+-72]
     x64.mov [r9+8], r8 (1b)
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
-    x64.mov [rbp+-48], r8
-    x64.mov r8, [rbp+-48]
+    x64.mov [rbp+-56], r8
+    x64.mov r8, [rbp+-56]
     x64.mov r9, 0
     x64.mov [r8+40], r9 (8b)
     x64.lea r9, [rip+__istr_9]
@@ -1058,17 +1059,17 @@ module {
     x64.add r8, 24
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
-    x64.add r13, 32
-    x64.mov rbx, r13
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov rbx, rcx
   inline_cont_main_3:
-    x64.sub r13, 8
-    x64.lock inc qword ptr [r13]
-    x64.mov r8, [rbp+-48]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-56]
     x64.mov [rbx+0], r8 (8b)
     x64.mov r8, 1
     x64.mov [rbx+8], r8 (8b)
     x64.mov rdx, rbx
-    x64.mov rcx, [rbp+-64]
+    x64.mov rcx, [rbp+-72]
     x64.call String.equals
     x64.mov r12, r8
     x64.mov rcx, rbx
@@ -1135,9 +1136,8 @@ module {
     x64.mov r8, 0
     x64.mov [r12+8], r8 (8b)
     x64.mov rbx, [r12+0] (8b)
-    x64.mov r8, rbx
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
     x64.mov rcx, rbx
     x64.call mrt_file_delete
     x64.mov r13, rdx
@@ -1152,8 +1152,8 @@ module {
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
-    x64.mov [rbp+-48], r8
-    x64.mov r8, [rbp+-48]
+    x64.mov [rbp+-56], r8
+    x64.mov r8, [rbp+-56]
     x64.mov r9, 0
     x64.mov [r8+40], r9 (8b)
     x64.lea r9, [rip+__istr_10]
@@ -1281,31 +1281,31 @@ module {
     x64.add r8, 24
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
-    x64.add r13, 32
-    x64.mov rbx, r13
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov rbx, rcx
   inline_cont_main_14:
-    x64.sub r13, 8
-    x64.lock inc qword ptr [r13]
-    x64.mov r8, [rbp+-48]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-56]
     x64.mov [rbx+0], r8 (8b)
     x64.mov r8, 1
     x64.mov [rbx+8], r8 (8b)
     x64.mov rdx, rbx
-    x64.mov rcx, [rbp+-64]
+    x64.mov rcx, [rbp+-72]
     x64.call String.equals
     x64.mov r12, r8
     x64.mov rcx, rbx
     x64.call mm_drop
-    x64.mov rcx, [rbp+-64]
+    x64.mov rcx, [rbp+-72]
     x64.call __mm_decref_maybenull_helper
     x64.mov r8, 1
     x64.xor r12, r8
   shortAnd.merge:
     x64.test r12, r12
-    x64.mov r8, [rbp+-56]
+    x64.mov r8, [rbp+-64]
     x64.je notDot2_0.after
   notDot2_0:
-    x64.mov r8, [rbp+-56]
+    x64.mov r8, [rbp+-64]
     x64.add r8, 1
   notDot2_0.after:
     x64.jmp loop_0.header
@@ -1371,9 +1371,8 @@ module {
     x64.mov r8, 0
     x64.mov [r12+8], r8 (8b)
     x64.mov rbx, [r12+0] (8b)
-    x64.mov r8, rbx
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
     x64.mov rcx, rbx
     x64.call mrt_file_delete
     x64.mov r13, rdx
@@ -1388,7 +1387,7 @@ module {
     x64.epilogue
     x64.ret
   try_6.merge:
-    x64.mov r8, [rbp+-56]
+    x64.mov r8, [rbp+-64]
     x64.cmp r8, 2
     x64.jne checkCount_0.after
   checkCount_0:
@@ -1400,7 +1399,7 @@ module {
     x64.call mrt_alloc
     x64.mov rbx, r8
     x64.mov rdx, rbx
-    x64.mov rcx, [rbp+-56]
+    x64.mov rcx, [rbp+-64]
     x64.call mrt_i64_to_string
     x64.mov r12, r8
     x64.mov r8, r12
@@ -1430,27 +1429,8 @@ module {
     x64.mov r8, 0
     x64.mov [rbp-24], r8
     x64.rep_movsb
-    x64.mov r8, -1
-    x64.mov r9, rbx
-    x64.sub r9, 8
-    x64.lock xadd qword ptr [r9], r8
-    x64.cmp r8, 1
-    x64.jne __decref_cont_0
-    x64.jmp __decref_free_0
-  __rc_edge_14_0:
     x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r12, 0
-    x64.jmp shortAnd.merge
-  __rc_edge_40_0:
-    x64.mov rcx, [rbp+-64]
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r12, 0
-    x64.jmp shortAnd.merge
-  __decref_free_0:
-    x64.mov rcx, rbx
-    x64.call mm_free
-  __decref_cont_0:
+    x64.call stdlib.__mm_decref
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov rcx, 48
     x64.call mrt_alloc_with_dtor
@@ -1480,6 +1460,16 @@ module {
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
+  __rc_edge_14_0:
+    x64.mov rcx, [rbp+-48]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rbx, 0
+    x64.jmp shortAnd.merge
+  __rc_edge_40_0:
+    x64.mov rcx, [rbp+-72]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r12, 0
+    x64.jmp shortAnd.merge
   __phi_trampoline_45_0:
     x64.mov r12, r8
     x64.jmp inlined_stdlib.__mm_alloc_2_0

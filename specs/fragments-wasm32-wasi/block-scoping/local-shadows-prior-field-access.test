@@ -90,17 +90,7 @@ module {
     mir.memcpy %27, %12, %13
     %28 = mir.add.i64 %27, %13
     mir.memcpy %28, %14, %15
-    %50 = mir.mov_imm 8 : i64
-    %51 = mir.sub.i64 %12, %50
-    %53 = mir.mov_imm -1 : i64
-    %52 = mir.atomic_xadd %51, %53
-    %54 = mir.mov_imm 1 : i64
-    %55 = mir.cmp eq, %52, %54
-    mir.cond_br %55 [then: __decref_free_0(), else: __decref_cont_0()]
-  __decref_free_0:
-    %56 = mir.call @mm_free(%12)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
+    %30 = mir.call @stdlib.__mm_decref(%12)
     %31 = mir.mov_imm 48 : i64
     %32 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %33 = mir.call @mrt_alloc_with_dtor(%31, %32)
@@ -332,13 +322,27 @@ module {
     mir.memcpy %66, %53, %2
     %67 = mir.add.i64 %66, %2
     mir.memcpy %67, %55, %138
-    %238 = mir.mov_imm 8 : i64
-    %239 = mir.sub.i64 %51, %238
-    %241 = mir.mov_imm -1 : i64
-    %240 = mir.atomic_xadd %239, %241
-    %242 = mir.mov_imm 1 : i64
-    %243 = mir.cmp eq, %240, %242
-    mir.cond_br %243 [then: __decref_free_0(), else: __decref_cont_0()]
+    %69 = mir.call @stdlib.__mm_decref(%51)
+    %70 = mir.mov_imm 48 : i64
+    %71 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %72 = mir.call @mrt_alloc_with_dtor(%70, %71)
+    mir.store %2, %72, 40 width: qword
+    mir.store %64, %72, 0 width: qword
+    mir.store %61, %72, 8 width: qword
+    mir.store %61, %72, 16 width: qword
+    mir.store %138, %72, 24 width: qword
+    %75 = mir.mov_imm -1 : i64
+    mir.store %75, %72, 32 width: qword
+    %77 = mir.mov_imm 16 : i64
+    %78 = mir.func_addr @__destruct_String
+    %76 = mir.call @stdlib.__mm_alloc(%77, %78)
+    mir.store %72, %76, 0 width: qword
+    mir.store %2, %76, 8 width: qword
+    %80 = mir.load %76, 0 width: qword
+    %81 = mir.load %80, 0 width: qword
+    %82 = mir.call @mrt_panic(%81)
+    %225 = mir.call @mm_drop(%76)
+    mir.ret %2
   inlined_Array.get_0_1:
     %178 = mir.load %137, 0 width: qword
     %179, %180 = mir.try_call @stdlib.__managed_mem_get(%178, %135)
@@ -378,73 +382,7 @@ module {
     mir.memcpy %112, %99, %2
     %113 = mir.add.i64 %112, %2
     mir.memcpy %113, %101, %138
-    %245 = mir.mov_imm 8 : i64
-    %246 = mir.sub.i64 %97, %245
-    %248 = mir.mov_imm -1 : i64
-    %247 = mir.atomic_xadd %246, %248
-    %249 = mir.mov_imm 1 : i64
-    %250 = mir.cmp eq, %247, %249
-    mir.cond_br %250 [then: __decref_free_1(), else: __decref_cont_1()]
-  try_1.merge:
-    %132 = mir.call @useOne(%176)
-    %227 = mir.call @__mm_decref_maybenull_helper(%176)
-    %134 = mir.call @useOne(%186)
-    %228 = mir.call @__mm_decref_maybenull_helper(%186)
-    mir.br nameLoop_0.step()
-  __rc_edge_18_0:
-    %229 = mir.call @__mm_decref_maybenull_helper(%146)
-    mir.br fooLoop_0.exit()
-  __rc_edge_22_0:
-    %230 = mir.call @__mm_decref_maybenull_helper(%146)
-    mir.br fooLoop_0.exit()
-  __rc_edge_32_0:
-    %252 = mir.mov_imm 8 : i64
-    %253 = mir.sub.i64 %211, %252
-    mir.atomic_inc %253
-    mir.br inline_cont_repro_3(%211)
-  __rc_edge_42_0:
-    %254 = mir.mov_imm 8 : i64
-    %255 = mir.sub.i64 %223, %254
-    mir.atomic_inc %255
-    mir.br inline_cont_repro_3(%223)
-  __rc_edge_25_0:
-    %256 = mir.mov_imm 8 : i64
-    %257 = mir.sub.i64 %169, %256
-    mir.atomic_inc %257
-    mir.br inline_cont_repro_6(%169, %175)
-  __rc_edge_29_0:
-    %258 = mir.mov_imm 8 : i64
-    %259 = mir.sub.i64 %179, %258
-    mir.atomic_inc %259
-    mir.br inline_cont_repro_11(%179, %185)
-  __decref_free_0:
-    %244 = mir.call @mm_free(%51)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
-    %70 = mir.mov_imm 48 : i64
-    %71 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %72 = mir.call @mrt_alloc_with_dtor(%70, %71)
-    mir.store %2, %72, 40 width: qword
-    mir.store %64, %72, 0 width: qword
-    mir.store %61, %72, 8 width: qword
-    mir.store %61, %72, 16 width: qword
-    mir.store %138, %72, 24 width: qword
-    %75 = mir.mov_imm -1 : i64
-    mir.store %75, %72, 32 width: qword
-    %77 = mir.mov_imm 16 : i64
-    %78 = mir.func_addr @__destruct_String
-    %76 = mir.call @stdlib.__mm_alloc(%77, %78)
-    mir.store %72, %76, 0 width: qword
-    mir.store %2, %76, 8 width: qword
-    %80 = mir.load %76, 0 width: qword
-    %81 = mir.load %80, 0 width: qword
-    %82 = mir.call @mrt_panic(%81)
-    %225 = mir.call @mm_drop(%76)
-    mir.ret %2
-  __decref_free_1:
-    %251 = mir.call @mm_free(%97)
-    mir.br __decref_cont_1()
-  __decref_cont_1:
+    %115 = mir.call @stdlib.__mm_decref(%97)
     %116 = mir.mov_imm 48 : i64
     %117 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %118 = mir.call @mrt_alloc_with_dtor(%116, %117)
@@ -465,6 +403,30 @@ module {
     %128 = mir.call @mrt_panic(%127)
     %226 = mir.call @mm_drop(%122)
     mir.ret %2
+  try_1.merge:
+    %132 = mir.call @useOne(%176)
+    %227 = mir.call @__mm_decref_maybenull_helper(%176)
+    %134 = mir.call @useOne(%186)
+    %228 = mir.call @__mm_decref_maybenull_helper(%186)
+    mir.br nameLoop_0.step()
+  __rc_edge_18_0:
+    %229 = mir.call @__mm_decref_maybenull_helper(%146)
+    mir.br fooLoop_0.exit()
+  __rc_edge_22_0:
+    %230 = mir.call @__mm_decref_maybenull_helper(%146)
+    mir.br fooLoop_0.exit()
+  __rc_edge_32_0:
+    %234 = mir.call @stdlib.__mm_incref(%211)
+    mir.br inline_cont_repro_3(%211)
+  __rc_edge_42_0:
+    %235 = mir.call @stdlib.__mm_incref(%223)
+    mir.br inline_cont_repro_3(%223)
+  __rc_edge_25_0:
+    %236 = mir.call @stdlib.__mm_incref(%169)
+    mir.br inline_cont_repro_6(%169, %175)
+  __rc_edge_29_0:
+    %237 = mir.call @stdlib.__mm_incref(%179)
+    mir.br inline_cont_repro_11(%179, %185)
   }
   func @main() -> u8 {
   entry:
@@ -487,17 +449,13 @@ module {
     %15 = mir.mov_imm 16 : i64
     %16 = mir.func_addr @__destruct_String
     %14 = mir.call @stdlib.__mm_alloc(%15, %16)
-    %93 = mir.mov_imm 8 : i64
-    %94 = mir.sub.i64 %14, %93
-    mir.atomic_inc %94
+    %85 = mir.call @stdlib.__mm_incref(%14)
     mir.store %8, %14, 0 width: qword
     mir.store %12, %14, 8 width: qword
     %77 = mir.mov_imm 16 : i64
     %78 = mir.func_addr @__destruct_Foo
     %79 = mir.call @stdlib.__mm_alloc(%77, %78)
-    %95 = mir.mov_imm 8 : i64
-    %96 = mir.sub.i64 %79, %95
-    mir.atomic_inc %96
+    %86 = mir.call @stdlib.__mm_incref(%79)
     %80 = mir.mov_imm 0 : i64
     mir.store %80, %79, 0 width: qword
     mir.store %14, %79, 0 width: qword
@@ -519,18 +477,14 @@ module {
     %33 = mir.mov_imm 16 : i64
     %34 = mir.func_addr @__destruct_String
     %32 = mir.call @stdlib.__mm_alloc(%33, %34)
-    %97 = mir.mov_imm 8 : i64
-    %98 = mir.sub.i64 %32, %97
-    mir.atomic_inc %98
+    %87 = mir.call @stdlib.__mm_incref(%32)
     mir.store %26, %32, 0 width: qword
     mir.store %12, %32, 8 width: qword
     %36 = mir.mov_imm 2 : i64
     %81 = mir.mov_imm 16 : i64
     %82 = mir.func_addr @__destruct_Foo
     %83 = mir.call @stdlib.__mm_alloc(%81, %82)
-    %99 = mir.mov_imm 8 : i64
-    %100 = mir.sub.i64 %83, %99
-    mir.atomic_inc %100
+    %88 = mir.call @stdlib.__mm_incref(%83)
     %84 = mir.mov_imm 0 : i64
     mir.store %84, %83, 0 width: qword
     mir.store %32, %83, 0 width: qword
@@ -554,9 +508,7 @@ module {
     %53 = mir.mov_imm 16 : i64
     %54 = mir.func_addr @__destruct_String
     %52 = mir.call @stdlib.__mm_alloc(%53, %54)
-    %101 = mir.mov_imm 8 : i64
-    %102 = mir.sub.i64 %52, %101
-    mir.atomic_inc %102
+    %89 = mir.call @stdlib.__mm_incref(%52)
     mir.store %46, %52, 0 width: qword
     mir.store %12, %52, 8 width: qword
     %56 = mir.global_addr @__layout_Array_String
@@ -576,9 +528,7 @@ module {
     %69 = mir.mov_imm 16 : i64
     %70 = mir.func_addr @__destruct_String
     %68 = mir.call @stdlib.__mm_alloc(%69, %70)
-    %103 = mir.mov_imm 8 : i64
-    %104 = mir.sub.i64 %68, %103
-    mir.atomic_inc %104
+    %90 = mir.call @stdlib.__mm_incref(%68)
     mir.store %62, %68, 0 width: qword
     mir.store %12, %68, 8 width: qword
     %72 = mir.global_addr @__layout_Array_String

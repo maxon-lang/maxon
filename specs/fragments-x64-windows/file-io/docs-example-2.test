@@ -36,13 +36,13 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov [r8+0], rbx (8b)
-    x64.mov r9, 1
-    x64.mov [r8+8], r9 (8b)
-    x64.mov rcx, r8
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rcx, r12
     x64.call FilePath.init
     x64.mov rbx, r8
     x64.mov rcx, rbx
@@ -128,16 +128,8 @@ module {
     x64.mov [rbp-16], r9
     x64.mov [rbp-24], r14
     x64.rep_movsb
-    x64.mov r8, -1
-    x64.mov r9, r13
-    x64.sub r9, 8
-    x64.lock xadd qword ptr [r9], r8
-    x64.cmp r8, 1
-    x64.jne __decref_cont_0
-  __decref_free_0:
     x64.mov rcx, r13
-    x64.call mm_free
-  __decref_cont_0:
+    x64.call stdlib.__mm_decref
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor

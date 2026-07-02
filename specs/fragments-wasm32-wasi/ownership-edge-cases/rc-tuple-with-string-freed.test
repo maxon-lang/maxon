@@ -29,9 +29,7 @@ module {
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
     %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    %23 = mir.mov_imm 8 : i64
-    %24 = mir.sub.i64 %11, %23
-    mir.atomic_inc %24
+    %21 = mir.call @stdlib.__mm_incref(%11)
     mir.store %5, %11, 0 width: qword
     %14 = mir.mov_imm 1 : i64
     mir.store %14, %11, 8 width: qword
@@ -43,12 +41,12 @@ module {
     mir.store %11, %16, 8 width: qword
     %20 = mir.load %16, 0 width: qword
     %22 = mir.call @mm_drop(%16)
-    %25 = mir.mov_imm 125 : i64
-    %26 = mir.cmp ugt, %20, %25
-    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %27 = mir.global_addr @__panic_msg_abbc006d550d53e2
-    %28 = mir.call @mrt_panic(%27)
+    %25 = mir.global_addr @__panic_msg_abbc006d550d53e2
+    %26 = mir.call @mrt_panic(%25)
   __range_ok_0:
     mir.ret %20
   }

@@ -349,14 +349,6 @@ function appendX64Win32RuntimeSeeds(seeds StringArray, os Os)
 	seeds.push("mrt_alloc")
 	seeds.push("mrt_alloc_with_dtor")
 	seeds.push("mm_decref")
-	// `mm_free` is called directly by the inlined strict-decref fast path
-	// (InlineRefcounts: prior-rc==1 → `call mm_free`). Seed it unconditionally
-	// alongside `mm_decref` in BOTH cache legs so the two stay byte-identical —
-	// otherwise a program whose only `mm_free` reference is an inlined decref on
-	// a rarely-linked path can diverge cache-on vs. cache-off (and the linker
-	// resolves the `call mm_free` fixup to a missing label). `mm_decref` is kept:
-	// the maybenull helper still routes through it.
-	seeds.push("mm_free")
 	seeds.push("__mm_decref_maybenull_helper")
 	seeds.push("mm_drop")
 	seeds.push("mm_retain_type_param")

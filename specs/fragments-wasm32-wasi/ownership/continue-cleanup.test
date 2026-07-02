@@ -226,9 +226,7 @@ module {
     %75 = mir.add.i64 %93, %74
     mir.br inline_cont_main_2(%75)
   inline_cont_main_2(%76: i64):
-    %174 = mir.mov_imm 8 : i64
-    %175 = mir.sub.i64 %75, %174
-    mir.atomic_inc %175
+    %173 = mir.call @stdlib.__mm_incref(%75)
     mir.store %51, %76, 0 width: qword
     %9 = mir.mov_imm 1 : i64
     %10 = mir.add.i64 %51, %9
@@ -253,25 +251,7 @@ module {
     mir.memcpy %30, %19, %20
     %31 = mir.add.i64 %30, %20
     mir.memcpy %31, %21, %22
-    %178 = mir.mov_imm 8 : i64
-    %179 = mir.sub.i64 %19, %178
-    %181 = mir.mov_imm -1 : i64
-    %180 = mir.atomic_xadd %179, %181
-    %182 = mir.mov_imm 1 : i64
-    %183 = mir.cmp eq, %180, %182
-    mir.cond_br %183 [then: __decref_free_0(), else: __decref_cont_0()]
-  skip_0.after:
-    %48 = mir.load %76, 0 width: qword
-    %49 = mir.add.i64 %50, %48
-    %171 = mir.call @mm_drop(%76)
-    mir.br loop_0.header(%49, %10)
-  __rc_edge_10_0:
-    %172 = mir.call @mm_drop(%76)
-    mir.br loop_0.header(%50, %10)
-  __decref_free_0:
-    %184 = mir.call @mm_free(%19)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
+    %33 = mir.call @stdlib.__mm_decref(%19)
     %34 = mir.mov_imm 48 : i64
     %35 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %36 = mir.call @mrt_alloc_with_dtor(%34, %35)
@@ -289,15 +269,21 @@ module {
     mir.store %36, %40, 0 width: qword
     mir.store %0, %40, 8 width: qword
     %55 = mir.load %40, 0 width: qword
-    %176 = mir.mov_imm 8 : i64
-    %177 = mir.sub.i64 %55, %176
-    mir.atomic_inc %177
+    %168 = mir.call @stdlib.__mm_incref(%55)
     %56 = mir.load %55, 0 width: qword
     %57 = mir.load %55, 8 width: qword
     %58 = mir.call @mrt_write_stdout(%56, %57)
     %170 = mir.call @mm_drop(%40)
     %169 = mir.call @__mm_decref_maybenull_helper(%55)
     mir.ret %0
+  skip_0.after:
+    %48 = mir.load %76, 0 width: qword
+    %49 = mir.add.i64 %50, %48
+    %171 = mir.call @mm_drop(%76)
+    mir.br loop_0.header(%49, %10)
+  __rc_edge_10_0:
+    %172 = mir.call @mm_drop(%76)
+    mir.br loop_0.header(%50, %10)
   }
 }
 ---

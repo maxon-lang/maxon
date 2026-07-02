@@ -59,17 +59,13 @@ module {
     %27 = mir.mov_imm 8 : i64
     %28 = mir.mov_imm 0 : i64
     %29 = mir.call @stdlib.__mm_alloc(%27, %28)
-    %33 = mir.mov_imm 8 : i64
-    %34 = mir.sub.i64 %29, %33
-    mir.atomic_inc %34
+    %30 = mir.call @stdlib.__mm_incref(%29)
     mir.store %11, %29, 0 width: qword
     mir.br try_0.merge(%29)
   try_0.merge(%15: i64):
     mir.ret %15
   __rc_edge_6_0:
-    %35 = mir.mov_imm 8 : i64
-    %36 = mir.sub.i64 %18, %35
-    mir.atomic_inc %36
+    %32 = mir.call @stdlib.__mm_incref(%18)
     mir.br inline_cont_getFirst_0(%18, %24)
   }
   func @main() -> u8 {
@@ -81,9 +77,7 @@ module {
     %42 = mir.mov_imm 8 : i64
     %43 = mir.mov_imm 0 : i64
     %44 = mir.call @stdlib.__mm_alloc(%42, %43)
-    %55 = mir.mov_imm 8 : i64
-    %56 = mir.sub.i64 %44, %55
-    mir.atomic_inc %56
+    %49 = mir.call @stdlib.__mm_incref(%44)
     mir.store %5, %44, 0 width: qword
     %7 = mir.global_addr @__layout_Array_Item
     %8 = mir.call @Array.push(%3, %44, %7)
@@ -107,17 +101,7 @@ module {
     mir.memcpy %27, %16, %17
     %28 = mir.add.i64 %27, %17
     mir.memcpy %28, %18, %19
-    %59 = mir.mov_imm 8 : i64
-    %60 = mir.sub.i64 %16, %59
-    %62 = mir.mov_imm -1 : i64
-    %61 = mir.atomic_xadd %60, %62
-    %63 = mir.mov_imm 1 : i64
-    %64 = mir.cmp eq, %61, %63
-    mir.cond_br %64 [then: __decref_free_0(), else: __decref_cont_0()]
-  __decref_free_0:
-    %65 = mir.call @mm_free(%16)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
+    %30 = mir.call @stdlib.__mm_decref(%16)
     %31 = mir.mov_imm 48 : i64
     %32 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %33 = mir.call @mrt_alloc_with_dtor(%31, %32)
@@ -135,9 +119,7 @@ module {
     mir.store %33, %37, 0 width: qword
     mir.store %0, %37, 8 width: qword
     %45 = mir.load %37, 0 width: qword
-    %57 = mir.mov_imm 8 : i64
-    %58 = mir.sub.i64 %45, %57
-    mir.atomic_inc %58
+    %50 = mir.call @stdlib.__mm_incref(%45)
     %46 = mir.load %45, 0 width: qword
     %47 = mir.load %45, 8 width: qword
     %48 = mir.call @mrt_write_stdout(%46, %47)

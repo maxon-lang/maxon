@@ -45,13 +45,13 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov [r8+0], rbx (8b)
-    x64.mov r9, 1
-    x64.mov [r8+8], r9 (8b)
-    x64.mov rcx, r8
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rcx, r12
     x64.call FilePath.init
     x64.mov rbx, r8
     x64.mov rcx, rbx
@@ -144,7 +144,8 @@ module {
     x64.mov r9d, 1
     x64.mov rcx, rsi
     x64.shr r8, r8, rcx
-    x64.and r8, r9
+    x64.mov rbx, r8
+    x64.and rbx, r9
     x64.jmp __rc_edge_31_0
   inlined_stdlib.__managed_mem_cursor_current_2_0:
     x64.imul rdi, rsi
@@ -158,21 +159,25 @@ module {
     x64.mov [rbp-16], r9
     x64.movzx rax, byte ptr [rax+0]
     x64.mov rcx, [rbp-24]
+    x64.mov rbx, rcx
     x64.jmp inline_cont_main_2
   inlined_stdlib.__managed_mem_load_sized_2_0:
     x64.cmp rsi, 2
     x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
   inlined_stdlib.__managed_mem_load_sized_3_0:
     x64.movzx rcx, [r8+0] (2b)
+    x64.mov rbx, rcx
     x64.jmp inline_cont_main_2
   inlined_stdlib.__managed_mem_load_sized_4_0:
     x64.cmp rsi, 4
     x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
   inlined_stdlib.__managed_mem_load_sized_5_0:
     x64.mov rcx, [r8+0] (4b)
+    x64.mov rbx, rcx
     x64.jmp inline_cont_main_2
   inlined_stdlib.__managed_mem_load_sized_6_0:
     x64.mov rcx, [r8+0] (8b)
+    x64.mov rbx, rcx
   inline_cont_main_2:
     x64.jmp __rc_edge_57_0
   inline_cont_main_3:
@@ -314,11 +319,11 @@ module {
     x64.add r8, 24
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
-    x64.add r13, 32
-    x64.mov rbx, r13
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov rbx, rcx
   inline_cont_main_3:
-    x64.sub r13, 8
-    x64.lock inc qword ptr [r13]
+    x64.call stdlib.__mm_incref
     x64.mov r8, [rbp+-48]
     x64.mov [rbx+0], r8 (8b)
     x64.mov r8, 1
@@ -469,11 +474,11 @@ module {
     x64.add r8, 24
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
-    x64.add r13, 32
-    x64.mov rbx, r13
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov rbx, rcx
   inline_cont_main_10:
-    x64.sub r13, 8
-    x64.lock inc qword ptr [r13]
+    x64.call stdlib.__mm_incref
     x64.mov r8, [rbp+-48]
     x64.mov [rbx+0], r8 (8b)
     x64.mov r8, 1
@@ -523,16 +528,12 @@ module {
     x64.mov r12, 1
     x64.jmp shortOr.merge
   __rc_edge_31_0:
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
     x64.jmp inline_cont_main_3
   __rc_edge_57_0:
-    x64.mov r8, rcx
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
-    x64.mov rbx, rcx
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
     x64.jmp inline_cont_main_3
   __phi_trampoline_18_0:
     x64.mov rdx, r8

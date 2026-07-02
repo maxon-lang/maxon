@@ -35,7 +35,7 @@ ExitCode: 20
 module {
   func @Function.create(rcx: i64, rdx: i64, rax: i64, r9: i1) -> i64 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov rbx, rcx
     x64.mov r12, rdx
     x64.mov r13, rax
@@ -43,17 +43,18 @@ module {
     x64.lea rdx, [rip+__destruct_Function]
     x64.mov ecx, 32
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.xor r9d, r9d
-    x64.mov [r8+8], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+16], r9 (8b)
-    x64.mov [r8+0], rbx (8b)
-    x64.mov [r8+8], r12 (8b)
-    x64.mov [r8+16], r13 (8b)
-    x64.mov [r8+24], r14 (1b)
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r15+8], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r15+16], r8 (8b)
+    x64.mov [r15+0], rbx (8b)
+    x64.mov [r15+8], r12 (8b)
+    x64.mov [r15+16], r13 (8b)
+    x64.mov [r15+24], r14 (1b)
+    x64.mov r8, r15
     x64.epilogue
     x64.ret
   }
@@ -66,17 +67,17 @@ module {
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.xor r9d, r9d
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9d, 99
-    x64.mov [r8+8], r9 (8b)
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 99
+    x64.mov [r12+8], r8 (8b)
     x64.mov r9d, 1
     x64.mov ecx, 1
     x64.mov rdx, rbx
-    x64.mov rax, r8
+    x64.mov rax, r12
     x64.call Function.create
     x64.mov rbx, r8
     x64.xor edx, edx

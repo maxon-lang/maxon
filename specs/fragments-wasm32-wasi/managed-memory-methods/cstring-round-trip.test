@@ -37,18 +37,16 @@ module {
     %24 = mir.call @stdlib.__managed_mem_to_cstring(%23)
     %18 = mir.call @stdlib.__managed_mem_from_cstring(%24)
     %26 = mir.call @mm_drop(%12)
-    %28 = mir.mov_imm 8 : i64
-    %29 = mir.sub.i64 %18, %28
-    mir.atomic_inc %29
+    %25 = mir.call @stdlib.__mm_incref(%18)
     %20 = mir.call @String.init(%18)
     %22 = mir.call @String.byteLength(%20)
     %27 = mir.call @__mm_decref_maybenull_helper(%20)
-    %30 = mir.mov_imm 125 : i64
-    %31 = mir.cmp ugt, %22, %30
-    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+    %28 = mir.mov_imm 125 : i64
+    %29 = mir.cmp ugt, %22, %28
+    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %32 = mir.global_addr @__panic_msg_3c04a321e86c68f3
-    %33 = mir.call @mrt_panic(%32)
+    %30 = mir.global_addr @__panic_msg_3c04a321e86c68f3
+    %31 = mir.call @mrt_panic(%30)
   __range_ok_0:
     mir.ret %22
   }

@@ -84,9 +84,7 @@ module {
     %18 = mir.mov_imm 8 : i64
     %20 = mir.mov_imm 0 : i64
     %19 = mir.call @stdlib.__mm_alloc(%18, %20)
-    %33 = mir.mov_imm 8 : i64
-    %34 = mir.sub.i64 %19, %33
-    mir.atomic_inc %34
+    %31 = mir.call @stdlib.__mm_incref(%19)
     %22 = mir.call @String.byteLength(%24)
     mir.store %22, %19, 0 width: qword
     %23 = mir.mov_imm 0 : i64
@@ -121,9 +119,7 @@ module {
     %86 = mir.mov_imm 8 : i64
     %87 = mir.mov_imm 0 : i64
     %88 = mir.call @stdlib.__mm_alloc(%86, %87)
-    %104 = mir.mov_imm 8 : i64
-    %105 = mir.sub.i64 %88, %104
-    mir.atomic_inc %105
+    %95 = mir.call @stdlib.__mm_incref(%88)
     mir.store %0, %88, 0 width: qword
     mir.br try_0.merge(%88)
   try_0.merge(%83: i64):
@@ -155,9 +151,7 @@ module {
     %89 = mir.mov_imm 8 : i64
     %90 = mir.mov_imm 0 : i64
     %91 = mir.call @stdlib.__mm_alloc(%89, %90)
-    %106 = mir.mov_imm 8 : i64
-    %107 = mir.sub.i64 %91, %106
-    mir.atomic_inc %107
+    %96 = mir.call @stdlib.__mm_incref(%91)
     mir.store %0, %91, 0 width: qword
     mir.br try_1.merge(%91)
   try_1.merge(%84: i64):
@@ -189,21 +183,19 @@ module {
     %92 = mir.mov_imm 8 : i64
     %93 = mir.mov_imm 0 : i64
     %94 = mir.call @stdlib.__mm_alloc(%92, %93)
-    %108 = mir.mov_imm 8 : i64
-    %109 = mir.sub.i64 %94, %108
-    mir.atomic_inc %109
+    %97 = mir.call @stdlib.__mm_incref(%94)
     mir.store %0, %94, 0 width: qword
     mir.br try_2.merge(%94)
   try_2.merge(%85: i64):
     %80 = mir.load %85, 0 width: qword
     %81 = mir.add.i64 %56, %80
     %103 = mir.call @__mm_decref_maybenull_helper(%85)
-    %110 = mir.mov_imm 125 : i64
-    %111 = mir.cmp ugt, %81, %110
-    mir.cond_br %111 [then: __range_panic_0(), else: __range_ok_0()]
+    %104 = mir.mov_imm 125 : i64
+    %105 = mir.cmp ugt, %81, %104
+    mir.cond_br %105 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %112 = mir.global_addr @__panic_msg_5514c9245e2ee88a
-    %113 = mir.call @mrt_panic(%112)
+    %106 = mir.global_addr @__panic_msg_5514c9245e2ee88a
+    %107 = mir.call @mrt_panic(%106)
   __range_ok_0:
     mir.ret %81
   }

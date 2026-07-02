@@ -89,9 +89,7 @@ module {
     %16 = mir.mov_imm 8 : i64
     %17 = mir.mov_imm 0 : i64
     %18 = mir.call @stdlib.__mm_alloc(%16, %17)
-    %27 = mir.mov_imm 8 : i64
-    %28 = mir.sub.i64 %18, %27
-    mir.atomic_inc %28
+    %19 = mir.call @stdlib.__mm_incref(%18)
     mir.store %15, %18, 0 width: byte
     %21 = mir.load_slot slot_2
     %22 = mir.call @__mm_decref_maybenull_helper(%21)
@@ -106,17 +104,17 @@ module {
     %23 = mir.load_slot slot_2
     %24 = mir.call @__mm_decref_maybenull_helper(%23)
     %20 = mir.call @mm_drop(%11)
-    %29 = mir.mov_imm 125 : i64
-    %30 = mir.cmp ugt, %13, %29
-    mir.cond_br %30 [then: __range_panic_0(), else: __range_ok_0()]
+    %27 = mir.mov_imm 125 : i64
+    %28 = mir.cmp ugt, %13, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
   pos_0.after:
     %14 = mir.mov_imm 0 : i64
     %25 = mir.load_slot slot_2
     %26 = mir.call @__mm_decref_maybenull_helper(%25)
     mir.ret %14
   __range_panic_0:
-    %31 = mir.global_addr @__panic_msg_71a2fa06d89ef97c
-    %32 = mir.call @mrt_panic(%31)
+    %29 = mir.global_addr @__panic_msg_71a2fa06d89ef97c
+    %30 = mir.call @mrt_panic(%29)
   __range_ok_0:
     mir.ret %13
   }

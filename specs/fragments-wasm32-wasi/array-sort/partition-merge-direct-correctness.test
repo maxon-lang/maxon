@@ -278,13 +278,20 @@ module {
     mir.memcpy %117, %106, %107
     %118 = mir.add.i64 %117, %107
     mir.memcpy %118, %108, %149
-    %322 = mir.mov_imm 8 : i64
-    %323 = mir.sub.i64 %106, %322
-    %325 = mir.mov_imm -1 : i64
-    %324 = mir.atomic_xadd %323, %325
-    %326 = mir.mov_imm 1 : i64
-    %327 = mir.cmp eq, %324, %326
-    mir.cond_br %327 [then: __decref_free_0(), else: __decref_cont_0()]
+    %120 = mir.call @stdlib.__mm_decref(%106)
+    %121 = mir.mov_imm 48 : i64
+    %122 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %123 = mir.call @mrt_alloc_with_dtor(%121, %122)
+    mir.store %0, %123, 40 width: qword
+    mir.store %116, %123, 0 width: qword
+    mir.store %113, %123, 8 width: qword
+    mir.store %113, %123, 16 width: qword
+    mir.store %149, %123, 24 width: qword
+    %126 = mir.mov_imm -1 : i64
+    mir.store %126, %123, 32 width: qword
+    %128 = mir.mov_imm 16 : i64
+    %129 = mir.func_addr @__destruct_String
+    mir.br inlined_stdlib.__mm_alloc_0_0()
   inlined_stdlib.__mm_alloc_0_0:
     %189 = mir.mov_imm 0 : i64
     %190 = mir.mov_imm 1 : i64
@@ -392,15 +399,11 @@ module {
     %205 = mir.add.i64 %243, %204
     mir.br inline_cont_main_13(%205)
   inline_cont_main_13(%206: i64):
-    %329 = mir.mov_imm 8 : i64
-    %330 = mir.sub.i64 %205, %329
-    mir.atomic_inc %330
+    %321 = mir.call @stdlib.__mm_incref(%205)
     mir.store %123, %206, 0 width: qword
     mir.store %0, %206, 8 width: qword
     %244 = mir.load %206, 0 width: qword
-    %331 = mir.mov_imm 8 : i64
-    %332 = mir.sub.i64 %244, %331
-    mir.atomic_inc %332
+    %309 = mir.call @stdlib.__mm_incref(%244)
     %245 = mir.load %244, 0 width: qword
     %246 = mir.load %244, 8 width: qword
     %247 = mir.call @mrt_write_stdout(%245, %246)
@@ -438,23 +441,6 @@ module {
     %319 = mir.call @__mm_decref_maybenull_helper(%167)
     %320 = mir.call @__mm_decref_maybenull_helper(%5)
     mir.br p_0.exit()
-  __decref_free_0:
-    %328 = mir.call @mm_free(%106)
-    mir.br __decref_cont_0()
-  __decref_cont_0:
-    %121 = mir.mov_imm 48 : i64
-    %122 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %123 = mir.call @mrt_alloc_with_dtor(%121, %122)
-    mir.store %0, %123, 40 width: qword
-    mir.store %116, %123, 0 width: qword
-    mir.store %113, %123, 8 width: qword
-    mir.store %113, %123, 16 width: qword
-    mir.store %149, %123, 24 width: qword
-    %126 = mir.mov_imm -1 : i64
-    mir.store %126, %123, 32 width: qword
-    %128 = mir.mov_imm 16 : i64
-    %129 = mir.func_addr @__destruct_String
-    mir.br inlined_stdlib.__mm_alloc_0_0()
   }
 }
 ---

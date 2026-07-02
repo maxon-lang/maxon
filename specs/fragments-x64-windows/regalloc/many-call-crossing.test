@@ -91,12 +91,12 @@ module {
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
-    x64.mov r9, r8
-    x64.sub r9, 8
-    x64.lock inc qword ptr [r9]
-    x64.mov [r8+0], rbx (8b)
-    x64.mov [r8+8], r12 (8b)
-    x64.mov rbx, r8
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], rbx (8b)
+    x64.mov [r14+8], r12 (8b)
+    x64.mov rbx, r14
   try_0.merge:
     x64.mov rcx, rbx
     x64.call stdlib.__int_fromString
@@ -164,9 +164,8 @@ module {
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   __rc_edge_15_0:
-    x64.mov r8, r14
-    x64.sub r8, 8
-    x64.lock inc qword ptr [r8]
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
     x64.mov rcx, rbx
     x64.call __mm_decref_maybenull_helper
     x64.mov rcx, r14
