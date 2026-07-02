@@ -57,6 +57,59 @@ export function getSweepMode() returns SweepMode
 	return currentSweepMode
 end 'getSweepMode'
 
+// Selects how colorClass COLORS ranges (Track A step A3), distinct from
+// SweepMode (which chooses only how interference is CONSTRUCTED). `legacy` =
+// the pre-existing materialized-graph first-fit + eviction fixup. `sweep` = the
+// dominance-order availability sweep with reservation intervals, materializing
+// real adjacency on demand only for the residual uncolored set. `validate` =
+// run BOTH the legacy colorer and the sweep colorer, assert they leave the same
+// set of vregs uncolored (spill parity), and return the LEGACY coloring so a
+// latent sweep bug can never change codegen while validation is on.
+export union ColorerMode
+	legacy
+	sweep
+	validate
+end 'ColorerMode'
+
+// Process-global colorer mode, defaulting to `legacy` so normal compilation is
+// unchanged. Set once at startup from a CLI flag (mirrors setSweepMode /
+// setGreedyOnlyFunc). `runColoring` reads it via getColorerMode() and threads it
+// into colorSSA. During the A3 rewrite this lets the spec suite + self-compile
+// run under `validate` (assert sweep == legacy spill parity) or `sweep` (use the
+// availability-sweep colorer) without threading a flag through every call site.
+var currentColorerMode = ColorerMode.legacy
+
+// Parse a --colorer-mode=MODE spec. Unknown/empty → legacy (unchanged behavior).
+export function setColorerMode(spec String)
+	if spec.equals("validate") 'v'
+		currentColorerMode = ColorerMode.validate
+		return
+	end 'v'
+	if spec.equals("sweep") 's'
+		currentColorerMode = ColorerMode.sweep
+		return
+	end 's'
+	currentColorerMode = ColorerMode.legacy
+end 'setColorerMode'
+
+export function getColorerMode() returns ColorerMode
+	return currentColorerMode
+end 'getColorerMode'
+
+// Serialize a ColorerMode back to its --colorer-mode= CLI value. `legacy`
+// returns "" so the parallel dispatcher omits the flag entirely (the default),
+// keeping a legacy run's worker argv byte-identical to before A3. Used by the
+// spec-test dispatcher to forward the mode to worker subprocesses without
+// threading it through the dispatcher's signature (which would perturb its
+// register allocation).
+export function colorerModeToFlag(mode ColorerMode) returns String
+	return match mode 'm'
+		legacy gives ""
+		sweep gives "sweep"
+		validate gives "validate"
+	end 'm'
+end 'colorerModeToFlag'
+
 // Per-range neighbor lists, structurally identical to InterferenceGraph.neighbors
 // (a RegIntArray per range index). Produced by one block sweep so the edge set
 // equals buildInterferenceGraph's. colorClass reads `.neighbors` exactly as it
@@ -260,28 +313,13 @@ export function assertAdjacencyMatches(ig InterferenceGraph, swept SweptAdjacenc
 	while i < n 'eachRange'
 		let a = try ig.neighbors.get(i) otherwise panic("assertAdjacencyMatches: ig.neighbors.get({i}) OOB")
 		let b = try swept.neighbors.get(i) otherwise panic("assertAdjacencyMatches: swept.neighbors.get({i}) OOB")
-		if not sameNeighborSet(a, b: b) 'diff'
+		if not sameRegIntSet(a, b: b) 'diff'
 			let r = try ranges.get(i) otherwise panic("assertAdjacencyMatches: ranges.get({i}) OOB")
 			panic("LiveSetSweep adjacency divergence at range {i} v{r.valueId} defBlock={r.defBlock} defPos={r.defPosition}: igNbrs={dumpSet(a)} sweepNbrs={dumpSet(b)}")
 		end 'diff'
 		i = i + 1
 	end 'eachRange'
 end 'assertAdjacencyMatches'
-
-// Set equality of two neighbor lists (small degree; membership scan is fine).
-// Equal iff same length and every element of `a` is in `b` — with equal lengths,
-// mutual containment follows, and both lists are already deduped by addInterference.
-function sameNeighborSet(a RegIntArray, b RegIntArray) returns bool
-	if a.count() != b.count() 'lenDiff'
-		return false
-	end 'lenDiff'
-	for x in a 'eachA'
-		if not regIntArrayContains(b, value: x) 'missing'
-			return false
-		end 'missing'
-	end 'eachA'
-	return true
-end 'sameNeighborSet'
 
 // Render a neighbor list for a divergence diagnostic.
 function dumpSet(arr RegIntArray) returns String

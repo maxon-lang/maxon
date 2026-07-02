@@ -3151,6 +3151,15 @@ type PersistentWorkerHandle
 		if not sweepMode.isEmpty() 'hasSweepMode'
 			argv.push("--sweep-mode={sweepMode}")
 		end 'hasSweepMode'
+		// Forward the colorer strategy so parallel workers honor
+		// --colorer-mode=validate/sweep (Track-A step A3). Read from the process-
+		// global (set once at startup) rather than a threaded parameter, so the
+		// dispatcher's signature — and thus its register allocation — is unchanged.
+		// Empty = legacy.
+		let colorerModeFlag = colorerModeToFlag(getColorerMode())
+		if not colorerModeFlag.isEmpty() 'hasColorerMode'
+			argv.push("--colorer-mode={colorerModeFlag}")
+		end 'hasColorerMode'
 		let c = try StreamingSubprocess.spawn(Executable.path(exeFile), arguments: argv)
 		return PersistentWorkerHandle{child: c, workerId: workerId}
 	end 'spawnNoWait'

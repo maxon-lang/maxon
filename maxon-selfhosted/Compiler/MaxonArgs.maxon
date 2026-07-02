@@ -119,6 +119,12 @@ export type MaxonArgs
 	// `sweep` = the unified LiveSetSweep; `validate` = build both and assert their
 	// edge sets match (Track-A rewrite validation). Passed to setSweepMode.
 	export var sweepMode as String
+	// `maxon build --colorer-mode=MODE <file>`: coloring strategy for the SSA
+	// colorer (Track-A step A3). `legacy` (default) = the materialized-graph
+	// first-fit + eviction fixup; `sweep` = the dominance-order availability
+	// sweep; `validate` = run both and assert they leave the same vregs uncolored
+	// (spill parity), returning the legacy coloring. Passed to setColorerMode.
+	export var colorerMode as String
 	// `maxon build -o PATH` / `--output PATH` (also `--output=PATH`): overrides
 	// the output executable path. Empty = derive it from the build name / first
 	// source file (the normal behavior). Threaded through compile() into
@@ -154,6 +160,7 @@ export type MaxonArgs
 			workerFallback: "",
 			greedyOnly: "",
 			sweepMode: "",
+			colorerMode: "",
 			outputOverride: ""
 		}
 
@@ -284,7 +291,10 @@ export type MaxonArgs
 			end 'isGreedyOnly' else if arg.startsWith("--sweep-mode=") 'isSweepMode'
 				// legacy (default) | sweep | validate — see setSweepMode.
 				args.sweepMode = try CommandLine.optionValue(arg) otherwise ""
-			end 'isSweepMode' else if arg == "-o" or arg == "--output" 'isOutputSpaced'
+			end 'isSweepMode' else if arg.startsWith("--colorer-mode=") 'isColorerMode'
+				// legacy (default) | sweep | validate — see setColorerMode.
+				args.colorerMode = try CommandLine.optionValue(arg) otherwise ""
+			end 'isColorerMode' else if arg == "-o" or arg == "--output" 'isOutputSpaced'
 				// `-o PATH` / `--output PATH`: the output path is the NEXT token.
 				args.outputOverride = try allArgs.get(i + 1) otherwise throw ArgError.invalidOption(arg)
 				skipNext = true

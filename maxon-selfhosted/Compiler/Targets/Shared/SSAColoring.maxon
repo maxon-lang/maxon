@@ -227,7 +227,7 @@ function effectiveRecolorDepth(cheapColoring bool) returns RegInt
 	return MAX_RECOLOR_DEPTH
 end 'effectiveRecolorDepth'
 
-export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode) returns ColoringResult
+export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPool RegIntArray, callerSavedGprs RegIntArray, fpPool RegIntArray, callerSavedFps RegIntArray, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode, colorerMode ColorerMode) returns ColoringResult
 	// Find max valueId for result sizing
 	var maxValueId = 0
 	for range in ranges 'findMax'
@@ -250,8 +250,8 @@ export function colorSSA(ranges LiveRangeArray, domPreorder BlockIdArray, gprPoo
 	end 'classify'
 
 	// Color each class independently
-	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
-	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+	colorClass(gprRanges, pool: gprPool, callerSaved: callerSavedGprs, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode, colorerMode: colorerMode)
+	colorClass(fpRanges, pool: fpPool, callerSaved: callerSavedFps, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode, colorerMode: colorerMode)
 
 	logDebug(LogCategory.ir, message: function() gives "ssa-color: gpr={gprRanges.count()} fp={fpRanges.count()} maxVal={maxValueId}")
 	return result
@@ -351,7 +351,21 @@ function pickRegisterForRange(range LiveRange, usedRegs BoolArray, hintReservedR
 	return chosenReg
 end 'pickRegisterForRange'
 
-function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode)
+// Color one register class, dispatching on ColorerMode (Track A step A3).
+//   legacy   → colorClassLegacy: the materialized-graph first-fit + eviction.
+//   sweep    → colorClassSweep: the dominance-order availability sweep.
+//   validate → validateColorClass: run BOTH, assert spill parity, and keep the
+//              LEGACY assignments (so validation can never change codegen even
+//              if the sweep has a bug).
+function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode, colorerMode ColorerMode)
+	match colorerMode 'mode'
+		legacy then colorClassLegacy(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+		sweep then _ = colorClassSweep(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, isValidateSweep: false)
+		validate then validateColorClass(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+	end 'mode'
+end 'colorClass'
+
+function colorClassLegacy(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode)
 	let numRanges = ranges.count()
 	if numRanges == 0 'empty'
 		return
@@ -502,7 +516,803 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	let tEvict = passTimerStart()
 	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
 	recordPassSince("__regalloc-eviction", startMs: tEvict)
-end 'colorClass'
+end 'colorClassLegacy'
+
+// ============================================================
+// A3: availability-sweep colorer
+// ============================================================
+
+// Incremental register-occupancy reservation set for the availability-sweep
+// colorer. Instead of materializing the (very dense, mostly pseudo-range) full
+// interference graph and walking a range's neighbor list, the sweep asks, per
+// range R and per pool index pi, "does any occupant of pi have an interval that
+// overlaps one of R's intervals?" Occupants are:
+//   * HARD reserves — the fixed pseudo-ranges (clobber / param / phys-dest,
+//     fixedReg != RM_NONE). Installed once before the sweep; never colored.
+//   * OCCUPANCY — each virtual range as it is colored, appended under the pool
+//     index of its chosen register.
+//
+// Storage is bucketed per block: `spans.get(blockId)` holds this block's
+// occupant records as flat quadruples (startPos, endPos, rangeIdx, poolIndex),
+// so a query for R scans only the blocks R lives in, and within each only that
+// block's occupants (bounded by the block's register pressure, ~poolSize), not
+// the whole occupancy set. rangeIdx is retained so the overlap test can apply
+// isCopyBoundaryOverlap — a colored copy source must not block its copy dest at
+// the single shared copy-boundary position (the two may share a register).
+type SweepReservations
+	export var spans as RegIntArrayArray
+	export var numBlocks as RegInt
+
+	export static function create(numBlocks RegInt) returns SweepReservations
+		var spans = RegIntArrayArray.create()
+		var i = 0
+		while i < numBlocks 'init'
+			spans.push(RegIntArray.create())
+			i = i + 1
+		end 'init'
+		return Self{spans: spans, numBlocks: numBlocks}
+	end 'create'
+
+	// Append every interval of `rangeIdx` as an occupant at `poolIndex`. Called
+	// for each hard reserve up front and for each virtual range as it is colored.
+	// Intervals in blocks outside [0, numBlocks) are skipped (they cannot overlap
+	// any swept range, whose blocks were used to size `numBlocks`).
+	export function occupy(range LiveRange, rangeIdx RegInt, poolIndex RegInt)
+		for iv in range.intervals 'eachIv'
+			let bid = iv.blockId
+			if bid < 0 or bid >= numBlocks 'outOfRange'
+				continue
+			end 'outOfRange'
+			var bucket = try spans.get(bid) otherwise panic("SweepReservations.occupy: spans.get({bid}) OOB after numBlocks guard")
+			bucket.push(iv.startPos)
+			bucket.push(iv.endPos)
+			bucket.push(rangeIdx)
+			bucket.push(poolIndex)
+		end 'eachIv'
+	end 'occupy'
+end 'SweepReservations'
+
+// Number of RegInts per occupant record in a SweepReservations block bucket:
+// (startPos, endPos, rangeIdx, poolIndex).
+let SWEEP_OCC_STRIDE = 4
+
+// Compute BOTH availability sets the legacy first-fit derives from the
+// interference graph, but reading reservation spans directly rather than a
+// neighbor list:
+//
+//   * usedRegs[pi] — HARD: pi is unavailable iff some HARD occupant (a colored
+//     virtual at its color, or a fixed pseudo-range at its fixed register)
+//     overlaps one of R's intervals. Mirrors legacy's "colored neighbor marks
+//     its color used" + "uncolored fixed neighbor marks its fixedReg used".
+//   * hintReservedRegs[pi] — SOFT: pi is hint-reserved iff some STILL-UNCOLORED
+//     non-fixed range whose hint maps to pi overlaps R. Mirrors legacy's
+//     "uncolored non-fixed neighbor with a hint marks hintReservedRegs". The
+//     picker defers a hint-reserved register (Tier-2) so a scratch range does
+//     not burn a register an interfering neighbor specifically wants — WITHOUT
+//     this, the sweep's first-fit picks differ from legacy's and the divergence
+//     cascades into genuine spills, breaking spill parity.
+//
+// Both scans apply the same two edge filters legacy applies at graph-build time
+// (isCopyBoundaryOverlap, interferenceEdgeIsRedundant), so the swept sets equal
+// the graph-derived ones. `hintReservations` holds one span per (range with a
+// hint), keyed by poolIndex(hint); a span counts only while its range is still
+// uncolored (rangeColors == RM_NONE) — exactly legacy's uncolored-neighbor gate.
+function computeSweepAvailability(reservations SweepReservations, hintReservations SweepReservations, rangeIdx RegInt, range LiveRange, usedRegs BoolArray, hintReservedRegs BoolArray, ranges LiveRangeArray, rangeColors RegIntArray, callerSavedByOrdinal BoolArray)
+	for iv in range.intervals 'eachIv'
+		let bid = iv.blockId
+		if bid < 0 or bid >= reservations.numBlocks 'outOfRange'
+			continue
+		end 'outOfRange'
+		let s1 = iv.startPos
+		let e1 = iv.endPos
+
+		// HARD reserves → usedRegs.
+		markOverlappingSpans(reservations, bid: bid, s1: s1, e1: e1, rangeIdx: rangeIdx, ranges: ranges, callerSavedByOrdinal: callerSavedByOrdinal, target: usedRegs, requireUncolored: false, rangeColors: rangeColors)
+
+		// SOFT hint reserves → hintReservedRegs (only while the hinting range is
+		// still uncolored, matching legacy's uncolored-neighbor gate).
+		markOverlappingSpans(hintReservations, bid: bid, s1: s1, e1: e1, rangeIdx: rangeIdx, ranges: ranges, callerSavedByOrdinal: callerSavedByOrdinal, target: hintReservedRegs, requireUncolored: true, rangeColors: rangeColors)
+	end 'eachIv'
+end 'computeSweepAvailability'
+
+// Scan one block's reservation bucket and mark `target[occPoolIndex]` for every
+// occupant span that genuinely overlaps [s1, e1) (half-open), applying the same
+// copy-boundary and redundant-edge suppression the legacy graph applies. When
+// `requireUncolored` is set, an occupant is skipped unless its range is still
+// uncolored (rangeColors == RM_NONE) — the gate the soft hint reservation needs.
+// An occupant that is R itself is skipped (a range never reserves against
+// itself). Shared by the HARD (usedRegs) and SOFT (hintReservedRegs) passes.
+function markOverlappingSpans(reservations SweepReservations, bid BlockId, s1 RegInt, e1 RegInt, rangeIdx RegInt, ranges LiveRangeArray, callerSavedByOrdinal BoolArray, target BoolArray, requireUncolored bool, rangeColors RegIntArray)
+	let bucket = try reservations.spans.get(bid) otherwise panic("markOverlappingSpans: spans.get({bid}) OOB after caller guard")
+	let n = bucket.count()
+	var k = 0
+	while k < n 'eachOcc'
+		let s2 = try bucket.get(k) otherwise panic("markOverlappingSpans: bucket.get start OOB")
+		let e2 = try bucket.get(k + 1) otherwise panic("markOverlappingSpans: bucket.get end OOB")
+		let occRangeIdx = try bucket.get(k + 2) otherwise panic("markOverlappingSpans: bucket.get rangeIdx OOB")
+		let occPoolIndex = try bucket.get(k + 3) otherwise panic("markOverlappingSpans: bucket.get poolIndex OOB")
+		k = k + SWEEP_OCC_STRIDE
+
+		if occRangeIdx == rangeIdx 'self'
+			continue
+		end 'self'
+
+		// Half-open overlap: s1 < e2 and s2 < e1.
+		if s1 >= e2 or s2 >= e1 'noOverlap'
+			continue
+		end 'noOverlap'
+
+		if requireUncolored 'gateUncolored'
+			let occColor = getOr(rangeColors, index: occRangeIdx, fallback: RM_NONE)
+			if occColor != RM_NONE 'alreadyColored'
+				continue
+			end 'alreadyColored'
+		end 'gateUncolored'
+
+		// A copy-connected occupant overlapping R by exactly one position at a
+		// recorded copy boundary does NOT block R — the dest may share the source's
+		// register (same suppression the legacy graph applies via
+		// isCopyBoundaryOverlap when deciding whether to emit the edge).
+		if isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: bid, ranges: ranges, ri1: rangeIdx, ri2: occRangeIdx) 'copyBoundary'
+			continue
+		end 'copyBoundary'
+
+		// A redundant edge (caller-saved fixed range vs a call-crossing virtual)
+		// is dropped by the legacy graph and must be dropped here too so the swept
+		// set matches — otherwise a caller-saved clobber's hard reserve would mark
+		// that pool index used against a crossesCall range the legacy first-fit
+		// left free, diverging the pick.
+		if interferenceEdgeIsRedundant(ranges, ri1: rangeIdx, ri2: occRangeIdx, callerSavedByOrdinal: callerSavedByOrdinal) 'redundant'
+			continue
+		end 'redundant'
+
+		if occPoolIndex >= 0 and occPoolIndex < target.count() 'inPool'
+			try target.set(occPoolIndex, value: true) otherwise panic("markOverlappingSpans: target.set OOB")
+		end 'inPool'
+	end 'eachOcc'
+end 'markOverlappingSpans'
+
+// Max blockId + 1 over every interval of every range, used to size the
+// per-block occupancy buckets. Mirrors buildInterferenceGraph's numBlocks.
+function sweepNumBlocks(ranges LiveRangeArray) returns RegInt
+	var maxBlockId = 0
+	for range in ranges 'findMax'
+		for iv in range.intervals 'eachIv'
+			if iv.blockId > maxBlockId 'higher'
+				maxBlockId = iv.blockId
+			end 'higher'
+		end 'eachIv'
+	end 'findMax'
+	return maxBlockId + 1
+end 'sweepNumBlocks'
+
+// The availability-sweep colorer (Track A step A3). Visits ranges in the SAME
+// dominance-tree preorder the legacy first-fit uses and picks each register with
+// the SAME shared picker (pickRegisterForRange), but derives the used-register
+// set from an incremental occupancy reservation set rather than a materialized
+// interference graph. Fixed pseudo-ranges are installed as hard reserves up
+// front (never colored); each virtual is queried, colored, and added to
+// occupancy. The residual uncolored set is handed to the unchanged eviction
+// fixup — in Step 2 that still consumes the full legacy-built graph; Step 4
+// replaces it with an on-demand partial adjacency.
+//
+// Returns the per-range colors so the validate path can compare spill parity
+// against the legacy colorer without re-reading `result`.
+function colorClassSweep(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, isValidateSweep bool) returns RegIntArray
+	let numRanges = ranges.count()
+	if numRanges == 0 'empty'
+		return RegIntArray.create()
+	end 'empty'
+
+	// Same valueId -> range-index map the legacy path builds — the shared picker
+	// consumes it (resolveCopyLinkHint / hint resolution). The value stored is the
+	// range's index in THIS class's `ranges` array, so a running counter is used
+	// (not vidToRangeIdx.count(), which grows to vid+1 via the fill loop).
+	var vidToRangeIdx = RegIntArray.create()
+	var mapIdx = 0
+	for range in ranges 'buildMap'
+		let vid = range.valueId
+		while vidToRangeIdx.count() <= vid 'grow'
+			vidToRangeIdx.push(-1)
+		end 'grow'
+		try vidToRangeIdx.set(vid, value: mapIdx) otherwise panic("invariant: vidToRangeIdx.set OOB")
+		mapIdx = mapIdx + 1
+	end 'buildMap'
+
+	let callerSavedByOrdinal = buildCallerSavedByOrdinal(pool, callerSaved: callerSaved)
+	let domIndex = buildDomPreorderIndex(domPreorder)
+
+	let tSort = passTimerStart()
+	let sortedOrder = sortByDomPreorder(ranges, domIndex: domIndex)
+	recordPassSince("__regalloc-sortdom", startMs: tSort)
+
+	let poolSize = pool.count()
+	var poolIndexOf = RegIntArray.create()
+	var pii = 0
+	while pii < poolSize 'buildPoolIndex'
+		let regOrd = try pool.get(pii) otherwise RM_NONE
+		if regOrd != RM_NONE 'valid'
+			while poolIndexOf.count() <= regOrd 'grow'
+				poolIndexOf.push(RM_NONE)
+			end 'grow'
+			try poolIndexOf.set(regOrd, value: pii) otherwise panic("invariant: poolIndexOf.set OOB")
+		end 'valid'
+		pii = pii + 1
+	end 'buildPoolIndex'
+
+	let callerSavedMask = buildCallerSavedMask(pool, callerSaved: callerSaved)
+
+	var rangeColors = RegIntArray.create()
+	var ri2 = 0
+	while ri2 < numRanges 'initColors'
+		rangeColors.push(RM_NONE)
+		ri2 = ri2 + 1
+	end 'initColors'
+
+	// Install hard-reserve OCCUPANCY: every fixed pseudo-range's intervals occupy
+	// the pool index of its fixed register, so a fixed range is visible as "used"
+	// to every query from the start — matching legacy's uncolored-fixed-neighbor
+	// gate (an uncolored fixed neighbor marks its fixedReg used even before it is
+	// colored). Registers outside this class's pool map to RM_NONE and are skipped
+	// (they cannot make a pool slot used).
+	//
+	// The fixed range's COLOR (rangeColors + result) is NOT written here: it is set
+	// when the range is reached in the dom-preorder sweep below, exactly as the
+	// legacy first-fit colors fixed ranges in order. Pre-coloring them would let a
+	// copy-link hint resolve against a fixed partner EARLIER than legacy does
+	// (legacy sees it uncolored → uses its static hint, not its color), shifting a
+	// virtual's hint and diverging the pick.
+	let numBlocks = sweepNumBlocks(ranges)
+	var reservations = SweepReservations.create(numBlocks)
+	var hi = 0
+	while hi < numRanges 'installHard'
+		let range = try ranges.get(hi) otherwise panic("colorClassSweep: ranges.get({hi}) OOB installing hard reserves")
+		if range.fixedReg != RM_NONE 'isFixed'
+			let pi = poolIndexOfReg(range.fixedReg, poolIndexOf: poolIndexOf)
+			if pi != RM_NONE 'inPool'
+				reservations.occupy(range, rangeIdx: hi, poolIndex: pi)
+			end 'inPool'
+		end 'isFixed'
+		hi = hi + 1
+	end 'installHard'
+
+	// Install SOFT hint reserves: every range carrying a register hint contributes
+	// a span under the pool index of that hint. Consulted (with an uncolored gate)
+	// to reproduce legacy's hintReservedRegs so the sweep's first-fit picks track
+	// legacy's. A hint outside this class's pool maps to RM_NONE and is skipped.
+	var hintReservations = SweepReservations.create(numBlocks)
+	var si2 = 0
+	while si2 < numRanges 'installHints'
+		let range = try ranges.get(si2) otherwise panic("colorClassSweep: ranges.get({si2}) OOB installing hint reserves")
+		if range.fixedReg == RM_NONE and range.hint != RM_NONE 'hasHint'
+			let pi = poolIndexOfReg(range.hint, poolIndexOf: poolIndexOf)
+			if pi != RM_NONE 'inPool'
+				hintReservations.occupy(range, rangeIdx: si2, poolIndex: pi)
+			end 'inPool'
+		end 'hasHint'
+		si2 = si2 + 1
+	end 'installHints'
+
+	// Sweep in dom-preorder, coloring fixed ranges in place (mirroring legacy,
+	// which colors fixed ranges to their fixedReg when reached in sortedOrder) and
+	// picking a register for each virtual off the availability set. The fixed
+	// range's occupancy is already installed, so it is NOT re-added here.
+	//
+	// Empty neighbor list to the picker: the sweep's usedRegs / hintReservedRegs
+	// already encode every hard-reserve and hint conflict, so the picker's
+	// nbrs-based fixed-neighbor hint check (hintConflictsWithFixedNeighbor) is
+	// subsumed and needs no materialized graph.
+	let emptyNbrs = RegIntArray.create()
+	let tFirstFit = passTimerStart()
+	for sortedIdx in sortedOrder 'colorEach'
+		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx from sortedOrder out of bounds in ranges")
+
+		if range.fixedReg != RM_NONE 'colorFixed'
+			// Color the fixed pseudo-range to its fixed register, exactly as legacy
+			// does at its sortedOrder position. Codegen resolves the pinned vreg via
+			// colorLookupGpr/Fp, so its assignment MUST be present; and the eviction
+			// fixup's pending collection excludes colored ranges. Occupancy is
+			// already installed, so nothing is re-added.
+			try rangeColors.set(sortedIdx, value: range.fixedReg) otherwise panic("invariant: rangeColors.set OOB for fixed range")
+			let vidF = range.valueId
+			if vidF < result.assignment.count() 'inBoundsF'
+				try result.assignment.set(vidF, value: range.fixedReg) otherwise panic("invariant: result.assignment.set OOB for fixed range")
+			end 'inBoundsF'
+			continue
+		end 'colorFixed'
+
+		var usedRegs = BoolArray.create()
+		growColorBoolArray(usedRegs, size: poolSize)
+		var hintReservedRegs = BoolArray.create()
+		growColorBoolArray(hintReservedRegs, size: poolSize)
+
+		computeSweepAvailability(reservations, hintReservations: hintReservations, rangeIdx: sortedIdx, range: range, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, ranges: ranges, rangeColors: rangeColors, callerSavedByOrdinal: callerSavedByOrdinal)
+
+		let chosenReg = pickRegisterForRange(range, usedRegs: usedRegs, hintReservedRegs: hintReservedRegs, nbrs: emptyNbrs, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, vidToRangeIdx: vidToRangeIdx, rangeColors: rangeColors, ranges: ranges)
+
+		try rangeColors.set(sortedIdx, value: chosenReg) otherwise panic("invariant: rangeColors.set OOB")
+
+		if chosenReg != RM_NONE 'hasColor'
+			let vid = range.valueId
+			if vid < result.assignment.count() 'inBounds'
+				try result.assignment.set(vid, value: chosenReg) otherwise panic("invariant: result.assignment.set OOB")
+			end 'inBounds'
+			// Add to occupancy so later ranges see this register taken.
+			let pi = poolIndexOfReg(chosenReg, poolIndexOf: poolIndexOf)
+			if pi != RM_NONE 'colorInPool'
+				reservations.occupy(range, rangeIdx: sortedIdx, poolIndex: pi)
+			end 'colorInPool'
+		end 'hasColor'
+	end 'colorEach'
+	recordPassSince("__regalloc-firstfit", startMs: tFirstFit)
+
+	// Residual + eviction. Rather than materialize the full (dense, mostly
+	// pseudo-range) interference graph, build a PARTIAL adjacency populated only
+	// for the interference-connected component of the residual uncolored set — the
+	// exact set of indices the eviction fixup can read. The vast majority of ranges
+	// are colored by the sweep first-fit, never enter the fixup's worklist, and are
+	// unreachable from it over interference edges, so their neighbor lists are
+	// never materialized. Neighbors come from a shared BlockIntervalEvents (the
+	// same event stream the pressure passes use), emitted by the same ordered block
+	// sweep buildInterferenceGraph uses, so each component member's list equals the
+	// full graph's — order included, which the eviction's first-in-list victim
+	// tie-break depends on.
+	let tIg = passTimerStart()
+	let partial = buildResidualAdjacency(ranges, rangeColors: rangeColors, callerSavedByOrdinal: callerSavedByOrdinal)
+	recordPassSince("__regalloc-interference", startMs: tIg)
+
+	// Under validate, assert the partial adjacency matches the full graph for
+	// every index the eviction fixup can read (the residual component) before it
+	// is consumed, so a latent neighborsFromEvents bug is caught at the edge level.
+	if isValidateSweep 'verifyPartial'
+		assertPartialAdjacencyMatches(ranges, partial: partial, rangeColors: rangeColors, callerSavedByOrdinal: callerSavedByOrdinal)
+	end 'verifyPartial'
+
+	let tEvict = passTimerStart()
+	runEvictionFixup(ranges, ig: partial, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
+	recordPassSince("__regalloc-eviction", startMs: tEvict)
+
+	return rangeColors
+end 'colorClassSweep'
+
+// Residual uncolored set for the partial-adjacency build: the virtual (non-fixed)
+// ranges the sweep first-fit left uncolored. These are the only ranges the
+// eviction fixup seeds its worklist from.
+function collectResidual(ranges LiveRangeArray, rangeColors RegIntArray) returns RegIntArray
+	var residual = RegIntArray.create()
+	let n = ranges.count()
+	var i = 0
+	while i < n 'each'
+		let range = try ranges.get(i) otherwise panic("collectResidual: ranges.get({i}) OOB")
+		if range.fixedReg == RM_NONE 'virtual'
+			let c = try rangeColors.get(i) otherwise panic("collectResidual: rangeColors.get({i}) OOB")
+			if c == RM_NONE 'uncolored'
+				residual.push(i)
+			end 'uncolored'
+		end 'virtual'
+		i = i + 1
+	end 'each'
+	return residual
+end 'collectResidual'
+
+// Build an InterferenceGraph whose neighbor lists are populated ONLY for the
+// interference-connected component of the residual uncolored set — the exact set
+// of indices the eviction fixup can ever read.
+//
+// Why the whole component (not a fixed depth): the fixup seeds its worklist from
+// the residual, then cascade-evicts. Each eviction victim is a NEIGHBOR of a
+// range already in the worklist, and the evicted victim is re-queued and itself
+// read (tryColorRange / pickEvictionVictim / last-chance recolor all read the
+// popped range's neighbor list). So the read frontier advances one interference
+// hop per eviction, with no a-priori depth bound (the cascade length is bounded
+// by MAX_CASCADE and the strictly-cheaper-victim rule, not by recolor depth).
+// The transitive closure over interference edges — the connected component — is
+// therefore the tight, correct over-approximation of the read set. Ranges outside
+// it have NO interference path from any residual range, so the fixup never reads
+// their lists; their neighbor list stays empty and the dense pseudo-range
+// adjacency is never materialized. Neighbors are computed on demand from a shared
+// BlockIntervalEvents, applying the same filters buildInterferenceGraph applies,
+// so each materialized list equals the full graph's for that index.
+function buildResidualAdjacency(ranges LiveRangeArray, rangeColors RegIntArray, callerSavedByOrdinal BoolArray) returns InterferenceGraph
+	let numRanges = ranges.count()
+	var partial = InterferenceGraph.create(numRanges)
+
+	let sweep = LiveSetSweep.build(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	let events = sweep.events
+
+	// `computed[i]` marks that index i's neighbor list has been materialized, so
+	// each component member is expanded exactly once (the BFS terminates).
+	var computed = BoolArray.create()
+	var ci = 0
+	while ci < numRanges 'initComputed'
+		computed.push(false)
+		ci = ci + 1
+	end 'initComputed'
+
+	// Pass 1: BFS the interference-connected component of the residual to decide
+	// membership only (`computed[i]`), using neighborsFromEvents for adjacency. The
+	// order of neighbors here does not matter — this pass only computes the set.
+	var frontier = collectResidual(ranges, rangeColors: rangeColors)
+	while frontier.count() > 0 'bfs'
+		var next = RegIntArray.create()
+		for idx in frontier 'expand'
+			let already = try computed.get(idx) otherwise panic("buildResidualAdjacency: computed.get({idx}) OOB")
+			if already 'skip'
+				continue
+			end 'skip'
+			try computed.set(idx, value: true) otherwise panic("buildResidualAdjacency: computed.set OOB")
+
+			let nbrs = neighborsFromEvents(events, ranges: ranges, rangeIdx: idx, callerSavedByOrdinal: callerSavedByOrdinal)
+			for nb in nbrs 'eachNb'
+				let nbComputed = try computed.get(nb) otherwise panic("buildResidualAdjacency: computed.get(nb={nb}) OOB")
+				if not nbComputed 'enqueue'
+					next.push(nb)
+				end 'enqueue'
+			end 'eachNb'
+		end 'expand'
+		frontier = next
+	end 'bfs'
+
+	// Pass 2: emit edges via the ORDERED block sweep (identical to
+	// buildInterferenceGraph / buildAdjacencyFromEvents), keeping only edges with
+	// at least one endpoint in the component. Emitting in sweep order makes each
+	// component member's neighbor list byte-identical to the full graph's — order
+	// included — so the eviction fixup (whose victim tie-break is first-in-list)
+	// reaches the SAME decisions the legacy full-graph run would, not merely a
+	// different-but-valid one.
+	emitComponentEdges(partial, events: events, ranges: ranges, blockMaxPos: sweep.blockMaxPos, callerSavedByOrdinal: callerSavedByOrdinal, inComponent: computed)
+
+	recordInterferenceStats(partial)
+	return partial
+end 'buildResidualAdjacency'
+
+// Ordered edge emission for the partial adjacency: the SAME per-block start-order
+// active-set sweep buildAdjacencyFromEvents runs, but an edge is added to
+// `partial` only when at least one endpoint is a component member. Because the
+// sweep visits blocks and starts in the same order as the full build, every
+// retained edge lands in the same relative position in each endpoint's neighbor
+// list — so a component member's list equals the full graph's exactly (order
+// included). Non-member lists receive only the edges incident to a member (their
+// lists are never read by the eviction fixup, so their incompleteness is inert).
+function emitComponentEdges(partial InterferenceGraph, events BlockIntervalEvents, ranges LiveRangeArray, blockMaxPos RegIntArray, callerSavedByOrdinal BoolArray, inComponent BoolArray)
+	let numBlocks = blockMaxPos.count()
+	var active = RegIntArray.create()
+	var blockId = 0
+	while blockId < numBlocks 'eachBlock'
+		let sliceStart = events.sliceStart(blockId)
+		let sliceEnd = events.sliceEnd(blockId)
+		let count = sliceEnd - sliceStart
+		if count <= 0 'emptyBlock'
+			blockId = blockId + 1
+			continue
+		end 'emptyBlock'
+
+		var bs = RegIntArray.create()
+		var k = 0
+		while k < count 'collectStarts'
+			bs.push(try events.startPos.get(sliceStart + k) otherwise panic("emitComponentEdges: startPos.get OOB collecting"))
+			k = k + 1
+		end 'collectStarts'
+		let order = sortBlockIndicesByStart(bs)
+
+		active.clear()
+		var oi = 0
+		while oi < count 'sweep'
+			let localIdx = try order.get(oi) otherwise panic("emitComponentEdges: order.get({oi}) OOB")
+			let flatIdx = sliceStart + localIdx
+			let ri1 = try events.rangeIdx.get(flatIdx) otherwise panic("emitComponentEdges: rangeIdx.get OOB")
+			let s1 = try events.startPos.get(flatIdx) otherwise panic("emitComponentEdges: s1 OOB")
+			let e1 = try events.endPos.get(flatIdx) otherwise panic("emitComponentEdges: e1 OOB")
+
+			var ai = 0
+			while ai < active.count() 'retire'
+				let aFlat = try active.get(ai) otherwise panic("emitComponentEdges: active.get({ai}) OOB")
+				let aEnd = try events.endPos.get(aFlat) otherwise panic("emitComponentEdges: aEnd OOB")
+				if aEnd <= s1 'expired'
+					let lastPos = active.count() - 1
+					if ai != lastPos 'notLast'
+						let tail = try active.get(lastPos) otherwise panic("emitComponentEdges: active tail OOB")
+						try active.set(ai, value: tail) otherwise panic("emitComponentEdges: active.set OOB")
+					end 'notLast'
+					try active.pop() otherwise panic("emitComponentEdges: active.pop on non-empty")
+				end 'expired' else 'stillLive'
+					ai = ai + 1
+				end 'stillLive'
+			end 'retire'
+
+			var ei = 0
+			while ei < active.count() 'emit'
+				let aFlat = try active.get(ei) otherwise panic("emitComponentEdges: emit active.get({ei}) OOB")
+				let ri2 = try events.rangeIdx.get(aFlat) otherwise panic("emitComponentEdges: ri2 OOB")
+				let s2 = try events.startPos.get(aFlat) otherwise panic("emitComponentEdges: s2 OOB")
+				let e2 = try events.endPos.get(aFlat) otherwise panic("emitComponentEdges: e2 OOB")
+
+				let ri1InComp = try inComponent.get(ri1) otherwise panic("emitComponentEdges: inComponent.get(ri1) OOB")
+				let ri2InComp = try inComponent.get(ri2) otherwise panic("emitComponentEdges: inComponent.get(ri2) OOB")
+				if ri1InComp or ri2InComp 'keepEdge'
+					let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
+					if not isCopyBoundary 'realOverlap'
+						if not interferenceEdgeIsRedundant(ranges, ri1: ri1, ri2: ri2, callerSavedByOrdinal: callerSavedByOrdinal) 'notRedundant'
+							addInterference(partial, a: ri1, b: ri2)
+						end 'notRedundant'
+					end 'realOverlap'
+				end 'keepEdge'
+
+				ei = ei + 1
+			end 'emit'
+
+			active.push(flatIdx)
+			oi = oi + 1
+		end 'sweep'
+
+		blockId = blockId + 1
+	end 'eachBlock'
+end 'emitComponentEdges'
+
+// Materialize the interference neighbors of a single range on demand from the
+// shared BlockIntervalEvents, applying the SAME overlap test and filters
+// buildInterferenceGraph / buildAdjacencyFromEvents apply — so the returned set
+// equals that range's neighbor list in the full graph. For each of `rangeIdx`'s
+// intervals, scan that block's event slice for any OTHER range whose event
+// overlaps [startPos, endPos) (half-open), skipping copy-boundary-only overlaps
+// and redundant (caller-saved-fixed vs call-crossing-virtual) edges. Results are
+// deduped across intervals/blocks (a neighbor may overlap in several blocks).
+function neighborsFromEvents(events BlockIntervalEvents, ranges LiveRangeArray, rangeIdx RegInt, callerSavedByOrdinal BoolArray) returns RegIntArray
+	var result = RegIntArray.create()
+	let range = try ranges.get(rangeIdx) otherwise panic("neighborsFromEvents: ranges.get({rangeIdx}) OOB")
+	let numBlockSlots = events.base.count() - 1
+
+	for iv in range.intervals 'eachIv'
+		let bid = iv.blockId
+		if bid < 0 or bid >= numBlockSlots 'outOfRange'
+			continue
+		end 'outOfRange'
+		let s1 = iv.startPos
+		let e1 = iv.endPos
+		let lo = events.sliceStart(bid)
+		let hi = events.sliceEnd(bid)
+		var e = lo
+		while e < hi 'eachEvent'
+			let occRangeIdx = try events.rangeIdx.get(e) otherwise panic("neighborsFromEvents: rangeIdx.get({e}) OOB in slice")
+			let s2 = try events.startPos.get(e) otherwise panic("neighborsFromEvents: startPos.get({e}) OOB in slice")
+			let e2 = try events.endPos.get(e) otherwise panic("neighborsFromEvents: endPos.get({e}) OOB in slice")
+			e = e + 1
+
+			if occRangeIdx == rangeIdx 'self'
+				continue
+			end 'self'
+
+			// Half-open overlap: s1 < e2 and s2 < e1.
+			if s1 >= e2 or s2 >= e1 'noOverlap'
+				continue
+			end 'noOverlap'
+
+			// Same two suppressions the full graph applies at edge-emit time.
+			if isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: bid, ranges: ranges, ri1: rangeIdx, ri2: occRangeIdx) 'copyBoundary'
+				continue
+			end 'copyBoundary'
+			if interferenceEdgeIsRedundant(ranges, ri1: rangeIdx, ri2: occRangeIdx, callerSavedByOrdinal: callerSavedByOrdinal) 'redundant'
+				continue
+			end 'redundant'
+
+			if not regIntArrayContains(result, value: occRangeIdx) 'newNbr'
+				result.push(occRangeIdx)
+			end 'newNbr'
+		end 'eachEvent'
+	end 'eachIv'
+
+	return result
+end 'neighborsFromEvents'
+
+// Validate-mode check: assert the PARTIAL adjacency's neighbor set equals the
+// FULL graph's for every index in the residual's interference-connected component
+// — the exact set of indices the eviction fixup can read (see
+// buildResidualAdjacency). Any index OUTSIDE the component has an empty list in
+// `partial` by design and is never read, so it is not compared. Builds the full
+// graph once and compares neighbor SETS (order-independent), panicking on the
+// first mismatch — so a latent neighborsFromEvents bug is caught at the edge
+// level before the fixup consumes the partial graph.
+function assertPartialAdjacencyMatches(ranges LiveRangeArray, partial InterferenceGraph, rangeColors RegIntArray, callerSavedByOrdinal BoolArray)
+	let full = buildInterferenceGraph(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	let numRanges = ranges.count()
+
+	// Reconstruct the component membership the same way buildResidualAdjacency
+	// does (unbounded BFS over interference edges from the residual seeds).
+	let sweep = LiveSetSweep.build(ranges, callerSavedByOrdinal: callerSavedByOrdinal)
+	let events = sweep.events
+	var computed = BoolArray.create()
+	var ci = 0
+	while ci < numRanges 'initComputed'
+		computed.push(false)
+		ci = ci + 1
+	end 'initComputed'
+	var frontier = collectResidual(ranges, rangeColors: rangeColors)
+	while frontier.count() > 0 'bfs'
+		var next = RegIntArray.create()
+		for idx in frontier 'expand'
+			let already = try computed.get(idx) otherwise panic("assertPartialAdjacencyMatches: computed.get({idx}) OOB")
+			if already 'skip'
+				continue
+			end 'skip'
+			try computed.set(idx, value: true) otherwise panic("assertPartialAdjacencyMatches: computed.set OOB")
+			let nbrs = neighborsFromEvents(events, ranges: ranges, rangeIdx: idx, callerSavedByOrdinal: callerSavedByOrdinal)
+			for nb in nbrs 'eachNb'
+				let nbComputed = try computed.get(nb) otherwise panic("assertPartialAdjacencyMatches: computed.get(nb) OOB")
+				if not nbComputed 'enqueue'
+					next.push(nb)
+				end 'enqueue'
+			end 'eachNb'
+		end 'expand'
+		frontier = next
+	end 'bfs'
+
+	// For every component member, the partial and full neighbor SETS must match.
+	var i = 0
+	while i < numRanges 'eachRange'
+		let isComputed = try computed.get(i) otherwise panic("assertPartialAdjacencyMatches: computed.get({i}) OOB")
+		if isComputed 'compare'
+			let pa = try partial.neighbors.get(i) otherwise panic("assertPartialAdjacencyMatches: partial.neighbors.get({i}) OOB")
+			let fa = try full.neighbors.get(i) otherwise panic("assertPartialAdjacencyMatches: full.neighbors.get({i}) OOB")
+			if not sameRegIntSet(pa, b: fa) 'mismatch'
+				let r = try ranges.get(i) otherwise panic("assertPartialAdjacencyMatches: ranges.get({i}) OOB")
+				panic("A3 partial-adjacency mismatch at range {i} v{r.valueId} defBlock={r.defBlock} defPos={r.defPosition}: partialDeg={pa.count()} fullDeg={fa.count()}")
+			end 'mismatch'
+		end 'compare'
+		i = i + 1
+	end 'eachRange'
+end 'assertPartialAdjacencyMatches'
+
+// Order-independent set equality of two RegInt lists that are each already
+// deduped (e.g. interference neighbor lists): equal iff same length and every
+// element of `a` is in `b` — with equal lengths mutual containment follows. Also
+// used by LiveSetSweep.assertAdjacencyMatches (hence export).
+export function sameRegIntSet(a RegIntArray, b RegIntArray) returns bool
+	if a.count() != b.count() 'lenDiff'
+		return false
+	end 'lenDiff'
+	for x in a 'eachA'
+		if not regIntArrayContains(b, value: x) 'missing'
+			return false
+		end 'missing'
+	end 'eachA'
+	return true
+end 'sameRegIntSet'
+
+// SweepMode-independent validate harness for the A3 colorer. Runs the LEGACY
+// colorer into `result` (the assignments codegen consumes), then runs the SWEEP
+// colorer into a THROWAWAY result, and asserts the two leave the SAME set of
+// vregs uncolored (spill parity — the correctness gate). Colors that differ but
+// are both valid are logged, not fatal (register choice is allowed to diverge;
+// only the spill/no-spill decision must match). Because `result` carries the
+// legacy assignments, validate mode never changes codegen.
+function validateColorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode)
+	let numRanges = ranges.count()
+	if numRanges == 0 'empty'
+		return
+	end 'empty'
+
+	// The eviction fixup mutates per-range cascade state (LiveRange.cascade AND the
+	// shared cascadeByValueId sidetable) via bumpEvicteeCascade. Both the legacy
+	// and sweep runs invoke it, so the sweep must start from the SAME cascade state
+	// the legacy run saw — otherwise the legacy run's cascade bumps carry into the
+	// sweep's eviction and change WHICH ranges it can evict, manufacturing a
+	// spurious spill-parity divergence that is an artifact of the harness, not the
+	// colorer. Snapshot the cascade state before the legacy run and restore it
+	// before the sweep run. (result is not shared: legacy writes the real `result`
+	// that codegen consumes; the sweep writes a throwaway, so its assignments never
+	// leak into codegen — validate mode is codegen-neutral.)
+	var cascadeSnapshot = RegIntArray.create()
+	var ci = 0
+	while ci < numRanges 'snapRange'
+		let r = try ranges.get(ci) otherwise panic("validateColorClass: ranges.get({ci}) OOB snapshotting cascade")
+		cascadeSnapshot.push(r.cascade)
+		ci = ci + 1
+	end 'snapRange'
+	var cascadeSideSnapshot = RegIntArray.create()
+	var cj = 0
+	while cj < cascadeByValueId.count() 'snapSide'
+		cascadeSideSnapshot.push(try cascadeByValueId.get(cj) otherwise panic("validateColorClass: cascadeByValueId.get({cj}) OOB snapshotting"))
+		cj = cj + 1
+	end 'snapSide'
+
+	let legacyColors = colorClassCapture(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+
+	// Capture the cascade state the LEGACY run leaves — this is the state codegen
+	// (and the next spill iteration) must see, since the legacy result is the one
+	// that ships. Restored after the throwaway sweep run below.
+	var cascadePostLegacy = RegIntArray.create()
+	var pk = 0
+	while pk < numRanges 'snapPost'
+		let r = try ranges.get(pk) otherwise panic("validateColorClass: ranges.get({pk}) OOB post-legacy snapshot")
+		cascadePostLegacy.push(r.cascade)
+		pk = pk + 1
+	end 'snapPost'
+	var cascadeSidePostLegacy = RegIntArray.create()
+	var pj = 0
+	while pj < cascadeByValueId.count() 'snapSidePost'
+		cascadeSidePostLegacy.push(try cascadeByValueId.get(pj) otherwise panic("validateColorClass: cascadeByValueId.get({pj}) OOB post-legacy"))
+		pj = pj + 1
+	end 'snapSidePost'
+
+	// Restore the PRE-legacy cascade state so the sweep run starts from the same
+	// slate the legacy run started from.
+	restoreCascadeState(ranges, cascadeByValueId: cascadeByValueId, rangeSnapshot: cascadeSnapshot, sideSnapshot: cascadeSideSnapshot, numRanges: numRanges)
+
+	var throwaway = ColoringResult.create(result.assignment.count())
+	let sweepColors = colorClassSweep(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: throwaway, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, isValidateSweep: true)
+
+	// Restore the post-legacy cascade state so validate mode is fully codegen-
+	// neutral: the shipping (legacy) result and its cascade side-effects are what
+	// the rest of the pipeline sees, exactly as an un-instrumented legacy run.
+	restoreCascadeState(ranges, cascadeByValueId: cascadeByValueId, rangeSnapshot: cascadePostLegacy, sideSnapshot: cascadeSidePostLegacy, numRanges: numRanges)
+
+	assertSpillParity(ranges, legacyColors: legacyColors, sweepColors: sweepColors)
+end 'validateColorClass'
+
+// Restore per-range LiveRange.cascade and the cascadeByValueId sidetable from a
+// prior snapshot. Used by the validate harness to run the legacy and sweep
+// colorers from identical cascade slates (the eviction fixup mutates both).
+function restoreCascadeState(ranges LiveRangeArray, cascadeByValueId RegIntArray, rangeSnapshot RegIntArray, sideSnapshot RegIntArray, numRanges RegInt)
+	var i = 0
+	while i < numRanges 'restoreRange'
+		var r = try ranges.get(i) otherwise panic("restoreCascadeState: ranges.get({i}) OOB")
+		r.cascade = try rangeSnapshot.get(i) otherwise panic("restoreCascadeState: rangeSnapshot.get({i}) OOB")
+		i = i + 1
+	end 'restoreRange'
+	var j = 0
+	while j < sideSnapshot.count() 'restoreSide'
+		try cascadeByValueId.set(j, value: try sideSnapshot.get(j) otherwise panic("restoreCascadeState: sideSnapshot.get({j}) OOB")) otherwise panic("restoreCascadeState: cascadeByValueId.set({j}) OOB")
+		j = j + 1
+	end 'restoreSide'
+end 'restoreCascadeState'
+
+// Run the legacy colorer, writing assignments into `result` AND returning the
+// per-range color array (so validate can compare spill parity). Factored out of
+// colorClassLegacy so the validate path gets the legacy `rangeColors` without a
+// second coloring or a signature change on the legacy entry point.
+function colorClassCapture(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntArray, domPreorder BlockIdArray, result ColoringResult, cascadeByValueId RegIntArray, cheapColoring bool, sweepMode SweepMode) returns RegIntArray
+	colorClassLegacy(ranges, pool: pool, callerSaved: callerSaved, domPreorder: domPreorder, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring, sweepMode: sweepMode)
+	// Reconstruct the per-range color array from `result` (indexed by valueId)
+	// so it is comparable to colorClassSweep's return (indexed by range index).
+	var colors = RegIntArray.create()
+	var i = 0
+	while i < ranges.count() 'each'
+		let range = try ranges.get(i) otherwise panic("colorClassCapture: ranges.get({i}) OOB")
+		let c = getOr(result.assignment, index: range.valueId, fallback: RM_NONE)
+		colors.push(c)
+		i = i + 1
+	end 'each'
+	return colors
+end 'colorClassCapture'
+
+// Assert SPILL PARITY between the legacy and sweep colorers: for every range,
+// both must be colored or both uncolored (a fixed range is colored in both by
+// construction). A divergence where one colors and the other spills is a
+// correctness break — panic naming the range. Different-but-valid colors are not
+// checked here (register choice may legitimately differ). Panics on the first
+// spill-parity break so a latent sweep bug is caught deterministically.
+function assertSpillParity(ranges LiveRangeArray, legacyColors RegIntArray, sweepColors RegIntArray)
+	let n = ranges.count()
+	var colorDiffs = 0
+	var i = 0
+	while i < n 'each'
+		let range = try ranges.get(i) otherwise panic("assertSpillParity: ranges.get({i}) OOB")
+		let legacyC = getOr(legacyColors, index: i, fallback: RM_NONE)
+		let sweepC = getOr(sweepColors, index: i, fallback: RM_NONE)
+		let legacyColored = legacyC != RM_NONE
+		let sweepColored = sweepC != RM_NONE
+		if legacyColored != sweepColored 'spillParityBreak'
+			panic("A3 spill-parity break at range {i} v{range.valueId} defBlock={range.defBlock} defPos={range.defPosition} fixedReg={range.fixedReg} crossesCall={range.crossesCall}: legacy={legacyC} sweep={sweepC} (one colored, one spilled)")
+		end 'spillParityBreak'
+		if legacyColored and legacyC != sweepC 'colorDiff'
+			colorDiffs = colorDiffs + 1
+		end 'colorDiff'
+		i = i + 1
+	end 'each'
+	if colorDiffs > 0 'hadDiffs'
+		logDebug(LogCategory.ir, message: function() gives "A3 validate: {colorDiffs} range(s) got a different (but valid) color under sweep vs legacy")
+	end 'hadDiffs'
+end 'assertSpillParity'
 
 // Accumulate interference-graph edge count E (summed over every coloring
 // invocation, so divide by __regalloc-colorings for a per-coloring average).
