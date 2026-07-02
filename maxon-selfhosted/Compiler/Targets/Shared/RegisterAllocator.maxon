@@ -1007,12 +1007,51 @@ type FunctionRegAllocator
 	// vreg's copy edges. Splitting must precede coloring so the per-anchor
 	// sub-ranges enter the interference graph independently.
 	function runLivenessAndRanges()
+		let tLive = passTimerStart()
 		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
+		recordPassSince("__regalloc-liveness", startMs: tLive)
+
+		let tBuild = passTimerStart()
 		ranges = buildLiveRanges(module, func: func, cfg: cfg, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds, stageByValueId: stageByValueId, rematerializeIds: rematerializeIds, rematerializeValueByValueId: rematerializeValueByValueId, cascadeByValueId: cascadeByValueId)
+		recordPassSince("__regalloc-buildranges", startMs: tBuild)
+
+		let tConstraints = passTimerStart()
 		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
+		recordPassSince("__regalloc-constraints", startMs: tConstraints)
+
+		let tCoalesce = passTimerStart()
 		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, errorFlagOrd: state.desc.errorFlagOrd, opQuery: opQuery)
+		recordPassSince("__regalloc-coalesce", startMs: tCoalesce)
+
+		let tSplit = passTimerStart()
 		splitInfo = splitMultiAnchorMerges(ranges, func: func, module: module, stageByValueId: stageByValueId)
+		recordPassSince("__regalloc-splitmerges", startMs: tSplit)
+
+		// Rebuild counter + range-population stats (R, pseudo-R). Counts every
+		// full from-scratch rebuild across Belady rounds + reactive iterations +
+		// split iterations — the A2 target. See recordRangeStats.
+		recordPassCounter("__regalloc-rebuilds", delta: 1)
+		self.recordRangeStats()
 	end 'runLivenessAndRanges'
+
+	// Accumulate live-range population stats after a rebuild: total ranges (R)
+	// and pseudo-ranges (fixed clobber/param/phys-dest ranges minted by
+	// insertPhysicalConstraints — the R-inflation A3's reservation model
+	// removes). Summed across every rebuild, so divide by __regalloc-rebuilds
+	// for a per-rebuild average. Only touched when timings are active.
+	function recordRangeStats()
+		if not passTimingsActive() 'inactive'
+			return
+		end 'inactive'
+		var pseudo = 0
+		for r in ranges 'countPseudo'
+			if r.fixedReg != RM_NONE 'isPseudo'
+				pseudo = pseudo + 1
+			end 'isPseudo'
+		end 'countPseudo'
+		recordPassCounter("__regalloc-ranges-sum", delta: ranges.count())
+		recordPassCounter("__regalloc-pseudoranges-sum", delta: pseudo)
+	end 'recordRangeStats'
 
 	// The per-function decision to use the cheap register-allocation path: skip
 	// the last-chance-recolor recursion (depth -> 0) AND the live-range splitter.
@@ -1025,7 +1064,10 @@ type FunctionRegAllocator
 	end 'useCheapRegalloc'
 
 	function runColoring()
+		let tColor = passTimerStart()
 		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps, cascadeByValueId: cascadeByValueId, cheapColoring: self.useCheapRegalloc(), sweepMode: getSweepMode())
+		recordPassSince("__regalloc-coloring", startMs: tColor)
+		recordPassCounter("__regalloc-colorings", delta: 1)
 	end 'runColoring'
 
 	// Pre-coloring Belady/MIN register-pressure reduction. Runs AFTER
@@ -1088,7 +1130,9 @@ type FunctionRegAllocator
 		var round = 0
 
 		while round < BELADY_MAX_ROUNDS 'beladyLoop'
+			let tMaxLive = passTimerStart()
 			let maxLive = computeMaxLivePerBlock(ranges, module: module, func: func, desc: state.desc)
+			recordPassSince("__regalloc-belady-maxlive", startMs: tMaxLive)
 
 			let overGpr = pressureExcess(maxLive.gpr, budget: kGpr) + pressureExcess(maxLive.gprCallee, budget: kCalleeGpr)
 			let overFp = pressureExcess(maxLive.fp, budget: kFp) + pressureExcess(maxLive.fpCallee, budget: kCalleeFp)
@@ -1103,7 +1147,9 @@ type FunctionRegAllocator
 				break
 			end 'withinBudget'
 
+			let tPick = passTimerStart()
 			var spillDec = pickBeladySpills(ranges, module: module, func: func, rpo: rpo, cfg: cfg, regTarget: regTarget, desc: state.desc)
+			recordPassSince("__regalloc-belady-pick", startMs: tPick)
 
 			// Total-pressure relief by spilling. Convergence guard: if a prior
 			// spill round did not strictly reduce the over-budget magnitude, further
@@ -1132,8 +1178,10 @@ type FunctionRegAllocator
 				break
 			end 'noCandidate'
 
+			let tSpillCode = passTimerStart()
 			self.spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: self.spillBaseOffset)
 			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: state.desc)
+			recordPassSince("__regalloc-spillcode", startMs: tSpillCode)
 
 			// Union this round's reload/remat bitmaps into the cumulative sets
 			// before rebuilding ranges — identical bookkeeping to
@@ -1150,6 +1198,7 @@ type FunctionRegAllocator
 			self.runLivenessAndRanges()
 
 			round = round + 1
+			recordPassCounter("__regalloc-belady-rounds", delta: 1)
 		end 'beladyLoop'
 	end 'runBeladyPressureReduction'
 
@@ -1248,6 +1297,14 @@ type FunctionRegAllocator
 			if uncoloredSpills.count() == 0 'allColored'
 				break
 			end 'allColored'
+
+			// Count every reactive-loop body that finds work to do (uncolored
+			// ranges remain). Distinct from the `iteration` local, which only
+			// counts spill iterations (split-only iterations `continue` before
+			// bumping it) — this counts BOTH so the A1 attribution sees the true
+			// reactive-loop pass count. See __regalloc-split-iterations for the
+			// split-only subset.
+			recordPassCounter("__regalloc-reactive-passes", delta: 1)
 
 			// Progress check for splitting. Each successful split iteration
 			// rebuilds liveness; if the new uncolored count doesn't strictly
@@ -1373,6 +1430,7 @@ type FunctionRegAllocator
 				// Skip Pass 2 this iteration — the next pass sees the shorter
 				// ranges and may color them without any spill at all.
 				splitOnlyIterations = splitOnlyIterations + 1
+				recordPassCounter("__regalloc-split-iterations", delta: 1)
 				if splitOnlyIterations >= maxReactiveSplitIterations 'splitCapReached'
 					// Bounded the per-function split churn — spill the rest.
 					splittingHelps = false
@@ -1480,8 +1538,10 @@ type FunctionRegAllocator
 				panic("regalloc: spill loop stalled in {state.funcName} — {stillUnsplit.count()} uncolored ranges but Pass 2 spilled nothing (iteration={iteration})")
 			end 'nothingToSpill'
 
+			let tSpillCode = passTimerStart()
 			self.spillBaseOffset = allocateSpillSlots(spillDec, baseOffset: self.spillBaseOffset)
 			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget, desc: desc)
+			recordPassSince("__regalloc-spillcode", startMs: tSpillCode)
 
 			// Union this iteration's reload bitmap into the cumulative set
 			// before rebuilding ranges, so the new reload vregs get
@@ -1515,8 +1575,12 @@ type FunctionRegAllocator
 	// Modes 2 and 3 are both caught by the pre-applyColoring `firstUncoloredUse`
 	// scan over the function's actual operand uses+defs.
 	export function run() returns bool
+		recordPassCounter("__regalloc-functions", delta: 1)
+
 		// Phase 0: CFG analysis
+		let tCfg = passTimerStart()
 		self.runCfgAnalysis()
+		recordPassSince("__regalloc-cfg", startMs: tCfg)
 
 		// Phases 1-3: liveness, live ranges, coalescing
 		self.runLivenessAndRanges()
@@ -1527,6 +1591,10 @@ type FunctionRegAllocator
 		// the DENSE_FUNC_* thresholds. Stored on `denseFunc` and consumed via
 		// `useCheapRegalloc()` by both runColoring and runSpillColorLoop.
 		self.denseFunc = ranges.count() >= DENSE_FUNC_RANGE_THRESHOLD or functionOpCount(func, module: module) >= DENSE_FUNC_OP_THRESHOLD
+
+		if self.denseFunc 'countDense'
+			recordPassCounter("__regalloc-dense-functions", delta: 1)
+		end 'countDense'
 
 		if self.spillEverywhere 'fallbackMode'
 			// Robustness fallback: stack-spill every spillable value so no value
@@ -1568,10 +1636,14 @@ type FunctionRegAllocator
 		end 'uncoloredFailed'
 
 		// Phase 6: Apply coloring (virtual -> physical)
+		let tApply = passTimerStart()
 		applyColoring(module, func: func, coloring: coloring, ranges: ranges, state: state, regTarget: regTarget)
+		recordPassSince("__regalloc-applycolor", startMs: tApply)
 
 		// Phase 7: Destroy SSA (parallel copies at CFG edges)
+		let tDestroy = passTimerStart()
 		destroySSA(module, func: func, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
+		recordPassSince("__regalloc-destroyssa", startMs: tDestroy)
 		return true
 	end 'run'
 

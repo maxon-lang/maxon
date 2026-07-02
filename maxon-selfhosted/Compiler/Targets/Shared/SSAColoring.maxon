@@ -323,13 +323,18 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// Step 1: Build interference graph. `legacy` uses buildInterferenceGraph;
 	// `sweep` uses the unified LiveSetSweep (byte-identical edge set); `validate`
 	// builds both, asserts the edge sets match, and returns the legacy graph.
+	let tIg = passTimerStart()
 	let ig = selectInterference(ranges, callerSavedByOrdinal: callerSavedByOrdinal, sweepMode: sweepMode)
+	recordPassSince("__regalloc-interference", startMs: tIg)
+	recordInterferenceStats(ig)
 
 	// Step 2: Compute dominance-tree preorder index for sorting
 	let domIndex = buildDomPreorderIndex(domPreorder)
 
 	// Step 3: Sort ranges by dom-tree preorder of their def block
+	let tSort = passTimerStart()
 	let sortedOrder = sortByDomPreorder(ranges, domIndex: domIndex)
+	recordPassSince("__regalloc-sortdom", startMs: tSort)
 
 	// Step 4: Greedy coloring in dom-tree preorder
 	let poolSize = pool.count()
@@ -371,6 +376,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// eviction logic runs as a SECOND pass below, touching only the ranges
 	// this first pass left uncolored — so a successful first-fit produces
 	// IDENTICAL coloring to the pre-Phase-4 allocator.
+	let tFirstFit = passTimerStart()
 	for sortedIdx in sortedOrder 'colorEach'
 		let range = try ranges.get(sortedIdx) otherwise panic("invariant: sortedIdx from sortedOrder out of bounds in ranges")
 
@@ -467,6 +473,7 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 			end 'inBounds'
 		end 'hasColor'
 	end 'colorEach'
+	recordPassSince("__regalloc-firstfit", startMs: tFirstFit)
 
 	// Phase 4: Greedy-style eviction fixup. For every virtual range still
 	// uncolored after the first-fit pass, try to evict a lower-priority
@@ -474,8 +481,25 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 	// evictee weight or smaller cascade at equal weight) plus the
 	// MAX_CASCADE bound guarantees termination — see the LiveRange.cascade
 	// comment for the proof sketch.
+	let tEvict = passTimerStart()
 	runEvictionFixup(ranges, ig: ig, rangeColors: rangeColors, vidToRangeIdx: vidToRangeIdx, pool: pool, callerSavedMask: callerSavedMask, poolIndexOf: poolIndexOf, poolSize: poolSize, result: result, cascadeByValueId: cascadeByValueId, cheapColoring: cheapColoring)
+	recordPassSince("__regalloc-eviction", startMs: tEvict)
 end 'colorClass'
+
+// Accumulate interference-graph edge count E (summed over every coloring
+// invocation, so divide by __regalloc-colorings for a per-coloring average).
+// neighbors is symmetric adjacency, so total endpoints / 2 = undirected edges.
+// The O(numRanges) walk is only paid when timings are active.
+function recordInterferenceStats(ig InterferenceGraph)
+	if not passTimingsActive() 'inactive'
+		return
+	end 'inactive'
+	var endpoints = 0
+	for nbrs in ig.neighbors 'sumDegree'
+		endpoints = endpoints + nbrs.count()
+	end 'sumDegree'
+	recordPassCounter("__regalloc-edges-sum", delta: endpoints / 2)
+end 'recordInterferenceStats'
 
 // Attempt to color a single range, writing the assignment to `rangeColors` and
 // `result` if successful. Computes the used-register set from currently-colored
@@ -1871,7 +1895,8 @@ function buildDomPreorderIndex(domPreorder BlockIdArray) returns RegIntArray
 end 'buildDomPreorderIndex'
 
 // Return range indices sorted by dominator-tree preorder of their def block.
-// Uses insertion sort (simple, good enough for typical range counts).
+// Sorted with an inline O(n log n) merge sort — see the note inside about the
+// former insertion sort it replaced.
 function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns RegIntArray
 	let numRanges = ranges.count()
 	var order = RegIntArray.create()

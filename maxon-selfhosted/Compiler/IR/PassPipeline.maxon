@@ -973,6 +973,13 @@ var passTimingsEnabled = false
 var passTimings = PassMillisMap.create()
 var passInvocations = PassMillisMap.create()
 
+// Named integer counters accumulated over a run, dumped alongside the timings.
+// Distinct from `passTimings` so counts (Belady rounds, reactive iterations,
+// interference-graph edges, ...) are never confused with milliseconds. Only
+// touched when `passTimingsEnabled` — same gating as the timers — so production
+// runs pay nothing. Used by the intra-regalloc instrumentation (Track A A1).
+var passCounters = PassMillisMap.create()
+
 export function enablePassTimings()
 	passTimingsEnabled = true
 end 'enablePassTimings'
@@ -1014,6 +1021,18 @@ export function recordPassSince(passName String, startMs PassMillis)
 	end 'inactive'
 	recordPassTime(passName, elapsedMs: ((Clock.nowMs()) - startMs))
 end 'recordPassSince'
+
+// Accumulate `delta` against a named counter (e.g. "__regalloc-belady-rounds").
+// No-op unless timings are active, so callers can write the same shape
+// unconditionally. Dumped by dumpPassTimings() in a separate "Pass counters"
+// section. Used by the intra-regalloc instrumentation (Track A A1).
+export function recordPassCounter(counterName String, delta PassMillis)
+	if not passTimingsEnabled 'inactive'
+		return
+	end 'inactive'
+	let prev = try passCounters.get(counterName) otherwise 0 as PassMillis
+	passCounters.upsert(counterName, value: prev + delta)
+end 'recordPassCounter'
 
 // Print per-pass totals + invocation counts, descending by total ms. Selection
 // sort over the (small) pass list is fine. Resets the accumulator after
@@ -1062,9 +1081,51 @@ export function dumpPassTimings()
 		print("  ({suppressed} sub-millisecond rows suppressed)\n")
 	end 'note'
 
+	dumpPassCounters()
+
 	passTimings = PassMillisMap.create()
 	passInvocations = PassMillisMap.create()
+	passCounters = PassMillisMap.create()
 end 'dumpPassTimings'
+
+// Print accumulated integer counters (descending by value) after the timings.
+// Selection sort over the small counter set, mirroring the timing dump. No
+// reset here — dumpPassTimings owns the shared lifecycle reset.
+function dumpPassCounters()
+	if passCounters.count() == 0 'noData'
+		return
+	end 'noData'
+	var rows = StringArray.create()
+	for (name, _) in passCounters 'collect'
+		rows.push(name)
+	end 'collect'
+	let n = rows.count()
+	for i in 0 upto n 'outer'
+		var bestIdx = i
+		let firstName = try rows.get(i) otherwise panic("dumpPassCounters: rows.get({i}) OOB")
+		var bestVal = try passCounters.get(firstName) otherwise panic("dumpPassCounters: missing counter for '{firstName}'")
+		for j in (i + 1) upto n 'inner'
+			let cn = try rows.get(j) otherwise panic("dumpPassCounters: rows.get({j}) OOB")
+			let cv = try passCounters.get(cn) otherwise panic("dumpPassCounters: missing counter for '{cn}'")
+			if cv > bestVal 'newBest'
+				bestVal = cv
+				bestIdx = j
+			end 'newBest'
+		end 'inner'
+		if bestIdx != i 'swap'
+			let tmp = (try rows.get(i) otherwise panic("dumpPassCounters: row swap get(i) OOB")).clone()
+			let other = (try rows.get(bestIdx) otherwise panic("dumpPassCounters: row swap get(bestIdx) OOB")).clone()
+			try rows.set(i, value: other) otherwise panic("dumpPassCounters: row swap set(i) out of bounds")
+			try rows.set(bestIdx, value: tmp) otherwise panic("dumpPassCounters: row swap set(bestIdx) out of bounds")
+		end 'swap'
+	end 'outer'
+
+	print("Pass counters (descending):\n")
+	for name in rows 'printRow'
+		let val = try passCounters.get(name) otherwise panic("dumpPassCounters: missing counter for '{name}'")
+		print("  {name}: {val}\n")
+	end 'printRow'
+end 'dumpPassCounters'
 
 // Returns a human-readable name for a pass, used for logging.
 function passKindToString(pass PassKind) returns String
