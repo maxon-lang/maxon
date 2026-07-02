@@ -1038,6 +1038,20 @@ end 'recordPassCounter'
 // sort over the (small) pass list is fine. Resets the accumulator after
 // dumping so subsequent runs in the same process measure their own bursts.
 export function dumpPassTimings()
+	printPassTimings(true)
+	dumpPassCounters()
+
+	passTimings = PassMillisMap.create()
+	passInvocations = PassMillisMap.create()
+	passCounters = PassMillisMap.create()
+end 'dumpPassTimings'
+
+// Emit the current timing table (descending by total ms) WITHOUT resetting the
+// accumulators. Shared by the end-of-run dump and the mid-run partial snapshot.
+// When `suppressSubMs` is false every row prints (the partial snapshot wants
+// the sub-ms regalloc sub-phases too — on a crashing self-compile the totals
+// matter even where a single invocation is fast).
+function printPassTimings(suppressSubMs bool)
 	if passTimings.count() == 0 'noData'
 		return
 	end 'noData'
@@ -1048,45 +1062,69 @@ export function dumpPassTimings()
 	let n = rows.count()
 	for i in 0 upto n 'outer'
 		var bestIdx = i
-		let firstName = try rows.get(i) otherwise panic("dumpPassTimings: rows.get({i}) OOB")
-		var bestMs = try passTimings.get(firstName) otherwise panic("dumpPassTimings: missing timing for '{firstName}'")
+		let firstName = try rows.get(i) otherwise panic("printPassTimings: rows.get({i}) OOB")
+		var bestMs = try passTimings.get(firstName) otherwise panic("printPassTimings: missing timing for '{firstName}'")
 		for j in (i + 1) upto n 'inner'
-			let cn = try rows.get(j) otherwise panic("dumpPassTimings: rows.get({j}) OOB")
-			let cm = try passTimings.get(cn) otherwise panic("dumpPassTimings: missing timing for '{cn}'")
+			let cn = try rows.get(j) otherwise panic("printPassTimings: rows.get({j}) OOB")
+			let cm = try passTimings.get(cn) otherwise panic("printPassTimings: missing timing for '{cn}'")
 			if cm > bestMs 'newBest'
 				bestMs = cm
 				bestIdx = j
 			end 'newBest'
 		end 'inner'
 		if bestIdx != i 'swap'
-			let tmp = (try rows.get(i) otherwise panic("dumpPassTimings: row swap get(i) OOB")).clone()
-			let other = (try rows.get(bestIdx) otherwise panic("dumpPassTimings: row swap get(bestIdx) OOB")).clone()
-			try rows.set(i, value: other) otherwise panic("dumpPassTimings: row swap set(i) out of bounds")
-			try rows.set(bestIdx, value: tmp) otherwise panic("dumpPassTimings: row swap set(bestIdx) out of bounds")
+			let tmp = (try rows.get(i) otherwise panic("printPassTimings: row swap get(i) OOB")).clone()
+			let other = (try rows.get(bestIdx) otherwise panic("printPassTimings: row swap get(bestIdx) OOB")).clone()
+			try rows.set(i, value: other) otherwise panic("printPassTimings: row swap set(i) out of bounds")
+			try rows.set(bestIdx, value: tmp) otherwise panic("printPassTimings: row swap set(bestIdx) out of bounds")
 		end 'swap'
 	end 'outer'
 
 	print("Pass timings (descending):\n")
 	var suppressed = 0
 	for name in rows 'printRow'
-		let ms = try passTimings.get(name) otherwise panic("dumpPassTimings: missing timing for '{name}'")
-		if ms == 0 'subMs'
+		let ms = try passTimings.get(name) otherwise panic("printPassTimings: missing timing for '{name}'")
+		if ms == 0 and suppressSubMs 'subMs'
 			suppressed = suppressed + 1
 			continue
 		end 'subMs'
-		let count = try passInvocations.get(name) otherwise panic("dumpPassTimings: missing invocations for '{name}'")
+		let count = try passInvocations.get(name) otherwise panic("printPassTimings: missing invocations for '{name}'")
 		print("  {name}: {ms}ms across {count} invocations\n")
 	end 'printRow'
 	if suppressed > 0 'note'
 		print("  ({suppressed} sub-millisecond rows suppressed)\n")
 	end 'note'
+end 'printPassTimings'
 
+// Mid-run profile snapshot: print the timing table (all rows) + counters
+// WITHOUT resetting. Used by maybeFlushRegallocProfile so a self-compile that
+// crashes mid-regalloc still yields a full attribution up to the crash point.
+// No-op unless timings are active.
+function dumpPassProfileSnapshot()
+	if not passTimingsEnabled 'inactive'
+		return
+	end 'inactive'
+	printError("=== profile snapshot ===\n")
+	printPassTimings(false)
 	dumpPassCounters()
+end 'dumpPassProfileSnapshot'
 
-	passTimings = PassMillisMap.create()
-	passInvocations = PassMillisMap.create()
-	passCounters = PassMillisMap.create()
-end 'dumpPassTimings'
+// Emit a profile snapshot every `regallocFlushInterval` register-allocated
+// functions, so a crashing self-compile still leaves attribution behind. Only
+// counts / prints when timings are active. Called once per regalloc function
+// from allocateRegistersWithTarget.
+var regallocFuncsSeen = 0
+let regallocFlushInterval = 100
+
+export function maybeFlushRegallocProfile()
+	if not passTimingsEnabled 'inactive'
+		return
+	end 'inactive'
+	regallocFuncsSeen = regallocFuncsSeen + 1
+	if regallocFuncsSeen mod regallocFlushInterval == 0 'flush'
+		dumpPassProfileSnapshot()
+	end 'flush'
+end 'maybeFlushRegallocProfile'
 
 // Print accumulated integer counters (descending by value) after the timings.
 // Selection sort over the small counter set, mirroring the timing dump. No
