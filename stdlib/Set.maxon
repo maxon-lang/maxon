@@ -13,10 +13,12 @@ end 'SetSlotState'
 export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
 	typealias StateArray = Array with SetSlotState
+	typealias HashSlotArray = Array with HashValue
 	typealias SetIter = SetIterator with Element
 
 	var elements as ElementArray = ElementArray.create()  // Element storage
 	var states as StateArray = StateArray.create()  // Slot states
+	var hashes as HashSlotArray = HashSlotArray.create()  // Cached element hashes, parallel to elements
 	var count = 0  // Number of occupied entries
 	var capacity = 0  // Total slots
 
@@ -42,9 +44,11 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		elems.resize(cap)
 		var sts = StateArray{}
 		sts.resize(cap)
+		var hs = HashSlotArray{}
+		hs.resize(cap)
 
 		// Create the set with preallocated capacity (count defaults to 0)
-		var result = Self{elements: elems, states: sts, capacity: cap}
+		var result = Self{elements: elems, states: sts, hashes: hs, capacity: cap}
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'
@@ -64,8 +68,11 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			newElements.resize(16)
 			var newStates = StateArray{}
 			newStates.resize(16)
+			var newHashes = HashSlotArray{}
+			newHashes.resize(16)
 			elements = newElements
 			states = newStates
+			hashes = newHashes
 			capacity = 16
 		end 'init_empty'
 
@@ -76,10 +83,11 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'grow'
 
 		let hash = element.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+		// capacity is always a power of two (starts at 16, only ever doubled), so
+		// `hash and (capacity - 1)` selects the low bits — identical to
+		// `hash mod capacity` for the non-negative HashValue range, but cheaper.
+		let mask = capacity - 1
+		var index = hash and mask
 
 		var firstDeleted = -1
 		var probes = 0
@@ -101,6 +109,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 				try elements.set(insertIndex, value: element) otherwise panic("Set.insert: elements.set OOB — insertIndex from probe is in-bounds")
 				try states.set(insertIndex, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — insertIndex from probe is in-bounds")
+				try hashes.set(insertIndex, value: hash) otherwise panic("Set.insert: hashes.set OOB — insertIndex from probe is in-bounds")
 				count = count + 1
 				return
 			end 'empty'
@@ -120,16 +129,20 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'check_exists'
-				if let existing = try elements.get(index) 'get_existing'
-					if existing == element 'exists'
-						// Element already exists - no-op for sets
-						return
-					end 'exists'
-				end 'get_existing'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'exists'
+							// Element already exists - no-op for sets
+							return
+						end 'exists'
+					end 'get_existing'
+				end 'hash_match'
 			end 'check_exists'
 
 			// Linear probing
-			index = (index + 1) mod capacity
+			index = (index + 1) and mask
 			probes = probes + 1
 		end 'probe'
 
@@ -138,6 +151,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		if firstDeleted >= 0 'fallback'
 			try elements.set(firstDeleted, value: element) otherwise panic("Set.insert: elements.set OOB — firstDeleted from probe is in-bounds")
 			try states.set(firstDeleted, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — firstDeleted from probe is in-bounds")
+			try hashes.set(firstDeleted, value: hash) otherwise panic("Set.insert: hashes.set OOB — firstDeleted from probe is in-bounds")
 			count = count + 1
 		end 'fallback'
 	end 'insert'
@@ -150,10 +164,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+		// capacity is always a power of two, so masking selects the low bits.
+		let mask = capacity - 1
+		var index = hash and mask
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -174,14 +187,18 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'check_found'
-				if let existing = try elements.get(index) 'get_existing'
-					if existing == element 'found'
-						return true
-					end 'found'
-				end 'get_existing'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'found'
+							return true
+						end 'found'
+					end 'get_existing'
+				end 'hash_match'
 			end 'check_found'
 
-			index = (index + 1) mod capacity
+			index = (index + 1) and mask
 			probes = probes + 1
 		end 'probe'
 
@@ -196,10 +213,9 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+		// capacity is always a power of two, so masking selects the low bits.
+		let mask = capacity - 1
+		var index = hash and mask
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -220,16 +236,23 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'check_found'
-				if let existing = try elements.get(index) 'get_existing'
-					if existing == element 'found'
-						try states.set(index, value: SetSlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
-						count = count - 1
-						return true
-					end 'found'
-				end 'get_existing'
+				// Skip the full element.equals() unless the cached hash matches.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try elements.get(index) 'get_existing'
+						if existing == element 'found'
+							// Only the Deleted state marks the slot as removed. The cached
+							// hash is left as-is: the hash-guard only runs inside the
+							// Occupied branch, so a tombstone can never cause a false match.
+							try states.set(index, value: SetSlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
+							count = count - 1
+							return true
+						end 'found'
+					end 'get_existing'
+				end 'hash_match'
 			end 'check_found'
 
-			index = (index + 1) mod capacity
+			index = (index + 1) and mask
 			probes = probes + 1
 		end 'probe'
 
@@ -265,16 +288,24 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		newElements.resize(newCapacity)
 		var newStates = StateArray{}
 		newStates.resize(newCapacity)
+		var newHashes = HashSlotArray{}
+		newHashes.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
 		let oldElements = elements
 		let oldStates = states
+		let oldHashes = hashes
 		elements = newElements
 		states = newStates
+		hashes = newHashes
 		capacity = newCapacity
 		count = 0
 
-		// Rehash all occupied entries from old arrays
+		// newCapacity is a power of two, so masking selects the low bits.
+		let mask = newCapacity - 1
+
+		// Rehash all occupied entries from old arrays, reusing the cached hash
+		// instead of re-calling element.hash().
 		for i in 0 upto oldCapacity 'rehash'
 			let state = try oldStates.get(i) otherwise SetSlotState.Empty
 
@@ -286,11 +317,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 			if isOccupied 'occupied'
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
-					let hash = element.hash()
-					var index = hash mod newCapacity
-					if index < 0 'fix_negative'
-						index = index + newCapacity
-					end 'fix_negative'
+					let hash = try oldHashes.get(i) otherwise element.hash()
+					var index = hash and mask
 
 					// Find empty slot (no deleted slots in fresh array)
 					var currentState = try states.get(index) otherwise SetSlotState.Empty
@@ -300,7 +328,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 						Deleted gives true
 					end 'se1'
 					while isNotEmpty 'find_slot'
-						index = (index + 1) mod newCapacity
+						index = (index + 1) and mask
 						currentState = try states.get(index) otherwise SetSlotState.Empty
 						isNotEmpty = match currentState 'se2'
 							Empty gives false
@@ -311,6 +339,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 					try elements.set(index, value: element) otherwise panic("Set.grow: elements.set OOB — rehash slot is in-bounds")
 					try states.set(index, value: SetSlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
+					try hashes.set(index, value: hash) otherwise panic("Set.grow: hashes.set OOB — rehash slot is in-bounds")
 					count = count + 1
 				end 'get_elem'
 			end 'occupied'

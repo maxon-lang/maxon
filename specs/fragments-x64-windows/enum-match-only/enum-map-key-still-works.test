@@ -187,7 +187,7 @@ module {
   }
   func @__destruct_ColorMap(ptr: i64) {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
@@ -212,6 +212,14 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_2
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [r8+24]
+    x64.mov [rbp-40], r9
+    x64.test r9, r9
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
     x64.jmp __destruct_ColorMap.done
   done:
     x64.epilogue

@@ -16,6 +16,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
 	typealias StateArray = Array with SlotState
+	typealias HashSlotArray = Array with HashValue
 	typealias Entry = (Key, Value)
 	typealias KeyMemory = __ManagedMemory with Key
 	typealias ValueMemory = __ManagedMemory with Value
@@ -23,6 +24,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	var keys as KeyArray = KeyArray.create()  // Key storage
 	var values as ValueArray = ValueArray.create()  // Value storage
 	var states as StateArray = StateArray.create()  // Slot states
+	var hashes as HashSlotArray = HashSlotArray.create()  // Cached key hashes, parallel to keys
 	var count = 0  // Number of occupied entries
 	var capacity = 0  // Total slots
 
@@ -49,9 +51,11 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		vs.resize(cap)
 		var sts = StateArray{}
 		sts.resize(cap)
+		var hs = HashSlotArray{}
+		hs.resize(cap)
 
 		// Create the map with arrays and preallocated capacity (count defaults to 0)
-		var result = Self{keys: ks, values: vs, states: sts, capacity: cap}
+		var result = Self{keys: ks, values: vs, states: sts, hashes: hs, capacity: cap}
 
 		// Insert each key-value pair from the init arrays
 		for i in 0 upto numElements 'insert_loop'
@@ -76,6 +80,8 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			values.resize(16)
 			states = StateArray{}
 			states.resize(16)
+			hashes = HashSlotArray{}
+			hashes.resize(16)
 			capacity = 16
 		end 'init_empty'
 
@@ -85,11 +91,14 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'do_grow'
 	end 'ensureCapacity'
 
-	// Internal: write a key-value pair into the given slot
-	function insertAtSlot(slotIndex SlotIndex, key Key, value Value)
+	// Internal: write a key-value pair into the given slot. `hash` is the key's
+	// precomputed hash (from findSlot), cached in the parallel `hashes` array so
+	// probes can skip the full key.equals() when hashes differ.
+	function insertAtSlot(slotIndex SlotIndex, key Key, value Value, hash HashValue)
 		try keys.set(slotIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from findSlot is always in-bounds")
 		try values.set(slotIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from findSlot is always in-bounds")
 		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from findSlot is always in-bounds")
+		try hashes.set(slotIndex, value: hash) otherwise panic("Map.insertAtSlot: hashes.set OOB — slot from findSlot is always in-bounds")
 		count = count + 1
 	end 'insertAtSlot'
 
@@ -99,13 +108,14 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function insert(key Key, value Value) throws MapError
 		ensureCapacity()
 
-		let slotIndex = findSlot(key)
+		let hash = key.hash()
+		let slotIndex = findSlot(key, hash: hash)
 		if slotIndex >= 0 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
 
 		let insertIndex = -(slotIndex + 1)
-		insertAtSlot(insertIndex, key: key, value: value)
+		insertAtSlot(insertIndex, key: key, value: value, hash: hash)
 	end 'insert'
 
 	/// Insert or update a key-value pair in the map
@@ -114,19 +124,20 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function upsert(key Key, value Value)
 		ensureCapacity()
 
-		let slotIndex = findSlot(key)
+		let hash = key.hash()
+		let slotIndex = findSlot(key, hash: hash)
 		if slotIndex >= 0 'found'
 			try values.set(slotIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
 			return
 		end 'found'
 
 		let insertIndex = -(slotIndex + 1)
-		insertAtSlot(insertIndex, key: key, value: value)
+		insertAtSlot(insertIndex, key: key, value: value, hash: hash)
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found
 	export function get(key Key) returns Value throws MapError
-		let slotIndex = findSlot(key)
+		let slotIndex = findSlot(key, hash: key.hash())
 		if slotIndex >= 0 'found'
 			if let v = try values.get(slotIndex) 'get_value'
 				return v
@@ -137,13 +148,16 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	/// Check if key exists in the map
 	export function contains(key Key) returns bool
-		return findSlot(key) >= 0
+		return findSlot(key, hash: key.hash()) >= 0
 	end 'contains'
 
 	/// Remove key from map, returns true if key was present
 	export function remove(key Key) returns bool
-		let slotIndex = findSlot(key)
+		let slotIndex = findSlot(key, hash: key.hash())
 		if slotIndex >= 0 'found'
+			// Only the Deleted state marks the slot as removed. The cached hash is
+			// left as-is: the hash-guard only runs inside the Occupied branch of
+			// findSlot, so a tombstone's stale hash can never cause a false match.
 			try states.set(slotIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
 			count = count - 1
 			return true
@@ -168,19 +182,20 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'getCapacity'
 
 	// Internal: find the slot for a key using linear probing.
+	// `hash` is the key's precomputed hash (computed once by the caller).
 	// Returns the index of the key if found (>= 0).
 	// Returns -(insertIndex + 1) if the key is not found, encoding the best
 	// slot for insertion as a negative value. Returns -1 if the map is empty.
-	function findSlot(key Key) returns SlotIndex
+	function findSlot(key Key, hash HashValue) returns SlotIndex
 		if capacity == 0 'empty'
 			return -1
 		end 'empty'
 
-		let hash = key.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+		// capacity is always a power of two (starts at 16, only ever doubled), so
+		// `hash and (capacity - 1)` selects the low bits — identical to
+		// `hash mod capacity` for the non-negative HashValue range, but cheaper.
+		let mask = capacity - 1
+		var index = hash and mask
 
 		var firstDeleted = -1
 		var probes = 0
@@ -217,15 +232,20 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'check_key'
-				if let existing = try keys.get(index) 'get_existing'
-					if existing == key 'found'
-						return index
-					end 'found'
-				end 'get_existing'
+				// Skip the full key.equals() unless the cached hash matches — this
+				// is the hot-path win for string-keyed maps.
+				let slotHash = try hashes.get(index) otherwise hash
+				if slotHash == hash 'hash_match'
+					if let existing = try keys.get(index) 'get_existing'
+						if existing == key 'found'
+							return index
+						end 'found'
+					end 'get_existing'
+				end 'hash_match'
 			end 'check_key'
 
 			// Linear probing
-			index = (index + 1) mod capacity
+			index = (index + 1) and mask
 			probes = probes + 1
 		end 'probe'
 
@@ -251,18 +271,27 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		newValues.resize(newCapacity)
 		var newStates = StateArray{}
 		newStates.resize(newCapacity)
+		var newHashes = HashSlotArray{}
+		newHashes.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
 		let oldKeys = keys
 		let oldValues = values
 		let oldStates = states
+		let oldHashes = hashes
 		keys = newKeys
 		values = newValues
 		states = newStates
+		hashes = newHashes
 		capacity = newCapacity
 		count = 0
 
-		// Rehash all occupied entries from old arrays
+		// newCapacity is a power of two, so masking selects the low bits.
+		let mask = newCapacity - 1
+
+		// Rehash all occupied entries from old arrays. The new table is fresh
+		// (no tombstones), so we can place each entry with a plain empty-slot
+		// probe and reuse the cached hash instead of re-calling key.hash().
 		for i in 0 upto oldCapacity 'rehash'
 			let state = try oldStates.get(i) otherwise SlotState.Empty
 
@@ -278,7 +307,28 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				let value = try oldValues.get(i) otherwise 'skip_val'
 					continue
 				end 'skip_val'
-				upsert(key, value: value)
+				let hash = try oldHashes.get(i) otherwise 'skip_hash'
+					continue
+				end 'skip_hash'
+
+				var index = hash and mask
+				var currentState = try states.get(index) otherwise SlotState.Empty
+				var isNotEmpty = match currentState 'ns1'
+					Empty gives false
+					Occupied gives true
+					Deleted gives true
+				end 'ns1'
+				while isNotEmpty 'find_slot'
+					index = (index + 1) and mask
+					currentState = try states.get(index) otherwise SlotState.Empty
+					isNotEmpty = match currentState 'ns2'
+						Empty gives false
+						Occupied gives true
+						Deleted gives true
+					end 'ns2'
+				end 'find_slot'
+
+				insertAtSlot(index, key: key, value: value, hash: hash)
 			end 'occupied'
 		end 'rehash'
 	end 'grow'
