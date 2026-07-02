@@ -3057,15 +3057,17 @@ end 'borrowedElementConsumedByContainer'
 // `Map<K,Box>` get-borrow-after-free; the inlined dual is rung-11, where the
 // `__managed_mem_get` result is `incomingOwner` and acquires on return). The retain
 // is the def-side analogue of `planBorrowedElementContainerRetains`'s store-side
-// one — same layout-routed `__mm_retain_type_param` (increfs a managed-pointer
-// element, no-ops a primitive), so it is correct for the generic element type. A
-// `tryCall` result is NULL on the error edge, so the retain is placed at the START
-// of the SUCCESS block (where the result is provably non-null), mirroring
+// one: a CONCRETE managed element is retained with a plain layout-free `mm_incref`;
+// a generic type-param element with the layout-routed `__mm_retain_type_param`
+// (increfs a managed-pointer element, no-ops a primitive). Both wrapper shapes are
+// handled here — a GENERIC container (`Map.get`, layout present) AND a NON-GENERIC
+// wrapper over a concrete collection (`CommandLine.optionValue`'s `return
+// parts.get(1)`, no layout) — because `buildRetainForValue` picks the right retain
+// per value and `returnedBorrowNeedsRetainCtx` gates the layout-requiring type-param
+// case. A `tryCall` result is NULL on the error edge, so the retain is placed at the
+// START of the SUCCESS block (where the result is provably non-null), mirroring
 // `planAcquireForOp`; a non-tryCall def is retained immediately after its def.
 function planReturnedBorrowRetains(ctx RcContext)
-	if ctx.layoutValueId == RELEASE_NO_LAYOUT 'noLayout'
-		return
-	end 'noLayout'
 	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planReturnedBorrowRetains: blockRef not in module.blocks")
@@ -3095,7 +3097,35 @@ function returnedBorrowNeedsRetainCtx(ctx RcContext, id ValueId) returns bool
 	if not classIsBorrowed(ctx, id: id) 'notBorrowed'
 		return false
 	end 'notBorrowed'
-	return ctx.isReturned(id)
+	if not ctx.isReturned(id) 'notReturned'
+		return false
+	end 'notReturned'
+	// Retain ONLY a forwarded borrow-returning FUNCTION-CALL result (the `Map.get`/
+	// `optionValue` wrapper shape: `return coll.get(...)` forwarding the borrow from a
+	// `funcReturnsBorrow` callee). Such a wrapper owns the SOURCE collection locally and
+	// tears it down at return, so the forwarded element must be retained to survive as
+	// the caller's owned +1. A `borrowed` value that is NOT a borrow-call result —
+	// notably a static getter's MODULE-GLOBAL slot read (`return CharacterSet.cachedX`,
+	// whose occupant the .data slot owns and OUTLIVES the call) — must NOT be retained:
+	// the borrow's source outlives it, so a retain would leak the global's occupant. The
+	// `isBorrowReturningCallResult` gate is exactly that "source is a torn-down local
+	// collection, not an outliving global/param" distinction.
+	if not ctx.isBorrowReturningCallResult(id) 'notForwardedCall'
+		return false
+	end 'notForwardedCall'
+	// A TYPE-PARAM retain routes through the layout descriptor
+	// (`buildRetainForValue` → `mm_retain_type_param*`), so it needs a layout. A
+	// non-generic function has no layout; a type-param value there is a fully
+	// monomorphized concrete scalar owning no generic resource (mirrors the
+	// `releaseKindAtLastUse` type-param `noLayout` skip). A MANAGED value is retained
+	// with a plain layout-free `mm_incref` and always proceeds — which is what a
+	// NON-GENERIC wrapper forwarding a borrow-returning call result (`optionValue`'s
+	// `return parts.get(1)`, destroying the local `parts`) needs to hand its caller a
+	// genuinely-owned +1.
+	if ctx.isTypeParam(id) and ctx.layoutValueId == RELEASE_NO_LAYOUT 'typeParamNoLayout'
+		return false
+	end 'typeParamNoLayout'
+	return true
 end 'returnedBorrowNeedsRetainCtx'
 
 // True iff value `id` is classified `borrowed`.
