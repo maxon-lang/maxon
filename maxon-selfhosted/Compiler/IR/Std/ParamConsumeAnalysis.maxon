@@ -87,22 +87,31 @@ export function analyzeParamConsumes(module StdModule, project Project) returns 
 	// produces are cached, so the user build needs no separate persistence.
 	let mayReturnArg = computeMayReturnArgMap(module)
 
-	// Fixpoint: recompute each function's consume bits until no bit flips. Each round
-	// consults the callees' CURRENT bits (the restored stdlib facts + this round's), so
-	// a consume fact propagates one forwarding hop per round; monotonic, so it settles.
-	var changed = true
-	while changed 'fixpoint'
-		changed = false
-		for funcIdx in 0 upto module.functions.count() 'eachFunc'
-			let func = try module.functions.get(funcIdx) otherwise panic("analyzeParamConsumes: functions.get OOB at {funcIdx}")
-			if func.blockRefs.count() == 0 'empty'
-				continue
-			end 'empty'
-			if updateFuncConsumeBits(module, func: func, project: project, mayReturnArg: mayReturnArg) 'flipped'
-				changed = true
-			end 'flipped'
-		end 'eachFunc'
-	end 'fixpoint'
+	// SCC-condensation-ordered single pass. The consume bits are MONOTONIC and depend
+	// ONLY on the callees' bits (`updateFuncConsumeBits` reads other functions' bits
+	// solely through `calleeConsumesParamIndex` / `calleeResultAliasesArg`, the
+	// forwarding edges — it never reads caller state), so a callees-before-callers SCC
+	// order lets each SCC be finalized before any of its callers is visited. A single-
+	// function non-self-recursive SCC then needs `updateFuncConsumeBits` exactly ONCE;
+	// only a genuinely recursive SCC (size > 1 or a self-edge) needs a LOCAL while-
+	// changed over just its members. This computes the same least fixpoint the former
+	// module-wide `while changed` did, but re-runs the expensive per-function analysis
+	// once per function instead of once per function per round.
+	//
+	// The call graph MUST include `tryCall` edges, not just `call`: the consume
+	// forwarding (`callConsumesValueArg`) and the passthrough-aliasing
+	// (`callResultAliasesArg`) both follow `tryCall` callees. `buildCallGraph`
+	// deliberately omits `tryCall` (the inliner can't inline throwing callees), so this
+	// pass uses the wider `buildCallGraphIncludingTryCalls` over its actual dependence
+	// edges — otherwise a `tryCall`-caller could be ordered before its callee and read a
+	// stale (unset) consume bit (the directory/FilePath over-release seen with a call-
+	// only graph). `computeSccs` (Tarjan) still yields callees-before-callers order.
+	let cg = buildCallGraphIncludingTryCalls(module)
+	let sccs = computeSccs(cg)
+	let funcByName = buildConsumeFuncIndexByName(module)
+	for scc in sccs 'eachScc'
+		visitConsumeScc(module, scc: scc, cg: cg, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg)
+	end 'eachScc'
 
 	logTrace(LogCategory.ir, message: function() gives "RC-PCA-DONE funcs={module.functions.count()} consumingCallees={project.funcParamConsumes.count()} wrappers={project.funcReturnsConsumedArg.count()}")
 
@@ -117,6 +126,58 @@ export function analyzeParamConsumes(module StdModule, project Project) returns 
 
 	return module
 end 'analyzeParamConsumes'
+
+// Per-name map from a function name to its index in `module.functions`, so the
+// SCC-ordered walk (whose members are function NAMES) reaches each member's
+// `IrFunction` without a linear scan. Last definition wins on the (rare) duplicate
+// name, matching a straight index scan's later-shadows-earlier behavior.
+typealias ConsumeFuncIndexByName = Map with (String, FuncIndex)
+
+function buildConsumeFuncIndexByName(module StdModule) returns ConsumeFuncIndexByName
+	var byName = ConsumeFuncIndexByName.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("buildConsumeFuncIndexByName: functions.get OOB at {funcIdx}")
+		byName.upsert(func.name, value: funcIdx)
+	end 'eachFunc'
+	return byName
+end 'buildConsumeFuncIndexByName'
+
+// Finalize one SCC's consume bits. A non-recursive singleton is analyzed ONCE
+// (its callees are already settled by the callees-first SCC order). A recursive
+// SCC (size > 1, or a singleton with a self-edge) runs a LOCAL while-changed over
+// only its members until no bit flips — the members' mutual forwarding needs the
+// fixpoint, but confined to the cycle it is O(cycleSize x rounds), not module-wide.
+function visitConsumeScc(module StdModule, scc StringArray, cg CallGraph, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap)
+	if not sccIsRecursive(scc, cg: cg) 'singlePass'
+		let only = try scc.get(0) otherwise panic("visitConsumeScc: empty SCC")
+		// A non-recursive singleton's callees are already settled, so its bits are
+		// final after one pass — the flip result is irrelevant (no local fixpoint).
+		_ = updateConsumeBitsForName(module, name: only, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg)
+		return
+	end 'singlePass'
+	var changed = true
+	while changed 'localFixpoint'
+		changed = false
+		for name in scc 'eachMember'
+			if updateConsumeBitsForName(module, name: name, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg) 'flipped'
+				changed = true
+			end 'flipped'
+		end 'eachMember'
+	end 'localFixpoint'
+end 'visitConsumeScc'
+
+// Resolve `name` to its `IrFunction` and run `updateFuncConsumeBits`, returning
+// whether a bit flipped. A name with no in-module body (a signature-only stub, or
+// a call-graph node for a bodyless intrinsic) has nothing to analyze — its bits, if
+// any, were seeded / cache-restored — so it flips nothing.
+function updateConsumeBitsForName(module StdModule, name String, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap) returns bool
+	let funcIdx = try funcByName.get(name) otherwise return false
+	let func = try module.functions.get(funcIdx) otherwise panic("updateConsumeBitsForName: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return false
+	end 'empty'
+	return updateFuncConsumeBits(module, func: func, project: project, mayReturnArg: mayReturnArg)
+end 'updateConsumeBitsForName'
 
 // Rewrite each `__gt_spawn(funcRef F, count, buf)` site's managed_mask store
 // (`store [buf+8] = mask`) to `mask and not consumedBits(F)`. The mask const
@@ -338,6 +399,14 @@ end 'arithConstValueOf'
 // to true (drives the fixpoint). Reads callees' CURRENT bits for forwarding.
 function updateFuncConsumeBits(module StdModule, func IrFunction, project Project, mayReturnArg MayReturnArgMap) returns bool
 	let paramValues = collectParamValues(module, func: func)
+	// Per-function value-use index, built ONCE (one O(ops) pass) and shared across
+	// every param's incref-gate and consume-sink walk this visit. The alias-expansion
+	// and sink detection below become worklist pops over each value's use list instead
+	// of the former per-alias full-body re-walk (`paramValueReachesConsumeSink`'s inner
+	// fixpoint x per-alias sink scan). With SCC ordering each function is visited once,
+	// so building the index here (rather than caching it) pays for itself on the first
+	// visit; a recursive-SCC member simply rebuilds it per local round.
+	let usesIndex = buildConsumeUsesIndex(module, func: func)
 	var prior = try project.funcParamConsumes.get(func.name) otherwise BoolArray.create()
 	var flipped = false
 
@@ -369,7 +438,7 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 		// retain-then-store (borrow) from a raw move-store (consume); both otherwise
 		// look identical pre-insertion (`Array.init`'s `Self{managed: arg}` vs the
 		// cursor's `Self{raw: cursor}` over a retained source).
-		if functionIncrefsValue(module, func: func, valueId: paramVal) 'retained'
+		if functionIncrefsValue(module, usesIndex: usesIndex, valueId: paramVal) 'retained'
 			continue
 		end 'retained'
 		// A TYPE-PARAMETER-typed parameter is consumed BY CONVENTION: the callee
@@ -399,7 +468,7 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 				continue
 			end 'genericParam'
 		end 'hasDeclaredType'
-		if paramValueReachesConsumeSink(module, func: func, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
+		if paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
 			setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
 			logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex}")
 			flipped = true
@@ -426,51 +495,42 @@ let CONSUME_NO_VALUE = (-1) as ValueId
 // `func` — a heap store/box of it, or a call that consumes it at its argument
 // position. Post-mem2reg the parameter is a single SSA value used directly at its
 // sinks (no slot relays / pointer-identity copies survive — the unary opcodes are
-// all arithmetic/float, none of which alias a managed pointer), so a single forward
-// scan over the body for a direct sink is exact. A param re-passed to a consuming
+// all arithmetic/float, none of which alias a managed pointer), so walking only the
+// ops that READ the param (via `usesIndex`) is exact. A param re-passed to a consuming
 // callee is caught as the call-sink (the forwarding edge); a param stored into a
 // field/element/wrapper is caught as the store-sink.
-function paramValueReachesConsumeSink(module StdModule, func IrFunction, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
-	// The set of SSA values that ALIAS the parameter: the param's own value, plus the
-	// result of any call that MAY-RETURN one of those aliases as its argument (an
-	// identity-passthrough whose result is the same pointer). Grown to a fixpoint so a
+function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
+	// Single WORKLIST over the per-function value-use index. Each popped alias is
+	// examined by walking ONLY the ops that READ it (`usesIndex.usesOf`), never the
+	// whole body: an op that reaches a store/box/consume-call sink of the alias returns
+	// consumed immediately; an op that is a may-return-arg passthrough of the alias
+	// pushes the call's RESULT as a new alias. This replaces the former two nested
+	// full-body fixpoints (grow-all-aliases, then re-scan-per-alias for sinks) — a
 	// param laundered through a CHAIN of passthroughs (`resolveFileURL` then
-	// `normalizeSeparators`) is followed all the way to its store-sink.
-	// `aliases` is the set of SSA values that alias this one parameter — it
-	// grows only when a call passes an existing alias through and may-returns
-	// it, so it holds the passthrough-chain length (realistically 1–few). The
-	// linear `valueIdArrayContains` membership tests below (here and in
-	// `calleeResultAliasesArg`) are therefore over a tiny array; a hash set or
-	// value-id-space bitset would add per-parameter allocation/hashing that
-	// outweighs scanning a handful of entries, and would not touch the real
-	// cost — the full-body re-walk the fixpoint performs per discovered alias.
+	// `normalizeSeparators`) is still followed to its store-sink, but the total work is
+	// bounded by the SUM of the discovered aliases' use-list lengths, not
+	// aliases x body-size. `aliases` doubles as the visited set (a handful of entries;
+	// the linear `valueIdArrayContains` membership test is cheaper than a per-param set
+	// allocation).
 	var aliases = ValueIdArray.create()
 	aliases.push(valueId)
-	var expanded = true
-	while expanded 'growAliases'
-		expanded = false
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("paramValueReachesConsumeSink: blockRef not in module.blocks")
-			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("paramValueReachesConsumeSink: opIdx not in module.ops")
-				let aliasedResult = callPassesThroughAlias(op, aliases: aliases, mayReturnArg: mayReturnArg)
-				if aliasedResult != CONSUME_NO_VALUE and not valueIdArrayContains(aliases, vid: aliasedResult) 'newAlias'
-					aliases.push(aliasedResult)
-					expanded = true
-					logTrace(LogCategory.ir, message: function() gives "RC-PCA-ALIAS func={func.name} param=%{valueId} aliasResult=%{aliasedResult}")
-				end 'newAlias'
-			end 'eachOp'
-		end 'eachBlock'
-	end 'growAliases'
-
-	for aliasId in aliases 'eachAlias'
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("paramValueReachesConsumeSink: blockRef not in module.blocks (sink scan)")
-			if blockBodyOrTermSinks(module, block: block, valueId: aliasId, project: project) 'sunk'
+	var head = 0
+	while head < aliases.count() 'worklist'
+		let aliasId = try aliases.get(head) otherwise panic("paramValueReachesConsumeSink: aliases.get OOB despite head < count")
+		head = head + 1
+		let useOps = usesIndex.usesOf(aliasId)
+		for opIdx in useOps 'eachUse'
+			let op = try module.ops.get(opIdx) otherwise panic("paramValueReachesConsumeSink: opIdx not in module.ops")
+			if opIsConsumeSinkFor(op, valueId: aliasId, project: project) 'sunk'
 				return true
 			end 'sunk'
-		end 'eachBlock'
-	end 'eachAlias'
+			let aliasedResult = callPassesThroughAlias(op, aliases: aliases, mayReturnArg: mayReturnArg)
+			if aliasedResult != CONSUME_NO_VALUE and not valueIdArrayContains(aliases, vid: aliasedResult) 'newAlias'
+				aliases.push(aliasedResult)
+				logTrace(LogCategory.ir, message: function() gives "RC-PCA-ALIAS func={func.name} param=%{valueId} aliasResult=%{aliasedResult}")
+			end 'newAlias'
+		end 'eachUse'
+	end 'worklist'
 	return false
 end 'paramValueReachesConsumeSink'
 
@@ -519,16 +579,14 @@ end 'calleeResultAliasesArg'
 // the caller's reference. (The lowered stdlib bodies contain manual increfs only at
 // the few retain sites — `lowerCreateCursor` — never at the move-store mutators, so
 // this cleanly separates retain from consume.)
-function functionIncrefsValue(module StdModule, func IrFunction, valueId ValueId) returns bool
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("functionIncrefsValue: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("functionIncrefsValue: opIdx not in module.ops")
-			if opIncrefsValue(op, valueId: valueId) 'increfs'
-				return true
-			end 'increfs'
-		end 'eachOp'
-	end 'eachBlock'
+function functionIncrefsValue(module StdModule, usesIndex ConsumeUsesIndex, valueId ValueId) returns bool
+	let useOps = usesIndex.usesOf(valueId)
+	for opIdx in useOps 'eachUse'
+		let op = try module.ops.get(opIdx) otherwise panic("functionIncrefsValue: opIdx not in module.ops")
+		if opIncrefsValue(op, valueId: valueId) 'increfs'
+			return true
+		end 'increfs'
+	end 'eachUse'
 	return false
 end 'functionIncrefsValue'
 
@@ -554,23 +612,6 @@ end 'callIncrefsValue'
 function calleeIsIncref(callee String) returns bool
 	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
 end 'calleeIsIncref'
-
-// Scan one block's body ops + terminator for a consume sink of `valueId`.
-function blockBodyOrTermSinks(module StdModule, block IrBlock, valueId ValueId, project Project) returns bool
-	for opIdx in block.opRefs 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("blockBodyOrTermSinks: opIdx not in module.ops")
-		if opIsConsumeSinkFor(op, valueId: valueId, project: project) 'sink'
-			return true
-		end 'sink'
-	end 'eachOp'
-	if block.hasTerminatorOp() 'hasTerm'
-		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("blockBodyOrTermSinks: terminatorIndex not in module.ops")
-		if opIsConsumeSinkFor(term, valueId: valueId, project: project) 'termSink'
-			return true
-		end 'termSink'
-	end 'hasTerm'
-	return false
-end 'blockBodyOrTermSinks'
 
 // True iff `op` is a DIRECT consume sink of `valueId`:
 //   - a `store_indirect` / `box_value` whose STORED value is `valueId` (moved into
@@ -924,3 +965,70 @@ end 'recordParamCall'
 function paramValueForIndex(pv ParamValueMap, paramIndex NodeIndex) returns ValueId
 	return try pv.get(paramIndex) otherwise CONSUME_NO_VALUE
 end 'paramValueForIndex'
+
+// ============================================================
+// Per-function value-use index
+// ============================================================
+
+// Per-function map from a ValueId to the op-indices that READ it (any read
+// operand — a call arg, a store value or address, a box value, an arith input).
+// ValueIds are dense per-function (0..maxValueId), so `usesBySlot` is a flat array
+// indexed by ValueId rather than a hash map. Built ONCE per function visit in
+// `buildConsumeUsesIndex` (one O(ops) pass reusing an `StdOpOperands` scratch), then
+// the consume walk's alias expansion and sink detection pop over each value's use
+// list — replacing the former repeated full-body scans (one per discovered alias).
+type ConsumeUsesIndex
+	export var usesBySlot as OpIndexArrayArray
+
+	static function create(usesBySlot OpIndexArrayArray) returns ConsumeUsesIndex
+		return Self{usesBySlot: usesBySlot}
+	end 'create'
+
+	// The op-indices reading `valueId`, or an empty list for an id with no reads or
+	// out of the sized range (a value the function never reads).
+	export function usesOf(valueId ValueId) returns OpIndexArray
+		if valueId < 0 or valueId >= self.usesBySlot.count() 'outOfRange'
+			return OpIndexArray.create()
+		end 'outOfRange'
+		return try self.usesBySlot.get(valueId) otherwise OpIndexArray.create()
+	end 'usesOf'
+end 'ConsumeUsesIndex'
+
+typealias OpIndexArrayArray = Array with OpIndexArray
+
+function buildConsumeUsesIndex(module StdModule, func IrFunction) returns ConsumeUsesIndex
+	let maxValueId = scanMaxValueId(func, module: module)
+	var usesBySlot = OpIndexArrayArray.create()
+	var i = 0
+	while i <= maxValueId 'fill'
+		usesBySlot.push(OpIndexArray.create())
+		i = i + 1
+	end 'fill'
+	var scratch = StdOpOperands.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildConsumeUsesIndex: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			recordConsumeUses(module, usesBySlot: usesBySlot, opIdx: opIdx, scratch: scratch)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			recordConsumeUses(module, usesBySlot: usesBySlot, opIdx: block.terminatorIndex(), scratch: scratch)
+		end 'hasTerm'
+	end 'eachBlock'
+	return ConsumeUsesIndex.create(usesBySlot)
+end 'buildConsumeUsesIndex'
+
+// Append `opIdx` to the reader list of each value the op at `opIdx` reads. Reuses
+// `scratch` across the whole build so the per-op extract allocates nothing.
+function recordConsumeUses(module StdModule, usesBySlot OpIndexArrayArray, opIdx OpIndex, scratch StdOpOperands)
+	let op = try module.ops.get(opIdx) otherwise panic("recordConsumeUses: opIdx not in module.ops")
+	extractStdOpOperandsInto(op, operands: scratch)
+	for readId in scratch.readIds 'eachRead'
+		if readId >= 0 and readId < usesBySlot.count() 'inRange'
+			// `usesBySlot.get` yields the slot's array by reference; `push` mutates it
+			// in place, so no write-back `set` is needed (which the borrow checker also
+			// rejects — `list` still borrows `usesBySlot`).
+			var list = try usesBySlot.get(readId) otherwise panic("recordConsumeUses: usesBySlot.get OOB despite bound check")
+			list.push(opIdx)
+		end 'inRange'
+	end 'eachRead'
+end 'recordConsumeUses'

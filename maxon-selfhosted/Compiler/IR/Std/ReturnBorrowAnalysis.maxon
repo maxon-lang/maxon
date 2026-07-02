@@ -48,36 +48,6 @@
 // borrow-returning call results across the module. Returns the module unchanged
 // (mutates `project.funcReturnsBorrow` and per-function `valueOwnership`).
 export function analyzeReturnBorrows(module StdModule, project Project) returns StdModule
-	// Identify the element-loader CHAIN-BOUNDARY functions structurally: a function is
-	// an element loader iff its body directly calls `__managed_mem_load_sized`, the
-	// single sized-managed-element load primitive (see `funcCallsElementLoadPrimitive`).
-	// This replaces a hardcoded `{__managed_mem_get, __managed_mem_cursor_current}` name
-	// list with the structural fact "routes through the shared load chokepoint" — set-
-	// equivalent today (those are the ONLY two callers) and self-extending: a future
-	// loader MUST call the primitive to do its element load, so it is recognized with no
-	// list edit. Persisted in the cache (v73) for the user build, where these bodies are
-	// absent.
-	//
-	// MUST run BEFORE the borrow fixpoint: the fixpoint's
-	// `forwardedBorrowWillBeRetained` consults `calleeIsBorrowFunction`, whose
-	// loader EXCLUSION is what keeps a leaf intrinsic-forwarder (`Array.get`,
-	// whose returned value forwards `__managed_mem_get`) classified as a PURE
-	// borrow. With an empty loader set, the leaf was mispredicted as a
-	// retained wrapper and never entered `funcReturnsBorrow` — so no caller
-	// reclassified its results, and every stdlib `stack.get(i)` result got a
-	// `callReturnRc1` release that stripped the container's element ref (the
-	// driftsort run-stack over-release). The detection itself is purely
-	// structural (no dependence on the borrow set), so hoisting it is safe.
-	for funcIdx in 0 upto module.functions.count() 'eachFuncLoader'
-		let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
-		if func.blockRefs.count() == 0 'empty'
-			continue
-		end 'empty'
-		if funcCallsElementLoadPrimitive(module, func: func) 'isLoader'
-			project.funcIsElementLoader.insert(func.name)
-		end 'isLoader'
-	end 'eachFuncLoader'
-
 	// Seed the BODYLESS runtime element loader: `mrt_managed_list_node_value`
 	// reads the node's value slot — a borrow the NODE owns, exactly as
 	// `__managed_mem_get` reads an element the MM owns. The structural loops
@@ -114,49 +84,33 @@ export function analyzeReturnBorrows(module StdModule, project Project) returns 
 	project.funcReturnsBorrow.insert("mrt_managed_list_node_prev")
 	project.funcReturnsBorrow.insert("stdlib.mrt_managed_list_node_prev")
 
-	// Fixpoint: repeat until no function's return-borrow status flips. Monotonic
-	// (once true it stays true), so the loop terminates in <= #functions rounds.
-	var changed = true
-	while changed 'fixpoint'
-		changed = false
-		for funcIdx in 0 upto module.functions.count() 'eachFunc'
-			let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
-			if func.blockRefs.count() == 0 'empty'
-				continue
-			end 'empty'
-			if project.funcReturnsBorrow.contains(func.name) 'settled'
-				continue
-			end 'settled'
-			if functionReturnsBorrow(module, func: func, project: project) 'isBorrow'
-				project.funcReturnsBorrow.insert(func.name)
-				changed = true
-			end 'isBorrow'
-		end 'eachFunc'
-	end 'fixpoint'
-
-	// RECEIVER-INTERIOR sweep (after the borrow fixpoint, so `valueOwnsPlusOne`'s
-	// phi trace sees the settled borrow set): a function whose EVERY return value
-	// owns no +1 structurally — ignoring the acquired-class / wrapper-retain
-	// exemptions that keep +1-handing functions OUT of `funcReturnsBorrow` —
-	// returns a pointer INTO its receiver's structure. `List.walkTo` is the
-	// motivating member: its loop phi over the chain walkers is acquired (+1 to
-	// the caller, so NOT a borrow-returner), but the node's value slot is freed
-	// by the chain's teardown, so liveness must extend the receiver list past the
-	// node's uses (`recordNavBorrow` consumes the union of this set and
-	// `funcReturnsBorrow`). Liveness-only and extend-only: an over-broad entry
-	// risks a late release, never a premature free.
-	for funcIdx in 0 upto module.functions.count() 'eachFuncInterior'
-		let func = try module.functions.get(funcIdx) otherwise panic("analyzeReturnBorrows: functions.get OOB at {funcIdx}")
-		if func.blockRefs.count() == 0 'emptyInterior'
-			continue
-		end 'emptyInterior'
-		if project.funcReturnsReceiverInterior.contains(func.name) 'alreadyInterior'
-			continue
-		end 'alreadyInterior'
-		if functionReturnsReceiverInterior(module, func: func, project: project) 'isInterior'
-			project.funcReturnsReceiverInterior.insert(func.name)
-		end 'isInterior'
-	end 'eachFuncInterior'
+	// SCC-condensation-ordered single pass over the borrow + receiver-interior facts.
+	// Both propagate CALLEE -> CALLER only: `functionReturnsBorrow` reads other
+	// functions' status solely through `calleeReturnsBorrow` / `calleeIsBorrowFunction`
+	// (the callees' `funcReturnsBorrow` + the pre-settled `funcIsElementLoader`), never
+	// caller state, and `functionReturnsReceiverInterior` reads only the settled borrow
+	// set (through `valueOwnsPlusOne`). Both are MONOTONIC, so a callees-before-callers
+	// SCC order finalizes each SCC before any caller is visited: a non-recursive
+	// singleton classifies ONCE, only a genuinely recursive SCC (size > 1 or a self-
+	// edge) needs a LOCAL while-changed over its members. This computes the same least
+	// fixpoint the former module-wide `while changed` did, running the expensive per-
+	// function analysis once per function instead of once per function per round.
+	//
+	// The call graph MUST include `tryCall` edges (the borrow-forwarding
+	// `callOpOwnsPlusOne` / `opCallsBorrowFunction` / `opIsBorrowSetCall` all follow
+	// `tryCall` callees), so `buildCallGraphIncludingTryCalls` is used, not the
+	// inliner-facing `buildCallGraph`. Folded into the SCC visit: the element-loader
+	// detection (purely LOCAL — "does this body call `__managed_mem_load_sized`") is set
+	// per function at the START of its visit, so a caller (visited later, callees-first)
+	// sees its callees' loader bits; and the receiver-interior classification runs after
+	// each SCC's borrow set settles, SHARING the per-function `ValueDefMap` with the
+	// borrow classification on the common non-recursive path (one def-map build/func).
+	let cg = buildCallGraphIncludingTryCalls(module)
+	let sccs = computeSccs(cg)
+	let funcByName = buildBorrowFuncIndexByName(module)
+	for scc in sccs 'eachScc'
+		visitBorrowScc(module, scc: scc, cg: cg, funcByName: funcByName, project: project)
+	end 'eachScc'
 
 	// Reclassify: every call RESULT whose callee returns a borrow becomes
 	// `borrowed` (it owns no +1) instead of the lowering default `callReturnRc1`.
@@ -170,13 +124,143 @@ export function analyzeReturnBorrows(module StdModule, project Project) returns 
 	return module
 end 'analyzeReturnBorrows'
 
+// Per-name map from a function name to its index in `module.functions`, so the
+// SCC-ordered walk (whose members are function NAMES) reaches each member's
+// `IrFunction` without a linear scan. Last definition wins on the (rare) duplicate.
+typealias BorrowFuncIndexByName = Map with (String, FuncIndex)
+
+function buildBorrowFuncIndexByName(module StdModule) returns BorrowFuncIndexByName
+	var byName = BorrowFuncIndexByName.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("buildBorrowFuncIndexByName: functions.get OOB at {funcIdx}")
+		byName.upsert(func.name, value: funcIdx)
+	end 'eachFunc'
+	return byName
+end 'buildBorrowFuncIndexByName'
+
+// Finalize one SCC's return-borrow + receiver-interior facts. A non-recursive
+// singleton is analyzed ONCE (its callees are settled by the callees-first SCC
+// order); a recursive SCC (size > 1, or a singleton with a self-edge) runs a LOCAL
+// while-changed over just its members until the borrow set stabilizes. In BOTH cases
+// the receiver-interior classification runs only AFTER the SCC's borrow set settles
+// (it consults the settled borrow set through `valueOwnsPlusOne`).
+function visitBorrowScc(module StdModule, scc StringArray, cg CallGraph, funcByName BorrowFuncIndexByName, project Project)
+	if not sccIsRecursive(scc, cg: cg) 'singlePass'
+		let only = try scc.get(0) otherwise panic("visitBorrowScc: empty SCC")
+		classifyBorrowForName(module, name: only, funcByName: funcByName, project: project)
+		return
+	end 'singlePass'
+	var changed = true
+	while changed 'localFixpoint'
+		changed = false
+		for name in scc 'eachMember'
+			if classifyBorrowFixpointStep(module, name: name, funcByName: funcByName, project: project) 'flipped'
+				changed = true
+			end 'flipped'
+		end 'eachMember'
+	end 'localFixpoint'
+	// Receiver-interior only after the cycle's borrow set has settled.
+	for name in scc 'eachInterior'
+		classifyReceiverInteriorForName(module, name: name, funcByName: funcByName, project: project)
+	end 'eachInterior'
+end 'visitBorrowScc'
+
+// Non-recursive singleton path: set the (local) element-loader bit, classify the
+// borrow status once, then the receiver-interior status — building the per-function
+// `ValueDefMap` ONCE and sharing it across both classifications.
+function classifyBorrowForName(module StdModule, name String, funcByName BorrowFuncIndexByName, project Project)
+	let funcIdx = try funcByName.get(name) otherwise return
+	let func = try module.functions.get(funcIdx) otherwise panic("classifyBorrowForName: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return
+	end 'empty'
+	markElementLoader(module, func: func, project: project)
+	let defs = buildValueDefMap(module, func: func)
+	if not project.funcReturnsBorrow.contains(func.name) 'notSettled'
+		if functionReturnsBorrow(module, func: func, defs: defs, project: project) 'isBorrow'
+			project.funcReturnsBorrow.insert(func.name)
+		end 'isBorrow'
+	end 'notSettled'
+	if not project.funcReturnsReceiverInterior.contains(func.name) 'notInterior'
+		if functionReturnsReceiverInterior(module, func: func, defs: defs, project: project) 'isInterior'
+			project.funcReturnsReceiverInterior.insert(func.name)
+		end 'isInterior'
+	end 'notInterior'
+end 'classifyBorrowForName'
+
+// One recursive-SCC local-fixpoint round for `name`: set the element-loader bit (once
+// is enough, but idempotent) and re-test the borrow status. Returns true iff the
+// borrow bit newly flipped, driving the local while-changed. Receiver-interior is
+// deferred to after the cycle settles (`classifyReceiverInteriorForName`).
+function classifyBorrowFixpointStep(module StdModule, name String, funcByName BorrowFuncIndexByName, project Project) returns bool
+	let funcIdx = try funcByName.get(name) otherwise return false
+	let func = try module.functions.get(funcIdx) otherwise panic("classifyBorrowFixpointStep: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return false
+	end 'empty'
+	markElementLoader(module, func: func, project: project)
+	if project.funcReturnsBorrow.contains(func.name) 'settled'
+		return false
+	end 'settled'
+	let defs = buildValueDefMap(module, func: func)
+	if functionReturnsBorrow(module, func: func, defs: defs, project: project) 'isBorrow'
+		project.funcReturnsBorrow.insert(func.name)
+		return true
+	end 'isBorrow'
+	return false
+end 'classifyBorrowFixpointStep'
+
+// Recursive-SCC receiver-interior finalization for `name`, run after the SCC's borrow
+// set has settled (so `valueOwnsPlusOne`'s phi trace sees final borrow bits).
+function classifyReceiverInteriorForName(module StdModule, name String, funcByName BorrowFuncIndexByName, project Project)
+	let funcIdx = try funcByName.get(name) otherwise return
+	let func = try module.functions.get(funcIdx) otherwise panic("classifyReceiverInteriorForName: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return
+	end 'empty'
+	if project.funcReturnsReceiverInterior.contains(func.name) 'already'
+		return
+	end 'already'
+	let defs = buildValueDefMap(module, func: func)
+	if functionReturnsReceiverInterior(module, func: func, defs: defs, project: project) 'isInterior'
+		project.funcReturnsReceiverInterior.insert(func.name)
+	end 'isInterior'
+end 'classifyReceiverInteriorForName'
+
+// Set the (structural, purely LOCAL) element-loader bit for `func`: a chain-boundary
+// loader is one whose body directly calls `__managed_mem_load_sized` (the single
+// sized-managed-element load primitive). This replaces a hardcoded
+// `{__managed_mem_get, __managed_mem_cursor_current}` name list with "routes through
+// the shared load chokepoint" — self-extending (a future loader MUST call the
+// primitive) and persisted in the cache (v73) for the user build, where these bodies
+// are absent.
+//
+// MUST be set before any CALLER's borrow classification: the fixpoint's
+// `forwardedBorrowWillBeRetained` consults `calleeIsBorrowFunction`, whose loader
+// EXCLUSION is what keeps a leaf intrinsic-forwarder (`Array.get`, whose returned
+// value forwards `__managed_mem_get`) classified as a PURE borrow. With an empty
+// loader set, the leaf was mispredicted as a retained wrapper and never entered
+// `funcReturnsBorrow` — so no caller reclassified its results, and every stdlib
+// `stack.get(i)` result got a `callReturnRc1` release that stripped the container's
+// element ref (the driftsort run-stack over-release). The callees-first SCC order
+// guarantees a callee's loader bit is set at the start of ITS visit, before any
+// caller reads it. The detection is purely structural (no dependence on the borrow
+// set), so computing it inline is safe.
+function markElementLoader(module StdModule, func IrFunction, project Project)
+	if project.funcIsElementLoader.contains(func.name) 'already'
+		return
+	end 'already'
+	if funcCallsElementLoadPrimitive(module, func: func) 'isLoader'
+		project.funcIsElementLoader.insert(func.name)
+	end 'isLoader'
+end 'markElementLoader'
+
 // The receiver-interior dual of `functionReturnsBorrow`: every return value owns
 // no +1 STRUCTURALLY (`valueOwnsPlusOne` — allocations and non-borrow calls block
 // it), with NO acquired-class / wrapper-retain exemptions: those exemptions
 // describe who supplies the caller's +1, not whether the pointee lives inside
 // the receiver. Void functions return no interior pointer.
-function functionReturnsReceiverInterior(module StdModule, func IrFunction, project Project) returns bool
-	let defs = buildValueDefMap(module, func: func)
+function functionReturnsReceiverInterior(module StdModule, func IrFunction, defs ValueDefMap, project Project) returns bool
 	var sawReturn = false
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -199,8 +283,7 @@ end 'functionReturnsReceiverInterior'
 
 // True iff EVERY return terminator of `func` returns a borrow value (per the leaf
 // rule). A function with no return value (void) trivially returns no borrow.
-function functionReturnsBorrow(module StdModule, func IrFunction, project Project) returns bool
-	let defs = buildValueDefMap(module, func: func)
+function functionReturnsBorrow(module StdModule, func IrFunction, defs ValueDefMap, project Project) returns bool
 	var sawReturn = false
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsBorrow: blockRef not in module.blocks")

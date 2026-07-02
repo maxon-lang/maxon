@@ -32,32 +32,48 @@ export typealias CallGraphStringSet = Set with String
 // throwing semantics; indirectCall has no static target; tailCall is rare
 // and the inliner would need to preserve the tail-call shape).
 export function buildCallGraph(module StdModule) returns CallGraph
+	return buildCallGraphImpl(module, includeTryCalls: false)
+end 'buildCallGraph'
+
+// Wider call graph that ALSO records `tryCall` edges, for the refcount analyses
+// (`analyzeParamConsumes` / `analyzeReturnBorrows`) whose facts forward across BOTH
+// `call` and `tryCall`. The inliner-facing `buildCallGraph` omits `tryCall` (it can
+// never inline a throwing callee), but the SCC condensation those analyses order
+// their fixpoints by MUST reflect every dependence edge — otherwise a `tryCall`-
+// caller can be ordered before its callee and read a stale fact. `computeSccs` still
+// yields callees-before-callers order over the wider edge set.
+module function buildCallGraphIncludingTryCalls(module StdModule) returns CallGraph
+	return buildCallGraphImpl(module, includeTryCalls: true)
+end 'buildCallGraphIncludingTryCalls'
+
+function buildCallGraphImpl(module StdModule, includeTryCalls bool) returns CallGraph
 	var cg = CallGraph.create()
 	for func in module.functions 'eachFunc'
 		var callees = StringArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("buildCallGraph: blockRef {blockRef} not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				collectCalleeFromOp(module, opIdx: opIdx, calleeOut: callees)
+				collectCalleeFromOp(module, opIdx: opIdx, includeTryCalls: includeTryCalls, calleeOut: callees)
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
-				collectCalleeFromOp(module, opIdx: block.terminatorIndex(), calleeOut: callees)
+				collectCalleeFromOp(module, opIdx: block.terminatorIndex(), includeTryCalls: includeTryCalls, calleeOut: callees)
 			end 'hasTerm'
 		end 'eachBlock'
 		cg.edges.upsert(func.name, value: callees)
 	end 'eachFunc'
 	return cg
-end 'buildCallGraph'
+end 'buildCallGraphImpl'
 
 // Append the static-callee name for one op to `calleeOut`, or nothing if
-// the op has no statically-resolvable callee. The set of recognized op
+// the op has no statically-resolvable callee. The base set of recognized op
 // shapes mirrors the "directly inlinable" decision in `Inliner.makeDecision`
-// — call shapes the inliner can never inline (indirect / try / tail) are
-// invisible here.
-function collectCalleeFromOp(module StdModule, opIdx OpIndex, calleeOut StringArray)
+// — call shapes the inliner can never inline (indirect / tail) are invisible.
+// `includeTryCalls` additionally records `tryCall` targets (the refcount analyses'
+// forwarding edge; still excluded for the inliner's recursion detection).
+function collectCalleeFromOp(module StdModule, opIdx OpIndex, includeTryCalls bool, calleeOut StringArray)
 	let stdOp = try module.ops.get(opIdx) otherwise panic("collectCalleeFromOp: opIdx {opIdx} not in module.ops")
 	match stdOp 'op'
-		call(inner) then collectFromCallOp(inner, calleeOut: calleeOut)
+		call(inner) then collectFromCallOp(inner, includeTryCalls: includeTryCalls, calleeOut: calleeOut)
 		arith then return
 		control then return
 		memory then return
@@ -65,20 +81,20 @@ function collectCalleeFromOp(module StdModule, opIdx OpIndex, calleeOut StringAr
 	end 'op'
 end 'collectCalleeFromOp'
 
-function collectFromCallOp(op StdCallOp, calleeOut StringArray)
+function collectFromCallOp(op StdCallOp, includeTryCalls bool, calleeOut StringArray)
 	match op 'shape'
 		call(_, callee, _) then calleeOut.push(callee)
+		tryCall(_, callee, _, _) then pushTryCallCallee(callee, includeTryCalls: includeTryCalls, calleeOut: calleeOut)
 		ret then return
-		tryCall then return
-		indirectCall then return
-		witnessCall then return
-		witnessTryCall then return
-		funcRef then return
-		tailCall then return
-		param then return
-		errorReturn then return
+		indirectCall to errorReturn then return
 	end 'shape'
 end 'collectFromCallOp'
+
+function pushTryCallCallee(callee String, includeTryCalls bool, calleeOut StringArray)
+	if includeTryCalls 'record'
+		calleeOut.push(callee)
+	end 'record'
+end 'pushTryCallCallee'
 
 // Tarjan SCC mutable state. Index counter, the explicit DFS stack, and per-
 // node bookkeeping (index, lowlink, onStack flag). All three node-keyed
@@ -249,6 +265,19 @@ export function collectRecursive(sccs StringArrayArray, cg CallGraph) returns Ca
 	end 'eachScc'
 	return recursive
 end 'collectRecursive'
+
+// True iff `scc` is a recursion cycle: multiple members, or a lone member with a
+// self-edge. The per-SCC test the SCC-ordered refcount analyses use to decide
+// whether a single visit suffices or a local fixpoint over the cycle is required
+// (mirrors `collectRecursive`'s singleton branch). Shared so the two analyses and
+// `collectRecursive` agree on the definition of "recursive".
+module function sccIsRecursive(scc StringArray, cg CallGraph) returns bool
+	if scc.count() >= 2 'multiNode'
+		return true
+	end 'multiNode'
+	let only = try scc.get(0) otherwise panic("sccIsRecursive: empty SCC")
+	return hasSelfEdge(cg, name: only)
+end 'sccIsRecursive'
 
 function hasSelfEdge(cg CallGraph, name String) returns bool
 	let callees = try cg.edges.get(name) otherwise StringArray.create()
