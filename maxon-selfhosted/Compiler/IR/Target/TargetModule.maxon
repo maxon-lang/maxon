@@ -64,6 +64,19 @@ export type TargetModule
 			wasm32 then break 'dispatch'
 		end 'dispatch'
 	end 'compactOps'
+
+	// Raw length of the active op array (x64Ops or arm64Ops per cpu), INCLUDING
+	// orphaned pre-rewrite ops not yet reclaimed by compactOps. This is the true
+	// committed-storage size that grows as applyColoring/insertSpillCode re-append
+	// per function across the shared array, so the regalloc loop thresholds its
+	// periodic compaction on it. Hot-path-safe: a plain array-count, no walk.
+	export function activeOpArrayLength() returns OpCount
+		return match self.cpu 'dispatch'
+			x64 gives self.x64Ops.count()
+			arm64 gives self.arm64Ops.count()
+			wasm32 gives 0
+		end 'dispatch'
+	end 'activeOpArrayLength'
 end 'TargetModule'
 
 // Compact `module.x64Ops` in place. Computes the shared op-type-agnostic

@@ -55,6 +55,14 @@ export typealias RegMask = int(0 to u32.max)
 let DENSE_FUNC_RANGE_THRESHOLD = 1000
 let DENSE_FUNC_OP_THRESHOLD = 500
 
+// Active-op-array length at which the per-function regalloc loop compacts the
+// shared x64Ops/arm64Ops array to reclaim orphaned pre-coloring ops. Chosen so
+// the peak op-array commit stays ~1-2 GB (X64Op is a tagged union of tens of
+// bytes; ~4M entries × its stride) — well under the OOM ceiling — while
+// compacting infrequently enough (a handful of times over a 5400-function
+// self-compile) that the O(ops) compaction cost stays negligible.
+let REGALLOC_OP_COMPACT_THRESHOLD = 4000000
+
 // Total MIR op count across all of a function's blocks — a cheap upfront proxy
 // for function size feeding the density gate above, computed before the
 // expensive recolor/split work runs.
@@ -647,6 +655,23 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 		// Periodic profile snapshot so a crashing self-compile still leaves a
 		// full sub-phase attribution behind (A1). No-op when timings are off.
 		maybeFlushRegallocProfile()
+
+		// Bound the shared op-array high-water mark WITHIN the loop. Every
+		// function's applyColoring + insertSpillCode clear each block's opRefs and
+		// re-append fresh machine ops, orphaning the predecessors in the single
+		// shared x64Ops/arm64Ops array. compactOps runs only AFTER the whole loop
+		// (BackendDispatch), so on a large module (the self-compile: 5400+
+		// functions) these orphans ratchet the active array to tens of GB and the
+		// Array's capacity-doubling then tries to commit ~2x that — a deterministic
+		// OUT-OF-MEMORY (VirtualAlloc NULL) mid-applyColoring. Compacting whenever
+		// the array crosses the threshold caps the peak at ~O(threshold) instead of
+		// O(total orphans). Byte-identical to a no-op otherwise (renumber + drop
+		// unreachable; opRefs are current between functions), and the noOrphans
+		// early-exit makes an unnecessary call cheap.
+		if module.activeOpArrayLength() > REGALLOC_OP_COMPACT_THRESHOLD 'compactMidLoop'
+			module.compactOps()
+			recordPassCounter("__regalloc-midloop-compactions", delta: 1)
+		end 'compactMidLoop'
 	end 'eachFunc'
 end 'allocateRegistersWithTarget'
 
