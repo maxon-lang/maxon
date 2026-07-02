@@ -42,28 +42,27 @@ module {
     x64.prologue stack_size=80
     x64.xor r8d, r8d
     x64.mov r8, 0
+    x64.mov rbx, r8
   push_0.header:
-    x64.mov [rbp+-40], r8
-    x64.mov r8, [rbp+-40]
-    x64.cmp r8, 20
+    x64.cmp rbx, 20
     x64.mov rcx, 0
     x64.jge __phi_trampoline_1_0
   push_0:
     x64.lea r8, [rip+__data_globalArr]
-    x64.mov rbx, [r8+0] (8b)
+    x64.mov r12, [r8+0] (8b)
     x64.xor r8d, r8d
     x64.mov r8d, 8
   inlined_stdlib.__mm_alloc_0_0:
     x64.xor r9d, r9d
     x64.cmp r8, 1
-    x64.jge __phi_trampoline_10_0
+    x64.jge inlined_stdlib.__mm_alloc_2_0
   inlined_stdlib.__mm_alloc_1_0:
     x64.mov r8d, 1
-    x64.mov r12, r8
   inlined_stdlib.__mm_alloc_2_0:
+    x64.mov [rbp+-40], r8
     x64.lea r8, [rip+__mm_alloc_count]
     x64.lock inc qword ptr [r8]
-    x64.mov r13, r12
+    x64.mov r13, [rbp+-40]
     x64.add r13, 32
   inlined_stdlib.__slab_alloc_0_0:
     x64.xor r8d, r8d
@@ -161,24 +160,23 @@ module {
     x64.mov [r8+0], r9 (8b)
     x64.mov r8, r13
     x64.add r8, 16
-    x64.mov [r8+0], r12 (8b)
+    x64.mov r9, [rbp+-40]
+    x64.mov [r8+0], r9 (8b)
     x64.mov r8, r13
     x64.add r8, 24
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
     x64.mov rcx, r13
     x64.add rcx, 32
-    x64.mov r12, rcx
+    x64.mov r13, rcx
   inline_cont_main_3:
     x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp+-40]
-    x64.mov [r12+0], r8 (8b)
+    x64.mov [r13+0], rbx (8b)
     x64.lea rax, [rip+__layout_Array_Item]
-    x64.mov rcx, rbx
-    x64.mov rdx, r12
+    x64.mov rcx, r12
+    x64.mov rdx, r13
     x64.call Array.push
-    x64.mov r8, [rbp+-40]
-    x64.add r8, 1
+    x64.add rbx, 1
     x64.jmp push_0.header
   remove_0.header:
     x64.lea r8, [rip+__data_globalArr]
@@ -286,9 +284,6 @@ module {
   __phi_trampoline_1_0:
     x64.mov rbx, rcx
     x64.jmp remove_0.header
-  __phi_trampoline_10_0:
-    x64.mov r12, r8
-    x64.jmp inlined_stdlib.__mm_alloc_2_0
   }
 }
 ---

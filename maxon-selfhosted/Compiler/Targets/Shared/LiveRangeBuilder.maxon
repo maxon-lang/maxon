@@ -240,8 +240,43 @@ export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInf
 	// coloring fallback can prefer callee-saved registers for them.
 	let callPositionsPerBlock = buildCallPositionsPerBlock(module, func: func, opQuery: opQuery)
 
-	// Phase 3: Build live ranges for each value
+	// Block length (exclusive terminator position) keyed by block.id — needed by
+	// pushDefBlockInterval, which has only a def block.id (not a blockRef; the
+	// two differ, so module.blocks.get(id) is invalid — see getBlockByIdIn).
+	let blockLenById = buildBlockLenById(module, func: func)
+
+	// Phase 3: Build live ranges for each value.
+	//
+	// Structured block-MAJOR to avoid an O(numRanges x numBlocks) blow-up: the
+	// former per-value structure walked EVERY block for EVERY value (2 liveness
+	// queries + a map lookup each), producing an interval only in the ~2-4
+	// blocks the value is actually live in — ~99% of the work on a dense
+	// function (1234 ranges x 2445 blocks = 3M (value,block) probes, dwarfing
+	// the ~3700 intervals emitted). This was the single largest self-compile
+	// regalloc cost (buildranges = 45%, and Phase 3 its dominant sub-cost),
+	// paid on every one of the ~14k liveness rebuilds.
+	//
+	// Instead: create every range + its DEF-BLOCK interval in one O(numRanges)
+	// value pass, then append LIVE-IN intervals in one O(sum of per-block
+	// live-in-set sizes) block pass over the sparse liveness member lists. Total
+	// work is O(numRanges + liveness-facts) instead of O(numRanges x numBlocks).
+	// A value's def block and its live-in blocks are disjoint (SSA: a value is
+	// born inside its def block, never live-IN to it), so the two passes never
+	// double-emit. Interval ORDER within a range differs (block-grouped rather
+	// than value-scan order), but every consumer sorts intervals by position;
+	// the only order-sensitive reads are two diagnostic `.get(0)` sites in
+	// panic messages, which just want a representative point. Output is
+	// otherwise identical.
 	var ranges = LiveRangeArray.create()
+
+	// vid -> index into `ranges` for the block-major live-in pass. -1 = value
+	// has no range (no def: physical register or unused).
+	var rangeIdxByVid = RegIntArray.create()
+	var g = 0
+	while g < maxVal 'growMap'
+		rangeIdxByVid.push(-1)
+		g = g + 1
+	end 'growMap'
 
 	var vid = 0
 	while vid < maxVal 'eachValue'
@@ -271,11 +306,10 @@ export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInf
 			range.constantValue = getOr(constVal, index: vid, fallback: 0)
 		end 'isConst'
 
-		// Build intervals from liveness
-		buildIntervalsForValue(module, range: range, liveness: liveness, defBid: defBid, func: func, lastUseInBlock: lastUseInBlock, maxVal: maxVal)
-
-		// Mark whether the range survives across any call
-		range.crossesCall = intervalsCrossCall(range.intervals, callPositionsPerBlock: callPositionsPerBlock)
+		// Def-block interval only (the block where the value is defined). The
+		// live-in intervals in OTHER blocks are appended by the block-major
+		// pass below.
+		pushDefBlockInterval(range, liveness: liveness, defBid: defBid, lastUseInBlock: lastUseInBlock, maxVal: maxVal, blockLenById: blockLenById)
 
 		// Compute spill weight. Reload destinations get a sentinel
 		// infinite weight so the spill picker refuses to spill them.
@@ -297,9 +331,26 @@ export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInf
 		// evicted MAX_CASCADE times can never be evicted again).
 		range.cascade = getOr(cascadeByValueId, index: vid, fallback: 0)
 
+		try rangeIdxByVid.set(vid, value: ranges.count()) otherwise panic("invariant: rangeIdxByVid.set OOB (sized to maxVal)")
 		ranges.push(range)
 		vid = vid + 1
 	end 'eachValue'
+
+	// Block-major pass: append live-in intervals. Walk each block once; for
+	// every value live-IN at the block, append its interval to that value's
+	// range. Iterating the sparse liveness member list makes this
+	// O(sum of live-in-set sizes), not O(numRanges x numBlocks).
+	addLiveInIntervals(module, func: func, liveness: liveness, lastUseInBlock: lastUseInBlock, maxVal: maxVal, ranges: ranges, rangeIdxByVid: rangeIdxByVid, defBlockId: defBlockId)
+
+	// Mark whether each range survives across any call — deferred to here so it
+	// sees the range's COMPLETE interval set (def-block + all live-in blocks).
+	var ci = 0
+	let nRanges = ranges.count()
+	while ci < nRanges 'markCrossesCall'
+		var range = try ranges.get(ci) otherwise panic("invariant: ci < ranges.count() but get({ci}) failed")
+		range.crossesCall = intervalsCrossCall(range.intervals, callPositionsPerBlock: callPositionsPerBlock)
+		ci = ci + 1
+	end 'markCrossesCall'
 
 	// Step 6: Add a 1-position tail interval on every block-arg destination
 	// inside each of its predecessor blocks. The parallel-copy that materializes
@@ -357,16 +408,7 @@ function addBlockArgEdgeIntervals(module TargetModule, func IrFunction, cfg CfgI
 	// on functions with many blocks. The "<100 blocks" assumption in
 	// findBlockById's comment does NOT hold for huge functions (e.g.
 	// Testing.parseSpecFile at 2445 blocks), where it dominated backend time.
-	var blockLenById = RegIntArray.create()
-	var bl = 0
-	while bl < func.nextBlockId 'initLen'
-		blockLenById.push(-1)
-		bl = bl + 1
-	end 'initLen'
-	for blockRef in func.blockRefs 'eachLenBlock'
-		let lblock = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-		try blockLenById.set(lblock.id, value: lblock.opRefs.count() + 1) otherwise panic("invariant: blockLenById.set OOB; sized to func.nextBlockId")
-	end 'eachLenBlock'
+	let blockLenById = buildBlockLenById(module, func: func)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -721,59 +763,105 @@ end 'getLastUseInBlock'
 // Phase 3: Build intervals for a value
 // ============================================================
 
-function buildIntervalsForValue(module TargetModule, range LiveRange, liveness LivenessInfo, defBid BlockId, func IrFunction, lastUseInBlock LastUseMap, maxVal RegInt)
-	let vid = range.valueId
+// Build a block.id -> block length (exclusive terminator position) array, sized
+// to func.nextBlockId. Length = opRefs.count() + 1. Keyed by block.id (NOT by
+// blockRef — the two differ, so module.blocks.get(id) is invalid). Shared by
+// pushDefBlockInterval and addBlockArgEdgeIntervals to avoid the O(blocks²)
+// per-lookup linear scan they both otherwise need.
+function buildBlockLenById(module TargetModule, func IrFunction) returns RegIntArray
+	var lens = RegIntArray.create()
+	var bl = 0
+	while bl < func.nextBlockId 'init'
+		lens.push(-1)
+		bl = bl + 1
+	end 'init'
+	for blockRef in func.blockRefs 'each'
+		let lblock = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		try lens.set(lblock.id, value: lblock.opRefs.count() + 1) otherwise panic("invariant: buildBlockLenById set OOB; sized to func.nextBlockId")
+	end 'each'
+	return lens
+end 'buildBlockLenById'
 
+// Push the DEF-BLOCK interval for `range` — the interval covering the block
+// where the value is defined, from its def position to either the block end
+// (if live-out) or one past its last use in that block. The value's intervals
+// in OTHER blocks (where it is live-in) are added by addLiveInIntervals. A
+// value is never live-IN to its own def block (SSA: it's born inside the
+// block), so these two producers partition the interval set with no overlap.
+function pushDefBlockInterval(range LiveRange, liveness LivenessInfo, defBid BlockId, lastUseInBlock LastUseMap, maxVal RegInt, blockLenById RegIntArray)
+	let vid = range.valueId
+	let isLiveOut = liveGetBool(liveness.liveOut, blockId: defBid, valueId: vid)
+	let lastUse = getLastUseInBlock(lastUseInBlock, blockId: defBid, valueId: vid, maxVal: maxVal)
+
+	// Intervals use half-open [start, end) convention to match the overlap
+	// check in SSAColoring (s1 < e2 and s2 < e1).
+	let startPos = range.defPosition
+	let blockLen = try blockLenById.get(defBid) otherwise panic("pushDefBlockInterval: def block.id {defBid} out of blockLenById range")
+
+	if isLiveOut 'liveOut'
+		// Live through to end of block (blockLen is already exclusive)
+		range.intervals.push(Interval.create(defBid, startPos: startPos, endPos: blockLen))
+	end 'liveOut' else 'notLiveOut'
+		// Dies in this block — end one past the last use (exclusive)
+		if lastUse >= 0 'hasUse'
+			range.intervals.push(Interval.create(defBid, startPos: startPos, endPos: lastUse + 1))
+		end 'hasUse' else 'noUse'
+			// Defined but not used in this block and not live-out
+			// Still create a minimal interval at the def point
+			range.intervals.push(Interval.create(defBid, startPos: startPos, endPos: startPos + 1))
+		end 'noUse'
+	end 'notLiveOut'
+end 'pushDefBlockInterval'
+
+// Block-major live-in interval pass. For each block, for each value live-IN at
+// that block (from the sparse liveness member list), append the value's
+// interval in that block to its range. This replaces the former per-value
+// all-blocks scan (O(numRanges x numBlocks)) with an O(sum of live-in-set
+// sizes) walk. Def-block intervals are already produced by pushDefBlockInterval
+// in the value pass; a value is never live-in to its own def block, so the
+// `blockId == defBid` guard below is a belt-and-braces skip that should never
+// fire (kept to guarantee no double-emit even if liveness ever reports it).
+function addLiveInIntervals(module TargetModule, func IrFunction, liveness LivenessInfo, lastUseInBlock LastUseMap, maxVal RegInt, ranges LiveRangeArray, rangeIdxByVid RegIntArray, defBlockId RegIntArray)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
 		let blockLen = block.opRefs.count() + 1
 
-		let isLiveIn = liveGetBool(liveness.liveIn, blockId: blockId, valueId: vid)
-		let isLiveOut = liveGetBool(liveness.liveOut, blockId: blockId, valueId: vid)
+		let liveInSet = try liveness.liveIn.get(blockId) otherwise panic("addLiveInIntervals: liveness.liveIn.get({blockId}) OOB; sized to numBlocks")
+		let liveOutSet = try liveness.liveOut.get(blockId) otherwise panic("addLiveInIntervals: liveness.liveOut.get({blockId}) OOB; sized to numBlocks")
 
-		let lastUse = getLastUseInBlock(lastUseInBlock, blockId: blockId, valueId: vid, maxVal: maxVal)
+		for vid in liveInSet.members 'eachLiveIn'
+			// A value live-in to its own def block would double-emit — SSA
+			// forbids it, but guard defensively.
+			let defBid = getOr(defBlockId, index: vid, fallback: -1)
+			if blockId == defBid 'ownDefBlock'
+				continue
+			end 'ownDefBlock'
 
-		if blockId == defBid 'isDefBlock'
-			// Value is defined in this block.
-			// Intervals use half-open [start, end) convention to match the
-			// overlap check in SSAColoring (s1 < e2 and s2 < e1).
-			let startPos = range.defPosition
+			let ri = getOr(rangeIdxByVid, index: vid, fallback: -1)
+			if ri < 0 'noRange'
+				// Live-in value with no range (no recorded def) — matches the
+				// former loop skipping it (only defined values got ranges).
+				continue
+			end 'noRange'
+			var range = try ranges.get(ri) otherwise panic("invariant: rangeIdxByVid points past ranges")
 
-			if isLiveOut 'liveOut'
-				// Live through to end of block (blockLen is already exclusive)
-				range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: blockLen))
-			end 'liveOut' else 'notLiveOut'
-				// Dies in this block — end one past the last use (exclusive)
+			if liveOutSet.contains(vid) 'liveThrough'
+				// Live through entire block (blockLen is already exclusive)
+				range.intervals.push(Interval.create(blockId, startPos: 0, endPos: blockLen))
+			end 'liveThrough' else 'diesHere'
+				let lastUse = getLastUseInBlock(lastUseInBlock, blockId: blockId, valueId: vid, maxVal: maxVal)
 				if lastUse >= 0 'hasUse'
-					range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: lastUse + 1))
+					range.intervals.push(Interval.create(blockId, startPos: 0, endPos: lastUse + 1))
 				end 'hasUse' else 'noUse'
-					// Defined but not used in this block and not live-out
-					// Still create a minimal interval at the def point
-					range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: startPos + 1))
+					// Live-in but never used and not live-out — shouldn't happen
+					// normally but handle gracefully
+					range.intervals.push(Interval.create(blockId, startPos: 0, endPos: 1))
 				end 'noUse'
-			end 'notLiveOut'
-
-		end 'isDefBlock' else 'notDefBlock'
-			// Value is NOT defined in this block — only include if live-in
-			if isLiveIn 'liveIn'
-				if isLiveOut 'liveThrough'
-					// Live through entire block (blockLen is already exclusive)
-					range.intervals.push(Interval.create(blockId, startPos: 0, endPos: blockLen))
-				end 'liveThrough' else 'diesHere'
-					// Live-in but dies in this block (exclusive end)
-					if lastUse >= 0 'hasUse2'
-						range.intervals.push(Interval.create(blockId, startPos: 0, endPos: lastUse + 1))
-					end 'hasUse2' else 'noUse2'
-						// Live-in but never used and not live-out — shouldn't happen normally
-						// but handle gracefully
-						range.intervals.push(Interval.create(blockId, startPos: 0, endPos: 1))
-					end 'noUse2'
-				end 'diesHere'
-			end 'liveIn'
-		end 'notDefBlock'
+			end 'diesHere'
+		end 'eachLiveIn'
 	end 'eachBlock'
-end 'buildIntervalsForValue'
+end 'addLiveInIntervals'
 
 // Helper to read from LiveSetArray liveness sets. `sets` is
 // `liveness.liveIn` or `liveness.liveOut`; the outer array is sized to
