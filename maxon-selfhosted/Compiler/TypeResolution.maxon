@@ -989,12 +989,14 @@ function resolveAllInterfaces(project Project)
 		// cache restore continues to win — same convention as the struct
 		// and enum drains.
 		try project.interfaces.insert(name, value: iface) otherwise ignore
+		noteInnerAliasMutation(project)
 		resolvedNames.push(name)
 	end 'sweep'
 
 	for resolvedName in resolvedNames 'drop'
 		_ = project.unresolvedInterfaces.remove(resolvedName)
 	end 'drop'
+	noteInnerAliasMutation(project)
 end 'resolveAllInterfaces'
 
 // For each interface in `unresolvedInterfaces` with no explicit `uses`
@@ -1370,6 +1372,7 @@ function drainPendingExtensionInnerAliases(project Project)
 				project.structInnerAliasNames.insert(aliasName)
 			end 'eachStructAlias'
 			project.unresolvedStructTypes.upsert(targetTypeName, value: structTarget)
+			noteInnerAliasMutation(project)
 		end 'structHit' else if var ifaceTarget = try project.unresolvedInterfaces.get(targetTypeName) 'ifaceHit'
 			for (aliasName, aliasExpr) in extInnerAliases 'eachIfaceAlias'
 				if not ifaceTarget.innerAliases.contains(aliasName) 'novelIface'
@@ -1377,6 +1380,7 @@ function drainPendingExtensionInnerAliases(project Project)
 				end 'novelIface'
 			end 'eachIfaceAlias'
 			project.unresolvedInterfaces.upsert(targetTypeName, value: ifaceTarget)
+			noteInnerAliasMutation(project)
 		end 'ifaceHit'
 	end 'eachTarget'
 	project.pendingExtensionInnerAliases = PendingExtensionInnerAliasMap.create()
@@ -1423,6 +1427,7 @@ function resolveAllStructTypes(project Project)
 		// this point: the second declaration already failed parse ("Duplicate
 		// type") against `unresolvedStructTypes`.
 		project.structTypes.upsert(name, value: st)
+		noteInnerAliasMutation(project)
 		// Persist source-declaration order so `getParamNames` returns the
 		// right pairing for `resolveCalleeParamToConcreteType` regardless
 		// of what order the registry's id space got populated.
@@ -1449,6 +1454,7 @@ function resolveAllStructTypes(project Project)
 	for resolvedName in resolvedNames 'drop'
 		_ = project.unresolvedStructTypes.remove(resolvedName)
 	end 'drop'
+	noteInnerAliasMutation(project)
 end 'resolveAllStructTypes'
 
 // Drain `project.unresolvedEnums` into `project.enumTypes`. Mirrors the struct

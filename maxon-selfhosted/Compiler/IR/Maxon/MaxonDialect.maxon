@@ -284,48 +284,62 @@ export function chaseTypealiasToFunctionType(project Project, t MaxonType) retur
 	// Interface and struct inner aliases — function-type aliases declared
 	// inside `extension SomeInterface ... end` (e.g. `ElementTransform`
 	// declared inside `extension Iterable`) land on the interface's
-	// `innerAliases`. Probe both registries so a `named(alias)` that
-	// resolves through an inner alias still chases to its function type.
-	for (_, iface) in project.interfaces 'eachIface'
-		if let resolved = try iface.innerAliases.get(aliasName) 'innerHit'
-			if isFunctionMaxonType(resolved) 'innerIsFn'
-				return resolved
-			end 'innerIsFn'
-		end 'innerHit'
-	end 'eachIface'
-	for (_, structEntry) in project.structTypes 'eachStruct'
-		if let resolved = try structEntry.innerAliases.get(aliasName) 'structInnerHit'
-			if isFunctionMaxonType(resolved) 'structInnerIsFn'
-				return resolved
-			end 'structInnerIsFn'
-		end 'structInnerHit'
-	end 'eachStruct'
-	// Parse-time fallback: extension bodies merge their inner typealiases
-	// into `project.unresolvedStructTypes[target].innerAliases` immediately
-	// (see `mergeExtensionInnerAliases`), but the parsed entries land as
-	// `UnresolvedTypeExpr.functionAlias(target)` rather than a fully-
-	// resolved MaxonType. Probing unresolved entries here lets a sibling
-	// file's `cmp(a, b)` call recognize `cmp` as a function value before
-	// the type-resolution pass runs to promote the alias.
-	for (_, unresolvedStruct) in project.unresolvedStructTypes 'eachUnresolved'
-		if let expr = try unresolvedStruct.innerAliases.get(aliasName) 'unresolvedHit'
-			let chased = match expr 'extract'
-				functionAlias(target) gives target
-				rangedInt gives t
-				rangedFloat gives t
-				boolPrim gives t
-				aliasName gives t
-				genericAlias gives t
-				sizedGenericAlias gives t
-				invalid gives t
-			end 'extract'
-			if isFunctionMaxonType(chased) 'isFn'
-				return chased
-			end 'isFn'
-		end 'unresolvedHit'
-	end 'eachUnresolved'
+	// `innerAliases`; parse-time entries land on `unresolvedStructTypes` as
+	// `UnresolvedTypeExpr.functionAlias(target)` with the fully-resolved
+	// function type inside (see `mergeExtensionInnerAliases`). All three
+	// registries are consulted through a flat name->functionType cache —
+	// scanning them per call was O(ops x types) over the whole compile and
+	// dominated the lowering pass on large modules. The cache rebuilds
+	// whenever `noteInnerAliasMutation` has bumped the registries' epoch.
+	if project.functionInnerAliasCacheEpoch != project.innerAliasEpoch 'stale'
+		rebuildFunctionInnerAliasCache(project)
+	end 'stale'
+	if let cached = try project.functionInnerAliasCache.get(aliasName) 'cacheHit'
+		return cached
+	end 'cacheHit'
 	return t
 end 'chaseTypealiasToFunctionType'
+
+// Rebuild `project.functionInnerAliasCache`: collect every function-typed
+// inner alias from the three registries in the same precedence order the
+// former per-call scan used (interfaces, then resolved structs, then
+// unresolved structs) — first registration wins so a name that appears in
+// several registries chases to the same type the live scan returned.
+function rebuildFunctionInnerAliasCache(project Project)
+	var cache = ResolvedInnerAliasMap.create()
+
+	for (_, iface) in project.interfaces 'eachIface'
+		for (name, resolved) in iface.innerAliases 'eachAlias'
+			if isFunctionMaxonType(resolved) and not cache.contains(name) 'fnHit'
+				cache.upsert(name, value: resolved)
+			end 'fnHit'
+		end 'eachAlias'
+	end 'eachIface'
+
+	for (_, structEntry) in project.structTypes 'eachStruct'
+		for (name, resolved) in structEntry.innerAliases 'eachAlias'
+			if isFunctionMaxonType(resolved) and not cache.contains(name) 'fnHit'
+				cache.upsert(name, value: resolved)
+			end 'fnHit'
+		end 'eachAlias'
+	end 'eachStruct'
+
+	for (_, unresolvedStruct) in project.unresolvedStructTypes 'eachUnresolved'
+		for (name, expr) in unresolvedStruct.innerAliases 'eachAlias'
+			let target = match expr 'extract'
+				functionAlias(fnTarget) gives fnTarget
+				rangedInt to sizedGenericAlias gives MaxonType.unresolved
+				invalid gives MaxonType.unresolved
+			end 'extract'
+			if isFunctionMaxonType(target) and not cache.contains(name) 'fnHit'
+				cache.upsert(name, value: target)
+			end 'fnHit'
+		end 'eachAlias'
+	end 'eachUnresolved'
+
+	project.functionInnerAliasCache = cache
+	project.functionInnerAliasCacheEpoch = project.innerAliasEpoch
+end 'rebuildFunctionInnerAliasCache'
 
 // Phase 11.3: True iff `t` is a `MaxonType.interface(_)`. Interface-typed
 // values are 16-byte fat pointers (`{value, witness}`); the construction

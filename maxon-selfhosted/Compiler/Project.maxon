@@ -507,6 +507,21 @@ export type Project
 	// bucket.
 	export var structInnerAliasNames as InnerAliasNameSet
 
+	// Flat `aliasName -> MaxonType.function` cache backing
+	// `chaseTypealiasToFunctionType`. Without it every chase of a non-function
+	// alias (the overwhelmingly common case) scanned every interface's, every
+	// struct's, and every unresolved struct's `innerAliases` map — O(ops x
+	// types) across the whole compile, the dominant cost of lowering large
+	// modules. The cache is rebuilt lazily whenever `innerAliasEpoch` moves
+	// past `functionInnerAliasCacheEpoch`; every site that adds or reverts
+	// inner aliases (parser deposits, extension merges, promotion into the
+	// resolved registries, stdlib-cache restore, parse-delta revert) bumps the
+	// epoch via `noteInnerAliasMutation`. Over-bumping is harmless — a false
+	// invalidation just costs one cheap rebuild.
+	export var functionInnerAliasCache as ResolvedInnerAliasMap
+	export var functionInnerAliasCacheEpoch as InnerAliasEpoch
+	export var innerAliasEpoch as InnerAliasEpoch
+
 	// Dotted per-instance ranged inner-alias names (`IntWrapper.Idx`,
 	// `StrWrapper.Idx`) registered by `registerPerInstanceInnerAliases`. Used by
 	// the cross-instance argument check to reject passing a `WrapperA.Idx` value
@@ -1059,6 +1074,9 @@ export type Project
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			structInnerAliasNames: InnerAliasNameSet.create(),
+			functionInnerAliasCache: ResolvedInnerAliasMap.create(),
+			functionInnerAliasCacheEpoch: 0,
+			innerAliasEpoch: 1,
 			perInstanceAliasNames: PerInstanceAliasNameSet.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			pendingExtensionInnerAliases: PendingExtensionInnerAliasMap.create(),
@@ -3726,6 +3744,17 @@ export function anyStructHasInnerAlias(project Project, aliasName String) return
 	return project.structInnerAliasNames.contains(aliasName)
 end 'anyStructHasInnerAlias'
 
+// Invalidate the `functionInnerAliasCache` on `project`. Call from every site
+// that adds, merges, restores, or reverts inner-alias entries on any of the
+// three registries `chaseTypealiasToFunctionType` consults (`interfaces`,
+// `structTypes`, `unresolvedStructTypes`) — including wholesale attachment of
+// a pre-built `innerAliases` map when a parsed type or a restored cache entry
+// is deposited. Over-calling is harmless (one cheap rebuild); missing a site
+// would let the cache serve a stale answer.
+export function noteInnerAliasMutation(project Project)
+	project.innerAliasEpoch = project.innerAliasEpoch + 1
+end 'noteInnerAliasMutation'
+
 // Struct field descriptor: name, type, byte offset, and `var`/`let`
 // mutability. `isMutable` mirrors the source-level keyword so post-construction
 // writes (`receiver.field = value`) can be rejected with E2013 against
@@ -3826,6 +3855,10 @@ export typealias StructTypeArray = Array with StructType
 // Reverse-index value type for `Project.structInnerAliasNames` — see the
 // field comment on `Project` for the population contract.
 export typealias InnerAliasNameSet = Set with String
+
+// Monotonic mutation counter for the inner-alias registries, consumed by the
+// `functionInnerAliasCache` staleness check on `Project`.
+export typealias InnerAliasEpoch = int(0 to u64.max)
 export typealias PerInstanceAliasNameSet = Set with String
 export typealias RangeAmbiguousAliasNameSet = Set with String
 

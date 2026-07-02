@@ -5327,6 +5327,9 @@ export type Parser
 			project.structInnerAliasNames.insert(aliasName)
 			recordStructInnerAliasInsert(project, filePath: filePath, key: aliasName)
 		end 'recordAliasNames'
+		if innerAliases.count() > 0 'aliasEpoch'
+			noteInnerAliasMutation(project)
+		end 'aliasEpoch'
 
 		// Eager BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery.
 		// Walking conformances at type-registration time means each static
@@ -6876,6 +6879,7 @@ export type Parser
 			end 'eachAlias'
 			project.unresolvedStructTypes.upsert(targetTypeName, value: target)
 			recordUnresolvedStructTypeInsert(project, filePath: filePath, key: targetTypeName)
+			noteInnerAliasMutation(project)
 			return
 		end 'structTarget'
 
@@ -6887,6 +6891,7 @@ export type Parser
 			end 'eachIfaceAlias'
 			project.unresolvedInterfaces.upsert(targetTypeName, value: iface)
 			recordUnresolvedInterfaceUpsert(project, filePath: filePath, key: targetTypeName)
+			noteInnerAliasMutation(project)
 			return
 		end 'ifaceTarget'
 
