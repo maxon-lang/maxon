@@ -253,6 +253,11 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 
 	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg)
 
+	// Single-scan caches for the per-value body queries + the block-id index.
+	// Must precede `buildBodyRcCompleteSet` (which probes the released/acquired
+	// sets) and every planning sweep (which probe all four).
+	buildBodyScanCaches(ctx)
+
 	// Body-complete refcount set: values whose retain+release the inlined body
 	// already carries in full (see `bodyRcComplete`). Computed BEFORE the escape /
 	// acquire analyses and every sweep, since all of them consult `isManaged`, which
@@ -390,21 +395,11 @@ end 'funcNeedsReleaseInsertion'
 // body-released values rather than every value.
 function buildBodyRcCompleteSet(ctx RcContext) returns BoolArray
 	let maxVal = ctx.liveness.maxValueId
-	var released = BoolArray.create()
-	released.resize(maxVal + 1)
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("buildBodyRcCompleteSet: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try ctx.module.ops.get(opIdx) otherwise panic("buildBodyRcCompleteSet: opIdx not in module.ops")
-			markBodyReleaseArgs(op, released: released)
-		end 'eachOp'
-	end 'eachBlock'
-
 	var result = BoolArray.create()
 	result.resize(maxVal + 1)
 	var v = 0
 	while v <= maxVal 'eachVal'
-		let wasReleased = try released.get(v) otherwise false
+		let wasReleased = try ctx.bodyReleasedValues.get(v) otherwise false
 		if wasReleased and ctx.func.isValueManaged(v) and not ctx.isReturned(v) and valueHasBodyAcquire(ctx, vid: v) 'complete'
 			try result.set(v, value: true) otherwise panic("buildBodyRcCompleteSet: result.set OOB despite bound check")
 		end 'complete'
@@ -412,6 +407,188 @@ function buildBodyRcCompleteSet(ctx RcContext) returns BoolArray
 	end 'eachVal'
 	return result
 end 'buildBodyRcCompleteSet'
+
+// One pass over the function body filling the RcContext scan caches
+// (`bodyReleasedValues` / `bodyAcquiredValues` / `constantZeroValues`) plus the
+// block-id index. Replaces the former per-query full-body walks
+// (`funcBodyReleasesValue` / `valueHasBodyAcquire` / `valueIsConstantZero` /
+// `findBlockById` re-scanned the whole function per value or per lookup).
+//
+// The acquired side replicates the former per-vid scan exactly: within a
+// block, an `atomic_inc` acquires the vid whose LATEST `subi vid, 8` produced
+// the inc'd address — a later `subi` for the same vid invalidates the earlier
+// result, and the tracker resets at block boundaries. Tracked with two flat
+// maps (vid -> header addr, addr -> vid) whose entries carry the block ordinal
+// as a validity stamp, so per-block resets are O(1) instead of O(maxValueId).
+function buildBodyScanCaches(ctx RcContext)
+	let maxVal = ctx.liveness.maxValueId
+	var released = BoolArray.create()
+	released.resize(maxVal + 1)
+	var acquired = BoolArray.create()
+	acquired.resize(maxVal + 1)
+	var constZero = BoolArray.create()
+	constZero.resize(maxVal + 1)
+
+	var blockIndex = BlockRefArray.create()
+	blockIndex.resize(ctx.numBlocks)
+
+	// Stamped header-address maps for the inlined-acquire pattern. Values are
+	// stored +1 so 0 means absent; stamps hold (block ordinal + 1).
+	var vidToAddr = ValueIdArray.create()
+	vidToAddr.resize(maxVal + 1)
+	var vidToAddrStamp = ValueIdArray.create()
+	vidToAddrStamp.resize(maxVal + 1)
+	var addrToVid = ValueIdArray.create()
+	addrToVid.resize(maxVal + 1)
+	var addrToVidStamp = ValueIdArray.create()
+	addrToVidStamp.resize(maxVal + 1)
+
+	var ordinal = 0
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		ordinal = ordinal + 1
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("buildBodyScanCaches: blockRef not in module.blocks")
+		if block.id >= 0 and block.id < blockIndex.count() 'indexBlock'
+			try blockIndex.set(block.id, value: blockRef + 1) otherwise panic("buildBodyScanCaches: blockIndex.set OOB despite bound check")
+		end 'indexBlock'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("buildBodyScanCaches: opIdx not in module.ops")
+			markBodyReleaseArgs(op, released: released)
+			markConstantZeroResult(op, constZero: constZero)
+
+			let increfArg = increfCallArgOrSentinel(op)
+			if increfArg != REFCOUNT_NO_VALUE and increfArg >= 0 and increfArg < acquired.count() 'callAcquire'
+				try acquired.set(increfArg, value: true) otherwise panic("buildBodyScanCaches: acquired.set OOB despite bound check")
+			end 'callAcquire'
+
+			let headerSub = headerSubOrSentinel(op)
+			if headerSub.vid != REFCOUNT_NO_VALUE and headerSub.vid >= 0 and headerSub.vid <= maxVal and headerSub.addrId >= 0 and headerSub.addrId <= maxVal 'trackSub'
+				// A newer `subi vid, 8` supersedes the vid's earlier header
+				// address — drop the stale reverse entry so an `atomic_inc`
+				// of the OLD address no longer matches (per-vid scan parity).
+				let oldAddrRaw = try vidToAddr.get(headerSub.vid) otherwise 0
+				let oldStamp = try vidToAddrStamp.get(headerSub.vid) otherwise 0
+				if oldStamp == ordinal and oldAddrRaw > 0 'dropStale'
+					try addrToVidStamp.set(oldAddrRaw - 1, value: 0) otherwise panic("buildBodyScanCaches: addrToVidStamp.set OOB despite bound check")
+				end 'dropStale'
+				try vidToAddr.set(headerSub.vid, value: headerSub.addrId + 1) otherwise panic("buildBodyScanCaches: vidToAddr.set OOB despite bound check")
+				try vidToAddrStamp.set(headerSub.vid, value: ordinal) otherwise panic("buildBodyScanCaches: vidToAddrStamp.set OOB despite bound check")
+				try addrToVid.set(headerSub.addrId, value: headerSub.vid + 1) otherwise panic("buildBodyScanCaches: addrToVid.set OOB despite bound check")
+				try addrToVidStamp.set(headerSub.addrId, value: ordinal) otherwise panic("buildBodyScanCaches: addrToVidStamp.set OOB despite bound check")
+			end 'trackSub'
+
+			let incAddr = atomicIncAddrOrSentinel(op)
+			if incAddr != REFCOUNT_NO_VALUE and incAddr >= 0 and incAddr <= maxVal 'inlinedAcquire'
+				let ownerRaw = try addrToVid.get(incAddr) otherwise 0
+				let ownerStamp = try addrToVidStamp.get(incAddr) otherwise 0
+				if ownerStamp == ordinal and ownerRaw > 0 'ownerHit'
+					try acquired.set(ownerRaw - 1, value: true) otherwise panic("buildBodyScanCaches: acquired.set OOB despite bound check")
+				end 'ownerHit'
+			end 'inlinedAcquire'
+		end 'eachOp'
+	end 'eachBlock'
+
+	ctx.bodyReleasedValues = released
+	ctx.bodyAcquiredValues = acquired
+	ctx.constantZeroValues = constZero
+	ctx.blockRefIndex = blockIndex
+end 'buildBodyScanCaches'
+
+// The result id of an `arith.const 0` op, marked into `constZero`.
+function markConstantZeroResult(op StdOp, constZero BoolArray)
+	let vid = match op 'dispatch'
+		arith(a) gives constZeroResultOrSentinel(a)
+		call gives REFCOUNT_NO_VALUE
+		control gives REFCOUNT_NO_VALUE
+		memory gives REFCOUNT_NO_VALUE
+		system gives REFCOUNT_NO_VALUE
+	end 'dispatch'
+	if vid != REFCOUNT_NO_VALUE and vid >= 0 and vid < constZero.count() 'mark'
+		try constZero.set(vid, value: true) otherwise panic("markConstantZeroResult: constZero.set OOB despite bound check")
+	end 'mark'
+end 'markConstantZeroResult'
+
+function constZeroResultOrSentinel(a StdArithOp) returns ValueId
+	return match a 'check'
+		const(c) gives (c.resultId if c.value == 0 else REFCOUNT_NO_VALUE)
+		unary to binary gives REFCOUNT_NO_VALUE
+	end 'check'
+end 'constZeroResultOrSentinel'
+
+// Arg 0 of an incref-family call, or REFCOUNT_NO_VALUE.
+function increfCallArgOrSentinel(op StdOp) returns ValueId
+	return match op 'dispatch'
+		call(c) gives increfCallOpArgOrSentinel(c)
+		arith gives REFCOUNT_NO_VALUE
+		control gives REFCOUNT_NO_VALUE
+		memory gives REFCOUNT_NO_VALUE
+		system gives REFCOUNT_NO_VALUE
+	end 'dispatch'
+end 'increfCallArgOrSentinel'
+
+function increfCallOpArgOrSentinel(c StdCallOp) returns ValueId
+	return match c 'check'
+		call(_, callee, argIds) gives (firstArgOrSentinel(argIds) if calleeNameIsIncref(callee) else REFCOUNT_NO_VALUE)
+		ret gives REFCOUNT_NO_VALUE
+		tryCall gives REFCOUNT_NO_VALUE
+		indirectCall to errorReturn gives REFCOUNT_NO_VALUE
+	end 'check'
+end 'increfCallOpArgOrSentinel'
+
+function firstArgOrSentinel(argIds ValueIdArray) returns ValueId
+	return try argIds.get(0) otherwise REFCOUNT_NO_VALUE
+end 'firstArgOrSentinel'
+
+// The (vid, addrId) pair of a `subi vid, 8`-shaped header-address computation.
+type HeaderSubMatch
+	export var vid as ValueId
+	export var addrId as ValueId
+
+	export static function none() returns HeaderSubMatch
+		return Self{vid: REFCOUNT_NO_VALUE, addrId: REFCOUNT_NO_VALUE}
+	end 'none'
+
+	export static function found(vid ValueId, addrId ValueId) returns HeaderSubMatch
+		return Self{vid: vid, addrId: addrId}
+	end 'found'
+end 'HeaderSubMatch'
+
+function headerSubOrSentinel(op StdOp) returns HeaderSubMatch
+	return match op 'dispatch'
+		arith(a) gives arithHeaderSubOrSentinel(a)
+		call gives HeaderSubMatch.none()
+		control gives HeaderSubMatch.none()
+		memory gives HeaderSubMatch.none()
+		system gives HeaderSubMatch.none()
+	end 'dispatch'
+end 'headerSubOrSentinel'
+
+function arithHeaderSubOrSentinel(a StdArithOp) returns HeaderSubMatch
+	return match a 'check'
+		binary(op) gives (HeaderSubMatch.found(op.leftId, addrId: op.resultId) if binOpcodeIsSubI64(op.opcode) else HeaderSubMatch.none())
+		const gives HeaderSubMatch.none()
+		unary gives HeaderSubMatch.none()
+	end 'check'
+end 'arithHeaderSubOrSentinel'
+
+// The incremented address of a `sys.atomic_inc`, or REFCOUNT_NO_VALUE.
+function atomicIncAddrOrSentinel(op StdOp) returns ValueId
+	return match op 'dispatch'
+		system(s) gives sysAtomicIncAddrOrSentinel(s)
+		arith gives REFCOUNT_NO_VALUE
+		call gives REFCOUNT_NO_VALUE
+		control gives REFCOUNT_NO_VALUE
+		memory gives REFCOUNT_NO_VALUE
+	end 'dispatch'
+end 'atomicIncAddrOrSentinel'
+
+function sysAtomicIncAddrOrSentinel(s StdSystemOp) returns ValueId
+	return match s 'check'
+		atomicInc(target) gives target
+		globalAddr to osDirMkdir gives REFCOUNT_NO_VALUE
+		atomicDec to dropTypeParam gives REFCOUNT_NO_VALUE
+	end 'check'
+end 'sysAtomicIncAddrOrSentinel'
 
 // Mark every argument of a release-family CALL (`mm_drop` / `stdlib.__mm_decref` /
 // `__mm_decref` / `__mm_decref_maybenull_helper`) in `op` — the body-spliced release
@@ -578,6 +755,25 @@ type RcContext
 	// body's spliced pair is the complete lifecycle). Populated by
 	// `buildBodyRcCompleteSet`, consulted by `isManaged`.
 	export var bodyRcComplete as BoolArray
+	// Single-scan caches for the per-value body queries the phi-edge planning
+	// used to answer by re-walking the whole function per query (O(values x ops)
+	// — the dominant insert-refcounts cost at self-host scale). All three are
+	// populated by `buildBodyScanCaches` right after context creation; the IR is
+	// read-only until the planned edits are applied, so one scan is authoritative.
+	//   bodyReleasedValues — args of body-spliced RELEASE-family calls
+	//                        (backs `funcBodyReleasesValue`).
+	//   bodyAcquiredValues — values with a body-spliced ACQUIRE, call form or
+	//                        inlined `subi v,8; atomic_inc` form (backs
+	//                        `valueHasBodyAcquire`).
+	//   constantZeroValues — `arith.const 0` result ids (backs
+	//                        `valueIsConstantZero`).
+	export var bodyReleasedValues as BoolArray
+	export var bodyAcquiredValues as BoolArray
+	export var constantZeroValues as BoolArray
+	// block.id -> (blockRef + 1) flat index backing `findBlockById` /
+	// `tryFindBlockById`; 0 = absent. The pass never adds or removes blocks, so
+	// the index built at context creation stays valid for the whole run.
+	export var blockRefIndex as BlockRefArray
 	// ValueIds that are `sys.global_addr @__data_*` results — the addresses of
 	// module-level writable globals. A managed `store_indirect` through one of
 	// these is an ownership TRANSFER into the long-lived global (see
@@ -651,6 +847,10 @@ type RcContext
 			returnedValues: returnedValues,
 			escapingValues: BoolArray.create(),
 			bodyRcComplete: BoolArray.create(),
+			bodyReleasedValues: BoolArray.create(),
+			bodyAcquiredValues: BoolArray.create(),
+			constantZeroValues: BoolArray.create(),
+			blockRefIndex: BlockRefArray.create(),
 			globalAddrValues: globalAddrValues,
 			transparentWrapResults: transparentWrapResults,
 			borrowReturningCallResults: borrowReturningCallResults,
@@ -4594,39 +4794,10 @@ end 'phiReleasesMovedValue'
 // `vid` — a release spliced in verbatim by the inliner from a callee body. The
 // release-side analogue of `valueHasBodyAcquire`: the inserter's own release ops
 // are not yet applied when this runs, so a hit always means an INLINED release.
+// O(1) probe of the `buildBodyScanCaches` single scan.
 function funcBodyReleasesValue(ctx RcContext, vid ValueId) returns bool
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("funcBodyReleasesValue: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try ctx.module.ops.get(opIdx) otherwise panic("funcBodyReleasesValue: opIdx not in module.ops")
-			if opIsReleaseCallOf(op, vid: vid) 'releases'
-				return true
-			end 'releases'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
+	return try ctx.bodyReleasedValues.get(vid) otherwise false
 end 'funcBodyReleasesValue'
-
-// True iff `op` is a static call to a release-family runtime entry
-// (`mm_drop` / `stdlib.__mm_decref` / `__mm_decref` / `__mm_decref_maybenull_helper`)
-// with `vid` among its arguments.
-function opIsReleaseCallOf(op StdOp, vid ValueId) returns bool
-	return match op 'dispatch'
-		call(c) gives callIsReleaseOf(c, vid: vid)
-		arith gives false
-		control gives false
-		memory gives false
-		system gives false
-	end 'dispatch'
-end 'opIsReleaseCallOf'
-
-function callIsReleaseOf(c StdCallOp, vid ValueId) returns bool
-	return match c 'check'
-		call(_, callee, argIds) gives calleeNameIsRelease(callee) and valueIdArrayContains(argIds, vid: vid)
-		ret gives false
-		tryCall to errorReturn gives false
-	end 'check'
-end 'callIsReleaseOf'
 
 function calleeNameIsRelease(callee String) returns bool
 	return callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper"
@@ -4882,103 +5053,25 @@ end 'phiArgGetsEdgeIncref'
 // True iff the function body already contains an ACQUIRE of `vid`: an
 // `__mm_incref`-family call with `vid` as its argument, or the inliner-spliced
 // inlined form — `sys.atomic_inc` of an address computed as `subi vid, 8` (the
-// refcount header word). Scans only pre-existing body ops (the inserter's own
+// refcount header word). Only pre-existing body ops count (the inserter's own
 // queued ops are not yet applied when the phi-edge plan runs), so a hit always
 // means the +1 was minted by a spliced callee body, not by this pass.
+// O(1) probe of the `buildBodyScanCaches` single scan.
 function valueHasBodyAcquire(ctx RcContext, vid ValueId) returns bool
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("valueHasBodyAcquire: blockRef not in module.blocks")
-		var headerAddrId = REFCOUNT_NO_VALUE
-		for opIdx in block.opRefs 'eachOp'
-			let op = try ctx.module.ops.get(opIdx) otherwise panic("valueHasBodyAcquire: opIdx not in module.ops")
-			if opIsIncrefCallOf(op, vid: vid) 'callForm'
-				return true
-			end 'callForm'
-			let subResult = opDefinesRcHeaderAddr(op, vid: vid)
-			if subResult != REFCOUNT_NO_VALUE 'headerAddr'
-				headerAddrId = subResult
-			end 'headerAddr'
-			if headerAddrId != REFCOUNT_NO_VALUE and opIsAtomicIncOf(op, addrId: headerAddrId) 'inlinedForm'
-				return true
-			end 'inlinedForm'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
+	return try ctx.bodyAcquiredValues.get(vid) otherwise false
 end 'valueHasBodyAcquire'
-
-// True iff `op` is a static call to the incref runtime entry with `vid` as arg 0.
-function opIsIncrefCallOf(op StdOp, vid ValueId) returns bool
-	return match op 'dispatch'
-		call(c) gives callIsIncrefOf(c, vid: vid)
-		arith gives false
-		control gives false
-		memory gives false
-		system gives false
-	end 'dispatch'
-end 'opIsIncrefCallOf'
-
-function callIsIncrefOf(c StdCallOp, vid ValueId) returns bool
-	return match c 'check'
-		call(_, callee, argIds) gives calleeNameIsIncref(callee) and isFirstArg(argIds, vid: vid)
-		ret gives false
-		tryCall gives false
-		indirectCall to errorReturn gives false
-	end 'check'
-end 'callIsIncrefOf'
 
 function calleeNameIsIncref(callee String) returns bool
 	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
 end 'calleeNameIsIncref'
 
-// If `op` is `arith.subi vid, 8` (the refcount-header address computation of the
-// inlined incref body), return its result id; else REFCOUNT_NO_VALUE.
-function opDefinesRcHeaderAddr(op StdOp, vid ValueId) returns ValueId
-	return match op 'dispatch'
-		arith(a) gives arithDefinesRcHeaderAddr(a, vid: vid)
-		call gives REFCOUNT_NO_VALUE
-		control gives REFCOUNT_NO_VALUE
-		memory gives REFCOUNT_NO_VALUE
-		system gives REFCOUNT_NO_VALUE
-	end 'dispatch'
-end 'opDefinesRcHeaderAddr'
-
-function arithDefinesRcHeaderAddr(a StdArithOp, vid ValueId) returns ValueId
-	return match a 'check'
-		binary(op) gives binaryDefinesRcHeaderAddr(op, vid: vid)
-		const gives REFCOUNT_NO_VALUE
-		unary gives REFCOUNT_NO_VALUE
-	end 'check'
-end 'arithDefinesRcHeaderAddr'
-
-function binaryDefinesRcHeaderAddr(op StdArithBinaryOp, vid ValueId) returns ValueId
-	let isSub = match op.opcode 'opc'
+function binOpcodeIsSubI64(opcode StdArithBinaryOpcode) returns bool
+	return match opcode 'opc'
 		subI64 gives true
 		addI64 gives false
 		mulI64 to cmpF64Ge gives false
 	end 'opc'
-	if not isSub or op.leftId != vid 'notHeaderSub'
-		return REFCOUNT_NO_VALUE
-	end 'notHeaderSub'
-	return op.resultId
-end 'binaryDefinesRcHeaderAddr'
-
-function opIsAtomicIncOf(op StdOp, addrId ValueId) returns bool
-	return match op 'dispatch'
-		system(s) gives sysIsAtomicIncOf(s, addrId: addrId)
-		arith gives false
-		call gives false
-		control gives false
-		memory gives false
-	end 'dispatch'
-end 'opIsAtomicIncOf'
-
-function sysIsAtomicIncOf(s StdSystemOp, addrId ValueId) returns bool
-	return match s 'check'
-		atomicInc(target) gives target == addrId
-		globalAddr to osDirMkdir gives false
-		atomicDec to dropTypeParam gives false
-	end 'check'
-end 'sysIsAtomicIncOf'
+end 'binOpcodeIsSubI64'
 
 // True iff `root` is the borrow-deferral root of `borrowed` (`borrowDeferralRoot`).
 // The term-drop suppression side of the deferral: `planBorrowRootEdgeRelease`
@@ -4994,35 +5087,10 @@ end 'borrowRootIs'
 // True iff `vid` is defined by an `arith.constant {value = 0}` op anywhere in the
 // function — i.e. a constant null/zero. Used to skip the phi-edge incref of a
 // try/otherwise error-path null sentinel (incref(0) would write-fault).
+// O(1) probe of the `buildBodyScanCaches` single scan.
 function valueIsConstantZero(ctx RcContext, vid ValueId) returns bool
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("valueIsConstantZero: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try ctx.module.ops.get(opIdx) otherwise panic("valueIsConstantZero: opIdx not in module.ops")
-			if opDefinesConstantZero(op, vid: vid) 'hit'
-				return true
-			end 'hit'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
+	return try ctx.constantZeroValues.get(vid) otherwise false
 end 'valueIsConstantZero'
-
-function opDefinesConstantZero(op StdOp, vid ValueId) returns bool
-	return match op 'dispatch'
-		arith(a) gives arithDefinesConstantZero(a, vid: vid)
-		call gives false
-		control gives false
-		memory gives false
-		system gives false
-	end 'dispatch'
-end 'opDefinesConstantZero'
-
-function arithDefinesConstantZero(a StdArithOp, vid ValueId) returns bool
-	return match a 'check'
-		const(c) gives (c.resultId == vid and c.value == 0)
-		unary to binary gives false
-	end 'check'
-end 'arithDefinesConstantZero'
 
 // The ValueId the `predBlock` terminator passes as block-arg `argIdx` on the
 // edge into `toBlockId`. `REFCOUNT_NO_VALUE` if the terminator carries no such
@@ -5232,6 +5300,12 @@ function getOrCreateEdgeBlock(ctx RcContext, fromBlock IrBlock, toBlockId BlockI
 	let edgeArgs = edgeArgsFor(ctx, fromBlock: fromBlock, toBlockId: toBlockId)
 
 	let edgeBlock = ctx.module.addBlock(ctx.func, label: "__rc_edge_{fromBlock.id}_{toBlockId}")
+	// Register the fresh block in the id index — `findExistingEdgeBlock` must
+	// re-find it when a later release accumulates onto this same edge (a stale
+	// index would create a SECOND edge block for the pair, orphaning this one's
+	// release op — the value would silently leak). `addBlock` appended the
+	// block to `module.blocks`, so its blockRef is the current last index.
+	registerBlockInIndex(ctx, blockId: edgeBlock.id, blockRef: ctx.module.blocks.count() - 1)
 	ctx.module.setTerminator(edgeBlock, op: StdOp.control(StdControlOp.br(toBlockId, argIds: edgeArgs)))
 
 	// Rewrite fromBlock's terminator: retarget the toBlockId edge to edgeBlock,
@@ -5240,6 +5314,16 @@ function getOrCreateEdgeBlock(ctx RcContext, fromBlock IrBlock, toBlockId BlockI
 
 	return edgeBlock
 end 'getOrCreateEdgeBlock'
+
+// Extend the block-id index with a block created after `buildBodyScanCaches`
+// ran (the critical-edge split blocks are the only such case). Grows the
+// index when the fresh id is past the original `numBlocks` sizing.
+function registerBlockInIndex(ctx RcContext, blockId BlockId, blockRef BlockRef)
+	while ctx.blockRefIndex.count() <= blockId 'grow'
+		ctx.blockRefIndex.push(0)
+	end 'grow'
+	try ctx.blockRefIndex.set(blockId, value: blockRef + 1) otherwise panic("registerBlockInIndex: set OOB after grow")
+end 'registerBlockInIndex'
 
 // A nullable BlockId result: `valueId == REFCOUNT_NO_VALUE` means "none".
 type EdgeBlockLookup
@@ -5417,22 +5501,21 @@ end 'pushCondBrTargets'
 // Block lookup
 // ============================================================
 
+// O(1) probes of the `blockRefIndex` built by `buildBodyScanCaches` — the
+// former linear walk over `func.blockRefs` ran per phi-edge query and was a
+// dominant insert-refcounts cost on large functions.
 function findBlockById(ctx RcContext, blockId BlockId) returns IrBlock
-	for blockRef in ctx.func.blockRefs 'each'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("findBlockById: blockRef not in module.blocks")
-		if block.id == blockId 'found'
-			return block
-		end 'found'
-	end 'each'
-	panic("findBlockById: no block with id {blockId} in func '{ctx.func.name}'")
+	let raw = try ctx.blockRefIndex.get(blockId) otherwise 0
+	if raw == 0 'absent'
+		panic("findBlockById: no block with id {blockId} in func '{ctx.func.name}'")
+	end 'absent'
+	return try ctx.module.blocks.get(raw - 1) otherwise panic("findBlockById: indexed blockRef not in module.blocks")
 end 'findBlockById'
 
 function tryFindBlockById(ctx RcContext, blockId BlockId) returns EdgeBlockLookup
-	for blockRef in ctx.func.blockRefs 'each'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("tryFindBlockById: blockRef not in module.blocks")
-		if block.id == blockId 'found'
-			return EdgeBlockLookup.some(blockId)
-		end 'found'
-	end 'each'
-	return EdgeBlockLookup.none()
+	let raw = try ctx.blockRefIndex.get(blockId) otherwise 0
+	if raw == 0 'absent'
+		return EdgeBlockLookup.none()
+	end 'absent'
+	return EdgeBlockLookup.some(blockId)
 end 'tryFindBlockById'
