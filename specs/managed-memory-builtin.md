@@ -19,16 +19,19 @@ does not register the `__ManagedMemory.*` method signatures.
 ## Tests
 
 <!-- test: create-and-length -->
-`__ManagedMemory.create(4, elementSize: 8)` allocates a struct with capacity 4
-and length 0. We verify both fields read back through the `length()` and
-`capacity()` getters (which lower to inline `loadIndirect` ops).
+`__ManagedMemory.create(4, elementSize: 8)` allocates a struct with capacity at
+least 4 and length 0. We verify both fields read back through the `length()` and
+`capacity()` getters (which lower to inline `loadIndirect` ops). Small requests
+now hold their elements inline in the record's own slab slot and report ALL the
+size-class slack as spare capacity, so `capacity()` may exceed the requested
+count — the invariant is `capacity >= requested`, not exact equality.
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	if mm.length() != 0 'badLen'
 		return 2
 	end 'badLen'
-	if mm.capacity() != 4 'badCap'
+	if mm.capacity() < 4 'badCap'
 		return 3
 	end 'badCap'
 	return 0
@@ -69,8 +72,9 @@ end 'main'
 ```
 
 <!-- test: setlength-then-get -->
-`create(8) + setLength(3)` makes length 3 while capacity stays 8. After three
-sets, length and capacity are independently observable.
+`create(8) + setLength(3)` makes length 3 while capacity stays at least 8 (the
+small-array inline path may report more than the requested count as spare
+capacity). After three sets, length and capacity are independently observable.
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
@@ -81,7 +85,7 @@ function main() returns ExitCode
 	if mm.length() != 3 'badLen'
 		return 4
 	end 'badLen'
-	if mm.capacity() != 8 'badCap'
+	if mm.capacity() < 8 'badCap'
 		return 5
 	end 'badCap'
 	let v = try mm.get(2) otherwise return 6
@@ -230,7 +234,8 @@ end 'main'
 
 <!-- test: clear -->
 `clear()` sets length to 0 without touching capacity. After clear, `length()`
-must read 0 and `capacity()` must still report the original allocated count.
+must read 0 and `capacity()` must still report the original allocated capacity
+(at least the requested count — the inline path reports the full size-class slack).
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
@@ -242,7 +247,7 @@ function main() returns ExitCode
 	if mm.length() != 0 'badLen'
 		return 4
 	end 'badLen'
-	if mm.capacity() != 4 'badCap'
+	if mm.capacity() < 4 'badCap'
 		return 5
 	end 'badCap'
 	return 0

@@ -423,13 +423,27 @@ function __slab_current_p_id() returns MachineWord
 	return -1
 end '__slab_current_p_id'
 
+// Number of size classes in the `__slab_class_size` table (8/16/24/32/48/64/96/
+// 128/192/256/384/512/1024/2048/4096/8192/16384/32768). Every class scan iterates
+// exactly this many entries.
+let SLAB_NUM_SIZE_CLASSES = 18
+
+// Largest request served from a size class (the last class, index 17). Anything
+// bigger routes to the OS-direct path (`__slab_os_direct_alloc`).
+let SLAB_MAX_SMALL_ALLOC = 32768
+
+// OS page granularity the OS-direct path aligns allocations up to (8KB), shared by
+// `__slab_os_direct_alloc` and `__slab_rounded_size`. (The arena-map index math
+// uses its own 13-bit page masks, kept as literals there — a distinct concern.)
+let SLAB_PAGE_SIZE = 8192
+
 // Number of mcache shard rows (one per possible P). The mcache base is sized
 // SLAB_MAX_SHARDS × SLAB_NUM_SIZE_CLASSES × 8 bytes (see the `__slab_mcache_base`
 // data-section entry).
 let SLAB_MAX_SHARDS = 256
 
-// Bytes between consecutive mcache rows: one 8-byte span* slot per size class.
-// Must stay lock-step with the size-class count baked into the mcache base size.
+// Bytes between consecutive mcache rows: one 8-byte span* slot per size class
+// (SLAB_NUM_SIZE_CLASSES × 8). Must stay lock-step with the size-class count.
 let SLAB_MCACHE_ROW_STRIDE = 144
 
 // Sentinel stamped into an mspan's owning_p (+0x40) while the span is parked in
@@ -879,8 +893,8 @@ end '__slab_os_direct_free'
 // 8KB chunk holding 512 (ptr, size) entries, lazy-allocated on first call.
 // Exits with sentinel 134 if the array is full.
 function __slab_os_direct_alloc(size MachineWord) returns MachineWord
-	// Align up to 8KB.
-	let aligned = (size + 8191) and -8192
+	// Align up to a page (SLAB_PAGE_SIZE).
+	let aligned = (size + (SLAB_PAGE_SIZE - 1)) and -SLAB_PAGE_SIZE
 	let ptr = __slab_assert_os_alloc(__Internals.osAllocPages(aligned))
 
 	// Lazy-allocate the OS-direct array on first call.
@@ -907,47 +921,70 @@ function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	return ptr
 end '__slab_os_direct_alloc'
 
-// Public allocator entry point. Routes >32768 to the OS-direct path (under
-// __slab_lock, mutating the shared OS-direct array); otherwise scans the
-// 18-class size table for the smallest class >= size and serves it from the
-// calling P's own mcache row (lockless fast path; refill takes __slab_lock).
+// Smallest size-class index whose class size can hold `size` bytes. Single source
+// of truth for the class scan shared by `__slab_alloc` (which then serves the slot)
+// and `__slab_rounded_size` (which reports the rounded byte size). Caller must have
+// already routed `size > SLAB_MAX_SMALL_ALLOC` to the OS-direct path — anything that
+// reaches here fits the last class, so a fall-through is an invariant violation.
+function __slab_class_index_for(size MachineWord) returns MachineWord
+	var classIdx = 0
+	for _ in 0 upto SLAB_NUM_SIZE_CLASSES 'classLoop'
+		if __slab_class_size(classIdx) >= size 'fits'
+			return classIdx
+		end 'fits'
+		classIdx = classIdx + 1
+	end 'classLoop'
+	// Unreachable (size <= SLAB_MAX_SMALL_ALLOC fits in the last class).
+	__Internals.osExit(136)
+	return 0
+end '__slab_class_index_for'
+
+// Public allocator entry point. Routes >SLAB_MAX_SMALL_ALLOC to the OS-direct path
+// (under __slab_lock, mutating the shared OS-direct array); otherwise finds the
+// smallest class >= size and serves it from the calling P's own mcache row
+// (lockless fast path; refill takes __slab_lock).
 function __slab_alloc(size MachineWord) returns MachineWord
-	if size > 32768 'osPath'
+	if size > SLAB_MAX_SMALL_ALLOC 'osPath'
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
 		let osPtr = __slab_os_direct_alloc(size)
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 		return osPtr
 	end 'osPath'
-	var classIdx = 0
-	for _ in 0 upto 18 'classLoop'
-		let classSize = __slab_class_size(classIdx)
-		if classSize >= size 'fits'
-			// A raw OS thread (id < 0) reaches the shared raw mcache shard. Two cases:
-			//   (a) PRE-SCHEDULER main (no `async` yet → `__slab_proc_at(0) == 0`): the
-			//       lone thread, so its pop is single-writer — lockless, no overhead on
-			//       ordinary non-async programs.
-			//   (b) a genuine raw thread WHILE a scheduler runs (subprocess sync worker
-			//       / IOCP poller — main is then P[0], id 0): it shares the raw shard
-			//       with the OTHER raw threads, so the pop is NOT single-writer.
-			//       Serialize the whole class-alloc under __slab_lock; the inner refill
-			//       re-acquires it, which is safe because __slab_lock is a recursive
-			//       Windows CRITICAL_SECTION. `__gt_init` runs on main before any worker
-			//       exists, so no raw thread ever takes the unlocked (a) path.
-			// Real Ps (id >= 0) always keep the lockless fast path — each owns its shard.
-			if __slab_current_p_id() < 0 and __slab_proc_at(0) != 0 'rawThreadLocked'
-				__Internals.osLockAcquire(__Internals.slabLockAddr())
-				let rawSlot = __slab_alloc_class(classIdx)
-				__Internals.osLockRelease(__Internals.slabLockAddr())
-				return rawSlot
-			end 'rawThreadLocked'
-			return __slab_alloc_class(classIdx)
-		end 'fits'
-		classIdx = classIdx + 1
-	end 'classLoop'
-	// Unreachable (size <= 32768 fits in class 17).
-	__Internals.osExit(136)
-	return 0
+	let classIdx = __slab_class_index_for(size)
+	// A raw OS thread (id < 0) reaches the shared raw mcache shard. Two cases:
+	//   (a) PRE-SCHEDULER main (no `async` yet → `__slab_proc_at(0) == 0`): the
+	//       lone thread, so its pop is single-writer — lockless, no overhead on
+	//       ordinary non-async programs.
+	//   (b) a genuine raw thread WHILE a scheduler runs (subprocess sync worker
+	//       / IOCP poller — main is then P[0], id 0): it shares the raw shard
+	//       with the OTHER raw threads, so the pop is NOT single-writer.
+	//       Serialize the whole class-alloc under __slab_lock; the inner refill
+	//       re-acquires it, which is safe because __slab_lock is a recursive
+	//       Windows CRITICAL_SECTION. `__gt_init` runs on main before any worker
+	//       exists, so no raw thread ever takes the unlocked (a) path.
+	// Real Ps (id >= 0) always keep the lockless fast path — each owns its shard.
+	if __slab_current_p_id() < 0 and __slab_proc_at(0) != 0 'rawThreadLocked'
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		let rawSlot = __slab_alloc_class(classIdx)
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+		return rawSlot
+	end 'rawThreadLocked'
+	return __slab_alloc_class(classIdx)
 end '__slab_alloc'
+
+// Report the actual number of bytes `__slab_alloc(size)` would hand back — i.e.
+// the size class it rounds `size` up to. `__slab_alloc` rounds every request to a
+// class but discards the rounded size; the inline-small-array path needs it to
+// reclaim the class slack as spare element capacity. Mirrors the two routing arms
+// of `__slab_alloc` exactly: >SLAB_MAX_SMALL_ALLOC rounds up to a page (the
+// OS-direct alignment in `__slab_os_direct_alloc`), otherwise the smallest class
+// >= size. Pure sizing — no allocation, no locking.
+function __slab_rounded_size(size MachineWord) returns MachineWord
+	if size > SLAB_MAX_SMALL_ALLOC 'osPath'
+		return (size + (SLAB_PAGE_SIZE - 1)) and -SLAB_PAGE_SIZE
+	end 'osPath'
+	return __slab_class_size(__slab_class_index_for(size))
+end '__slab_rounded_size'
 
 // Public free entry point. Recovers the owning mspan via __slab_arena_map_get
 // (a lockless read of the immutable map). Routing:
@@ -1128,6 +1165,25 @@ let MM_PARENT_ROOT = -1
 let MM_PARENT_RDATA = -2
 let MM_PARENT_UNINIT = 0
 
+// Small-array inline-storage sentinel + budget. When an array's element bytes fit
+// within MM_INLINE_CAP_BYTES, `__managed_mem_create_managed` holds the elements
+// INLINE right after the record fields in the SAME allocation (buffer@0 points into
+// the record's own slab slot) instead of taking a second heap allocation. Such a
+// record is marked by parent_ptr == MM_PARENT_INLINE (-3): a NON-pointer sentinel
+// (like ROOT/RDATA) so the slice-parent decref never treats it as a heap pointer,
+// and NOT a capacity sentinel (capacity stays >= 0 so bounds checks and the COW
+// no-copy fast path keep working). The inline bytes are reclaimed when `__mm_free`
+// frees the record's own slot — there is no separate buffer to decref. The first
+// grow past the inline capacity detaches to a normal external buffer via
+// `__managed_mem_cow_check`, after which the record is an ordinary ROOT array.
+let MM_PARENT_INLINE = -3
+let MM_INLINE_CAP_BYTES = 64
+
+// Bytes of mm header `__mm_alloc` prepends to every user region (`user_ptr =
+// slot_base + MM_ALLOC_HEADER_SIZE`; see `__mm_alloc`). The inline path uses it to
+// map a requested user-region byte size onto the class the slab will actually serve.
+let MM_ALLOC_HEADER_SIZE = 32
+
 // Runtime-readable fields of the per-instantiation layout descriptor blob.
 // ABI source of truth is `maxon-selfhosted/Compiler/IR/LayoutDescriptor.maxon`
 // (56-byte rdata image: size@0, alignment@8, elementSize@16, flags@24,
@@ -1172,7 +1228,9 @@ end '__managed_mem_alloc_buffer'
 // Destructor invoked indirectly by mm_free via the destructor function
 // pointer baked into the mm_alloc header. Inspects `parent_ptr` (offset 32)
 // to decide what to free:
-//   parent == -1: root MM — drop our refcount on the buffer
+//   parent == -1: root MM — drop our refcount on the (external) buffer
+//   parent == -3: inline MM — buffer lives in this record's own slab slot,
+//                 nothing to decref (element-walk still runs for managed elements)
 //   parent == -2: rdata-backed — buffer lives in .rdata, nothing to free
 //   parent == 0:  uninitialized — nothing to free
 //   otherwise:    slice view — drop one ref on the parent MM
@@ -1183,23 +1241,30 @@ end '__managed_mem_alloc_buffer'
 // returned 0 is silently discarded.
 function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 	let parent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
-	if parent == MM_PARENT_ROOT 'root'
+	if parent == MM_PARENT_ROOT or parent == MM_PARENT_INLINE 'ownedWalk'
 		// Container element-walk teardown. element_destroy@40 holds the
 		// per-element teardown function pointer (or 0 for raw/unmanaged-element
 		// buffers). For managed-pointer elements it is &__mm_decref: each live
 		// slot in [0, length) carries exactly +1 (push moved the caller's ref in
 		// without an incref), so decref-ing the slot value once nets to zero and
-		// cascades into the element's own destructor. Walk ONLY in the ROOT
-		// branch — slice/rdata views alias a buffer they do not own and walking
-		// them would double-free. The element_destroy==0 gate keeps raw/byte/
-		// primitive buffers from being walked (decref-ing a raw int would fault).
+		// cascades into the element's own destructor. Walk for records that OWN
+		// their buffer — a ROOT with an external buffer OR an INLINE record whose
+		// buffer lives in its own slab slot — but never for slice/rdata views,
+		// which alias a buffer they do not own (walking them would double-free).
+		// The element_destroy==0 gate keeps raw/byte/primitive buffers from being
+		// walked (decref-ing a raw int would fault).
 		__managed_mem_walk_elements(self)
-		let buffer = __Internals.loadIndirect(self)
-		if buffer != 0 'hasBuf'
-			__mm_decref(buffer)
-		end 'hasBuf'
+		if parent == MM_PARENT_ROOT 'extBuf'
+			// ONLY external ROOT buffers are a separate allocation to decref. An
+			// INLINE record's buffer lives inside this record's own slab slot and is
+			// reclaimed when `__mm_free` frees that slot — there is nothing to decref.
+			let buffer = __Internals.loadIndirect(self)
+			if buffer != 0 'hasBuf'
+				__mm_decref(buffer)
+			end 'hasBuf'
+		end 'extBuf'
 		return 0
-	end 'root'
+	end 'ownedWalk'
 	if parent == MM_PARENT_RDATA 'rdata'
 		return 0
 	end 'rdata'
@@ -1580,16 +1645,25 @@ function __managed_mem_raw_set(self MachineWord, idx MachineWord, value MachineW
 	return 0
 end '__managed_mem_raw_set'
 
-// Buffer-level Copy-On-Write. If capacity >= 0 the buffer is already
-// mm_alloc-owned and writable — no-op. If capacity < 0 (rdata = -2 or
-// slice = -1) the buffer is shared / read-only; allocate a fresh
-// length*elemSize-byte buffer, memcpy, and rewire self.buffer + self.capacity.
-// The old rdata/slice buffer is intentionally NOT freed (rdata is in the
-// binary's read-only section; slice buffers are owned by their parent).
-// Non-throwing.
+// Buffer-level Copy-On-Write. If capacity >= 0 AND the record is not INLINE the
+// buffer is already mm_alloc-owned, writable, and independently reallocatable —
+// no-op. Otherwise (capacity < 0: rdata = -2 or slice = -1; OR parent == INLINE:
+// buffer lives inside the record's own slab slot and cannot be `mmRealloc`'d)
+// the buffer is shared / read-only / non-detachable; allocate a fresh
+// length*elemSize-byte EXTERNAL buffer, memcpy the live bytes out, and rewire
+// self.buffer + self.capacity so the record becomes an ordinary ROOT array. The
+// old rdata/slice/inline buffer is intentionally NOT freed (rdata is in the
+// binary's read-only section; slice buffers are owned by their parent; inline
+// bytes are reclaimed when the record's own slot is freed). Non-throwing.
 function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
-	if capacity >= 0 'noCopy'
+	let parent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+	// INLINE records have capacity >= 0 (real spare-slot count) but must still
+	// detach here: their buffer points into the record's own allocation, so
+	// `mmRealloc` (which grow calls right after cow_check) would be reallocating a
+	// pointer the slab does not track as an independent block. First grow copies
+	// the live bytes to a fresh external buffer and flips parent to ROOT.
+	if capacity >= 0 and parent != MM_PARENT_INLINE 'noCopy'
 		return 0
 	end 'noCopy'
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
@@ -1608,15 +1682,14 @@ function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	// Promote the record to ROOT now that it owns a private heap buffer.
 	// `__destruct___ManagedMemory` keys teardown on parent_ptr (NOT capacity), so
 	// without this the record kept its pre-COW parent — RDATA (-2: "nothing to
-	// free", so the new owned buffer leaked — the append/grow-from-literal leak) or
-	// a slice parent (whose ref we must now drop, since we no longer alias its
-	// buffer). Capture the old parent before overwriting, set ROOT, then release a
-	// real slice parent (a heap pointer, i.e. not one of the ROOT/RDATA/UNINIT
-	// sentinels).
-	let oldParent = __Internals.loadIndirect(self + MM_OFFSET_PARENT)
+	// free", so the new owned buffer leaked — the append/grow-from-literal leak),
+	// INLINE (-3: a non-pointer marker, never a heap ref to decref), or a slice
+	// parent (whose ref we must now drop, since we no longer alias its buffer). Set
+	// ROOT, then release ONLY a real slice parent (a heap pointer, i.e. not one of
+	// the ROOT/INLINE/RDATA/UNINIT sentinels). `parent` was read at entry.
 	__Internals.storeIndirect(self + MM_OFFSET_PARENT, value: MM_PARENT_ROOT)
-	if oldParent != MM_PARENT_ROOT and oldParent != MM_PARENT_RDATA and oldParent != MM_PARENT_UNINIT 'wasSlice'
-		__mm_decref(oldParent)
+	if parent != MM_PARENT_ROOT and parent != MM_PARENT_INLINE and parent != MM_PARENT_RDATA and parent != MM_PARENT_UNINIT 'wasSlice'
+		__mm_decref(parent)
 	end 'wasSlice'
 	return 0
 end '__managed_mem_cow_check'
@@ -1939,6 +2012,47 @@ end '__managed_mem_create'
 // passes 0 (via __managed_mem_create), leaving the walk disabled.
 function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, elementDestroy MachineWord) returns MachineWord
 	let destructor = __Internals.destructManagedMemoryAddr()
+
+	// Small-array inline-storage fast path. When the requested element bytes fit
+	// within MM_INLINE_CAP_BYTES, hold them INLINE right after the 48-byte record
+	// fields in the SAME slab slot instead of taking a second heap allocation:
+	// `buffer@0` points into the record's own allocation and parent_ptr is tagged
+	// MM_PARENT_INLINE (-3). The slab rounds the record+inline request up to a size
+	// class anyway, so we reclaim ALL the class slack as spare element capacity (a
+	// few pushes past `count` stay single-allocation at zero extra cost). Bit-packed
+	// bool records (elemSize == 0) are deferred to the two-alloc path — their
+	// capacity is measured in bits, so the byte→slot division below does not apply.
+	if elemSize > 0 and count > 0 and count * elemSize <= MM_INLINE_CAP_BYTES 'inline'
+		let wantBytes = MANAGED_MEM_RECORD_SIZE + count * elemSize
+		// Bytes __mm_alloc(wantBytes) actually hands back after slab class rounding
+		// (it calls __slab_alloc(wantBytes + MM_ALLOC_HEADER_SIZE) internally).
+		let slotUser = __slab_rounded_size(wantBytes + MM_ALLOC_HEADER_SIZE) - MM_ALLOC_HEADER_SIZE
+		let inlineBytes = slotUser - MANAGED_MEM_RECORD_SIZE
+		let cap = inlineBytes / elemSize
+		let rec = __mm_alloc(MANAGED_MEM_RECORD_SIZE + inlineBytes, destructor: destructor)
+		// alloc-at-0 → restore the rc=1 contract (identical to the external path below).
+		__mm_incref(rec)
+		let inlineBuf = rec + MANAGED_MEM_RECORD_SIZE
+		// Zero-fill the inline element region for the same reason
+		// `__managed_mem_alloc_buffer` zeroes external buffers: a reused slab slot
+		// holds the previous occupant's bytes, and a sparsely-filled managed-element
+		// record would have the ROOT/INLINE element-walk decref those stale bytes as
+		// live pointers → a fault. Zero-init makes unoccupied slots read null so the
+		// walk's `if slot != 0` guard skips them.
+		var z = 0
+		while z < inlineBytes 'zero'
+			__Internals.storeByte(inlineBuf, offset: z, value: 0)
+			z = z + 1
+		end 'zero'
+		__Internals.storeIndirect(rec, value: inlineBuf)
+		__Internals.storeIndirect(rec + MM_OFFSET_LENGTH, value: 0)
+		__Internals.storeIndirect(rec + MM_OFFSET_CAPACITY, value: cap)
+		__Internals.storeIndirect(rec + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
+		__Internals.storeIndirect(rec + MM_OFFSET_PARENT, value: MM_PARENT_INLINE)
+		__Internals.storeIndirect(rec + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
+		return rec
+	end 'inline'
+
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	// alloc-at-0 → restore the rc=1 contract callers assume. The new record is bound
 	// into an OWNING container (an array literal's `Array.init(record)` transparent

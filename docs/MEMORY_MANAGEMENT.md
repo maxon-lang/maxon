@@ -180,6 +180,29 @@ The `capacity` field encodes the buffer's ownership mode:
 
 The `parent_ptr` field is `0` for owned and rdata buffers. For slices, it holds the parent struct pointer to keep the parent alive while the slice references its data.
 
+### Self-hosted runtime: `parent_ptr` sentinels and small-array inline storage
+
+The self-hosted runtime (`stdlib/Internals.maxon`) keys teardown on the
+`parent_ptr` field (not `capacity`, which always holds the real slot count) via a
+small set of sentinels: `-1` root (owns an external buffer), `-2` rdata-backed,
+`-3` inline (see below), `0` uninitialized, and any other value a live slice
+parent pointer.
+
+As a single-allocation optimization, a small array or string whose element bytes
+fit within `MM_INLINE_CAP_BYTES` (64) holds its elements **inline** in the same
+slab slot as the 48-byte record, right after the record fields — `buffer@0` points
+into the record's own allocation. The slab rounds the record+inline request up to
+a size class, so **all** of that class's slack is reclaimed as spare element
+capacity (a few pushes past the requested count stay single-allocation at zero
+extra cost). Such a record is tagged `parent_ptr == -3`; its destructor still runs
+the managed-element walk but skips the buffer decref (the inline bytes are freed
+with the record's own slot). The first grow past the inline capacity detaches to a
+normal external buffer via copy-on-write, after which the record is an ordinary
+root array. This halves the allocation count for small arrays (previously one
+allocation for the record plus a second for the element buffer). It is a
+self-hosted-only optimization; the C# bootstrap uses the capacity-keyed model
+described above.
+
 ## What Gets Heap-Allocated
 
 | Type | Heap-allocated? | Notes |
