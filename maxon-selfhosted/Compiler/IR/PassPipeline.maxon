@@ -248,6 +248,13 @@ export type PassPipeline
 			let name = passKindToString(pass)
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {name} ===")
 
+			// Announce the pass before dispatching so a run killed by an
+			// external timeout still names the pass it died inside — the
+			// completion line alone can't identify a pass that never finishes.
+			if passTimingsEnabled 'announce'
+				printError("[PASS] {name}...\n")
+			end 'announce'
+
 			let passStart = passTimerStart()
 			self.dispatch(pass)
 			recordPassSince(name, startMs: passStart)
@@ -974,11 +981,22 @@ export function passTimingsActive() returns bool
 	return passTimingsEnabled
 end 'passTimingsActive'
 
+// Any single timed span at or above this many milliseconds is streamed to
+// stderr the moment it completes (in addition to the end-of-run dump), so a
+// timeout-killed run still yields a profile of everything it reached.
+// Sub-threshold spans stay silent — 138 per-file parse samples would drown
+// the signal.
+let STREAM_SAMPLE_THRESHOLD_MS = 100
+
 function recordPassTime(passName String, elapsedMs PassMillis)
 	let prev = try passTimings.get(passName) otherwise 0 as PassMillis
 	passTimings.upsert(passName, value: prev + elapsedMs)
 	let prevCount = try passInvocations.get(passName) otherwise 0 as PassMillis
 	passInvocations.upsert(passName, value: prevCount + 1)
+
+	if elapsedMs >= STREAM_SAMPLE_THRESHOLD_MS 'stream'
+		printError("[PASS] {passName} +{elapsedMs}ms (total {prev + elapsedMs}ms)\n")
+	end 'stream'
 end 'recordPassTime'
 
 // Capture a wall-clock start point only when timings are active. Returns 0

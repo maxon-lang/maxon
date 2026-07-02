@@ -3196,6 +3196,7 @@ type MaxonToStdLowering
 		// where-clause constraints) — appended after the user/env slots
 		// so the Std-level paramCount and paramTypes both grow in lockstep
 		// with the synthetic ValueId reservations stamped below.
+		let lmsTransferStart = passTimerStart()
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = try self.maxonModule.functions.get(i) otherwise panic("invariant: i < functions.count() but get failed")
 			let needsLayout = functionIsGenericForLowering(self.project, func: func)
@@ -3289,6 +3290,7 @@ type MaxonToStdLowering
 			extendSlotsForInterfaceWitnesses(func)
 			self.stdModule.functions.push(func)
 		end 'transferFuncs'
+		recordPassSince("__lms-transferFuncs", startMs: lmsTransferStart)
 
 		// Walk each function's blocks and lower their ops. The walk reads
 		// `self.stdModule.functions` (not `maxonModule.functions`) so the
@@ -3296,7 +3298,18 @@ type MaxonToStdLowering
 		// (paramCount, hasImplicitLayoutParam, implicitWitnessConstraints) are
 		// the values consumed below — `funcIdRef` must start past the
 		// synthetic slots so SSA ids don't collide with them.
+		let lmsLowerStart = passTimerStart()
+		var lmsLoweredCount = 0
 		for srcFunc in self.stdModule.functions 'eachFunc'
+			// Progress heartbeat under --profile-passes: a flat per-1000 rate
+			// means the per-function cost is constant; a growing delta exposes
+			// superlinear behavior that end-of-pass totals would hide.
+			if passTimingsActive() 'lmsProgress'
+				lmsLoweredCount = lmsLoweredCount + 1
+				if lmsLoweredCount mod 1000 == 0 'lmsTick'
+					printError("[PASS] __lms-lowerFuncs {lmsLoweredCount} funcs at +{(Clock.nowMs()) - lmsLowerStart}ms\n")
+				end 'lmsTick'
+			end 'lmsProgress'
 			logTrace(LogCategory.ir, message: function() gives "lower-maxon-to-std: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
 			// Reset per-function state. SSA value IDs restart at paramCount in
@@ -3535,7 +3548,9 @@ type MaxonToStdLowering
 			// the body left unclassified (see auditUnclassifiedCallResults).
 			self.auditUnclassifiedCallResults(srcFunc)
 		end 'eachFunc'
+		recordPassSince("__lms-lowerFuncs", startMs: lmsLowerStart)
 
+		let lmsSynthStart = passTimerStart()
 		// Phase 11.3 follow-up: synthesize per-instance witness-method
 		// thunks. `BuildWitnessTables` recorded one entry on
 		// `project.witnessTables.gidEntries` per `(gid, interfaceName)` it
@@ -3583,6 +3598,7 @@ type MaxonToStdLowering
 		// wraps the target with the indirect-call ABI's trailing `__env`
 		// param so wasm's `call_indirect` sees a matching signature.
 		self.synthesizeFnRefThunks()
+		recordPassSince("__lms-synthesis", startMs: lmsSynthStart)
 
 		// Release the per-function `Scope` symbol tables. They are a
 		// front-end-only structure: the parser populates them and the passes
