@@ -1326,10 +1326,35 @@ export type ValueDefMap
 		end 'noDef'
 		return raw - 1
 	end 'get'
+
+	// Extend the slot table so ids up to `maxValueId` are addressable. Used by
+	// the inliner's incremental maintenance: each splice allocates fresh ids
+	// past the previous max, and the new slots start absent (0).
+	export function growTo(maxValueId ValueId)
+		while self.slots.count() <= maxValueId 'fill'
+			self.slots.push(0)
+		end 'fill'
+	end 'growTo'
+
+	// Drop `valueId`'s entry (back to absent). Used when the defining op is
+	// unlinked from its block (e.g. an inlined-away call) so the map matches
+	// what a fresh rebuild over the live ops would produce.
+	export function clear(valueId ValueId)
+		if valueId >= 0 and valueId < self.slots.count() 'inRange'
+			try self.slots.set(valueId, value: 0) otherwise panic("ValueDefMap.clear: OOB despite bound check")
+		end 'inRange'
+	end 'clear'
 end 'ValueDefMap'
 
-export function buildValueDefMap(module StdModule, func IrFunction) returns ValueDefMap
-	var defs = ValueDefMap.create(scanMaxValueId(func, module: module))
+function buildValueDefMap(module StdModule, func IrFunction) returns ValueDefMap
+	return buildValueDefMapSized(module, func: func, maxValueId: scanMaxValueId(func, module: module))
+end 'buildValueDefMap'
+
+// Sized variant for callers that already know the function's max ValueId —
+// the inliner computes it once per caller and must not pay a second full
+// scan just to size the map.
+export function buildValueDefMapSized(module StdModule, func IrFunction, maxValueId ValueId) returns ValueDefMap
+	var defs = ValueDefMap.create(maxValueId)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildValueDefMap: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
@@ -1341,4 +1366,4 @@ export function buildValueDefMap(module StdModule, func IrFunction) returns Valu
 		end 'eachOp'
 	end 'eachBlock'
 	return defs
-end 'buildValueDefMap'
+end 'buildValueDefMapSized'

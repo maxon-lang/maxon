@@ -163,6 +163,57 @@ end 'inlineOneRound'
 
 typealias StdFuncByNameForInliner = Map with (String, IrFunction)
 
+// Lazily-built per-caller-per-round analysis: the caller's max ValueId, its
+// value→defining-op index, and its per-block loop depths. Building these is
+// a full walk of the caller, so it happens only when a call site survives
+// `decideInline`'s cheap gates (most callers have no inlinable site at all),
+// and successful splices update the state incrementally instead of paying a
+// rebuild per splice — the former rebuild-per-splice (plus two more full
+// caller scans inside the splice itself) made the inliner's cost
+// splices × callerSize, the pass's dominant term on large modules.
+type CallerAnalysisState
+	export var ready as bool
+	export var maxId as ValueId
+	export var defs as ValueDefMap
+	export var loopDepth as RegIntArray
+
+	export static function create() returns CallerAnalysisState
+		return Self{ready: false, maxId: 0, defs: ValueDefMap.create(0), loopDepth: RegIntArray.create()}
+	end 'create'
+end 'CallerAnalysisState'
+
+// Populate `state` from the caller's current IR if it hasn't been built this
+// round. Runs before the first budget decision, so the first splice always
+// sees exactly what a from-scratch scan would.
+function ensureCallerAnalysis(module StdModule, caller IrFunction, state CallerAnalysisState)
+	if state.ready 'done'
+		return
+	end 'done'
+	state.maxId = scanMaxValueId(caller, module: module)
+	state.defs = buildValueDefMapSized(module, func: caller, maxValueId: state.maxId)
+	// Loop-depth for the budget multiplier (C2.c). The depth array stays
+	// valid for every original block even after splices append fresh blocks:
+	// new back-edges from inlined bodies can't extend a loop containing an
+	// original caller block (the splice only adds entry/continuation edges,
+	// no edge from a callee block back to an original block).
+	state.loopDepth = computeLoopDepth(caller, module: module)
+	state.ready = true
+end 'ensureCallerAnalysis'
+
+// Fold the ops a splice just appended to `module.ops` into the caller's
+// def-map. `module.ops` is append-only during inlining, so everything from
+// `opsBefore` to the current count belongs to this splice; terminators in
+// that range have no writeIds and fall through harmlessly.
+function absorbSplicedDefs(module StdModule, defs ValueDefMap, opsBefore OpIndex)
+	for idx in opsBefore upto module.ops.count() 'eachNew'
+		let op = try module.ops.get(idx) otherwise panic("absorbSplicedDefs: appended index {idx} not in module.ops")
+		let operands = extractStdOpOperands(op)
+		for writeId in operands.writeIds 'eachDef'
+			defs.set(writeId, opIdx: idx)
+		end 'eachDef'
+	end 'eachNew'
+end 'absorbSplicedDefs'
+
 function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet) returns RoundCounts
 	var splices = 0
 	var loopBonus = 0
@@ -173,39 +224,38 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 	// continuation block before its predecessors are stable). The next
 	// fixpoint round picks up any further inlining opportunities.
 	let blockSnapshot = caller.blockRefs.clone()
-	// Loop-depth for the budget multiplier (C2.c). Computed once per caller
-	// per round: the snapshot's block ids are all < the original
-	// caller.nextBlockId, so the depth array stays valid for every call site
-	// we visit even after splices append fresh blocks. New back-edges from
-	// inlined bodies can't extend a loop containing an original caller block
-	// (the splice only adds entry/continuation edges, no edge from a callee
-	// block back to an original block). Re-runs next fixpoint round.
-	let loopDepth = computeLoopDepth(caller, module: module)
-	// Caller-local value→defining-op index, consulted O(1) by the arg-shape
-	// budget heuristics instead of re-scanning the caller's entire op set per
-	// arg per call site (the old linear scans were the inliner's O(n²) cost).
-	// A successful splice mutates the caller (spliced body ops define fresh
-	// ids; result-substitution can repoint a later call's arg onto one of
-	// them), so the map is rebuilt after every splice to stay identical to
-	// what a live re-scan would observe — the heuristics' decisions are thus
-	// byte-for-byte preserved.
-	var defs = buildValueDefMap(module, func: caller)
+	var state = CallerAnalysisState.create()
 	for blockRef in blockSnapshot 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("processOneCaller: blockRef {blockRef} not in module")
-		let blockDepth = lookupLoopDepth(loopDepth, blockId: block.id)
 		// Walk a clone of opRefs — the splice rewrites the live list as it
 		// runs (one entry removed, the callee body's entries inserted in
 		// place), and the iteration must not observe its own mutations.
 		let snapshot = block.opRefs.clone()
 		for opIdx in snapshot 'eachOp'
-			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, loopDepth: blockDepth, defs: defs)
+			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, blockId: block.id, state: state)
 			if decision.inline 'wantInline'
-				if performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap) 'didInline'
+				// The splice unlinks the call op but leaves it in `module.ops`,
+				// so its result/error-flag ids can still be read for the
+				// def-map cleanup below.
+				let callShape = extractCallShape(module, opIdx: opIdx)
+				let opsBefore = module.ops.count()
+				let outcome = performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap, callerOrigMaxId: state.maxId)
+				if outcome.inlined 'didInline'
 					splices = splices + 1
 					if decision.loopBonus 'wasBonus'
 						loopBonus = loopBonus + 1
 					end 'wasBonus'
-					defs = buildValueDefMap(module, func: caller)
+					// Incremental maintenance replacing the former full
+					// rebuild: absorb the spliced body's defs, and drop the
+					// unlinked call's own result defs (result substitution
+					// already rewrote every reader onto the inlined ids).
+					state.maxId = outcome.nextFreshId - 1
+					state.defs.growTo(state.maxId)
+					absorbSplicedDefs(module, defs: state.defs, opsBefore: opsBefore)
+					state.defs.clear(callShape.resultId)
+					if callShape.errorFlagId != 0 'clearFlag'
+						state.defs.clear(callShape.errorFlagId)
+					end 'clearFlag'
 				end 'didInline'
 			end 'wantInline'
 		end 'eachOp'
@@ -231,12 +281,33 @@ type InlineDecision
 	end 'accept'
 end 'InlineDecision'
 
+// Result of a splice attempt. `nextFreshId` is the splice's fresh-ValueId
+// watermark (the first id it did NOT allocate) — `processOneCaller` folds it
+// into the caller's incrementally-maintained max id so no post-splice rescan
+// is needed. Meaningless when `inlined` is false.
+type InlineSpliceOutcome
+	export var inlined as bool
+	export var nextFreshId as ValueId
+
+	export static function failed() returns InlineSpliceOutcome
+		return Self{inlined: false, nextFreshId: 0}
+	end 'failed'
+
+	export static function spliced(nextFreshId ValueId) returns InlineSpliceOutcome
+		return Self{inlined: true, nextFreshId: nextFreshId}
+	end 'spliced'
+end 'InlineSpliceOutcome'
+
 // Decide whether to inline the callee at this call site. Returns skip() on
 // any of the disqualifying conditions in the priority-order list at the
 // top of this file. The `loopBonus` flag in accept() reports whether the
 // call site was inlined only because the loop-depth bonus pushed budget
 // past calleeOps — used for the inliner-debug telemetry counter.
-function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, loopDepth ParsedInt, defs ValueDefMap) returns InlineDecision
+//
+// The caller-wide analysis (`state`) is materialized here, on the first call
+// site that survives the cheap gates — callers with no viable site never pay
+// the full-function walks it requires.
+function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, blockId BlockId, state CallerAnalysisState) returns InlineDecision
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notInlinable'
 		return InlineDecision.skip()
@@ -288,8 +359,9 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	// of loop depth, so compute them once: `baseBudget` is the loop-depth-0
 	// budget and the depth-scaled budget is just `baseBudget × loopMult`. This
 	// avoids the former double evaluation of the three caller-scan heuristics.
-	let baseBudget = computeArgShapeBudget(module, project: project, callShape: callShape, funcMap: funcMap, defs: defs)
-	let budget = baseBudget * loopDepthMultiplier(loopDepth)
+	ensureCallerAnalysis(module, caller: caller, state: state)
+	let baseBudget = computeArgShapeBudget(module, project: project, callShape: callShape, funcMap: funcMap, defs: state.defs)
+	let budget = baseBudget * loopDepthMultiplier(lookupLoopDepth(state.loopDepth, blockId: blockId))
 	if calleeOps > budget 'overBudget'
 		return InlineDecision.skip()
 	end 'overBudget'
@@ -1186,14 +1258,14 @@ function calleeIsContainerTransferMethod(callee String) returns bool
 	return callee == "Array.remove" or callee == "Array.pop" or callee == "Vector.remove" or callee == "Vector.pop"
 end 'calleeIsContainerTransferMethod'
 
-function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner) returns bool
+function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner, callerOrigMaxId ValueId) returns InlineSpliceOutcome
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notStatic'
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'notStatic'
-	let callee = try funcMap.get(callShape.callee) otherwise return false
+	let callee = try funcMap.get(callShape.callee) otherwise return InlineSpliceOutcome.failed()
 	if callee.blockRefs.count() == 0 'noBlocks'
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'noBlocks'
 	if calleeIsContainerTransferMethod(callShape.callee) 'transferCallee'
 		// A container method that TRANSFERS a managed element OUT (`Array.remove`/`pop`)
@@ -1208,37 +1280,38 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		// use-after-free. Not-inlining is the surgical fix — borrow methods (`get`) keep
 		// inlining, since the inserter's `incomingOwner` acquire already handles a kept
 		// borrow correctly.
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'transferCallee'
 	if callee.blockRefs.count() > 1 'multi'
-		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape)
+		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape, callerOrigMaxId: callerOrigMaxId)
 	end 'multi'
 	let calleeBlockRef = try callee.blockRefs.get(0) otherwise panic("performInline: callee.blockRefs.get(0) failed after count==1")
 	let calleeBlock = try module.blocks.get(calleeBlockRef) otherwise panic("performInline: blockRef {calleeBlockRef} not in module")
 	if not calleeBlock.hasTerminatorOp() 'noTerm'
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'noTerm'
 	let calleeRet = try module.ops.get(calleeBlock.terminatorIndex()) otherwise panic("performInline: callee terminator opIdx not in module.ops")
 	let retValId = retValueIdOrSentinel(calleeRet)
 	if retValId == REMAP_INVALID and not stdReturnTypeIsVoid(callee.returnType) 'badRet'
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'badRet'
 	if calleeBodyTouchesSlots(module, calleeBlock: calleeBlock) 'usesSlots'
 		// Slot ops would need slot-id remapping into the caller's frame —
 		// not yet implemented. Most accessors don't touch slots after
 		// mem2reg, so this gate is rarely hit.
-		return false
+		return InlineSpliceOutcome.failed()
 	end 'usesSlots'
 
-	// Phase 1: build the remap.
+	// Phase 1: build the remap. The caller's max ValueId arrives from the
+	// incrementally-maintained per-round state — rescanning the (large)
+	// caller here on every splice was a dominant inliner cost.
 	let calleeMaxId = scanMaxValueId(callee, module: module)
-	let callerOrigMaxId = scanMaxValueId(caller, module: module)
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
 	bindParamRemap(module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
-	_ = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: callerOrigMaxId + 1)
+	let nextFreshId = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: callerOrigMaxId + 1)
 	// Refcount-insertion: thread the callee's per-ValueId ownership classification
 	// onto the fresh caller body ids so the post-inline SSA inserter refcounts the
 	// inlined allocations/loads (an unthreaded id lands `notManaged` → leak).
@@ -1247,7 +1320,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	// Phase 2: replace the call op in caller's block.opRefs with the
 	// rewritten body. Find the call's position first; insert is at the
 	// same position so the splice is visually "in place".
-	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return false
+	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return InlineSpliceOutcome.failed()
 	let removedIdx = try block.opRefs.remove(posInBlock) otherwise panic("performInline: remove at {posInBlock} failed")
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
@@ -1284,10 +1357,12 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	// plain `call` (the lowerings keep these in lockstep).
 	if isTryCallSite 'tryCallSite'
 		if not isErrorReturnOpStd(calleeRet) 'wrongTerm'
-			// Defensive — the spliceability gate should already have rejected
-			// a `ret`-terminated callee for a tryCall site if the lowerings
-			// ever drift apart. Bail rather than mis-bind the flag.
-			return false
+			// The spliceability gate rejects `ret`-terminated callees for
+			// tryCall sites. Reaching here means the gate and the lowerings
+			// drifted apart AND the body was already spliced in — there is no
+			// clean bail-out (the caller's error-flag reads would dangle), so
+			// fail loudly instead of emitting silently broken IR.
+			panic("performInline: tryCall site spliced a ret-terminated callee '{callShape.callee}' — spliceability gate drifted")
 		end 'wrongTerm'
 		let calleeErrorFlagId = errorFlagIdOrSentinel(calleeRet)
 		if calleeErrorFlagId == REMAP_INVALID 'noFlag'
@@ -1303,7 +1378,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	invalidateCachedHash(project, callerName: caller.name)
 	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id})")
-	return true
+	return InlineSpliceOutcome.spliced(nextFreshId)
 end 'performInline'
 
 // C2.b multi-block splice. The callee owns N blocks; we duplicate every
@@ -1319,8 +1394,8 @@ end 'performInline'
 // invariants the rest of the pipeline assumes). BlockIds are allocated
 // from `caller.nextBlockId`; the caller's `nextBlockId` is bumped by
 // (calleeBlocks + 1) — one slot per cloned block plus the continuation.
-function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape) returns bool
-	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return false
+function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape, callerOrigMaxId ValueId) returns InlineSpliceOutcome
+	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return InlineSpliceOutcome.failed()
 
 	// Phase 1: allocate fresh BlockIds for every callee block plus the
 	// continuation. Build callee-blockId → caller-blockId remap.
@@ -1344,8 +1419,10 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// site exposes — primary return register (when the callee is non-void
 	// or when the call site is a tryCall), and an error-flag register
 	// (when the call site is a tryCall).
+	// The caller's max ValueId arrives from the incrementally-maintained
+	// per-round state — rescanning the (large) caller here on every splice
+	// was a dominant inliner cost.
 	let calleeMaxId = scanMaxValueId(callee, module: module)
-	let callerOrigMaxId = scanMaxValueId(caller, module: module)
 	var nextId = callerOrigMaxId + 1
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
@@ -1436,7 +1513,7 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	invalidateCachedHash(project, callerName: caller.name)
 	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced multi-block @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id}, +{callee.blockRefs.count()} block(s))")
-	return true
+	return InlineSpliceOutcome.spliced(nextId)
 end 'performMultiBlockInline'
 
 // Like `stdReturnTypeInner`, but returns i64 for void-returning callees
