@@ -251,6 +251,16 @@ public partial class RuntimeEmitter {
     _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0);
 
     _b.DefineLabel(gotPages);
+    // Both the large-page and regular-page paths return NULL on failure. Every
+    // caller (__slab_arena_alloc_chunks, __slab_mspan_alloc, the os-direct
+    // paths) stores through this pointer unchecked, so a NULL here would fault
+    // as an opaque [NULL] access violation deep in an unrelated frame. Convert
+    // it to a clean, unconditional "out of memory" panic here at the source.
+    var allocOk = UniqueLabel("os_alloc_ok");
+    _b.JumpIfNonZero(VReg.Scratch1, allocOk);
+    _b.LeaSymdata(VReg.Arg0, "__slab_panic_oom");
+    _b.Call("mrt_panic");
+    _b.DefineLabel(allocOk);
     _b.StoreLocal(1, VReg.Scratch1); // save ptr
     if (mmTrace) {
       _b.LoadLocal(VReg.Scratch0, 0); // size

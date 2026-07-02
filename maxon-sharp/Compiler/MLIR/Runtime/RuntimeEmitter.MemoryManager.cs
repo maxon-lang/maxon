@@ -136,6 +136,12 @@ public partial class RuntimeEmitter {
       "__ManagedDirectory.filename: _block is null (called on closed iterator)\n\0"u8.ToArray());
     _b.DefineSymdata("__slab_panic_sentinel_owning_p",
       "__slab_free: cross-P free hit owning_p sentinel; span already returned to mcentral (Mimalloc invariant violation)\n\0"u8.ToArray());
+    // Unconditional (NOT mmDebug-gated): a NULL from VirtualAlloc/mmap must fault
+    // cleanly as "out of memory" instead of a downstream nil-store to [NULL]
+    // (an opaque addr=0x0 access violation). Every __slab_os_alloc caller
+    // dereferences its result, so the check belongs in the allocator itself.
+    _b.DefineSymdata("__slab_panic_oom",
+      "out of memory: VirtualAlloc/mmap returned NULL (committed memory exhausted)\n\0"u8.ToArray());
 
     if (mmDebug) {
       _b.DefineSymdata("__mm_panic_canary",
