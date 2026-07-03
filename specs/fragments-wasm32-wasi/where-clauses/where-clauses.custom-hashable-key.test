@@ -56,31 +56,21 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %25 = mir.mov_imm 48 : i64
-    %26 = mir.func_addr @__destruct_Map
-    %27 = mir.call @stdlib.__mm_alloc(%25, %26)
-    %36 = mir.mov_imm 8 : i64
-    %37 = mir.sub.i64 %27, %36
-    mir.atomic_inc %37
-    %29 = mir.mov_imm 0 : i64
-    mir.store %29, %27, 0 width: qword
-    %30 = mir.mov_imm 0 : i64
-    mir.store %30, %27, 8 width: qword
-    %31 = mir.mov_imm 0 : i64
-    mir.store %31, %27, 16 width: qword
-    %32 = mir.mov_imm 0 : i64
-    mir.store %32, %27, 24 width: qword
+    %1 = mir.global_addr @__layout_Map_MyKey_Integer
+    %2 = mir.global_addr @__witness_MyKey_Hashable
+    %3 = mir.global_addr @__witness_MyKey_Equatable
+    %4 = mir.call @Map.create(%1, %2, %3)
     %6 = mir.mov_imm 1 : i64
-    %33 = mir.mov_imm 8 : i64
-    %34 = mir.mov_imm 0 : i64
-    %35 = mir.call @stdlib.__mm_alloc(%33, %34)
-    %38 = mir.call @stdlib.__mm_incref(%35)
-    mir.store %6, %35, 0 width: qword
+    %25 = mir.mov_imm 8 : i64
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.call @stdlib.__mm_alloc(%25, %26)
+    %28 = mir.call @stdlib.__mm_incref(%27)
+    mir.store %6, %27, 0 width: qword
     %8 = mir.mov_imm 42 : i64
     %9 = mir.global_addr @__layout_Map_MyKey_Integer
     %10 = mir.global_addr @__witness_MyKey_Hashable
     %11 = mir.global_addr @__witness_MyKey_Equatable
-    %12, %13 = mir.try_call @Map.insert(%27, %35, %8, %9, %10, %11)
+    %12, %13 = mir.try_call @Map.insert(%4, %27, %8, %9, %10, %11)
     %14 = mir.mov_imm 0 : i64
     %15 = mir.cmp ne, %13, %14
     mir.cond_br %15 [then: try_0.otherwise(), else: __rc_edge_0_0()]
@@ -88,21 +78,21 @@ module {
     %17 = mir.mov_imm 0 : i64
     mir.br try_0.merge(%17)
   try_0.merge(%24: i64):
-    %40 = mir.call @__mm_decref_maybenull_helper(%24)
+    %30 = mir.call @__mm_decref_maybenull_helper(%24)
     %20 = mir.global_addr @__layout_Map_MyKey_Integer
     %21 = mir.global_addr @__witness_MyKey_Hashable
     %22 = mir.global_addr @__witness_MyKey_Equatable
-    %23 = mir.call @Map.count(%27, %20, %21, %22)
-    %39 = mir.call @__mm_decref_maybenull_helper(%27)
-    %42 = mir.mov_imm 125 : i64
-    %43 = mir.cmp ugt, %23, %42
-    mir.cond_br %43 [then: __range_panic_0(), else: __range_ok_0()]
+    %23 = mir.call @Map.count(%4, %20, %21, %22)
+    %29 = mir.call @__mm_decref_maybenull_helper(%4)
+    %32 = mir.mov_imm 125 : i64
+    %33 = mir.cmp ugt, %23, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
   __rc_edge_0_0:
-    %41 = mir.call @stdlib.__mm_incref(%27)
-    mir.br try_0.merge(%27)
+    %31 = mir.call @stdlib.__mm_incref(%4)
+    mir.br try_0.merge(%4)
   __range_panic_0:
-    %44 = mir.global_addr @__panic_msg_4130f817a21c4614
-    %45 = mir.call @mrt_panic(%44)
+    %34 = mir.global_addr @__panic_msg_4130f817a21c4614
+    %35 = mir.call @mrt_panic(%34)
   __range_ok_0:
     mir.ret %23
   }

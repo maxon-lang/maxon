@@ -1312,6 +1312,20 @@ function buildAndWriteLibraryCache(project Project, allModule MaxonModule, metaP
 	// so lowerMaxonToStd can look up named types successfully.
 	// Skip semanticCheck — it requires main() which stdlib doesn't have
 	pipeline.addPass(PassKind.resolveTypes)
+	// Splice `__field_init_<field>` calls for every defaulted field a stdlib
+	// `Self{...}` literal omits, exactly as the user pipeline does. Without
+	// this, a stdlib container's `Self{}` (e.g. `Map.create`'s empty literal)
+	// only gets its managed fields NULL-initialized by `lowerStructAlloc`'s
+	// `synthesizeManagedFieldInits`; scalar-default fields like `count`/`capacity`
+	// are left holding whatever bytes `mrt_alloc_with_dtor` (which does NOT
+	// zero-fill) hands back. A reused slab slot then leaves `capacity` non-zero,
+	// so `Map.findSlot` skips its `capacity == 0` early-out and dereferences the
+	// still-NULL `states` array, faulting. `MaxonFieldInitCheck` self-gates on
+	// `isStdlib` (splices the inits but skips E3086 + the static-factory
+	// rewrite), so running it here is safe. Must run after resolveTypes (needs
+	// resolved field lists) and before lowerMaxonToStd (which consumes the
+	// spliced fieldStore ops).
+	pipeline.addPass(PassKind.fieldInitCheck)
 	// Phase 11.2 / 11.3: emit layout descriptors and witness tables for
 	// every interned generic instance / conformance the stdlib parse
 	// produced. lowerMaxonToStd's `materializeLayoutArg` reads

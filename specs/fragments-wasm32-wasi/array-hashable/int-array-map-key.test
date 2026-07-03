@@ -27,20 +27,10 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %62 = mir.mov_imm 48 : i64
-    %63 = mir.func_addr @__destruct_Map
-    %64 = mir.call @stdlib.__mm_alloc(%62, %63)
-    %70 = mir.mov_imm 8 : i64
-    %71 = mir.sub.i64 %64, %70
-    mir.atomic_inc %71
-    %66 = mir.mov_imm 0 : i64
-    mir.store %66, %64, 0 width: qword
-    %67 = mir.mov_imm 0 : i64
-    mir.store %67, %64, 8 width: qword
-    %68 = mir.mov_imm 0 : i64
-    mir.store %68, %64, 16 width: qword
-    %69 = mir.mov_imm 0 : i64
-    mir.store %69, %64, 24 width: qword
+    %3 = mir.global_addr @__layout_Map_IntArr_Val
+    %4 = mir.global_addr @__witness_Array_with_Val_Hashable
+    %5 = mir.global_addr @__witness_Array_with_Val_Equatable
+    %6 = mir.call @Map.create(%3, %4, %5)
     %7 = mir.global_addr @__layout_Array_Val
     %8 = mir.call @Array.create(%7)
     %10 = mir.mov_imm 1 : i64
@@ -56,13 +46,13 @@ module {
     %24 = mir.global_addr @__layout_Map_IntArr_Val
     %25 = mir.global_addr @__witness_Array_with_Val_Hashable
     %26 = mir.global_addr @__witness_Array_with_Val_Equatable
-    %27, %28 = mir.try_call @Map.insert(%64, %8, %23, %24, %25, %26)
+    %27, %28 = mir.try_call @Map.insert(%6, %8, %23, %24, %25, %26)
     %30 = mir.cmp ne, %28, %0
     mir.cond_br %30 [then: try_0.merge(%0), else: try_0.ok()]
   try_0.ok:
     mir.br __rc_edge_2_0()
   try_0.merge(%61: i64):
-    %73 = mir.call @__mm_decref_maybenull_helper(%61)
+    %63 = mir.call @__mm_decref_maybenull_helper(%61)
     %34 = mir.global_addr @__layout_Array_Val
     %35 = mir.call @Array.create(%34)
     %37 = mir.mov_imm 1 : i64
@@ -77,23 +67,23 @@ module {
     %50 = mir.global_addr @__layout_Map_IntArr_Val
     %51 = mir.global_addr @__witness_Array_with_Val_Hashable
     %52 = mir.global_addr @__witness_Array_with_Val_Equatable
-    %53, %54 = mir.try_call @Map.get(%64, %35, %50, %51, %52)
+    %53, %54 = mir.try_call @Map.get(%6, %35, %50, %51, %52)
     %56 = mir.cmp ne, %54, %0
     mir.cond_br %56 [then: try_1.otherwise(), else: try_1.merge()]
   try_1.otherwise:
-    %74 = mir.call @__mm_decref_maybenull_helper(%64)
+    %64 = mir.call @__mm_decref_maybenull_helper(%6)
     mir.ret %0
   try_1.merge:
-    %72 = mir.call @__mm_decref_maybenull_helper(%64)
-    %76 = mir.mov_imm 125 : i64
-    %77 = mir.cmp ugt, %53, %76
-    mir.cond_br %77 [then: __range_panic_0(), else: __range_ok_0()]
+    %62 = mir.call @__mm_decref_maybenull_helper(%6)
+    %66 = mir.mov_imm 125 : i64
+    %67 = mir.cmp ugt, %53, %66
+    mir.cond_br %67 [then: __range_panic_0(), else: __range_ok_0()]
   __rc_edge_2_0:
-    %75 = mir.call @stdlib.__mm_incref(%64)
-    mir.br try_0.merge(%64)
+    %65 = mir.call @stdlib.__mm_incref(%6)
+    mir.br try_0.merge(%6)
   __range_panic_0:
-    %78 = mir.global_addr @__panic_msg_27a4449829454c01
-    %79 = mir.call @mrt_panic(%78)
+    %68 = mir.global_addr @__panic_msg_27a4449829454c01
+    %69 = mir.call @mrt_panic(%68)
   __range_ok_0:
     mir.ret %53
   }

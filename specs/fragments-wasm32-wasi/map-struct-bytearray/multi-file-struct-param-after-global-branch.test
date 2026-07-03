@@ -73,27 +73,17 @@ module {
   }
   func @api.__module_init_2() {
   entry:
-    %9 = mir.mov_imm 48 : i64
-    %10 = mir.func_addr @__destruct_Map
-    %11 = mir.call @stdlib.__mm_alloc(%9, %10)
-    %17 = mir.mov_imm 8 : i64
-    %18 = mir.sub.i64 %11, %17
-    mir.atomic_inc %18
-    %13 = mir.mov_imm 0 : i64
-    mir.store %13, %11, 0 width: qword
-    %14 = mir.mov_imm 0 : i64
-    mir.store %14, %11, 8 width: qword
-    %15 = mir.mov_imm 0 : i64
-    mir.store %15, %11, 16 width: qword
-    %16 = mir.mov_imm 0 : i64
-    mir.store %16, %11, 24 width: qword
+    %0 = mir.global_addr @__layout_Map_String_Entry
+    %1 = mir.global_addr @__witness_String_Hashable
+    %2 = mir.global_addr @__witness_String_Equatable
+    %3 = mir.call @Map.create(%0, %1, %2)
     %4 = mir.global_addr @__layout_Array_String
     %5 = mir.call @Array.create(%4)
-    %6 = mir.call @Database.create(%11, %5)
+    %6 = mir.call @Database.create(%3, %5)
     %7 = mir.global_addr @__data_db
-    %19 = mir.load %7, 0 width: qword
+    %9 = mir.load %7, 0 width: qword
     mir.store %6, %7, 0 width: qword
-    %20 = mir.call @__mm_decref_maybenull_helper(%19)
+    %10 = mir.call @__mm_decref_maybenull_helper(%9)
     mir.ret %8
   }
   func @app.storeAndCheck(local0: i64, local1: i64) {
