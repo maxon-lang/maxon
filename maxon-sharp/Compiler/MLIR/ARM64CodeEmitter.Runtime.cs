@@ -234,6 +234,11 @@ public partial class ARM64CodeEmitter {
       EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
       EmitAddSubImm(ARM64Register.X2, ARM64Register.Sp, 0x10, isAdd: true);
       EmitCallImport("pthread_cond_timedwait_relative_np");
+      // On ETIMEDOUT (nonzero return) return to the caller WITHOUT a wake so it re-drives its
+      // loop (re-check queues / drive inline I/O) and re-parks. This is the sysmon-style
+      // periodic wake that recovers from any missed wakeup — without it a parked worker only
+      // ever wakes on an explicit count++, so a lost signal strands pending work forever.
+      EmitCbnz(ARM64Register.X0, $"{prefix}_unlock");
     } else {
       // pthread_cond_wait(&blk->cond, &blk->mutex)
       EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8); // blk
@@ -241,16 +246,18 @@ public partial class ARM64CodeEmitter {
       EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
       EmitCallImport("pthread_cond_wait");
     }
-    EmitBranch($"{prefix}_check"); // re-check count (timeout or spurious wakeup)
+    EmitBranch($"{prefix}_check"); // re-check count (signal or spurious wakeup)
 
     DefineLabel($"{prefix}_have");
-    // count--
+    // count-- (consume the wake). The timeout path skips this and just unlocks.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffCount, 8);
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
     EmitStoreIndirect(ARM64Register.X9, WakeLockBlkOffCount, ARM64Register.X0, 8);
 
+    DefineLabel($"{prefix}_unlock");
     // pthread_mutex_unlock(&blk->mutex)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.Sp, 0x00, 8);   // blk (reload — timeout path skipped _have)
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, WakeLockBlkOffMutex, isAdd: true);
     EmitCallImport("pthread_mutex_unlock");
 
@@ -3217,6 +3224,7 @@ public partial class ARM64CodeEmitter {
     EmitGtYield();
     EmitGtCancel();
     EmitGtCleanup();
+    EmitGtProcessPendingSyncReq();
     EmitGtProcessPendingWaiter();
     schedRt.EmitGtTimerAdd();
     schedRt.EmitGtTimerCheck();
@@ -3515,6 +3523,16 @@ public partial class ARM64CodeEmitter {
 
     // --- Park: no work available ---
     DefineLabel("__sched_worker_park");
+    // Before parking, drive inline sync I/O. A worker GT that just parked handed off its sync
+    // request (registered at the loop top by __gt_process_pending_sync_req); process it here
+    // so the GT is re-enqueued and the re-dequeue below finds it. Without this, once every M
+    // is idle nobody would drive the inline sync I/O and parked GTs would stall until the
+    // 100ms timed-park re-drive. Only the sync completion queue is drained here — kqueue
+    // (network) waiters cooperatively spin and drive __io_poll_kqueue themselves, so polling
+    // kqueue from an idle worker here would just let another M process a spinning waiter's
+    // EVFILT event via __io_poll_kqueue's (ungated) re-enqueue and double-schedule it.
+    EmitBranchLink("__io_check_completions");
+
     // Publish idleFlag=1 with a store, then DMB ISH to close the missed-wakeup window:
     // an enqueuer that reads idleFlag after its queue-publish either sees 1 (and signals
     // our semaphore) or sees 0 with its queue-publish already globally visible, in which
@@ -3895,6 +3913,18 @@ public partial class ARM64CodeEmitter {
     // Reload current gt
     EmitLoadCurrentGt(ARM64Register.X9);
 
+    // Reset ioYielded=0 BEFORE publishing status=completed (ordered by the store-store
+    // barrier below). An awaiter that observes status=completed then blocks on
+    // ioYielded==1 before munmapping this GT's stack; ioYielded flips to 1 only inside
+    // the final __gt_context_switch below, after our register context is saved and we
+    // leave the stack. Without this reset a stale ioYielded=1 left by an earlier I/O
+    // yield would let the awaiter free the stack while we still run on it — the crash in
+    // __io_poll_kqueue's epilogue at shutdown. Mirrors the ioYielded clear in
+    // __gt_await / __io_submit_sync.
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
+    EmitDmbIsh();
+
     // Set status = completed
     EmitMovRegImm(ARM64Register.X0, GtStatusCompleted);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
@@ -3962,6 +3992,15 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X9, 1);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffIoYielded, 8);
 
+    // to-GT is about to run: clear its ioYielded so the flag means exactly "suspended
+    // off-stack (safe to enqueue)" and never lingers stale-1 on a running GT. Without this,
+    // a GT that switched off once (ioYielded=1) and was later resumed keeps ioYielded=1 while
+    // running; the ioYielded==1 gates (__io_op_done / __gt_process_pending_waiter /
+    // __io_complete_gt) would then enqueue a still-running GT and a second M would resume it
+    // onto the same stack — the double-schedule.
+    EmitMovRegImm(ARM64Register.X9, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X1, GtOffIoYielded, 8);
+
     // Restore SP from to.sp: LDR X9, [X1, #GtOffSp]; MOV SP, X9
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X1, GtOffSp, 8);
     EmitMovRegReg(ARM64Register.Sp, ARM64Register.X9);
@@ -3986,6 +4025,27 @@ public partial class ARM64CodeEmitter {
 
     // RET (returns to new thread's saved LR)
     EmitWord(0xD65F03C0);
+  }
+
+  /// <summary>
+  /// Block until the awaited (completed) GT has switched off its own stack before the
+  /// awaiter munmaps that stack. The completion trampoline resets ioYielded=0 before
+  /// publishing status=completed and the final __gt_context_switch sets ioYielded=1 only
+  /// after saving the GT's context and leaving its stack — so ioYielded==1 here means
+  /// "off-stack, safe to free". Without this gate a worker M can still be running on the
+  /// stack (e.g. driving I/O in __io_poll_kqueue) when the awaiter unmaps it, faulting on
+  /// the next stack access. gtReg holds the awaited GT and is preserved; X3 is scratch;
+  /// labelBase must be unique per call site. Mirrors the __gt_ppw_spin ioYielded gate.
+  /// </summary>
+  private void EmitAwaitedStackVacatedGate(ARM64Register gtReg, string labelBase) {
+    EmitDmbIsh(); // order the earlier status==completed load before the ioYielded load
+    DefineLabel(labelBase + "_spin");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, gtReg, GtOffIoYielded, 8);
+    EmitCbnz(ARM64Register.X3, labelBase + "_ready");
+    EmitWord(0xD503203F); // YIELD
+    EmitBranch(labelBase + "_spin");
+    DefineLabel(labelBase + "_ready");
+    EmitDmbIsh();
   }
 
   /// <summary>
@@ -4130,6 +4190,9 @@ public partial class ARM64CodeEmitter {
     // Free the green thread's stack via munmap
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, GtOffStackBase, 8);
     EmitCbz(ARM64Register.X1, "__gt_await_skip_free_stack");
+    // Wait for the completed GT to leave its stack before unmapping it (X9 = awaited GT).
+    EmitAwaitedStackVacatedGate(ARM64Register.X9, "__gt_await_vacate");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, GtOffStackBase, 8); // reload stack_base (gate preserves X9)
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save result
     // munmap(stack_base, stack_size)
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X1); // X0 = stack_base
@@ -4304,6 +4367,9 @@ public partial class ARM64CodeEmitter {
     // Free the green thread's stack
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X9, GtOffStackBase, 8);
     EmitCbz(ARM64Register.X2, "__gt_try_await_skip_free_stack");
+    // Wait for the completed GT to leave its stack before unmapping it (X9 = awaited GT).
+    EmitAwaitedStackVacatedGate(ARM64Register.X9, "__gt_try_await_vacate");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X9, GtOffStackBase, 8); // reload stack_base (gate preserves X9)
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 32, 8); // save threw
     // munmap(stack_base, stack_size)
@@ -5096,10 +5162,37 @@ public partial class ARM64CodeEmitter {
     // io_error_code := captured errno slot (0 on success, errno on failure).
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 200, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
-    EmitMovRegImm(ARM64Register.X0, 0);
+    // Publish io_result/io_error before status=ready so a waiter that observes ready
+    // (via the io_submit_sync self-check below) reads the finished result on weak memory.
+    EmitDmbIsh();
+    EmitMovRegImm(ARM64Register.X0, GtStatusReady);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitDmbIsh();
+
+    // Guarded enqueue — mirror __io_complete_gt / __io_poll_kqueue. Enqueueing a waiter
+    // that is NOT suspended off-stack lets a second M resume it onto its live stack (the
+    // double-schedule that frees/corrupts an in-use GT stack). Skip the enqueue when:
+    //   (a) waiter is the main OS thread (stackBase==0) — it polls status in its await loop;
+    //   (b) waiter == currentGt — it is driving this completion in its own io_submit_sync
+    //       spin and self-detects status=ready;
+    //   (c) waiter.ioYielded==0 — it is still running/spinning (on this or another M) and
+    //       self-detects. __gt_context_switch clears ioYielded on resume and sets it on
+    //       switch-off, so ioYielded==1 means exactly "suspended, needs an enqueue to run".
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__io_op_done_skip_enqueue");
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X9);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_done_skip_enqueue");
+    // Only a genuinely suspended waiter (ioYielded==1, switched off its stack) needs an
+    // enqueue to resume; a still-running/spinning waiter (ioYielded==0) self-detects
+    // status=ready in its io_submit_sync loop. Non-blocking snapshot — do NOT gate here:
+    // io_op_done runs inside the io_check_completions loop that DRIVES I/O, so blocking it
+    // stalls every other pending completion and cascades into a livelock.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
+    EmitCbz(ARM64Register.X0, "__io_op_done_skip_enqueue");
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
     EmitBranchLink("__gt_enqueue");
+    DefineLabel("__io_op_done_skip_enqueue");
 
     // Free req
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
@@ -5189,14 +5282,6 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
 
-    // Enqueue the request
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // req
-    EmitBranchLink("__io_enqueue_sync_req");
-
-    // Wake the I/O worker thread (semawakeup): a new request is available
-    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
-    EmitSemaWakeup(ARM64Register.X9);
-
     EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       // Trace: "io_yield #N [op_name]\n"
@@ -5211,34 +5296,54 @@ public partial class ARM64CodeEmitter {
     }
     EmitTraceRelease();
 
-    // Yield: try to dequeue next runnable thread
-    DefineLabel("__io_submit_sync_try_dequeue");
-    EmitBranchLink("__gt_dequeue");
-    EmitCbnz(ARM64Register.X0, "__io_submit_sync_has_next");
+    // The main OS thread (stackBase==0) cannot park — it IS its P's scheduler — so it
+    // enqueues the request and spins. A worker GT parks (Go gopark): it hands the request to
+    // its P's scheduler and switches off, and the scheduler enqueues the request only once we
+    // are fully parked (ioYielded=1), so no completer can ever resume us while we still run.
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__io_submit_sync_main");
 
-    // No runnable thread: process pending I/O and timers inline
+    // --- Worker GT: register-after-park. Hand off the request, then switch to this P's
+    // scheduler (&P.mainThread). __gt_context_switch saves our context and sets ioYielded=1;
+    // __gt_process_pending_sync_req (run by the scheduler) then enqueues the request with us
+    // already parked. We resume at __io_submit_sync_resume once __io_op_done re-enqueues us. ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // req
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffPendingSyncReq, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);              // from = current
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true); // to = &P.mainThread
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // p = P
+    EmitBranchLink("__gt_context_switch");
+    EmitBranch("__io_submit_sync_resume");
+
+    // --- Main OS thread: enqueue the request + wake the sync worker, then spin driving I/O
+    // and self-detecting completion (status WAITING→ready set by __io_op_done, which skips the
+    // enqueue for a stackBase==0 waiter). ---
+    DefineLabel("__io_submit_sync_main");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // req
+    EmitBranchLink("__io_enqueue_sync_req");
+    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
+    EmitSemaWakeup(ARM64Register.X9);
+    DefineLabel("__io_submit_sync_main_spin");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, GtStatusReady);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_submit_sync_resume");
     EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
     EmitBranchLink("__io_poll_kqueue");
     EmitBranchLink("__gt_timer_check");
-    EmitBranch("__io_submit_sync_try_dequeue");
+    EmitBranch("__io_submit_sync_main_spin");
 
-    DefineLabel("__io_submit_sync_has_next");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save next
-
-    // Set next.status = running
-    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-
-    // Context switch: from=current, to=next
-    EmitLoadCurrentGt(ARM64Register.X0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);
-    EmitLoadP(ARM64Register.X9);
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
-    EmitBranchLink("__gt_context_switch");
-
-    // Resume here after being re-enqueued by __io_complete_gt
+    // Resume here — worker GT via __io_op_done re-enqueue, main thread via its self-check.
     DefineLabel("__io_submit_sync_resume");
+    // Stamp status=running (parity with the enqueue-resume path; needed for the main self-
+    // check which reaches here with status still ready).
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
 
     EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
@@ -6338,9 +6443,37 @@ public partial class ARM64CodeEmitter {
   /// __gt_process_pending_waiter(): Load P->pendingWaiter via TLS, clear it,
   /// and re-enqueue if non-null.
   /// </summary>
+  /// <summary>
+  /// __gt_process_pending_sync_req(): enqueue a sync request handed off by a worker GT that
+  /// just parked (Go gopark's register-after-park). Run by the scheduler the GT switched to,
+  /// so the GT is fully parked (ioYielded=1) before the request becomes discoverable to any
+  /// completer — the request's waiter can therefore never be enqueued while still running.
+  /// Same-P, single-M: only the parked GT's own scheduler reads this slot. No-op when empty,
+  /// so it is safe to run from every scheduler drain point.
+  /// </summary>
+  private void EmitGtProcessPendingSyncReq() {
+    EmitRuntimeFunctionStart("__gt_process_pending_sync_req", 0, 0x20);
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffPendingSyncReq, 8);
+    EmitCbz(ARM64Register.X0, "__gt_ppsr_done");
+    // Clear the slot, then enqueue the request (X0 = req) and wake the I/O sync worker so a
+    // parked M is roused to drive it. The waiter is parked, so __io_op_done will enqueue it.
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffPendingSyncReq, 8);
+    EmitBranchLink("__io_enqueue_sync_req");
+    EmitGlobalLoadReg(ARM64Register.X9, "__io_sync_req_semaphore");
+    EmitSemaWakeup(ARM64Register.X9);
+    DefineLabel("__gt_ppsr_done");
+    EmitRuntimeFunctionEnd();
+  }
+
   private void EmitGtProcessPendingWaiter() {
     EmitRuntimeFunctionStart("__gt_process_pending_waiter", 0, 0x20);
     // [x29+16] = homed waiter (across the gate spin / __gt_enqueue call)
+
+    // Drain any sync request handed off by a GT that parked onto this scheduler (this runs
+    // at every scheduler drain point, so a parked worker GT's request is always registered).
+    EmitBranchLink("__gt_process_pending_sync_req");
 
     // w = P->pendingWaiter; if null → done.
     EmitLoadP(ARM64Register.X9);

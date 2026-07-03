@@ -129,7 +129,14 @@ public static class GtLayout {
   // on its next __slab_alloc slow path. Zero-initialised at P alloc time (memzero).
   public const int POffRemoteFreeHead = 0x78;
   public const int POffMainThread = 0x80;
-  public const int PStructSize = POffMainThread + GtStructSize;   // 0x80 + 0xD8 = 0x158 = 344 bytes
+  // Deferred sync-I/O request handed off by a parking worker GT (Go gopark's
+  // "register-after-park"): __io_submit_sync stores the request here and switches to
+  // this P's scheduler; the scheduler enqueues it (via __gt_process_pending_sync_req)
+  // only AFTER the GT is fully parked (ioYielded=1), so no completer can ever observe
+  // the request while its waiter still runs — the double-schedule is structurally
+  // impossible. Appended after the inline mainThread GT so no existing offset shifts.
+  public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x158
+  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x160 = 352 bytes
 
   // ---- macOS wake lock block (Go semasleep/semawakeup primitive) ----
   // On macOS the worker park/wake (and the I/O sync worker's wake) use a Go-style
