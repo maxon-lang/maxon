@@ -303,14 +303,6 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// an iterator `.current()` view that owns no +1); the container's destructor
 	// element-walk will decref it once, so a matching retain must run on store.
 	planBorrowedElementContainerRetains(ctx)
-	// A WRAPPER forwarding a BORROWED element as its OWN return value (`Map.get`
-	// returns `values.get(...)`, the borrow from the leaf `Array.get`) must hand the
-	// caller a genuinely-owned +1, not the borrow itself — else the caller (which
-	// treats the result as `callReturnRc1`) consumes a +1 the borrow never owned and
-	// double-frees once the source collection's teardown frees the element. Retain
-	// the borrow before the return so the +1 transfers out cleanly. Runs in BOTH
-	// domains: the element type is generic, so the retain is layout-routed.
-	planReturnedBorrowRetains(ctx)
 	// A TRANSPARENT WRAP (`Array.init`/`String.init`) of a value owning NO +1 must
 	// take its own ref: the wrap result's destructor decrefs the wrapped pointer
 	// exactly once, but a no-+1 arg (a `borrowed` field load — `String.toByteArray`
@@ -322,6 +314,26 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 		planBorrowedWrapRetains(ctx)
 	end 'wrapRetains'
 	planLastUseDecrefs(ctx)
+	// A WRAPPER forwarding a BORROWED element as its OWN return value (`Map.get`
+	// returns `values.get(...)`, the borrow from the leaf `Array.get`) must hand the
+	// caller a genuinely-owned +1, not the borrow itself — else the caller (which
+	// treats the result as `callReturnRc1`) consumes a +1 the borrow never owned and
+	// double-frees once the source collection's teardown frees the element. Retain
+	// the borrow before the return so the +1 transfers out cleanly. Runs in BOTH
+	// domains: the element type is generic, so the retain is layout-routed.
+	//
+	// MUST run AFTER `planLastUseDecrefs`: the retain and the source collection's
+	// terminator-death decref (`planTerminatorDeaths`) both land at the SUCCESS
+	// block's head (pos 0) for a `tryCall`-forwarded element (`optionValue`'s
+	// `return try parts.get(1)`). `applyPlansForBlock` inserts equal-position ops
+	// front-to-back, which REVERSES their queue order in the final op list — so the
+	// LAST-queued op lands FIRST. The retain must precede the source decref (retain
+	// the element while `parts` still holds it, before `parts`'s teardown frees it),
+	// so it must be queued AFTER the decref. Queuing it BEFORE (the old position)
+	// emitted `decref parts; incref element` — increffing an already-freed element,
+	// a dangling +1 the caller then stored and later dereferenced (the `MaxonArgs.
+	// parse` two-`--filter=`/`--dump-stages=` store over-release / bootstrap crash).
+	planReturnedBorrowRetains(ctx)
 	planDeadDefDrops(ctx)
 	// ADDRESS-TAKEN SLOT scope-exit drops: a managed value stored into a closure-
 	// captured (address-taken) slot is owned by the SLOT; its SSA-store release was
