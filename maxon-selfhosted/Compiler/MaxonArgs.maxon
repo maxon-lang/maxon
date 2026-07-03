@@ -57,6 +57,19 @@ export type MaxonArgs
 	// lets you reproduce/debug a leak-gated build standalone. It does NOT bypass
 	// the stdlib cache, so it reproduces the cached-build path.
 	export var leakCheck as bool
+	// `maxon build --rc-sanitize <file>` turns on the refcount sanitizer: freed
+	// mm allocations are POISONED and QUARANTINED (delayed-reuse) instead of
+	// being handed straight back to the slab, so the FIRST touch of a freed
+	// object (an incref/decref/drop/free/double-slab-free of a poisoned header)
+	// panics immediately — reporting the object address and the free-site return
+	// address — instead of the over-release crashing much later via use-after-free
+	// on reused slab memory. Costs ZERO when off: all sanitizer code in
+	// stdlib/Internals.maxon sits inside `#if rcSanitize(true)` conditional-
+	// compilation regions, so a default build never even parses it — emitted
+	// output is byte-identical to a build where the code does not exist.
+	// Diagnostic-only — production builds never enable it. For SPEC runs the
+	// same flag routes through setSpecRcSanitize instead (see SpecTestRunner).
+	export var rcSanitize as bool
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses as bool
@@ -148,6 +161,7 @@ export type MaxonArgs
 			verbose: false,
 			coverage: false,
 			leakCheck: false,
+			rcSanitize: false,
 			profilePasses: false,
 			fastRegalloc: false,
 			cacheStats: false,
@@ -231,7 +245,9 @@ export type MaxonArgs
 				args.emitIr = true
 			end 'isEmitIr' else if arg == "--leak-check" 'isLeakCheck'
 				args.leakCheck = true
-			end 'isLeakCheck' else if arg == "--dump-stages" 'isDumpStages'
+			end 'isLeakCheck' else if arg == "--rc-sanitize" 'isRcSanitize'
+				args.rcSanitize = true
+			end 'isRcSanitize' else if arg == "--dump-stages" 'isDumpStages'
 				args.dumpStages = true
 			end 'isDumpStages' else if arg.startsWith("--dump-stages=") 'isDumpStagesFiltered'
 				// Sentinel: an empty NAMES list means "dump every stage" — same

@@ -98,6 +98,7 @@ Supported conditions:
 - `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)` — match the target operating system
 - `arch(x64)`, `arch(arm64)`, `arch(wasm32)` — match the target CPU architecture
 - `testing(true)`, `testing(false)` — match whether the code is compiled in test mode
+- `rcSanitize(true)`, `rcSanitize(false)` — match whether the build has the refcount sanitizer enabled (`--rc-sanitize`); used by `stdlib/Internals.maxon` to include the poison/quarantine diagnostics only in sanitized builds
 
 **Boolean operators** (precedence: `or` < `and` < `not`), plus parentheses for grouping:
 ```maxon

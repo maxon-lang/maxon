@@ -67,10 +67,17 @@ typealias UserChunkNameSet = Set with String
 // ============================================================
 
 // Digest of every codegen-affecting build option, folded into the chunk-cache
-// filename + header. A mismatch is a cache miss → all chunks rebuild. Today the
-// only self-hosted contributor is `coverageEnabled` (coverage instrumentation
-// changes emitted bytes, and the user chunk cache stores fully-emitted
-// functions, so a `--coverage` build must never reuse non-instrumented chunks).
+// filename + header. A mismatch is a cache miss → all chunks rebuild. The
+// contributors are the flags that change EMITTED BYTES (the user chunk cache
+// stores fully-emitted functions, so a build under one mode must never reuse
+// chunks compiled under another):
+//   * `coverageEnabled` — coverage instrumentation changes emitted bytes.
+//   * `fastRegalloc` — `--fast` skips the splitter/last-chance recolor, so
+//     register assignments (and therefore bytes) differ. It runs AFTER the
+//     post-mid content hash is stamped, so nothing else keys it — omitting it
+//     here let `--fast` and quality builds silently reuse each other's chunks.
+//   * `rcSanitizeEnabled` — the sanitizer branches expand inside the inlined
+//     mm helpers, changing every managed function's bytes.
 // Folding all options into one hash means a future codegen flag is one line.
 function compileOptionsHash(project Project) returns OptionsHash
 	var h = FNV_OFFSET_BASIS
@@ -79,6 +86,19 @@ function compileOptionsHash(project Project) returns OptionsHash
 		coverageByte = 1
 	end 'cov'
 	h = fnvUpdate(h, b: coverageByte)
+
+	var fastRegallocByte = 0
+	if project.fastRegalloc 'fast'
+		fastRegallocByte = 1
+	end 'fast'
+	h = fnvUpdate(h, b: fastRegallocByte)
+
+	var rcSanitizeByte = 0
+	if project.rcSanitizeEnabled 'sanitize'
+		rcSanitizeByte = 1
+	end 'sanitize'
+	h = fnvUpdate(h, b: rcSanitizeByte)
+
 	return h
 end 'compileOptionsHash'
 

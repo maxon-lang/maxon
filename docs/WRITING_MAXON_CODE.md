@@ -964,7 +964,7 @@ module var featureState = 0                       // visible to this directory s
 #endif
 ```
 
-Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)`, `arch(x64)`, `arch(arm64)`, `arch(wasm32)`, `testing(true)`, `testing(false)`.
+Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)`, `arch(x64)`, `arch(arm64)`, `arch(wasm32)`, `testing(true)`, `testing(false)`, `rcSanitize(true)`, `rcSanitize(false)`.
 Operators: `and`, `or`, `not`, plus parentheses for grouping.
 
 ### Memory Model

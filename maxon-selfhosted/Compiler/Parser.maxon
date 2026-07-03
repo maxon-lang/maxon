@@ -16995,7 +16995,7 @@ export type Parser
 			try expect(TokenKind.rightParen)
 			return inner
 		end 'isParen'
-		let funcToken = try consumeExpecting("conditional predicate ('os', 'arch', or 'testing')")
+		let funcToken = try consumeExpecting("conditional predicate ('os', 'arch', 'testing', or 'rcSanitize')")
 		try expect(TokenKind.leftParen)
 		let valueToken = cursor.current()
 		if valueToken.kind == TokenKind.true or valueToken.kind == TokenKind.false 'isBool'
@@ -17021,7 +17021,20 @@ export type Parser
 			// `_testing` is unset.
 			return equalsIgnoreCase(value, b: "false")
 		end 'isTesting'
-		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', or 'testing'.", line: funcToken.line, column: funcToken.column, filePath: filePath)
+		if funcName == "rcSanitize" 'isRcSanitize'
+			// `rcSanitize` is true when this build runs with `--rc-sanitize`
+			// (project.rcSanitizeEnabled). Gating the refcount sanitizer at
+			// PARSE time — rather than folding a runtime-constant branch — is
+			// what makes a default build byte-identical to one where the
+			// sanitizer code does not exist: the inactive region is token-walked
+			// without allocating a single value id, so downstream IR, register
+			// allocation, and layout are untouched.
+			if equalsIgnoreCase(value, b: "true") 'wantsOn'
+				return project.rcSanitizeEnabled
+			end 'wantsOn'
+			return not project.rcSanitizeEnabled
+		end 'isRcSanitize'
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', or 'rcSanitize'.", line: funcToken.line, column: funcToken.column, filePath: filePath)
 		throw ParserError.unhandledToken
 	end 'evaluateConditionalAtom'
 

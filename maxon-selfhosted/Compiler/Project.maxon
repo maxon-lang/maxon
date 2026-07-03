@@ -832,6 +832,19 @@ export type Project
 	// byte-identical allocation.
 	export var fastRegalloc as bool
 
+	// When true (`maxon build --rc-sanitize`), the parser's `rcSanitize(...)`
+	// conditional-compilation predicate evaluates true, so the stdlib compile
+	// INCLUDES the `#if rcSanitize(true)` poison/quarantine/freed-touch-check
+	// regions in stdlib/Internals.maxon. That code makes freed mm allocations get
+	// poisoned and held in a delayed-reuse quarantine, so the FIRST
+	// incref/decref/drop/free of a freed object panics immediately (reporting the
+	// object + free-site addresses) instead of the over-release crashing much
+	// later via use-after-free on reused slab memory. Off by default: the regions
+	// are skipped at PARSE time, so a normal build is byte-identical (zero
+	// hot-path cost). The stdlib cache filename carries this bit so a sanitized
+	// and a normal stdlib coexist.
+	export var rcSanitizeEnabled as bool
+
 	// True when `maxon build --cache-stats <file>` should print a `CACHE_STATS …`
 	// line after the build (per-function regalloc hits/misses, stdlib cache
 	// hit/miss, compiled-function count). Read by the `maxon test-lib-cache`
@@ -1133,6 +1146,7 @@ export type Project
 			asyncTraceEnabled: false,
 			leakCheckEnabled: false,
 			fastRegalloc: false,
+			rcSanitizeEnabled: false,
 			cacheStatsEnabled: false,
 			cacheRootOverride: FilePath from "",
 			outputPathOverride: "",

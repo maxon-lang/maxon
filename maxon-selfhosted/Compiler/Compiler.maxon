@@ -1,7 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false, outputPathOverride String = "") returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false, outputPathOverride String = "", rcSanitize bool = false) returns FilePath throws CompileError
 	// Persisting the lazily-grown stdlib cache back to disk is safe from ANY
 	// project (Phase 3.5 made the cache codec project-independent — it resolves
 	// through the cache's own snapshot tables, not the consumer's interner), so
@@ -15,6 +15,13 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// `--fast`: use the fast register allocator (depth-0 recolor, no splitting,
 	// tighter spill-loop cap). Off by default so a normal build is byte-identical.
 	project.fastRegalloc = fastRegalloc
+	// `--rc-sanitize`: include the `#if rcSanitize(true)` sanitizer regions in
+	// stdlib/Internals.maxon (poison + quarantine freed mm allocations so the
+	// first touch of a freed object panics). The parser's rcSanitize(...)
+	// predicate reads this bit, so a default build (false) skips the regions at
+	// parse time and is byte-identical; the stdlib cache filename carries the bit
+	// so a sanitized and a normal stdlib coexist.
+	project.rcSanitizeEnabled = rcSanitize
 	// `--cache-stats` / `--cache-root=DIR` (internal, drives `maxon test-lib-cache`):
 	// print the post-build CACHE_STATS line and/or redirect the library cache to a
 	// throwaway temp dir. Both default off / empty, so a normal build is unchanged.
@@ -214,7 +221,7 @@ end 'writeCovMapTo'
 // next to the exe (outputPath.changeExtension(".covmap")); the spec runner
 // redirects it into its per-suite .coverage directory. When coverage is off
 // the path is ignored — no file is written.
-export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false, rcSanitize bool = false) returns CompileWithIrResult throws CompileError
 	let setupStart = passTimerStart()
 	// Single-file fragment: rootPath = the file's parent directory (decision #3
 	// in the directory-as-module redesign — single-file compiles have no module
@@ -225,6 +232,7 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 	project.coverageEnabled = coverage
 	project.asyncTraceEnabled = asyncTrace
 	project.leakCheckEnabled = leakCheck
+	project.rcSanitizeEnabled = rcSanitize
 	fileChanged(project, path: virtualPath, content: source)
 	recordPassSince("__compile-setup", startMs: setupStart)
 
@@ -253,7 +261,7 @@ export typealias VirtualSourceFileArray = Array with VirtualSourceFile
 // resolve the same way they would in a real on-disk project. The caller is
 // responsible for choosing virtual paths whose layout matches the test's
 // intent (e.g. siblings under one dir vs. nested subdirectories).
-export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false) returns CompileWithIrResult throws CompileError
+export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false, asyncTrace bool = false, leakCheck bool = false, rcSanitize bool = false) returns CompileWithIrResult throws CompileError
 	if files.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(outputPath)
 	end 'noFiles'
@@ -270,6 +278,7 @@ export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, proje
 	project.coverageEnabled = coverage
 	project.asyncTraceEnabled = asyncTrace
 	project.leakCheckEnabled = leakCheck
+	project.rcSanitizeEnabled = rcSanitize
 	for file in files 'eachFile'
 		fileChanged(project, path: file.path, content: file.source)
 	end 'eachFile'

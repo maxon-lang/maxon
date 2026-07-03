@@ -974,6 +974,24 @@ function sliceFromBytePos(s String, bytePos BytePos) returns String
 	return s.slice(startIdx, endIndex: endIdx)
 end 'sliceFromBytePos'
 
+// Process-wide `--rc-sanitize` toggle for spec runs (mirrors the sweep-mode
+// global pattern): set once from args at process entry, read at the fragment
+// compile sites, and forwarded to parallel worker subprocesses as a CLI flag.
+// Fragments then compile with the refcount sanitizer expanded — the
+// suite-scale false-positive check for the sanitizer itself and a permanent
+// use-after-free regression lane. Lives here as a global (not threaded through
+// the runner call chain) because the runner builds fragments through
+// per-fragment projects; only the compile calls below need the bit. Sanitized
+// runs check RUNTIME behavior only: RequiredIR / RequiredRdata golden
+// comparisons are skipped (the sanitizer legitimately changes inlined IR and
+// .rdata strings), and `--update-required` is rejected up front so goldens can
+// never be regenerated from a sanitized build.
+var specRcSanitize = false
+
+export function setSpecRcSanitize(enabled bool)
+	specRcSanitize = enabled
+end 'setSpecRcSanitize'
+
 // Dispatch to single- or multi-file compile based on whether the test
 // authored `// --- file: name.maxon` markers. The single-file branch keeps
 // the fragment's on-disk path so error messages line up with what the
@@ -983,7 +1001,7 @@ end 'sliceFromBytePos'
 function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath, leakCheck bool = false) returns CompileWithIrResult throws CompileError
 	let covMapPath = outputExe.changeExtension(".covmap")
 	if not fragment.hasMultiFile 'isSingle'
-		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck)
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck, rcSanitize: specRcSanitize)
 	end 'isSingle'
 
 	// Anchor virtual paths in the fragment's directory so module-visibility
@@ -1001,7 +1019,7 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
 		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
 	end 'eachFile'
-	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck)
+	return try compileMultiFileSourceWithIr(virtualFiles, projectRoot: fragmentDir, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr, asyncTrace: fragment.asyncTrace, leakCheck: leakCheck, rcSanitize: specRcSanitize)
 end 'compileFragmentInMemory'
 
 // Canonical string encoding of the RUN-OUTCOME oracle a test asserts — what the
@@ -1227,8 +1245,11 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Check RequiredIR — the enforced `// CompiledIR`. Compare the spec's pinned
 	// per-test IR against this run's freshly-compiled IR; a mismatch fails the test
 	// so an unintended lowering/codegen change surfaces for review (regenerate with
-	// `--update-required` once the change is confirmed intentional).
-	if fragment.expectation.hasRequiredIr 'checkIr'
+	// `--update-required` once the change is confirmed intentional). Skipped under
+	// `--rc-sanitize`: the sanitizer legitimately expands poison/check branches in
+	// every inlined mm helper, so the pinned default-build IR cannot match — a
+	// sanitized run's oracle is runtime behavior, not IR shape.
+	if fragment.expectation.hasRequiredIr and not specRcSanitize 'checkIr'
 		let irResult = checkRequiredIr(fragment.expectation.requiredIr, actual: compileIr)
 		if not irResult.passed 'irFailed'
 			passed = false
@@ -1242,8 +1263,10 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	// Check RequiredRdata — byte-for-byte compare the compiled .exe's .rdata
 	// section against the typed values in the spec block. PE-only; ELF and
-	// Mach-O don't have a `.rdata` section. Mirrors TestRunner.cs:748.
-	if fragment.expectation.hasRequiredRdata 'checkRdata'
+	// Mach-O don't have a `.rdata` section. Mirrors TestRunner.cs:748. Skipped
+	// under `--rc-sanitize` for the same reason as RequiredIR: the sanitizer's
+	// panic-message strings land in .rdata, so the pinned bytes cannot match.
+	if fragment.expectation.hasRequiredRdata and not specRcSanitize 'checkRdata'
 		if target.os == Os.windows 'isWindows'
 			let rdataResult = checkRequiredRdataBytes(fragment.expectation.requiredRdata, exePath: outputPath)
 			if not rdataResult.passed 'rdataFailed'
@@ -2939,7 +2962,15 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 	for test in unit.selectedTests 'eachSingle'
 		let testPath = "{specName}/{test.name}"
 		let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-		writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+
+		// Fragment files are DEFAULT-build artifacts (committed goldens of
+		// codegen evolution). A sanitized run must never rewrite them — its
+		// compiled IR embeds the sanitizer expansion, and its aborted runs have
+		// truncated IncludeStdlibIr fragments before. Sanitized runs consume the
+		// existing on-disk fragments instead (kept in sync by default runs).
+		if not specRcSanitize 'writeInitial'
+			writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+		end 'writeInitial'
 
 		let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
 			logError(LogCategory.testing, message: function() gives "[FAIL] {testPath} - could not parse fragment")
@@ -2951,7 +2982,7 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 
 		let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir, runCache: runCache, newPassKeys: newPassKeys, skippedBox: skippedBox)
 
-		if not result.compileIr.isEmpty() 'hasIr'
+		if not result.compileIr.isEmpty() and not specRcSanitize 'hasIr'
 			writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
 		end 'hasIr'
 
@@ -3160,6 +3191,12 @@ type PersistentWorkerHandle
 		if not colorerModeFlag.isEmpty() 'hasColorerMode'
 			argv.push("--colorer-mode={colorerModeFlag}")
 		end 'hasColorerMode'
+		// Forward the refcount-sanitizer toggle so parallel workers compile their
+		// fragments sanitized too. Read from the process-global like the colorer
+		// mode above.
+		if specRcSanitize 'hasRcSanitize'
+			argv.push("--rc-sanitize")
+		end 'hasRcSanitize'
 		let c = try StreamingSubprocess.spawn(Executable.path(exeFile), arguments: argv)
 		return PersistentWorkerHandle{child: c, workerId: workerId}
 	end 'spawnNoWait'

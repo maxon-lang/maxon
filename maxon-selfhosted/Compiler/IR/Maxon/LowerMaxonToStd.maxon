@@ -631,7 +631,7 @@ end 'zeroBytesOfSize'
 // runtime.std's lock acquire/release helpers are no-ops while the runtime is
 // single-threaded. When threading lands, register one 8-byte slot per class
 // here and wire the helpers in `__slab_refill_mcache` to a real CAS loop.
-function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false)
+function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false, rcSanitizeEnabled bool = false)
 	// Slab bottom-layer state (step 6a.12).
 	addDataSectionEntry(globalData, name: "__slab_init_done", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_arena_list_head", initialBytes: zeroBytesOfSize(8))
@@ -673,6 +673,31 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	// MM-layer leak counter. Atomic-tracked count of live allocations;
 	// spec tests assert this reaches zero.
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
+
+	// Refcount-sanitizer quarantine control block (`--rc-sanitize` only). A freed
+	// mm allocation is POISONED and pushed onto a fixed-capacity FIFO ring here
+	// instead of going straight back to the slab, so its slab slot is not reused
+	// until it has aged out of the ring — which is what lets the poison persist
+	// long enough for the first touch of the freed object to be caught. Six i64
+	// words (48 bytes):
+	//   +0x00 ring_base  — pointer to the ring's (slotBase, slotSize) entry array,
+	//                      0 until lazily OS-allocated on the first quarantine push
+	//   +0x08 head       — ring index of the OLDEST live entry (dequeue / evict point)
+	//   +0x10 tail       — ring index of the next free slot (enqueue point)
+	//   +0x18 count      — number of live entries currently quarantined
+	//   +0x20 byte_total — sum of slot_size over the live entries (byte-cap accounting)
+	//   +0x28 capacity   — ring capacity in entries (stamped at lazy-alloc; 0 = unallocated)
+	// Each ring entry is 16 bytes: +0 slotBase, +8 slotSize. Registered ONLY in
+	// sanitized builds: the gate folds the sole referencing code away in a
+	// default build, and a default binary must carry ZERO trace of the sanitizer
+	// (the byte-identical-when-off guarantee) — not even 48 dead .data bytes.
+	// The name MUST keep a `__mm_` prefix: reloc section class is decided by
+	// NAME PREFIX in classifyGlobalLabel (an unrecognized prefix classifies as
+	// .rdata, which silently mis-resolves every load/store of this block — the
+	// original `__rc_`-prefixed name crashed exactly that way).
+	if rcSanitizeEnabled 'rcSanitize'
+		addDataSectionEntry(globalData, name: "__mm_rc_quarantine_ctl", initialBytes: zeroBytesOfSize(48))
+	end 'rcSanitize'
 
 	// Phase B3: lazy-init cache for the hand-rolled `mrt_win32_get_argc` /
 	// `mrt_win32_get_argv` helpers. First call to either helper populates
@@ -1213,6 +1238,12 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.symtableAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.destructManagedMemoryAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadFramePtr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Address of the refcount-sanitizer quarantine control block
+	// (`__mm_rc_quarantine_ctl`). See registerSlabAndMmGlobalsForDataSection for the
+	// block layout; referenced only from Internals.maxon code inside
+	// `#if rcSanitize(true)` regions, so a default build never lowers it (and the
+	// global itself is only registered for sanitized builds).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.rcQuarantineCtlAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	// Indirect call (one-arg variants). `indirectCall1` calls an `(i64) -> i64`
 	// target (the destructor ABI: `__mm_free` → `__destruct_*`); `indirectCallVoid1`
 	// calls an `(i64) -> void` target (the managed-element walk → `&__mm_decref`).
@@ -3175,7 +3206,7 @@ type MaxonToStdLowering
 		// `globalAddr __slab_*` / `globalAddr __mm_*` resolve to distinct
 		// addresses. Without this every allocator-state global would alias to
 		// offset 0 the moment `mrt_start` calls `__slab_init`.
-		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled)
+		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled, rcSanitizeEnabled: self.project.rcSanitizeEnabled)
 
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
@@ -12890,6 +12921,9 @@ function lookupInternalsGlobalAddrTarget(methodName String) returns String throw
 	end 'a'
 	if methodName == "dataCovNumSitesAddr" 'a'
 		return "__data_cov_num_sites"
+	end 'a'
+	if methodName == "rcQuarantineCtlAddr" 'a'
+		return "__mm_rc_quarantine_ctl"
 	end 'a'
 	throw InternalsBridgeLookupError.notBridge
 end 'lookupInternalsGlobalAddrTarget'

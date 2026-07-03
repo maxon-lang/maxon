@@ -25,6 +25,9 @@ function __mm_incref(ptr MachineWord)
 	// leak). incref has no maybe-null sibling: the inserter only increfs values
 	// it has proven live (a fresh allocation or a dominating definition), so a
 	// null here is always wrong.
+	#if rcSanitize(true)
+		__rc_check_freed_touch(ptr, kind: RC_TOUCH_INCREF)
+	#endif
 	__Internals.atomicInc(ptr - 8)
 end '__mm_incref'
 
@@ -45,6 +48,9 @@ function __mm_decref(ptr MachineWord)
 	// tolerates EXACTLY null (==0) at the statically-maybe-null release sites
 	// (incomingOwner / selfReturnBorrow values, field-reassign old-occupant drop)
 	// and calls through to this strict body for every non-null pointer.
+	#if rcSanitize(true)
+		__rc_check_freed_touch(ptr, kind: RC_TOUCH_DECREF)
+	#endif
 	let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 	if prior == 1 'lastRef'
 		__mm_free(ptr)
@@ -78,6 +84,11 @@ function __mm_drop(ptr MachineWord)
 		return
 	end 'null'
 	let rc = __Internals.loadIndirect(ptr - 8)
+	#if rcSanitize(true)
+		if rc == RC_SANITIZE_POISON_RC 'freedTouch'
+			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DROP)
+		end 'freedTouch'
+	#endif
 	if rc == 0 'soleOwner'
 		// Scope-exit drop of the sole owner (rc==0): this is the sole reference,
 		// so free the block directly.
@@ -992,7 +1003,22 @@ end '__slab_rounded_size'
 //   * same-P free (my raw id >= 0 AND == span.owning_p): lockless local push.
 //   * cross-P free (different P, or a raw OS thread with no P): CAS-push onto
 //     the OWNER P's remote-free queue.
+//
+// Refcount sanitizer (`--rc-sanitize`): the gate at the top intercepts mm-sized
+// slab slots BEFORE the routing — they are poisoned and parked on the quarantine
+// ring instead of returning to the slab, and re-enter here (via the bypass
+// sentinel `__rc_quarantine_intercept` recognizes) only when they age out. The
+// gate lives IN this body instead of wrapping it because runtime.std's
+// `mm_realloc` calls `__slab_free` by name and runtime.std gets no inlining
+// (mem2reg only) — a rename-plus-wrapper would survive as an extra call hop in
+// default builds, breaking the sanitizer's byte-identical-when-off guarantee.
 function __slab_free(ptr MachineWord)
+	#if rcSanitize(true)
+		if __rc_quarantine_intercept(ptr) 'quarantined'
+			return
+		end 'quarantined'
+	#endif
+
 	let span = __slab_arena_map_get(ptr)
 	if span == 0 'osDirect'
 		// OS-direct free mutates the shared OS-direct array — serialize it.
@@ -1054,6 +1080,283 @@ function __slab_free(ptr MachineWord)
 	__slab_remote_free_push(targetP, slot: ptr)
 end '__slab_free'
 
+// =============================================================================
+// Refcount sanitizer (`--rc-sanitize`) — poison, quarantine, touch checks.
+//
+// An OVER-RELEASE (a refcount-inserter bug) frees an object while another live
+// reference to it still exists; the process then crashes much LATER, when the
+// reused slab slot's new occupant is corrupted through the dangling reference.
+// That distance between bug and crash is what makes over-releases expensive to
+// diagnose. With the sanitizer on, a freed slot is POISONED and QUARANTINED
+// (its slab slot is not reused until it ages out of a FIFO ring), and every mm
+// entry point checks for the poison first — so the FIRST touch of a freed
+// object panics immediately, reporting the object address and the free-site
+// return address (the touch site comes from the panic's own symbolized
+// backtrace).
+//
+// Zero cost when off: everything here (and every check at the mm entry points)
+// sits inside `#if rcSanitize(true)` conditional-compilation regions, so a
+// default build PARSES NONE OF IT — no value ids, no IR, no blocks, nothing for
+// downstream passes to even fold. A default build's output is byte-identical to
+// one where this code does not exist. (A runtime-constant `if` gate was tried
+// first and rejected: the const-fold left an empty-block seam and shifted value
+// ids, which perturbed emitted bytes.)
+// =============================================================================
+#if rcSanitize(true)
+
+	// Poison words written into a quarantined slot's mm-header field positions.
+	// Impossible as real header values: a refcount is a small non-negative integer
+	// (the decref underflow trap keeps it from ever going negative), a destructor
+	// is a code pointer, and a size is a small positive byte count. The shared
+	// `0x5AFEDEAD` high word identifies the sanitizer in a hex dump; the low word
+	// names WHICH header field was read. Plain literals — top-level `let` accepts
+	// only a literal, not an expression; all stay positive i64.
+	let RC_SANITIZE_POISON_DTOR = 0x5AFEDEAD00000001
+	let RC_SANITIZE_POISON_SIZE = 0x5AFEDEAD00000002
+	let RC_SANITIZE_POISON_RC = 0x5AFEDEAD00000003
+
+	// Bypass sentinel: `__rc_quarantine_release` stamps this into an aged-out
+	// slot's refcount word so its re-entry into `__slab_free` falls through the
+	// quarantine intercept to the real routing. Only ever written by the release
+	// path, which owns the slot exclusively. (A raw non-mm slot whose freed
+	// payload happens to equal this word would skip quarantine — a one-in-2^63
+	// coverage miss, never a correctness problem.)
+	let RC_SANITIZE_BYPASS = 0x5AFEDEAD0000000F
+
+	// Touch kinds for `__rc_report_freed_touch` — which mm entry point observed
+	// the poisoned header.
+	let RC_TOUCH_INCREF = 1
+	let RC_TOUCH_DECREF = 2
+	let RC_TOUCH_DROP = 3
+	let RC_TOUCH_MM_FREE = 4
+	let RC_TOUCH_SLAB_FREE = 5
+
+	// Quarantine geometry. Only slots big enough to carry a full 32-byte mm header
+	// are quarantined — poisoning the four header-word positions of a smaller RAW
+	// slot would write past the slot into its live neighbor. Every mm allocation
+	// is 32 (header) + >=1 user byte, so all mm objects — the sanitizer's target —
+	// are covered; sub-32-byte raw slots and OS-direct blocks (whose pages are
+	// unmapped on free, so poison could not persist) pass straight through. The
+	// capacity and byte caps bound the quarantine's memory hold; slab slot sizes
+	// are <= SLAB_MAX_SMALL_ALLOC, so a single entry can never exceed the byte cap.
+	let RC_QUARANTINE_MIN_SLOT_SIZE = 32
+	let RC_QUARANTINE_CAPACITY = 1048576
+	let RC_QUARANTINE_ENTRY_SIZE = 16
+	let RC_QUARANTINE_BYTE_CAP = 536870912
+
+	// Field offsets of the `__mm_rc_quarantine_ctl` data-section global (layout doc
+	// at its registration in LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection).
+	let RC_QCTL_RING_BASE = 0
+	let RC_QCTL_HEAD = 8
+	let RC_QCTL_TAIL = 16
+	let RC_QCTL_COUNT = 24
+	let RC_QCTL_BYTE_TOTAL = 32
+	let RC_QCTL_CAPACITY = 40
+
+	// The `__slab_free` sanitizer gate: decide whether `slotBase` is quarantined.
+	// Returns true when the slot was parked on the ring (the caller must NOT free
+	// it); false when the free should proceed normally (pass-through cases and the
+	// release path's bypass re-entry).
+	function __rc_quarantine_intercept(slotBase MachineWord) returns bool
+		let span = __slab_arena_map_get(slotBase)
+		if span == 0 'osDirect'
+			return false
+		end 'osDirect'
+
+		let slotSize = __Internals.loadIndirect(span + 0x08)
+		if slotSize < RC_QUARANTINE_MIN_SLOT_SIZE 'tooSmall'
+			return false
+		end 'tooSmall'
+
+		let rcWord = __Internals.loadIndirect(slotBase + 24)
+		if rcWord == RC_SANITIZE_BYPASS 'agedOut'
+			// `__rc_quarantine_release` re-entering after age-out: clear the
+			// sentinel (the reserved-word / clean-header contract) and let the
+			// real routing free the slot.
+			__Internals.storeIndirect(slotBase + 24, value: 0)
+			return false
+		end 'agedOut'
+
+		if rcWord == RC_SANITIZE_POISON_RC 'doubleFree'
+			// The slot is already quarantined — this is a second free of the same
+			// allocation with no intervening reuse: a genuine double-free.
+			__rc_report_freed_touch(slotBase + 32, kind: RC_TOUCH_SLAB_FREE)
+		end 'doubleFree'
+
+		__rc_quarantine_push(slotBase, slotSize: slotSize)
+		return true
+	end '__rc_quarantine_intercept'
+
+	// Poison `slotBase`'s header-word positions and enqueue it on the quarantine
+	// ring, evicting (really freeing) the oldest entries first when the ring is
+	// full or the byte cap would be exceeded. The ring is shared across Ps, so the
+	// push runs under __slab_lock; each eviction RELEASES the lock before touching
+	// the evictee — `__slab_free` may itself take the lock (os-direct / raw-owned
+	// routing), and the write-to-freed panic must never fire while holding it.
+	function __rc_quarantine_push(slotBase MachineWord, slotSize MachineWord)
+		// Free-site attribution: the return address one frame up ([fp+8] — the same
+		// frame walk mrt_panic does on x64/arm64). After inlining, "one frame up"
+		// is the nearest non-inlined caller of the code that freed the object —
+		// close enough to name the freeing function when symbolized offline. wasm
+		// has no frame-pointer chain (loadFramePtr yields 0): stash 0 and the
+		// report degrades gracefully.
+		let fp = __Internals.loadFramePtr()
+		var freeSiteRa = 0
+		if fp != 0 'haveFrame'
+			freeSiteRa = __Internals.loadIndirect(fp + 8)
+		end 'haveFrame'
+
+		let ctl = __Internals.rcQuarantineCtlAddr()
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+
+		// Lazily allocate the ring on the first quarantined free. Raw OS pages
+		// rather than a slab/os-direct allocation: the ring must never itself
+		// route back through the allocator paths it interposes on, and it is
+		// never freed.
+		if __Internals.loadIndirect(ctl + RC_QCTL_RING_BASE) == 0 'lazyRing'
+			let ring = __slab_assert_os_alloc(__Internals.osAllocPages(RC_QUARANTINE_CAPACITY * RC_QUARANTINE_ENTRY_SIZE))
+			__Internals.storeIndirect(ctl + RC_QCTL_RING_BASE, value: ring)
+			__Internals.storeIndirect(ctl + RC_QCTL_CAPACITY, value: RC_QUARANTINE_CAPACITY)
+		end 'lazyRing'
+
+		// Evict the oldest entries until this one fits — in entry count AND in
+		// quarantined bytes. Each eviction drops the lock (see function comment);
+		// the loop re-reads the control block after re-acquiring because another P
+		// may have pushed or evicted in the gap.
+		while __rc_quarantine_needs_evict(ctl, incomingBytes: slotSize) 'evict'
+			let ringBase = __Internals.loadIndirect(ctl + RC_QCTL_RING_BASE)
+			let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
+			let head = __Internals.loadIndirect(ctl + RC_QCTL_HEAD)
+			let entry = ringBase + head * RC_QUARANTINE_ENTRY_SIZE
+			let evictSlot = __Internals.loadIndirect(entry)
+			let evictSize = __Internals.loadIndirect(entry + 8)
+
+			var nextHead = head + 1
+			if nextHead == capacity 'wrapHead'
+				nextHead = 0
+			end 'wrapHead'
+			__Internals.storeIndirect(ctl + RC_QCTL_HEAD, value: nextHead)
+			__Internals.storeIndirect(ctl + RC_QCTL_COUNT, value: __Internals.loadIndirect(ctl + RC_QCTL_COUNT) - 1)
+			__Internals.storeIndirect(ctl + RC_QCTL_BYTE_TOTAL, value: __Internals.loadIndirect(ctl + RC_QCTL_BYTE_TOTAL) - evictSize)
+
+			__Internals.osLockRelease(__Internals.slabLockAddr())
+			__rc_quarantine_release(evictSlot, slotSize: evictSize)
+			__Internals.osLockAcquire(__Internals.slabLockAddr())
+		end 'evict'
+
+		// Poison the header-word positions and stash the free site in the reserved
+		// word (slot+0) — `__rc_report_freed_touch` reads it back at [userPtr-32].
+		__Internals.storeIndirect(slotBase, value: freeSiteRa)
+		__Internals.storeIndirect(slotBase + 8, value: RC_SANITIZE_POISON_DTOR)
+		__Internals.storeIndirect(slotBase + 16, value: RC_SANITIZE_POISON_SIZE)
+		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_POISON_RC)
+
+		let ringBase = __Internals.loadIndirect(ctl + RC_QCTL_RING_BASE)
+		let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
+		let tail = __Internals.loadIndirect(ctl + RC_QCTL_TAIL)
+		let entry = ringBase + tail * RC_QUARANTINE_ENTRY_SIZE
+		__Internals.storeIndirect(entry, value: slotBase)
+		__Internals.storeIndirect(entry + 8, value: slotSize)
+
+		var nextTail = tail + 1
+		if nextTail == capacity 'wrapTail'
+			nextTail = 0
+		end 'wrapTail'
+		__Internals.storeIndirect(ctl + RC_QCTL_TAIL, value: nextTail)
+		__Internals.storeIndirect(ctl + RC_QCTL_COUNT, value: __Internals.loadIndirect(ctl + RC_QCTL_COUNT) + 1)
+		__Internals.storeIndirect(ctl + RC_QCTL_BYTE_TOTAL, value: __Internals.loadIndirect(ctl + RC_QCTL_BYTE_TOTAL) + slotSize)
+
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+	end '__rc_quarantine_push'
+
+	// True when the ring cannot accept another entry of `incomingBytes` without
+	// first evicting: no free ring slot, or the byte cap would be exceeded. The
+	// count>0 guard makes an incoming slot larger than the whole byte cap (cannot
+	// happen — slab slots are bounded by SLAB_MAX_SMALL_ALLOC — but cheap to make
+	// impossible) terminate instead of evicting forever. Caller holds __slab_lock.
+	function __rc_quarantine_needs_evict(ctl MachineWord, incomingBytes MachineWord) returns bool
+		let count = __Internals.loadIndirect(ctl + RC_QCTL_COUNT)
+		if count == 0 'empty'
+			return false
+		end 'empty'
+
+		if count >= __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY) 'full'
+			return true
+		end 'full'
+
+		return __Internals.loadIndirect(ctl + RC_QCTL_BYTE_TOTAL) + incomingBytes > RC_QUARANTINE_BYTE_CAP
+	end '__rc_quarantine_needs_evict'
+
+	// Age-out of a quarantined slot: verify its poison survived the quarantine
+	// stay (a mismatch means something WROTE through a dangling reference after
+	// the free — report that rather than silently freeing corrupted state), clear
+	// the poison so the slab-reuse invariants hold (slot+0 must return to 0 — the
+	// reserved-word contract — and stale magics must not linger to confuse a later
+	// diagnosis), stamp the bypass sentinel, and re-enter `__slab_free` for the
+	// real routing. Runs with __slab_lock NOT held: the real free may take it, and
+	// panicking while holding it would wedge the panic path's own allocations.
+	function __rc_quarantine_release(slotBase MachineWord, slotSize MachineWord)
+		let dtorWord = __Internals.loadIndirect(slotBase + 8)
+		let sizeWord = __Internals.loadIndirect(slotBase + 16)
+		let rcWord = __Internals.loadIndirect(slotBase + 24)
+
+		if dtorWord != RC_SANITIZE_POISON_DTOR or sizeWord != RC_SANITIZE_POISON_SIZE or rcWord != RC_SANITIZE_POISON_RC 'tampered'
+			panic("rc-sanitize: write to freed memory detected — quarantined slot 0x{slotBase:016x} (size {slotSize}) was modified after free (dtor=0x{dtorWord:016x} size=0x{sizeWord:016x} rc=0x{rcWord:016x})")
+		end 'tampered'
+
+		__Internals.storeIndirect(slotBase, value: 0)
+		__Internals.storeIndirect(slotBase + 8, value: 0)
+		__Internals.storeIndirect(slotBase + 16, value: 0)
+		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_BYPASS)
+		__slab_free(slotBase)
+	end '__rc_quarantine_release'
+
+	// The shared touch check the mm entry points run first: a poisoned refcount
+	// word means `ptr` was already freed and quarantined — report instead of
+	// touching it. One helper so the check reads identically at every entry point
+	// (`__mm_drop` inlines its own comparison instead: it has already loaded the
+	// refcount word for its rc==0 branch, and re-loading here would double the
+	// header read on its hot path).
+	function __rc_check_freed_touch(ptr MachineWord, kind MachineWord)
+		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
+			__rc_report_freed_touch(ptr, kind: kind)
+		end 'freedTouch'
+	end '__rc_check_freed_touch'
+
+	// A poisoned header was touched. `userPtr` is the freed object's user pointer;
+	// `kind` names the mm entry point that observed it. The free-site return
+	// address was stashed in the slot's reserved word at quarantine time — printed
+	// raw for offline symbolization (subtract the image base, then look the offset
+	// up via .symtab / llvm-objdump); the panic itself supplies the symbolized
+	// backtrace of the TOUCH site. Reads nothing from the object beyond its header
+	// words — the payload may be arbitrarily stale.
+	function __rc_report_freed_touch(userPtr MachineWord, kind MachineWord)
+		let freeSiteRa = __Internals.loadIndirect(userPtr - 32)
+
+		if kind == RC_TOUCH_INCREF 'increfKind'
+			panic("rc-sanitize: INCREF of freed object 0x{userPtr:016x} — freed at ra=0x{freeSiteRa:016x}")
+		end 'increfKind'
+
+		if kind == RC_TOUCH_DECREF 'decrefKind'
+			panic("rc-sanitize: DECREF of freed object 0x{userPtr:016x} (over-release pair) — freed at ra=0x{freeSiteRa:016x}")
+		end 'decrefKind'
+
+		if kind == RC_TOUCH_DROP 'dropKind'
+			panic("rc-sanitize: DROP of freed object 0x{userPtr:016x} — freed at ra=0x{freeSiteRa:016x}")
+		end 'dropKind'
+
+		if kind == RC_TOUCH_MM_FREE 'freeKind'
+			panic("rc-sanitize: DOUBLE __mm_free of object 0x{userPtr:016x} — first freed at ra=0x{freeSiteRa:016x}")
+		end 'freeKind'
+
+		if kind == RC_TOUCH_SLAB_FREE 'slabFreeKind'
+			panic("rc-sanitize: double slab-free of object 0x{userPtr:016x} — first freed at ra=0x{freeSiteRa:016x}")
+		end 'slabFreeKind'
+
+		panic("rc-sanitize: freed-object touch with unknown kind {kind} — object 0x{userPtr:016x}, freed at ra=0x{freeSiteRa:016x}")
+	end '__rc_report_freed_touch'
+#endif
+
 // Allocate a tracked block of `size` bytes through the slab allocator.
 // Layout: 32-byte mm header followed by the user region. The first header
 // word sits at slot_base+0 so the destructor / size / refcount fields keep
@@ -1103,6 +1406,13 @@ function __mm_free(ptr MachineWord)
 	if ptr == 0 'nullPtr'
 		return
 	end 'nullPtr'
+
+	// Sanitizer: a poisoned refcount word here means this allocation was already
+	// freed — report the double-free BEFORE the destructor read, so a poisoned
+	// destructor word is never indirect-called.
+	#if rcSanitize(true)
+		__rc_check_freed_touch(ptr, kind: RC_TOUCH_MM_FREE)
+	#endif
 	let destructor = __Internals.loadIndirect(ptr - 24)
 	if destructor != 0 'hasDtor'
 		__Internals.indirectCall1(destructor, arg: ptr)

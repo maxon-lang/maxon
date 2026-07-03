@@ -20335,8 +20335,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       "os" => string.Equals(value, _targetOs, StringComparison.OrdinalIgnoreCase),
       "arch" => string.Equals(value, _targetArch, StringComparison.OrdinalIgnoreCase),
       "testing" => string.Equals(value, _testing.ToString(), StringComparison.OrdinalIgnoreCase),
+      // The refcount sanitizer is a self-hosted-only diagnostic (its code lives in
+      // stdlib/Internals.maxon, which this bootstrap excludes); the bootstrap
+      // never sanitizes, so the predicate is constant-false here. Recognized so
+      // both parsers accept the same conditional-compilation language.
+      "rcSanitize" => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', or 'testing'.",
+        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', or 'rcSanitize'.",
         funcToken.Line, funcToken.Column),
     };
   }

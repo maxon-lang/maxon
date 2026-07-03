@@ -25,6 +25,12 @@ function main() returns ExitCode
 	// default) → legacy, so normal compilation is unchanged.
 	setColorerMode(args.colorerMode)
 
+	// Refcount sanitizer for SPEC RUNS: `maxon spec-test --rc-sanitize` compiles
+	// every fragment with the sanitizer expanded (build-command sanitizing flows
+	// through `compile(...)` instead). False (the default) leaves spec runs
+	// byte-identical to before the sanitizer existed.
+	setSpecRcSanitize(args.rcSanitize)
+
 	let exit = match args.command 'cmd'
 		build gives runBuild(args)
 		specTest gives runSpecTests(args)
@@ -121,6 +127,7 @@ function printUsage()
 	print("Build options (build, run):\n")
 	print("  --emit-ir                Write .ir file\n")
 	print("  --leak-check             Wire the process-exit leak gate: exit 101 if any allocation is live at exit (uses the stdlib cache)\n")
+	print("  --rc-sanitize            Refcount sanitizer: poison+quarantine freed objects so the first touch of a freed object panics immediately (diagnostic; zero cost when off)\n")
 	print("  --dump-stages[=NAMES]    Write IR at each pipeline stage (user program only); NAMES = comma-separated pass-name substrings to dump only matching stages (e.g. =insert-refcounts)\n")
 	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
@@ -169,7 +176,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'hasCacheRoot'
 
 	let startMs = Clock.nowMs()
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries, fastRegalloc: args.fastRegalloc, outputPathOverride: args.outputOverride) otherwise (e) 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries, fastRegalloc: args.fastRegalloc, outputPathOverride: args.outputOverride, rcSanitize: args.rcSanitize) otherwise (e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
 			directoryNotFound(p) then printError("error: directory not found: {p}\n")
@@ -195,6 +202,14 @@ function runSpecTests(args MaxonArgs) returns ExitCode
 end 'runSpecTests'
 
 function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
+	// Golden blocks pin DEFAULT-build output; a sanitized build's IR and .rdata
+	// legitimately differ, so regenerating goldens from one would poison every
+	// subsequent default run. Reject the combination outright.
+	if args.updateRequired and args.rcSanitize 'sanitizedRegen'
+		printError("error: --update-required cannot be combined with --rc-sanitize (goldens must be regenerated from a default build)\n")
+		return 1
+	end 'sanitizedRegen'
+
 	let target = args.target()
 	if not isSupportedTarget(target) 'unsupported'
 		let host = detectHostTarget()

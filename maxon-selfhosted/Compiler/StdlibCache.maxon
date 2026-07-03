@@ -294,7 +294,15 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // getCompilerFingerprint). A v85 header would be misread — its mtime qword
 // compared against the new content hash — so the version gate forces clean
 // regeneration of every existing cache.
-let CACHE_FORMAT_VERSION = 87
+//
+// v88: cache filenames gain the build-options token (`libraryOptionsToken` —
+// today just `-rcsan` for `--rc-sanitize` builds), because `--rc-sanitize`
+// changes the stdlib's emitted bytes (the sanitizer gate in
+// stdlib/Internals.maxon folds to 1) while the compiler fingerprint and the
+// stdlib source checksum stay identical. Pre-v88 caches predate the token and
+// could be a sanitized stdlib written by an interrupted experiment, so the
+// version gate forces clean regeneration.
+let CACHE_FORMAT_VERSION = 88
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
