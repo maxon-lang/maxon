@@ -111,8 +111,12 @@ function main() returns ExitCode
 		return 3
 	end 'check-success'
 	// `cmd /c cd` (Windows) / `pwd` (POSIX) prints the working directory it
-	// inherited from us.
-	if not result.stdout.contains(cwd.path) 'check-cwd'
+	// inherited from us. Compare case-insensitively: Windows paths are
+	// case-insensitive, and the child may report the on-disk casing while our
+	// process inherited a differently-cased cwd string from its launcher (the
+	// mismatch is real — e.g. a shell started in `...\dev\maxon` on a disk
+	// whose directory is `...\Dev\maxon`).
+	if not result.stdout.toLower().contains(cwd.path.toLower()) 'check-cwd'
 		return 4
 	end 'check-cwd'
 	return 0
