@@ -332,7 +332,19 @@ function pickRegisterForRange(range LiveRange, usedRegs BoolArray, hintReservedR
 			let hintIsCallerSaved = regIsCallerSaved(effectiveHint, pool: pool, callerSavedMask: callerSavedMask)
 			let hintClassSafe = range.crossesCall == false or not hintIsCallerSaved
 
-			if not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
+			// Honor the hint only when it names a register in this class's
+			// ALLOCATABLE pool. A `mov virt, phys` from a reserved register
+			// seeds a hint to that register — `load_frame_ptr` lowers to
+			// `mov virt, rbp` (x29 on arm64) — and honoring it colors the
+			// virtual INTO the frame pointer: usedRegs cannot report a
+			// non-pool register as busy (it is not tracked), so the hint
+			// passes every other check, and a two-address op then mutates
+			// rbp in place, corrupting the epilogue's `mov rsp, rbp` frame
+			// teardown (observed as a return to a garbage address the first
+			// time stdlib code read its own frame pointer).
+			let hintInPool = poolIndexOfReg(effectiveHint, poolIndexOf: poolIndexOf) != RM_NONE
+
+			if hintInPool and not isRegUsed(usedRegs, regOrd: effectiveHint, poolIndexOf: poolIndexOf) and not hintConflictsFixed and hintClassSafe 'hintAvail'
 				chosenReg = effectiveHint
 			end 'hintAvail'
 		end 'hasHint'
