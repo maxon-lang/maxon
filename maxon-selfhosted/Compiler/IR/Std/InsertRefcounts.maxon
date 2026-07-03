@@ -5631,12 +5631,11 @@ function applyPlansForBlock(ctx RcContext, blockRef BlockRef)
 		return
 	end 'none'
 
-	// Selection sort descending by position; ties keep insertion order reversed
-	// so multiple ops planned at the same position land in plan order (an incref
-	// planned before a decref at the same pos stays before it after both are
-	// inserted descending — applying the later-planned one first at pos P pushes
-	// it down, then the earlier one at pos P lands above it).
-	sortInsertionsDescending(mine)
+	// Order the block's insertions for application (see `sortInsertionsDescending`):
+	// descending by position, and within one position RETAINS applied last so they
+	// land ABOVE (execute before) the releases at that position — the
+	// retain-before-release invariant.
+	sortInsertionsDescending(ctx, arr: mine)
 
 	let block = try ctx.module.blocks.get(blockRef) otherwise panic("applyPlansForBlock: blockRef not in module.blocks")
 	for ins in mine 'apply'
@@ -5644,28 +5643,50 @@ function applyPlansForBlock(ctx RcContext, blockRef BlockRef)
 	end 'apply'
 end 'applyPlansForBlock'
 
-// STABLE insertion sort of an RcInsertion array by descending `pos`. Stability
-// is REQUIRED, not incidental: equal-pos entries must retain their relative queue
-// order so that applying them descending reverses each same-pos group (an op
-// queued before another at the same pos lands above it — see the caller's note,
-// and `planAddressTakenSlotReleaseBeforeStore`'s load/decref pairing that depends
-// on it). The previous selection sort SWAPPED a far max-pos element into an
-// earlier slot, which could reorder an equal-pos pair sitting between them — that
-// flipped a planned load/decref into decref/load (a use-before-def the arm64
-// backend then emitted verbatim, decref'ing a stale register → SIGSEGV). A
-// strict-comparison insertion sort never moves an equal-pos entry past its peer.
-// The arrays are tiny (a handful of refcount ops per block).
-function sortInsertionsDescending(arr RcInsertionArray)
+// STABLE insertion sort of an RcInsertion array into APPLICATION order: descending
+// by `pos`, and within one position a two-level tie-break — non-RETAINS first, then
+// RETAINS, each group keeping its relative queue order. `applyPlansForBlock` inserts
+// the array front-to-back and every insert at the same `pos` pushes the previous one
+// DOWN, so the entry applied LAST at a position ends up on TOP (executes first).
+// Ordering retains last therefore lands them ABOVE the releases at that position —
+// the RETAIN-BEFORE-RELEASE invariant.
+//
+// WHY retain-before-release is required (not cosmetic): a release at a position may
+// run a destructor that frees an object a pending retain at the SAME position is about
+// to incref. The canonical case is an inlined multi-arm accessor arm
+// `f = load(base + off); decref base; incref f`: `f` is an interior pointer loaded out
+// of `base`, so decref'ing `base` first runs its destructor, which frees the very field
+// `f` aims at, and the following incref then touches freed memory (the
+// `exprType`/`ExprResult` `load ty; decref result; incref ty` over-release in the
+// self-compiled `Parser.parsePostfix`, an `INCREF of freed object … __destruct_*`).
+// The field's def-acquire (`planAcquireIncrefs`) and the base's last-use release
+// (a `planTerminatorDeaths` term-drop or a `planInBlockDeaths` death) both land at
+// that position; the acquire is queued in the EARLIER sweep, so front-to-back
+// application put the later-queued release on top — this tie-break puts the acquire
+// on top instead. (The edge-death path splits a fresh block and is ordered
+// separately by `planBorrowRootEdgeRelease`, so it is unaffected.)
+//
+// Stability WITHIN a group is REQUIRED, not incidental: two non-retains (or two
+// retains) at one position keep their relative queue order so
+// `planAddressTakenSlotReleaseBeforeStore`'s load/decref pairing (both non-retains)
+// stays load-above-decref. A strict-comparison insertion sort never moves an entry
+// past a peer it ties with under the composite key. The arrays are tiny (a handful of
+// refcount ops per block).
+function sortInsertionsDescending(ctx RcContext, arr RcInsertionArray)
 	let n = arr.count()
 	var i = 1
 	while i < n 'outer'
 		let key = copyInsertion(try arr.get(i) otherwise panic("sortInsertionsDescending: get({i}) OOB"))
+		let keyIsRetain = insertionOpIsRetain(ctx, opIdx: key.opIdx)
 		var j = i - 1
-		// Shift every entry with STRICTLY smaller pos one slot to the right; stop at
-		// the first entry whose pos is >= key.pos so equal-pos ties keep their order.
+		// Shift `cur` one slot right (it applies AFTER `key`) while `key` sorts before
+		// it: `key` has a strictly larger pos, or — same pos — `key` is a non-retain and
+		// `cur` is a retain (non-retains apply first so retains land on top). Stop at the
+		// first `cur` that sorts at-or-before `key`, so equal-key ties keep queue order.
 		while j >= 0 'inner'
 			let cur = copyInsertion(try arr.get(j) otherwise panic("sortInsertionsDescending: get({j}) OOB"))
-			if cur.pos >= key.pos 'stop'
+			let curIsRetain = insertionOpIsRetain(ctx, opIdx: cur.opIdx)
+			if insertionAppliesBeforeOrTies(cur, curIsRetain: curIsRetain, key: key, keyIsRetain: keyIsRetain) 'stop'
 				break
 			end 'stop'
 			try arr.set(j + 1, value: cur) otherwise panic("sortInsertionsDescending: set({j + 1}) OOB")
@@ -5675,6 +5696,52 @@ function sortInsertionsDescending(arr RcInsertionArray)
 		i = i + 1
 	end 'outer'
 end 'sortInsertionsDescending'
+
+// True iff `cur` sorts at-or-before `key` in application order, so the insertion sort
+// must STOP shifting (leave `cur` ahead of `key`): `cur` has a strictly larger pos, or
+// — same pos — `cur` is not a retain-after-a-non-retain relative to `key` (i.e. it is
+// NOT the case that `cur` is a retain and `key` is a non-retain). Equal composite keys
+// tie here, preserving queue order.
+function insertionAppliesBeforeOrTies(cur RcInsertion, curIsRetain bool, key RcInsertion, keyIsRetain bool) returns bool
+	if cur.pos > key.pos 'higherPos'
+		return true
+	end 'higherPos'
+	if cur.pos < key.pos 'lowerPos'
+		return false
+	end 'lowerPos'
+	// Same pos: `key` (a non-retain) sorts before `cur` (a retain) ⇒ do NOT stop.
+	return not (curIsRetain and not keyIsRetain)
+end 'insertionAppliesBeforeOrTies'
+
+// True iff the queued op at `opIdx` is a RETAIN — an `mm_incref` / `mm_retain_type_param`
+// -family call that increments a refcount. Consulted by `sortInsertionsDescending` to
+// keep retains ordered before releases at a shared insertion position.
+function insertionOpIsRetain(ctx RcContext, opIdx OpIndex) returns bool
+	let op = try ctx.module.ops.get(opIdx) otherwise return false
+	return match op 'chk'
+		call(c) gives callOpCalleeIsRetain(c)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'chk'
+end 'insertionOpIsRetain'
+
+function callOpCalleeIsRetain(c StdCallOp) returns bool
+	return match c 'chk'
+		call(_, callee, _) gives calleeNameIsRetain(callee)
+		ret gives false
+		tryCall gives false
+		indirectCall to errorReturn gives false
+	end 'chk'
+end 'callOpCalleeIsRetain'
+
+// True iff `callee` is a refcount-INCREMENT runtime helper: the plain `mm_incref`
+// family plus the layout-routed type-param retains (`mm_retain_type_param` /
+// `mm_retain_type_param_at`) `buildRetainForValue` emits for generic elements.
+function calleeNameIsRetain(callee String) returns bool
+	return calleeNameIsIncref(callee) or callee == "mm_retain_type_param" or callee == "mm_retain_type_param_at"
+end 'calleeNameIsRetain'
 
 // Snapshot an RcInsertion into a fresh value (all fields are scalars), used by
 // the swap so a read does not borrow the array across a `set`.
