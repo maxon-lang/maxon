@@ -2,7 +2,7 @@
 // Mirrors MirPrinter/TargetPrinter so `--dump-stages` and `--emit-ir` produce
 // a uniform `module { ... }` layout across every phase.
 
-export function stdModuleToString(module StdModule, skipStdlib bool) returns String
+export function stdModuleToString(module StdModule, skipStdlib bool, funcFilter String = "") returns String
 	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
@@ -10,6 +10,11 @@ export function stdModuleToString(module StdModule, skipStdlib bool) returns Str
 				continue
 			end 'hidden'
 		end 'filter'
+		// `--dump-func` narrowing: empty filter selects every function, so a
+		// plain dump is unchanged. Non-empty keeps only substring-matching names.
+		if not filterSelectsBySubstring(funcFilter, target: func.name) 'notWanted'
+			continue
+		end 'notWanted'
 		// O(1)-amortized `append`, not O(n) interp reallocation — see the
 		// note in TargetPrinter.targetModuleToString.
 		body.append(stdFunctionToString(module, func: func))

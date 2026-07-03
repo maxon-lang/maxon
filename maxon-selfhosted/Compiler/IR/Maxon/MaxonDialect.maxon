@@ -1707,9 +1707,9 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 	let rb = "\}"
 	return match op 'print'
 		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {valueType.toString(project)}{rb}"
-		stringConst(result, stringId, _) gives "%{String.from(result)} = maxon.string_const \"{project.strings.get(stringId)}\" #{stringId}"
-		charLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.char_literal \"{project.strings.get(stringId)}\" #{stringId}"
-		byteStringLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.byte_string_literal \"{project.strings.get(stringId)}\" #{stringId}"
+		stringConst(result, stringId, _) gives "%{String.from(result)} = maxon.string_const \"{escapeIrStringBytes(project.strings.get(stringId))}\" #{stringId}"
+		charLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.char_literal \"{escapeIrStringBytes(project.strings.get(stringId))}\" #{stringId}"
+		byteStringLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.byte_string_literal \"{escapeIrStringBytes(project.strings.get(stringId))}\" #{stringId}"
 		stringInterp(result, parts, _) gives "%{String.from(result)} = maxon.string_interp [{formatStringInterpParts(project, parts: parts)}]"
 		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {slotType.toString(project)}"
 		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {slotType.toString(project)}"
@@ -1727,7 +1727,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		call(result, callee, callContext, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		methodCall(result, receiver, methodName, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
-		panic(stringId, _) gives "maxon.panic \"{project.strings.get(stringId)}\" #{stringId}"
+		panic(stringId, _) gives "maxon.panic \"{escapeIrStringBytes(project.strings.get(stringId))}\" #{stringId}"
 		panicDynamic(stringValue, _) gives "maxon.panic_dynamic %{String.from(stringValue)}"
 		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
 		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
@@ -1819,7 +1819,7 @@ function formatStringInterpParts(project Project, parts StringInterpPartArray) r
 			out = "{out}, "
 		end 'comma'
 		match part 'k'
-			literal(stringId) then out = "{out}\"{project.strings.get(stringId)}\" #{stringId}"
+			literal(stringId) then out = "{out}\"{escapeIrStringBytes(project.strings.get(stringId))}\" #{stringId}"
 			expr(valueName, kind, formatSpecId) then out = "{out}{formatInterpExprPart(project, valueName: valueName, kind: kind, formatSpecId: formatSpecId)}"
 		end 'k'
 	end 'each'

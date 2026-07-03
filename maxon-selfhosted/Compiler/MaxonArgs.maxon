@@ -47,6 +47,13 @@ export type MaxonArgs
 	// advances for skipped stages so a filtered dump keeps the same `NN-`
 	// prefixes as a full one. Empty = dump every stage (the bare-flag default).
 	export var dumpStagesFilter as String
+	// `--dump-func[=NAMES]`: comma-separated FUNCTION-NAME substrings that narrow
+	// every `--dump-stages` stage render down to only the matching function(s)
+	// (e.g. `parsePostfix` matches the qualified `Compiler.Parser.parsePostfix`).
+	// Empty = every function. It filters WITHIN stage dumps rather than triggering
+	// them, so it is inert without `--dump-stages`. Threaded through runBuild into
+	// `IrDumpOptions.stagesFuncFilter`.
+	export var dumpFuncFilter as String
 	export var trackAllocs as bool
 	export var updateRequired as bool
 	export var verbose as bool
@@ -156,6 +163,7 @@ export type MaxonArgs
 			dumpStages: false,
 			dumpStagesStdlib: false,
 			dumpStagesFilter: "",
+			dumpFuncFilter: "",
 			trackAllocs: false,
 			updateRequired: false,
 			verbose: false,
@@ -262,7 +270,12 @@ export type MaxonArgs
 				args.dumpStages = true
 				args.dumpStagesStdlib = true
 				args.dumpStagesFilter = try CommandLine.optionValue(arg) otherwise ""
-			end 'isDumpStagesStdlibFiltered' else if arg == "--track-allocs" 'isTrackAllocs'
+			end 'isDumpStagesStdlibFiltered' else if arg.startsWith("--dump-func=") 'isDumpFunc'
+				// Sentinel: an empty NAMES list means "every function" — the same
+				// as not passing the flag. Narrows `--dump-stages` output to the
+				// matching function(s); inert on its own (no stage dumps requested).
+				args.dumpFuncFilter = try CommandLine.optionValue(arg) otherwise ""
+			end 'isDumpFunc' else if arg == "--track-allocs" 'isTrackAllocs'
 				args.trackAllocs = true
 			end 'isTrackAllocs' else if arg == "--update-required" 'isUpdateRequired'
 				args.updateRequired = true

@@ -1,7 +1,7 @@
 // TargetPrinter: serializes a TargetModule to text.
 // Used by spec tests to capture the final compiled IR into fragment files.
 
-export function targetModuleToString(module TargetModule, skipStdlib bool, cpu CpuArch) returns String
+export function targetModuleToString(module TargetModule, skipStdlib bool, cpu CpuArch, funcFilter String = "") returns String
 	var body = ""
 	for func in module.functions 'eachFunc'
 		if skipStdlib 'filter'
@@ -9,6 +9,11 @@ export function targetModuleToString(module TargetModule, skipStdlib bool, cpu C
 				continue
 			end 'hidden'
 		end 'filter'
+		// `--dump-func` narrowing: empty filter selects every function, so a
+		// plain dump is unchanged. Non-empty keeps only substring-matching names.
+		if not filterSelectsBySubstring(funcFilter, target: func.name) 'notWanted'
+			continue
+		end 'notWanted'
 		// `append` mutates the String buffer with amortized-O(1) doubling growth,
 		// keeping the printer O(total bytes) instead of the O(n²) shape you get
 		// from `body = "{body}{...}"` (each interp allocs a fresh buffer sized

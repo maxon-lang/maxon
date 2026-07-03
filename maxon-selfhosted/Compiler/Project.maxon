@@ -47,9 +47,17 @@ export type IrDumpOptions
 	// stages still advance `passCounter` so a filtered dump keeps the same
 	// `NN-` numbering as a full one. Empty = every stage.
 	export var stagesFilter as String
+	// FUNCTION selection from `--dump-func[=NAMES]`: a comma-separated list of
+	// function-NAME substrings (e.g. `parsePostfix` matches the qualified
+	// `Compiler.Parser.parsePostfix`). Orthogonal to `stagesFilter`: it narrows
+	// each rendered stage to only the matching functions (`funcWanted`), so a
+	// dump of one function out of the ~8000-function self-compile is KB-scale
+	// instead of the 100+ MB a full stage dump produces. Empty = every function
+	// (the default), keeping a stage dump byte-identical to before this existed.
+	export var stagesFuncFilter as String
 
 	export static function disabled() returns IrDumpOptions
-		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1, stagesIncludeStdlib: false, stagesFilter: ""}
+		return Self{emitFinal: false, stagesBasePath: "", passCounter: 1, stagesIncludeStdlib: false, stagesFilter: "", stagesFuncFilter: ""}
 	end 'disabled'
 
 	// True when any form of IR dumping is active. Callers use this to bypass
@@ -80,21 +88,47 @@ export type IrDumpOptions
 	// `dce-functions`). Callers that skip a stage must still claim its file
 	// number via `claimStageNumber` so filtered and full dumps share numbering.
 	export function stageWanted(label String) returns bool
-		if stagesFilter.isEmpty() 'all'
-			return true
-		end 'all'
-
-		for entry in stagesFilter.split(",") 'eachEntry'
-			let wanted = entry.trim()
-
-			if not wanted.isEmpty() and label.contains(wanted) 'hit'
-				return true
-			end 'hit'
-		end 'eachEntry'
-
-		return false
+		return filterSelectsBySubstring(stagesFilter, target: label)
 	end 'stageWanted'
+
+	// True when a function named `name` should be RENDERED in a stage dump under
+	// the current `--dump-func` filter (`stagesFuncFilter`). Empty filter selects
+	// every function; otherwise `name` must contain one of the comma-separated
+	// entries — the same substring rule as `stageWanted`, so `parsePostfix`
+	// matches the qualified `Compiler.Parser.parsePostfix`. The phase printers
+	// apply the identical predicate directly via `filterSelectsBySubstring`
+	// because they receive the raw filter string, not the IrDumpOptions.
+	export function funcWanted(name String) returns bool
+		return filterSelectsBySubstring(stagesFuncFilter, target: name)
+	end 'funcWanted'
 end 'IrDumpOptions'
+
+// Shared CSV-substring selector backing both `--dump-stages=` stage selection
+// (`IrDumpOptions.stageWanted`) and `--dump-func=` function selection
+// (`IrDumpOptions.funcWanted` plus the phase printers). An empty `filter`
+// selects everything; otherwise `target` is selected iff any comma-separated
+// entry (trimmed; empty entries ignored) is a SUBSTRING of it. Substring — not
+// exact — so a qualified name like `Compiler.Parser.parsePostfix` is reachable
+// by the bare `parsePostfix`, matching how `refcounts` matches the stage
+// `insert-refcounts`. `module` (not `export`) visibility: every caller — the
+// `IrDumpOptions` methods here and the four phase printers under `Compiler/IR/`
+// — lives inside this `Compiler/` module subtree, so exporting it globally
+// would trip the unused-export lint (E3093).
+module function filterSelectsBySubstring(filter String, target String) returns bool
+	if filter.isEmpty() 'all'
+		return true
+	end 'all'
+
+	for entry in filter.split(",") 'eachEntry'
+		let wanted = entry.trim()
+
+		if not wanted.isEmpty() and target.contains(wanted) 'hit'
+			return true
+		end 'hit'
+	end 'eachEntry'
+
+	return false
+end 'filterSelectsBySubstring'
 
 // Visibility tier for a top-level declaration. Three tiers match the
 // language reference:

@@ -63,6 +63,154 @@ module function formatBlockArgs(block IrBlock) returns String
 	return sb
 end 'formatBlockArgs'
 
+// --- Byte-safe string helpers ---
+//
+// The Maxon-dialect printer embeds interned strings (`b"\xFF"` byte-string
+// literals, non-UTF8 source strings) into dump text, and `stabilizeLabels`
+// below walks every printed line. Both must be byte-oriented: decoding an
+// arbitrary byte as a UTF-8 codepoint panics (a malformed 4-byte lead exceeds
+// `Codepoint`'s range). These helpers iterate BYTES and never decode, so the
+// printer is robust to any byte the IR carries.
+
+// The byte routines below test and emit ASCII bytes by their hex codepoint
+// with a `// 'c'` comment, and cast computed bytes with `... as Byte`. This
+// follows the convention noted in Json.maxon — a named boundary reads worse
+// than the digit it stands for — and stays portable across both the C#
+// bootstrap and the self-hosted compiler (a file-private byte-valued `enum`
+// used as a parameter type is not resolvable by the bootstrap).
+
+// A single hex nibble. Wider than the real 0..15 domain (mirroring Json.maxon's
+// hexNybble input) so a `... and 0xF` expression passed in fits without an
+// explicit ranged construction; the guard enforces the true contract.
+typealias HexNibble = int(0 to u8.max)
+
+// Byte length of the `stabilizeLabels` marker-lookback window. Wide range —
+// this is a rolling buffer with no hard conceptual cap, and the value the trim
+// enforces (`windowMax`) lives at the call site.
+typealias ByteWindowLen = int(0 to u64.max)
+
+// Escape an interned string's RAW BYTES for embedding between the `"`s of IR
+// dump text. Interned strings can hold arbitrary bytes; the whole dump is later
+// walked by `stabilizeLabels`, where a raw non-UTF8 byte would panic the
+// codepoint decoder. We iterate BYTES (never decode UTF-8) and emit a pure-
+// ASCII rendering: printable ASCII passes through, the common control
+// characters get C-style escapes, quote/backslash are backslash-escaped, and
+// every other byte (including all bytes of a multi-byte UTF-8 sequence) becomes
+// `\xNN`. The result is always valid ASCII, so downstream text walks never trip.
+module function escapeIrStringBytes(s String) returns String
+	var out = ByteArray.create()
+	for b in s.bytes() 'eachByte'
+		appendEscapedIrByte(b, out: out)
+	end 'eachByte'
+	return String.from(out)
+end 'escapeIrStringBytes'
+
+function appendEscapedIrByte(b Byte, out ByteArray)
+	// `"` (0x22) and `\` (0x5C) would break the surrounding literal; backslash-
+	// escape both.
+	if b == 0x22 or b == 0x5C 'selfEscaped'
+		out.push(0x5C as Byte)
+		out.push(b)
+		return
+	end 'selfEscaped'
+	if b == 0x0A 'nl'
+		pushShortEscape(0x6E as Byte, out: out)
+		return
+	end 'nl'
+	if b == 0x09 'tab'
+		pushShortEscape(0x74 as Byte, out: out)
+		return
+	end 'tab'
+	if b == 0x0D 'cr'
+		pushShortEscape(0x72 as Byte, out: out)
+		return
+	end 'cr'
+	if b >= 0x20 and b <= 0x7E 'printable'
+		out.push(b)
+		return
+	end 'printable'
+	pushHexEscape(b, out: out)
+end 'appendEscapedIrByte'
+
+// Emit a two-byte `\<escLetter>` short escape (e.g. `\n`, `\t`). `escLetter` is
+// the ASCII byte of the escape letter (`0x6E` for `n`, etc.).
+function pushShortEscape(escLetter Byte, out ByteArray)
+	out.push(0x5C as Byte)
+	out.push(escLetter)
+end 'pushShortEscape'
+
+// Emit `\xNN` (lowercase hex) for a byte that has no shorter escape.
+function pushHexEscape(b Byte, out ByteArray)
+	out.push(0x5C as Byte)
+	out.push(0x78 as Byte)
+	out.push(hexNibbleByte((b shr 4) and 0xF))
+	out.push(hexNibbleByte(b and 0xF))
+end 'pushHexEscape'
+
+// Map a 0..15 nibble to its lowercase-hex ASCII byte. Mirrors Json.maxon's
+// hexNybble; the guard documents the 0..15 contract callers satisfy via `and 0xF`.
+function hexNibbleByte(nibble HexNibble) returns Byte
+	if nibble > 15 'oob'
+		panic("hexNibbleByte: nibble {nibble} outside 0..15")
+	end 'oob'
+	if nibble < 10 'digit'
+		return 0x30 + nibble
+	end 'digit'
+	return 0x61 + (nibble - 10)
+end 'hexNibbleByte'
+
+// Append every byte of `s` to `dst`. Byte-oriented so the label rewriter can
+// splice a (possibly non-ASCII) token String into a ByteArray line buffer
+// without a grapheme decode.
+function appendStringBytes(dst ByteArray, s String)
+	for b in s.bytes() 'each'
+		dst.push(b)
+	end 'each'
+end 'appendStringBytes'
+
+// Byte-level equivalent of `isIdentChar` for the ASCII identifier set the label
+// walks recognize: alphanumeric, `_`, `.`, `-`. Byte-based so the walks never
+// decode UTF-8 — a raw non-UTF8 byte is simply not an identifier byte, so it
+// terminates the run exactly as a non-ident grapheme would, but without the
+// codepoint-decode panic.
+function isIdentByte(b Byte) returns bool
+	// alphanumeric, `_` (0x5F), `.` (0x2E), `-` (0x2D)
+	return isAsciiAlphanumericByte(b) or b == 0x5F or b == 0x2E or b == 0x2D
+end 'isIdentByte'
+
+// ASCII alphanumeric test, matching `Ascii.isAlphanumeric` for single-byte
+// input (0-9, A-Z, a-z). Inline hex per the range-comparison convention.
+function isAsciiAlphanumericByte(b Byte) returns bool
+	return (b >= 0x30 and b <= 0x39) or (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A)
+end 'isAsciiAlphanumericByte'
+
+// ASCII digit test, matching `Ascii.isDigit` for single-byte input ('0'-'9').
+function isAsciiDigitByte(b Byte) returns bool
+	return b >= 0x30 and b <= 0x39
+end 'isAsciiDigitByte'
+
+// Return the last `count` bytes of `src` (all of it when it is already that
+// short). Byte-oriented replacement for the grapheme-based slice in the
+// label-window trim: the window is only ever compared against ASCII markers, so
+// keeping the last N BYTES both suffices and stays panic-free on a window that
+// captured a raw non-UTF8 byte.
+function lastBytes(src ByteArray, count ByteWindowLen) returns ByteArray
+	let total = src.count()
+	if count >= total 'all'
+		return src
+	end 'all'
+	let skip = total - count
+	var out = ByteArray.create()
+	var i = 0
+	for b in src 'each'
+		if i >= skip 'keep'
+			out.push(b)
+		end 'keep'
+		i = i + 1
+	end 'each'
+	return out
+end 'lastBytes'
+
 // --- Stable label renumbering ---
 //
 // Counter-based identifier names in the lowering pipeline (block labels,
@@ -111,8 +259,8 @@ typealias BracketDepth = int(0 to u64.max)
 let MODULE_SCOPE = "<module>"
 
 // Byte-level scan for ASCII underscore (0x5F) anywhere in `line`. Used by
-// `stabilizeLabels`'s pass1/pass2 fast paths to skip the grapheme-aware
-// `for c in line` walk on lines that can't contain a renameable token
+// `stabilizeLabels`'s pass1/pass2 fast paths to skip the per-byte
+// identifier-run walk on lines that can't contain a renameable token
 // (every counter-suffixed candidate has the shape `<base>_<digits>`).
 // Avoids the per-call wrapper allocation that `line.contains("_")` would
 // incur from materializing a fresh String literal at every call site.
@@ -186,21 +334,20 @@ function extractTopLevelFuncName(line String) returns String
 	if not line.startsWith(marker) 'noMatch'
 		return ""
 	end 'noMatch'
-	var name = ""
+	var nameBytes = ByteArray.create()
 	var pastMarker = 0
 	let markerLen = marker.count()
-	for c in line 'eachChar'
+	for b in line.bytes() 'eachByte'
 		if pastMarker < markerLen 'inMarker'
 			pastMarker = pastMarker + 1
 			continue
 		end 'inMarker'
-		if isIdentChar(c) 'isIdent'
-			name.append(c.toString())
-		end 'isIdent' else 'notIdent'
+		if not isIdentByte(b) 'notIdent'
 			break
 		end 'notIdent'
-	end 'eachChar'
-	return name
+		nameBytes.push(b)
+	end 'eachByte'
+	return String.from(nameBytes)
 end 'extractTopLevelFuncName'
 
 // Walk `line` and look for the contexts that introduce or reference a
@@ -256,42 +403,42 @@ end 'collectLabelsFromLine'
 //   2 = collecting identifier; 3 = saw colon, expecting only whitespace.
 function extractBlockHeader(line String) returns String
 	var state = 0
-	var name = ""
-	for c in line 'walk'
+	var nameBytes = ByteArray.create()
+	for b in line.bytes() 'walk'
 		if state == 0 'wantSp1'
-			if c != ' ' 'notSp'
-				return ""
-			end 'notSp'
-			state = 1
-			continue
+			if b == 0x20 'isSp'
+				state = 1
+				continue
+			end 'isSp'
+			return ""
 		end 'wantSp1'
 		if state == 1 'wantSp2'
-			if c != ' ' 'notSp2'
-				return ""
-			end 'notSp2'
-			state = 2
-			continue
+			if b == 0x20 'isSp2'
+				state = 2
+				continue
+			end 'isSp2'
+			return ""
 		end 'wantSp2'
 		if state == 2 'collectName'
-			if isIdentChar(c) 'isIdent'
-				name.append(c.toString())
+			if isIdentByte(b) 'isIdent'
+				nameBytes.push(b)
 				continue
 			end 'isIdent'
-			if c == ':' 'colon'
+			if b == 0x3A 'colon'
 				state = 3
 				continue
 			end 'colon'
 			return ""
 		end 'collectName'
 		if state == 3 'afterColon'
-			if c != ' ' and c != '\t' 'nonWs'
-				return ""
-			end 'nonWs'
-			continue
+			if b == 0x20 or b == 0x09 'isWs'
+				continue
+			end 'isWs'
+			return ""
 		end 'afterColon'
 	end 'walk'
-	if state == 3 and not name.isEmpty() 'valid'
-		return name
+	if state == 3 and nameBytes.count() > 0 'valid'
+		return String.from(nameBytes)
 	end 'valid'
 	return ""
 end 'extractBlockHeader'
@@ -313,34 +460,38 @@ function scanLineForContextualLabels(line String, currentFunc String, renames La
 	// We also track whether we're inside `[...]` brackets so that
 	// identifiers like `[__str_0]` get classified as data labels.
 	var bracketDepth = 0
-	var token = ""
-	var precedingWindow = ""
+	// Token and window are BYTE buffers (never grapheme-decoded). Tokens hold
+	// only ASCII identifier bytes; the window can capture arbitrary delimiter
+	// bytes, but is only ever compared against ASCII markers via byte-safe
+	// String ops (`contains`/`endsWith`), so `String.from` at flush time is safe.
+	var tokenBytes = ByteArray.create()
+	var windowBytes = ByteArray.create()
 	let windowMax = 40
-	for c in line 'eachChar'
-		if isIdentChar(c) 'identChar'
-			token.append(c.toString())
+	for b in line.bytes() 'eachByte'
+		if isIdentByte(b) 'identChar'
+			tokenBytes.push(b)
 		end 'identChar' else 'delim'
-			if not token.isEmpty() 'flush'
-				classifyAndRegister(token, precedingWindow: precedingWindow, bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
-				token = ""
+			if tokenBytes.count() > 0 'flush'
+				classifyAndRegister(String.from(tokenBytes), precedingWindow: String.from(windowBytes), bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+				tokenBytes = ByteArray.create()
 			end 'flush'
-			if c == '[' 'openBracket'
+			if b == 0x5B 'openBracket'
 				bracketDepth = bracketDepth + 1
 			end 'openBracket'
-			if c == ']' 'closeBracket'
+			if b == 0x5D 'closeBracket'
 				if bracketDepth > 0 'depthOK'
 					bracketDepth = bracketDepth - 1
 				end 'depthOK'
 			end 'closeBracket'
 		end 'delim'
-		// Maintain the trailing window.
-		precedingWindow.append(c.toString())
-		if precedingWindow.count() > windowMax 'trim'
-			precedingWindow = sliceLast(precedingWindow, count: windowMax)
+		// Maintain the trailing window (last `windowMax` bytes).
+		windowBytes.push(b)
+		if windowBytes.count() > windowMax 'trim'
+			windowBytes = lastBytes(windowBytes, count: windowMax)
 		end 'trim'
-	end 'eachChar'
-	if not token.isEmpty() 'flushTail'
-		classifyAndRegister(token, precedingWindow: precedingWindow, bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+	end 'eachByte'
+	if tokenBytes.count() > 0 'flushTail'
+		classifyAndRegister(String.from(tokenBytes), precedingWindow: String.from(windowBytes), bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
 	end 'flushTail'
 end 'scanLineForContextualLabels'
 
@@ -496,21 +647,28 @@ function appendRewrittenLine(out String, line String, renames LabelRenameMap, cu
 		out.append(line)
 		return
 	end 'fastPath'
-	var token = ""
-	for c in line 'eachChar'
-		if isIdentChar(c) 'ident'
-			token.append(c.toString())
+	// Build the rewritten line as a BYTE buffer: identifier runs are rewritten
+	// through the rename map (ASCII in, ASCII out), every other byte — including
+	// any raw non-UTF8 byte in printed identifier text — is copied verbatim. One
+	// `out.append` at the end avoids the per-delimiter String allocation the old
+	// grapheme walk paid via `c.toString()`.
+	var lineOut = ByteArray.create()
+	var tokenBytes = ByteArray.create()
+	for b in line.bytes() 'eachByte'
+		if isIdentByte(b) 'ident'
+			tokenBytes.push(b)
 		end 'ident' else 'delim'
-			if not token.isEmpty() 'flush'
-				out.append(rewriteToken(token, renames: renames, currentFunc: currentFunc))
-				token = ""
+			if tokenBytes.count() > 0 'flush'
+				appendStringBytes(lineOut, s: rewriteToken(String.from(tokenBytes), renames: renames, currentFunc: currentFunc))
+				tokenBytes = ByteArray.create()
 			end 'flush'
-			out.append(c.toString())
+			lineOut.push(b)
 		end 'delim'
-	end 'eachChar'
-	if not token.isEmpty() 'flushTail'
-		out.append(rewriteToken(token, renames: renames, currentFunc: currentFunc))
+	end 'eachByte'
+	if tokenBytes.count() > 0 'flushTail'
+		appendStringBytes(lineOut, s: rewriteToken(String.from(tokenBytes), renames: renames, currentFunc: currentFunc))
 	end 'flushTail'
+	out.append(String.from(lineOut))
 end 'appendRewrittenLine'
 
 // Substitute `token` via the rename map, with special handling for compound
@@ -604,14 +762,6 @@ function lookupQualified(renames LabelRenameMap, qualified String) returns Strin
 	end 'walkBack'
 	return ""
 end 'lookupQualified'
-
-// Chars allowed inside an identifier-run for the purposes of stabilizeLabels.
-// Function names can also start with a digit when synthesized by the batched
-// test rewriter (e.g. `1-Logic.storeAndCheck`), but the digit is just another
-// alphanumeric — no special start-char logic needed.
-function isIdentChar(c Character) returns bool
-	return Ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-'
-end 'isIdentChar'
 
 // Register a token discovered in a function-scoped definition context. If
 // the token doesn't end in `_<digits>` it's not a counter-suffixed label
@@ -738,18 +888,20 @@ function trailingDigitsHead(token String) returns String
 		return ""
 	end 'empty'
 
+	// Byte walk: tokens are ASCII identifier runs, so a byte index equals the
+	// grapheme index `sliceFirst` expects, and no UTF-8 decode is needed.
 	var charsBefore = 0
 	var runStart = 0
 	var runIsAllDigits = false
 	var runHadDigit = false
-	for c in token 'walk'
-		if c == '_' 'underscore'
+	for b in token.bytes() 'walk'
+		if b == 0x5F 'underscore'
 			runStart = charsBefore
 			runIsAllDigits = true
 			runHadDigit = false
 		end 'underscore' else 'notUnderscore'
 			if runIsAllDigits 'inCandidate'
-				if Ascii.isDigit(c) 'digit'
+				if isAsciiDigitByte(b) 'digit'
 					runHadDigit = true
 				end 'digit' else 'nonDigit'
 					runIsAllDigits = false
@@ -784,19 +936,6 @@ function sliceFirst(s String, count GraphemeCount) returns String
 	let endIdx = try advanceIndex(s, start: start, count: count) otherwise panic("sliceFirst: count exceeds s.count() — caller invariant")
 	return s.slice(start, endIndex: endIdx)
 end 'sliceFirst'
-
-// Return the last `count` grapheme clusters of `s`. Like sliceFirst but
-// from the right edge.
-function sliceLast(s String, count GraphemeCount) returns String
-	let total = s.count()
-	if count >= total 'all'
-		return s
-	end 'all'
-	let start = s.startIndex()
-	let skipCount = total - count
-	let cutIdx = try advanceIndex(s, start: start, count: skipCount) otherwise panic("sliceLast: skipCount exceeds s.count() — caller invariant")
-	return s.slice(cutIdx, endIndex: s.endIndex())
-end 'sliceLast'
 
 function advanceIndex(s String, start StringIndex, count GraphemeCount) returns StringIndex throws StringError
 	var idx = start

@@ -449,11 +449,16 @@ export type PassPipeline
 		// stdlib after each pass is what makes `--dump-stages` slow, and it is
 		// rarely what you want — `--dump-stages-stdlib` opts back in.
 		let skipStdlib = project.irDump.renderSkipsStdlib()
+		// `--dump-func` narrows each stage to matching functions. Empty (the
+		// default) selects every function, so a plain `--dump-stages` render is
+		// unchanged. Passed as a raw filter string the printers match via
+		// `filterSelectsBySubstring` (they have no IrDumpOptions of their own).
+		let funcFilter = project.irDump.stagesFuncFilter
 		return match phase 'pick'
-			maxon gives maxonModuleToString(project, module: maxonModule, skipStdlib: skipStdlib)
-			std gives stdModuleToString(stdModule, skipStdlib: skipStdlib)
-			mir gives mirModuleToString(mirModule, skipStdlib: skipStdlib)
-			target gives targetModuleToString(targetModule, skipStdlib: skipStdlib, cpu: targetModule.cpu)
+			maxon gives maxonModuleToString(project, module: maxonModule, skipStdlib: skipStdlib, funcFilter: funcFilter)
+			std gives stdModuleToString(stdModule, skipStdlib: skipStdlib, funcFilter: funcFilter)
+			mir gives mirModuleToString(mirModule, skipStdlib: skipStdlib, funcFilter: funcFilter)
+			target gives targetModuleToString(targetModule, skipStdlib: skipStdlib, cpu: targetModule.cpu, funcFilter: funcFilter)
 		end 'pick'
 	end 'renderPhaseModule'
 end 'PassPipeline'

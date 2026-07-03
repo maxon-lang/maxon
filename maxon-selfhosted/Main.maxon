@@ -130,6 +130,7 @@ function printUsage()
 	print("  --rc-sanitize            Refcount sanitizer: poison+quarantine freed objects so the first touch of a freed object panics immediately (diagnostic; zero cost when off)\n")
 	print("  --dump-stages[=NAMES]    Write IR at each pipeline stage (user program only); NAMES = comma-separated pass-name substrings to dump only matching stages (e.g. =insert-refcounts)\n")
 	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
+	print("  --dump-func=NAMES         Restrict --dump-stages output to functions whose name contains one of the comma-separated NAMES (e.g. =parsePostfix)\n")
 	print("  --track-allocs           Track heap allocations and print memory stats\n")
 	print("  --fast                   Fast register allocation: much faster dev builds, slightly worse codegen (default is quality)\n")
 	print("  --coverage               Emit a coverage-instrumented executable + .covmap\n")
@@ -162,6 +163,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 		irDump.stagesBasePath = fp.changeExtension("").toString()
 		irDump.stagesIncludeStdlib = args.dumpStagesStdlib
 		irDump.stagesFilter = args.dumpStagesFilter
+		irDump.stagesFuncFilter = args.dumpFuncFilter
 	end 'wantStages'
 	var irOutputPath = FilePath from ""
 	if args.emitIr 'wantIr'
