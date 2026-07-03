@@ -1666,6 +1666,16 @@ function computeIncomingOwnerAcquire(ctx RcContext)
 	// (returned or moved/consumed into a durable owner). Scanned once over all ops.
 	let transferred = collectOwnershipTransferredValues(ctx, maxVal: maxVal)
 
+	// (c) shared input: the set of heap FIELDS `[addrId + offset]` that are
+	// OVERWRITTEN (a store that releases the field's prior occupant) somewhere in
+	// this function. An `incomingOwner` value loaded from such a field is a borrow
+	// of the field's reference — when the field is overwritten while the value is
+	// still live, that reference is released and the borrow dangles, so the value
+	// must own its own +1. Post-mem2reg the field base (`self`, a param) is a
+	// single SSA value shared by the load and the store, so exact `(addrId,
+	// offset)` matching is sound. Collected once over all ops.
+	let overwrittenFields = collectOverwrittenFieldKeys(ctx)
+
 	// Decide each managed `incomingOwner` body value. One reusable operand
 	// buffer for the whole scan (refilled per op by `extractStdOpOperandsInto`).
 	var scratch = StdOpOperands.create()
@@ -1676,11 +1686,172 @@ function computeIncomingOwnerAcquire(ctx RcContext)
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("computeIncomingOwnerAcquire: opIdx not in module.ops")
 			extractStdOpOperandsInto(op, operands: scratch)
 			for defId in scratch.writeIds 'eachDef'
-				decideIncomingOwnerAcquire(ctx, id: defId, transferred: transferred)
+				decideIncomingOwnerAcquire(ctx, id: defId, defOp: op, transferred: transferred, overwrittenFields: overwrittenFields)
 			end 'eachDef'
 		end 'eachOp'
 	end 'eachBlock'
 end 'computeIncomingOwnerAcquire'
+
+// A heap field `[addrId + offset]` that is overwritten (its prior occupant
+// released) at a specific site in the function. `blockRef`/`pos` locate the
+// overwriting store so case (c) can check whether the borrow is LIVE past it —
+// a borrow released and then never read again needs no +1 (that release IS its
+// last use), while a borrow live past the release dangles and must own a +1.
+type OverwrittenFieldKey
+	export var addrId as ValueId
+	export var offset as MachineWord
+	export var blockRef as BlockRef
+	export var pos as NodeIndex
+
+	export static function create(addrId ValueId, offset MachineWord, blockRef BlockRef, pos NodeIndex) returns OverwrittenFieldKey
+		return Self{addrId: addrId, offset: offset, blockRef: blockRef, pos: pos}
+	end 'create'
+end 'OverwrittenFieldKey'
+
+typealias OverwrittenFieldKeyArray = Array with OverwrittenFieldKey
+
+// Collect every heap field `[addrId + offset]` overwritten in the function. A
+// managed `store_indirect` counts as an overwrite only when the field already
+// held a managed reference that gets released — the same `storeIsFieldOverwrite`
+// proof the decref-old planning uses. An INITIAL store (into freshly-allocated
+// slab garbage) is NOT an overwrite: no prior reference is released, so a
+// field-load borrow cannot be invalidated by it.
+function collectOverwrittenFieldKeys(ctx RcContext) returns OverwrittenFieldKeyArray
+	var keys = OverwrittenFieldKeyArray.create()
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("collectOverwrittenFieldKeys: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("collectOverwrittenFieldKeys: opIdx not in module.ops")
+			collectOverwriteKeyForOp(ctx, op: op, blockRef: blockRef, block: block, pos: pos as NodeIndex, keys: keys)
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+	return keys
+end 'collectOverwrittenFieldKeys'
+
+// Push the overwrite key for `op` if it is a managed `store_indirect` that
+// `storeIsFieldOverwrite` proves overwrites (releases) an already-initialized
+// field. Non-store ops and initial (garbage-slot) stores contribute nothing.
+function collectOverwriteKeyForOp(ctx RcContext, op StdOp, blockRef BlockRef, block IrBlock, pos NodeIndex, keys OverwrittenFieldKeyArray)
+	let store = storeIndirectFieldOf(op)
+	if not store.found 'notStore'
+		return
+	end 'notStore'
+	if not ctx.isManaged(store.valueId) 'notManaged'
+		return
+	end 'notManaged'
+	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: store.addrId, offset: store.offset, storePos: pos) 'overwrite'
+		keys.push(OverwrittenFieldKey.create(store.addrId, offset: store.offset, blockRef: blockRef, pos: pos))
+	end 'overwrite'
+end 'collectOverwriteKeyForOp'
+
+// The `(addrId, offset, valueId)` of a `store_indirect` op, or `found=false`.
+type StoreIndirectField
+	export var found as bool
+	export var addrId as ValueId
+	export var offset as MachineWord
+	export var valueId as ValueId
+
+	export static function none() returns StoreIndirectField
+		return Self{found: false, addrId: 0, offset: 0, valueId: 0}
+	end 'none'
+
+	export static function of (addrId ValueId, offset MachineWord, valueId ValueId) returns StoreIndirectField
+		return Self{found: true, addrId: addrId, offset: offset, valueId: valueId}
+	end 'of'
+end 'StoreIndirectField'
+
+function storeIndirectFieldOf(op StdOp) returns StoreIndirectField
+	return match op 'chk'
+		system(s) gives storeIndirectFieldOfSys(s)
+		arith to control gives StoreIndirectField.none()
+		call gives StoreIndirectField.none()
+		memory gives StoreIndirectField.none()
+	end 'chk'
+end 'storeIndirectFieldOf'
+
+function storeIndirectFieldOfSys(s StdSystemOp) returns StoreIndirectField
+	return match s 'sys'
+		storeIndirect(addrId, offset, valueId, _, _) gives StoreIndirectField.of(addrId, offset: offset, valueId: valueId)
+		globalAddr to loadByte gives StoreIndirectField.none()
+		osExit to osWrite gives StoreIndirectField.none()
+		free gives StoreIndirectField.none()
+		osWriteErr to loadFramePtr gives StoreIndirectField.none()
+		loadIndirect gives StoreIndirectField.none()
+		funcAddr gives StoreIndirectField.none()
+		drop gives StoreIndirectField.none()
+		osAllocPages to osDirMkdir gives StoreIndirectField.none()
+		atomicInc to osLockRelease gives StoreIndirectField.none()
+		boxValue to dropTypeParam gives StoreIndirectField.none()
+	end 'sys'
+end 'storeIndirectFieldOfSys'
+
+// True iff the `incomingOwner` value `id` was loaded from a heap field
+// `[addrId + offset]` that is overwritten (its prior reference released) at a
+// site where `id` is STILL LIVE. Only then does the borrow dangle and need its
+// own +1. The liveness gate is what separates the dangling `Map.grow` borrow
+// (`oldValues` used AFTER `self.values` is replaced) from a benign in-place
+// mutation like an enum-payload reassign (`match named(name) then name = ...`),
+// whose original binding is dead the moment the payload slot is overwritten and
+// therefore must NOT be retained (retaining it leaks / double-frees on the
+// enum-mutation decref-old protocol).
+function incomingOwnerSourceFieldOverwritten(ctx RcContext, id ValueId, defOp StdOp, overwrittenFields OverwrittenFieldKeyArray) returns bool
+	if overwrittenFields.count() == 0 'none'
+		return false
+	end 'none'
+	// `defOp` is `id`'s defining op (the caller iterates ops and their defs in
+	// lockstep) — so recovering `id`'s source field is an O(1) op inspection, no
+	// per-value function rescan.
+	let src = loadIndirectFieldOf(defOp)
+	if not src.found or src.valueId != id 'notFieldLoad'
+		return false
+	end 'notFieldLoad'
+	for key in overwrittenFields 'each'
+		if key.addrId == src.addrId and key.offset == src.offset 'match'
+			if valueLiveAfterStore(ctx, id: id, blockRef: key.blockRef, pos: key.pos) 'liveAcross'
+				return true
+			end 'liveAcross'
+		end 'match'
+	end 'each'
+	return false
+end 'incomingOwnerSourceFieldOverwritten'
+
+// True iff `id` is live AFTER the body op at `pos` in the block `blockRef` — the
+// overwriting store. A value live past the release of its source field cannot
+// rely on that field's reference and must own its own +1.
+function valueLiveAfterStore(ctx RcContext, id ValueId, blockRef BlockRef, pos NodeIndex) returns bool
+	let block = try ctx.module.blocks.get(blockRef) otherwise panic("valueLiveAfterStore: blockRef not in module.blocks")
+	let liveAfter = blockLiveAfterFor(ctx, block: block)
+	return liveAfter.isLiveAfterBodyOp(pos, vid: id)
+end 'valueLiveAfterStore'
+
+// The `(resultId, addrId, offset)` of a `load_indirect` op, or `found=false`.
+// Reuses `StoreIndirectField`'s shape: `valueId` carries the load RESULT id.
+function loadIndirectFieldOf(op StdOp) returns StoreIndirectField
+	return match op 'chk'
+		system(s) gives loadIndirectFieldOfSys(s)
+		arith to control gives StoreIndirectField.none()
+		call gives StoreIndirectField.none()
+		memory gives StoreIndirectField.none()
+	end 'chk'
+end 'loadIndirectFieldOf'
+
+function loadIndirectFieldOfSys(s StdSystemOp) returns StoreIndirectField
+	return match s 'sys'
+		loadIndirect(resultId, loadAddrId, loadOffset, _, _, _) gives StoreIndirectField.of(loadAddrId, offset: loadOffset, valueId: resultId)
+		globalAddr to loadByte gives StoreIndirectField.none()
+		osExit to osWrite gives StoreIndirectField.none()
+		free gives StoreIndirectField.none()
+		osWriteErr to loadFramePtr gives StoreIndirectField.none()
+		storeIndirect gives StoreIndirectField.none()
+		funcAddr gives StoreIndirectField.none()
+		drop gives StoreIndirectField.none()
+		osAllocPages to osDirMkdir gives StoreIndirectField.none()
+		atomicInc to osLockRelease gives StoreIndirectField.none()
+		boxValue to dropTypeParam gives StoreIndirectField.none()
+	end 'sys'
+end 'loadIndirectFieldOfSys'
 
 // A managed `incomingOwner` block-arg (phi) always owns a +1 (the merged
 // reference). Mark it so its last-use decref fires and it is treated as
@@ -1701,7 +1872,7 @@ end 'markIncomingOwnerBlockArgs'
 // Decide and cache the acquire bit for a single value `id`, if it is a managed,
 // non-param `incomingOwner`. Non-`incomingOwner` ids are left false (other
 // classes do not consult the cache).
-function decideIncomingOwnerAcquire(ctx RcContext, id ValueId, transferred BoolArray)
+function decideIncomingOwnerAcquire(ctx RcContext, id ValueId, defOp StdOp, transferred BoolArray, overwrittenFields OverwrittenFieldKeyArray)
 	if not classIsIncomingOwner(ctx, id: id) 'notIncoming'
 		return
 	end 'notIncoming'
@@ -1725,6 +1896,17 @@ function decideIncomingOwnerAcquire(ctx RcContext, id ValueId, transferred BoolA
 			return
 		end 'sourceTransferred'
 	end 'haveSource'
+	// (c) V is a borrow of a heap FIELD whose reference is RELEASED mid-function:
+	// V was loaded from `[addr + offset]`, and that field is OVERWRITTEN (its prior
+	// occupant decref'd) somewhere in the function. The field's single reference
+	// therefore cannot be relied on to keep V's pointee alive across V's uses, so
+	// V must own its own +1 — exactly the source-not-outlives-V reasoning of (b),
+	// but for a heap-field source (which is not an SSA value in `transferred`). The
+	// `Map.grow`/`let old = self.field; self.field = new` rehash-move over-release.
+	if incomingOwnerSourceFieldOverwritten(ctx, id: id, defOp: defOp, overwrittenFields: overwrittenFields) 'fieldOverwritten'
+		setBoolAt(ctx.incomingOwnerAcquire, id: id, value: true)
+		return
+	end 'fieldOverwritten'
 	// Pure pass-through borrow whose source stays live and owned — do not acquire.
 end 'decideIncomingOwnerAcquire'
 
