@@ -306,7 +306,10 @@ public sealed class MaxonParamOp(int index, string name, MaxonValueKind kind) : 
         ["index"] = new IntegerAttr(Index, IrType.I32),
         ["name"] = new StringAttr(Name),
       };
-      if (ValueKind is not (MaxonValueKind.TypeParameter or MaxonValueKind.Struct or MaxonValueKind.Enum))
+      // Function kinds carry no IrFunctionType payload, so ToIrType() cannot
+      // reconstruct a printable type for them (it throws). Skip the type attr
+      // for function-typed params, as we already do for type-parameter/struct/enum.
+      if (ValueKind is not (MaxonValueKind.TypeParameter or MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.Function))
         attrs["type"] = new TypeAttr(ValueKind.ToIrType());
       return attrs;
     }

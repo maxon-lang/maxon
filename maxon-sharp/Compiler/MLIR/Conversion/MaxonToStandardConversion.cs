@@ -382,6 +382,18 @@ public static partial class MaxonToStandardConversion {
           }
           switch (op) {
             case MaxonParamOp paramOp: {
+              // A generic type-parameter monomorphized to a function type stays a
+              // MaxonParamOp carrying a Function kind (MaxonValueKind has no
+              // function-type payload) rather than becoming a MaxonFunctionParamOp.
+              // Its lowered ABI still occupies two slots (fn ptr + hidden env ptr),
+              // exactly as the signature builder allocates for an IrFunctionType
+              // param. Route it through the same two-slot expansion; without it the
+              // env StdParamOp is never emitted and every trailing param shifts down
+              // one register (reading the env instead of its own value).
+              if (paramOp.Index < func.ParamTypes.Count && func.ParamTypes[paramOp.Index] is IrFunctionType) {
+                LowerFunctionParam(paramOp.Index, paramOp.Name, paramOp.Result, newBlock, valueMap, varTypes, fnEnvVarNames, fnEnvDirectValues, paramFlatIndex);
+                break;
+              }
               if (refParamPtrVars.TryGetValue(paramOp.Name, out string? value)) {
                 // Mutated param: receive reference pointer, dereference for initial local copy
                 var ptrVal = new StdI64(IrContext.Current.NextStdId());
@@ -2040,7 +2052,7 @@ public static partial class MaxonToStandardConversion {
               LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, temps);
               break;
             case MaxonFunctionParamOp fnParamOp:
-              LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes, fnEnvVarNames, fnEnvDirectValues, paramFlatIndex);
+              LowerFunctionParam(fnParamOp.Index, fnParamOp.Name, fnParamOp.Result, newBlock, valueMap, varTypes, fnEnvVarNames, fnEnvDirectValues, paramFlatIndex);
               break;
             case MaxonFunctionVarRefOp fnVarRefOp:
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap, varTypes, fnEnvVarNames);

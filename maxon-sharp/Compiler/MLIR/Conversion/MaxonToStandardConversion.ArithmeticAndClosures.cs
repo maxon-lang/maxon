@@ -407,23 +407,31 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  // Lower a function-typed parameter into its two-slot ABI form: the function
+  // pointer in `flatIdx` and the hidden env pointer in `flatIdx + 1`. Callable
+  // for both a MaxonFunctionParamOp and a generic MaxonParamOp that
+  // monomorphized to a function kind (which shares MaxonFunctionPtr as its
+  // result), so both routes allocate the env slot and keep trailing params'
+  // flat indices aligned with the signature builder.
   private static void LowerFunctionParam(
-    MaxonFunctionParamOp fnParamOp,
+    int paramIndex,
+    string paramName,
+    MaxonValue paramResult,
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<int, StdValue> fnEnvDirectValues,
     Dictionary<int, int> paramFlatIndex) {
-    int flatIdx = paramFlatIndex.GetValueOrDefault(fnParamOp.Index, fnParamOp.Index);
-    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(IrContext.Current.NextStdId()));
+    int flatIdx = paramFlatIndex.GetValueOrDefault(paramIndex, paramIndex);
+    var paramOp = new StdParamOp(flatIdx, paramName, new StdPtr(IrContext.Current.NextStdId()));
     block.AddOp(paramOp);
-    valueMap[fnParamOp.Result] = paramOp.Result;
+    valueMap[paramResult] = paramOp.Result;
     // Store function pointer to variable so it can be loaded later via StdLoadI64Op
-    block.AddOp(new StdStorePtrOp((StdPtr)paramOp.Result, fnParamOp.Name));
-    varTypes[fnParamOp.Name] = "ptr";
+    block.AddOp(new StdStorePtrOp((StdPtr)paramOp.Result, paramName));
+    varTypes[paramName] = "ptr";
     // Receive the hidden env_ptr (next parameter slot)
-    var envVarName = $"__env_{fnParamOp.Name}";
+    var envVarName = $"__env_{paramName}";
     var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(envParamOp);
     EmitStore(block, envParamOp.Result, envVarName, varTypes);
