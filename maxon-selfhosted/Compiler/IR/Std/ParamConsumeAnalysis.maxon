@@ -484,8 +484,206 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 		end 'isWrapper'
 	end 'notYetWrapper'
 
+	// Bug #7 parameter-RETAIN bits (caller-side acquire-and-keep). Computed on the SAME
+	// SSA/use index the consume walk built, and merged into the fixpoint's flip signal so
+	// the cross-function forwarding of retains converges alongside the consume bits.
+	if updateFuncRetainsBits(module, func: func, project: project, mayReturnArg: mayReturnArg, paramValues: paramValues, usesIndex: usesIndex) 'retainFlipped'
+		flipped = true
+	end 'retainFlipped'
+
 	return flipped
 end 'updateFuncConsumeBits'
+
+// ============================================================
+// Parameter-RETAIN analysis (bug #7 — caller-side acquire-and-keep)
+// ============================================================
+//
+// A function RETAINS parameter P when it moves P's SSA value (or a may-return-arg
+// alias of it) into an `incomingOwner` loop-carried block-arg (phi). `insertRefcounts`
+// later increfs that phi on its BORROWED pre-header edge and releases it inside the
+// callee — so a caller-fresh rc=0 argument passed there is driven 0→1→0 and FREED
+// mid-call. This is NOT a consume (the +1 is not transferred to durable storage — the
+// callee's own release balances its own transient acquire); it is a caller-side signal
+// that the argument must be ACQUIRED-AND-KEPT across the call (the C# oracle's
+// acquire-before / decref-after shape). The predicate is computed STRUCTURALLY here and
+// forwarded across the call graph exactly like the consume bits, then persisted in the
+// stdlib cache so retaining stdlib callees are visible on a warm user build.
+//
+// WHY THE PRE-INSERTION BODY SUFFICES. The ownership-taking event (the pre-header
+// incref + the loop's overwrite-decref) is SYNTHESIZED by `insertRefcounts`, invisible
+// in the body this pass sees. But the STRUCTURAL precondition it keys off — a param
+// flowing into a block-arg the mem2reg ownership classifier tagged `incomingOwner` — IS
+// present pre-insertion (mem2reg runs before this pass; the classes are populated). So
+// "P reaches an `incomingOwner`-phi edge" is a sound proxy for "the callee will
+// transiently acquire P".
+
+// Recompute `func`'s retain bits this round; return true iff a bit newly flipped to
+// true (drives the same fixpoint as the consume bits). A retain bit, once set, stays
+// set — monotonic like consume. Reuses the consume walk's `paramValues` + `usesIndex`.
+function updateFuncRetainsBits(module StdModule, func IrFunction, project Project, mayReturnArg MayReturnArgMap, paramValues ParamValueMap, usesIndex ConsumeUsesIndex) returns bool
+	let prior = try project.funcRetainsParam.get(func.name) otherwise BoolArray.create()
+	var flipped = false
+	let blockById = buildBlockIdToRefMap(module, func: func)
+
+	for paramIndex in 0 upto func.paramCount 'eachParam'
+		if boolArrayGet(prior, idx: paramIndex) 'alreadyRetained'
+			continue
+		end 'alreadyRetained'
+		let paramVal = paramValueForIndex(paramValues, paramIndex: paramIndex)
+		if paramVal == CONSUME_NO_VALUE 'noSsaValue'
+			continue
+		end 'noSsaValue'
+		if paramValueReachesRetainSink(module, func: func, usesIndex: usesIndex, valueId: paramVal, project: project, mayReturnArg: mayReturnArg, blockById: blockById) 'retained'
+			setRetainBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
+			logTrace(LogCategory.ir, message: function() gives "RC-PRA-SET func={func.name} pos={paramIndex}")
+			flipped = true
+		end 'retained'
+	end 'eachParam'
+
+	return flipped
+end 'updateFuncRetainsBits'
+
+// Per-function BlockId → BlockRef index so the retain walk can resolve a `cf.br`/
+// `cf.cond_br` edge's TARGET block (to read its positional block-args) without a linear
+// scan. Stores the cheap BlockRef index, not the IrBlock, to avoid copying block bodies.
+typealias BlockIdToRefMap = Map with (BlockId, BlockRef)
+
+function buildBlockIdToRefMap(module StdModule, func IrFunction) returns BlockIdToRefMap
+	var byId = BlockIdToRefMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockIdToRefMap: blockRef not in module.blocks")
+		byId.upsert(block.id, value: blockRef)
+	end 'eachBlock'
+	return byId
+end 'buildBlockIdToRefMap'
+
+// True iff `valueId` (a parameter's SSA value) reaches a RETAIN SINK anywhere in `func`
+// — it feeds an `incomingOwner`-phi edge, or is passed to a callee that RETAINS its
+// argument at that position (the forwarding edge). Mirrors `paramValueReachesConsumeSink`
+// exactly: a single worklist over the per-function use index, following may-return-arg
+// passthrough aliases, so a param laundered through a passthrough call before reaching a
+// phi/retaining-callee is still detected.
+function paramValueReachesRetainSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, valueId ValueId, project Project, mayReturnArg MayReturnArgMap, blockById BlockIdToRefMap) returns bool
+	var aliases = ValueIdArray.create()
+	aliases.push(valueId)
+	var head = 0
+	while head < aliases.count() 'worklist'
+		let aliasId = try aliases.get(head) otherwise panic("paramValueReachesRetainSink: aliases.get OOB despite head < count")
+		head = head + 1
+		let useOps = usesIndex.usesOf(aliasId)
+		for opIdx in useOps 'eachUse'
+			let op = try module.ops.get(opIdx) otherwise panic("paramValueReachesRetainSink: opIdx not in module.ops")
+			if opIsRetainSinkFor(module, func: func, op: op, valueId: aliasId, project: project, blockById: blockById) 'sunk'
+				return true
+			end 'sunk'
+			let aliasedResult = callPassesThroughAlias(op, aliases: aliases, mayReturnArg: mayReturnArg)
+			if aliasedResult != CONSUME_NO_VALUE and not valueIdArrayContains(aliases, vid: aliasedResult) 'newAlias'
+				aliases.push(aliasedResult)
+			end 'newAlias'
+		end 'eachUse'
+	end 'worklist'
+	return false
+end 'paramValueReachesRetainSink'
+
+// True iff `op` is a DIRECT retain sink of `valueId`: a `cf.br`/`cf.cond_br` feeding it
+// into an `incomingOwner` phi, or a call that RETAINS it at its argument position.
+function opIsRetainSinkFor(module StdModule, func IrFunction, op StdOp, valueId ValueId, project Project, blockById BlockIdToRefMap) returns bool
+	if opFeedsIncomingOwnerPhi(module, func: func, op: op, valueId: valueId, blockById: blockById) 'phi'
+		return true
+	end 'phi'
+	return callRetainsArgValue(op, valueId: valueId, project: project)
+end 'opIsRetainSinkFor'
+
+// True iff `op` is a branch terminator moving `valueId` into a successor block-arg the
+// mem2reg classifier tagged `incomingOwner` (the loop-carried phi shape the callee will
+// transiently acquire). Positional binding: the Nth edge arg feeds the Nth successor
+// block-arg (mirrors `markEdgePhiMovedValues`).
+function opFeedsIncomingOwnerPhi(module StdModule, func IrFunction, op StdOp, valueId ValueId, blockById BlockIdToRefMap) returns bool
+	return match op 'dispatch'
+		control(cf) gives cfFeedsIncomingOwnerPhi(module, func: func, cf: cf, valueId: valueId, blockById: blockById)
+		arith gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opFeedsIncomingOwnerPhi'
+
+function cfFeedsIncomingOwnerPhi(module StdModule, func IrFunction, cf StdControlOp, valueId ValueId, blockById BlockIdToRefMap) returns bool
+	return match cf 'c'
+		br(target, argIds) gives edgeFeedsIncomingOwnerPhi(module, func: func, target: target, argIds: argIds, valueId: valueId, blockById: blockById)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives edgeFeedsIncomingOwnerPhi(module, func: func, target: thenTarget, argIds: thenArgIds, valueId: valueId, blockById: blockById) or edgeFeedsIncomingOwnerPhi(module, func: func, target: elseTarget, argIds: elseArgIds, valueId: valueId, blockById: blockById)
+	end 'c'
+end 'cfFeedsIncomingOwnerPhi'
+
+// True iff `valueId` appears at some position in `argIds` whose positionally-matching
+// block-arg of the `target` block has ownership class `incomingOwner`.
+function edgeFeedsIncomingOwnerPhi(module StdModule, func IrFunction, target BlockId, argIds ValueIdArray, valueId ValueId, blockById BlockIdToRefMap) returns bool
+	let toBlockRef = try blockById.get(target) otherwise return false
+	let toBlock = try module.blocks.get(toBlockRef) otherwise return false
+	var i = 0
+	while i < argIds.count() 'each'
+		let aid = try argIds.get(i) otherwise panic("edgeFeedsIncomingOwnerPhi: argIds.get OOB despite i < count")
+		if aid == valueId and i < toBlock.blockArgs.count() 'atPos'
+			let phiArg = try toBlock.blockArgs.get(i) otherwise panic("edgeFeedsIncomingOwnerPhi: blockArgs.get OOB despite bounds check")
+			if func.ownershipOfValue(phiArg.valueId) == OwnershipClass.incomingOwner 'incoming'
+				return true
+			end 'incoming'
+		end 'atPos'
+		i = i + 1
+	end 'each'
+	return false
+end 'edgeFeedsIncomingOwnerPhi'
+
+// True iff `op` is a call passing `valueId` at an argument position the callee RETAINS
+// (per the fixpoint's current retain bits) — the forwarding edge.
+function callRetainsArgValue(op StdOp, valueId ValueId, project Project) returns bool
+	return match op 'dispatch'
+		call(c) gives callRetainsValueArg(c, valueId: valueId, project: project)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'callRetainsArgValue'
+
+function callRetainsValueArg(c StdCallOp, valueId ValueId, project Project) returns bool
+	return match c 'check'
+		call(_, callee, argIds) gives calleeRetainsArgAt(callee, argIds: argIds, valueId: valueId, project: project)
+		tryCall(_, callee, argIds, _) gives calleeRetainsArgAt(callee, argIds: argIds, valueId: valueId, project: project)
+		ret gives false
+		indirectCall to errorReturn gives false
+	end 'check'
+end 'callRetainsValueArg'
+
+function calleeRetainsArgAt(callee String, argIds ValueIdArray, valueId ValueId, project Project) returns bool
+	var idx = 0
+	while idx < argIds.count() 'each'
+		let aid = try argIds.get(idx) otherwise panic("calleeRetainsArgAt: argIds.get OOB despite idx < count")
+		if aid == valueId and calleeRetainsParamIndex(callee, paramIndex: idx, project: project) 'retains'
+			return true
+		end 'retains'
+		idx = idx + 1
+	end 'each'
+	return false
+end 'calleeRetainsArgAt'
+
+// True iff a call to `callee` retains its parameter at `paramIndex` (reads the retain
+// registry the fixpoint is filling / the cache restored).
+function calleeRetainsParamIndex(callee String, paramIndex NodeIndex, project Project) returns bool
+	let bits = try project.funcRetainsParam.get(callee) otherwise return false
+	return boolArrayGet(bits, idx: paramIndex)
+end 'calleeRetainsParamIndex'
+
+// Set `funcName`'s retain bit for `paramIndex`, growing the BoolArray to `paramCount`
+// entries (default false) on first touch. Mirrors `setConsumeBit`.
+function setRetainBit(project Project, funcName String, paramIndex NodeIndex, paramCount NodeIndex)
+	var bits = try project.funcRetainsParam.get(funcName) otherwise growConsumeBits(paramCount)
+	while bits.count() <= paramIndex 'grow'
+		bits.push(false)
+	end 'grow'
+	try bits.set(paramIndex, value: true) otherwise panic("setRetainBit: set OOB after grow")
+	project.funcRetainsParam.upsert(funcName, value: bits)
+end 'setRetainBit'
 
 // Sentinel: a parameter index with no `param` op in the body (e.g. an unused param
 // the lowerer never materialized) — never a consume candidate.

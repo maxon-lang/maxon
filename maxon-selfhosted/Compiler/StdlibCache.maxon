@@ -294,7 +294,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // getCompilerFingerprint). A v85 header would be misread — its mtime qword
 // compared against the new content hash — so the version gate forces clean
 // regeneration of every existing cache.
-let CACHE_FORMAT_VERSION = 86
+let CACHE_FORMAT_VERSION = 87
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -460,6 +460,13 @@ export type StdlibCacheData
 	// id, so they round-trip verbatim (no `translateMaxonType` needed).
 	export var funcParamConsumes as FuncParamConsumesMap
 	export var funcReturnsConsumedArg as FuncReturnsBorrowSet
+	// Cache v87 (bug #7): persisted argument-RETAIN facts (`funcRetainsParam`) computed by
+	// `analyzeParamConsumes` over the stdlib. A retaining stdlib callee (one that moves a
+	// param into an `incomingOwner` loop-carried phi) is a signature-only stub on the user
+	// build, so its retain bits must be restored for the inserter's caller-side
+	// acquire-and-keep (`markRetainedCallArgs`) to fire. Same `Map<String, BoolArray>`
+	// shape as `funcParamConsumes`; bits reference no type-interner id, round-trip verbatim.
+	export var funcRetainsParam as FuncRetainsParamMap
 	// Cache v72: persisted RETURN-BORROW facts (`funcReturnsBorrow`) computed by
 	// `analyzeReturnBorrows` over the stdlib, so the user build restores a stdlib
 	// function's borrow-returning status (notably the bodyless-in-user-build element
@@ -638,6 +645,7 @@ export type StdlibCacheData
 			funcSignatures: FuncSignatureMap.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),
 			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
+			funcRetainsParam: FuncRetainsParamMap.create(),
 			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
@@ -1398,6 +1406,17 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 		try writeString(buf, s: wrapperName)
 	end 'eachWrapper'
 
+	// Cache v87 (bug #7): per-function argument-RETAIN bits (same name → BoolArray shape
+	// as the consume bits above).
+	writeDword(buf, value: data.funcRetainsParam.count())
+	for (name, bits) in data.funcRetainsParam 'eachRetain'
+		try writeString(buf, s: name)
+		writeDword(buf, value: bits.count())
+		for b in bits 'eachRetainBit'
+			writeBoolByte(buf, b: b)
+		end 'eachRetainBit'
+	end 'eachRetain'
+
 	// Cache v72: return-borrow function-name set (same shape as the wrapper set above).
 	writeDword(buf, value: data.funcReturnsBorrow.count())
 	for borrowName in data.funcReturnsBorrow 'eachBorrow'
@@ -2120,6 +2139,23 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 		pos = pW0
 		data.funcReturnsConsumedArg.insert(wrapperName)
 	end 'eachWrapper'
+
+	// Cache v87 (bug #7): argument-RETAIN bits, read in the exact order written above.
+	let retainCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto retainCount 'eachRetain'
+		let (retainName, pR0) = try readString(buf, offset: pos)
+		pos = pR0
+		let retainBitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		var retainBits = BoolArray.create()
+		for _ in 0 upto retainBitCount 'eachRetainBit'
+			let (b, pR1) = try readBoolByte(buf, offset: pos)
+			pos = pR1
+			retainBits.push(b)
+		end 'eachRetainBit'
+		data.funcRetainsParam.upsert(retainName, value: retainBits)
+	end 'eachRetain'
 
 	// Cache v72: return-borrow function-name set (read in write order).
 	let borrowCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
@@ -2860,6 +2896,17 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		data.funcReturnsConsumedArg.insert(wrapperName)
 	end 'copyWrappers'
 
+	// Cache v87 (bug #7): snapshot the stdlib argument-RETAIN facts so a cached user build
+	// sees a retaining stdlib callee's bits (its body is a signature-only stub there).
+	// Copy each BoolArray by value so the cache owns it.
+	for (name, bits) in project.funcRetainsParam 'copyRetains'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		data.funcRetainsParam.upsert(name, value: bitsCopy)
+	end 'copyRetains'
+
 	// Cache v72: snapshot the stdlib's structural return-borrow facts so the user
 	// build restores them (notably the element-loader intrinsics, classified from
 	// their bodies here) instead of a name allowlist.
@@ -3140,6 +3187,17 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	for wrapperName in data.funcReturnsConsumedArg 'restoreWrappers'
 		project.funcReturnsConsumedArg.insert(wrapperName)
 	end 'restoreWrappers'
+
+	// Cache v87 (bug #7): replay the stdlib argument-RETAIN facts so the inserter's
+	// caller-side acquire-and-keep fires for a non-inlined retaining stdlib callee.
+	for (name, bits) in data.funcRetainsParam 'restoreRetains'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		project.funcRetainsParam.upsert(name, value: bitsCopy)
+	end 'restoreRetains'
+
 	// Cache v72: replay the stdlib's structural return-borrow facts into the user
 	// project so `analyzeReturnBorrows` / the inserter see a stdlib callee's
 	// borrow-returning status without re-analyzing its (absent) body.

@@ -353,6 +353,23 @@ export type Project
 	// inheriting its wrapped arg's reference, orthogonal to the result's class).
 	export var funcReturnsConsumedArg as FuncReturnsBorrowSet
 
+	// Argument-RETAIN registry (bug #7 — the caller-side acquire-and-keep fact). For
+	// each function NAME, a bool per parameter index: true iff the callee TRANSIENTLY
+	// ACQUIRES that argument — it moves the param into an `incomingOwner` loop-carried
+	// block-arg (phi) that `insertRefcounts` later increfs on the borrowed pre-header
+	// edge and releases inside the callee. Under the alloc-at-0 runtime a freshly-rc=0
+	// caller value passed to such a callee would be driven 0→1→0 and FREED mid-call, so
+	// the caller must ACQUIRE (incref) the arg before the call and keep its own +1 —
+	// exactly the C# oracle's acquire-and-keep shape. Distinct from `funcParamConsumes`:
+	// a consumed arg TRANSFERS its +1 (caller suppresses its release); a RETAINED arg is
+	// only borrowed for the callee's transient acquire (caller keeps AND releases its
+	// +1). Computed STRUCTURALLY by `analyzeParamConsumes` (the param's SSA value, or a
+	// may-return-arg alias, appears as a block-arg feeding an `incomingOwner` phi) and
+	// forwarded across the call graph like the consume bits. The inserter reads it
+	// (`markRetainedCallArgs`) to mark such an arg ESCAPING — routing it through the
+	// existing freshRc0 escape→acquire pipeline WITHOUT suppressing the caller's release.
+	export var funcRetainsParam as FuncRetainsParamMap
+
 	// Per-call-site substituted paramTypes — the FuncSignature's declared
 	// paramTypes resolved against each call's enclosing-struct innerAliases
 	// + receiver's genericInstance arg bindings. Populated by TypeResolution
@@ -1057,6 +1074,7 @@ export type Project
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),
 			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
+			funcRetainsParam: FuncRetainsParamMap.create(),
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
 			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
@@ -3553,6 +3571,12 @@ export typealias FuncReturnsBorrowSet = Set with String
 // `Project.funcParamConsumes`). The BoolArray is indexed by ABI parameter position
 // (leading `__self` at 0), matching `FuncSignature.paramTypes`.
 export typealias FuncParamConsumesMap = Map with (String, BoolArray)
+
+// Per-parameter argument-RETAIN bits, keyed by qualified function name. Entry `i` is
+// true iff the callee transiently acquires parameter `i` into an `incomingOwner`
+// loop-carried phi (see `Project.funcRetainsParam`). Same `Map<String, BoolArray>`
+// shape as `FuncParamConsumesMap`, indexed by ABI parameter position.
+export typealias FuncRetainsParamMap = Map with (String, BoolArray)
 
 export type TypealiasRange
 	export var lower as RangeBound

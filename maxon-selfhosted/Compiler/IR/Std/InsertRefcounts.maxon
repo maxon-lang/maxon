@@ -127,9 +127,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, includeManaged: true)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true)
 	end 'eachFunc'
 
 	return module
@@ -149,8 +149,9 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyReturnsConsumed = FuncReturnsBorrowSet.create()
 	let emptyReturnsBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsInterior = FuncReturnsBorrowSet.create()
+	let emptyRetains = FuncRetainsParamMap.create()
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, includeManaged: false)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false)
 	end 'eachFunc'
 
 	return module
@@ -160,7 +161,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, includeManaged bool)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -251,7 +252,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// closure borrows it by reference) and released at scope exit, not at the SSA store.
 	let addressTakenSlots = collectAddressTakenSlots(func, module: module)
 
-	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg)
+	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
 
 	// Single-scan caches for the per-value body queries + the block-id index.
 	// Must precede `buildBodyRcCompleteSet` (which probes the released/acquired
@@ -939,6 +940,13 @@ type RcContext
 	// consumed arg (a transparent wrapper — `Array.init`/`Vector.init`). Read by
 	// `collectTransparentWrapResults`. Empty in type-param-only mode.
 	export var funcReturnsConsumedArg as FuncReturnsBorrowSet
+	// BUG #7 — the structural argument-RETAIN registry computed by `analyzeParamConsumes`:
+	// `funcRetainsParam[callee][i]` is true iff `callee` transiently acquires its argument
+	// at position `i` into an `incomingOwner` loop-carried phi. `markRetainedCallArgs`
+	// reads this to mark such a MANAGED arg ESCAPING — routing it through the freshRc0
+	// escape→acquire pipeline (caller acquires-and-keeps) WITHOUT suppressing the caller's
+	// release. Empty in type-param-only mode.
+	export var funcRetainsParam as FuncRetainsParamMap
 	// Entry-block `constI64` ValueIds for per-arg layout-bit ordinals, minted
 	// lazily by `ordinalConstId` (indexed by ordinal; `REFCOUNT_NO_VALUE` =
 	// not yet minted). One const per ordinal serves every per-ordinal
@@ -970,7 +978,7 @@ type RcContext
 	// position-based `valueDirectlyReadElsewhere` cannot see.
 	export var loopDepth as RegIntArray
 
-	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet) returns RcContext
+	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
 		return Self{
 			func: func,
 			module: module,
@@ -1000,6 +1008,7 @@ type RcContext
 			edgeReleases: RcEdgeReleaseArray.create(),
 			funcParamConsumes: funcParamConsumes,
 			funcReturnsConsumedArg: funcReturnsConsumedArg,
+			funcRetainsParam: funcRetainsParam,
 			ordinalConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
 			blockLiveAfterPresent: BoolArray.create(),
@@ -2120,6 +2129,7 @@ function buildEscapingValuesSet(ctx RcContext) returns BoolArray
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise continue
 			markOpTransferredOperands(ctx, op: op, transferred: escaping, scratch: scratch)
+			markRetainedCallArgs(ctx, op: op, escaping: escaping)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			markPhiMovedValues(ctx, fromBlock: block, escaping: escaping)
@@ -2170,6 +2180,51 @@ function markEdgePhiMovedValues(ctx RcContext, target BlockId, argIds ValueIdArr
 		i = i + 1
 	end 'each'
 end 'markEdgePhiMovedValues'
+
+// BUG #7 — caller-side acquire-and-keep. Mark every MANAGED argument of a `call`/
+// `tryCall` that the callee RETAINS (moves into an `incomingOwner` loop-carried phi,
+// per `funcRetainsParam`) as ESCAPING. A freshRc0 value passed to a retaining callee
+// would otherwise be driven 0→1→0 and FREED mid-call by the callee's own transient
+// acquire+release; marking it escaping routes it through `freshRc0NeedsAcquire`→
+// `plusOneOwnership`=`acquiredAtDef`, so the caller acquires its own +1 at the def.
+//
+// CRITICAL: the arg is marked ONLY in the escape set — NOT via a `TransferDisposition`
+// arm. `escapingValues` feeds solely the ACQUIRE path (`valueEscapes`); release
+// suppression re-derives independently through `opTransferDisposition`. So the caller
+// acquires (yes) but still RELEASES at last use (not suppressed) — the acquire-and-keep
+// shape. Routing through a `moveInto*` disposition would wrongly suppress the release
+// and re-leak.
+function markRetainedCallArgs(ctx RcContext, op StdOp, escaping BoolArray)
+	match op 'dispatch'
+		call(c) then markRetainedCallArgsForCall(ctx, c: c, escaping: escaping)
+		arith then noOp()
+		control then noOp()
+		memory then noOp()
+		system then noOp()
+	end 'dispatch'
+end 'markRetainedCallArgs'
+
+function markRetainedCallArgsForCall(ctx RcContext, c StdCallOp, escaping BoolArray)
+	match c 'check'
+		call(_, callee, argIds) then markRetainedArgs(ctx, callee: callee, argIds: argIds, escaping: escaping)
+		tryCall(_, callee, argIds, _) then markRetainedArgs(ctx, callee: callee, argIds: argIds, escaping: escaping)
+		ret then noOp()
+		indirectCall to errorReturn then noOp()
+	end 'check'
+end 'markRetainedCallArgsForCall'
+
+function markRetainedArgs(ctx RcContext, callee String, argIds ValueIdArray, escaping BoolArray)
+	let bits = try ctx.funcRetainsParam.get(callee) otherwise return
+	var i = 0
+	while i < argIds.count() 'each'
+		let argId = try argIds.get(i) otherwise panic("markRetainedArgs: argIds.get OOB despite i < count")
+		let retained = try bits.get(i) otherwise false
+		if retained and ctx.isManaged(argId) 'retainedManaged'
+			setBoolAt(escaping, id: argId, value: true)
+		end 'retainedManaged'
+		i = i + 1
+	end 'each'
+end 'markRetainedArgs'
 
 // ============================================================
 // Heap-store increfs (container takes a ref — balanced by its destructor)
