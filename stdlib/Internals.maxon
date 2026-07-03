@@ -1090,9 +1090,9 @@ end '__slab_free'
 // diagnose. With the sanitizer on, a freed slot is POISONED and QUARANTINED
 // (its slab slot is not reused until it ages out of a FIFO ring), and every mm
 // entry point checks for the poison first — so the FIRST touch of a freed
-// object panics immediately, reporting the object address and the free-site
-// return address (the touch site comes from the panic's own symbolized
-// backtrace).
+// object panics immediately, reporting the object address, the SYMBOLIZED
+// five-frame free-site chain (captured into the quarantine ring entry at free
+// time), and the touch site's own symbolized backtrace.
 //
 // Zero cost when off: everything here (and every check at the mm entry points)
 // sits inside `#if rcSanitize(true)` conditional-compilation regions, so a
@@ -1141,8 +1141,21 @@ end '__slab_free'
 	// are <= SLAB_MAX_SMALL_ALLOC, so a single entry can never exceed the byte cap.
 	let RC_QUARANTINE_MIN_SLOT_SIZE = 32
 	let RC_QUARANTINE_CAPACITY = 1048576
-	let RC_QUARANTINE_ENTRY_SIZE = 16
 	let RC_QUARANTINE_BYTE_CAP = 536870912
+
+	// Ring entry layout (64 bytes). The free-site return-address CHAIN lives in
+	// the entry — NOT in the quarantined slot — so every slot size gets full
+	// attribution and the slot's header/payload carry only the poison. The
+	// freed-touch report finds the entry by scanning the ring for its slotBase
+	// (O(live entries), fine on the panic path).
+	let RC_QUARANTINE_ENTRY_SIZE = 64
+	let RC_QENTRY_SLOT_BASE = 0
+	let RC_QENTRY_SLOT_SIZE = 8
+	let RC_QENTRY_RA1 = 16
+	let RC_QENTRY_RA2 = 24
+	let RC_QENTRY_RA3 = 32
+	let RC_QENTRY_RA4 = 40
+	let RC_QENTRY_RA5 = 48
 
 	// Field offsets of the `__mm_rc_quarantine_ctl` data-section global (layout doc
 	// at its registration in LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection).
@@ -1194,17 +1207,42 @@ end '__slab_free'
 	// the evictee — `__slab_free` may itself take the lock (os-direct / raw-owned
 	// routing), and the write-to-freed panic must never fire while holding it.
 	function __rc_quarantine_push(slotBase MachineWord, slotSize MachineWord)
-		// Free-site attribution: the return address one frame up ([fp+8] — the same
-		// frame walk mrt_panic does on x64/arm64). After inlining, "one frame up"
-		// is the nearest non-inlined caller of the code that freed the object —
-		// close enough to name the freeing function when symbolized offline. wasm
-		// has no frame-pointer chain (loadFramePtr yields 0): stash 0 and the
-		// report degrades gracefully.
-		let fp = __Internals.loadFramePtr()
-		var freeSiteRa = 0
-		if fp != 0 'haveFrame'
-			freeSiteRa = __Internals.loadIndirect(fp + 8)
-		end 'haveFrame'
+		// Free-site attribution: a short return-address CHAIN captured by walking
+		// the frame-pointer links ([fp] = caller's fp, [fp+8] = return address —
+		// the same walk mrt_panic does on x64/arm64; the chain root is 0). One
+		// frame is not enough: this helper and its callers (__rc_quarantine_
+		// intercept ← __slab_free ← __mm_free ← the releasing decref/drop) are
+		// real out-of-line functions, so the first return addresses name the
+		// sanitizer's own plumbing and only the deeper entries reach the code
+		// that actually released the object. wasm has no frame-pointer chain
+		// (loadFramePtr yields 0): all entries stash 0 and the report degrades
+		// gracefully.
+		var freeRa1 = 0
+		var freeRa2 = 0
+		var freeRa3 = 0
+		var freeRa4 = 0
+		var freeRa5 = 0
+		var fp = __Internals.loadFramePtr()
+
+		if fp != 0 'frame1'
+			freeRa1 = __Internals.loadIndirect(fp + 8)
+			fp = __Internals.loadIndirect(fp)
+		end 'frame1'
+		if fp != 0 'frame2'
+			freeRa2 = __Internals.loadIndirect(fp + 8)
+			fp = __Internals.loadIndirect(fp)
+		end 'frame2'
+		if fp != 0 'frame3'
+			freeRa3 = __Internals.loadIndirect(fp + 8)
+			fp = __Internals.loadIndirect(fp)
+		end 'frame3'
+		if fp != 0 'frame4'
+			freeRa4 = __Internals.loadIndirect(fp + 8)
+			fp = __Internals.loadIndirect(fp)
+		end 'frame4'
+		if fp != 0 'frame5'
+			freeRa5 = __Internals.loadIndirect(fp + 8)
+		end 'frame5'
 
 		let ctl = __Internals.rcQuarantineCtlAddr()
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
@@ -1228,8 +1266,8 @@ end '__slab_free'
 			let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
 			let head = __Internals.loadIndirect(ctl + RC_QCTL_HEAD)
 			let entry = ringBase + head * RC_QUARANTINE_ENTRY_SIZE
-			let evictSlot = __Internals.loadIndirect(entry)
-			let evictSize = __Internals.loadIndirect(entry + 8)
+			let evictSlot = __Internals.loadIndirect(entry + RC_QENTRY_SLOT_BASE)
+			let evictSize = __Internals.loadIndirect(entry + RC_QENTRY_SLOT_SIZE)
 
 			var nextHead = head + 1
 			if nextHead == capacity 'wrapHead'
@@ -1244,9 +1282,9 @@ end '__slab_free'
 			__Internals.osLockAcquire(__Internals.slabLockAddr())
 		end 'evict'
 
-		// Poison the header-word positions and stash the free site in the reserved
-		// word (slot+0) — `__rc_report_freed_touch` reads it back at [userPtr-32].
-		__Internals.storeIndirect(slotBase, value: freeSiteRa)
+		// Poison the header-word positions. The free-site chain goes into the
+		// RING ENTRY, not the slot — the slot keeps only the poison, and the
+		// report finds the chain by scanning the ring for this slotBase.
 		__Internals.storeIndirect(slotBase + 8, value: RC_SANITIZE_POISON_DTOR)
 		__Internals.storeIndirect(slotBase + 16, value: RC_SANITIZE_POISON_SIZE)
 		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_POISON_RC)
@@ -1255,8 +1293,13 @@ end '__slab_free'
 		let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
 		let tail = __Internals.loadIndirect(ctl + RC_QCTL_TAIL)
 		let entry = ringBase + tail * RC_QUARANTINE_ENTRY_SIZE
-		__Internals.storeIndirect(entry, value: slotBase)
-		__Internals.storeIndirect(entry + 8, value: slotSize)
+		__Internals.storeIndirect(entry + RC_QENTRY_SLOT_BASE, value: slotBase)
+		__Internals.storeIndirect(entry + RC_QENTRY_SLOT_SIZE, value: slotSize)
+		__Internals.storeIndirect(entry + RC_QENTRY_RA1, value: freeRa1)
+		__Internals.storeIndirect(entry + RC_QENTRY_RA2, value: freeRa2)
+		__Internals.storeIndirect(entry + RC_QENTRY_RA3, value: freeRa3)
+		__Internals.storeIndirect(entry + RC_QENTRY_RA4, value: freeRa4)
+		__Internals.storeIndirect(entry + RC_QENTRY_RA5, value: freeRa5)
 
 		var nextTail = tail + 1
 		if nextTail == capacity 'wrapTail'
@@ -1290,10 +1333,9 @@ end '__slab_free'
 	// Age-out of a quarantined slot: verify its poison survived the quarantine
 	// stay (a mismatch means something WROTE through a dangling reference after
 	// the free — report that rather than silently freeing corrupted state), clear
-	// the poison so the slab-reuse invariants hold (slot+0 must return to 0 — the
-	// reserved-word contract — and stale magics must not linger to confuse a later
-	// diagnosis), stamp the bypass sentinel, and re-enter `__slab_free` for the
-	// real routing. Runs with __slab_lock NOT held: the real free may take it, and
+	// the poison so stale magics don't linger to confuse a later diagnosis,
+	// stamp the bypass sentinel, and re-enter `__slab_free` for the real
+	// routing. Runs with __slab_lock NOT held: the real free may take it, and
 	// panicking while holding it would wedge the panic path's own allocations.
 	function __rc_quarantine_release(slotBase MachineWord, slotSize MachineWord)
 		let dtorWord = __Internals.loadIndirect(slotBase + 8)
@@ -1304,7 +1346,6 @@ end '__slab_free'
 			panic("rc-sanitize: write to freed memory detected — quarantined slot 0x{slotBase:016x} (size {slotSize}) was modified after free (dtor=0x{dtorWord:016x} size=0x{sizeWord:016x} rc=0x{rcWord:016x})")
 		end 'tampered'
 
-		__Internals.storeIndirect(slotBase, value: 0)
 		__Internals.storeIndirect(slotBase + 8, value: 0)
 		__Internals.storeIndirect(slotBase + 16, value: 0)
 		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_BYPASS)
@@ -1323,37 +1364,98 @@ end '__slab_free'
 		end 'freedTouch'
 	end '__rc_check_freed_touch'
 
+	// Print one free-site frame, symbolized in-process: return addresses inside
+	// .text go through the same `mrt_panic_print_frame` lookup mrt_panic uses
+	// for the touch backtrace ("  in <fn>"); anything else (0 from a truncated
+	// walk, a non-text address from a corrupted frame chain) prints raw so the
+	// chain's shape stays visible.
+	function __rc_print_free_frame(ra MachineWord)
+		if ra == 0 'noFrame'
+			return
+		end 'noFrame'
+
+		let textBase = __Internals.mrtStartAddr()
+		let textOffset = ra - textBase
+		let textSize = __Internals.symtableAddr() - textBase
+
+		if textOffset >= 0 and textOffset < textSize 'inText'
+			__Internals.panicPrintFrame(textOffset, symtable: __Internals.symtableAddr())
+			return
+		end 'inText'
+
+		printError("  at 0x{ra:016x} (outside .text)\n")
+	end '__rc_print_free_frame'
+
 	// A poisoned header was touched. `userPtr` is the freed object's user pointer;
-	// `kind` names the mm entry point that observed it. The free-site return
-	// address was stashed in the slot's reserved word at quarantine time — printed
-	// raw for offline symbolization (subtract the image base, then look the offset
-	// up via .symtab / llvm-objdump); the panic itself supplies the symbolized
-	// backtrace of the TOUCH site. Reads nothing from the object beyond its header
-	// words — the payload may be arbitrarily stale.
+	// `kind` names the mm entry point that observed it. The free-site return-
+	// address chain lives in the object's quarantine RING ENTRY (found by
+	// scanning the ring for the slot base — a poisoned header implies the slot
+	// is still quarantined, so the entry exists); each frame is symbolized
+	// in-process and printed to stderr, then the panic supplies the symbolized
+	// backtrace of the TOUCH site. The chain's leading frames name the
+	// sanitizer/mm plumbing (__rc_quarantine_intercept ← __slab_free ←
+	// __mm_free …); the deeper frames name the code that released the object.
+	// Reads nothing from the object itself beyond its header words — the
+	// payload may be arbitrarily stale.
 	function __rc_report_freed_touch(userPtr MachineWord, kind MachineWord)
-		let freeSiteRa = __Internals.loadIndirect(userPtr - 32)
+		let slotBase = userPtr - 32
 
+		var what = ""
 		if kind == RC_TOUCH_INCREF 'increfKind'
-			panic("rc-sanitize: INCREF of freed object 0x{userPtr:016x} — freed at ra=0x{freeSiteRa:016x}")
-		end 'increfKind'
+			what = "INCREF of freed object"
+		end 'increfKind' else if kind == RC_TOUCH_DECREF 'decrefKind'
+			what = "DECREF of freed object (over-release pair)"
+		end 'decrefKind' else if kind == RC_TOUCH_DROP 'dropKind'
+			what = "DROP of freed object"
+		end 'dropKind' else if kind == RC_TOUCH_MM_FREE 'freeKind'
+			what = "DOUBLE __mm_free of object"
+		end 'freeKind' else if kind == RC_TOUCH_SLAB_FREE 'slabFreeKind'
+			what = "double slab-free of object"
+		end 'slabFreeKind' else 'unknownKind'
+			what = "freed-object touch with unknown kind {kind} on object"
+		end 'unknownKind'
 
-		if kind == RC_TOUCH_DECREF 'decrefKind'
-			panic("rc-sanitize: DECREF of freed object 0x{userPtr:016x} (over-release pair) — freed at ra=0x{freeSiteRa:016x}")
-		end 'decrefKind'
+		printError("rc-sanitize: {what} 0x{userPtr:016x}\n")
 
-		if kind == RC_TOUCH_DROP 'dropKind'
-			panic("rc-sanitize: DROP of freed object 0x{userPtr:016x} — freed at ra=0x{freeSiteRa:016x}")
-		end 'dropKind'
+		// Locate the quarantine entry. The scan walks the live window
+		// (head..head+count) without the lock — this is the panic path, and a
+		// racing push cannot move OUR entry (the object is quarantined until
+		// evicted, and an eviction that raced us would have cleared the poison
+		// before we saw it).
+		let ctl = __Internals.rcQuarantineCtlAddr()
+		let ringBase = __Internals.loadIndirect(ctl + RC_QCTL_RING_BASE)
+		let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
+		let count = __Internals.loadIndirect(ctl + RC_QCTL_COUNT)
+		var idx = __Internals.loadIndirect(ctl + RC_QCTL_HEAD)
+		var remaining = count
+		var found = 0
 
-		if kind == RC_TOUCH_MM_FREE 'freeKind'
-			panic("rc-sanitize: DOUBLE __mm_free of object 0x{userPtr:016x} — first freed at ra=0x{freeSiteRa:016x}")
-		end 'freeKind'
+		while remaining > 0 'scan'
+			let entry = ringBase + idx * RC_QUARANTINE_ENTRY_SIZE
 
-		if kind == RC_TOUCH_SLAB_FREE 'slabFreeKind'
-			panic("rc-sanitize: double slab-free of object 0x{userPtr:016x} — first freed at ra=0x{freeSiteRa:016x}")
-		end 'slabFreeKind'
+			if __Internals.loadIndirect(entry + RC_QENTRY_SLOT_BASE) == slotBase 'hit'
+				printError("freed by (innermost first, leading frames are mm/sanitizer plumbing):\n")
+				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA1))
+				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA2))
+				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA3))
+				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA4))
+				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA5))
+				found = 1
+				break
+			end 'hit'
 
-		panic("rc-sanitize: freed-object touch with unknown kind {kind} — object 0x{userPtr:016x}, freed at ra=0x{freeSiteRa:016x}")
+			idx = idx + 1
+			if idx == capacity 'wrap'
+				idx = 0
+			end 'wrap'
+			remaining = remaining - 1
+		end 'scan'
+
+		if found == 0 'noEntry'
+			printError("freed by: (no quarantine entry found for slot 0x{slotBase:016x} — poison without a live ring entry)\n")
+		end 'noEntry'
+
+		panic("rc-sanitize: {what} 0x{userPtr:016x} — touch backtrace:")
 	end '__rc_report_freed_touch'
 #endif
 

@@ -687,7 +687,9 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	//   +0x18 count      — number of live entries currently quarantined
 	//   +0x20 byte_total — sum of slot_size over the live entries (byte-cap accounting)
 	//   +0x28 capacity   — ring capacity in entries (stamped at lazy-alloc; 0 = unallocated)
-	// Each ring entry is 16 bytes: +0 slotBase, +8 slotSize. Registered ONLY in
+	// Each ring entry is 64 bytes: +0 slotBase, +8 slotSize, +16..+48 the
+	// five-deep free-site return-address chain, +56 reserved (see the
+	// RC_QENTRY_* constants in stdlib/Internals.maxon). Registered ONLY in
 	// sanitized builds: the gate folds the sole referencing code away in a
 	// default build, and a default binary must carry ZERO trace of the sanitizer
 	// (the byte-identical-when-off guarantee) — not even 48 dead .data bytes.
@@ -1260,6 +1262,7 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	// Each bridge maps `__Internals.<bridgeName>(args)` to an unqualified
 	// `call <runtime_name>(args)` Std op. No string literals — the runtime
 	// callee name is baked into the bridge's lowering case.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.panicPrintFrame", paramNames: mmParamNames2("textOffset", second: "symtable"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabAlloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabFree", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabInit", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
@@ -12953,6 +12956,14 @@ end 'lookupInternalsFuncAddrTarget'
 // registered intrinsic signature, so the lowering helper just consumes that
 // many SSA names from the args array.
 function lookupInternalsRuntimeCallTarget(methodName String) returns InternalsRuntimeCallHit throws InternalsBridgeLookupError
+	if methodName == "panicPrintFrame" 'a'
+		// `mrt_panic_print_frame(text_offset, symtable)` — prints one
+		// symbolized "  in <fn>" stack-trace line to stderr. The refcount
+		// sanitizer's freed-touch report uses it to symbolize the free-site
+		// return-address chain IN-PROCESS, exactly like mrt_panic symbolizes
+		// the touch site's backtrace.
+		return InternalsRuntimeCallHit.create("mrt_panic_print_frame", arity: 2 as VarSlot)
+	end 'a'
 	if methodName == "slabAlloc" 'a'
 		return InternalsRuntimeCallHit.create("__slab_alloc", arity: 1 as VarSlot)
 	end 'a'
