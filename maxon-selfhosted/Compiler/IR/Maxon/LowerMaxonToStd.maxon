@@ -8562,7 +8562,7 @@ type MaxonToStdLowering
 			intLiteral(value) then return self.emitParamDefaultConstI64(value, fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
 			boolLiteral(value) then return self.emitParamDefaultConstI64(1 if value else 0, fromType: MaxonType.boolean, paramType: paramType, dstBlock: dstBlock)
 			byteLiteral(value) then return self.emitParamDefaultConstI64(value, fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
-			enumCase(typeName, caseName) then return self.emitParamDefaultConstI64(self.lookupEnumCaseOrdinal(typeName, caseName: caseName), fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+			enumCase(typeName, caseName) then return self.emitParamDefaultEnumCase(typeName, caseName: caseName, paramType: paramType, dstBlock: dstBlock)
 			floatLiteralBits(bits) then return self.emitParamDefaultConstF64(bits, paramType: paramType, dstBlock: dstBlock)
 			helper(helperName) then return self.emitParamDefaultHelperCall(helperName, paramType: paramType, dstBlock: dstBlock)
 			none then panic("materializeParamDefault: invariant — caller must check paramDefaultHasValue first")
@@ -8623,6 +8623,117 @@ type MaxonToStdLowering
 		self.classifyValue(resultId, cls: OwnershipClass.callReturnRc1, valueMaxonType: paramType)
 		return resultId
 	end 'emitParamDefaultHelperCall'
+
+	// Materialize a `TypeName.caseName` default. `TypeName` may be a plain
+	// enum (or a scalar payload-free union, which is representationally an
+	// enum) OR a HEAP-BOXED union — a union with at least one payload-bearing
+	// case, whose values are `mm_alloc`'d `{ tag, payload... }` boxes, never
+	// bare ordinals. The two representations need different materializations:
+	//   * enum / scalar-union  → a bare i64 ordinal constant (the historical
+	//                            path, correct because these pass by value).
+	//   * boxed union          → a real boxed construction (alloc + tag + zero
+	//                            payload slots), because the parameter's ABI
+	//                            slot carries a heap pointer the callee will
+	//                            DEREFERENCE. Emitting the ordinal there passes
+	//                            a raw small integer where a pointer is
+	//                            expected → the callee reads the union tag off
+	//                            a garbage/NULL address (the
+	//                            `throwsClauseIsThrowing(ThrowsClause.none)`
+	//                            default-fill crash).
+	// The parser's `enumCase` default arm only fires for a bare `Type.case`
+	// with no trailing `(...)`, so a boxed-union default here is always a
+	// PAYLOAD-FREE case; payload-bearing defaults route through the helper
+	// path. That keeps the boxed construction below payload-free.
+	function emitParamDefaultEnumCase(typeName String, caseName String, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		if let enumType = try self.project.enumTypes.get(typeName) 'resolved'
+			if enumTypeIsBoxedUnion(enumType) 'boxedUnion'
+				return self.emitParamDefaultBoxedUnionCase(enumType, caseName: caseName, dstBlock: dstBlock)
+			end 'boxedUnion'
+		end 'resolved'
+
+		return self.emitParamDefaultConstI64(self.lookupEnumCaseOrdinal(typeName, caseName: caseName), fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+	end 'emitParamDefaultEnumCase'
+
+	// Materialize a payload-free case of a HEAP-BOXED union as a default value.
+	// Shares the box skeleton (alloc + dtor + tag + zero-fill) with
+	// `lowerEnumConstruct` via `emitBoxedUnionSkeleton`; the only difference is
+	// this case never has a live payload to store, so every slot is zero-filled.
+	// The box is a fresh rc=0 allocation classified `freshRc0` so the refcount
+	// inserter acquires its +1 and pairs the eventual decref, exactly like an
+	// inline `Union.case` construction.
+	function emitParamDefaultBoxedUnionCase(unionType EnumType, caseName String, dstBlock IrBlock) returns ValueId
+		let caseIdx = try unionType.caseByName.get(caseName) otherwise panic("paramDefault boxed union: union '{unionType.name}' has no case '{caseName}'")
+		let theCase = try unionType.cases.get(caseIdx) otherwise panic("emitParamDefaultBoxedUnionCase: cases.get OOB at {caseIdx} for '{unionType.name}'")
+		if theCase.payloadFields.count() != 0 'hasPayload'
+			panic("emitParamDefaultBoxedUnionCase: '{unionType.name}.{caseName}' carries a payload — payload-bearing defaults must route through the helper path, not the enumCase arm")
+		end 'hasPayload'
+
+		let resultId = self.emitBoxedUnionSkeleton(unionType, resultName: ByteArray.create(), tagRawValue: theCase.rawValue, dstBlock: dstBlock)
+
+		// Zero-fill every payload slot so the destructor's field enumeration
+		// and any dump see a deterministic 0 (no live payload for a bare case).
+		let maxArity = unionMaxPayloadArity(unionType)
+		for j in 0 upto maxArity 'zeroPad'
+			let zeroId = self.emitConstI64(0, dstBlock: dstBlock)
+			self.emitStoreFieldI64(resultId, offset: 8 + j * 8, valueId: zeroId, dstBlock: dstBlock)
+		end 'zeroPad'
+
+		return resultId
+	end 'emitParamDefaultBoxedUnionCase'
+
+	// Emit the heap-boxed-union allocation skeleton and return the box's
+	// `resultId`: the size constant, the destructor argument (per-union
+	// `__destruct_<Union>` funcRef when any case carries a managed payload, else
+	// null — matching `synthesizeUnionDestructors`, which skips scalar-only
+	// unions so a funcRef to a never-emitted symbol would dangle), the
+	// `__mm_alloc(size, dtor)` call bound to the box, its `freshRc0`
+	// classification (the box is a fresh rc=0 allocation whose +1/decref the late
+	// inserter supplies), and the case `tagRawValue` stored at offset 0. Match
+	// dispatch (`resolveUnionCaseRawValue`) compares the loaded tag against each
+	// case's rawValue, so the TAG is the rawValue (== ordinal for bare/payload-
+	// only cases; diverges only when the union carries explicit scalar backings).
+	// A non-empty `resultName` binds the box to that name (the `enumConstruct`
+	// result); an empty name yields an anonymous SSA value (the param-default
+	// path, whose result flows straight into the call-arg slot). The size /
+	// destructor / tag constants are allocated BEFORE the box id so the value
+	// numbering matches the pre-extraction `lowerEnumConstruct` order. Payload-
+	// slot stores are left to the caller. Mirrors the C# bootstrap, which stores
+	// rawValue as the tag.
+	function emitBoxedUnionSkeleton(unionType EnumType, resultName ByteArray, tagRawValue IntConstant, dstBlock IrBlock) returns ValueId
+		let maxArity = unionMaxPayloadArity(unionType)
+		let allocBytes = 8 + maxArity * 8
+		let sizeId = self.emitConstI64(allocBytes as ParsedInt, dstBlock: dstBlock)
+		self.setValueType(sizeId, t: MaxonType.integer)
+
+		var dtorId = self.emitConstI64(0, dstBlock: dstBlock)
+		if unionHasManagedPayload(self.project, unionType: unionType) 'hasManaged'
+			let dtorRefId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorRefId, funcName: unionDestructorSymbol(unionType.name))))
+			dtorId = dtorRefId
+		end 'hasManaged'
+		self.setValueType(dtorId, t: MaxonType.integer)
+
+		let tagId = self.emitConstI64(tagRawValue, dstBlock: dstBlock)
+		self.setValueType(tagId, t: MaxonType.integer)
+
+		var resultId = 0 as ValueId
+		if resultName.count() != 0 'named'
+			resultId = self.defineName(resultName)
+		end 'named' else 'anonymous'
+			resultId = allocValueId(self.funcIdRef)
+		end 'anonymous'
+
+		var allocArgIds = ValueIdArray.create()
+		allocArgIds.push(sizeId)
+		allocArgIds.push(dtorId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
+		let unionMaxonType = MaxonType.named(self.project.typeNames.intern(unionType.name))
+		self.setValueType(resultId, t: unionMaxonType)
+		self.classifyValue(resultId, cls: OwnershipClass.freshRc0, valueMaxonType: unionMaxonType)
+
+		self.emitStoreFieldI64(resultId, offset: 0, valueId: tagId, dstBlock: dstBlock)
+		return resultId
+	end 'emitBoxedUnionSkeleton'
 
 	// Resolve `EnumName.caseName` to the case's ordinal (the index of the
 	// case in its declaring enum's `cases` list). For ordinal-backed enums
@@ -11331,50 +11442,12 @@ type MaxonToStdLowering
 			return
 		end 'arityMismatch'
 		let maxArity = unionMaxPayloadArity(unionType)
-		let allocBytes = 8 + maxArity * 8
-		let sizeId = self.emitConstI64(allocBytes as ParsedInt, dstBlock: dstBlock)
-		self.setValueType(sizeId, t: MaxonType.integer)
-		// Phase 9 Stage 4: pass `funcRef("__destruct_<UnionName>")` so that
-		// `mm_free` (invoked when refcount drops to zero) indirect-calls the
-		// per-union destructor, which `mm_decref`s each managed payload field
-		// of the live case. Unions whose payloads are all scalar (or which
-		// have no payload cases at all) keep the null destructor — the slab
-		// path frees the box and there's nothing managed to release. The
-		// helper symbol matches what `synthesizeUnionDestructors` will emit
-		// at the tail of this pass; `synthesizeUnionDestructors` skips
-		// scalar-only unions, so emitting `funcRef` here for those would
-		// dangle. Predicate must agree with the synthesizer on the same
-		// invariant — both consult `unionHasManagedPayload`.
-		var dtorId = self.emitConstI64(0, dstBlock: dstBlock)
-		if unionHasManagedPayload(self.project, unionType: unionType) 'hasManaged'
-			let dtorRefId = allocValueId(self.funcIdRef)
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorRefId, funcName: unionDestructorSymbol(unionType.name))))
-			dtorId = dtorRefId
-		end 'hasManaged'
-		self.setValueType(dtorId, t: MaxonType.integer)
-		// The tag stored at offset 0 is the case's rawValue (NOT its ordinal):
-		// match dispatch (`resolveUnionCaseRawValue`) compares the loaded tag
-		// against each case's rawValue, and for a boxed union that carries
-		// explicit scalar backings the rawValue diverges from the ordinal. For a
-		// bare/payload-only case rawValue equals the ordinal, so this is a no-op
-		// there. Mirrors the C# bootstrap, which stores rawValue as the tag.
-		let tagOrdinalId = self.emitConstI64(theCase.rawValue, dstBlock: dstBlock)
-		self.setValueType(tagOrdinalId, t: MaxonType.integer)
-		var allocArgIds = ValueIdArray.create()
-		allocArgIds.push(sizeId)
-		allocArgIds.push(dtorId)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
-		let unionMaxonType = MaxonType.named(self.project.typeNames.intern(unionType.name))
-		self.setValueType(resultId, t: unionMaxonType)
-		// Refcount-insertion: the union box is a fresh rc=0 allocation; its first
-		// owner acquires the +1 (alloc-at-0). The late inserter places the acquire +
-		// the eventual decref (whose `__destruct_<Union>` cascades into each managed
-		// payload field) — lowering emits NO manual incref here.
-		self.classifyValue(resultId, cls: OwnershipClass.freshRc0, valueMaxonType: unionMaxonType)
-		// Store the case rawValue tag at the box's offset 0 — this is what the
-		// match-side `enumTag` load reads back to dispatch on the live case.
-		self.emitStoreFieldI64(resultId, offset: 0, valueId: tagOrdinalId, dstBlock: dstBlock)
+		// Emit the shared box skeleton (size, per-union destructor, `__mm_alloc`
+		// bound to `result`, `freshRc0` classification, and the rawValue tag store
+		// at offset 0); the payload stores + zero-pad below are the only
+		// construct-specific work. See `emitBoxedUnionSkeleton` for the rawValue-
+		// vs-ordinal tag rationale and the null-vs-funcRef destructor choice.
+		let resultId = self.emitBoxedUnionSkeleton(unionType, resultName: result, tagRawValue: theCase.rawValue, dstBlock: dstBlock)
 		for i in 0 upto theCase.payloadFields.count() 'eachField'
 			let field = try theCase.payloadFields.get(i) otherwise panic("lowerEnumConstruct: payloadFields.get OOB at {i}")
 			let payloadValueName = try payloadValues.get(i) otherwise panic("lowerEnumConstruct: payloadValues.get OOB at {i}")
