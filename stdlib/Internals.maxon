@@ -1123,6 +1123,17 @@ end '__slab_free'
 	// coverage miss, never a correctness problem.)
 	let RC_SANITIZE_BYPASS = 0x5AFEDEAD0000000F
 
+	// PAYLOAD poison, filled word-by-word over a quarantined slot's user region.
+	// The header magics catch refcount-op touches of a freed object, but a plain
+	// FIELD READ through a dangling reference never consults the header — with
+	// the payload intact it silently returns the stale (still-correct-looking)
+	// value, hiding the use-after-free behind correct-by-luck behavior (bug #10's
+	// spurious E3071 came from exactly such a read). A poisoned payload makes
+	// every stale read yield this recognizable pattern instead: dereferencing it
+	// faults at a 0x5AFEDEAD-prefixed address (instantly attributable in the
+	// fault report's rip/addr), and comparisons/logic on it go loudly wrong.
+	let RC_SANITIZE_POISON_PAYLOAD = 0x5AFEDEAD00000011
+
 	// Touch kinds for `__rc_report_freed_touch` — which mm entry point observed
 	// the poisoned header.
 	let RC_TOUCH_INCREF = 1
@@ -1289,6 +1300,16 @@ end '__slab_free'
 		__Internals.storeIndirect(slotBase + 16, value: RC_SANITIZE_POISON_SIZE)
 		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_POISON_RC)
 
+		// Poison the PAYLOAD too (see RC_SANITIZE_POISON_PAYLOAD): stale field
+		// reads through dangling references must yield the pattern, not the
+		// intact old value. Word-stepped; slab slot sizes are 8-aligned.
+		var payloadPos = slotBase + 32
+
+		while payloadPos + 8 <= slotBase + slotSize 'poisonPayload'
+			__Internals.storeIndirect(payloadPos, value: RC_SANITIZE_POISON_PAYLOAD)
+			payloadPos = payloadPos + 8
+		end 'poisonPayload'
+
 		let ringBase = __Internals.loadIndirect(ctl + RC_QCTL_RING_BASE)
 		let capacity = __Internals.loadIndirect(ctl + RC_QCTL_CAPACITY)
 		let tail = __Internals.loadIndirect(ctl + RC_QCTL_TAIL)
@@ -1345,6 +1366,18 @@ end '__slab_free'
 		if dtorWord != RC_SANITIZE_POISON_DTOR or sizeWord != RC_SANITIZE_POISON_SIZE or rcWord != RC_SANITIZE_POISON_RC 'tampered'
 			panic("rc-sanitize: write to freed memory detected — quarantined slot 0x{slotBase:016x} (size {slotSize}) was modified after free (dtor=0x{dtorWord:016x} size=0x{sizeWord:016x} rc=0x{rcWord:016x})")
 		end 'tampered'
+
+		// The payload was pattern-filled at quarantine time; a changed first
+		// payload word means something WROTE through a dangling reference while
+		// the slot sat quarantined. One word is a cheap tripwire — full-payload
+		// verification would just re-walk what the poison loop wrote.
+		if slotSize >= 40 'hasPayloadWord'
+			let payloadWord = __Internals.loadIndirect(slotBase + 32)
+
+			if payloadWord != RC_SANITIZE_POISON_PAYLOAD 'payloadTampered'
+				panic("rc-sanitize: write to freed memory detected — quarantined slot 0x{slotBase:016x} (size {slotSize}) payload was modified after free (first word=0x{payloadWord:016x})")
+			end 'payloadTampered'
+		end 'hasPayloadWord'
 
 		__Internals.storeIndirect(slotBase + 8, value: 0)
 		__Internals.storeIndirect(slotBase + 16, value: 0)
