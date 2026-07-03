@@ -964,6 +964,12 @@ type RcContext
 	// ValueId, sized to maxValueId+1; out-of-range ids count 0.
 	export var totalDirectReadingOps as ValueIdArray
 
+	// Per-BlockId natural-loop nesting depth (0 = not in a loop). Computed once at
+	// context construction from the CFG + dominator tree; read by `consumeIsLoopCarried`
+	// to detect a value consumed inside a loop (re-consumed every iteration), which the
+	// position-based `valueDirectlyReadElsewhere` cannot see.
+	export var loopDepth as RegIntArray
+
 	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet) returns RcContext
 		return Self{
 			func: func,
@@ -997,7 +1003,8 @@ type RcContext
 			ordinalConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
 			blockLiveAfterPresent: BoolArray.create(),
-			totalDirectReadingOps: ValueIdArray.create()
+			totalDirectReadingOps: ValueIdArray.create(),
+			loopDepth: computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
 		}
 	end 'create'
 
@@ -3080,12 +3087,42 @@ end 'consumedArgCopyCount'
 // (the `CodepointView.createIterator` leak). Only a DIRECT later read of the
 // value (a syntactic operand of a later op — `cwd.path` after
 // `Subprocess.run(.., cwd)`) means the caller keeps using the pointer.
+//
+// LOOP RE-CONSUME. A value consumed at an op INSIDE A LOOP is consumed AGAIN on
+// every iteration, but `valueDirectlyReadElsewhere` counts the consume op's own
+// read in its block PREFIX (not "elsewhere"), so a single-syntactic-read
+// loop-carried consume (`for f in files: Parser.create(rootPath: root)` over a
+// loop-invariant `root`) looks like a pure move and gets NO copy — the callee's
+// per-iteration destructor then frees the reused value on iteration 2 (the
+// prescan-loop `FilePath.relativeTo` over-release). `consumeIsLoopCarried` detects
+// this — the consume block is inside a loop and `argId` is loop-invariant (live-in)
+// — so the caller keeps needing the value for the next iteration's consume and
+// mints a per-iteration copy.
 function consumedArgKeepsOwnPlusOne(ctx RcContext, liveAfter StdLiveAfter, block IrBlock, pos NodeIndex, argId ValueId) returns bool
 	if not liveAfter.isLiveAfterBodyOp(pos, vid: argId) 'pureMove'
 		return false
 	end 'pureMove'
-	return valueDirectlyReadElsewhere(ctx, block: block, pos: pos, argId: argId)
+	if valueDirectlyReadElsewhere(ctx, block: block, pos: pos, argId: argId) 'directLaterUse'
+		return true
+	end 'directLaterUse'
+	return consumeIsLoopCarried(ctx, block: block, argId: argId)
 end 'consumedArgKeepsOwnPlusOne'
+
+// True iff the consume at `block` is RE-EXECUTED by a loop with the SAME `argId`:
+// `block` is INSIDE a natural loop (`loopDepth >= 1`) AND `argId` is live-IN to
+// `block` (it enters the loop body from the pre-header / survives the back-edge, so
+// the same value reaches the consume every iteration). A consume block is typically
+// a loop BODY block, not the loop header, so a "block dominates its own predecessor"
+// (header-only) test misses it — the per-block loop-nesting depth is the correct
+// membership test. A value DEFINED inside the loop (not live-in) is a fresh value
+// each round and is not this loop-invariant re-consume shape.
+function consumeIsLoopCarried(ctx RcContext, block IrBlock, argId ValueId) returns bool
+	let depth = try ctx.loopDepth.get(block.id) otherwise 0
+	if depth == 0 'notInLoop'
+		return false
+	end 'notInLoop'
+	return ctx.liveness.liveInContains(block.id, vid: argId)
+end 'consumeIsLoopCarried'
 
 // Full-gated form of `consumedArgKeepsOwnPlusOne` for callers that haven't
 // already established the value's domain: a value outside the copy domain
