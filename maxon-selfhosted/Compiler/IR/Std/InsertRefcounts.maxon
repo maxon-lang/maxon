@@ -1903,9 +1903,22 @@ function decideIncomingOwnerAcquire(ctx RcContext, id ValueId, defOp StdOp, tran
 	end 'gainsNewOwner'
 	// (b) V's SOURCE does not provably outlive V: the value V was loaded from has
 	// its own ownership transferred away (returned / moved / consumed), so its
-	// single reference cannot keep V's pointee alive. V must own its own +1.
+	// single reference cannot keep V's pointee alive. V must own its own +1 — but
+	// ONLY if V is actually USED. A read-free V (a dead match binding like
+	// `direct(name) gives e`, which binds `name` yet returns the whole union `e`,
+	// so the `name` field-load is never read) can never dangle: there is no use for
+	// the +1 to protect. Acquiring one anyway mints an incref at V's def PLUS a
+	// last-use decref that COLLAPSE to the same position (def == last use when V is
+	// never read); `applyPlansForBlock` lands equal-position ops in reversed queue
+	// order, so the release (planned in the later `planLastUseDecrefs` sweep) prints
+	// BEFORE the acquire — `decref V; incref V`. That decref-first frees the borrowed
+	// field the instant its rc is 0, then the incref resurrects a freed slab slot
+	// (the borrow-into-consuming-constructor `parsePostC` over-release). Case (c)
+	// already encodes this via `valueLiveAfterStore`; case (b) lacked any liveness
+	// guard — a completely-dead borrow gets no acquire (and thus no paired decref).
+	let vIsRead = (try ctx.totalDirectReadingOps.get(id) otherwise 0) > 0
 	let sourceRoot = incomingOwnerSourceRoot(ctx, id: id)
-	if sourceRoot != REFCOUNT_NO_VALUE and sourceRoot != id 'haveSource'
+	if vIsRead and sourceRoot != REFCOUNT_NO_VALUE and sourceRoot != id 'haveSource'
 		let sourceTransferred = try transferred.get(sourceRoot) otherwise false
 		if sourceTransferred 'sourceTransferred'
 			setBoolAt(ctx.incomingOwnerAcquire, id: id, value: true)
