@@ -10076,6 +10076,24 @@ type MaxonToStdLowering
 		let enumName = receiverType.namedAliasNameOrEmpty(self.project)
 		if not enumName.isEmpty() 'maybeEnum'
 			if let enumType = try self.project.enumTypes.get(enumName) 'isEnum'
+				// The `.rawValue` / `.ordinal` / `.name` accessors all reason off
+				// the case ORDINAL. A plain enum (int/float/string/char/ordinal-
+				// backed, no payloads) carries that ordinal directly in its SSA
+				// value. A boxed union (some case carries a payload) is a heap
+				// pointer whose i64 tag sits at offset 0 of the box, so the ordinal
+				// must be loaded from there first. Mirrors the C# bootstrap, which
+				// loads the tag from heap offset 0 for a StdHeapPtr enum value before
+				// each accessor (MaxonToStandardConversion.cs `MaxonEnumStructRawValueOp`
+				// / `MaxonEnumOrdinalOp`). Without it a struct-backed union like
+				// `MaxonOp` compares the box pointer against case ordinals — no case
+				// matches, so `.name` falls through to the last case and
+				// `.rawValue.category` sums to 0 (the E3013 false negative in
+				// `blockEndsWithPanic` when a self-hosted-built compiler parses JSON's
+				// `parseArray` panic tail).
+				var accessorReceiverId = receiverId
+				if enumTypeIsBoxedUnion(enumType) 'boxedUnionTag'
+					accessorReceiverId = self.emitLoadFieldI64(receiverId, offset: 0, dstBlock: dstBlock)
+				end 'boxedUnionTag'
 				if fieldNameStr == "rawValue" 'isRaw'
 					if enumType.isFunctionBacked 'isFnBacked'
 						// Function-backed enums map their ordinal to a function
@@ -10085,7 +10103,7 @@ type MaxonToStdLowering
 						// enum's shared FunctionTypeId and an env entry of 0
 						// (free functions) so a subsequent indirect call site
 						// can find the right thunk and dispatch correctly.
-						self.lowerFunctionBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+						self.lowerFunctionBackedEnumRawValue(result, receiverId: accessorReceiverId, enumType: enumType, dstBlock: dstBlock)
 						return
 					end 'isFnBacked'
 					if enumType.isStringBacked or enumType.isCharBacked 'isStringChar'
@@ -10093,7 +10111,7 @@ type MaxonToStdLowering
 						// so `.rawValue` must materialize the case's declared
 						// backing literal (String / Character) from the ordinal
 						// via a synthesized helper — analogous to `.name`.
-						self.lowerStringBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+						self.lowerStringBackedEnumRawValue(result, receiverId: accessorReceiverId, enumType: enumType, dstBlock: dstBlock)
 						return
 					end 'isStringChar'
 					let structBackingName = enumStructBackingName(enumType)
@@ -10119,27 +10137,28 @@ type MaxonToStdLowering
 						// (no alloc, no other-field work). Any non-projectable use
 						// falls through to the unchanged materialization below.
 						if self.allRawValueUsesProjectable(result, backingStructName: structBackingName) 'deferScalarProjection'
-							self.deferredStructRawValues.upsert(result, value: DeferredStructRawValue.create(enumType.name, backingStructName: structBackingName, ordinalId: receiverId))
+							self.deferredStructRawValues.upsert(result, value: DeferredStructRawValue.create(enumType.name, backingStructName: structBackingName, ordinalId: accessorReceiverId))
 							return
 						end 'deferScalarProjection'
-						self.lowerStructBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, backingStructName: structBackingName, dstBlock: dstBlock)
+						self.lowerStructBackedEnumRawValue(result, receiverId: accessorReceiverId, enumType: enumType, backingStructName: structBackingName, dstBlock: dstBlock)
 						return
 					end 'isStructBacked'
-					// int / float / ordinal backings: the receiver's SSA value
-					// already carries the raw bits.
-					self.aliasName(result, toId: receiverId)
+					// int / float / ordinal backings: `accessorReceiverId` already
+					// carries the raw ordinal bits (direct for a plain enum, or the
+					// tag loaded from the box for a boxed union).
+					self.aliasName(result, toId: accessorReceiverId)
 					return
 				end 'isRaw'
 				if fieldNameStr == "ordinal" 'isOrdinal'
 					if enumIsOrdinalBacked(enumType) 'ordinalEqRaw'
-						self.aliasName(result, toId: receiverId)
+						self.aliasName(result, toId: accessorReceiverId)
 						return
 					end 'ordinalEqRaw'
-					self.lowerEnumOrdinalLookup(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+					self.lowerEnumOrdinalLookup(result, receiverId: accessorReceiverId, enumType: enumType, dstBlock: dstBlock)
 					return
 				end 'isOrdinal'
 				if fieldNameStr == "name" 'isName'
-					self.lowerEnumNameLookup(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+					self.lowerEnumNameLookup(result, receiverId: accessorReceiverId, enumType: enumType, dstBlock: dstBlock)
 					return
 				end 'isName'
 			end 'isEnum'
@@ -10771,9 +10790,11 @@ type MaxonToStdLowering
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'unknownStruct'
-		// A struct-backed enum is a plain ordinal-valued enum (no associated
-		// payload, never a boxed union), so the receiver's SSA value IS the
-		// ordinal directly — no heap tag-load is needed.
+		// `receiverId` is the case ORDINAL: the caller (`lowerFieldLoad`) already
+		// normalized it — a plain ordinal-valued enum passes its SSA value through
+		// unchanged, while a struct-backed BOXED union (e.g. `MaxonOp`, whose cases
+		// carry payloads) has had its i64 tag loaded from offset 0 of the box. So
+		// the select-chain below can compare it directly against each case ordinal.
 		self.emitHeapStructAllocInto(resultId, structType: structType, structNameStr: backingStructName, inserterManaged: true, dstBlock: dstBlock)
 		var emptyChain = StringArray.create()
 		self.emitStructRawValueFields(resultId, structType: structType, enumType: enumType, ordinalId: receiverId, fieldPrefix: emptyChain, dstBlock: dstBlock)

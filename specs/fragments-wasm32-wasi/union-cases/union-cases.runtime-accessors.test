@@ -1,0 +1,263 @@
+// Test: union-cases.runtime-accessors
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+// `.name` / `.rawValue` / `.ordinal` read off a RUNTIME payload-bearing union
+// value (a parameter) — distinct from the compile-time companion access
+// (`Shape.unionCases.circle`). The value is a heap box whose i64 tag sits at
+// offset 0, so the accessor must load that tag before its ordinal-keyed
+// lookup. Without the load the box pointer was used as the ordinal: `.name`
+// fell through to the last case ("point") for every input and `.rawValue` /
+// `.ordinal` returned the pointer.
+function nameOf(sh Shape) returns String
+	return sh.name
+end 'nameOf'
+
+function tagOf(sh Shape) returns Integer
+	return sh.rawValue
+end 'tagOf'
+
+function ordOf(sh Shape) returns Integer
+	return sh.ordinal
+end 'ordOf'
+
+function main() returns ExitCode
+	let a = Shape.circle(5)
+	let b = Shape.square(9)
+	let c = Shape.point
+	print("{nameOf(a)}/{tagOf(a)}/{ordOf(a)}\n")
+	print("{nameOf(b)}/{tagOf(b)}/{ordOf(b)}\n")
+	print("{nameOf(c)}/{tagOf(c)}/{ordOf(c)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+circle/0/0
+square/1/1
+point/2/2
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 5 : i64
+    %170 = mir.mov_imm 16 : i64
+    %171 = mir.mov_imm 0 : i64
+    %172 = mir.mov_imm 0 : i64
+    %173 = mir.call @stdlib.__mm_alloc(%170, %171)
+    mir.store %172, %173, 0 width: qword
+    mir.store %3, %173, 8 width: qword
+    %5 = mir.mov_imm 9 : i64
+    %174 = mir.mov_imm 16 : i64
+    %175 = mir.mov_imm 0 : i64
+    %176 = mir.mov_imm 1 : i64
+    %177 = mir.call @stdlib.__mm_alloc(%174, %175)
+    mir.store %176, %177, 0 width: qword
+    mir.store %5, %177, 8 width: qword
+    %178 = mir.mov_imm 16 : i64
+    %179 = mir.mov_imm 0 : i64
+    %180 = mir.mov_imm 2 : i64
+    %181 = mir.call @stdlib.__mm_alloc(%178, %179)
+    mir.store %180, %181, 0 width: qword
+    %182 = mir.mov_imm 0 : i64
+    mir.store %182, %181, 8 width: qword
+    %183 = mir.load %173, 0 width: qword
+    %184 = mir.call @__enum_Shape_name(%183)
+    %185 = mir.load %173, 0 width: qword
+    %186 = mir.load %173, 0 width: qword
+    %14 = mir.global_addr @__istr_0
+    %16 = mir.load %184, 0 width: qword
+    %17 = mir.load %16, 0 width: qword
+    %18 = mir.load %16, 8 width: qword
+    %19 = mir.global_addr @__istr_1
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.mov_imm 21 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    %23 = mir.call @mrt_i64_to_string(%185, %22)
+    %24 = mir.global_addr @__istr_1
+    %27 = mir.call @mrt_alloc(%21)
+    %28 = mir.call @mrt_i64_to_string(%186, %27)
+    %210 = mir.call @mm_drop(%173)
+    %29 = mir.global_addr @__istr_2
+    %33 = mir.add.i64 %0, %18
+    %34 = mir.add.i64 %33, %20
+    %35 = mir.add.i64 %34, %23
+    %36 = mir.add.i64 %35, %20
+    %37 = mir.add.i64 %36, %28
+    %38 = mir.add.i64 %37, %20
+    %40 = mir.add.i64 %38, %20
+    %41 = mir.call @mrt_alloc(%40)
+    mir.memcpy %41, %14, %0
+    %42 = mir.add.i64 %41, %0
+    mir.memcpy %42, %17, %18
+    %43 = mir.add.i64 %42, %18
+    %211 = mir.call @__mm_decref_maybenull_helper(%184)
+    mir.memcpy %43, %19, %20
+    %44 = mir.add.i64 %43, %20
+    mir.memcpy %44, %22, %23
+    %45 = mir.add.i64 %44, %23
+    mir.memcpy %45, %24, %20
+    %46 = mir.add.i64 %45, %20
+    mir.memcpy %46, %27, %28
+    %47 = mir.add.i64 %46, %28
+    mir.memcpy %47, %29, %20
+    %49 = mir.call @stdlib.__mm_decref(%22)
+    %50 = mir.call @stdlib.__mm_decref(%27)
+    %51 = mir.mov_imm 48 : i64
+    %52 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %53 = mir.call @mrt_alloc_with_dtor(%51, %52)
+    mir.store %0, %53, 40 width: qword
+    mir.store %41, %53, 0 width: qword
+    mir.store %38, %53, 8 width: qword
+    mir.store %38, %53, 16 width: qword
+    mir.store %20, %53, 24 width: qword
+    %56 = mir.mov_imm -1 : i64
+    mir.store %56, %53, 32 width: qword
+    %58 = mir.mov_imm 16 : i64
+    %59 = mir.func_addr @__destruct_String
+    %57 = mir.call @stdlib.__mm_alloc(%58, %59)
+    mir.store %53, %57, 0 width: qword
+    mir.store %0, %57, 8 width: qword
+    %187 = mir.load %57, 0 width: qword
+    %207 = mir.call @stdlib.__mm_incref(%187)
+    %188 = mir.load %187, 0 width: qword
+    %189 = mir.load %187, 8 width: qword
+    %190 = mir.call @mrt_write_stdout(%188, %189)
+    %213 = mir.call @mm_drop(%57)
+    %212 = mir.call @__mm_decref_maybenull_helper(%187)
+    %191 = mir.load %177, 0 width: qword
+    %192 = mir.call @__enum_Shape_name(%191)
+    %193 = mir.load %177, 0 width: qword
+    %194 = mir.load %177, 0 width: qword
+    %68 = mir.global_addr @__istr_0
+    %70 = mir.load %192, 0 width: qword
+    %71 = mir.load %70, 0 width: qword
+    %72 = mir.load %70, 8 width: qword
+    %73 = mir.global_addr @__istr_1
+    %76 = mir.call @mrt_alloc(%21)
+    %77 = mir.call @mrt_i64_to_string(%193, %76)
+    %78 = mir.global_addr @__istr_1
+    %81 = mir.call @mrt_alloc(%21)
+    %82 = mir.call @mrt_i64_to_string(%194, %81)
+    %214 = mir.call @mm_drop(%177)
+    %83 = mir.global_addr @__istr_2
+    %87 = mir.add.i64 %0, %72
+    %88 = mir.add.i64 %87, %20
+    %89 = mir.add.i64 %88, %77
+    %90 = mir.add.i64 %89, %20
+    %91 = mir.add.i64 %90, %82
+    %92 = mir.add.i64 %91, %20
+    %94 = mir.add.i64 %92, %20
+    %95 = mir.call @mrt_alloc(%94)
+    mir.memcpy %95, %68, %0
+    %96 = mir.add.i64 %95, %0
+    mir.memcpy %96, %71, %72
+    %97 = mir.add.i64 %96, %72
+    %215 = mir.call @__mm_decref_maybenull_helper(%192)
+    mir.memcpy %97, %73, %20
+    %98 = mir.add.i64 %97, %20
+    mir.memcpy %98, %76, %77
+    %99 = mir.add.i64 %98, %77
+    mir.memcpy %99, %78, %20
+    %100 = mir.add.i64 %99, %20
+    mir.memcpy %100, %81, %82
+    %101 = mir.add.i64 %100, %82
+    mir.memcpy %101, %83, %20
+    %103 = mir.call @stdlib.__mm_decref(%76)
+    %104 = mir.call @stdlib.__mm_decref(%81)
+    %105 = mir.mov_imm 48 : i64
+    %106 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %107 = mir.call @mrt_alloc_with_dtor(%105, %106)
+    mir.store %0, %107, 40 width: qword
+    mir.store %95, %107, 0 width: qword
+    mir.store %92, %107, 8 width: qword
+    mir.store %92, %107, 16 width: qword
+    mir.store %20, %107, 24 width: qword
+    %110 = mir.mov_imm -1 : i64
+    mir.store %110, %107, 32 width: qword
+    %112 = mir.mov_imm 16 : i64
+    %113 = mir.func_addr @__destruct_String
+    %111 = mir.call @stdlib.__mm_alloc(%112, %113)
+    mir.store %107, %111, 0 width: qword
+    mir.store %0, %111, 8 width: qword
+    %195 = mir.load %111, 0 width: qword
+    %208 = mir.call @stdlib.__mm_incref(%195)
+    %196 = mir.load %195, 0 width: qword
+    %197 = mir.load %195, 8 width: qword
+    %198 = mir.call @mrt_write_stdout(%196, %197)
+    %217 = mir.call @mm_drop(%111)
+    %216 = mir.call @__mm_decref_maybenull_helper(%195)
+    %199 = mir.load %181, 0 width: qword
+    %200 = mir.call @__enum_Shape_name(%199)
+    %201 = mir.load %181, 0 width: qword
+    %202 = mir.load %181, 0 width: qword
+    %122 = mir.global_addr @__istr_0
+    %124 = mir.load %200, 0 width: qword
+    %125 = mir.load %124, 0 width: qword
+    %126 = mir.load %124, 8 width: qword
+    %127 = mir.global_addr @__istr_1
+    %130 = mir.call @mrt_alloc(%21)
+    %131 = mir.call @mrt_i64_to_string(%201, %130)
+    %132 = mir.global_addr @__istr_1
+    %135 = mir.call @mrt_alloc(%21)
+    %136 = mir.call @mrt_i64_to_string(%202, %135)
+    %218 = mir.call @mm_drop(%181)
+    %137 = mir.global_addr @__istr_2
+    %141 = mir.add.i64 %0, %126
+    %142 = mir.add.i64 %141, %20
+    %143 = mir.add.i64 %142, %131
+    %144 = mir.add.i64 %143, %20
+    %145 = mir.add.i64 %144, %136
+    %146 = mir.add.i64 %145, %20
+    %148 = mir.add.i64 %146, %20
+    %149 = mir.call @mrt_alloc(%148)
+    mir.memcpy %149, %122, %0
+    %150 = mir.add.i64 %149, %0
+    mir.memcpy %150, %125, %126
+    %151 = mir.add.i64 %150, %126
+    %219 = mir.call @__mm_decref_maybenull_helper(%200)
+    mir.memcpy %151, %127, %20
+    %152 = mir.add.i64 %151, %20
+    mir.memcpy %152, %130, %131
+    %153 = mir.add.i64 %152, %131
+    mir.memcpy %153, %132, %20
+    %154 = mir.add.i64 %153, %20
+    mir.memcpy %154, %135, %136
+    %155 = mir.add.i64 %154, %136
+    mir.memcpy %155, %137, %20
+    %157 = mir.call @stdlib.__mm_decref(%130)
+    %158 = mir.call @stdlib.__mm_decref(%135)
+    %159 = mir.mov_imm 48 : i64
+    %160 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %161 = mir.call @mrt_alloc_with_dtor(%159, %160)
+    mir.store %0, %161, 40 width: qword
+    mir.store %149, %161, 0 width: qword
+    mir.store %146, %161, 8 width: qword
+    mir.store %146, %161, 16 width: qword
+    mir.store %20, %161, 24 width: qword
+    %164 = mir.mov_imm -1 : i64
+    mir.store %164, %161, 32 width: qword
+    %166 = mir.mov_imm 16 : i64
+    %167 = mir.func_addr @__destruct_String
+    %165 = mir.call @stdlib.__mm_alloc(%166, %167)
+    mir.store %161, %165, 0 width: qword
+    mir.store %0, %165, 8 width: qword
+    %203 = mir.load %165, 0 width: qword
+    %209 = mir.call @stdlib.__mm_incref(%203)
+    %204 = mir.load %203, 0 width: qword
+    %205 = mir.load %203, 8 width: qword
+    %206 = mir.call @mrt_write_stdout(%204, %205)
+    %221 = mir.call @mm_drop(%165)
+    %220 = mir.call @__mm_decref_maybenull_helper(%203)
+    mir.ret %0
+  }
+}
+---

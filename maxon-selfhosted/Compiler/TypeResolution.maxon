@@ -3034,24 +3034,29 @@ end 'QualifiedEnumName'
 
 function splitQualifiedEnumName(project Project, qualifiedName String) returns QualifiedEnumName
 	let bytes = qualifiedName.toByteArray()
-	var dotIdx = -1 as ParsedInt
-	for i in 0 upto bytes.count() 'scan'
+	// Scan dot positions from LAST to FIRST and return the LONGEST prefix that
+	// names a registered enum. A union's `.unionCases` companion is itself a
+	// registered enum whose NAME contains a dot (`Shape.unionCases`), so its
+	// case constant `Shape.unionCases.circle` must resolve to that companion —
+	// not to the parent union `Shape`, whose shorter prefix would otherwise win
+	// and mistype the bare-ordinal companion value as the boxed union (yielding
+	// a nil deref in the boxed-union `.rawValue`/`.name`/`.ordinal` tag-load).
+	// A case name never contains a dot, so the last dot is always the enum/case
+	// boundary; a single-dot `Direction.north` resolves identically either way.
+	var i = bytes.count() - 1
+	while i > 0 'scan'
 		let b = try bytes.get(i) otherwise return QualifiedEnumName.notEnum()
-		if b == '.' 'hit'
-			dotIdx = i
-			break
-		end 'hit'
+		if b == '.' 'atDot'
+			let prefixBytes = try bytes.slice(0, endIndex: i) otherwise return QualifiedEnumName.notEnum()
+			let enumName = String.from(prefixBytes)
+			if project.enumTypes.contains(enumName) or project.unresolvedEnums.contains(enumName) 'isEnum'
+				let suffixBytes = try bytes.slice(i + 1, endIndex: bytes.count()) otherwise return QualifiedEnumName.notEnum()
+				return QualifiedEnumName.enumCase(enumName, suffix: String.from(suffixBytes))
+			end 'isEnum'
+		end 'atDot'
+		i = i - 1
 	end 'scan'
-	if dotIdx < 0 'noDot'
-		return QualifiedEnumName.notEnum()
-	end 'noDot'
-	let prefixBytes = try bytes.slice(0, endIndex: dotIdx) otherwise return QualifiedEnumName.notEnum()
-	let suffixBytes = try bytes.slice(dotIdx + 1, endIndex: bytes.count()) otherwise return QualifiedEnumName.notEnum()
-	let enumName = String.from(prefixBytes)
-	if not project.enumTypes.contains(enumName) 'notEnum'
-		return QualifiedEnumName.notEnum()
-	end 'notEnum'
-	return QualifiedEnumName.enumCase(enumName, suffix: String.from(suffixBytes))
+	return QualifiedEnumName.notEnum()
 end 'splitQualifiedEnumName'
 
 function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, range SourceRange, valueType MaxonType = MaxonType.integer)

@@ -169,3 +169,45 @@ end 'main'
 ```exitcode
 1
 ```
+
+### Struct-backing metadata read on a runtime union value
+
+<!-- test: union-backing-runtime-rawvalue -->
+```maxon
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+union TestOp
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
+end 'TestOp'
+
+// Read the struct-backing metadata off a RUNTIME union value (a parameter),
+// not a constant case. A payload-bearing union is heap-boxed, so its i64 tag
+// lives at offset 0 of the box; the boxed-union `.rawValue` lowering must load
+// that tag before the per-case select-chain compares it against each case
+// ordinal. Without the load the box pointer was compared instead, no case
+// matched, and `.rawValue.latency` summed to 0 for every input.
+function latencyOf(op TestOp) returns Latency
+	return op.rawValue.latency
+end 'latencyOf'
+
+function main() returns ExitCode
+	let a = TestOp.add(10, src: 20)
+	let m = TestOp.mul(1, src: 2)
+	let n = TestOp.nop
+	return latencyOf(a) + latencyOf(m) + latencyOf(n)
+end 'main'
+```
+```exitcode
+4
+```

@@ -158,3 +158,53 @@ end 'main'
 ```exitcode
 0
 ```
+
+### Accessors on a runtime union value
+
+<!-- test: union-cases.runtime-accessors -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+// `.name` / `.rawValue` / `.ordinal` read off a RUNTIME payload-bearing union
+// value (a parameter) — distinct from the compile-time companion access
+// (`Shape.unionCases.circle`). The value is a heap box whose i64 tag sits at
+// offset 0, so the accessor must load that tag before its ordinal-keyed
+// lookup. Without the load the box pointer was used as the ordinal: `.name`
+// fell through to the last case ("point") for every input and `.rawValue` /
+// `.ordinal` returned the pointer.
+function nameOf(sh Shape) returns String
+	return sh.name
+end 'nameOf'
+
+function tagOf(sh Shape) returns Integer
+	return sh.rawValue
+end 'tagOf'
+
+function ordOf(sh Shape) returns Integer
+	return sh.ordinal
+end 'ordOf'
+
+function main() returns ExitCode
+	let a = Shape.circle(5)
+	let b = Shape.square(9)
+	let c = Shape.point
+	print("{nameOf(a)}/{tagOf(a)}/{ordOf(a)}\n")
+	print("{nameOf(b)}/{tagOf(b)}/{ordOf(b)}\n")
+	print("{nameOf(c)}/{tagOf(c)}/{ordOf(c)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+circle/0/0
+square/1/1
+point/2/2
+```
