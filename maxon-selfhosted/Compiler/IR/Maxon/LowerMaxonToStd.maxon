@@ -8582,7 +8582,7 @@ type MaxonToStdLowering
 		end 'mSeek'
 		if methodName == "peek" 'mPeek'
 			let aheadId = try args.get(0) otherwise panic("lowerManagedMemoryCursorBuiltin: peek missing ahead arg")
-			self.lowerCursorPeek(result, cursorId: receiverId, aheadId: aheadId, dstBlock: dstBlock, errorBoundName: errorBoundName)
+			self.lowerCursorPeek(result, cursorId: receiverId, aheadId: aheadId, elementType: elementType, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mPeek'
 		// Unknown method on the cursor — fall through with a clear diagnostic
@@ -9192,28 +9192,27 @@ type MaxonToStdLowering
 	end 'lowerCursorSeek'
 
 	// Phase 11.4: cursor.peek(ahead) — load element at `position + ahead`
-	// without moving the cursor. Sets error code 1 when the target index is
-	// out of bounds; the load itself reads from a clamped address (the
-	// current position) on the failure path, so the value is benign noise
-	// that the caller's `try otherwise` branch discards.
-	function lowerCursorPeek(result ByteArray, cursorId ValueId, aheadId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
-		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
-		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
-		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
-		let elementSize = self.emitLoadFieldI64(cursorId, offset: 24, dstBlock: dstBlock)
-		let target = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: position, rightId: aheadId, dstBlock: dstBlock)
-		let isValid = self.emitInBoundsZeroToLength(target, length: length, dstBlock: dstBlock)
-		// Clamp on the error path so the load below dereferences a known-safe
-		// address (the current position): the value is benign noise that the
-		// caller's `try otherwise` discards.
-		let safeTarget = self.emitArithmeticSelect(isValid, trueVal: target, falseVal: position, dstBlock: dstBlock)
-		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: safeTarget, rightId: elementSize, dstBlock: dstBlock)
-		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
-		self.setValueType(resultId, t: MaxonType.integer)
-		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: 1, dstBlock: dstBlock)
-		self.emitFlagBind(errorBoundName, codeValueId: codeValue)
+	// without moving the cursor. Delegates to the stdlib runtime helper
+	// `__managed_mem_cursor_peek`, which bounds-checks the target index
+	// (throwing indexOutOfBounds → the nonzero error flag that the stdlib's
+	// `try raw.peek(ahead) otherwise throw` rethrows as IterationError) and
+	// dispatches the load on the cursor's runtime `element_size` field —
+	// same design as `lowerCursorCurrent`, for the same reason: at lowering
+	// time the receiver's element type is `typeParameter(Element)`, so the
+	// concrete width is only knowable from the cursor's own field at
+	// runtime. The previous inline lowering hardcoded a qword load, which
+	// leaked 7 bytes of adjacent buffer state for narrow elements (the
+	// lexer's hex-prefix `peek(1)` returned garbage high bytes, splitting
+	// every `0x…` literal into `0` + identifier) and mis-read bit-packed
+	// bool arrays entirely (element_size 0 zeroed the byte offset).
+	function lowerCursorPeek(result ByteArray, cursorId ValueId, aheadId ValueId, elementType MaxonType, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
+		var argIds = ValueIdArray.create()
+		argIds.push(cursorId)
+		argIds.push(aheadId)
+		_ = self.lowerManagedMemRuntimeCall(result, helperName: "stdlib.__managed_mem_cursor_peek", argIds: argIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
+		// Same narrow-signed-element shim as lowerCursorCurrent: the helper
+		// zero-extends its sized loads through the i64 ABI.
+		self.maybeSignExtendNarrowReturn(result, elementType: elementType, dstBlock: dstBlock)
 	end 'lowerCursorPeek'
 
 	// Inline a `loadIndirect(selfPtr, offset)` for one of the simple

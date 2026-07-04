@@ -428,3 +428,29 @@ end 'main'
 ```stdout
 1101
 ```
+
+<!-- test: cursor-peek-packed-byte-elements -->
+Peek over a byte-string-backed array, whose buffer is genuinely byte-packed (element size 1, unlike a pushed `Array with Byte`, which stores 8-byte slots). A fixed-width qword load in peek's lowering read 7 bytes of adjacent buffer state past the element, so the peeked values carried garbage high bytes — the self-hosted compiler's own lexer tripped over this when `peek(1)` for the `0x` hex prefix returned a huge value that matched neither `x` nor `0`, splitting every hex literal into `0` + identifier.
+```maxon
+function main() returns ExitCode
+	let bytes = b"0xFF"
+	var it = try bytes.createIterator() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	let cur = it.current()
+	let p1 = try it.peek(1) otherwise 255
+	let p2 = try it.peek(2) otherwise 255
+	let p3 = try it.peek(3) otherwise 255
+	let oob = try it.peek(4) otherwise 255
+
+	print("{cur} {p1} {p2} {p3} {oob}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+48 120 70 70 255
+```

@@ -1902,6 +1902,37 @@ function __managed_mem_cursor_current(cursor MachineWord) returns MachineWord
 	return __managed_mem_load_sized(buffer + position * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_current'
 
+// cursor_peek(cursor, ahead) — load the element at `position + ahead` without
+// moving the cursor, dispatching on element_size exactly like cursor_current.
+// Unlike current(), peek has no invariant guaranteeing the target is in range,
+// so it bounds-checks target ∈ [0, length) and throws indexOutOfBounds (wire 1)
+// on a miss — the stdlib's `ArrayIterator.peek` rethrows that as
+// IterationError.exhausted. The width dispatch must live here, at the one
+// place that has the runtime element_size value: a fixed qword load in the
+// lowering leaked 7 bytes of adjacent buffer state for narrow elements (the
+// lexer's hex-prefix peek returned garbage high bytes, splitting every `0x…`
+// literal into `0` + identifier). No empty-slot guard, mirroring
+// cursor_current: a zeroed managed slot reads back as null, same as current().
+function __managed_mem_cursor_peek(cursor MachineWord, ahead MachineWord) returns MachineWord throws __ManagedMemoryError
+	let position = __Internals.loadIndirect(cursor + 8)
+	let length = __Internals.loadIndirect(cursor + 16)
+	let target = position + ahead
+	if target < 0 'lo'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'lo'
+	if target >= length 'hi'
+		throw __ManagedMemoryError.indexOutOfBounds
+	end 'hi'
+	let buffer = __Internals.loadIndirect(cursor)
+	let elemSize = __Internals.loadIndirect(cursor + 24)
+	// element_size == 0 is the bit-packed-bool sentinel — same layout as
+	// __managed_mem_get / cursor_current.
+	if elemSize == 0 'bit'
+		return __managed_mem_read_bit(buffer, idx: target)
+	end 'bit'
+	return __managed_mem_load_sized(buffer + target * elemSize, elemSize: elemSize)
+end '__managed_mem_cursor_peek'
+
 // get(self, idx) — bounds-check idx ∈ [0, length), then load the element.
 // Dispatch on element_size: 1 byte (loadByte), 2 (loadHalfword), 4 (loadWord),
 // fall through to qword (loadIndirect). Unsigned reads — typed sign-extension
