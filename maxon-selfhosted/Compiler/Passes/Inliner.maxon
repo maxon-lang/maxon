@@ -1373,6 +1373,12 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		if inlinedFlag == REMAP_INVALID 'unmappedFlag'
 			panic("performInline: errorFlagId {calleeErrorFlagId} not bound by callee body walk")
 		end 'unmappedFlag'
+		// Refcount-insertion: carry the tryCall error-flag's managed contract onto the
+		// spliced thrown value (mirrors the resultId `preserveCallSiteOwnership` above). A
+		// heap-boxed-union throw classified the flag `callReturnRc1` (`classifyTryCallErrorFlag`);
+		// an ownership-blind spliced value would otherwise erase that, orphaning the caught
+		// box's transferred +1.
+		preserveCallSiteOwnership(module, caller: caller, oldResultId: callShape.errorFlagId, newId: inlinedFlag)
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: inlinedFlag)
 	end 'tryCallSite'
 
@@ -1508,6 +1514,15 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
 	end 'subRet'
 	if isTryCallSite 'subErrFlag'
+		// Refcount-insertion: the error-flag continuation phi (a fresh id) inherits the
+		// original tryCall error-flag's managed-ness/class so the inserter releases the
+		// caught box at its last use. A heap-boxed-union throw classified the tryCall
+		// flag `callReturnRc1` (see `classifyTryCallErrorFlag`); without threading it
+		// here the merged phi stays a bare i64 and the thrown box — moved into an
+		// unmanaged phi — is `mm_drop`'d at the inline site and then read through the
+		// dangling phi (the inlined assoc-value throw-catch UAF). A bare-enum flag is
+		// notManaged, so this is a no-op there.
+		threadReturnPhiOwnership(caller, callResultId: callShape.errorFlagId, phiValueId: phiErrorFlagId)
 		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
 	end 'subErrFlag'
 

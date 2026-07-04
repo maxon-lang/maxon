@@ -127,9 +127,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, asyncSpawnedFuncs: asyncSpawnedFuncs)
 	end 'eachFunc'
 
 	return module
@@ -150,8 +150,9 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyReturnsBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsInterior = FuncReturnsBorrowSet.create()
 	let emptyRetains = FuncRetainsParamMap.create()
+	let emptyAsyncSpawned = FuncReturnsBorrowSet.create()
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false, asyncSpawnedFuncs: emptyAsyncSpawned)
 	end 'eachFunc'
 
 	return module
@@ -161,7 +162,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, asyncSpawnedFuncs FuncReturnsBorrowSet)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -201,8 +202,10 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	let paramValues = collectParamValues(module, entryBlock: entryBlock)
 
 	// Values flowing into `ret` / `errorReturn` across the whole function: their
-	// last-use decref is suppressed (transferred to the caller).
-	let returnedValues = collectReturnedValues(func, module: module)
+	// last-use decref is suppressed (transferred to the caller). An async-spawned
+	// function withholds the errorReturn box-transfer (see `Project.asyncSpawnedFuncs`).
+	let funcIsAsyncSpawned = asyncSpawnedFuncs.contains(func.name)
+	let returnedValues = collectReturnedValues(func, module: module, funcIsAsyncSpawned: funcIsAsyncSpawned)
 
 	// Addresses of module-level writable globals (`sys.global_addr @__data_*`):
 	// a managed `store_indirect` through one of these is an ownership TRANSFER
@@ -1299,7 +1302,7 @@ end 'paramResultIfAbiIndex'
 // Collect the ValueIds that flow into a `ret` / `errorReturn` terminator
 // anywhere in the function. Their would-be last-use decref is suppressed (the
 // +1 transfers to the caller).
-function collectReturnedValues(func IrFunction, module StdModule) returns BoolArray
+function collectReturnedValues(func IrFunction, module StdModule, funcIsAsyncSpawned bool) returns BoolArray
 	var returned = BoolArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("collectReturnedValues: blockRef not in module.blocks")
@@ -1308,7 +1311,7 @@ function collectReturnedValues(func IrFunction, module StdModule) returns BoolAr
 		end 'noTerm'
 		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("collectReturnedValues: terminator not in module.ops")
 		match term 'dispatch'
-			call(c) then markIfReturnOp(c, returned: returned)
+			call(c) then markIfReturnOp(c, returned: returned, funcIsAsyncSpawned: funcIsAsyncSpawned)
 			arith then break 'dispatch'
 			control then break 'dispatch'
 			memory then break 'dispatch'
@@ -1318,13 +1321,40 @@ function collectReturnedValues(func IrFunction, module StdModule) returns BoolAr
 	return returned
 end 'collectReturnedValues'
 
-function markIfReturnOp(c StdCallOp, returned BoolArray)
+function markIfReturnOp(c StdCallOp, returned BoolArray, funcIsAsyncSpawned bool)
 	match c 'check'
 		ret(retValId) then setBoolAt(returned, id: retValId, value: true)
-		errorReturn(retValId, _) then setBoolAt(returned, id: retValId, value: true)
+		errorReturn(retValId, errorFlagId) then markErrorReturnOp(retValId, errorFlagId: errorFlagId, returned: returned, funcIsAsyncSpawned: funcIsAsyncSpawned)
 		call to param then break 'check'
 	end 'check'
 end 'markIfReturnOp'
+
+// Mark an `errorReturn`'s transferred value(s). Normally BOTH operands transfer to the
+// caller (`markErrorReturnTransfers`). For an ASYNC-SPAWNED function the thrown box
+// (`errorFlagId`) is captured by the green-thread runtime instead — withhold its transfer
+// so the coroutine still frees it locally (only the normal-return `retValId` transfers).
+function markErrorReturnOp(retValId ValueId, errorFlagId ValueId, returned BoolArray, funcIsAsyncSpawned bool)
+	if funcIsAsyncSpawned 'asyncCoroutine'
+		setBoolAt(returned, id: retValId, value: true)
+		return
+	end 'asyncCoroutine'
+	markErrorReturnTransfers(retValId, errorFlagId: errorFlagId, returned: returned)
+end 'markErrorReturnOp'
+
+// An `errorReturn(retValId, errorFlagId)` transfers whichever operand is the live
+// managed value to the caller: `retValId` on a normal return inside a throwing fn
+// (`errorReturn(retVal, 0)`), or `errorFlagId` — the thrown error box — on a `throw`
+// (`errorReturn(0, thrownBox)`). Mark BOTH: the inert operand is always a const-0
+// (`notManaged`), so the extra mark is a no-op there, while the real transferred
+// value is correctly recognized as returned on either path. Without marking
+// `errorFlagId`, a thrown heap-boxed union (its pointer rides the error register)
+// was never seen as escaping — so its `incomingOwner` field-load acquire never fired
+// (case a) and its `freshRc0` local was `dropManaged`'d at the terminator — freeing
+// the box before the caller reads it (the assoc-value throw-catch UAF).
+function markErrorReturnTransfers(retValId ValueId, errorFlagId ValueId, returned BoolArray)
+	setBoolAt(returned, id: retValId, value: true)
+	setBoolAt(returned, id: errorFlagId, value: true)
+end 'markErrorReturnTransfers'
 
 function setBoolAt(arr BoolArray, id ValueId, value bool)
 	while arr.count() <= id 'grow'
@@ -2824,10 +2854,21 @@ end 'planReturnIncrefForTerm'
 function planReturnIncrefForCall(ctx RcContext, blockRef BlockRef, block IrBlock, c StdCallOp)
 	match c 'check'
 		ret(retValId) then planReturnIncrefValue(ctx, blockRef: blockRef, block: block, retValId: retValId)
-		errorReturn(retValId, _) then planReturnIncrefValue(ctx, blockRef: blockRef, block: block, retValId: retValId)
+		errorReturn(retValId, errorFlagId) then planReturnIncrefForErrorReturn(ctx, blockRef: blockRef, block: block, retValId: retValId, errorFlagId: errorFlagId)
 		call to param then break 'check'
 	end 'check'
 end 'planReturnIncrefForCall'
+
+// A returned/thrown PARAM needs a fresh +1 handed to the caller (the caller still
+// owns its own borrowed reference). An `errorReturn` can carry the transferred value
+// in EITHER operand (`retValId` on a normal return, `errorFlagId` on a `throw`), so
+// try both — `planReturnIncrefValue` self-gates on managed-param, so the inert const-0
+// operand is a no-op. This is what retains a `throw someErrorParam` (rethrowing a
+// caught union bound to a parameter) so the caller receives an owned reference.
+function planReturnIncrefForErrorReturn(ctx RcContext, blockRef BlockRef, block IrBlock, retValId ValueId, errorFlagId ValueId)
+	planReturnIncrefValue(ctx, blockRef: blockRef, block: block, retValId: retValId)
+	planReturnIncrefValue(ctx, blockRef: blockRef, block: block, retValId: errorFlagId)
+end 'planReturnIncrefForErrorReturn'
 
 function planReturnIncrefValue(ctx RcContext, blockRef BlockRef, block IrBlock, retValId ValueId)
 	if not ctx.isManaged(retValId) 'notManaged'
@@ -3735,8 +3776,13 @@ function terminatorReturnsValue(ctx RcContext, block IrBlock, vid ValueId) retur
 		return false
 	end 'noTerm'
 	let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise panic("terminatorReturnsValue: terminatorIndex not in module.ops")
-	let retValId = try returnedValueOfTerminator(term) otherwise return false
-	return retValId == vid
+	// The value must be a structural return operand AND actually in the returned set:
+	// the `isReturned` conjunct ties the path-sensitive suppression to the SAME set
+	// `collectReturnedValues` built, so a withheld transfer (an async-spawned function's
+	// `errorFlagId` — never marked returned) is NOT suppressed here and gets its normal
+	// terminator drop. For every non-withheld return operand `isReturned` is true, so
+	// this is a no-op relative to the pure structural test.
+	return terminatorTransfersValue(term, vid: vid) and ctx.isReturned(vid)
 end 'terminatorReturnsValue'
 
 // The set of values live immediately BEFORE the block's terminator: seed from
@@ -3909,27 +3955,27 @@ function buildDropManagedOp(module StdModule, valueId ValueId, idRef ValueIdRef)
 	return opIdx
 end 'buildDropManagedOp'
 
-// The returned ValueId of a `ret`/`errorReturn` terminator. THROWS
-// `NotAReturnTerminator` for any other op rather than returning a sentinel:
-// `ValueId` is unsigned (`0 to u64.max`), so there is no in-range "absent" value,
-// and a sentinel forces callers into a dead `>= 0` guard. Callers use
-// `try ... otherwise` to handle the non-return case explicitly.
-function returnedValueOfTerminator(term StdOp) returns ValueId throws NotAReturnTerminator
+// True iff `term` is a `ret`/`errorReturn` terminator that TRANSFERS `vid` to the
+// caller here. `ret` transfers its single value; `errorReturn(retValId, errorFlagId)`
+// transfers BOTH operands — the normal-return value on `errorReturn(retVal, 0)` OR the
+// thrown error box on `errorReturn(0, thrownBox)` — whichever is the live managed one
+// (the other is a const-0 that harmlessly fails the `== vid` test). Recognizing
+// `errorFlagId` here is what suppresses the terminator-death release of a thrown
+// managed value (its +1 transfers to the caller instead of being decref'd at the
+// throw). Any non-return terminator transfers nothing.
+function terminatorTransfersValue(term StdOp, vid ValueId) returns bool
 	return match term 'dispatch'
 		call(c) gives match c 'check'
-			ret(retValId) gives retValId
-			errorReturn(retValId, _) gives retValId
-			default throws NotAReturnTerminator.notAReturn
+			ret(retValId) gives retValId == vid
+			errorReturn(retValId, errorFlagId) gives retValId == vid or errorFlagId == vid
+			call to param gives false
 		end 'check'
-		default throws NotAReturnTerminator.notAReturn
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
 	end 'dispatch'
-end 'returnedValueOfTerminator'
-
-// A terminator op that is not a value-returning `ret`/`errorReturn` — the
-// throwing "absent" signal for `returnedValueOfTerminator`.
-enum NotAReturnTerminator implements Error
-	notAReturn
-end 'NotAReturnTerminator'
+end 'terminatorTransfersValue'
 
 // Build a `sys.dropTypeParam` for a generic type-parameter value, threading the
 // function's resolved implicit `__layout` descriptor ValueId. `ctx.layoutValueId`

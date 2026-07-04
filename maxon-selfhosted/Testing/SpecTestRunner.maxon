@@ -855,8 +855,10 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 
 	// Same per-fragment machinery the parallel workers use, so serial and
 	// parallel runs share one code path. Every selected test writes one
-	// fragment, so the written count is just the selected-test count.
-	let fragmentsWritten = unit.selectedTests.count()
+	// fragment, so the written count is just the selected-test count — EXCEPT
+	// under `--rc-sanitize`, which suppresses all fragment writes (see the
+	// `not specRcSanitize` gate at `writeInitial`), so nothing is written.
+	let fragmentsWritten = 0 if specRcSanitize else unit.selectedTests.count()
 	// `--update-required` just rewrote the Required* blocks, so re-exercise every
 	// test (disable the run-skip cache for this pass).
 	let (specPassed, specFailed, specFailures, _) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose, useRunCache: not updateRequired)
@@ -3446,7 +3448,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		let singlesBytes = sumTestWeight(unit.selectedTests)
 		if unit.selectedTests.count() > 0 or unit.missingLoweringCount > 0 'hasSingles'
 			jobQueue.push(SpecJob.createSingles(unit.specName, weight: singlesBytes, testCount: unit.selectedTests.count()))
-			totalFragmentsWritten = totalFragmentsWritten + unit.selectedTests.count()
+			// `--rc-sanitize` suppresses fragment writes, so nothing is written under it.
+			let writtenThisUnit = 0 if specRcSanitize else unit.selectedTests.count()
+			totalFragmentsWritten = totalFragmentsWritten + writtenThisUnit
 		end 'hasSingles'
 	end 'enqueueJobs'
 

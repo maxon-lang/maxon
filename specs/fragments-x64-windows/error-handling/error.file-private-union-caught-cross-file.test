@@ -42,12 +42,12 @@ module {
     x64.mov ecx, 16
     x64.call stdlib.__mm_alloc
     x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
     x64.xor r8d, r8d
     x64.mov [r12+0], r8 (8b)
     x64.mov r8d, 42
     x64.mov [r12+8], r8 (8b)
-    x64.mov rcx, r12
-    x64.call mm_drop
     x64.xor r8d, r8d
     x64.mov rdx, r12
     x64.epilogue
@@ -63,35 +63,45 @@ module {
     x64.prologue stack_size=16
     x64.mov ecx, 9
     x64.call risky
-    x64.xor r9d, r9d
+    x64.mov rbx, r8
+    x64.xor r12d, r12d
     x64.test rdx, rdx
-    x64.je __phi_trampoline_0_0
+    x64.je __rc_edge_0_0
   try_0.otherwise:
     x64.mov r8, [rdx+0] (8b)
     x64.test r8, r8
-    x64.jne __phi_trampoline_1_0
+    x64.jne __rc_edge_1_0
     x64.jmp check_0.case0
   check_0.merge:
     x64.jmp try_0.merge
   check_0.case0:
-    x64.mov r8, [rdx+8] (8b)
+    x64.mov rbx, [rdx+8] (8b)
+    x64.mov rcx, rdx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
     x64.jmp check_0.merge
   try_0.merge:
     x64.mov r9d, 4294967295
     x64.cmp r8, r9
     x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_0_0:
+    x64.mov rcx, rdx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.mov r12, rbx
+    x64.jmp try_0.merge
+  __rc_edge_1_0:
+    x64.mov rcx, rdx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp check_0.merge
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_eab258c3824993e0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
-  __phi_trampoline_0_0:
-    x64.xchg r8, r9
-    x64.jmp try_0.merge
-  __phi_trampoline_1_0:
-    x64.mov r8, r9
-    x64.jmp check_0.merge
   }
 }
 ---

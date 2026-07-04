@@ -376,6 +376,17 @@ export type Project
 	// leak, never a double-free).
 	export var funcParamConsumes as FuncParamConsumesMap
 
+	// Qualified names of functions SPAWNED as async green-thread coroutines (`async f()`
+	// records `f` here at lowering time). Such a function's thrown error box is captured
+	// by the runtime and consumed by the awaiter, NOT handed to a direct `try`-call
+	// caller — a distinct ownership contract in which the coroutine still frees the box
+	// locally on the throw edge. The refcount inserter reads this set to WITHHOLD the
+	// errorReturn box-transfer for these functions (see `markErrorReturnOp` /
+	// `collectReturnedValues` in InsertRefcounts), so the transfer that hands a direct
+	// caller the +1 does not double-own + leak the box across the async boundary
+	// (async-await.promise-array-throwing-assoc-value).
+	export var asyncSpawnedFuncs as FuncReturnsBorrowSet
+
 	// Return-side companion to `funcParamConsumes`: qualified function names whose
 	// return value OWNS the +1 of a CONSUMED parameter (a transparent wrapper —
 	// `Array.init`/`Vector.init`'s `return Self{managed: arg}`: the result aliases the
@@ -1120,6 +1131,7 @@ export type Project
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),
+			asyncSpawnedFuncs: FuncReturnsBorrowSet.create(),
 			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
 			funcRetainsParam: FuncRetainsParamMap.create(),
 			callParamTypes: CallParamTypesMap.create(),

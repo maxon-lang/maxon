@@ -2983,6 +2983,39 @@ type MaxonToStdLowering
 		end 'notTracked'
 	end 'classifyValue'
 
+	// Classify the SECONDARY def of a `try`-call — the error register (RDX/X1) that
+	// carries the callee's thrown value on the error edge. When the callee's `throws E`
+	// type is a HEAP-BOXED union (some case carries a payload), the thrown value is a
+	// managed BOX pointer that the throw site transferred an owned +1 for (see
+	// `markErrorReturnTransfers` in InsertRefcounts): classify it `callReturnRc1`
+	// (arrives owning the +1) so the late inserter releases it at its last use — the
+	// `otherwise (e)` binding's scope end, or the bare `otherwise`'s flag test. It is
+	// NULL on the success path, but a `callReturnRc1` release is null-guarded
+	// (`__mm_decref_maybenull_helper`), so the success-edge drop is a safe no-op while
+	// the error-path drop frees the box. A BARE-enum error (no payload) rides the
+	// register as a plain integer ordinal — keep it notManaged (the integer default).
+	function classifyTryCallErrorFlag(flagId ValueId, qualifiedCallee String)
+		let errorType = self.calleeThrowsErrorType(qualifiedCallee)
+		if maxonTypeIsHeapManaged(self.project, t: errorType) 'boxedUnion'
+			self.setValueType(flagId, t: errorType)
+			self.classifyValue(flagId, cls: OwnershipClass.callReturnRc1, valueMaxonType: errorType)
+		end 'boxedUnion' else 'bareErrorFlag'
+			self.setValueType(flagId, t: MaxonType.integer)
+		end 'bareErrorFlag'
+	end 'classifyTryCallErrorFlag'
+
+	// The MaxonType of `qualifiedCallee`'s declared `throws E` clause, or `unresolved`
+	// when the callee is non-throwing / unknown (a builtin or inline-expanded method
+	// with no registered signature). `unresolved` is not heap-managed, so a miss keeps
+	// the plain integer error flag.
+	function calleeThrowsErrorType(qualifiedCallee String) returns MaxonType
+		let clause = try self.project.funcThrowsTypes.get(qualifiedCallee) otherwise return MaxonType.unresolved
+		return match clause 'k'
+			none gives MaxonType.unresolved
+			throwing(name) gives internMaxonType(self.project, name: name)
+		end 'k'
+	end 'calleeThrowsErrorType'
+
 	// CLASSIFICATION AUDIT — the loud-failure backstop for the silent-leak class
 	// where a heap-managed CALL result is left unclassified: `classifyValue` was
 	// never called, the value defaults to `notManaged`, and the inserter never
@@ -3939,6 +3972,10 @@ type MaxonToStdLowering
 		let funcId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(funcId, funcName: resolvedCallee)))
 		self.setValueType(funcId, t: MaxonType.integer)
+		// Record the spawned callee so the refcount inserter withholds the errorReturn
+		// box-transfer for it (its thrown box rides the async-capture contract, not the
+		// direct-call error ABI — see `Project.asyncSpawnedFuncs`).
+		self.project.asyncSpawnedFuncs.insert(resolvedCallee)
 		// promise = __gt_spawn(func_ptr, count, arg_buf)
 		let countId2 = self.emitConstI64(count as IntConstant, dstBlock: dstBlock)
 		var spawnArgs = ValueIdArray.create()
@@ -6200,7 +6237,7 @@ type MaxonToStdLowering
 		let calleeReturnInterfaceName = returnTypeInterfaceName(self.project, ref: calleeDeclaredReturn)
 		if not errorBoundName.isEmpty() 'tryCall'
 			let flagId = self.defineName(errorBoundName)
-			self.setValueType(flagId, t: MaxonType.integer)
+			self.classifyTryCallErrorFlag(flagId, qualifiedCallee: qualifiedCallee)
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: qualifiedCallee, argIds: finalArgIds, errorFlagId: flagId)))
 		end 'tryCall' else if not calleeReturnInterfaceName.isEmpty() 'fatCall'
 			let witnessId = allocValueId(self.funcIdRef)
