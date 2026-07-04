@@ -9529,8 +9529,18 @@ export type Parser
 		// The merge block may be unreachable — when every arm body terminates
 		// via return/throw and no fallthrough reaches a non-terminating tail.
 		// Mark it dead so parseStatements / parseFunction skip the implicit
-		// return / E3013 path. The runtime never reaches these.
-		if not anyArmReachesMerge 'mergeDead'
+		// return / E3013 path. The runtime never reaches these. An arm that
+		// exits via `break` TO this match's merge keeps it reachable — its
+		// exit block is a detached dead block, invisible to the fall-through
+		// accounting above — so also consult the `mergeReached` flag the
+		// break-target resolution recorded on this match's context (mirrors
+		// the bootstrap's BlockEndsBranchingToLabel check). Without it, an
+		// all-break match wrongly sealed its live merge dead: no implicit
+		// return landed, and the merge fell through into whatever block the
+		// layout placed next (IrBlock.assertTerminated fell into its own
+		// unset-arm panic on every well-terminated block in v-next builds).
+		let thisMatchCtx = try matchStack.get(matchStack.count() - 1) otherwise panic("parseMatchStatement: matchStack empty before pop")
+		if not anyArmReachesMerge and not thisMatchCtx.mergeReached 'mergeDead'
 			markBlockDeadIfUnset(header.mergeBlock)
 		end 'mergeDead'
 
@@ -10225,6 +10235,7 @@ export type Parser
 		for i in 0 upto matchStack.count() 'matchSearch'
 			let mctx = try matchStack.get(matchStack.count() - 1 - i) otherwise panic("resolveBreakTarget: matchStack index OOB")
 			if mctx.sourceLabel == labelToken.value 'foundMatch'
+				markMatchMergeReached(mctx)
 				return mctx.mergeBlockId
 			end 'foundMatch'
 		end 'matchSearch'
@@ -10250,11 +10261,21 @@ export type Parser
 	function innermostBreakTarget() returns BlockId throws ParserError
 		if matchStack.count() > 0 'preferMatch'
 			let mctx = try matchStack.get(matchStack.count() - 1) otherwise panic("innermostBreakTarget: matchStack empty after count check")
+			markMatchMergeReached(mctx)
 			return mctx.mergeBlockId
 		end 'preferMatch'
 		let lctx = try loopStack.get(loopStack.count() - 1) otherwise panic("innermostBreakTarget: loopStack empty after count check")
 		return lctx.exitBlockId
 	end 'innermostBreakTarget'
+
+	// Record that a `break` targets `mctx`'s merge block, keeping it alive in
+	// parseMatchStatement's merge-dead decision. Threaded through a helper
+	// because the parser's type rules forbid mutating a field of a let-bound
+	// struct in-place at the caller site (same trick as markBlockDeadIfUnset).
+	function markMatchMergeReached(mctx MatchContext)
+		var m = mctx
+		m.mergeReached = true
+	end 'markMatchMergeReached'
 
 	function parseContinueStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let continueToken = try consume()
@@ -20209,9 +20230,18 @@ typealias LoopContextArray = Array with LoopContext
 type MatchContext
 	export var sourceLabel as String
 	export var mergeBlockId as BlockId
+	// Set when a `break` resolves to this match's merge block. An arm that
+	// exits via `break` terminates its body with a br-to-merge and hands the
+	// parser a detached dead block, so parseMatchStatement's fall-through
+	// accounting (`anyArmReachesMerge`) never sees it — this flag is what
+	// keeps the REACHABLE merge from being marked dead (which would drop the
+	// implicit return / E3013 check and let the merge fall through into
+	// whatever block follows physically). Mirrors the bootstrap's
+	// `BlockEndsBranchingToLabel(caseBlock, mergeLabel)` accounting.
+	export var mergeReached as bool
 
 	export static function create(sourceLabel String, mergeBlockId BlockId) returns MatchContext
-		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId}
+		return Self{sourceLabel: sourceLabel, mergeBlockId: mergeBlockId, mergeReached: false}
 	end 'create'
 end 'MatchContext'
 

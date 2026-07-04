@@ -1486,3 +1486,55 @@ end 'main'
 1
 ```
 
+### Break-Only Arms Keep the Merge Reachable
+
+A match statement whose every arm terminates — some with `panic`, the rest
+with `break` — must still treat its merge block as reachable: the `break`
+arms jump to it. A parser that only counts fall-through arms marks the merge
+dead, skips the function's implicit return, and lets the merge fall through
+into whatever block the layout places next (historically the panic arm's
+body — the self-hosted `IrBlock.assertTerminated` panicked on every
+well-terminated block in self-compiled builds).
+
+<!-- test: match-statements.break-only-arms-with-panic-arm -->
+```maxon
+typealias Payload = int(0 to u64.max)
+
+union Slot
+	vacant
+	reserved
+	filled(value Payload)
+end 'Slot'
+
+type Holder
+	export var slot as Slot
+
+	export static function create() returns Holder
+		return Self{slot: Slot.reserved}
+	end 'create'
+
+	export function assertUsable()
+		match self.slot 'check'
+			vacant then panic("slot is vacant")
+			reserved then break 'check'
+			filled then break 'check'
+		end 'check'
+	end 'assertUsable'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.assertUsable()
+	h.slot = Slot.filled(7)
+	h.assertUsable()
+	print("usable\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+usable
+```
+

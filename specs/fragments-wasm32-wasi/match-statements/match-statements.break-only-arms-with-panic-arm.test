@@ -1,0 +1,137 @@
+// Test: match-statements.break-only-arms-with-panic-arm
+typealias Payload = int(0 to u64.max)
+
+union Slot
+	vacant
+	reserved
+	filled(value Payload)
+end 'Slot'
+
+type Holder
+	export var slot as Slot
+
+	export static function create() returns Holder
+		return Self{slot: Slot.reserved}
+	end 'create'
+
+	export function assertUsable()
+		match self.slot 'check'
+			vacant then panic("slot is vacant")
+			reserved then break 'check'
+			filled then break 'check'
+		end 'check'
+	end 'assertUsable'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.assertUsable()
+	h.slot = Slot.filled(7)
+	h.assertUsable()
+	print("usable\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+usable
+```
+---
+// CompiledIR
+module {
+  func @Holder.create() -> i64 {
+  entry:
+    %0 = mir.mov_imm 8 : i64
+    %2 = mir.func_addr @__destruct_Holder
+    %1 = mir.call @stdlib.__mm_alloc(%0, %2)
+    %10 = mir.call @stdlib.__mm_incref(%1)
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 0 width: qword
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%5, %6)
+    %11 = mir.call @stdlib.__mm_incref(%8)
+    mir.store %7, %8, 0 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %8, 8 width: qword
+    mir.store %8, %1, 0 width: qword
+    mir.ret %1
+  }
+  func @Holder.assertUsable(local0: i64) {
+  entry:
+    %19 = mir.param local0 : i64
+    %2 = mir.load %19, 0 width: qword
+    %3 = mir.load %2, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp eq, %3, %4
+    mir.cond_br %5 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge:
+    mir.ret %6
+  check_0.case0:
+    %7 = mir.global_addr @__panic_msg_571dd6d37e21fbf4
+    %8 = mir.call @mrt_panic(%7)
+    mir.ret %9
+  check_0.next0:
+    %10 = mir.load %2, 0 width: qword
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.cmp eq, %10, %11
+    mir.cond_br %12 [then: check_0.merge(), else: check_0.next1()]
+  check_0.next1:
+    %13 = mir.load %2, 0 width: qword
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.cmp eq, %13, %14
+    mir.cond_br %15 [then: check_0.merge(), else: check_0.next2()]
+  check_0.next2:
+    %16 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %17 = mir.call @mrt_panic(%16)
+    mir.ret %18
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.call @Holder.create()
+    %3 = mir.call @Holder.assertUsable(%1)
+    %5 = mir.mov_imm 7 : i64
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 2 : i64
+    %29 = mir.call @stdlib.__mm_alloc(%26, %27)
+    %34 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %28, %29, 0 width: qword
+    mir.store %5, %29, 8 width: qword
+    %7 = mir.load %1, 0 width: qword
+    %8 = mir.call @__mm_decref_maybenull_helper(%7)
+    mir.store %29, %1, 0 width: qword
+    %10 = mir.call @Holder.assertUsable(%1)
+    %35 = mir.call @__mm_decref_maybenull_helper(%1)
+    %11 = mir.global_addr @__istr_0
+    %12 = mir.mov_imm 48 : i64
+    %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %14 = mir.call @mrt_alloc_with_dtor(%12, %13)
+    %15 = mir.mov_imm 0 : i64
+    mir.store %15, %14, 40 width: qword
+    mir.store %11, %14, 0 width: qword
+    %16 = mir.mov_imm 7 : i64
+    mir.store %16, %14, 8 width: qword
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %14, 16 width: qword
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %14, 24 width: qword
+    %19 = mir.mov_imm 0 : i64
+    mir.store %19, %14, 32 width: qword
+    %21 = mir.mov_imm 16 : i64
+    %22 = mir.func_addr @__destruct_String
+    %20 = mir.call @stdlib.__mm_alloc(%21, %22)
+    mir.store %14, %20, 0 width: qword
+    %23 = mir.mov_imm 1 : i64
+    mir.store %23, %20, 8 width: qword
+    %30 = mir.load %20, 0 width: qword
+    %31 = mir.load %30, 0 width: qword
+    %32 = mir.load %30, 8 width: qword
+    %33 = mir.call @mrt_write_stdout(%31, %32)
+    %36 = mir.call @mm_drop(%20)
+    %25 = mir.mov_imm 0 : i64
+    mir.ret %25
+  }
+}
+---

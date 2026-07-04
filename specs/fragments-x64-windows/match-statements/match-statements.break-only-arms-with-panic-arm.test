@@ -1,0 +1,158 @@
+// Test: match-statements.break-only-arms-with-panic-arm
+typealias Payload = int(0 to u64.max)
+
+union Slot
+	vacant
+	reserved
+	filled(value Payload)
+end 'Slot'
+
+type Holder
+	export var slot as Slot
+
+	export static function create() returns Holder
+		return Self{slot: Slot.reserved}
+	end 'create'
+
+	export function assertUsable()
+		match self.slot 'check'
+			vacant then panic("slot is vacant")
+			reserved then break 'check'
+			filled then break 'check'
+		end 'check'
+	end 'assertUsable'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.assertUsable()
+	h.slot = Slot.filled(7)
+	h.assertUsable()
+	print("usable\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+usable
+```
+---
+// CompiledIR
+module {
+  func @Holder.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rdx, [rip+__destruct_Holder]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.assertUsable(rcx: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne check_0.next0
+    x64.jmp check_0.case0
+  check_0.merge:
+    x64.epilogue
+    x64.ret
+  check_0.case0:
+    x64.lea rcx, [rip+__panic_msg_571dd6d37e21fbf4]
+    x64.call mrt_panic
+    x64.epilogue
+    x64.ret
+  check_0.next0:
+    x64.mov r9, [r8+0] (8b)
+    x64.cmp r9, 1
+    x64.jne check_0.next1
+    x64.jmp check_0.merge
+  check_0.next1:
+    x64.mov r9, [r8+0] (8b)
+    x64.cmp r9, 2
+    x64.jne check_0.next2
+    x64.jmp check_0.merge
+  check_0.next2:
+    x64.lea rcx, [rip+__panic_msg_96c7daeb3f9a871f]
+    x64.call mrt_panic
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Holder.create
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call Holder.assertUsable
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 2
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 7
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov rcx, rbx
+    x64.call Holder.assertUsable
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.mov [rbx+40], r8 (8b)
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov r8d, 7
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov rdx, [r8+8] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+}
+---
