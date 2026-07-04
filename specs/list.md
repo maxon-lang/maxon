@@ -765,3 +765,44 @@ end 'main'
 ```maxoncstderr
 error E3070: specs/fragments/list/memory.value-survives-clear.test:8:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
 ```
+
+<!-- test: memory.get-in-loop-no-over-release -->
+### Repeated get() in a loop does not over-release the walked node
+`List.get(i)` inlines `List.walkTo`, whose loop-carried `current` node is both
+released inside the inlined body and returned on the exit path. The refcount
+inserter must not add a *second* release on the loop's continue/error edges, or
+the walked node is double-freed (the self-hosted `rewriteUnresolvedOpsPerFunction`
+over-release). Summing every element via `get(i)` in a loop must complete cleanly.
+```maxon
+typealias N = int(0 to u64.max)
+typealias NList = List with N
+
+function walkSum(list NList, n N) returns N
+	var sum = 0
+	var i = 0
+	while i < n 'loop'
+		let v = try list.get(i) otherwise panic("oob")
+		sum = sum + v
+		i = i + 1
+	end 'loop'
+	return sum
+end 'walkSum'
+
+function main() returns ExitCode
+	var list = NList.create()
+	var k = 0
+	while k < 12 'build'
+		list.append(k * 10)
+		k = k + 1
+	end 'build'
+	let s = walkSum(list, n: list.count())
+	print("sum={s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sum=660
+```

@@ -3955,6 +3955,27 @@ function releaseKindAtLastUse(ctx RcContext, id ValueId) returns ReleaseKind
 	if ctx.isParam(id) and not valueIsConsumedParamOfCurrentFunc(ctx, valueId: id) 'borrowedParam'
 		return ReleaseKind.none
 	end 'borrowedParam'
+	// An `incomingOwner` whose RELEASE is ALREADY spliced into the body by the
+	// inliner (`funcBodyReleasesValue` — its `__mm_decref` came verbatim from a
+	// fully-refcounted callee) must NOT get a SECOND inserter release. This is the
+	// release-side analogue of the phi-edge `valueHasBodyAcquire` guard: a stdlib
+	// body arrives fully refcounted from the stdlib build, so an inlined value's
+	// increfs AND decrefs travel with it. `threadInlinedOwnership` normally re-classes
+	// such a value `notManaged` so the inserter adds nothing — but a value that is BOTH
+	// released-in-body AND RETURNED is exempted from that re-class by its `and not
+	// returned` clause, so it arrives here as a managed `incomingOwner`. The canonical
+	// case is `List.walkTo`'s loop-carried `current` (a phi): the inlined body increfs
+	// each node into it, decrefs the OLD node on the continue/error paths, and the
+	// EXIT path RETURNS it (its inlined +1 transfers to the caller by MOVE). Its +1 is
+	// therefore fully managed by the inlined ops plus the return-transfer, and an
+	// inserter release on the continue/error paths DOUBLE-frees the node (the
+	// inlined-`walkTo`-in-a-loop `__mm_decref` over-release). Only the redundant release
+	// is suppressed — the acquire / `carriesPlusOne` state is left intact (via
+	// `plusOneOwnership` below), so the return-edge MOVE still transfers the inlined +1
+	// without a spurious phi-edge incref.
+	if classIsIncomingOwner(ctx, id: id) and funcBodyReleasesValue(ctx, vid: id) 'releasedInInlinedBody'
+		return ReleaseKind.none
+	end 'releasedInInlinedBody'
 	// `incomingOwner` releases at last use ONLY when it acquired a local +1 — the
 	// decref is PAIRED with the acquire (`shouldAcquire`). A pure pass-through
 	// borrow (no acquire) holds no local +1, so releasing it would drive the
