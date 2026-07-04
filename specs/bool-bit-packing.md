@@ -12,6 +12,8 @@ When `Array with bool` stores elements, they are bit-packed: each bool occupies 
 
 The `__ManagedMemory` struct uses `elementSize = 0` as a sentinel to indicate bit-packed mode. Bit `i` is stored at byte `i >> 3`, bit offset `i & 7`.
 
+A *constant* bool-array literal (e.g. `[true, false, true]`) is lowered to a bit-packed `.rdata` buffer with `elementSize = 0`. Structurally mutating such a literal (`remove` / `insert` / `slice` / `append`) must copy-on-write the read-only buffer and perform the shift/copy at *bit* granularity — scaling those operations by `elementSize` would collapse to zero-length byte moves and silently corrupt the data. Dynamically-built bool arrays (`Array.create()` + `push`) use one byte per element (`elementSize = 1`) and take the ordinary byte path.
+
 ## Tests
 
 <!-- test: push-and-get -->
@@ -388,4 +390,117 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: literal-remove -->
+```maxon
+// Structurally mutate a CONSTANT bool-array literal (bit-packed rdata,
+// element_size 0). remove must copy-on-write the read-only buffer and shift the
+// tail DOWN one bit; the byte-scaled shift would be a no-op and leave the removed
+// element in place while length is decremented -> corrupted bits.
+typealias BoolArray = Array with bool
+
+function printBits(a BoolArray)
+	for b in a 'each'
+		print("1" if b else "0")
+	end 'each'
+	print(" len={a.count()}\n")
+end 'printBits'
+
+function main() returns ExitCode
+	var a = [true, false, true, false, true]
+	_ = try a.remove(1) otherwise panic("test invariant: remove OOB")
+	printBits(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1101 len=4
+```
+
+<!-- test: literal-slice -->
+```maxon
+// Slice a CONSTANT bool-array literal. The new record must stay bit-packed
+// (element_size 0), allocate a bit-sized buffer, and copy bits [start, end) at
+// bit granularity — the byte-scaled copy would move zero bytes and return a
+// length-N record over an all-false buffer.
+typealias BoolArray = Array with bool
+
+function printBits(a BoolArray)
+	for b in a 'each'
+		print("1" if b else "0")
+	end 'each'
+	print(" len={a.count()}\n")
+end 'printBits'
+
+function main() returns ExitCode
+	let c = [true, false, true, false, true]
+	let s = try c.slice(1, endIndex: 4) otherwise panic("test invariant: slice OOB")
+	printBits(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+010 len=3
+```
+
+<!-- test: literal-insert -->
+```maxon
+// insert into a CONSTANT bool-array literal exercises the bit-packed grow (buffer
+// sized in bits, not bytes) plus shift_right at bit granularity plus the bit-set.
+typealias BoolArray = Array with bool
+
+function printBits(a BoolArray)
+	for b in a 'each'
+		print("1" if b else "0")
+	end 'each'
+	print(" len={a.count()}\n")
+end 'printBits'
+
+function main() returns ExitCode
+	var d = [true, true, true]
+	d.insert(1, value: false)
+	printBits(d)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1011 len=4
+```
+
+<!-- test: literal-append -->
+```maxon
+// append onto a CONSTANT bool-array literal grows the bit-packed buffer (sized in
+// bits) and copies the other literal's bits onto the end.
+typealias BoolArray = Array with bool
+
+function printBits(a BoolArray)
+	for b in a 'each'
+		print("1" if b else "0")
+	end 'each'
+	print(" len={a.count()}\n")
+end 'printBits'
+
+function main() returns ExitCode
+	var e = [true, false]
+	let f = [true, true]
+	e.append(f)
+	printBits(e)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1011 len=4
 ```

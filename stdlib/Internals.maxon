@@ -2181,7 +2181,13 @@ function __managed_mem_grow(self MachineWord, newCap MachineWord) returns Machin
 		throw __ManagedMemoryError.invalidCapacity
 	end 'tooSmall'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	let newSize = newCap * elemSize
+	// element_size == 0 is the bit-packed-bool sentinel: the buffer is measured in
+	// BITS, so it holds (newCap + 7) >> 3 bytes; every other element type holds
+	// newCap * element_size bytes. Without the bit path `newCap * 0` reallocs to 0
+	// bytes and every later bit-write past byte 0 corrupts the heap — this grow is
+	// on the insert/append path for a mutated bit-packed literal (via
+	// `ensureCapacity`). Mirrors `__managed_mem_cow_check`'s byteLen formula.
+	let newSize = ((newCap + 7) shr 3) if elemSize == 0 else (newCap * elemSize)
 	let oldBuf = __Internals.loadIndirect(self)
 	let newBuf = __Internals.mmRealloc(oldBuf, newSize: newSize)
 	__Internals.storeIndirect(self, value: newBuf)
@@ -2235,8 +2241,36 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 	if idx >= length 'hi'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'hi'
+	// A constant array LITERAL is rdata-backed (capacity -2, read-only) and a
+	// zero-copy view is a slice (capacity -1, shared with its parent): the in-place
+	// tail-shift below would fault on rdata or corrupt the parent on a slice.
+	// Materialize a private, writable heap buffer first — mirroring `set`/`swap`
+	// (same `capacity < 0` gate) and the C# reference `LowerManagedMemRemove`, which
+	// emits an `EmitCowCheck` before the shift. An owned ROOT/INLINE buffer
+	// (capacity >= 0) is already writable, so cow_check is skipped.
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	if capacity < 0 'cow'
+		_ = __managed_mem_cow_check(self)
+	end 'cow'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+	// element_size == 0 is the bit-packed-bool sentinel: one BIT per element, so
+	// the byte-scaled tail-shift below collapses to a no-op (every `* elemSize`
+	// is 0). Read the removed bit, then slide bits (idx+1 .. length-1) DOWN one
+	// position with the shared read_bit/write_bit primitives (same layout as
+	// __managed_mem_get) before decrementing length.
+	if elemSize == 0 'bitPacked'
+		let removed = __managed_mem_read_bit(buffer, idx: idx)
+		var j = idx + 1
+		while j < length 'shiftBits'
+			let bit = __managed_mem_read_bit(buffer, idx: j)
+			__managed_mem_write_bit(buffer, idx: j - 1, value: bit)
+			j = j + 1
+		end 'shiftBits'
+		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
+		return removed
+	end 'bitPacked'
+
 	let elemAddr = buffer + idx * elemSize
 	// Element-width dispatch mirrors __managed_mem_get. After the load we
 	// shift the tail via the byte-loop below regardless of element width.
@@ -2284,6 +2318,22 @@ function __managed_mem_shift_right(self MachineWord, idx MachineWord, count Mach
 	end 'oob'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+	// element_size == 0 is the bit-packed-bool sentinel: shift the `count` bits at
+	// [idx, idx+count) UP one position with a DESCENDING bit-loop (read_bit(j) ->
+	// write_bit(j+1)) so overlapping copies never clobber, then clear the vacated
+	// bit at idx. This is the bit-granular mirror of the byte-loop + hole-zeroing
+	// below; the caller's following set(idx, value) overwrites the cleared bit.
+	if elemSize == 0 'bitPacked'
+		var j = idx + count - 1
+		while j >= idx 'shiftBits'
+			let bit = __managed_mem_read_bit(buffer, idx: j)
+			__managed_mem_write_bit(buffer, idx: j + 1, value: bit)
+			j = j - 1
+		end 'shiftBits'
+		__managed_mem_write_bit(buffer, idx: idx, value: 0)
+		return 0
+	end 'bitPacked'
+
 	// sourceLastByte = (idx + count) * elemSize - 1; descend to
 	// startByte = idx * elemSize.
 	let startByte = idx * elemSize
@@ -2328,6 +2378,20 @@ function __managed_mem_shift_left(self MachineWord, idx MachineWord, count Machi
 	end 'oob'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
+	// element_size == 0 is the bit-packed-bool sentinel: shift the `count` bits at
+	// [idx, idx+count) DOWN one position with an ASCENDING bit-loop (read_bit(j) ->
+	// write_bit(j-1)) — overlap-safe because each destination bit was already read.
+	if elemSize == 0 'bitPacked'
+		let endBit = idx + count
+		var j = idx
+		while j < endBit 'shiftBits'
+			let bit = __managed_mem_read_bit(buffer, idx: j)
+			__managed_mem_write_bit(buffer, idx: j - 1, value: bit)
+			j = j + 1
+		end 'shiftBits'
+		return 0
+	end 'bitPacked'
+
 	let endByte = (idx + count) * elemSize
 	var i = idx * elemSize
 	while i < endByte 'loop'
@@ -2371,6 +2435,23 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let selfBuf = __Internals.loadIndirect(self)
 	let otherBuf = __Internals.loadIndirect(other)
+	// element_size == 0 is the bit-packed-bool sentinel: the byte-scaled memcpy
+	// below copies 0 bytes, so copy `other`'s otherLen bits onto self's end one bit
+	// at a time (self bit selfLen+j <- other bit j). The grow above (bit-aware)
+	// already sized self's buffer for newLength bits. Bit-packed bools are
+	// primitives (never managed pointers), so the managed-element retain/stamp path
+	// does not apply.
+	if elemSize == 0 'bitPacked'
+		var j = 0
+		while j < otherLen 'copyBits'
+			let bit = __managed_mem_read_bit(otherBuf, idx: j)
+			__managed_mem_write_bit(selfBuf, idx: selfLen + j, value: bit)
+			j = j + 1
+		end 'copyBits'
+		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
+		return 0
+	end 'bitPacked'
+
 	let dst = selfBuf + selfLen * elemSize
 	let nBytes = otherLen * elemSize
 	__Internals.memcpy(dst, src: otherBuf, size: nBytes)
@@ -2415,7 +2496,10 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	end 'endHi'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let sliceLen = endIdx - start
-	let byteLen = sliceLen * elemSize
+	// element_size == 0 is the bit-packed-bool sentinel: the buffer is measured in
+	// BITS, so it holds (sliceLen + 7) >> 3 bytes; every other element type holds
+	// sliceLen * element_size bytes (mirrors __managed_mem_cow_check / grow).
+	let byteLen = ((sliceLen + 7) shr 3) if elemSize == 0 else (sliceLen * elemSize)
 	let destructor = __Internals.destructManagedMemoryAddr()
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	// alloc-at-0 → restore the rc=1 contract callers assume. `Array.slice` binds this
@@ -2437,11 +2521,24 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	if sliceLen != 0 'hasContent'
 		newBuf = __managed_mem_alloc_buffer(byteLen)
 		let srcBuf = __Internals.loadIndirect(self)
-		let srcAddr = srcBuf + start * elemSize
-		__Internals.memcpy(newBuf, src: srcAddr, size: byteLen)
-		if elementDestroy != 0 'managedElems'
-			__managed_mem_retain_range(newBuf, count: sliceLen, elemSize: elemSize)
-		end 'managedElems'
+		// element_size == 0 (bit-packed bool): source bit `start` is not generally
+		// byte-aligned, so a raw memcpy would misalign every bit. Copy bit-by-bit
+		// into the fresh (zero-filled) buffer starting at bit 0; unwritten trailing
+		// bits stay false. Bit-packed bools are primitives, so no managed retain.
+		if elemSize == 0 'bitPacked'
+			var j = 0
+			while j < sliceLen 'copyBits'
+				let bit = __managed_mem_read_bit(srcBuf, idx: start + j)
+				__managed_mem_write_bit(newBuf, idx: j, value: bit)
+				j = j + 1
+			end 'copyBits'
+		end 'bitPacked' else 'byteWise'
+			let srcAddr = srcBuf + start * elemSize
+			__Internals.memcpy(newBuf, src: srcAddr, size: byteLen)
+			if elementDestroy != 0 'managedElems'
+				__managed_mem_retain_range(newBuf, count: sliceLen, elemSize: elemSize)
+			end 'managedElems'
+		end 'byteWise'
 	end 'hasContent'
 	__Internals.storeIndirect(newStruct, value: newBuf)
 	__Internals.storeIndirect(newStruct + MM_OFFSET_LENGTH, value: sliceLen)
