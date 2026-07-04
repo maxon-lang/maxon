@@ -344,6 +344,12 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// suppressed (`moveIntoAddressTakenSlot`), so release the slot's content here at
 	// each function return — AFTER every closure use in the body. Managed domain only.
 	if ctx.includeManaged 'addressTakenDrops'
+		// A value MOVED into a capture slot that owns NO +1 (a borrow-returning call
+		// result) needs the slot to supply its own +1 — so the release sweeps below
+		// balance and the source's single reference stays intact. Planned before the
+		// release/drop sweeps (order among plan passes is immaterial — all queue
+		// insertions).
+		planBorrowedAddressTakenSlotRetains(ctx)
 		// Free each overwritten occupant before its store (loop-reused capture slots)
 		// AND the final occupant at return — together they release every value the
 		// slot ever held. Both managed-domain only.
@@ -3076,9 +3082,6 @@ end 'deadDefNeedsDrop'
 // element (`freshRc0` / `callReturnRc1`, e.g. `s.insert(Item.create())`) carries a
 // +1 that the move transfers straight into the container.
 function planBorrowedElementContainerRetains(ctx RcContext)
-	if ctx.layoutValueId == RELEASE_NO_LAYOUT 'noLayout'
-		return
-	end 'noLayout'
 	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planBorrowedElementContainerRetains: blockRef not in module.blocks")
@@ -3087,7 +3090,7 @@ function planBorrowedElementContainerRetains(ctx RcContext)
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planBorrowedElementContainerRetains: opIdx not in module.ops")
 			extractStdOpOperandsInto(op, operands: scratch)
 			for argId in scratch.readIds 'eachArg'
-				if borrowedElementConsumedByContainer(ctx, op: op, argId: argId) 'retain'
+				if borrowedElementConsumedByContainer(ctx, op: op, argId: argId) and borrowedElementRetainable(ctx, argId: argId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-ELEM-RETAIN func={ctx.func.name} val=%{argId} atpos={pos}")
 					let retIdx = buildRetainForValue(ctx, valueId: argId)
 					queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: retIdx)
@@ -3097,6 +3100,27 @@ function planBorrowedElementContainerRetains(ctx RcContext)
 		end 'eachOp'
 	end 'eachBlock'
 end 'planBorrowedElementContainerRetains'
+
+// True iff a borrowed element consumed by a container/callee at a non-self position
+// CAN be retained here. A CONCRETE managed element retains with a layout-free
+// `mm_incref` (`buildRetainForValue`'s `isManaged` arm) and always proceeds — this is
+// the non-generic caller that moves a borrowed field/wrapper-result into a consuming
+// callee at position >= 1 (`parseCaseBindingPattern(caseToken)` /
+// `parseEnumRangePattern(.., loToken: caseToken)`, where a concrete `Token` borrow is
+// consumed with no layout in scope). A TYPE-PARAM element routes through the layout
+// descriptor (`__mm_retain_type_param`); with no layout there is nothing to route
+// through, so it is a monomorphized scalar owning no generic resource and needs no
+// retain — mirrors `consumedArgCopyCount` and `returnedBorrowNeedsRetainCtx`'s
+// type-param no-layout skips. The former blanket `layoutValueId == RELEASE_NO_LAYOUT`
+// early-return skipped the whole pass, dropping the concrete case entirely: the source
+// collection then freed the element out from under the container's own reference (the
+// self-hosted parser's `MatchArmBlocks.caseToken` teardown over-release).
+function borrowedElementRetainable(ctx RcContext, argId ValueId) returns bool
+	if ctx.isManaged(argId) 'concreteManaged'
+		return true
+	end 'concreteManaged'
+	return ctx.layoutValueId != RELEASE_NO_LAYOUT
+end 'borrowedElementRetainable'
 
 // COPY-incref a consumed argument the caller still needs. A CONSUMING call (a
 // container mutator / intrinsic consumer / transparent wrap) unconditionally
@@ -3644,6 +3668,62 @@ function planAddressTakenSlotDrops(ctx RcContext)
 		end 'eachSlot'
 	end 'eachBlock'
 end 'planAddressTakenSlotDrops'
+
+// Supply the SLOT's own +1 for a managed value MOVED into an address-taken
+// (closure-captured) slot that owns NO transferable +1. A value stored into such a
+// slot has its SSA-store release SUPPRESSED (`moveIntoAddressTakenSlot`) and is
+// released by the slot at each overwrite and at scope exit
+// (`planAddressTakenSlotReleaseBeforeStore` / `planAddressTakenSlotDrops`). A value
+// that already OWNS a +1 (an escaping `freshRc0` — a captured `Config.create()`
+// local — or a consumed param) transfers it into the slot by the move, so it needs
+// no incref. But a value owning NO +1 — a BORROW-returning call result the lowering
+// default mis-tags `callReturnRc1` (`consume()`'s token is an interior borrow of the
+// parser's cursor; the token's real reference stays in the token array), a
+// `borrowed` view, or a non-acquiring borrow — is only aliased by the slot, so the
+// slot's scope-exit release over-frees the source's single reference (the
+// self-hosted parser's `parseInterfaceDecl` teardown over-release: `logTrace(...
+// nameToken.value ...)`'s message closure captures a consume()'d name token, whose
+// slot drop frees it out from under the token array, which then over-releases it on
+// Parser teardown). Mirror `planManagedHeapStore`'s `transferValueAlreadyOwnsPlusOne`
+// gate exactly so the address-taken-slot store and the heap/global store agree on
+// which values the durable owner must incref.
+function planBorrowedAddressTakenSlotRetains(ctx RcContext)
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planBorrowedAddressTakenSlotRetains: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("planBorrowedAddressTakenSlotRetains: opIdx not in module.ops")
+			let stored = addressTakenManagedStoreValue(ctx, op: op)
+			if stored != REFCOUNT_NO_VALUE and not transferValueAlreadyOwnsPlusOne(ctx, valueId: stored) 'needsIncref'
+				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOT-RETAIN func={ctx.func.name} val=%{stored} atpos={pos}")
+				let incIdx = buildIncrefOp(ctx.module, valueId: stored, idRef: ctx.idRef)
+				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: incIdx)
+			end 'needsIncref'
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+end 'planBorrowedAddressTakenSlotRetains'
+
+// The MANAGED value written into an address-taken slot by `op` (a `storeSlot` into a
+// closure-captured slot), or `REFCOUNT_NO_VALUE` for any other op. The stored-VALUE
+// companion of `addressTakenManagedStoreSlot` (which returns the slot), used by the
+// store-incref decision.
+function addressTakenManagedStoreValue(ctx RcContext, op StdOp) returns ValueId
+	return match op 'dispatch'
+		memory(m) gives addressTakenManagedStoreValueMem(ctx, m: m)
+		arith gives REFCOUNT_NO_VALUE
+		control gives REFCOUNT_NO_VALUE
+		call gives REFCOUNT_NO_VALUE
+		system gives REFCOUNT_NO_VALUE
+	end 'dispatch'
+end 'addressTakenManagedStoreValue'
+
+function addressTakenManagedStoreValueMem(ctx RcContext, m StdMemoryOp) returns ValueId
+	return match m 'check'
+		storeSlot(targetSlot, valueId) gives (valueId if ctx.isAddressTakenSlot(targetSlot) and ctx.isManaged(valueId) else REFCOUNT_NO_VALUE)
+		loadSlot gives REFCOUNT_NO_VALUE
+	end 'check'
+end 'addressTakenManagedStoreValueMem'
 
 // Release the PRIOR occupant of an address-taken managed slot immediately BEFORE
 // each `storeSlot` that overwrites it. Without this, a captured managed local
