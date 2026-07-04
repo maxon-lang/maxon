@@ -2022,15 +2022,25 @@ public partial class X86CodeEmitter {
   // ==========================================================================
 
   // Layout of the find-file block allocated on the heap:
-  //   [0..7]   = Win32 HANDLE from FindFirstFileA
-  //   [8..327] = WIN32_FIND_DATAA (320 bytes)
-  //              +0  (offset 8):  dwFileAttributes (DWORD)
-  //              +44 (offset 52): cFileName (char[260])
-  // Total block size: 328 bytes
-  private const int FindBlockSize = 328;
+  //   [0..7]     = Win32 HANDLE from FindFirstFileA
+  //   [8..327]   = WIN32_FIND_DATAA (320 bytes)
+  //                +0  (offset 8):  dwFileAttributes (DWORD)
+  //                +44 (offset 52): cFileName (char[260])
+  //   [328]      = advance-first pending flag (byte)
+  // Total block size: 336 bytes
+  private const int FindBlockSize = 336;
   private const int FindBlockHandleOffset = 0;
   private const int FindBlockFindDataOffset = 8;
   private const int FindDataFileNameOffset = 44;
+
+  // Advance-first pending flag: set to 1 by open_search when FindFirstFileA's
+  // entry has not yet been consumed by the first next() call. Lives just past
+  // the 320-byte WIN32_FIND_DATAA (8 + 320 = 328).
+  private const int FindBlockPendingOffset = 328;
+
+  // ASCII '.' — the leading byte of the "." / ".." pseudo-entries the runtime
+  // skips so callers never see them (advance-first dot-filtering).
+  private const long DotByte = 0x2E;
 
   /// <summary>
   /// maxon_find_filename(block_ptr) -> cstring pointer to cFileName in the block
@@ -2051,8 +2061,16 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_find_next_file(block_ptr) -> non-zero if found, 0 if done
-  /// Delegates to __io_submit_sync(SyncOpFindNext, handle, findData_ptr).
+  /// maxon_find_next_file(block_ptr) -> non-zero if found, 0 if done.
+  /// Advance-first contract: advances the cursor to the next REAL entry,
+  /// skipping the "." and ".." pseudo-entries, and returns 1 if one was found
+  /// or 0 at end-of-iteration. filename() then reads the current entry from the
+  /// block. The runtime owns dot-filtering so the stdlib filters nothing.
+  ///
+  /// open_search leaves FindFirstFileA's entry in the block with a "pending"
+  /// flag set; the first next() consumes that entry in place (after the
+  /// dot-check) instead of re-fetching, so no entry is skipped. Subsequent
+  /// calls fetch via __io_submit_sync(SyncOpFindNext, handle, findData_ptr).
   /// Returns 0 if block_ptr is null.
   /// Stack: [rbp-8]=block_ptr
   /// </summary>
@@ -2064,13 +2082,50 @@ public partial class X86CodeEmitter {
     // Null block_ptr: return 0 (no more files)
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fnf_done");
+
     DefineLabel("rt_fnf_valid");
+    // If FindFirstFileA's entry is still pending, consume it in place (no
+    // FindNext) and fall through to the dot-check; otherwise fetch the next raw
+    // entry via FindNext.
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, FindBlockPendingOffset);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_fnf_findnext");
+    // Pending: clear the flag; the current entry is already in block[8..].
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, FindBlockPendingOffset, X86Register.Rcx);
+    EmitJmp("rt_fnf_dotcheck");
+
+    DefineLabel("rt_fnf_findnext");
     EmitMovRegImm(X86Register.Rcx, SyncOpFindNext);     // op = 3
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, FindBlockHandleOffset); // arg0 = handle
     EmitMovRegMem(X86Register.R8, -0x08, 8);             // block_ptr
     EmitAddRegImm(X86Register.R8, FindBlockFindDataOffset); // arg1 = &findData
     EmitCallRuntimeLabel("__io_submit_sync");
-    // RAX = non-zero if found, 0 if no more files
+    // RAX = non-zero if found, 0 if no more files.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_fnf_done");                         // done: RAX already 0
+
+    DefineLabel("rt_fnf_dotcheck");
+    // Skip "." and "..". cFileName is a NUL-terminated char[] at
+    // block+FindBlockFindDataOffset+FindDataFileNameOffset.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);            // block_ptr
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, FindBlockFindDataOffset + FindDataFileNameOffset); // byte0
+    EmitCmpRegImm(X86Register.Rcx, DotByte);
+    EmitJcc("ne", "rt_fnf_real");                        // not '.' → real entry
+    // byte0 == '.': inspect byte1.
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, FindBlockFindDataOffset + FindDataFileNameOffset + 1); // byte1
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_fnf_findnext");                     // "." (NUL) → skip
+    EmitCmpRegImm(X86Register.Rcx, DotByte);
+    EmitJcc("ne", "rt_fnf_real");                        // ".x" → real entry
+    // byte0=='.' byte1=='.': ".." only if byte2 is NUL.
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, FindBlockFindDataOffset + FindDataFileNameOffset + 2); // byte2
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_fnf_findnext");                     // ".." (NUL) → skip
+    // "..x" → real entry.
+
+    DefineLabel("rt_fnf_real");
+    EmitMovRegImm(X86Register.Rax, 1);                   // real entry now in the block
     DefineLabel("rt_fnf_done");
     EmitRuntimeFunctionEnd();
   }
@@ -3722,6 +3777,12 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);         // block_ptr
     EmitMovRegMem(X86Register.Rax, -0x18, 8);         // handle
     EmitMovIndirectMemReg(X86Register.Rcx, FindBlockHandleOffset, X86Register.Rax); // block[0] = handle
+
+    // Advance-first: mark FindFirstFileA's entry as pending (not yet consumed).
+    // The first next() will consume it in place (after dot-skip) rather than
+    // re-fetching, so no directory entry is dropped. Do NOT pre-consume here.
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.Rcx, FindBlockPendingOffset, X86Register.Rax); // block[328] = 1
 
     // Allocate __ManagedDirectory via mm_alloc(8, destructor_ptr, tag_index=0)
     EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes (one i64 _block field)

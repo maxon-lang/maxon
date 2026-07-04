@@ -2842,9 +2842,10 @@ public partial class ARM64CodeEmitter {
     // Save dir_ptr
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
 
-    // Do initial read: call maxon_find_next_file(block_ptr) to populate first entry
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // block_ptr
-    EmitBranchLink("maxon_find_next_file");
+    // Advance-first: open does NOT pre-load an entry. block starts with no
+    // current entry; the first maxon_find_next_file() advances to the first
+    // REAL entry (it already skips "."/".."), returning 1 if found or 0 at
+    // end-of-iteration. This keeps the runtime the sole owner of dot-filtering.
 
     // Restore and return dir_ptr
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);

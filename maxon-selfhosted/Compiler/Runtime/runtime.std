@@ -2648,16 +2648,11 @@ func mrt_directory_open_search 1 i64
     std storeIndirect v19 32 v22
 
     v23 = std loadSlot 4
-    // Pre-load the first real directory entry into block[32] so `filename()`
-    // returns it before the first `next()` call. This makes the builtin obey
-    // the filename-first iteration contract that stdlib `Directory.list`, the
-    // `managed-directory` spec, and the C# bootstrap all assume (without it the
-    // initial `filename()` is empty and gets miscounted as a real entry).
-    // `mrt_directory_next` only mutates the handle block and always reports a
-    // zero error flag, so this call is purely for its side effect. An empty
-    // directory leaves block[32] = 0 (an empty name), identical to reaching
-    // end-of-iteration.
-    v25 = std call mrt_directory_next v23
+    // Advance-first contract: open does NOT pre-load an entry. block[32] (the
+    // current filename ptr) starts 0, and the first `next()` advances the cursor
+    // to the first REAL entry (skipping "."/".."), returning 1 if found or 0 at
+    // end-of-iteration. This keeps the runtime the sole owner of dot-filtering
+    // and empty-directory handling, so stdlib `Directory.list` filters nothing.
     v24 = std constI64 0
     std errorReturn v23 v24
 end

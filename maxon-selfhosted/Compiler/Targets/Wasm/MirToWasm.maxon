@@ -5524,19 +5524,14 @@ let wasmDirBlockOffNameBuf = 24
 // 3. descriptor.read-directory(dirDesc, retArea) → directory-entry-stream.
 // 4. Allocate the 48-byte block, store dirDesc + streamHandle, zero hasCurrent
 //    and nameBuf.
-// 5. Self-call mrt_directory_next once so filename() returns the first real
-//    entry before next() is called (FindFirstFileW-style contract).
-// 6. Return the block pointer as the directory handle.
+// 5. Return the block pointer as the directory handle (NO pre-load — see below).
 function emitWasmDirectoryOpenSearch(funcSigs WasmFuncSigs) returns ByteArray
-	// `Directory.list` on every target expects the openSearch result to
-	// already be positioned at the FIRST entry, with `filename()` returning
-	// the name of that first entry before any call to `next()` (this matches
-	// the Windows FindFirstFileW semantics from which the stdlib API was
-	// derived). To preserve that contract on wasm we call mrt_directory_next
-	// at the end of open, populating block.hasCurrent so filename() reads
-	// the first non-dot entry. If the directory is empty (or only contains
-	// '.' / '..'), next() returns 0 with hasCurrent=0; filename() then
-	// returns an empty mm which the stdlib filters out.
+	// Advance-first contract (matching x64/arm64): openSearch does NOT pre-load an
+	// entry. The block is left with hasCurrent = 0, and callers drive iteration as
+	// `while next() != 0 { filename() }` — the first mrt_directory_next advances to
+	// the first REAL entry (skipping "."/".."), and an empty directory makes that
+	// first next() return 0. The runtime owns dot/empty filtering, so the stdlib
+	// `Directory.list` helper filters nothing.
 	var body = ByteArray.create()
 	// Locals (param at 0; explicit locals follow):
 	//   local 0 = path (param i64)
@@ -5814,18 +5809,12 @@ function emitWasmDirectoryOpenSearch(funcSigs WasmFuncSigs) returns ByteArray
 	body.push(0x03)
 	writeUleb128(body, value: wasmDirBlockOffNameBuf as ParsedInt)
 
-	// Eagerly advance to the first real entry so `filename()` works on the
-	// very first call (matches the Windows FindFirstFile semantics the
-	// stdlib's Directory.list helper assumes). Self-call to
-	// mrt_directory_next; it returns (i64 found, i64 flag) — drop both since
-	// the open itself succeeded and we don't propagate next()'s inner
-	// failures from openSearch.
-	body.push(opLocalGet)
-	writeUleb128(body, value: localBlock)
-	body.push(opCall)
-	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mrt_directory_next", importCount: wasiImportCount))
-	body.push(opDrop)
-	body.push(opDrop)
+	// Advance-first contract: open does NOT pre-load an entry. The block is left
+	// with hasCurrent = 0; callers drive iteration as `while next() != 0 { filename() }`,
+	// so the first mrt_directory_next advances to the first REAL entry (skipping
+	// "."/"..") and an empty directory makes that first next() return 0 — no
+	// spurious empty entry is surfaced. The runtime is the sole owner of dot/empty
+	// filtering, so `Directory.list` filters nothing (matching x64/arm64).
 
 	// Return (block, 0). The error paths already returned, so the body just
 	// falls off the bottom with the success pair on the stack.

@@ -21,13 +21,9 @@ export type Directory
 			end 'open'
 		}
 		var result = FilePathArray.create()
-		var hasEntry = true
-		while hasEntry 'loop'
+		while (try search.dir.next() otherwise throw DirectoryListError.listFailed) != 0 'loop'
 			let name = String.init(search.dir.filename())
-			if name != "." and name != ".." 'notDot'
-				result.push(path.join(name))
-			end 'notDot'
-			hasEntry = (try search.dir.next() otherwise throw DirectoryListError.listFailed) != 0
+			result.push(path.join(name))
 		end 'loop'
 		search.dir.close()
 		return result

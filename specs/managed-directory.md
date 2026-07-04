@@ -30,11 +30,11 @@ category: type-system
 
 ### Instance Methods (throwing)
 
-- `next()` — Advances to the next match. Returns non-zero if found, 0 if the iteration is complete. Throws `__ManagedDirectoryError.nextFailed` on OS error.
+- `next()` — Advance-first iteration. Advances the cursor to the next REAL entry, skipping the `.` and `..` pseudo-entries, and returns non-zero if one was found or 0 when the iteration is complete. `openSearch` does not pre-load an entry, so callers iterate `while next() != 0 { use filename() }`. Throws `__ManagedDirectoryError.nextFailed` on OS error.
 
 ### Instance Methods (non-throwing)
 
-- `filename()` — Returns the current match's filename as `__ManagedMemory`.
+- `filename()` — Returns the current entry's filename as `__ManagedMemory`. Only valid after a `next()` call that returned non-zero (before the first `next()` there is no current entry). The runtime owns all dot-filtering, so `filename()` never returns `.` or `..`.
 - `close()` — Explicitly closes the search handle. Idempotent. Also called automatically via destructor.
 
 ### Usage Pattern
@@ -223,17 +223,8 @@ function main() returns ExitCode
 	end 'searchFail'
 
 	var fileCount = 0
-	var nameManaged = dir.dir.filename()
-	var name = String.init(nameManaged)
-	if name != "." and name != ".." 'notDot1'
-		fileCount = fileCount + 1
-	end 'notDot1'
 	while (try dir.dir.next() otherwise return 3) != 0 'loop'
-		nameManaged = dir.dir.filename()
-		name = String.init(nameManaged)
-		if name != "." and name != ".." 'notDot2'
-			fileCount = fileCount + 1
-		end 'notDot2'
+		fileCount = fileCount + 1
 	end 'loop'
 	dir.dir.close()
 
