@@ -152,6 +152,85 @@ end 'main'
 42
 ```
 
+<!-- test: pass-by-reference.reassign-literal-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function reassign(x Integer) returns Integer
+	x = x + 1
+	return x
+end 'reassign'
+
+function main() returns ExitCode
+	return reassign(41)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: pass-by-reference.reassign-call-result-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function reassign(x Integer) returns Integer
+	x = x + 1
+	return x
+end 'reassign'
+
+function makeVal() returns Integer
+	return 41
+end 'makeVal'
+
+function main() returns ExitCode
+	return reassign(makeVal())
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: pass-by-reference.reassign-rvalue-and-variable -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function reassignReturn(x Integer) returns Integer
+	x = x + 1
+	return x
+end 'reassignReturn'
+
+function makeThirty() returns Integer
+	return 30
+end 'makeThirty'
+
+function reassignVoid(x Integer)
+	x = x + 50
+end 'reassignVoid'
+
+function main() returns ExitCode
+	let fromLiteral = reassignReturn(5)
+	let fromCall = reassignReturn(makeThirty())
+	var v = 100
+	reassignVoid(v)
+	print("{fromLiteral}\n")
+	print("{fromCall}\n")
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+31
+150
+
+```
+
 <!-- test: pass-by-reference.struct-ref-field-mutation -->
 ```maxon
 

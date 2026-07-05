@@ -1,0 +1,282 @@
+// Test: pass-by-reference.reassign-rvalue-and-variable
+
+typealias Integer = int(i64.min to i64.max)
+
+function reassignReturn(x Integer) returns Integer
+	x = x + 1
+	return x
+end 'reassignReturn'
+
+function makeThirty() returns Integer
+	return 30
+end 'makeThirty'
+
+function reassignVoid(x Integer)
+	x = x + 50
+end 'reassignVoid'
+
+function main() returns ExitCode
+	let fromLiteral = reassignReturn(5)
+	let fromCall = reassignReturn(makeThirty())
+	var v = 100
+	reassignVoid(v)
+	print("{fromLiteral}\n")
+	print("{fromCall}\n")
+	print("{v}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+6
+31
+150
+
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=448
+    x64.mov r8d, 5
+    x64.lea rax, [rbp-32]
+    x64.mov r9, [rbp-48]
+    x64.mov [rbp-32], r8
+    x64.mov r8, [r9+0] (8b)
+    x64.add r8, 1
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rbx, [r9+0] (8b)
+    x64.mov r8d, 30
+    x64.lea rax, [rbp-40]
+    x64.mov r9, [rbp-56]
+    x64.mov [rbp-40], r8
+    x64.mov r8, [r9+0] (8b)
+    x64.add r8, 1
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov r8d, 100
+    x64.lea rax, [rbp-24]
+    x64.mov r9, [rbp-64]
+    x64.mov ecx, 21
+    x64.xor esi, esi
+    x64.mov edi, 1
+    x64.lea r13, [rip+__istr_0]
+    x64.lea r14, [rip+__istr_1]
+    x64.mov [rbp-24], r8
+    x64.mov r8, [r9+0] (8b)
+    x64.add r8, 50
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r15, rsi
+    x64.mov [rbp+-384], rdi
+    x64.call mrt_alloc
+    x64.mov rcx, rbx
+    x64.mov rdx, r8
+    x64.mov rbx, r8
+    x64.call mrt_i64_to_string
+    x64.mov [rbp+-392], r8
+    x64.mov r8, [rbp+-392]
+    x64.add r8, 0
+    x64.mov [rbp+-408], r8
+    x64.mov r8, [rbp+-408]
+    x64.add r8, 1
+    x64.mov [rbp+-408], r8
+    x64.mov rcx, [rbp+-408]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-400], r8
+    x64.mov r8, [rbp+-400]
+    x64.add r8, 0
+    x64.mov r9, r8
+    x64.add r9, [rbp+-392]
+    x64.mov rsi, [rbp+-400]
+    x64.mov [rbp-72], rsi
+    x64.mov [rbp-80], r13
+    x64.mov [rbp-88], r15
+    x64.rep_movsb
+    x64.mov [rbp-96], r8
+    x64.mov [rbp-104], rbx
+    x64.mov r8, [rbp+-392]
+    x64.mov [rbp-112], r8
+    x64.rep_movsb
+    x64.mov [rbp-120], r9
+    x64.mov [rbp-128], r14
+    x64.mov r8, [rbp+-384]
+    x64.mov [rbp-136], r8
+    x64.rep_movsb
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.mov r8, -1
+    x64.lea rbx, [rip+__destruct_String]
+    x64.mov r8d, 16
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov [r13+40], r15 (8b)
+    x64.mov r8, [rbp+-400]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, [rbp+-408]
+    x64.mov [r13+8], r8 (8b)
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, [rbp+-384]
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [r13+32], r8 (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, rbx
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov [rbx+0], r13 (8b)
+    x64.mov [rbx+8], r15 (8b)
+    x64.mov r13, [rbx+0] (8b)
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [r13+8] (8b)
+    x64.mov rcx, [r13+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, rbx
+    x64.call mm_drop
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov ecx, 21
+    x64.lea rbx, [rip+__istr_0]
+    x64.lea r13, [rip+__istr_1]
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r12
+    x64.mov rdx, r14
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov r8, r12
+    x64.add r8, 0
+    x64.mov [rbp+-392], r8
+    x64.mov r8, [rbp+-392]
+    x64.add r8, 1
+    x64.mov [rbp+-392], r8
+    x64.mov rcx, [rbp+-392]
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov [rbp+-400], r8
+    x64.mov r8, [rbp+-400]
+    x64.add r8, 0
+    x64.mov r9, r8
+    x64.add r9, r12
+    x64.mov rsi, [rbp+-400]
+    x64.mov [rbp-144], rsi
+    x64.mov [rbp-152], rbx
+    x64.mov [rbp-88], r15
+    x64.rep_movsb
+    x64.mov [rbp-160], r8
+    x64.mov [rbp-168], r14
+    x64.mov [rbp-176], r12
+    x64.rep_movsb
+    x64.mov [rbp-184], r9
+    x64.mov [rbp-192], r13
+    x64.mov r8, [rbp+-384]
+    x64.mov [rbp-136], r8
+    x64.rep_movsb
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.mov rbx, -1
+    x64.lea r12, [rip+__destruct_String]
+    x64.mov r13d, 16
+    x64.call mrt_alloc_with_dtor
+    x64.mov r14, r8
+    x64.mov [r14+40], r15 (8b)
+    x64.mov r8, [rbp+-400]
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r8, [rbp+-392]
+    x64.mov [r14+8], r8 (8b)
+    x64.mov [r14+16], r8 (8b)
+    x64.mov r8, [rbp+-384]
+    x64.mov [r14+24], r8 (8b)
+    x64.mov [r14+32], rbx (8b)
+    x64.mov rcx, r13
+    x64.mov rdx, r12
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov [rbx+0], r14 (8b)
+    x64.mov [rbx+8], r15 (8b)
+    x64.mov r12, [rbx+0] (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [r12+8] (8b)
+    x64.mov rcx, [r12+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, rbx
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rbx, [rbp-24]
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call mrt_i64_to_string
+    x64.mov rbx, r8
+    x64.mov r8, rbx
+    x64.add r8, 0
+    x64.mov r13, r8
+    x64.add r13, 1
+    x64.mov rcx, r13
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r14, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [rbp-200], r14
+    x64.mov [rbp-208], r8
+    x64.mov [rbp-88], r15
+    x64.rep_movsb
+    x64.mov r8, r14
+    x64.add r8, 0
+    x64.mov [rbp-216], r8
+    x64.mov [rbp-224], r12
+    x64.mov [rbp-232], rbx
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, rbx
+    x64.mov [rbp-240], r8
+    x64.mov [rbp-248], r9
+    x64.mov r8, [rbp+-384]
+    x64.mov [rbp-136], r8
+    x64.rep_movsb
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.mov [rbx+40], r15 (8b)
+    x64.mov [rbx+0], r14 (8b)
+    x64.mov [rbx+8], r13 (8b)
+    x64.mov [rbx+16], r13 (8b)
+    x64.mov r8, [rbp+-384]
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], rbx (8b)
+    x64.mov [r12+8], r15 (8b)
+    x64.mov rbx, [r12+0] (8b)
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [rbx+8] (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r15
+    x64.epilogue
+    x64.ret
+  }
+}
+---

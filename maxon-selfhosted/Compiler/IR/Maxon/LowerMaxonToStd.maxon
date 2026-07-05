@@ -3025,6 +3025,14 @@ type MaxonToStdLowering
 	// source slot of an argument so it can pass the slot's address for a
 	// by-reference parameter. Rebuilt per function in `lower()`.
 	var argNameToSourceSlot as ByRefArgSlotMap
+	// Pass-by-reference: next free scope-slot id for a fresh scratch slot used
+	// to give an r-value by-reference argument (literal / expression / call
+	// result / field load) a backing address. Initialized per function to
+	// `scope.nextSlot` — past every parser local/param AND interface-witness
+	// companion slot — and bumped by `allocByRefScratchSlot`. The backend
+	// sizes the frame from the max slot referenced, so these trailing slots
+	// get frame space automatically.
+	var byRefScratchSlotCursor as VarSlot
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -3065,7 +3073,8 @@ type MaxonToStdLowering
 			reassignedParams: ReassignedParamsKeySet.create(),
 			byRefParamKeys: ReassignedParamsKeySet.create(),
 			byRefParamSlots: ByRefParamSlotSet.create(),
-			argNameToSourceSlot: ByRefArgSlotMap.create()
+			argNameToSourceSlot: ByRefArgSlotMap.create(),
+			byRefScratchSlotCursor: 0
 		}
 	end 'create'
 
@@ -3595,6 +3604,12 @@ type MaxonToStdLowering
 			// the caller-side address passing consults.
 			self.byRefParamSlots = self.buildByRefParamSlots(srcFunc)
 			self.argNameToSourceSlot = ByRefArgSlotMap.create()
+			// Pass-by-reference: r-value by-reference scratch slots start past
+			// every real scope slot. `scope.nextSlot` already folds in the
+			// interface-witness companions appended by
+			// `extendSlotsForInterfaceWitnesses` in transferFuncs, so this base
+			// can never alias a live slot.
+			self.byRefScratchSlotCursor = srcFunc.scope.nextSlot
 			// Drop-tracking: clear the per-function alias flags (see aliasValues).
 			self.aliasValues = BoolArray.create()
 			// Clear the deferred struct-backed-enum `.rawValue` projection map so
@@ -9998,10 +10013,10 @@ type MaxonToStdLowering
 	//     forward the pointer it holds so the write reaches the original
 	//     caller's storage rather than a copy in this frame (the transitive
 	//     `nested-calls` case).
-	//   - Otherwise the argument is a literal/expression with no backing slot,
-	//     which the self-hosted whitelist never exercises (reassigned parameters
-	//     are always fed a variable) — routed to a loud failure below.
-	function byRefArgAddress(arg ByteArray, dstBlock IrBlock) returns ValueId
+	//   - Otherwise the argument is an r-value (literal, expression, call
+	//     result, field load) with no backing slot: materialize a fresh
+	//     scratch slot below so the callee still receives a valid address.
+	function byRefArgAddress(arg ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
 		if let sourceSlot = try self.argNameToSourceSlot.get(String.from(arg)) 'haveSlot'
 			if self.byRefParamSlots.contains(sourceSlot) 'forwardPtr'
 				return self.emitLoadByRefParamPointer(sourceSlot, dstBlock: dstBlock)
@@ -10011,13 +10026,34 @@ type MaxonToStdLowering
 			self.setValueType(addrId, t: MaxonType.integer)
 			return addrId
 		end 'haveSlot'
-		// Literal/expression argument to a parameter-reassigning function: there
-		// is no source slot to take the address of. Route it to a loud failure
-		// rather than silently passing a value where the callee expects a
-		// pointer. If a real program ever needs it, allocate a fresh scratch
-		// slot, store the coerced value, and take that slot's address here.
-		panic("byRefArgAddress: by-reference argument has no backing slot (literal/expression passed to a parameter-reassigning function is not yet supported)")
+		// R-value argument (literal, arithmetic/comparison expression, call
+		// result, field load — anything without a caller-visible backing slot)
+		// passed to a parameter-reassigning callee. Coerce it to the parameter
+		// type, spill it into a fresh scratch slot, and hand the callee THAT
+		// slot's address so its dereference reads a valid location. The callee's
+		// write-back lands in the scratch slot and is discarded after the call —
+		// the r-value has no caller-visible identity, so this is exactly
+		// pass-by-value-of-an-rvalue. Mirrors the C# bootstrap's `__ref_temp`
+		// temporary in FlattenCallArgs.
+		let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: range, dstBlock: dstBlock)
+		let scratchSlot = self.allocByRefScratchSlot()
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(scratchSlot, valueId: coercedId)))
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: scratchSlot)))
+		self.setValueType(addrId, t: MaxonType.integer)
+		return addrId
 	end 'byRefArgAddress'
+
+	// Pass-by-reference: reserve a fresh scope slot to back an r-value
+	// by-reference argument. The cursor starts past `scope.nextSlot` at
+	// function entry, so a scratch slot never aliases a real parser/witness
+	// slot; the backend's `scanLoadedSlots` grows the frame to cover it because
+	// it is referenced by `storeSlot` + `stackAddr`.
+	function allocByRefScratchSlot() returns VarSlot
+		let slot = self.byRefScratchSlotCursor
+		self.byRefScratchSlotCursor = self.byRefScratchSlotCursor + 1
+		return slot
+	end 'allocByRefScratchSlot'
 
 	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, opIdx OpIndex, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
@@ -10077,7 +10113,7 @@ type MaxonToStdLowering
 			// is a plain scalar, hand it the ADDRESS of the argument's storage
 			// instead of the value, so the callee's write is visible here.
 			if self.argPositionIsByRef(opIdx, paramOrdinal: slot + paramStartIndex) 'byRefArg'
-				let addrId = self.byRefArgAddress(arg, dstBlock: dstBlock)
+				let addrId = self.byRefArgAddress(arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
 				try self.slotIdsScratch.set(slot, value: addrId) otherwise panic("invariant: slotIds.set OOB (by-ref)")
 				try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB (by-ref)")
 				continue
