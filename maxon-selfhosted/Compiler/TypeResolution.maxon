@@ -6684,26 +6684,38 @@ end 'enumNameIsRegistered'
 
 // Resolve a cross-file enum/union range arm's owner + case ordinals.
 //
-// The parser computes `enumOwnerName` / `loValue` / `hiValue` only when the
-// enum declaring the endpoint case names was already parsed at the match
-// site. With filesystem-driven load order an enum can be referenced before
-// its declaring file is parsed, so the parser leaves `enumOwnerName` empty
-// and the ordinals at -1 while still carrying the raw `loCaseName` /
-// `hiCaseName`. Recover the owner from the scrutinee's now-resolved producer
-// type and re-derive the ordinals from the case names against the registered
-// enum. Leaving this unresolved would feed -1 ordinals into the runtime range
-// check (E3005, "-1 outside ValueId range") and drop every case past the
-// start from the deferred exhaustiveness coverage (spurious E2026).
+// The parser computes `enumOwnerName` / `loValue` / `hiValue` by a type-blind
+// search across every registered enum for the FIRST one that declares both
+// endpoint case names — it cannot consult the scrutinee's type because type
+// resolution has not run yet. Two hazards follow, both fixed by re-deriving
+// here against the scrutinee's now-resolved producer type (the authoritative
+// enum, exactly as the C# bootstrap resolves range endpoints against the
+// scrutinee's `enumType`):
+//
+//   1. Cross-file forward reference: with filesystem-driven load order the
+//      declaring enum can be unparsed at the match site, so the parser leaves
+//      `enumOwnerName` empty and the ordinals at -1. Leaving that unresolved
+//      would feed -1 ordinals into the runtime range check (E3005) and drop
+//      every case past the start from deferred exhaustiveness (spurious E2026).
+//   2. Case-name collision: when a DIFFERENT enum happens to declare the same
+//      endpoint case names (e.g. `lt`/`ge` live on both `CmpPredicate` and
+//      `Arm64CondCode`), the parser can bind to the wrong enum depending on
+//      map iteration order and bake its ordinals into the range check. That is
+//      invisible to the C# bootstrap (it resolves against the scrutinee) and
+//      silently miscompiles the arm — the match result falls through as an
+//      always-false membership test. Verify the parser's guess against the
+//      scrutinee's real enum and override it when they disagree.
 function fillRangeMatchArm(project Project, module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, loCaseName String, hiCaseName String, thenTarget BlockId, elseTarget BlockId, range SourceRange, producerTypes ProducerTypeMap)
-	if not enumOwnerName.isEmpty() 'alreadyResolved'
-		return
-	end 'alreadyResolved'
 	if loCaseName.isEmpty() 'numericRange'
 		// Pure numeric-scrutinee range — nothing to resolve here.
 		return
 	end 'numericRange'
 	let scrutineeType = lookupProducerType(producerTypes, name: scrutineeName)
 	let resolvedEnumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise return
+	if not enumOwnerName.isEmpty() and enumOwnerName == resolvedEnumName 'parserGuessAgrees'
+		// The parser already bound to the scrutinee's real enum — nothing to fix.
+		return
+	end 'parserGuessAgrees'
 	let resolvedEnum = try project.enumTypes.get(resolvedEnumName) otherwise return
 	let loOrdinalRaw = try resolvedEnum.caseByName.get(loCaseName) otherwise return
 	let newLo = loOrdinalRaw

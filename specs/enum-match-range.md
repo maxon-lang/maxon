@@ -187,6 +187,57 @@ end 'main'
 1
 ```
 
+<!-- test: enum-match-range.endpoint-name-collision -->
+```maxon
+// A range arm's endpoint case names (`lt`/`ge`) also exist on a DIFFERENT
+// enum (`Cond`) at other ordinals — here `ge` precedes `lt`, both high, the
+// way `Arm64CondCode` shadows `CmpPredicate` inside the compiler. The range
+// endpoints must resolve against the SCRUTINEE's enum (`Pred`: lt=2..ge=5),
+// not whichever enum a type-blind name search happens to reach first. Binding
+// to `Cond` would yield the empty ordinal span [7,6], so the exhaustive match
+// would match no arm for `Pred.gt` and fall through to a nil result.
+union Cond
+	eqc
+	nec
+	mi
+	pl
+	hic
+	ls
+	ge
+	lt
+	gtc
+	lec
+end 'Cond'
+
+union Pred
+	eq
+	ne
+	lt
+	le
+	gt
+	ge
+end 'Pred'
+
+function classify(p Pred) returns String
+	return match p 'm'
+		eq gives "eq"
+		ne gives "ne"
+		lt to ge gives "ord"
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	let s = classify(Pred.gt)
+	if s.isEmpty() 'empty'
+		return 2
+	end 'empty'
+	return 0 if s == "ord" else 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.enum-match-range.overlap -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
