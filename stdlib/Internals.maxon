@@ -1637,6 +1637,7 @@ let MM_ALLOC_HEADER_SIZE = 32
 // either end requires updating the other in lockstep. `flags` bit 0 is set when
 // the instance's element type is heap-managed (a String / generic-instance
 // pointer, or — after the recursive widening — a struct with managed fields).
+let LAYOUT_OFFSET_ELEMENT_SIZE = 16
 let LAYOUT_OFFSET_FLAGS = 24
 let LAYOUT_OFFSET_DESTROY_FUNC = 40
 let LAYOUT_FLAG_HAS_HEAP_REFS = 1
@@ -2674,6 +2675,45 @@ function __managed_mem_set_element_destroy_from_layout(self MachineWord, layoutD
 	end 'managed'
 	return 0
 end '__managed_mem_set_element_destroy_from_layout'
+
+// Stamp a record's `element_size@24` (per-slot storage stride) from a forwarded
+// instance layout descriptor's `elementSize@16`. Emitted at the `grow` site (the
+// generic container body where the concrete element type is an unbound
+// type-parameter, so the per-create stamp `synthesizeManagedFieldInits` left the
+// provisional pointer-width 8). Corrects a `Byte`/`bool` array's stride to 1 so
+// its slots pack contiguously instead of 8 bytes apart (the garbled-byte-slice
+// bug: a self-compiled compiler's `byteSliceToString` reconstructed wrong
+// strings → spurious E3034 on stdlib/Subprocess.maxon).
+//
+// `elementSize == 0` means the forwarded layout carries NO usable stride: it is a
+// singleton element-layout (`__layout_elem_managed` / `__layout_elem_raw`) that a
+// multi-type-param aggregate (e.g. a `Map`'s keys/values field-array) forwards,
+// where only the HAS_HEAP_REFS bit is meaningful and every sizing slot is 0.
+// Leaving the create-time default 8 untouched there is correct — those field
+// elements are pointer-width (String / struct / int). Zeroing `element_size`
+// would flip `grow` onto its bit-packed path and shred the buffer (the
+// `Map.insert` → `Array.set` over-release).
+function __managed_mem_set_element_size_from_layout(self MachineWord, layoutDesc MachineWord) returns MachineWord
+	if layoutDesc == 0 'noDesc'
+		return 0
+	end 'noDesc'
+	// Preserve a deliberate bit-packed-bool record: `element_size == 0` is the
+	// sentinel the bool-literal path sets so `grow` measures the buffer in BITS
+	// ((newCap+7)>>3 bytes) and the accessors bit-address it. The layout's
+	// `elementSize@16` is 1 for bool (its byte width), so stamping it would flip
+	// a bit-packed array to one-byte-per-bool mid-life and corrupt every packed
+	// slot (the `bool-bit-packing/literal-append` mismatch). Only Byte — whose
+	// records start at the provisional non-zero default — needs the correction.
+	let current = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	if current == 0 'bitPacked'
+		return 0
+	end 'bitPacked'
+	let elemSize = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_ELEMENT_SIZE)
+	if elemSize != 0 'hasStride'
+		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
+	end 'hasStride'
+	return 0
+end '__managed_mem_set_element_size_from_layout'
 
 // toCString(self) — return a NUL-terminated byte pointer into self's buffer.
 // A zero-copy slice or rdata-backed literal often has `buffer[length] != 0`

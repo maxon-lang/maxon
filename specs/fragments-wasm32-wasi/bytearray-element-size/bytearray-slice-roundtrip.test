@@ -1,0 +1,118 @@
+// Test: bytearray-slice-roundtrip
+function main() returns ExitCode
+	let src = "Environment.inherit"
+	let bytes = src.toByteArray()
+	var out = ByteArray.create()
+	var i = 12
+	while i < bytes.count() 'copy'
+		let b = try bytes.get(i) otherwise 0
+		out.push(b)
+		i = i + 1
+	end 'copy'
+	let sliced = String.from(out)
+	return 0 if sliced == "inherit" else 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 48 : i64
+    %6 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %7 = mir.call @mrt_alloc_with_dtor(%5, %6)
+    mir.store %0, %7, 40 width: qword
+    mir.store %4, %7, 0 width: qword
+    %9 = mir.mov_imm 19 : i64
+    mir.store %9, %7, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %7, 16 width: qword
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %7, 24 width: qword
+    mir.store %0, %7, 32 width: qword
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.func_addr @__destruct_String
+    %13 = mir.call @stdlib.__mm_alloc(%14, %15)
+    mir.store %7, %13, 0 width: qword
+    mir.store %11, %13, 8 width: qword
+    %68 = mir.load %13, 0 width: qword
+    %82 = mir.mov_imm 8 : i64
+    %83 = mir.sub.i64 %68, %82
+    mir.atomic_inc %83
+    %70 = mir.global_addr @__layout_Array_Byte
+    %71 = mir.call @Array.init(%68, %70)
+    %84 = mir.call @mm_drop(%13)
+    %19 = mir.global_addr @__layout_Array_Byte
+    %20 = mir.call @Array.create(%19)
+    %21 = mir.mov_imm 12 : i64
+    mir.br copy_0.header(%21)
+  copy_0.header(%65: i64):
+    %24 = mir.global_addr @__layout_Array_Byte
+    %25 = mir.call @Array.count(%71, %24)
+    %26 = mir.cmp lt, %65, %25
+    mir.cond_br %26 [then: inlined_Array.get_0_0(), else: copy_0.exit()]
+  inlined_Array.get_0_0:
+    %72 = mir.load %71, 0 width: qword
+    %73, %74 = mir.try_call @stdlib.__managed_mem_get(%72, %65)
+    %75 = mir.mov_imm 0 : i64
+    %76 = mir.cmp ne, %74, %75
+    mir.cond_br %76 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %77 = mir.mov_imm 0 : i64
+    %78 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%77, %78)
+  inlined_Array.get_3_0:
+    %79 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_2(%73, %79)
+  inline_cont_main_2(%80: i64, %81: i64):
+    %33 = mir.cmp ne, %81, %0
+    mir.cond_br %33 [then: try_0.merge(%0), else: try_0.ok()]
+  copy_0.exit:
+    %88 = mir.call @__mm_decref_maybenull_helper(%71)
+    %36 = mir.call @String.from(%20)
+    %85 = mir.call @__mm_decref_maybenull_helper(%20)
+    %40 = mir.global_addr @__istr_1
+    %41 = mir.mov_imm 48 : i64
+    %42 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %43 = mir.call @mrt_alloc_with_dtor(%41, %42)
+    mir.store %0, %43, 40 width: qword
+    mir.store %40, %43, 0 width: qword
+    %45 = mir.mov_imm 7 : i64
+    mir.store %45, %43, 8 width: qword
+    %46 = mir.mov_imm -2 : i64
+    mir.store %46, %43, 16 width: qword
+    mir.store %11, %43, 24 width: qword
+    mir.store %0, %43, 32 width: qword
+    %50 = mir.mov_imm 16 : i64
+    %51 = mir.func_addr @__destruct_String
+    %49 = mir.call @stdlib.__mm_alloc(%50, %51)
+    mir.store %43, %49, 0 width: qword
+    mir.store %11, %49, 8 width: qword
+    %53 = mir.call @String.equals(%36, %49)
+    %87 = mir.call @__mm_decref_maybenull_helper(%36)
+    %86 = mir.call @mm_drop(%49)
+    mir.cond_br %53 [then: ternary.merge(%0), else: ternary.else()]
+  try_0.ok:
+    mir.br try_0.merge(%80)
+  try_0.merge(%66: i64):
+    %59 = mir.global_addr @__layout_Array_Byte
+    %60 = mir.call @Array.push(%20, %66, %59)
+    %63 = mir.add.i64 %65, %11
+    mir.br copy_0.header(%63)
+  ternary.else:
+    mir.br ternary.merge(%11)
+  ternary.merge(%67: i64):
+    %89 = mir.mov_imm 125 : i64
+    %90 = mir.cmp ugt, %67, %89
+    mir.cond_br %90 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %91 = mir.global_addr @__panic_msg_1c70396e94f4cf6c
+    %92 = mir.call @mrt_panic(%91)
+  __range_ok_0:
+    mir.ret %67
+  }
+}
+---

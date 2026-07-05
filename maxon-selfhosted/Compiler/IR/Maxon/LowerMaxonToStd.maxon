@@ -8258,8 +8258,20 @@ type MaxonToStdLowering
 			// `Array with Box`/`with String` built via a non-inlined generic `create`+
 			// `push` leaks every element (the buffer frees, the elements don't). The
 			// receiver (arg 0) is the `__ManagedMemory` record.
+			//
+			// Same story for `element_size@24`: `synthesizeManagedFieldInits` left the
+			// pointer-width default 8, correct only for the 8-byte elements. For a
+			// `Byte`/`bool` element (width 1) that stride is wrong — every slot store
+			// jumps 8 bytes, so a `ByteArray` built via `create`+`push` packs its bytes
+			// 8 apart and `String.from` reads only every 8th (the garbled union-name
+			// slice in `byteSliceToString` → a self-compiled compiler's spurious E3034
+			// on stdlib/Subprocess.maxon). `grow` runs before the first slot store and
+			// `__managed_mem_grow` sizes the new buffer as `newCap * element_size`, so
+			// stamping the descriptor's concrete `elementSize@16` here corrects both the
+			// buffer size and the store stride. Idempotent (same value each grow).
 			if methodName == "grow" and hasReceiver and self.implicitLayoutValueId != 0 'stampElementWalk'
 				self.emitStampElementDestroyFromLayout(receiverId, dstBlock: dstBlock)
+				self.emitStampElementSizeFromLayout(receiverId, dstBlock: dstBlock)
 			end 'stampElementWalk'
 			// Throwing helpers (e.g. `_get`, `_set`, `_grow`, `_slice`) write the
 			// error flag in RDX/X1 — emit `StdCallOp.tryCall` at try-call sites
@@ -8373,6 +8385,27 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(retId, callee: "stdlib.__managed_mem_set_element_destroy_from_layout", argIds: argIds)))
 		self.setValueType(retId, t: MaxonType.integer)
 	end 'emitStampElementDestroyFromLayout'
+
+	// Stamp a `__ManagedMemory` record's `element_size@24` (per-slot storage
+	// stride) from the enclosing generic body's forwarded layout descriptor
+	// (`elementSize@16`), via the guarded runtime helper. Emitted at the `grow`
+	// site — where the descriptor is in scope and the buffer is (re)allocated —
+	// because the per-create stamp (`synthesizeManagedFieldInits`) cannot see the
+	// element type of a generic container body. Corrects the provisional
+	// pointer-width 8 to the concrete width (1 for `Byte`/`bool`) so slot stores
+	// and `__managed_mem_grow`'s buffer sizing (`newCap * element_size`) both
+	// stride correctly. The helper skips a forwarded singleton element-layout
+	// (`elementSize@16 == 0`, e.g. a `Map`'s keys/values field-array) so those
+	// pointer-width field elements keep the correct default. Mirrors the C#
+	// bootstrap, which sizes the record per element type at construction.
+	function emitStampElementSizeFromLayout(recordId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(recordId)
+		argIds.push(self.implicitLayoutValueId)
+		let retId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(retId, callee: "stdlib.__managed_mem_set_element_size_from_layout", argIds: argIds)))
+		self.setValueType(retId, t: MaxonType.integer)
+	end 'emitStampElementSizeFromLayout'
 
 	// Shared dispatcher for `__ManagedFile.*`, `__ManagedDirectory.*`,
 	// `__ManagedList.*`, `__ManagedListNode.*`, and `__ManagedSocket.*` method
@@ -12401,7 +12434,12 @@ type MaxonToStdLowering
 			self.setValueType(mmIncrefRetId, t: MaxonType.integer)
 			// Initialize fields: buffer=0, length=0, capacity=0, element_size=8,
 			// parent_ptr=-1 (MM_PARENT_ROOT — the destructor's buffer-free + element-
-			// walk branch).
+			// walk branch). `element_size = 8` is a provisional pointer-width default:
+			// this concrete-create stamp cannot see the element type for a generic
+			// container body (`Element` is unbound here), so the real per-element
+			// stride (1 for `Byte`/`bool`) is stamped from the layout descriptor at
+			// the `grow` site below, before the first slot store — see
+			// `emitStampElementSizeFromLayout`.
 			self.storeI64Const(mmId, offset: 0, value: 0, dstBlock: dstBlock)
 			self.storeI64Const(mmId, offset: 8, value: 0, dstBlock: dstBlock)
 			self.storeI64Const(mmId, offset: 16, value: 0, dstBlock: dstBlock)

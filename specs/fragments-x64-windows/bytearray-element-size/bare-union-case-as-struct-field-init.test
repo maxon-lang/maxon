@@ -1,0 +1,146 @@
+// Test: bare-union-case-as-struct-field-init
+union Env
+	inherit
+	set(vars StringArray)
+end 'Env'
+
+union In
+	none
+	bytes(data String)
+end 'In'
+
+type Cfg
+	export var env as Env
+	export var input as In
+
+	export static function create() returns Cfg
+		return Cfg{env: Env.inherit, input: In.none}
+	end 'create'
+end 'Cfg'
+
+function main() returns ExitCode
+	let c = Cfg.create()
+	let e = match c.env 'e'
+		inherit gives 0
+		set(v) gives v.count()
+	end 'e'
+	let i = match c.input 'i'
+		none gives 0
+		bytes(d) gives d.byteLength()
+	end 'i'
+	return e + i
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Cfg.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rdx, [rip+__destruct_Cfg]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [rbx+8], r8 (8b)
+    x64.lea rdx, [rip+__destruct_Env]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.lea rdx, [rip+__destruct_In]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov [rbx+8], r12 (8b)
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Cfg.create
+    x64.mov rbx, r8
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.xor r12d, r12d
+    x64.test r9, r9
+    x64.jne e_0.next0
+    x64.mov r13, r12
+    x64.jmp e_0.merge
+  e_0.merge:
+    x64.mov r8, [rbx+8] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne i_0.next0
+    x64.jmp __rc_edge_1_0
+  e_0.next0:
+    x64.mov r9, [r8+0] (8b)
+    x64.cmp r9, 1
+    x64.jne __phi_trampoline_3_0
+  e_0.case1:
+    x64.mov rcx, [r8+8] (8b)
+    x64.lea rdx, [rip+__layout_Array_String]
+    x64.call Array.count
+    x64.mov r13, r8
+    x64.jmp e_0.merge
+  i_0.merge:
+    x64.mov r9d, 4294967295
+    x64.mov rsi, r13
+    x64.add rsi, r8
+    x64.cmp rsi, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  i_0.next0:
+    x64.mov r9, [r8+0] (8b)
+    x64.cmp r9, 1
+    x64.jne __rc_edge_8_0
+  i_0.case1:
+    x64.mov rcx, [r8+8] (8b)
+    x64.call String.byteLength
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp i_0.merge
+  __rc_edge_1_0:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp i_0.merge
+  __rc_edge_8_0:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.jmp i_0.merge
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_1e4766f39b89f421]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_3_0:
+    x64.mov r13, r12
+    x64.jmp e_0.merge
+  }
+}
+---
