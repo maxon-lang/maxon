@@ -208,13 +208,6 @@ let whitelist = ["basics",
 	"enum-match-range",
 	"enum-allcases",
 	"collection-contains",
-	// "array-contains": `ByteArrayArray.contains(b"hello")` has two overloads —
-	//   `contains(element Element)` (shape = typeParameter) and `contains(sequence
-	//   ElementArray=Array with Element)` (shape = genericInstance). A `b"..."`
-	//   literal is genericInstance-shaped, so the shape-only resolver heuristic used
-	//   to pick the `sequence` overload over `element`. resolveOverloadedCallee now
-	//   does a receiver-substituted argTypesCompatible tie-break among generic-shaped
-	//   variants, so a single ByteArray element routes to `contains(element)`.
 	"array-contains",
 	"array-of-bytearray",
 	"array-slots",
@@ -223,23 +216,10 @@ let whitelist = ["basics",
 	"refcount-accessor-borrow-order",
 	"free-function-from-method",
 	"self-field-method-chain",
-	// `throw <value>` re-throw form (caught `(e)` binding / stashed payload-union
-	// self field) now parses + lowers correctly — see parseRethrowValue.
 	"throw-transfers-ownership",
 	"rethrow-stashed-self-field",
-	// "pass-by-reference" (8/14) — caller doesn't observe param mutation. Needs
-	//   real pass-by-reference: mutated scalar/struct/enum params must be spilled
-	//   + passed by ADDRESS with write-back (C# aliases the caller var at the IR
-	//   level; the self-hosted backend emits machine code, so it needs the
-	//   address-passing convention). Also closure-capture-by-ref + the
-	//   let-to-mutating-param E-diagnostic. Large core calling-convention feature
-	//   spanning lowering + x64 + wasm; not a quick fix.
-	// "try-block" (15/31) — block-form try Phase A complete: single-enum
-	//   success/error/array/nested-throw paths all pass (the nested-if/while/match
-	//   use-after-free is FIXED — see parseTryBlock's re-fetched `bodyBlock`).
-	//   Remaining 16 failures are Phase B (multi-enum error-union synthesis, the
-	//   E3083 "not yet implemented" reject) plus `array-narrow-signed` (a Phase A
-	//   ExitCode range-check edge). Re-enable once Phase B lands.
+	// "pass-by-reference"
+	// "try-block"
 	"try-block-otherwise-divergent",
 	"lazy-static",
 	"filepath",
