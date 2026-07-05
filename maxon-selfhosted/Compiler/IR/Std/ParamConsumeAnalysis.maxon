@@ -525,6 +525,20 @@ function updateFuncRetainsBits(module StdModule, func IrFunction, project Projec
 	var flipped = false
 	let blockById = buildBlockIdToRefMap(module, func: func)
 
+	// A param this function MAY RETURN directly (`mayReturnArg`) while it ALSO returns a
+	// freshly-OWNED value on another path is one the caller must ACQUIRE-AND-KEEP: on the
+	// return-the-param path `reclassifyBorrowReturnResults` increfs it so the caller's
+	// result owns a genuine +1, but the returned value ALIASES the argument. The caller
+	// then releases BOTH the argument and the result — a double-free of the same object
+	// unless the caller holds its own retained +1 (the `enumLiteralTypeOr(fallback)`
+	// over-release: a `MaxonType.float` box passed as `fallback`, returned as the result,
+	// `mm_drop`'d as the argument AND `decref`'d as the result). Computed once here and
+	// consulted per param below. A PURE passthrough (no owned return — every path returns
+	// a param/load borrow) needs NO retain: its result is reclassified `borrowed` and hands
+	// back the argument's own reference, so `hasOwningReturn` is false and the retain skips.
+	let mayReturnedPositions = try mayReturnArg.get(func.name) otherwise BoolArray.create()
+	let hasOwningReturn = mayReturnedPositions.count() > 0 and functionHasOwningReturn(module, func: func, project: project)
+
 	for paramIndex in 0 upto func.paramCount 'eachParam'
 		if boolArrayGet(prior, idx: paramIndex) 'alreadyRetained'
 			continue
@@ -533,7 +547,8 @@ function updateFuncRetainsBits(module StdModule, func IrFunction, project Projec
 		if paramVal == CONSUME_NO_VALUE 'noSsaValue'
 			continue
 		end 'noSsaValue'
-		if paramValueReachesRetainSink(module, func: func, usesIndex: usesIndex, valueId: paramVal, project: project, mayReturnArg: mayReturnArg, blockById: blockById) 'retained'
+		let mayReturnedIntoOwner = hasOwningReturn and boolArrayGet(mayReturnedPositions, idx: paramIndex)
+		if mayReturnedIntoOwner or paramValueReachesRetainSink(module, func: func, usesIndex: usesIndex, valueId: paramVal, project: project, mayReturnArg: mayReturnArg, blockById: blockById) 'retained'
 			setRetainBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
 			logTrace(LogCategory.ir, message: function() gives "RC-PRA-SET func={func.name} pos={paramIndex}")
 			flipped = true
@@ -542,6 +557,37 @@ function updateFuncRetainsBits(module StdModule, func IrFunction, project Projec
 
 	return flipped
 end 'updateFuncRetainsBits'
+
+// True iff SOME `ret`/`errorReturn` terminator of `func` returns a value that OWNS a
+// +1 — a fresh allocation or a non-borrow call result, as opposed to a bare `param`
+// borrow or a param-rooted load. This is the "NOT a pure borrow-returner" signal that
+// separates a MIXED-return function like `enumLiteralTypeOr` (`return fallback` on one
+// path, `return MaxonType.named(...)` — a fresh owning box — on another) from a pure
+// passthrough (`return param` on every path). Only a mixed returner increfs its
+// returned param for the caller, so only its callers must acquire-and-keep the
+// may-returned argument (see `updateFuncRetainsBits`). Reuses ReturnBorrowAnalysis's
+// authoritative `valueOwnsPlusOne` leaf rule. `funcReturnsBorrow` is not yet populated
+// for same-module callees at this pre-`analyzeReturnBorrows` stage, so a same-module
+// borrow call reads as owning — a harmless over-approximation that only ever adds a
+// balanced acquire/release pair on the caller's argument.
+function functionHasOwningReturn(module StdModule, func IrFunction, project Project) returns bool
+	let defs = buildValueDefMapSized(module, func: func, maxValueId: scanMaxValueId(func, module: module))
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionHasOwningReturn: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("functionHasOwningReturn: terminatorIndex not in module.ops")
+		let retVal = consumeReturnValueOf(term)
+		if retVal == CONSUME_NO_VALUE 'notReturn'
+			continue
+		end 'notReturn'
+		if valueOwnsPlusOne(module, defs: defs, func: func, valueId: retVal, project: project) 'owns'
+			return true
+		end 'owns'
+	end 'eachBlock'
+	return false
+end 'functionHasOwningReturn'
 
 // Per-function BlockId → BlockRef index so the retain walk can resolve a `cf.br`/
 // `cf.cond_br` edge's TARGET block (to read its positional block-args) without a linear

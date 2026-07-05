@@ -2224,3 +2224,56 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: may-return-arg-owned-result-no-over-release -->
+A function that returns its parameter on one path and a freshly-allocated OWNING box
+on another (`pickOr`: `return fallback` vs `return Tag.named(...)`) is a *mixed* returner
+whose call result owns a `+1`. When the caller passes a fresh box as that argument and the
+return-the-param path fires, the result ALIASES the argument. The caller releases BOTH the
+box argument and the result, so it must first ACQUIRE-AND-KEEP its own reference — else the
+box is decref'd twice (the self-hosted `enumLiteralTypeOr(fallback)` over-release, where a
+`MaxonType.float` box is `mm_drop`'d as the argument AND `decref`'d as the aliasing result).
+Summing across both the alias path and the fresh-box path must complete cleanly.
+```maxon
+typealias N = int(0 to u64.max)
+
+union Tag
+	integer
+	float
+	named(id N)
+end 'Tag'
+
+function pickOr(project N, useNamed bool, fallback Tag) returns Tag
+	if project > 999999 'never'
+		return Tag.integer
+	end 'never'
+	if useNamed 'named'
+		return Tag.named(project)
+	end 'named'
+	return fallback
+end 'pickOr'
+
+function tagCode(project N, useNamed bool) returns N
+	let t = pickOr(project, useNamed: useNamed, fallback: Tag.float)
+	return match t 'm'
+		integer gives 1
+		float gives 2
+		named(id) gives id
+	end 'm'
+end 'tagCode'
+
+function main() returns ExitCode
+	var sum = 0
+	sum = sum + tagCode(3, useNamed: false)
+	sum = sum + tagCode(5, useNamed: true)
+	sum = sum + tagCode(7, useNamed: false)
+	print("sum={sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sum=9
+```
