@@ -5096,9 +5096,14 @@ func mrt_managed_list_insert_first_value 2 i64
     v4 = std loadSlot 2
     v5 = std call mrt_managed_list_link_first v3 v4
 
-    // Release the transient alloc +1; the list owns the node via link_first.
-    v7 = std loadSlot 2
-    v8 = std call mm_decref v7
+    // Node arrives rc=2: the alloc +1 is the CALLER's owned reference (the
+    // returned handle — classified `callReturnRc1`, released at the caller's
+    // last use), and link_first's +1 is the LIST's owned reference. Keeping
+    // the alloc +1 (rather than dropping it here) is what lets a `detach`
+    // caller's handle keep the node alive after the list drops its reference —
+    // mirrors the C# bootstrap, where the node handle is a scope-tracked owned
+    // local (see LowerManagedListDetach's "the node survives because the local
+    // variable still holds a reference").
     v6 = std loadSlot 2
     std ret v6
 end
@@ -5118,9 +5123,9 @@ func mrt_managed_list_insert_last_value 2 i64
     v4 = std loadSlot 2
     v5 = std call mrt_managed_list_link_last v3 v4
 
-    // Release the transient alloc +1; the list owns the node via link_last.
-    v7 = std loadSlot 2
-    v8 = std call mm_decref v7
+    // Node arrives rc=2 (alloc +1 = caller's owned handle; link_last +1 = list's
+    // owned reference). See mrt_managed_list_insert_first_value for why the alloc
+    // +1 is kept, not dropped.
     v6 = std loadSlot 2
     std ret v6
 end
@@ -5143,9 +5148,9 @@ func mrt_managed_list_insert_after_value 3 i64
     v6 = std loadSlot 3
     v7 = std call mrt_managed_list_link_after v4 v5 v6
 
-    // Release the transient alloc +1; the list owns the node via link_after.
-    v9 = std loadSlot 3
-    v10 = std call mm_decref v9
+    // Node arrives rc=2 (alloc +1 = caller's owned handle; link_after +1 = list's
+    // owned reference). See mrt_managed_list_insert_first_value for why the alloc
+    // +1 is kept, not dropped.
     v8 = std loadSlot 3
     std ret v8
 end
@@ -5168,9 +5173,9 @@ func mrt_managed_list_insert_before_value 3 i64
     v6 = std loadSlot 3
     v7 = std call mrt_managed_list_link_before v4 v5 v6
 
-    // Release the transient alloc +1; the list owns the node via link_before.
-    v9 = std loadSlot 3
-    v10 = std call mm_decref v9
+    // Node arrives rc=2 (alloc +1 = caller's owned handle; link_before +1 = list's
+    // owned reference). See mrt_managed_list_insert_first_value for why the alloc
+    // +1 is kept, not dropped.
     v8 = std loadSlot 3
     std ret v8
 end
@@ -5184,18 +5189,19 @@ end
 //   slot 0 = list_ptr (arg)
 //   slot 1 = node_ptr (arg)
 //   slot 2 = old_list (node.list before detach)
-// REFCOUNT ORDERING: the node arrives holding exactly the OLD list's owned
-// reference (the user binding is a chain-owned borrow that takes no ref of its
-// own — see managedHandleResultClass). `link_first` increfs the node (the NEW
-// list's reference), so the move must drop the OLD list's reference — but the
-// drop has to run AFTER the relink, never before: a decref BEFORE link_first
-// took the lone ref to rc 0, FREEING the node, so the subsequent link wrote
-// links through (and incref'd) freed memory (the reinsert nil-deref). The fix:
-// unlink (no decref — unlink never decrefs), relink (+1), THEN decref (-1). The
-// node passes through rc 2 between link and decref, so it is never reclaimed.
-// A node that is ALREADY detached (node.list == 0, e.g. after `detach()`) holds
-// no list ref; it gains one from the relink and must NOT be decref'd — gated on
-// the saved old-list pointer.
+// REFCOUNT ORDERING: this helper rebalances ONLY the LIST-membership reference;
+// the caller's owned handle reference (the alloc +1, see the insert helpers and
+// managedHandleResultClass's `callReturnRc1` classify) is untouched and released
+// at the handle's own last use. When attached, the node holds the OLD list's +1;
+// `link_first` increfs it (the NEW list's +1), so the move must drop the OLD
+// list's reference — but the drop has to run AFTER the relink, never before: a
+// decref BEFORE link_first could take a lone ref to rc 0, FREEING the node, so
+// the subsequent link wrote links through (and incref'd) freed memory (the
+// reinsert nil-deref). The fix: unlink (no decref — unlink never decrefs),
+// relink (+1), THEN decref (-1) the OLD list's ref. A node that is ALREADY
+// detached (node.list == 0, e.g. after `detach()`) holds no list ref; it gains
+// one from the relink and must NOT be decref'd — gated on the saved old-list
+// pointer.
 func mrt_managed_list_reinsert_first 2 void
   block entry:
     v0 = std param 0 i64

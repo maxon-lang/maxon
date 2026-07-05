@@ -8471,6 +8471,37 @@ type MaxonToStdLowering
 		if receiverName == "__ManagedFile" and managedFileInstanceTakesFd(methodName) 'derefFd'
 			effectiveReceiverId = self.emitLoadFieldI64(receiverId, offset: 0, dstBlock: dstBlock)
 		end 'derefFd'
+
+		// `node.value()` on a node whose element is a CONCRETE managed type
+		// (e.g. `String`) is an OWNED read — a COPY, not a borrow: emit an inline
+		// value-load + incref so the caller's binding owns its own +1. Without
+		// this, `let old = node.value()` is reclassified a transient borrow
+		// (`reclassifyBorrowReturnResults`), so a subsequent `node.setValue(...)` —
+		// which decrefs the node's reference to the OLD value — freed it out from
+		// under the still-live `old` (the set-value-old-survives use-after-free).
+		// Mirrors the C# bootstrap, where the `let old = node.value()` assignment
+		// increfs the loaded pointer. The type-parameter element case (stdlib
+		// `List.get`/`current` forwarding `return node.value()`) and the primitive
+		// case keep the shared borrow / element-loader runtime-call path below: a
+		// type-param or primitive load carries no statically-known managed +1 to
+		// copy here.
+		if receiverName == "__ManagedListNode" and methodName == "value" 'maybeNodeValue'
+			let nvResultType = self.nodeValueResultType(receiverType)
+			if maxonTypeIsManagedRef(self.project, t: nvResultType) 'nodeValueManaged'
+				let valueId = self.emitLoadFieldI64(effectiveReceiverId, offset: NODE_VALUE_OFFSET, dstBlock: dstBlock)
+				var increfArgs = ValueIdArray.create()
+				increfArgs.push(valueId)
+				let increfRetId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: increfArgs)))
+				self.setValueType(increfRetId, t: MaxonType.integer)
+				self.nameToId.upsert(result, value: valueId)
+				self.setValueType(valueId, t: nvResultType)
+				self.classifyValue(valueId, cls: OwnershipClass.callReturnRc1, valueMaxonType: nvResultType)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				return true
+			end 'nodeValueManaged'
+		end 'maybeNodeValue'
+
 		var allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: effectiveReceiverId, hasLeadingReceiver: hasReceiver)
 		// `mrt_managed_list_create(elem_managed)` takes the projected element
 		// heap-ref bit the Maxon-level signature doesn't declare — append it
@@ -9379,10 +9410,22 @@ type MaxonToStdLowering
 			if methodName == "head" or methodName == "tail" or methodName == "cursorStart" or methodName == "cursorAdvance" or methodName == "cursorValue" 'borrow'
 				return (true, OwnershipClass.borrowed)
 			end 'borrow'
-			// The insert helpers return the freshly-linked NODE — a borrow the
-			// chain owns (the node's +1 lives in the chain links).
+			// The insert helpers return the freshly-linked NODE holding TWO owned
+			// references: the alloc +1 (the caller's returned handle) and link_*'s
+			// +1 (the list's). The handle is therefore an OWNED value the caller
+			// must release at its last use — NOT a borrow. This mirrors the C#
+			// bootstrap, whose node handle is a scope-tracked owned local; it is
+			// what lets `list.detach(n)` drop the LIST's reference while `n` keeps
+			// the node alive (rc stays 1 via the handle), and frees the node at
+			// the handle's scope-end release. A `borrowed` classify here left the
+			// node with only the list's +1, so `detach`'s decref freed it out from
+			// under the still-live handle (the detach use-after-free). The
+			// `calleeReturnsReceiverBorrow` LIVENESS edge (StdLiveness) independently
+			// keeps the LIST alive for sibling navigation (`n.next()`), so dropping
+			// the borrow OWNERSHIP class does not reintroduce the node.next-prev
+			// early-free.
 			if methodName == "insertFirst" or methodName == "insertLast" or methodName == "insertAfter" or methodName == "insertBefore" 'insertNode'
-				return (true, OwnershipClass.borrowed)
+				return (true, OwnershipClass.callReturnRc1)
 			end 'insertNode'
 			// `create` hands back the owned list handle (rc=1 from the runtime);
 			// `remove` transfers the unlinked element's +1 out. Both default to
@@ -12356,6 +12399,21 @@ type MaxonToStdLowering
 		let newValueType = try argTypes.get(0) otherwise panic("nodeSetValueElementIsManaged: setValue missing new-value arg type")
 		return maxonTypeIsManagedRef(self.project, t: newValueType)
 	end 'nodeSetValueElementIsManaged'
+
+	// The concrete element type a `node.value()` call returns, resolving the
+	// registered `Element` type-parameter against the node receiver's generic
+	// instantiation (mirrors `refineBuiltinCallResultType`). A non-generic /
+	// unresolved receiver yields the bare declared type. Used to decide whether
+	// `node.value()` is a concrete-managed OWNED read (inline load + incref).
+	function nodeValueResultType(receiverType MaxonType) returns MaxonType
+		let returnType = try self.project.funcReturnTypes.get("__ManagedListNode.value") otherwise return MaxonType.unresolved
+		let declaredType = match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		let subst = buildSubstitutionForInstance(self.project, t: receiverType)
+		return substituteType(self.project, t: declaredType, subst: subst)
+	end 'nodeValueResultType'
 
 	// For each field on `structType` whose declared type resolves to the
 	// `__ManagedMemory` builtin, allocate a 40-byte __ManagedMemory record
