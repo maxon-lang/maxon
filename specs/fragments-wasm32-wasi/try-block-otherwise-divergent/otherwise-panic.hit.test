@@ -1,0 +1,69 @@
+// Test: otherwise-panic.hit
+typealias Integer = int(i64.min to i64.max)
+
+enum PanicHitError implements Error
+	bad
+end 'PanicHitError'
+
+function maybeFail(b bool) returns Integer throws PanicHitError
+	if b 'c'
+		throw PanicHitError.bad
+	end 'c'
+	return 7
+end 'maybeFail'
+
+function main() returns ExitCode
+	var total = 0
+	try 'work'
+		let a = maybeFail(true)
+		total = a
+	end 'work'
+	otherwise panic("call failed")
+	return total
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at otherwise-panic.hit.test:21: call failed
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    mir.br inlined_maybeFail_0_0()
+  inlined_maybeFail_0_0:
+    mir.cond_br %2 [then: inlined_maybeFail_1_0(), else: inlined_maybeFail_2_0()]
+  inlined_maybeFail_1_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%11, %12)
+  inlined_maybeFail_2_0:
+    %13 = mir.mov_imm 7 : i64
+    %14 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%13, %14)
+  inline_cont_main_0(%15: i64, %16: i64):
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %16, %5
+    mir.cond_br %6 [then: tryblock_1.after(), else: tryblock_0.err()]
+  tryblock_0.err:
+    %8 = mir.global_addr @__panic_msg_07a15266503a8d69
+    %9 = mir.call @mrt_panic(%8)
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  tryblock_1.after:
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_a3b53ae152eced6d
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+}
+---

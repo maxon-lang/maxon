@@ -1,0 +1,81 @@
+// Test: otherwise-throws.not-hit
+typealias Integer = int(i64.min to i64.max)
+
+enum ThrowsNotHitInner implements Error
+	bad
+end 'ThrowsNotHitInner'
+
+enum ThrowsNotHitOuter implements Error
+	failed
+end 'ThrowsNotHitOuter'
+
+function maybeFail(b bool) returns Integer throws ThrowsNotHitInner
+	if b 'c'
+		throw ThrowsNotHitInner.bad
+	end 'c'
+	return 5
+end 'maybeFail'
+
+function compute() returns Integer throws ThrowsNotHitOuter
+	var total = 0
+	try 'work'
+		let a = maybeFail(false)
+		total = a
+	end 'work'
+	otherwise throws ThrowsNotHitOuter.failed
+	return total
+end 'compute'
+
+function main() returns ExitCode
+	let r = try compute() otherwise 99
+	return r
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @compute() -> i64 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_maybeFail_0_0()
+  inlined_maybeFail_0_0:
+    mir.cond_br %0 [then: inlined_maybeFail_1_0(), else: inlined_maybeFail_2_0()]
+  inlined_maybeFail_1_0:
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.mov_imm 1 : i64
+    mir.br inline_cont_compute_0(%10, %11)
+  inlined_maybeFail_2_0:
+    %12 = mir.mov_imm 5 : i64
+    %13 = mir.mov_imm 0 : i64
+    mir.br inline_cont_compute_0(%12, %13)
+  inline_cont_compute_0(%14: i64, %15: i64):
+    %6 = mir.cmp eq, %15, %0
+    mir.cond_br %6 [then: tryblock_1.after(), else: tryblock_0.err()]
+  tryblock_0.err:
+    %9 = mir.mov_imm 1 : i64
+    mir.error_return %0, %9
+  tryblock_1.after:
+    mir.error_return %14, %0
+  }
+  func @main() -> u8 {
+  entry:
+    %0, %1 = mir.try_call @compute()
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp ne, %1, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: try_0.merge(%0)]
+  try_0.otherwise:
+    %5 = mir.mov_imm 99 : i64
+    mir.br try_0.merge(%5)
+  try_0.merge(%8: i64):
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_1d29236ea1073edc
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

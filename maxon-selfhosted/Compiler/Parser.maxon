@@ -7324,7 +7324,14 @@ export type Parser
 	// `try ... otherwise (e)` site.
 	function parseThrowStatement(block IrBlock) throws ParserError
 		let throwToken = try consume()  // caller has already dispatched on 'throw'
+		try parseThrowStatementBody(block, throwToken: throwToken)
+	end 'parseThrowStatement'
 
+	// Emit a `throw`/`throws` statement body given the already-consumed keyword
+	// token. Split out from parseThrowStatement so the block-form try's
+	// `otherwise [(e)] throws ...` clause can reuse the identical value-vs-literal
+	// discrimination and emission (its keyword is spelled `throws`, not `throw`).
+	function parseThrowStatementBody(block IrBlock, throwToken Token) throws ParserError
 		// Discriminate the two `throw` shapes:
 		//   - `throw EnumName.case [(args)]` — the literal form: the head names
 		//     an enum/union TYPE (never a local), followed by `.case`.
@@ -7389,7 +7396,7 @@ export type Parser
 			return
 		end 'bareUnionCase'
 		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ByteArray.create(), range: SourceRange.between(throwToken, last: variantToken)))
-	end 'parseThrowStatement'
+	end 'parseThrowStatementBody'
 
 	// Re-throw an existing error VALUE: `throw e` (a caught `otherwise (e)`
 	// binding), `throw someVar`, or `throw self.field`. Mirrors the C#
@@ -12385,13 +12392,24 @@ export type Parser
 		end 'eachBlock'
 	end 'branchOpenBodyTailsToAfter'
 
-	// Parse the `otherwise (e) 'label' <handler> end 'label'` clause of a
-	// block-form try. The handler is emitted into the shared error block
-	// (`errorBlockId`; every routed error edge branches here). Re-fetches the
-	// error block by id rather than holding a struct alias across the body
-	// parse (see the errorBlockId note in parseTryBlock). Declares the typed
-	// `(e)` binding, parses the handler body, enforces E3084 (handler must
-	// `match e`), and branches the handler's live tail to `afterBlockId`.
+	// Parse the `otherwise ...` clause of a block-form try. The handler is
+	// emitted into the shared error block (`errorBlockId`; every routed error
+	// edge branches here). Re-fetches the error block by id rather than holding
+	// a struct alias across the body parse (see the errorBlockId note in
+	// parseTryBlock). Three forms are accepted:
+	//   1. `otherwise (e) 'label' <handler> end 'label'` — block handler that
+	//      declares the typed `(e)` binding, parses the handler body, enforces
+	//      E3084 (handler must `match e`), and branches its live tail to
+	//      `afterBlockId`.
+	//   2. `otherwise [(e)] panic("msg")` — terminate the program when the body
+	//      throws. Reuses parsePanicStatement, then seals the block.
+	//   3. `otherwise [(e)] throws ErrorType.case` — re-throw a fixed error to
+	//      the caller. Reuses parseThrowStatementBody; the enclosing function
+	//      must declare a matching `throws` clause (validated by the post-parse
+	//      throws checks, as with any other `throw`).
+	// In forms 2 and 3 the optional `(e)` binding is a typed enum (or heap-boxed
+	// union) the panic message or throw expression may reference; leaving it
+	// unread trips the standard unused-variable check (E3012).
 	function parseTryBlockOtherwise(ctx TryBlockContext, errorBlockId BlockId, afterBlockId BlockId, tryToken Token) throws ParserError
 		if not at(TokenKind.otherwise) 'noOtherwise'
 			let tok = cursor.current()
@@ -12400,33 +12418,65 @@ export type Parser
 		end 'noOtherwise'
 		try eat(TokenKind.otherwise)
 
-		// Phase A requires the `(binding) 'label'` block-handler form.
-		if not at(TokenKind.leftParen) 'noBinding'
+		// All routed error edges land in the shared error block. Position on it
+		// so any binding decl / panic / throw ops the forms below emit are placed
+		// there.
+		var errorBlock = try module.getBlockByIdIn(currentFunc, id: errorBlockId) otherwise panic("parseTryBlockOtherwise: error block vanished")
+		currentBlock = errorBlock
+
+		// Optional `(binding)`. Present in every block-handler form and optionally
+		// in the divergent `panic` / `throws` forms. When present, declare the
+		// typed error binding into the error block up front (its unused-variable
+		// tracking then applies uniformly to all three forms).
+		var hasBinding = false
+		var bindingName = ""
+		if at(TokenKind.leftParen) 'hasBindingParen'
+			try eat(TokenKind.leftParen)
+			let bindingToken = try consumeExpecting("error binding name")
+			checkReservedDeclName(bindingToken)
+			try eat(TokenKind.rightParen)
+			hasBinding = true
+			bindingName = bindingToken.value
+			try declareErrorBindingInBlock(errorBlock, errorFlagName: bindingFlagLoadName(errorBlock, ctx: ctx, tryToken: tryToken), bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: ctx.throwsClause, range: SourceRange.ofToken(tryToken))
+		end 'hasBindingParen'
+
+		// Divergent terminal forms: `otherwise [(e)] panic(...)` and
+		// `otherwise [(e)] throws ...`. Both seal the error block themselves and
+		// never branch to the continuation (only the success edge reaches it), so
+		// they share the same binding-scope teardown before returning.
+		if at(TokenKind.panic) 'divergentPanic'
+			try parsePanicStatement(errorBlock)
+			// parsePanicStatement only appends MaxonOp.panic — seal the block with
+			// a synthetic ret so the verifier sees it terminated.
+			sealPanicTailWithSyntheticRet(errorBlock)
+			popTryBlockBinding(hasBinding)
+			return
+		end 'divergentPanic'
+
+		if at(TokenKind.throws) 'divergentThrows'
+			// Re-throw a fixed error to the caller via the shared throw-emission
+			// path (parseThrowStatementBody). The clause spells the keyword
+			// `throws`; parseTryBlockOtherwiseThrows consumes it and hands the
+			// following `ErrorType.case[(args)]` to that shared body.
+			try parseTryBlockOtherwiseThrows(errorBlock)
+			popTryBlockBinding(hasBinding)
+			return
+		end 'divergentThrows'
+
+		// Block-handler form requires the `(binding) 'label'` shape.
+		if not hasBinding 'noBinding'
 			let tok = cursor.current()
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "try block 'otherwise' requires a '(binding)' error handler, e.g. otherwise (e) 'h'", line: tok.line, column: tok.column, filePath: filePath)
 			throw ParserError.unhandledToken
 		end 'noBinding'
-		try eat(TokenKind.leftParen)
-		let bindingToken = try consumeExpecting("error binding name")
-		checkReservedDeclName(bindingToken)
-		try eat(TokenKind.rightParen)
 		let handlerLabelToken = try consumeExpecting("handler block label")
 		try skipNewlines()
-
-		// All routed error edges land in the shared error block. Declare the
-		// typed-enum binding here. `declareErrorBindingInBlock` pushes a fresh
-		// scope (popped after the handler body) and recovers the ordinal as
-		// `flag - 1` for a bare enum. For Phase A the binding type is the single
-		// recorded throws clause.
-		var errorBlock = try module.getBlockByIdIn(currentFunc, id: errorBlockId) otherwise panic("parseTryBlockOtherwise: error block vanished")
-		currentBlock = errorBlock
-		try declareErrorBindingInBlock(errorBlock, errorFlagName: bindingFlagLoadName(errorBlock, ctx: ctx, tryToken: tryToken), bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: ctx.throwsClause, range: SourceRange.ofToken(tryToken))
 
 		// Parse the handler body, watching for a `match e`. E3084 fires if the
 		// handler never matches the binding.
 		let savedBinding = tryBlockMatchedBinding
 		let savedMatched = tryBlockBindingWasMatched
-		tryBlockMatchedBinding = bindingToken.value
+		tryBlockMatchedBinding = bindingName
 		tryBlockBindingWasMatched = false
 
 		let handlerExitBlock = try parseStatements(currentFunc, block: errorBlock, lastWasReturn: false)
@@ -12438,7 +12488,7 @@ export type Parser
 		scope.popScope()  // pops the binding scope pushed by declareErrorBindingInBlock
 
 		if not wasMatched 'noMatch'
-			reportCompileError(project, code: ErrorCode.semanticTryBlockBindingNotMatched, message: "otherwise block must contain a match on the error binding '{bindingToken.value}'", line: handlerLabelToken.line, column: handlerLabelToken.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.semanticTryBlockBindingNotMatched, message: "otherwise block must contain a match on the error binding '{bindingName}'", line: handlerLabelToken.line, column: handlerLabelToken.column, filePath: filePath)
 			throw ParserError.unhandledToken
 		end 'noMatch'
 
@@ -12451,6 +12501,28 @@ export type Parser
 			module.setTerminator(handlerExitBlock, op: MaxonOp.br(afterBlockId, range: SourceRange.ofToken(tryToken)))
 		end 'handlerLiveTail'
 	end 'parseTryBlockOtherwise'
+
+	// Emit the `otherwise [(e)] throws ErrorType.case[(args)]` re-throw into the
+	// shared error block. The try-block stack has already been popped by
+	// parseTryBlock, so the throw routes to the enclosing function's exit (the
+	// caller) rather than back into this handler — exactly the "re-throw to the
+	// caller" semantics the divergent form specifies. The `otherwise` clause
+	// spells the keyword `throws` (vs. the statement `throw`), so we consume it
+	// here and hand the shared body the following `ErrorType.case[(args)]`.
+	function parseTryBlockOtherwiseThrows(errorBlock IrBlock) throws ParserError
+		let throwsToken = try consume()  // 'throws'
+		try parseThrowStatementBody(errorBlock, throwToken: throwsToken)
+	end 'parseTryBlockOtherwiseThrows'
+
+	// Pop the optional `(e)` binding scope after a divergent (`panic`/`throws`)
+	// otherwise form. Both forms are terminal — no live tail to branch from — so
+	// the only teardown is unwinding the scope `declareErrorBindingInBlock`
+	// pushed, and only when a binding was actually declared.
+	function popTryBlockBinding(hasBinding bool)
+		if hasBinding 'popBinding'
+			scope.popScope()
+		end 'popBinding'
+	end 'popTryBlockBinding'
 
 	// Load the shared error-flag slot into a fresh SSA name so
 	// `declareErrorBindingInBlock` can recover the ordinal (`flag - 1`) for the
