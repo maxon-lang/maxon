@@ -640,6 +640,31 @@ function walkInstanceArm(project Project, gid GenericInstanceId, out GenericInst
 	end 'each'
 end 'walkInstanceArm'
 
+// Determine whether `qualified` names a top-level free function that can be
+// referenced by bare name as a function-pointer value, and if so intern its
+// function type. Returns `(true, fnTypeId)` on a hit; `(false, 0)` when the
+// name is unregistered or names an instance method — whose implicit `__self`
+// receiver a bare reference can't supply, so it is left unresolved for the
+// standard undefined-name diagnostic. Shared by the parser's parse-time
+// `maybeFunctionRef` and TypeResolution's deferred
+// `tryRewriteUnresolvedFunctionRef` so both compute an identical `fnTypeId`
+// for the same function whether the reference is backward or forward.
+export function referenceableFunctionTypeId(project Project, qualified String) returns (bool, FunctionTypeId)
+	if not project.funcSignatures.contains(qualified) or not project.funcReturnTypes.contains(qualified) 'notAFunction'
+		return (false, 0 as FunctionTypeId)
+	end 'notAFunction'
+	let sig = try project.funcSignatures.get(qualified) otherwise panic("referenceableFunctionTypeId: funcSignatures.contains(true) but get() failed for '{qualified}'")
+	if sig.paramNames.count() > 0 'hasParams'
+		let firstParam = try sig.paramNames.get(0) otherwise panic("referenceableFunctionTypeId: paramNames.get(0) failed after count guard")
+		if firstParam == "__self" 'isInstanceMethod'
+			return (false, 0 as FunctionTypeId)
+		end 'isInstanceMethod'
+	end 'hasParams'
+	let returnType = try project.funcReturnTypes.get(qualified) otherwise panic("referenceableFunctionTypeId: funcReturnTypes.contains(true) but get() failed for '{qualified}'")
+	let fnTypeId = internFunctionType(project, paramTypes: sig.paramTypes, returnType: returnType)
+	return (true, fnTypeId)
+end 'referenceableFunctionTypeId'
+
 // Intern a function type by structural identity. A linear scan over the
 // registry suffices today — function-typed parameters are rare, and the
 // signatures are small. If profiling shows this is hot we can swap in a

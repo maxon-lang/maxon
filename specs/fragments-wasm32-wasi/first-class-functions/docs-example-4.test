@@ -1,40 +1,36 @@
 // Test: docs-example-4
 typealias Score = int(i64.min to i64.max)
-typealias ScoreOp = function(Score) returns Score
-
-function apply(f ScoreOp, x Score) returns Score
-	return f(x)
-end 'apply'
 
 function main() returns ExitCode
-	return apply(function(n Score) gives n + 5, x: 10)  // returns 15
+	let f = function(x Score) gives x * 2
+	return f(21)  // returns 42
 end 'main'
 ---
-ExitCode: 15
+ExitCode: 42
 ---
 // CompiledIR
 module {
   func @main$closure_0(local0: i64, local1: i64) -> i64 {
   entry:
     %5 = mir.param local0 : i64
-    %3 = mir.mov_imm 5 : i64
-    %4 = mir.add.i64 %5, %3
+    %3 = mir.mov_imm 2 : i64
+    %4 = mir.mul.i64 %5, %3
     mir.ret %4
   }
   func @main() -> u8 {
   entry:
     %0 = mir.func_addr @main$closure_0
     %1 = mir.mov_imm 0 : i64
-    %2 = mir.mov_imm 10 : i64
-    %5 = mir.indirect_call %0(%2, %1)
-    %6 = mir.mov_imm 125 : i64
-    %7 = mir.cmp ugt, %5, %6
-    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+    %3 = mir.mov_imm 21 : i64
+    %4 = mir.indirect_call %0(%3, %1)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %8 = mir.global_addr @__panic_msg_95ae05ca130fb66f
-    %9 = mir.call @mrt_panic(%8)
+    %7 = mir.global_addr @__panic_msg_1358a2e856bb55ed
+    %8 = mir.call @mrt_panic(%7)
   __range_ok_0:
-    mir.ret %5
+    mir.ret %4
   }
 }
 ---

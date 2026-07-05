@@ -1,0 +1,55 @@
+// Test: first-class-function.forward-reference-named-arg
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(x Integer, f UnaryOp) returns Integer
+	return f(x)
+end 'apply'
+
+function useDbl() returns Integer
+	return apply(20, f: dbl)
+end 'useDbl'
+
+function useTrip() returns Integer
+	return apply(10, f: trip)
+end 'useTrip'
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function trip(n Integer) returns Integer
+	return n * 3
+end 'trip'
+
+function main() returns ExitCode
+	return useDbl() - useTrip()
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 20 : i64
+    %4 = mir.func_addr @__fnref_dbl
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.indirect_call %4(%3, %5)
+    %7 = mir.mov_imm 10 : i64
+    %8 = mir.func_addr @__fnref_trip
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.indirect_call %8(%7, %9)
+    %2 = mir.sub.i64 %6, %10
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %2, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_5a0a42f230135b48
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

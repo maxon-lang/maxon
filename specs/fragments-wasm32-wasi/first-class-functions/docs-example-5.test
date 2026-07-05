@@ -1,4 +1,4 @@
-// Test: docs-example-3
+// Test: docs-example-5
 typealias Score = int(i64.min to i64.max)
 typealias ScoreOp = function(Score) returns Score
 
@@ -7,20 +7,23 @@ function apply(f ScoreOp, x Score) returns Score
 end 'apply'
 
 function main() returns ExitCode
-	return apply(triple, x: 10)  // triple is declared below — returns 30
+	return apply(function(n Score) gives n + 5, x: 10)  // returns 15
 end 'main'
-
-function triple(n Score) returns Score
-	return n * 3
-end 'triple'
 ---
-ExitCode: 30
+ExitCode: 15
 ---
 // CompiledIR
 module {
+  func @main$closure_0(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.add.i64 %5, %3
+    mir.ret %4
+  }
   func @main() -> u8 {
   entry:
-    %0 = mir.func_addr @__fnref_triple
+    %0 = mir.func_addr @main$closure_0
     %1 = mir.mov_imm 0 : i64
     %2 = mir.mov_imm 10 : i64
     %5 = mir.indirect_call %0(%2, %1)
@@ -28,7 +31,7 @@ module {
     %7 = mir.cmp ugt, %5, %6
     mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %8 = mir.global_addr @__panic_msg_a5b8ae73c6f99370
+    %8 = mir.global_addr @__panic_msg_e9e1484d5fd63dea
     %9 = mir.call @mrt_panic(%8)
   __range_ok_0:
     mir.ret %5

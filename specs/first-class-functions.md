@@ -103,6 +103,31 @@ end 'main'
 30
 ```
 
+A function may be referenced by name *before* its declaration appears in the
+source. Name resolution of a bare function reference is deferred until every
+declaration is known, so a forward reference resolves to the same function
+value as a backward one:
+
+```maxon
+typealias Score = int(i64.min to i64.max)
+typealias ScoreOp = function(Score) returns Score
+
+function apply(f ScoreOp, x Score) returns Score
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(triple, x: 10)  // triple is declared below — returns 30
+end 'main'
+
+function triple(n Score) returns Score
+	return n * 3
+end 'triple'
+```
+```exitcode
+30
+```
+
 ## Closures
 
 Closures are inline anonymous functions written with the `function` keyword:
@@ -341,6 +366,76 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: first-class-function.forward-reference-arg -->
+A bare function name may be passed as a function-typed argument even when the
+function is declared *later* in the file. The parser can't resolve the
+reference at the call site (the signature isn't registered yet), so it defers
+to type resolution, which rewrites the read to a function reference once every
+declaration is known.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function driver() returns Integer
+	return apply(dbl, x: 21)
+end 'driver'
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	return driver()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.forward-reference-named-arg -->
+Two distinct forward-declared functions passed by name as a NAMED, non-first
+argument (the shape the self-hosted compiler's own `computeParamKeySet` uses)
+must each dispatch to the correct target: `useDbl` yields 40 and `useTrip`
+yields 30, so their difference is 10 only when both references resolved
+correctly.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(x Integer, f UnaryOp) returns Integer
+	return f(x)
+end 'apply'
+
+function useDbl() returns Integer
+	return apply(20, f: dbl)
+end 'useDbl'
+
+function useTrip() returns Integer
+	return apply(10, f: trip)
+end 'useTrip'
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function trip(n Integer) returns Integer
+	return n * 3
+end 'trip'
+
+function main() returns ExitCode
+	return useDbl() - useTrip()
+end 'main'
+```
+```exitcode
+10
 ```
 
 <!-- test: first-class-function.cross-file-extension-typealias-param -->

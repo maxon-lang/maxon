@@ -14342,27 +14342,19 @@ export type Parser
 				fnRefCtx = CallContext.sibling(currentTypeName)
 			end 'inMethodFnRef'
 			let qualified = qualifyCalleeForContext(project, bare: token.value, callContext: fnRefCtx, currentNamespace: namespace, readerFilePath: filePath)
-			if project.funcSignatures.contains(qualified) and project.funcReturnTypes.contains(qualified) 'isFnRef'
-				let sig = try project.funcSignatures.get(qualified) otherwise panic("parseIdentifierExpr.maybeFunctionRef: funcSignatures.contains(true) but get() failed for '{qualified}'")
-				let returnType = try project.funcReturnTypes.get(qualified) otherwise panic("parseIdentifierExpr.maybeFunctionRef: funcReturnTypes.contains(true) but get() failed for '{qualified}'")
-				// Instance methods take an implicit `__self` as their first
-				// parameter; referencing them by bare name has no receiver
-				// to thread through. Skip these and let `unresolvedRead`
-				// surface the expected E2004 below.
-				var isInstanceMethod = false
-				if sig.paramNames.count() > 0 'hasParams'
-					let firstParam = try sig.paramNames.get(0) otherwise panic("parseIdentifierExpr.maybeFunctionRef: paramNames.get(0) failed after count guard")
-					if firstParam == "__self" 'isSelf'
-						isInstanceMethod = true
-					end 'isSelf'
-				end 'hasParams'
-				if not isInstanceMethod 'freeFunction'
-					let fnTypeId = internFunctionType(project, paramTypes: sig.paramTypes, returnType: returnType)
-					let resultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.functionRef(resultName, funcName: qualified, fnTypeId: fnTypeId, range: SourceRange.ofToken(token)))
-					return ExprResult.direct(resultName, valueType: MaxonType.function(fnTypeId))
-				end 'freeFunction'
-			end 'isFnRef'
+			// `referenceableFunctionTypeId` returns false for an unregistered
+			// name or an instance method (whose implicit `__self` a bare
+			// reference can't thread through) — those fall through to the
+			// `unresolvedRead` below. A forward reference to a not-yet-parsed
+			// function also lands there, and TypeResolution's
+			// `tryRewriteUnresolvedFunctionRef` completes it once every
+			// signature is registered.
+			let (isFnRef, fnTypeId) = referenceableFunctionTypeId(project, qualified: qualified)
+			if isFnRef 'freeFunction'
+				let resultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.functionRef(resultName, funcName: qualified, fnTypeId: fnTypeId, range: SourceRange.ofToken(token)))
+				return ExprResult.direct(resultName, valueType: MaxonType.function(fnTypeId))
+			end 'freeFunction'
 		end 'maybeFunctionRef'
 
 		// Bare identifier that isn't bound as a local: defer name resolution

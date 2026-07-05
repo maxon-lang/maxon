@@ -2933,8 +2933,51 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, block IrBloc
 	if reportEnumUnknownCaseIfApplicable(project, name: name, range: range, filePath: filePath) 'wasEnumCase'
 		return
 	end 'wasEnumCase'
+	// A bare name that resolved to no variable / constant / enum or union case
+	// may still name a top-level free function used by name as a function-
+	// reference value (`apply(dbl, ...)`, `let f = dbl`). See
+	// `tryRewriteUnresolvedFunctionRef` for why the parser's `maybeFunctionRef`
+	// can miss a forward reference and leaves it for this pass.
+	if tryRewriteUnresolvedFunctionRef(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasFunctionRef'
+		return
+	end 'wasFunctionRef'
 	reportUnknownName(project, name: name, range: range, filePath: filePath)
 end 'rewriteUnresolvedRead'
+
+// A bare identifier that named no local, parameter, top-level var, constant,
+// or union/enum case might still name a top-level free function referenced by
+// name as a function-pointer value. The parser's `maybeFunctionRef` handles
+// this at parse time, but only for a function ALREADY registered when the
+// reference is parsed. Function signatures are registered as each function is
+// parsed top-to-bottom, so a FORWARD reference — a function declared later in
+// the same file, or in a sibling file not yet parsed — is not yet in
+// `funcSignatures` at the reference site and arrives here as an
+// `unresolvedRead`. By type-resolution time every signature is registered, so
+// re-run the same context-aware qualification a bare call would do and, on a
+// hit, rewrite the op to a `functionRef` carrying the resolved fnTypeId — an
+// ordinary function value the existing indirect-call / by-value function-arg
+// machinery already handles. `buildProducerTypes` (which runs after this pass)
+// stamps the result's `MaxonType.function(fnTypeId)` from the rewritten op.
+// Mirrors the C# bootstrap's bare-function-reference path
+// (`FindFunctionByExactName` → `MaxonFunctionRefOp` in 2-Parser.cs).
+function tryRewriteUnresolvedFunctionRef(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
+	// Only a bare (undotted) identifier can be a bare function reference; the
+	// parser's `maybeFunctionRef` likewise fires only on a single-identifier
+	// token. A dotted `Prefix.suffix` here is a qualified read whose valid
+	// enum / union / instance-field shapes were already handled above, so
+	// leave it for the standard `reportUnknownName` diagnostic.
+	if leadingSegment(name) != name 'isDotted'
+		return false
+	end 'isDotted'
+	let namespace = deriveNamespace(filePath, rootPath: project.rootPath)
+	let qualified = qualifyCalleeForContext(project, bare: name, callContext: CallContext.free, currentNamespace: namespace, readerFilePath: filePath)
+	let (isFnRef, fnTypeId) = referenceableFunctionTypeId(project, qualified: qualified)
+	if not isFnRef 'notAFunction'
+		return false
+	end 'notAFunction'
+	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.functionRef(result, funcName: qualified, fnTypeId: fnTypeId, range: range)) otherwise panic("tryRewriteUnresolvedFunctionRef: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+	return true
+end 'tryRewriteUnresolvedFunctionRef'
 
 // Phase 9 Stage 3: rewrite a bare-case union read `UnionName.caseName` to
 // a no-arg call against the synthesized constructor. Returns true when

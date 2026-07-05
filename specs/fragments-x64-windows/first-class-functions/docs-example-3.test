@@ -1,34 +1,35 @@
 // Test: docs-example-3
 typealias Score = int(i64.min to i64.max)
+typealias ScoreOp = function(Score) returns Score
+
+function apply(f ScoreOp, x Score) returns Score
+	return f(x)
+end 'apply'
 
 function main() returns ExitCode
-	let f = function(x Score) gives x * 2
-	return f(21)  // returns 42
+	return apply(triple, x: 10)  // triple is declared below — returns 30
 end 'main'
+
+function triple(n Score) returns Score
+	return n * 3
+end 'triple'
 ---
-ExitCode: 42
+ExitCode: 30
 ---
 // CompiledIR
 module {
-  func @main$closure_0(rcx: i64, rdx: i64) -> i64 {
-  entry:
-    x64.mov r9d, 2
-    x64.mov r8, rcx
-    x64.imul r8, r9
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.xor edx, edx
-    x64.mov ecx, 21
-    x64.lea rbx, [rip+main$closure_0]
+    x64.mov ecx, 10
+    x64.lea rbx, [rip+__fnref_triple]
     x64.call rbx
     x64.mov r9d, 4294967295
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_f3d62d12a21fc1ec]
+    x64.lea rcx, [rip+__panic_msg_a5b8ae73c6f99370]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
