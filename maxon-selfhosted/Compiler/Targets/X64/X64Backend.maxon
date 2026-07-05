@@ -6851,7 +6851,17 @@ end 'emitX64GtLoadCurrentP'
 //   P == NULL                    → -1  (raw OS thread with no adopted P)
 //   else                         → P->id  (POffId)
 function emitX64SlabCurrentPId(code ByteArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
-	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__slab_current_p_id", offset: code.count())
+	// Register under the `stdlib.`-QUALIFIED name (not bare `__slab_current_p_id`).
+	// The stub this overrides is a Maxon-phase Internals function recorded as
+	// `stdlib.__slab_current_p_id`, and every intra-stdlib caller (__slab_alloc /
+	// __slab_alloc_class / __slab_free) emits its call against that qualified name.
+	// `lookupLabel` matches the qualified key exactly and never falls through to a
+	// bare-only entry, so a bare registration here would leave all 1900+ call sites
+	// resolving to the always-`-1` stub — every free would then see myId==-1, skip
+	// the parked-span sentinel guard, and wild-deref in __slab_proc_at. recordLabel's
+	// bare-alias bridge also writes the bare key, so runtime.std Std-IR bare callers
+	// still resolve here; being emitted after the stdlib link, this offset wins both.
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "stdlib.__slab_current_p_id", offset: code.count())
 	var state = Win32HelperState.create(3, outgoingBytes: 0, localBytes: 0)
 	helperPrologue(code, frameSize: 0)
 	helperMarkBlock(state, code: code, blockId: 0)
