@@ -195,35 +195,25 @@ export type TryBlockContext
 		return Self{errorBlockId: errorBlockId, errorFlagSlot: errorFlagSlot, discriminantSlot: discriminantSlot, boxSlot: boxSlot, blockLabel: blockLabel, errorTypeNames: StringArray.create(), throwsClause: ThrowsClause.none}
 	end 'create'
 
-	// Phase B: 0-based index of `name` within `errorTypeNames` (the union
-	// member ordinal used as the discriminant value). `name` must have been
-	// recorded via `recordErrorType` before this call — a routed site always
-	// records its type immediately before looking up its member index.
-	export function memberIndexOf(name String) returns ElementCount
-		for i in 0 upto self.errorTypeNames.count() 'each'
-			let existing = try self.errorTypeNames.get(i) otherwise panic("memberIndexOf: errorTypeNames.get OOB at {i}")
-			if existing == name 'hit'
-				return i
-			end 'hit'
-		end 'each'
-		panic("memberIndexOf: '{name}' was not recorded on the try-block context")
-	end 'memberIndexOf'
-
-	// Record a distinct error-enum name encountered while routing a bare throw
-	// or throwing call in this block. The first recorded clause types the
-	// handler binding. Returns the count of distinct enums seen so far so the
-	// caller can detect the Phase B multi-enum union case (> 1).
+	// Record a distinct error-enum name encountered while routing a bare throw or
+	// throwing call in this block, and return its 0-based union-member index (its
+	// position in `errorTypeNames`, which the routing uses as the discriminant
+	// value). The first recorded clause types the handler binding. A name already
+	// recorded returns its existing index without re-adding it, so the count of
+	// members (`errorTypeNames.count()`) distinguishes the single- from the
+	// multi-enum error-union case.
 	export function recordErrorType(name String, clause ThrowsClause) returns ElementCount
-		for existing in self.errorTypeNames 'each'
+		for i in 0 upto self.errorTypeNames.count() 'each'
+			let existing = try self.errorTypeNames.get(i) otherwise panic("recordErrorType: errorTypeNames.get OOB at {i}")
 			if existing == name 'seen'
-				return self.errorTypeNames.count()
+				return i
 			end 'seen'
 		end 'each'
 		if self.errorTypeNames.count() == 0 'firstType'
 			self.throwsClause = clause
 		end 'firstType'
 		self.errorTypeNames.push(name)
-		return self.errorTypeNames.count()
+		return self.errorTypeNames.count() - 1
 	end 'recordErrorType'
 end 'TryBlockContext'
 
@@ -13172,8 +13162,7 @@ export type Parser
 		// Simple-enum delivery: `ordinal + 1` flag + member discriminant into the
 		// i64 slots, then branch success -> continuation, error -> shared handler.
 		module.appendOp(block, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: tokRange))
-		let discrName = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: tokRange)
-		module.appendOp(block, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: tokRange))
+		storeDiscriminant(block, ctx: ctx, memberIndex: memberIndex, range: tokRange)
 		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: tokRange)
 		let cmpName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: flagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: tokRange))
@@ -13186,10 +13175,19 @@ export type Parser
 	// it); the box store is the box's last use (an ownership move into the slot).
 	function fillBoxSlotLanding(block IrBlock, ctx TryBlockContext, boxName ByteArray, memberIndex ElementCount, range SourceRange)
 		module.appendOp(block, op: MaxonOp.varStore(ctx.boxSlot, value: boxName, range: range))
-		let discrName = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
-		module.appendOp(block, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: range))
+		storeDiscriminant(block, ctx: ctx, memberIndex: memberIndex, range: range)
 		module.setTerminator(block, op: MaxonOp.br(ctx.errorBlockId, range: range))
 	end 'fillBoxSlotLanding'
+
+	// Store `memberIndex` (the routed throw/call's union-member ordinal) into the
+	// shared discriminant slot on `block`. Read only by `parseErrorUnionMatch` on
+	// the multi-enum path; dead on the single-enum path. `block` is mutated through
+	// the module ops (the same pass-a-block-and-mutate idiom the other routing
+	// helpers use), so the caller keeps using its block borrow afterward.
+	function storeDiscriminant(block IrBlock, ctx TryBlockContext, memberIndex ElementCount, range SourceRange)
+		let discrName = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
+		module.appendOp(block, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: range))
+	end 'storeDiscriminant'
 
 	// Emit-time interception for a bare `throw Enum.case` inside an active
 	// block-form try body: instead of the function-exit `throw` terminator,
@@ -13235,10 +13233,7 @@ export type Parser
 		currentBlock = block
 		let flagName = emitLiteral(currentBlock, value: ordinalPlusOne, valueType: MaxonType.integer, range: range)
 		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: range))
-		// Store this throw's union-member index into the shared discriminant slot
-		// (dead on the single-enum path; read by `parseErrorUnionMatch`).
-		let discrName = emitLiteral(currentBlock, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
-		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: range))
+		storeDiscriminant(currentBlock, ctx: ctx, memberIndex: memberIndex, range: range)
 		module.setTerminator(currentBlock, op: MaxonOp.br(ctx.errorBlockId, range: range))
 		return true
 	end 'routeBareThrowToActiveTryBlock'
@@ -13274,8 +13269,7 @@ export type Parser
 	function recordTryBlockErrorType(ctx TryBlockContext, clause ThrowsClause) returns ElementCount throws ParserError
 		var liveCtx = ctx
 		let enumName = try throwsClauseName(clause) otherwise panic("recordTryBlockErrorType: routed throwing clause carries no enum name")
-		_ = liveCtx.recordErrorType(enumName, clause: clause)
-		return liveCtx.memberIndexOf(enumName)
+		return liveCtx.recordErrorType(enumName, clause: clause)
 	end 'recordTryBlockErrorType'
 
 	// --- Phase B: multi-enum error-union `(e)` binding registry ---
@@ -13289,18 +13283,28 @@ export type Parser
 		errorUnionBindings.push(ErrorUnionBinding.create(name, ctx: ctx))
 	end 'registerErrorUnionBinding'
 
-	// Pop the innermost (last-pushed) error-union binding named `name`.
-	function unregisterErrorUnionBinding(name String)
+	// Index of the innermost (last-registered) error-union binding named `name`.
+	// The reverse scan returns the most recently pushed match so a nested
+	// multi-enum try inside an outer handler resolves to its own innermost
+	// binding. `name` MUST be active — callers gate via `isActiveErrorUnionBinding`
+	// or a non-empty `header.errorUnionBindingName` — so a miss is a compiler
+	// invariant violation and panics rather than returning a sentinel.
+	function lastErrorUnionBindingIndex(name String) returns ElementCount
 		var idx = errorUnionBindings.count()
 		while idx > 0 'scan'
 			idx = idx - 1
-			let b = try errorUnionBindings.get(idx) otherwise panic("unregisterErrorUnionBinding: get OOB at {idx}")
+			let b = try errorUnionBindings.get(idx) otherwise panic("lastErrorUnionBindingIndex: get OOB at {idx}")
 			if b.bindingName == name 'hit'
-				_ = try errorUnionBindings.remove(idx) otherwise panic("unregisterErrorUnionBinding: remove OOB at {idx}")
-				return
+				return idx
 			end 'hit'
 		end 'scan'
-		panic("unregisterErrorUnionBinding: no active binding named '{name}'")
+		panic("lastErrorUnionBindingIndex: no active binding named '{name}'")
+	end 'lastErrorUnionBindingIndex'
+
+	// Pop the innermost (last-pushed) error-union binding named `name`.
+	function unregisterErrorUnionBinding(name String)
+		let idx = lastErrorUnionBindingIndex(name)
+		_ = try errorUnionBindings.remove(idx) otherwise panic("unregisterErrorUnionBinding: remove OOB at {idx}")
 	end 'unregisterErrorUnionBinding'
 
 	// True when `name` is an active multi-enum error-union `(e)` binding.
@@ -13319,15 +13323,9 @@ export type Parser
 	// an active error-union binding. `name` must be an active binding — callers
 	// gate on `isActiveErrorUnionBinding` / a non-empty `header.errorUnionBindingName`.
 	function errorUnionCtxForBinding(name String) returns TryBlockContext
-		var idx = errorUnionBindings.count()
-		while idx > 0 'scan'
-			idx = idx - 1
-			let b = try errorUnionBindings.get(idx) otherwise panic("errorUnionCtxForBinding: get OOB at {idx}")
-			if b.bindingName == name 'hit'
-				return b.ctx
-			end 'hit'
-		end 'scan'
-		panic("errorUnionCtxForBinding: no active binding named '{name}'")
+		let idx = lastErrorUnionBindingIndex(name)
+		let b = try errorUnionBindings.get(idx) otherwise panic("errorUnionCtxForBinding: get OOB at {idx}")
+		return b.ctx
 	end 'errorUnionCtxForBinding'
 
 	// Split `block` after op position `splitPos` (0-based index into its
