@@ -2501,6 +2501,20 @@ end 'structNameIsDropTrackedRec'
 // back to the raw field-type test when there is no alias to chase (already-concrete
 // `named`/`genericInstance` fields).
 function fieldTypeIsDropTracked(project Project, structType StructType, field StructField) returns bool
+	// An interface-typed field is a 16-byte fat pointer (value + witness). Its VALUE
+	// half (at `field.offset`) is a managed heap reference the struct OWNS — a concrete
+	// conformer moved into the field by the `Self{field: t}` constructor store — so the
+	// destructor must decref it, exactly as it does for a `named` struct field. (The
+	// destructor's per-field walk emits ONE decref at `field.offset`, which lands on the
+	// value half; the witness half at `field.offset + 8` is a static vtable pointer and is
+	// correctly left untouched.) The base heap-managed predicate reports `interface` as
+	// non-managed because the value half is typed `i64` throughout the fat-pointer lowering,
+	// so it must be recognized here — otherwise the struct gets a NULL destructor and the
+	// moved-in conformer's +1 is never released (leak) OR, paired with the consume-side
+	// transfer, the caller's drop frees it out from under the field (UAF).
+	if interfaceTypeIsFat(field.fieldType) 'interfaceValueHalf'
+		return true
+	end 'interfaceValueHalf'
 	let directBase = try baseNameOfMaxonType(project, t: field.fieldType) otherwise return maxonTypeIsHeapManaged(project, t: field.fieldType)
 	// A field is "drop-tracked" (the enclosing struct's destructor must decref it) iff
 	// it is a HEAP-MANAGED reference the struct owns — ANY user struct / union / container
@@ -3137,7 +3151,19 @@ type MaxonToStdLowering
 				continue
 			end 'skipParam'
 			let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
-			if not maxonTypeIsHeapManaged(self.project, t: slotType) 'notTracked'
+			// A LOCAL interface value-half slot (`interfaceTypeIsFat`) is an unpromoted
+			// managed slot the insert-refcounts pass drops at scope exit (see
+			// `isInterfaceValueLocalSlot`); zero-init it too so the release-before-store on
+			// its first assignment and the scope-exit drop on an unassigned path read null
+			// (a no-op) rather than slab garbage. The base heap-managed predicate reports
+			// `interface` as non-managed (its value half is typed `i64` throughout the
+			// fat-pointer lowering), so include it explicitly; the witness companion slot
+			// has the opaque-pointer companion type, not `interface`, so it stays out.
+			// On wasm the interface value slot's scope-exit drop is disabled (its module-wide
+			// linear-memory slot cannot survive a call — see `isInterfaceValueLocalSlot`), so it
+			// needs no zero-init there; only the register-frame targets manage it.
+			let interfaceSlotManaged = interfaceTypeIsFat(slotType) and self.project.target.cpu != CpuArch.wasm32
+			if not maxonTypeIsHeapManaged(self.project, t: slotType) and not interfaceSlotManaged 'notTracked'
 				continue
 			end 'notTracked'
 			let zeroId = allocValueId(self.funcIdRef)

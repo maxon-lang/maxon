@@ -127,9 +127,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, asyncSpawnedFuncs: asyncSpawnedFuncs)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs)
 	end 'eachFunc'
 
 	return module
@@ -152,7 +152,10 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyRetains = FuncRetainsParamMap.create()
 	let emptyAsyncSpawned = FuncReturnsBorrowSet.create()
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false, asyncSpawnedFuncs: emptyAsyncSpawned)
+		// The stdlib type-param sandbox runs the type-param-only domain (`includeManaged:
+		// false`), which never reaches the interface-value-slot machinery, so its
+		// `isWasmTarget` is inert — pass false.
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false, isWasmTarget: false, asyncSpawnedFuncs: emptyAsyncSpawned)
 	end 'eachFunc'
 
 	return module
@@ -162,7 +165,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, asyncSpawnedFuncs FuncReturnsBorrowSet)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -255,7 +258,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// closure borrows it by reference) and released at scope exit, not at the SSA store.
 	let addressTakenSlots = collectAddressTakenSlots(func, module: module)
 
-	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
+	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, isWasmTarget: isWasmTarget, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
 
 	// Single-scan caches for the per-value body queries + the block-id index.
 	// Must precede `buildBodyRcCompleteSet` (which probes the released/acquired
@@ -931,6 +934,9 @@ type RcContext
 	// When false (stdlib type-param-only mode), the managed `mm_incref`/
 	// `mm_decref` domain is suppressed and only `sys.dropTypeParam` is emitted.
 	export var includeManaged as bool
+	// True iff compiling for wasm32, whose module-wide linear-memory slot region cannot
+	// hold an unpromoted slot's value across a call (see `isInterfaceValueLocalSlot`).
+	export var isWasmTarget as bool
 	// Per-ValueId acquire decision for `incomingOwner` values (computed once per
 	// function by `computeIncomingOwnerAcquire`; see `incomingOwnerAcquiresCached`).
 	// `true` ⇒ this loaded-alias value takes a local owning +1 at its def (paired
@@ -987,7 +993,7 @@ type RcContext
 	// position-based `valueDirectlyReadElsewhere` cannot see.
 	export var loopDepth as RegIntArray
 
-	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
+	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, isWasmTarget bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
 		return Self{
 			func: func,
 			module: module,
@@ -1012,6 +1018,7 @@ type RcContext
 			numBlocks: numBlocks,
 			layoutValueId: layoutValueId,
 			includeManaged: includeManaged,
+			isWasmTarget: isWasmTarget,
 			incomingOwnerAcquire: BoolArray.create(),
 			insertions: RcInsertionArray.create(),
 			edgeReleases: RcEdgeReleaseArray.create(),
@@ -1037,12 +1044,64 @@ type RcContext
 		return try self.paramValues.get(id) otherwise false
 	end 'isParam'
 
-	// True iff stack slot `slotId` had its address captured into a closure env (a
-	// `sys.stack_addr slot_<slotId>` op). Such slots are mem2reg-pinned in memory; a
-	// managed value stored into one is owned by the slot, released at scope exit.
+	// True iff `slotId` is an UNPROMOTED MANAGED SLOT — one mem2reg leaves in memory
+	// whose content is a managed heap reference the slot OWNS (released by the slot at
+	// scope exit / overwrite, not by the SSA-store). Two kinds qualify:
+	//   - a stack slot whose address was captured into a closure env
+	//     (`sys.stack_addr slot_<slotId>` — `addressTakenSlots`), and
+	//   - a LOCAL interface value-half slot (`isInterfaceValueLocalSlot`): the `{value,
+	//     witness}` fat pointer's value half, which mem2reg leaves memory-backed
+	//     (`slotIsInterfaceFatPointer`) and which owns the concrete conformer moved into
+	//     it (the `let p = factory.make()` interface local).
+	// The whole slot-owned-managed machinery — move-on-store (release suppressed),
+	// release-before-store on overwrite, and scope-exit drop — keys off this predicate.
 	export function isAddressTakenSlot(slotId VarSlot) returns bool
-		return try self.addressTakenSlots.get(slotId) otherwise false
+		let captured = try self.addressTakenSlots.get(slotId) otherwise false
+		if captured 'captured'
+			return true
+		end 'captured'
+		return self.isInterfaceValueLocalSlot(slotId)
 	end 'isAddressTakenSlot'
+
+	// True iff `slotId` is a LOCAL interface value-half slot (its slot type is
+	// `interface`) whose owning refcount the slot machinery may manage. PARAM interface
+	// slots are EXCLUDED: a callee BORROWS (or separately CONSUMES, per `funcParamConsumes`)
+	// its interface parameter, so a scope-exit drop of it would over-release the caller's
+	// value. The witness companion slot is excluded by shape (its slot type is the
+	// opaque-pointer companion, never `interface`) so only the managed value half qualifies.
+	//
+	// SOUNDNESS — WASM IS EXCLUDED. The slot machinery's scope-exit drop reads the slot's
+	// content AT SCOPE END, which is only correct when the slot persists across the calls in
+	// its own function's body. On the register-frame targets (x64/arm64) an unpromoted slot
+	// is frame-local (per-invocation), so it does. On wasm every function shares ONE
+	// linear-memory slot region (`stackBase + slotId*8`, MirToWasm.emitMemRefStoreSlot) —
+	// mem2reg notes a slot store there "would clobber a downstream callee's slot" — so an
+	// interface local live across a call is overwritten by the callee and the scope-exit
+	// load reads that clobbered value (a garbage-pointer double-free). Because the value is
+	// unrecoverable at scope exit on wasm regardless of what the inserter emits (the
+	// interface local across a call is a pre-existing wasm slot-model limitation needing a
+	// per-invocation shadow stack), the slot machinery is disabled there — the interface
+	// local keeps its pre-existing behavior rather than gaining an unsound drop.
+	export function isInterfaceValueLocalSlot(slotId VarSlot) returns bool
+		if self.isWasmTarget 'wasmSharedSlots'
+			return false
+		end 'wasmSharedSlots'
+		if self.func.isParamRegionScopeSlot(slotId) 'paramSlot'
+			return false
+		end 'paramSlot'
+		if slotId >= self.func.slotMaxonTypes.count() 'beyondTracked'
+			return false
+		end 'beyondTracked'
+		let slotType = try self.func.slotMaxonTypes.get(slotId) otherwise return false
+		return match slotType 'check'
+			interface gives true
+			boolean to function gives false
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives false
+			constInt to cstring gives false
+		end 'check'
+	end 'isInterfaceValueLocalSlot'
 
 	export function isReturned(id ValueId) returns bool
 		return try self.returnedValues.get(id) otherwise false
@@ -3659,7 +3718,7 @@ function planAddressTakenSlotDrops(ctx RcContext)
 				let loadId = allocValueId(ctx.idRef)
 				let loadOpIdx = ctx.module.ops.count()
 				ctx.module.ops.push(StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: slotId as VarSlot)))
-				let decrefIdx = buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef)
+				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: slotId as VarSlot)
 				queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: decrefIdx)
 				queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: loadOpIdx)
 				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOTDROP func={ctx.func.name} slot_{slotId} block_{block.id}")
@@ -3742,6 +3801,19 @@ function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("planAddressTakenSlotReleaseBeforeStore: opIdx not in module.ops")
 			let (isManagedCaptureStore, storedSlot) = addressTakenManagedStoreSlot(ctx, op: op)
+			// An interface value-half LOCAL slot is zero-init'd and, in practice, assigned
+			// exactly once (`let p = factory.make()`), so its release-before-store would be a
+			// redundant null-drop. It is SKIPPED here because the load+decref inserted at the
+			// store's position and the store itself get separated across the wasm green-thread /
+			// error-propagation state-machine's resume blocks (the memref slot value is respilled),
+			// so on the linear-memory-slot targets the load reads the POST-store occupant and
+			// releases the just-stored value (the `dispatch-interface-return-type` over-release).
+			// The slot's single owned occupant is released by the scope-exit `mm_drop`
+			// (`planAddressTakenSlotDrops`).
+			if isManagedCaptureStore and ctx.isInterfaceValueLocalSlot(storedSlot) 'interfaceValueSlot'
+				pos = pos + 1
+				continue
+			end 'interfaceValueSlot'
 			if isManagedCaptureStore 'isManagedCaptureStore'
 				// Insert `loadSlot` THEN `decref(loaded)` at the store's own pos so both
 				// land BEFORE the store (same-pos ties apply in reverse plan-order — see
@@ -3752,7 +3824,7 @@ function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
 				let loadId = allocValueId(ctx.idRef)
 				let loadOpIdx = ctx.module.ops.count()
 				ctx.module.ops.push(StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: storedSlot)))
-				let decrefIdx = buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef)
+				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: storedSlot)
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: decrefIdx)
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: loadOpIdx)
 				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOTRELSTORE func={ctx.func.name} slot_{storedSlot} block_{block.id}")
@@ -4055,6 +4127,24 @@ function buildDropManagedOp(module StdModule, valueId ValueId, idRef ValueIdRef)
 	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mm_drop", argIds: argIds)))
 	return opIdx
 end 'buildDropManagedOp'
+
+// Release op for a managed value held in an unpromoted slot at overwrite / scope exit.
+// The primitive depends on HOW the slot owns its content:
+//   - An interface value-half LOCAL slot holds a SOLE-OWNER move-in (the conformer was
+//     MOVED into the local — `let p = factory.make()`), so it is released with the
+//     owner-drop `mm_drop` (frees at rc==0, else decrefs). Using the strict
+//     `__mm_decref` here would over-release the moved-in value, which sits at rc==0 its
+//     whole life (it was never shared/retained) — the interface-local `dispatch-
+//     interface-return-type` over-release on the linear-memory-slot targets.
+//   - An address-taken (closure-captured) slot holds a value the capture path RETAINED
+//     to rc>=1 (it is read by-reference during the body), so its own reference is
+//     released with the strict null-guarded `__mm_decref`.
+function buildSlotContentReleaseOp(ctx RcContext, loadId ValueId, slotId VarSlot) returns OpIndex
+	if ctx.isInterfaceValueLocalSlot(slotId) 'interfaceOwner'
+		return buildDropManagedOp(ctx.module, valueId: loadId, idRef: ctx.idRef)
+	end 'interfaceOwner'
+	return buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef)
+end 'buildSlotContentReleaseOp'
 
 // True iff `term` is a `ret`/`errorReturn` terminator that TRANSFERS `vid` to the
 // caller here. `ret` transfers its single value; `errorReturn(retValId, errorFlagId)`

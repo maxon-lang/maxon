@@ -407,6 +407,10 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 	// so building the index here (rather than caching it) pays for itself on the first
 	// visit; a recursive-SCC member simply rebuilds it per local round.
 	let usesIndex = buildConsumeUsesIndex(module, func: func)
+	// Interface fat-pointer params reach their field-store consume sink through an
+	// unpromoted `storeSlot`/`loadSlot` relay (mem2reg never promotes the pair), so the
+	// consume walk needs the slot relay to follow a value-half param past its home slot.
+	let slotRelay = buildSlotRelayInfo(module, func: func)
 	var prior = try project.funcParamConsumes.get(func.name) otherwise BoolArray.create()
 	var flipped = false
 
@@ -468,7 +472,7 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 				continue
 			end 'genericParam'
 		end 'hasDeclaredType'
-		if paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
+		if paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, slotRelay: slotRelay, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
 			setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
 			logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex}")
 			flipped = true
@@ -743,7 +747,7 @@ let CONSUME_NO_VALUE = (-1) as ValueId
 // ops that READ the param (via `usesIndex`) is exact. A param re-passed to a consuming
 // callee is caught as the call-sink (the forwarding edge); a param stored into a
 // field/element/wrapper is caught as the store-sink.
-function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
+function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, slotRelay SlotRelayInfo, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
 	// Single WORKLIST over the per-function value-use index. Each popped alias is
 	// examined by walking ONLY the ops that READ it (`usesIndex.usesOf`), never the
 	// whole body: an op that reaches a store/box/consume-call sink of the alias returns
@@ -773,6 +777,20 @@ function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesInd
 				aliases.push(aliasedResult)
 				logTrace(LogCategory.ir, message: function() gives "RC-PCA-ALIAS func={func.name} param=%{valueId} aliasResult=%{aliasedResult}")
 			end 'newAlias'
+			// Fat-pointer slot relay: if the alias is stored into an unpromoted
+			// single-store slot (an interface value/witness home slot mem2reg leaves in
+			// memory), every load of that slot re-derives the SAME managed pointer — add
+			// each load result as a new alias so the walk follows the param past its slot
+			// to the field store.
+			let (isSlotStore, relaySlot) = storeSlotTargetOf(op, storedValueId: aliasId)
+			if isSlotStore 'slotRelayHop'
+				for loadResult in slotRelay.singleStoreLoads(relaySlot) 'eachSlotLoad'
+					if not valueIdArrayContains(aliases, vid: loadResult) 'newSlotAlias'
+						aliases.push(loadResult)
+						logTrace(LogCategory.ir, message: function() gives "RC-PCA-SLOT-ALIAS func={func.name} param=%{valueId} slot={relaySlot} loadResult=%{loadResult}")
+					end 'newSlotAlias'
+				end 'eachSlotLoad'
+			end 'slotRelayHop'
 		end 'eachUse'
 	end 'worklist'
 	return false
@@ -1276,3 +1294,125 @@ function recordConsumeUses(module StdModule, usesBySlot OpIndexArrayArray, opIdx
 		end 'inRange'
 	end 'eachRead'
 end 'recordConsumeUses'
+
+// ============================================================
+// Fat-pointer slot relay (interface value/witness pair)
+// ============================================================
+//
+// mem2reg DELIBERATELY leaves interface fat-pointer slots (the `{value, witness}`
+// pair) UNPROMOTED — see `slotIsInterfaceFatPointer` in Mem2Reg. So a value-half
+// PARAMETER reaches its field-store consume sink through a `storeSlot`/`loadSlot`
+// relay rather than a direct SSA use:
+//
+//   %P = func.param 0            ; the value half
+//   storeSlot(slot, %P)          ; param stored to its (unpromoted) home slot
+//   %L = loadSlot(slot)          ; re-loaded before the field store
+//   store_indirect field, %L     ; the actual consume sink
+//
+// The plain SSA-use worklist stops at `%P` (whose only use is the slot store — a
+// `memory` op, not the `system.storeIndirect` heap sink), so it never reaches the
+// field store on `%L` and the param is missed as consumed. The caller then keeps
+// ownership and DROPS the argument while the field aliases it — the interface-field
+// use-after-free. This index lets the consume walk follow a param through a
+// SINGLE-STORE slot: when a slot has exactly one `storeSlot`, every `loadSlot` of it
+// reads that one stored value, so each load result is a sound alias of the param.
+typealias SlotStoreTally = int(0 to u64.max)
+typealias SlotStoreCountMap = Map with (VarSlot, SlotStoreTally)
+
+// The `loadSlot` sites of a function, as PARALLEL flat arrays (`loadSlotIds[i]` is the
+// slot loaded, `loadResultIds[i]` its result value id). A flat pair avoids a
+// Map-of-growable-arrays and its ref-mutation subtleties; `singleStoreLoads` scans it
+// (functions are small and the query fires only for a fat-pointer param).
+type SlotRelayInfo
+	export var storeCount as SlotStoreCountMap
+	export var loadSlotIds as VarSlotArray
+	export var loadResultIds as ValueIdArray
+
+	static function create(storeCount SlotStoreCountMap, loadSlotIds VarSlotArray, loadResultIds ValueIdArray) returns SlotRelayInfo
+		return Self{storeCount: storeCount, loadSlotIds: loadSlotIds, loadResultIds: loadResultIds}
+	end 'create'
+
+	// The `loadSlot` result value ids of `slotId`, but ONLY when `slotId` has exactly
+	// one `storeSlot` (so every load provably reads that single stored value — the
+	// entry param-store of an unpromoted fat-pointer param slot). A multiply-stored
+	// slot returns empty: a load might read a different value, so aliasing the param
+	// through it would be unsound (a spurious consume → the caller leaks its arg).
+	export function singleStoreLoads(slotId VarSlot) returns ValueIdArray
+		var out = ValueIdArray.create()
+		let count = try self.storeCount.get(slotId) otherwise return out
+		if count != 1 'multiStore'
+			return out
+		end 'multiStore'
+		for i in 0 upto self.loadSlotIds.count() 'eachLoad'
+			let s = try self.loadSlotIds.get(i) otherwise panic("singleStoreLoads: loadSlotIds.get OOB at {i}")
+			if s == slotId 'match'
+				out.push(try self.loadResultIds.get(i) otherwise panic("singleStoreLoads: loadResultIds.get OOB at {i}"))
+			end 'match'
+		end 'eachLoad'
+		return out
+	end 'singleStoreLoads'
+end 'SlotRelayInfo'
+
+// Build the per-function slot relay: for every `storeSlot`/`loadSlot` op, tally the
+// slot's store count and collect its load sites. One O(ops) pass, built once per
+// function visit alongside the consume uses index.
+function buildSlotRelayInfo(module StdModule, func IrFunction) returns SlotRelayInfo
+	var storeCount = SlotStoreCountMap.create()
+	var loadSlotIds = VarSlotArray.create()
+	var loadResultIds = ValueIdArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildSlotRelayInfo: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildSlotRelayInfo: opIdx not in module.ops")
+			recordSlotRelayOp(op, storeCount: storeCount, loadSlotIds: loadSlotIds, loadResultIds: loadResultIds)
+		end 'eachOp'
+	end 'eachBlock'
+	return SlotRelayInfo.create(storeCount, loadSlotIds: loadSlotIds, loadResultIds: loadResultIds)
+end 'buildSlotRelayInfo'
+
+function recordSlotRelayOp(op StdOp, storeCount SlotStoreCountMap, loadSlotIds VarSlotArray, loadResultIds ValueIdArray)
+	match op 'dispatch'
+		memory(m) then recordSlotRelayMemoryOp(m, storeCount: storeCount, loadSlotIds: loadSlotIds, loadResultIds: loadResultIds)
+		arith then break 'dispatch'
+		control then break 'dispatch'
+		call then break 'dispatch'
+		system then break 'dispatch'
+	end 'dispatch'
+end 'recordSlotRelayOp'
+
+function recordSlotRelayMemoryOp(m StdMemoryOp, storeCount SlotStoreCountMap, loadSlotIds VarSlotArray, loadResultIds ValueIdArray)
+	match m 'check'
+		storeSlot(slotId, _) then bumpSlotStoreCount(storeCount, slotId: slotId)
+		loadSlot(resultId, slotId) then recordSlotLoad(loadSlotIds, loadResultIds: loadResultIds, slotId: slotId, resultId: resultId)
+	end 'check'
+end 'recordSlotRelayMemoryOp'
+
+function bumpSlotStoreCount(storeCount SlotStoreCountMap, slotId VarSlot)
+	let prior = try storeCount.get(slotId) otherwise 0
+	storeCount.upsert(slotId, value: prior + 1)
+end 'bumpSlotStoreCount'
+
+function recordSlotLoad(loadSlotIds VarSlotArray, loadResultIds ValueIdArray, slotId VarSlot, resultId ValueId)
+	loadSlotIds.push(slotId)
+	loadResultIds.push(resultId)
+end 'recordSlotLoad'
+
+// The `(present, slotId)` of a `storeSlot(slotId, storedValueId)` op — i.e. `op`
+// stores `storedValueId` into slot `slotId`. Used to follow a param through its
+// unpromoted fat-pointer home slot into the slot's loads.
+function storeSlotTargetOf(op StdOp, storedValueId ValueId) returns (bool, VarSlot)
+	return match op 'dispatch'
+		memory(m) gives storeSlotMemoryTargetOf(m, storedValueId: storedValueId)
+		arith gives (false, 0)
+		control gives (false, 0)
+		call gives (false, 0)
+		system gives (false, 0)
+	end 'dispatch'
+end 'storeSlotTargetOf'
+
+function storeSlotMemoryTargetOf(m StdMemoryOp, storedValueId ValueId) returns (bool, VarSlot)
+	return match m 'check'
+		storeSlot(slotId, valueId) gives ((true, slotId) if valueId == storedValueId else (false, 0))
+		loadSlot gives (false, 0)
+	end 'check'
+end 'storeSlotMemoryTargetOf'

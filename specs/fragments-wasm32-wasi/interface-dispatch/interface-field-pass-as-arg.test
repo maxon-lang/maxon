@@ -67,18 +67,20 @@ module {
   }
   func @Holder.create(local0: i64, local1: i64) -> i64 {
   entry:
-    %7 = mir.param local0 : i64
-    mir.store_slot slot_0, %7
-    %8 = mir.param local1 : i64
-    mir.store_slot slot_1, %8
+    %8 = mir.param local0 : i64
+    mir.store_slot slot_0, %8
+    %9 = mir.param local1 : i64
+    mir.store_slot slot_1, %9
     %2 = mir.mov_imm 16 : i64
-    %4 = mir.mov_imm 0 : i64
+    %4 = mir.func_addr @__destruct_Holder
     %3 = mir.call @stdlib.__mm_alloc(%2, %4)
-    %9 = mir.call @stdlib.__mm_incref(%3)
-    %5 = mir.load_slot slot_0
-    %6 = mir.load_slot slot_1
+    %10 = mir.call @stdlib.__mm_incref(%3)
+    %5 = mir.mov_imm 0 : i64
     mir.store %5, %3, 0 width: qword
-    mir.store %6, %3, 8 width: qword
+    %6 = mir.load_slot slot_0
+    %7 = mir.load_slot slot_1
+    mir.store %6, %3, 0 width: qword
+    mir.store %7, %3, 8 width: qword
     mir.ret %3
   }
   func @callTag(local0: i64, local1: i64) -> i64 {
@@ -98,10 +100,10 @@ module {
     %11 = mir.mov_imm 8 : i64
     %12 = mir.mov_imm 0 : i64
     %13 = mir.call @stdlib.__mm_alloc(%11, %12)
+    %14 = mir.call @stdlib.__mm_incref(%13)
     mir.store %2, %13, 0 width: qword
     %5 = mir.global_addr @__witness_Marker_Tagged
     %6 = mir.call @Holder.create(%13, %5)
-    %14 = mir.call @mm_drop(%13)
     %8 = mir.load %6, 0 width: qword
     %9 = mir.load %6, 8 width: qword
     %10 = mir.call @callTag(%8, %9)
