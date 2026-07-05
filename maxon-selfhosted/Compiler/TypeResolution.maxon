@@ -3588,6 +3588,11 @@ export typealias SlotTypeMapArray = Array with SlotTypeMap
 // indirected via slotTypes.
 export typealias StringIdNameMap = Map with (ByteArray, StringId)
 export typealias SlotStringIdMap = Map with (VarSlot, StringId)
+// Slots that are reassigned (a `varStore` target) anywhere in the function.
+// The string-const specializer's slot-aliasing fold is only sound for a slot
+// that keeps its declaration-time constant — a reassigned slot no longer does,
+// so its `varLoad`s must not be treated as that compile-time constant.
+export typealias StoredSlotSet = Set with VarSlot
 
 function recordResultType(producerTypes ProducerTypeMap, name ByteArray, t MaxonType)
 	if name.isEmpty() 'noName'
@@ -7468,16 +7473,36 @@ end 'specializeStringConstConsumers'
 function specializeFuncStringConsts(module MaxonModule, func IrFunction)
 	var nameStringIds = StringIdNameMap.create()
 	var slotStringIds = SlotStringIdMap.create()
+
+	// A slot that is ever reassigned no longer holds its declaration-time
+	// string constant. Collect every stored slot up front so the flow-
+	// insensitive fold below can exclude them: without this a `var s = ""`
+	// later reassigned to a runtime value (`s = token.value`) would still fold
+	// `s == "_"` against the stale "" id, silently answering a runtime string
+	// comparison at compile time (the C# bootstrap emits `String.equals` here).
+	var storedSlots = StoredSlotSet.create()
+	for blockRef in func.blockRefs 'scanStores'
+		let block = try module.blocks.get(blockRef) otherwise panic("specializeFuncStringConsts: blockRef OOB (store scan)")
+		for opIdx in block.opRefs 'scanStoreOp'
+			let op = try module.ops.get(opIdx) otherwise panic("specializeFuncStringConsts: opIdx OOB (store scan)")
+			match op 'collectStore'
+				varStore(slotId, _, _) then storedSlots.insert(slotId)
+				literal to varLoad then skipOpArm()
+				globalLoad to sizeofType then skipOpArm()
+			end 'collectStore'
+		end 'scanStoreOp'
+	end 'scanStores'
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("specializeFuncStringConsts: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("specializeFuncStringConsts: opIdx OOB")
-			specializeOp(module, opIdx: opIdx, op: op, nameStringIds: nameStringIds, slotStringIds: slotStringIds)
+			specializeOp(module, opIdx: opIdx, op: op, nameStringIds: nameStringIds, slotStringIds: slotStringIds, storedSlots: storedSlots)
 		end 'eachOp'
 	end 'eachBlock'
 end 'specializeFuncStringConsts'
 
-function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringIds StringIdNameMap, slotStringIds SlotStringIdMap)
+function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringIds StringIdNameMap, slotStringIds SlotStringIdMap, storedSlots StoredSlotSet)
 	match op 'specialize'
 		stringConst(result, stringId, _) then nameStringIds.upsert(result, value: stringId)
 		// Phase 7 step 6/7: charLiteral and byteStringLiteral both carry a
@@ -7493,7 +7518,7 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		// into cmp rewrites; an interp result has no fixed StringId, so
 		// nothing to record here.
 		stringInterp then return
-		varDecl(slotId, value, _, _) then specializeVarDecl(slotStringIds, nameStringIds: nameStringIds, slotId: slotId, value: value)
+		varDecl(slotId, value, _, _) then specializeVarDecl(slotStringIds, nameStringIds: nameStringIds, slotId: slotId, value: value, storedSlots: storedSlots)
 		varLoad(result, slotId, _, _) then specializeVarLoad(slotStringIds, nameStringIds: nameStringIds, result: result, slotId: slotId)
 		cmp(result, left, right, predicate, _, _, _, range) then specializeCmp(module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, range: range, nameStringIds: nameStringIds)
 		literal then return
@@ -7548,7 +7573,13 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 	end 'specialize'
 end 'specializeOp'
 
-function specializeVarDecl(slotStringIds SlotStringIdMap, nameStringIds StringIdNameMap, slotId VarSlot, value ByteArray)
+function specializeVarDecl(slotStringIds SlotStringIdMap, nameStringIds StringIdNameMap, slotId VarSlot, value ByteArray, storedSlots StoredSlotSet)
+	// Only a slot that is never reassigned keeps its declaration-time constant.
+	// A reassigned slot's later loads are runtime values, so skip recording it
+	// (its `varLoad`s then stay unfolded and dispatch to `String.equals`).
+	if storedSlots.contains(slotId) 'reassigned'
+		return
+	end 'reassigned'
 	if let stringId = try nameStringIds.get(value) 'has'
 		slotStringIds.upsert(slotId, value: stringId)
 	end 'has'

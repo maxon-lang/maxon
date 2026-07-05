@@ -86,6 +86,41 @@ end 'main'
 1
 ```
 
+<!-- test: reassigned-var-equality-not-const-folded -->
+A `var` declared with a compile-time string constant (`""`) and then reassigned
+to a runtime value must compare by content, not against its stale declaration-
+time constant. Regression: the TypeResolution string-const specializer aliased
+the slot to its declaration id and never invalidated it on reassignment, so
+`v == "_"` folded to `"" == "_"` (false) at compile time. A self-compiled
+compiler inherited the miscompile in `parseForStatement` (`var iterName = "";
+iterName = nameToken.value; iterName == "_"`), taking the non-discard branch for
+every `for _` loop and spuriously firing E3012 on the stdlib's discard loops.
+```maxon
+function pick(useUnderscore bool) returns String
+	if useUnderscore 'u'
+		return "_"
+	end 'u'
+	return "x"
+end 'pick'
+
+function main() returns ExitCode
+	var v = ""
+	v = pick(true)
+	if v == "_" 'match'
+		print("1\n")
+	end 'match' else 'no'
+		print("0\n")
+	end 'no'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
 <!-- test: heap-string-iteration -->
 ```maxon
 function main() returns ExitCode
