@@ -2277,3 +2277,54 @@ end 'main'
 ```stdout
 sum=9
 ```
+
+<!-- test: rc-snapshot-list-field-then-overwrite-no-uaf -->
+Snapshotting a struct's `List` field into a local, then overwriting that field with a
+fresh list, then iterating the SNAPSHOT (`let old = buf.ops; buf.ops = IntList.create();
+for x in old ...`). Overwriting `buf.ops` decrefs the old list. The snapshot `old` is an
+interior borrow of the old list, so its liveness must span the whole loop — otherwise the
+overwrite frees the old list while `for x in old` still walks it (use-after-free), and scope
+cleanup then decrefs it a second time (double-free). This is the self-hosted `IrModule.compactOps`
+double-free: `let oldOps = block.opRefs; block.opRefs = WordList.create(); for x in oldOps`.
+The fix has two halves — InsertRefcounts recognizes the field-overwrite as case (c) and acquires
+the live borrow even though `lowerFieldStore` already emits the decref-old, and StdLiveness roots
+the managed field-load snapshot at itself so the acquired borrow outlives the loop. The sum must
+be computed from the original three elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+type OpBuffer
+	export var ops as IntList
+
+	static function create() returns Self
+		return Self{ops: IntList.create()}
+	end 'create'
+end 'OpBuffer'
+
+function rewrap(buf OpBuffer) returns Integer
+	let old = buf.ops
+	buf.ops = IntList.create()
+	var total = 0
+	for x in old 'each'
+		total = total + x
+	end 'each'
+	return total
+end 'rewrap'
+
+function main() returns ExitCode
+	var buf = OpBuffer.create()
+	buf.ops.append(1)
+	buf.ops.append(2)
+	buf.ops.append(3)
+	let total = rewrap(buf)
+	print("total={total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total=6
+```

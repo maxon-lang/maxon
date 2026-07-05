@@ -313,6 +313,23 @@ function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, domI
 		end 'eachOp'
 	end 'eachBlock'
 
+	// A MANAGED pointer loaded from a field that is OVERWRITTEN elsewhere in the
+	// function is an INDEPENDENT SNAPSHOT (a separate refcounted object), NOT an
+	// interior pointer of the containing struct: once `obj.field = new` runs, the
+	// previously-loaded reference no longer tracks the field. The plain load-borrow
+	// edge (`baseOf[old] = obj`) is wrong for it — it collapses the interior-borrow
+	// ROOT to `obj`, so an iterator that borrows THROUGH `old` (its list nodes) is
+	// coupled to `obj` instead of to `old`. `old`'s own liveness (and its case-(c)
+	// acquire, which gave it its +1 to survive the field's decref-old) then ends at
+	// the iterator's creation and the inserter frees it there — truncating/UAFing
+	// the loop (`let old = obj.listField; obj.listField = new; for x in old`). Root
+	// such loads (clear the base) so the propagation couples the iterator to `old`
+	// itself and its liveness extends across the borrow's uses. Runs BEFORE the
+	// store/phi propagation so the rooted base is what propagates. Extend-only, so
+	// sound: a managed reference manages its own lifetime, so dropping its (wrong)
+	// interior-borrow edge to the container never under-keeps a raw interior pointer.
+	rootOverwrittenManagedFieldLoads(module, func: func, baseOf: baseOf, domInfo: domInfo)
+
 	// Propagate borrow bases transitively through (a) heap stores of a borrow and
 	// (b) block-args (phis), to a combined fixpoint. This is what couples a
 	// COLLECTION's lifetime to an ITERATOR that borrows into it — the pattern the
@@ -353,6 +370,166 @@ function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, domI
 
 	return BorrowInfo.create(baseOf)
 end 'buildBorrowInfo'
+
+typealias FieldKey = int(i64.min to i64.max)
+
+// A `store_indirect` site: the field it targets (`key`) and its location (block +
+// intra-block position), so a snapshot load can test whether an overwrite of its
+// field comes AFTER it.
+type StoreLoc
+	export var key as FieldKey
+	export var blockId as BlockId
+	export var pos as NodeIndex
+
+	export static function create(key FieldKey, blockId BlockId, pos NodeIndex) returns StoreLoc
+		return Self{key: key, blockId: blockId, pos: pos}
+	end 'create'
+end 'StoreLoc'
+
+typealias StoreLocArray = Array with StoreLoc
+
+// Allocation-free identity key for a `(base SSA value, field offset)` load/store
+// target: the base id in the high 32 bits, the field offset in the low 32. Both
+// fit comfortably (SSA ids and field offsets are far under 2^32), so distinct
+// pairs never collide.
+function storedFieldKey(addrId ValueId, offset MachineWord) returns FieldKey
+	return (addrId shl 32) or (offset and 0xFFFFFFFF)
+end 'storedFieldKey'
+
+// Root (clear the borrow base of) every MANAGED pointer-width field load that is
+// an OVERWRITTEN SNAPSHOT: a `p = [addr+off]` such that a `store [addr+off] = …`
+// comes AFTER it (later in the same block, or in a block `p`'s block dominates).
+// After that reassignment `p` no longer tracks the field — it is an independent
+// separate refcounted object, not an interior pointer of the containing struct.
+// The store must come AFTER the load, so an INITIAL construction store
+// (`store [list+0] = chain` before every read of the list) does NOT root a
+// genuine later interior load. See the call site in `buildBorrowInfo`.
+function rootOverwrittenManagedFieldLoads(module StdModule, func IrFunction, baseOf ValueIdArray, domInfo DomInfo)
+	let stores = collectStoreLocs(module, func: func)
+	if stores.count() == 0 'noStores'
+		return
+	end 'noStores'
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("rootOverwrittenManagedFieldLoads: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("rootOverwrittenManagedFieldLoads: opIdx not in module.ops")
+			rootIfSnapshotLoad(op, blockId: block.id, pos: pos as NodeIndex, func: func, stores: stores, baseOf: baseOf, domInfo: domInfo)
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+end 'rootOverwrittenManagedFieldLoads'
+
+function collectStoreLocs(module StdModule, func IrFunction) returns StoreLocArray
+	var stores = StoreLocArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectStoreLocs: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectStoreLocs: opIdx not in module.ops")
+			recordStoreLoc(op, blockId: block.id, pos: pos as NodeIndex, stores: stores)
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+	return stores
+end 'collectStoreLocs'
+
+function recordStoreLoc(op StdOp, blockId BlockId, pos NodeIndex, stores StoreLocArray)
+	match op 'dispatch'
+		system(s) then recordStoreLocSys(s, blockId: blockId, pos: pos, stores: stores)
+		arith then break 'dispatch'
+		control then break 'dispatch'
+		call then break 'dispatch'
+		memory then break 'dispatch'
+	end 'dispatch'
+end 'recordStoreLoc'
+
+function recordStoreLocSys(s StdSystemOp, blockId BlockId, pos NodeIndex, stores StoreLocArray)
+	match s 'check'
+		storeIndirect(addrId, offset, _, _, _) then stores.push(StoreLoc.create(storedFieldKey(addrId, offset: offset), blockId: blockId, pos: pos))
+		globalAddr to loadByte then break 'check'
+		osExit to osWrite then break 'check'
+		free then break 'check'
+		osWriteErr to loadFramePtr then break 'check'
+		loadIndirect then break 'check'
+		funcAddr then break 'check'
+		drop then break 'check'
+		osAllocPages to osDirMkdir then break 'check'
+		atomicInc to osLockRelease then break 'check'
+		boxValue to dropTypeParam then break 'check'
+	end 'check'
+end 'recordStoreLocSys'
+
+function rootIfSnapshotLoad(op StdOp, blockId BlockId, pos NodeIndex, func IrFunction, stores StoreLocArray, baseOf ValueIdArray, domInfo DomInfo)
+	match op 'dispatch'
+		system(s) then rootIfSnapshotLoadSys(s, blockId: blockId, pos: pos, func: func, stores: stores, baseOf: baseOf, domInfo: domInfo)
+		arith then break 'dispatch'
+		control then break 'dispatch'
+		call then break 'dispatch'
+		memory then break 'dispatch'
+	end 'dispatch'
+end 'rootIfSnapshotLoad'
+
+function rootIfSnapshotLoadSys(s StdSystemOp, blockId BlockId, pos NodeIndex, func IrFunction, stores StoreLocArray, baseOf ValueIdArray, domInfo DomInfo)
+	match s 'check'
+		loadIndirect(resultId, addrId, offset, width, _, isFloat) then maybeRootSnapshot(resultId, addrId: addrId, offset: offset, width: width, isFloat: isFloat, loadBlockId: blockId, loadPos: pos, func: func, stores: stores, baseOf: baseOf, domInfo: domInfo)
+		globalAddr to loadByte then break 'check'
+		osExit to osWrite then break 'check'
+		free then break 'check'
+		osWriteErr to loadFramePtr then break 'check'
+		storeIndirect then break 'check'
+		funcAddr then break 'check'
+		drop then break 'check'
+		osAllocPages to osDirMkdir then break 'check'
+		atomicInc to osLockRelease then break 'check'
+		boxValue to dropTypeParam then break 'check'
+	end 'check'
+end 'rootIfSnapshotLoadSys'
+
+function maybeRootSnapshot(resultId ValueId, addrId ValueId, offset MachineWord, width StoreWidth, isFloat bool, loadBlockId BlockId, loadPos NodeIndex, func IrFunction, stores StoreLocArray, baseOf ValueIdArray, domInfo DomInfo)
+	if isFloat 'float'
+		return
+	end 'float'
+	let isPointerWidth = match width 'w'
+		qword gives true
+		byte gives false
+		halfword gives false
+		word gives false
+	end 'w'
+	if not isPointerWidth 'narrow'
+		return
+	end 'narrow'
+	// Only a MANAGED reference is a separate refcounted object safe to root; a raw
+	// interior pointer must keep its base, so it is left with its load-borrow edge.
+	if not func.isValueManaged(resultId) 'notManaged'
+		return
+	end 'notManaged'
+	if resultId >= baseOf.count() 'oob'
+		return
+	end 'oob'
+	if not anyStoreAfterLoad(stores, key: storedFieldKey(addrId, offset: offset), loadBlockId: loadBlockId, loadPos: loadPos, domInfo: domInfo) 'notOverwrittenAfter'
+		return
+	end 'notOverwrittenAfter'
+	try baseOf.set(resultId, value: BORROW_NO_BASE) otherwise panic("maybeRootSnapshot: baseOf.set OOB despite bound check")
+end 'maybeRootSnapshot'
+
+function anyStoreAfterLoad(stores StoreLocArray, key FieldKey, loadBlockId BlockId, loadPos NodeIndex, domInfo DomInfo) returns bool
+	for st in stores 'each'
+		if st.key == key and storeIsAfterLoad(st, loadBlockId: loadBlockId, loadPos: loadPos, domInfo: domInfo) 'after'
+			return true
+		end 'after'
+	end 'each'
+	return false
+end 'anyStoreAfterLoad'
+
+// A store at `st` comes AFTER the load: later in the SAME block, or in a block the
+// load's block strictly dominates (so the load always precedes the store).
+function storeIsAfterLoad(st StoreLoc, loadBlockId BlockId, loadPos NodeIndex, domInfo DomInfo) returns bool
+	if st.blockId == loadBlockId 'sameBlock'
+		return st.pos > loadPos
+	end 'sameBlock'
+	return dominates(loadBlockId, b: st.blockId, domInfo: domInfo)
+end 'storeIsAfterLoad'
 
 // Build a per-ValueId map from value to the id of the block that DEFINES it
 // (block-args are defined at their block head; op results at the op's block).

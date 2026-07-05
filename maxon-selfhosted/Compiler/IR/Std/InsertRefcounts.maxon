@@ -1852,7 +1852,10 @@ function collectOverwriteKeyForOp(ctx RcContext, op StdOp, blockRef BlockRef, bl
 	if not ctx.isManaged(store.valueId) 'notManaged'
 		return
 	end 'notManaged'
-	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: store.addrId, offset: store.offset, storePos: pos) 'overwrite'
+	// Case (c) BORROW-RELEASE question: a store that releases the field's prior
+	// occupant (even via `lowerFieldStore`'s contiguous decref-old) makes a live
+	// interior borrow of that occupant dangle, so pass `contiguousDecrefOldCountsAsRelease`.
+	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: store.addrId, offset: store.offset, storePos: pos, contiguousDecrefOldCountsAsRelease: true) 'overwrite'
 		keys.push(OverwrittenFieldKey.create(store.addrId, offset: store.offset, blockRef: blockRef, pos: pos))
 	end 'overwrite'
 end 'collectOverwriteKeyForOp'
@@ -2499,7 +2502,7 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: fIncIdx)
 			end 'fNormalStore'
 		end 'fieldNeedsStoreIncref'
-		if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos) 'fieldOverwrite'
+		if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos, contiguousDecrefOldCountsAsRelease: false) 'fieldOverwrite'
 			planDecrefOldField(ctx, blockRef: blockRef, addrId: addrId, offset: offset, pos: pos)
 		end 'fieldOverwrite'
 		return
@@ -2532,7 +2535,7 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 	// dominating prior `load_indirect` of the SAME (addrId, offset), which proves
 	// the field held a real value; an initial store (no prior read) is left alone
 	// so we never decref slab garbage. See the safety argument above.
-	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos) 'overwrite'
+	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos, contiguousDecrefOldCountsAsRelease: false) 'overwrite'
 		planDecrefOldField(ctx, blockRef: blockRef, addrId: addrId, offset: offset, pos: pos)
 	end 'overwrite'
 end 'planManagedHeapStore'
@@ -2746,15 +2749,27 @@ end 'planDecrefOldField'
 // decref stays null-guarded, so a legitimately-null managed field is a no-op. This is
 // the move-model-consistent fix — it adds ONLY the one required decref-old, no
 // C#-style incref-per-reference.
-function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId, offset MachineWord, storePos NodeIndex) returns bool
+// `contiguousDecrefOldCountsAsRelease` selects between two DISTINCT questions
+// that share this initialization proof (see the two named wrappers below):
+//   - false — "must the INSERTER emit a decref-old for this store?" A nearest
+//     prior load feeding ONLY `__mm_decref_maybenull_helper` means `lowerFieldStore`
+//     ALREADY released this slot's occupant contiguously, so the answer is NO (a
+//     second decref-old would double-free — the `String.from` over-release).
+//   - true — "does this store RELEASE the field's prior occupant?" (so a live
+//     interior BORROW of the old value dangles and must own its own +1). The old
+//     value is released EITHER WAY — by `lowerFieldStore`'s contiguous decref-old
+//     OR by the inserter's — so that same nearest-decref-old load counts as a
+//     release here. Without this, a `let old = obj.listField; obj.listField = new;
+//     for x in old` frees the old list under the live iterator borrow (case c not
+//     firing → the `ListIterator` node double-free in `rewriteFunctionInPlace`).
+function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId, offset MachineWord, storePos NodeIndex, contiguousDecrefOldCountsAsRelease bool) returns bool
 	// NEAREST-PRIOR-LOAD scan, BACKWARD from the store: the closest earlier
 	// in-block read of `[addrId + offset]` decides.
 	//   - a genuine load of the slot → the classic read-modify-write proof.
 	//   - a load feeding ONLY `__mm_decref_maybenull_helper` → `lowerFieldStore`
 	//     ALREADY released this slot's occupant for this store (its decref-old
 	//     sequence is emitted contiguously with the store, so it is always the
-	//     nearest slot read); adding a second decref-old would double-free the
-	//     prior occupant (the `String.from` over-release).
+	//     nearest slot read); see the two questions in the header comment.
 	//
 	// NOTE: the SOURCE-LEVEL managed-field reassign (`c.arguments = args`) is
 	// handled by `lowerFieldStore`'s typed decref-old, NOT by a proof here — an
@@ -2770,6 +2785,9 @@ function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId
 		let op = try ctx.module.ops.get(opIdx) otherwise panic("storeIsFieldOverwrite: opIdx not in module.ops")
 		let loadResult = fieldLoadResultId(op, addrId: addrId, offset: offset)
 		if loadResult != REFCOUNT_NO_VALUE 'priorLoad'
+			if contiguousDecrefOldCountsAsRelease 'countsAsRelease'
+				return true
+			end 'countsAsRelease'
 			return not loadFeedsOnlyDecrefOldHelper(ctx, block: storeBlock, loadResultId: loadResult)
 		end 'priorLoad'
 	end 'scanBack'

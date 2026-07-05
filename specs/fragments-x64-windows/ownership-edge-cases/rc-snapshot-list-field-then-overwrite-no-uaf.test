@@ -1,0 +1,294 @@
+// Test: rc-snapshot-list-field-then-overwrite-no-uaf
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+type OpBuffer
+	export var ops as IntList
+
+	static function create() returns Self
+		return Self{ops: IntList.create()}
+	end 'create'
+end 'OpBuffer'
+
+function rewrap(buf OpBuffer) returns Integer
+	let old = buf.ops
+	buf.ops = IntList.create()
+	var total = 0
+	for x in old 'each'
+		total = total + x
+	end 'each'
+	return total
+end 'rewrap'
+
+function main() returns ExitCode
+	var buf = OpBuffer.create()
+	buf.ops.append(1)
+	buf.ops.append(2)
+	buf.ops.append(3)
+	let total = rewrap(buf)
+	print("total={total}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+total=6
+```
+---
+// CompiledIR
+module {
+  func @OpBuffer.create() -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.lea rdx, [rip+__destruct_OpBuffer]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.lea rdx, [rip+__destruct_List]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8, r12
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+    x64.lea r13, [rip+__layout_List_Integer]
+    x64.mov rcx, [r13+24] (8b)
+    x64.mov r8d, 1
+    x64.and rcx, r8
+    x64.call mrt_managed_list_create
+    x64.mov [r12+0], r8 (8b)
+    x64.mov rcx, [r13+24] (8b)
+    x64.mov r8d, 1
+    x64.and rcx, r8
+    x64.call mrt_managed_list_create
+    x64.mov r13, r8
+    x64.mov rcx, [r12+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [r12+0], r13 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @rewrap(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, [rbx+0] (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.lea rdx, [rip+__destruct_List]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov r8, r13
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+    x64.lea r14, [rip+__layout_List_Integer]
+    x64.mov rcx, [r14+24] (8b)
+    x64.mov r8d, 1
+    x64.and rcx, r8
+    x64.call mrt_managed_list_create
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, [r14+24] (8b)
+    x64.mov r8d, 1
+    x64.and rcx, r8
+    x64.call mrt_managed_list_create
+    x64.mov r14, r8
+    x64.mov rcx, [r13+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [r13+0], r14 (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [rbx+0], r13 (8b)
+    x64.xor ebx, ebx
+  inlined_List.createIterator_0_0:
+    x64.mov rcx, [r12+0] (8b)
+  inlined_ListIterator.create_0_0:
+    x64.call mrt_managed_list_head
+    x64.mov r13, r8
+    x64.xor r14d, r14d
+    x64.test rdx, rdx
+    x64.je inlined_ListIterator.create_3_0
+  inlined_ListIterator.create_1_0:
+    x64.mov edx, 1
+    x64.mov rcx, r14
+    x64.mov r13, rdx
+    x64.jmp inline_cont_rewrap_0
+  inlined_ListIterator.create_3_0:
+    x64.lea rdx, [rip+__destruct_ListIterator]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r14 (8b)
+    x64.mov r9, r13
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov rcx, r8
+    x64.mov r13, r14
+  inline_cont_rewrap_0:
+    x64.test r13, r13
+    x64.je inlined_List.createIterator_2_0
+  inlined_List.createIterator_1_0:
+    x64.call __mm_decref_maybenull_helper
+    x64.xor ecx, ecx
+    x64.mov r8, r13
+    x64.mov r13, rcx
+    x64.jmp inline_cont_rewrap_1
+  inlined_List.createIterator_2_0:
+    x64.xor r8d, r8d
+    x64.mov r13, rcx
+  inline_cont_rewrap_1:
+    x64.test r8, r8
+    x64.je __phi_trampoline_8_0
+    x64.jmp __rc_edge_8_0
+  inlined_ListIterator.advance_0_0:
+    x64.mov rcx, [r13+0] (8b)
+    x64.call mrt_managed_list_node_next
+    x64.xor r15d, r15d
+    x64.test rdx, rdx
+    x64.je inlined_ListIterator.advance_3_0
+  inlined_ListIterator.advance_1_0:
+    x64.mov edx, 1
+    x64.jmp inline_cont_rewrap_2
+  inlined_ListIterator.advance_3_0:
+    x64.mov r9, r8
+    x64.sub r9, 8
+    x64.lock inc qword ptr [r9]
+    x64.mov rcx, [r13+0] (8b)
+    x64.mov [r13+0], r8 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rdx, r15
+  inline_cont_rewrap_2:
+    x64.test rdx, rdx
+    x64.je each_0
+    x64.jmp __rc_edge_12_0
+  each_0:
+    x64.mov rcx, [r13+0] (8b)
+    x64.call mrt_managed_list_node_value
+    x64.add r14, r8
+    x64.jmp inlined_ListIterator.advance_0_0
+  each_0.exit:
+    x64.epilogue
+    x64.ret
+  __rc_edge_8_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
+    x64.jmp each_0.exit
+  __rc_edge_12_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r14
+    x64.jmp each_0.exit
+  __phi_trampoline_8_0:
+    x64.mov r14, rbx
+    x64.jmp each_0
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call OpBuffer.create
+    x64.mov rbx, r8
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov edx, 1
+    x64.call mrt_managed_list_insert_last_value
+    x64.mov rcx, r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov edx, 2
+    x64.call mrt_managed_list_insert_last_value
+    x64.mov rcx, r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov edx, 3
+    x64.call mrt_managed_list_insert_last_value
+    x64.mov rcx, r8
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, rbx
+    x64.call rewrap
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov r13d, 1
+    x64.mov r8, r12
+    x64.add r8, 6
+    x64.mov r14, r8
+    x64.add r14, 1
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r15, r8
+    x64.mov r8d, 6
+    x64.lea r9, [rip+__istr_0]
+    x64.mov [rbp-8], r15
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov r8, r15
+    x64.add r8, 6
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], rbx
+    x64.mov [rbp-24], r12
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, r12
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r13
+    x64.rep_movsb
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.mov [rbx+40], r8 (8b)
+    x64.mov [rbx+0], r15 (8b)
+    x64.mov [rbx+8], r14 (8b)
+    x64.mov [rbx+16], r14 (8b)
+    x64.mov r8d, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], rbx (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov rdx, [r8+8] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+}
+---
