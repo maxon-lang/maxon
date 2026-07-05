@@ -1,0 +1,190 @@
+// Test: interface-borrowed-field-drop-in-loop
+typealias StrArray = Array with String
+typealias Tag = int(0 to u64.max)
+
+interface Query
+	function score() returns bool
+end 'Query'
+
+type ConcreteQuery implements Query
+	export let tag as Tag
+
+	static function create(tag Tag) returns ConcreteQuery
+		return Self{tag: tag}
+	end 'create'
+
+	function score() returns bool
+		return self.tag >= 0
+	end 'score'
+end 'ConcreteQuery'
+
+// `Allocator` stores a BORROWED interface value into a field, alongside enough
+// fresh state that its constructor exceeds the inline budget (a real non-inlined
+// constructor, like the compiler's own `FunctionRegAllocator`). The allocator is a
+// short-lived local dropped at the end of `allocateFor`, and its synthesized
+// destructor decrefs the interface field. The conformer passed in is OWNED by
+// `main` and kept alive across the whole loop, so the field holds only a BORROW —
+// the destructor must NOT release it. Before interface values were refcount-managed
+// consistently (the field is drop-tracked, but the borrowed value stored into it
+// got no store-incref), the destructor over-released the caller's conformer — the
+// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
+// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
+// so an over-release or leak fails it.
+type Allocator
+	export var query as Query
+	export var f0 as StrArray
+	export var f1 as StrArray
+	export var f2 as StrArray
+	export var f3 as StrArray
+	export var f4 as StrArray
+	export var f5 as StrArray
+
+	static function create(query Query) returns Allocator
+		return Self{query: query, f0: StrArray.create(), f1: StrArray.create(), f2: StrArray.create(), f3: StrArray.create(), f4: StrArray.create(), f5: StrArray.create()}
+	end 'create'
+
+	function run() returns bool
+		return self.query.score() and self.f0.count() == 0
+	end 'run'
+end 'Allocator'
+
+function allocateFor(query Query) returns bool
+	var allocator = Allocator.create(query)
+	return allocator.run()
+end 'allocateFor'
+
+function main() returns ExitCode
+	let concrete = ConcreteQuery.create(7)
+	var trueCount = 0
+	var i = 0
+	while i < 4 'loop'
+		if allocateFor(concrete) 'ok'
+			trueCount = trueCount + 1
+		end 'ok'
+		i = i + 1
+	end 'loop'
+	return trueCount
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @ConcreteQuery.score(local0: i64) -> i1 {
+  entry:
+    %5 = mir.param local0 : i64
+    %2 = mir.load %5, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ge, %2, %3
+    mir.ret %4
+  }
+  func @Allocator.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %26 = mir.param local0 : i64
+    mir.store_slot slot_0, %26
+    %27 = mir.param local1 : i64
+    mir.store_slot slot_1, %27
+    %2 = mir.mov_imm 64 : i64
+    %4 = mir.func_addr @__destruct_Allocator
+    %3 = mir.call @stdlib.__mm_alloc(%2, %4)
+    %28 = mir.call @stdlib.__mm_incref(%3)
+    %5 = mir.mov_imm 0 : i64
+    mir.store %5, %3, 0 width: qword
+    mir.store %5, %3, 16 width: qword
+    mir.store %5, %3, 24 width: qword
+    mir.store %5, %3, 32 width: qword
+    mir.store %5, %3, 40 width: qword
+    mir.store %5, %3, 48 width: qword
+    mir.store %5, %3, 56 width: qword
+    %12 = mir.load_slot slot_0
+    %13 = mir.load_slot slot_1
+    mir.store %12, %3, 0 width: qword
+    mir.store %13, %3, 8 width: qword
+    %14 = mir.global_addr @__layout_Array_String
+    %15 = mir.call @Array.create(%14)
+    mir.store %15, %3, 16 width: qword
+    %16 = mir.global_addr @__layout_Array_String
+    %17 = mir.call @Array.create(%16)
+    mir.store %17, %3, 24 width: qword
+    %18 = mir.global_addr @__layout_Array_String
+    %19 = mir.call @Array.create(%18)
+    mir.store %19, %3, 32 width: qword
+    %20 = mir.global_addr @__layout_Array_String
+    %21 = mir.call @Array.create(%20)
+    mir.store %21, %3, 40 width: qword
+    %22 = mir.global_addr @__layout_Array_String
+    %23 = mir.call @Array.create(%22)
+    mir.store %23, %3, 48 width: qword
+    %24 = mir.global_addr @__layout_Array_String
+    %25 = mir.call @Array.create(%24)
+    mir.store %25, %3, 56 width: qword
+    mir.ret %3
+  }
+  func @Allocator.run(local0: i64) -> i1 {
+  entry:
+    %12 = mir.param local0 : i64
+    %2 = mir.load %12, 0 width: qword
+    %3 = mir.load %12, 8 width: qword
+    %4 = mir.witness_call %3, [0](%2)
+    %6 = mir.load %12, 16 width: qword
+    %7 = mir.global_addr @__layout_Array_String
+    %8 = mir.call @Array.count(%6, %7)
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %8, %9
+    %11 = mir.and.i64 %4, %10
+    mir.ret %11
+  }
+  func @allocateFor(local0: i64, local1: i64) -> i1 {
+  entry:
+    %8 = mir.param local0 : i64
+    mir.store_slot slot_0, %8
+    %9 = mir.param local1 : i64
+    mir.store_slot slot_1, %9
+    %3 = mir.load_slot slot_0
+    %4 = mir.load_slot slot_1
+    %5 = mir.call @Allocator.create(%3, %4)
+    %7 = mir.call @Allocator.run(%5)
+    %10 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.ret %7
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 7 : i64
+    %21 = mir.mov_imm 8 : i64
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.call @stdlib.__mm_alloc(%21, %22)
+    %24 = mir.call @stdlib.__mm_incref(%23)
+    mir.store %1, %23, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%3, %4)
+  loop_0.header(%19: i64, %20: i64):
+    %6 = mir.mov_imm 4 : i64
+    %7 = mir.cmp lt, %20, %6
+    mir.cond_br %7 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %9 = mir.global_addr @__witness_ConcreteQuery_Query
+    %25 = mir.call @stdlib.__mm_incref(%23)
+    %10 = mir.call @allocateFor(%23, %9)
+    mir.cond_br %10 [then: ok_0(), else: ok_0.after(%19)]
+  loop_0.exit:
+    %26 = mir.call @stdlib.__mm_decref(%23)
+    %27 = mir.mov_imm 125 : i64
+    %28 = mir.cmp ugt, %19, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
+  ok_0:
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.add.i64 %19, %13
+    mir.br ok_0.after(%14)
+  ok_0.after(%18: i64):
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %20, %16
+    mir.br loop_0.header(%18, %17)
+  __range_panic_0:
+    %29 = mir.global_addr @__panic_msg_e4593d603606d9a8
+    %30 = mir.call @mrt_panic(%29)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

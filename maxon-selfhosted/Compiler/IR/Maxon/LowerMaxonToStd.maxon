@@ -2987,7 +2987,20 @@ type MaxonToStdLowering
 		// `maxonTypeIsHeapManaged` (all structs) — NOT `maxonTypeIsDropTracked`
 		// (managed-field-only, which drives DESTRUCTOR emission) — is what makes a
 		// plain-struct local (e.g. rung-01's Box) get freed instead of leaking.
-		let managed = maxonTypeIsHeapManaged(self.project, t: valueMaxonType)
+		//
+		// An INTERFACE-typed value is a 16-byte fat pointer whose value half is a
+		// managed heap reference to the concrete conformer the struct owns — the C#
+		// oracle groups `IrInterfaceType` with `IrStructType` for managedness
+		// throughout its conversion. The base heap-managed predicate reports
+		// `interface` as non-managed (its value half is typed `i64` through the
+		// fat-pointer lowering), so recognize it explicitly here — exactly as the
+		// destructor field-walk (`fieldTypeIsDropTracked` via `interfaceTypeIsFat`)
+		// and the scope-exit slot drop (`isInterfaceValueLocalSlot`) already do.
+		// Without this, the store-incref / consume-copy / release machinery all skip
+		// a BORROWED interface value stored into a drop-tracked struct field while the
+		// destructor still decref's it → over-release (the FunctionRegAllocator
+		// `regTarget`/`opQuery` fields; see the interface-field spec).
+		let managed = maxonTypeIsHeapManaged(self.project, t: valueMaxonType) or interfaceTypeIsFat(valueMaxonType)
 		self.currentMaxonFunc.setValueManaged(id, managed: managed)
 		let isTypeParam = maxonTypeIsTypeParameter(valueMaxonType)
 		if managed or isTypeParam 'carriesClass'

@@ -1,0 +1,209 @@
+// Test: interface-borrowed-field-drop-in-loop
+typealias StrArray = Array with String
+typealias Tag = int(0 to u64.max)
+
+interface Query
+	function score() returns bool
+end 'Query'
+
+type ConcreteQuery implements Query
+	export let tag as Tag
+
+	static function create(tag Tag) returns ConcreteQuery
+		return Self{tag: tag}
+	end 'create'
+
+	function score() returns bool
+		return self.tag >= 0
+	end 'score'
+end 'ConcreteQuery'
+
+// `Allocator` stores a BORROWED interface value into a field, alongside enough
+// fresh state that its constructor exceeds the inline budget (a real non-inlined
+// constructor, like the compiler's own `FunctionRegAllocator`). The allocator is a
+// short-lived local dropped at the end of `allocateFor`, and its synthesized
+// destructor decrefs the interface field. The conformer passed in is OWNED by
+// `main` and kept alive across the whole loop, so the field holds only a BORROW —
+// the destructor must NOT release it. Before interface values were refcount-managed
+// consistently (the field is drop-tracked, but the borrowed value stored into it
+// got no store-incref), the destructor over-released the caller's conformer — the
+// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
+// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
+// so an over-release or leak fails it.
+type Allocator
+	export var query as Query
+	export var f0 as StrArray
+	export var f1 as StrArray
+	export var f2 as StrArray
+	export var f3 as StrArray
+	export var f4 as StrArray
+	export var f5 as StrArray
+
+	static function create(query Query) returns Allocator
+		return Self{query: query, f0: StrArray.create(), f1: StrArray.create(), f2: StrArray.create(), f3: StrArray.create(), f4: StrArray.create(), f5: StrArray.create()}
+	end 'create'
+
+	function run() returns bool
+		return self.query.score() and self.f0.count() == 0
+	end 'run'
+end 'Allocator'
+
+function allocateFor(query Query) returns bool
+	var allocator = Allocator.create(query)
+	return allocator.run()
+end 'allocateFor'
+
+function main() returns ExitCode
+	let concrete = ConcreteQuery.create(7)
+	var trueCount = 0
+	var i = 0
+	while i < 4 'loop'
+		if allocateFor(concrete) 'ok'
+			trueCount = trueCount + 1
+		end 'ok'
+		i = i + 1
+	end 'loop'
+	return trueCount
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @ConcreteQuery.score(rcx: i64) -> i1 {
+  entry:
+    x64.mov r8, [rcx+0] (8b)
+    x64.test r8, r8
+    x64.setge r8
+    x64.ret
+  }
+  func @Allocator.create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.lea rdx, [rip+__destruct_Allocator]
+    x64.mov ecx, 64
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov [rbx+32], r8 (8b)
+    x64.mov [rbx+40], r8 (8b)
+    x64.mov [rbx+48], r8 (8b)
+    x64.mov [rbx+56], r8 (8b)
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-8]
+    x64.mov [rbx+0], r9 (8b)
+    x64.mov [rbx+8], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+16], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+24], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+40], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+48], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_String]
+    x64.call Array.create
+    x64.mov [rbx+56], r8 (8b)
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Allocator.run(rcx: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov r8, [rbx+8] (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.mov r12, r8
+    x64.mov rcx, [rbx+16] (8b)
+    x64.lea rdx, [rip+__layout_Array_String]
+    x64.call Array.count
+    x64.test r8, r8
+    x64.sete r8
+    x64.and r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @allocateFor(rcx: i64, rdx: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.call Allocator.create
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call Allocator.run
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 7
+    x64.mov [rbx+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov r12, r9
+    x64.mov r13, r8
+  loop_0.header:
+    x64.cmp r13, 4
+    x64.jge loop_0.exit
+  loop_0:
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.lea rdx, [rip+__witness_ConcreteQuery_Query]
+    x64.mov rcx, rbx
+    x64.call allocateFor
+    x64.test r8, r8
+    x64.je ok_0.after
+    x64.jmp ok_0
+  loop_0.exit:
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_decref
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  ok_0:
+    x64.add r12, 1
+  ok_0.after:
+    x64.add r13, 1
+    x64.jmp loop_0.header
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_e4593d603606d9a8]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

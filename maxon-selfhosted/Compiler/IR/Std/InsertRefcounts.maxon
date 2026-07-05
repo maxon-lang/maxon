@@ -96,6 +96,10 @@
 // Sentinel: "no value". ValueId is always >= 0, so i64.max never collides.
 let REFCOUNT_NO_VALUE = i64.max
 
+// Precomputed valueId -> ABI-index map (Concept: paramAbiByValue) and its interface
+// param-slot -> abi helper map. Declared here so the RcContext field can reference them.
+typealias ParsedIntArray = Array with ParsedInt
+
 // ============================================================
 // Entry point
 // ============================================================
@@ -282,6 +286,11 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// escape/ownership state, so building the set here (before
 	// `computeIncomingOwnerAcquire`) is safe.
 	ctx.escapingValues = buildEscapingValuesSet(ctx)
+
+	// Precompute the param/interface-param-slot -> ABI map so the many +1-ownership
+	// queries (`plusOneOwnership`, `decideIncomingOwnerAcquire`, the transfer sites) do an
+	// O(1) lookup instead of rescanning the entry block. Must precede those sweeps.
+	ctx.paramAbiByValue = buildParamAbiByValue(ctx)
 
 	// Per-value acquire analysis for `incomingOwner` values (the conditional rule;
 	// see `computeIncomingOwnerAcquire`). Must run BEFORE the acquire/release/phi
@@ -881,6 +890,10 @@ type RcContext
 	// adjacent cost at self-host scale. (The returned/thrown escape stays a
 	// separate `returnedValues` check in `valueEscapes`.)
 	export var escapingValues as BoolArray
+	// Precomputed `valueId -> ABI param index` (-1 for non-params), covering direct
+	// params AND interface params loaded from their unpromoted fat-pointer slots. Built
+	// once by `buildParamAbiByValue` so `paramAbiIndexOfValue` is an O(1) lookup.
+	export var paramAbiByValue as ParsedIntArray
 	// ValueIds whose refcount lifecycle is ALREADY COMPLETE in the (inlined) body:
 	// they carry BOTH a body-spliced acquire (`__mm_incref`, or its inlined
 	// `subi v,8; atomic_inc` form) AND a body-spliced release (`__mm_decref` /
@@ -1020,6 +1033,7 @@ type RcContext
 			paramValues: paramValues,
 			returnedValues: returnedValues,
 			escapingValues: BoolArray.create(),
+			paramAbiByValue: ParsedIntArray.create(),
 			bodyRcComplete: BoolArray.create(),
 			bodyReleasedValues: BoolArray.create(),
 			bodyAcquiredValues: BoolArray.create(),
@@ -2026,6 +2040,15 @@ function decideIncomingOwnerAcquire(ctx RcContext, id ValueId, defOp StdOp, tran
 	if ctx.isParam(id) 'param'
 		return
 	end 'param'
+	// An INTERFACE param, loaded from its unpromoted fat-pointer slot, is classified
+	// `incomingOwner` but IS the parameter — treat it exactly as the direct `param` skip
+	// above. A CONSUMED interface param already owns the caller's moved-in +1 (no fresh
+	// acquire — it transfers on the field/consume store); a BORROWED one is caller-owned
+	// (the store's own copy-incref, not an acquire, supplies the field's +1). Acquiring
+	// here would double-count either way (the interface-field-pass-as-arg leak).
+	if isInterfaceParamSlotLoad(ctx, id: id) 'interfaceParamSlot'
+		return
+	end 'interfaceParamSlot'
 	// (a) V's own ownership is transferred away (returned / moved / consumed).
 	let selfTransferred = try transferred.get(id) otherwise false
 	if selfTransferred 'gainsNewOwner'
@@ -2207,13 +2230,39 @@ function plusOneOwnership(ctx RcContext, id ValueId) returns PlusOneOwnership
 	end 'param'
 	return match ctx.classOf(id) 'class'
 		freshRc0 gives (PlusOneOwnership.acquiredAtDef if freshRc0NeedsAcquire(ctx, id: id) else PlusOneOwnership.noPlusOne)
-		incomingOwner gives (PlusOneOwnership.acquiredAtDef if ctx.incomingOwnerAcquiresCached(id) else PlusOneOwnership.noPlusOne)
+		incomingOwner gives incomingOwnerPlusOneOwnership(ctx, id: id)
 		selfReturnBorrow gives PlusOneOwnership.acquiredAtDef
 		callReturnRc1 gives PlusOneOwnership.arrivesOwning
 		borrowed gives PlusOneOwnership.noPlusOne
 		notManaged gives PlusOneOwnership.noPlusOne
 	end 'class'
 end 'plusOneOwnership'
+
+// +1 ownership for an `incomingOwner` value. An INTERFACE param loaded from its
+// unpromoted fat-pointer slot is classified `incomingOwner` but IS the parameter, so it
+// carries the SAME ownership a direct `param` does — `arrivesOwning` when the param is
+// consumed (the caller moved its +1 in), `noPlusOne` when borrowed (caller-owned; a
+// field store supplies its own copy). Its incomingOwner acquire is correspondingly
+// skipped (see `decideIncomingOwnerAcquire`). A genuine incomingOwner (a field/local
+// load) keeps the conditional-acquire rule.
+function incomingOwnerPlusOneOwnership(ctx RcContext, id ValueId) returns PlusOneOwnership
+	if isInterfaceParamSlotLoad(ctx, id: id) 'interfaceParam'
+		return (PlusOneOwnership.arrivesOwning if valueIsConsumedParamOfCurrentFunc(ctx, valueId: id) else PlusOneOwnership.noPlusOne)
+	end 'interfaceParam'
+	return (PlusOneOwnership.acquiredAtDef if ctx.incomingOwnerAcquiresCached(id) else PlusOneOwnership.noPlusOne)
+end 'incomingOwnerPlusOneOwnership'
+
+// True iff `id` is an INTERFACE parameter loaded from its unpromoted fat-pointer slot —
+// `paramAbiIndexOfValue` resolves it to a real ABI param index through the slot relay,
+// yet `isParam` is false for it (the value is a `memref.load`, not the `func.param` op).
+// The param-aware +1 sites consult this to route the value through param semantics.
+// Direct params (isParam true) are handled by their own arm and excluded here.
+function isInterfaceParamSlotLoad(ctx RcContext, id ValueId) returns bool
+	if ctx.isParam(id) 'directParam'
+		return false
+	end 'directParam'
+	return paramAbiIndexOfValue(ctx, valueId: id) >= 0
+end 'isInterfaceParamSlotLoad'
 
 // View over Concept A: a value takes a local owning +1 at its DEFINITION (an
 // `mm_incref` at the def) iff it is `acquiredAtDef`. `callReturnRc1`
@@ -2631,10 +2680,13 @@ end 'transferValueAlreadyOwnsPlusOne'
 // a transferable +1 from the caller (the consumed-arg move), so a store of it into a
 // durable owner is a MOVE of that +1, not a borrow-copy. Resolves the param's ABI index
 // from the entry-block `param` op that defines `valueId`.
+//
+// Does NOT short-circuit on `ctx.isParam(valueId)`: an INTERFACE param's value half lives
+// in an unpromoted slot, so a use of it is a `memref.load` (not the `func.param` op), and
+// `isParam` is false for the load even though it IS the consumed param. `paramAbiIndexOfValue`
+// resolves that case through its slot relay and returns -1 for genuine non-params, so the
+// index test below is the single, complete gate.
 function valueIsConsumedParamOfCurrentFunc(ctx RcContext, valueId ValueId) returns bool
-	if not ctx.isParam(valueId) 'notParam'
-		return false
-	end 'notParam'
 	let abiIndex = paramAbiIndexOfValue(ctx, valueId: valueId)
 	if abiIndex < 0 'noIndex'
 		return false
@@ -2642,38 +2694,155 @@ function valueIsConsumedParamOfCurrentFunc(ctx RcContext, valueId ValueId) retur
 	return paramConsumeBit(ctx.funcParamConsumes, callee: ctx.func.name, argIndex: abiIndex as NodeIndex)
 end 'valueIsConsumedParamOfCurrentFunc'
 
-// The ABI parameter index of the entry-block `param` op that defines `valueId`, or -1
-// if `valueId` is not a param value. Mem2reg re-mints param value ids, so the index is
-// recovered from the `param` op (which carries its ABI index) rather than assumed.
+// The ABI parameter index of `valueId`, or -1 if it is not a parameter. An O(1) lookup
+// in the precomputed `ctx.paramAbiByValue` map (see `buildParamAbiByValue`) — it covers
+// BOTH a direct `func.param` SSA value AND an INTERFACE param loaded from its unpromoted
+// fat-pointer slot (a `memref.load` the raw `param`-op scan cannot see). Mem2reg re-mints
+// param value ids, so the index is recovered structurally, not assumed.
 function paramAbiIndexOfValue(ctx RcContext, valueId ValueId) returns ParsedInt
-	let entryBlock = try ctx.module.blocks.get(blockRefForId(ctx, blockId: ctx.entryBlockId)) otherwise return (-1)
-	for opIdx in entryBlock.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("paramAbiIndexOfValue: opIdx not in module.ops")
-		let idx = paramOpAbiIndexIfDefines(op, valueId: valueId)
-		if idx >= 0 'found'
-			return idx
-		end 'found'
-	end 'eachOp'
-	return (-1)
+	return paramAbiAt(ctx.paramAbiByValue, id: valueId)
 end 'paramAbiIndexOfValue'
 
-function paramOpAbiIndexIfDefines(op StdOp, valueId ValueId) returns ParsedInt
-	return match op 'dispatch'
-		call(c) gives paramCallAbiIndexIfDefines(c, valueId: valueId)
-		arith gives (-1)
-		control gives (-1)
-		memory gives (-1)
-		system gives (-1)
-	end 'dispatch'
-end 'paramOpAbiIndexIfDefines'
+// Precompute, once per function, `valueId -> ABI param index` (-1 for non-params) from
+// two structural sources, matching everything `paramAbiIndexOfValue` must recognize:
+//   1. A direct `func.param(v, abi)` op in the entry block -> `v` maps to `abi`.
+//   2. An INTERFACE param whose fat-pointer value slot mem2reg left UNPROMOTED (see
+//      `anyParamSlotIsInterfaceFatPointer`): the param is stored into its home slot at
+//      entry (`storeSlot(S, paramV)`) and every later `loadSlot(load, S)` re-derives it,
+//      so each such `load` maps to the param's `abi`. Without this the field-store transfer
+//      logic (`valueIsConsumedParamOfCurrentFunc`) cannot see a consumed interface param
+//      and emits a COPY instead of a MOVE — stranding the caller's transferred +1 (the
+//      FunctionRegAllocator `regTarget`/`opQuery` / interface-field-pass-as-arg leak).
+// O(ops) once, replacing the former per-query entry-block rescans (an O(values x ops)
+// self-host-scale cost — the same rationale as the `escapingValues` precompute).
+function buildParamAbiByValue(ctx RcContext) returns ParsedIntArray
+	var abiByValue = ParsedIntArray.create()
+	var vid = 0
+	while vid <= ctx.liveness.maxValueId 'init'
+		abiByValue.push(-1)
+		vid = vid + 1
+	end 'init'
+	let entryBlock = try ctx.module.blocks.get(blockRefForId(ctx, blockId: ctx.entryBlockId)) otherwise return abiByValue
+	// Single ENTRY-BLOCK pass. mem2reg emits an interface param's `param` + `storeSlot`
+	// pair at the top of the entry block, and only ENTRY-block loads of that slot are
+	// provably the still-unmodified param (a later block may reassign the slot — a load
+	// there is NOT the param). Restricting the relay to the entry block matches the
+	// original per-query relay exactly: mapping a NON-entry interface-slot load as the
+	// consumed param mis-transfers its store and reintroduces the FunctionRegAllocator
+	// `regTarget`/`opQuery` over-release. `param`, `storeSlot`, and `loadSlot` appear in
+	// that order, so one forward pass suffices (a load's slot store precedes it).
+	var slotAbiBySlot = ParsedIntArray.create()
+	for opIdx in entryBlock.opRefs 'eachEntryOp'
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("buildParamAbiByValue: opIdx not in module.ops")
+		let (isParamDef, paramResult, paramAbi) = paramOpResultAbi(op)
+		if isParamDef 'paramDef'
+			setParamAbiAt(abiByValue, id: paramResult, abi: paramAbi)
+		end 'paramDef'
+		let (isStore, storeSlotId, storeVal) = storeSlotSlotAndValue(op)
+		if isStore 'store'
+			let storedAbi = paramAbiAt(abiByValue, id: storeVal)
+			if storedAbi >= 0 and slotIsInterfaceParamRegion(ctx.func, slotId: storeSlotId) 'interfaceParamSlot'
+				setParamAbiAt(slotAbiBySlot, id: storeSlotId, abi: storedAbi)
+			end 'interfaceParamSlot'
+		end 'store'
+		let (isLoad, loadResult, loadSlotId) = loadSlotResultAndSlot(op)
+		if isLoad 'load'
+			let mapped = paramAbiAt(slotAbiBySlot, id: loadSlotId)
+			if mapped >= 0 'mappedSlot'
+				setParamAbiAt(abiByValue, id: loadResult, abi: mapped)
+			end 'mappedSlot'
+		end 'load'
+	end 'eachEntryOp'
+	return abiByValue
+end 'buildParamAbiByValue'
 
-function paramCallAbiIndexIfDefines(c StdCallOp, valueId ValueId) returns ParsedInt
+// True iff `slotId` is a param-region scope slot whose declared type is an interface fat
+// pointer (the unpromoted value half). Restricts the slot relay to genuine interface PARAM
+// slots so a load of an ordinary local slot is never mis-attributed to a param.
+function slotIsInterfaceParamRegion(func IrFunction, slotId VarSlot) returns bool
+	if not func.isParamRegionScopeSlot(slotId) 'notParam'
+		return false
+	end 'notParam'
+	if slotId >= func.slotMaxonTypes.count() 'noType'
+		return false
+	end 'noType'
+	let slotType = try func.slotMaxonTypes.get(slotId) otherwise return false
+	return interfaceTypeIsFat(slotType)
+end 'slotIsInterfaceParamRegion'
+
+// Grow `abiByValue` to cover `id` and record its ABI index.
+function setParamAbiAt(abiByValue ParsedIntArray, id ValueId, abi ParsedInt)
+	while abiByValue.count() <= id 'grow'
+		abiByValue.push(-1)
+	end 'grow'
+	try abiByValue.set(id, value: abi) otherwise panic("setParamAbiAt: set OOB after grow")
+end 'setParamAbiAt'
+
+// The ABI index recorded for `id` in `abiByValue`, or -1 if none / out of range.
+function paramAbiAt(abiByValue ParsedIntArray, id ValueId) returns ParsedInt
+	if id < 0 or id >= abiByValue.count() 'outOfRange'
+		return (-1)
+	end 'outOfRange'
+	return try abiByValue.get(id) otherwise panic("paramAbiAt: in-bounds get failed after guard")
+end 'paramAbiAt'
+
+// (isParam, resultId, paramIndex) of a `func.param` op, else (false, 0, 0). The abi is
+// carried as its native `VarSlot` (the `param` op's field type); the `isParam` flag gates
+// it, so no signed sentinel is needed. The VarSlot -> ParsedInt widening happens later at
+// the `setParamAbiAt` call site (an argument position that coerces), never in this tuple.
+function paramOpResultAbi(op StdOp) returns (bool, ValueId, VarSlot)
+	return match op 'dispatch'
+		call(c) gives paramCallResultAbi(c)
+		arith gives (false, 0, 0)
+		control gives (false, 0, 0)
+		memory gives (false, 0, 0)
+		system gives (false, 0, 0)
+	end 'dispatch'
+end 'paramOpResultAbi'
+
+function paramCallResultAbi(c StdCallOp) returns (bool, ValueId, VarSlot)
 	return match c 'check'
-		param(resultId, paramIndex, _) gives (paramIndex if resultId == valueId else (-1))
-		ret to tailCall gives (-1)
-		errorReturn gives (-1)
+		param(resultId, paramIndex, _) gives (true, resultId, paramIndex)
+		ret to tailCall gives (false, 0, 0)
+		errorReturn gives (false, 0, 0)
 	end 'check'
-end 'paramCallAbiIndexIfDefines'
+end 'paramCallResultAbi'
+
+// (present, slotId, valueId) of a `memref.storeSlot`, else (false, 0, 0).
+function storeSlotSlotAndValue(op StdOp) returns (bool, VarSlot, ValueId)
+	return match op 'dispatch'
+		memory(m) gives memStoreSlotSlotAndValue(m)
+		arith gives (false, 0, 0)
+		control gives (false, 0, 0)
+		call gives (false, 0, 0)
+		system gives (false, 0, 0)
+	end 'dispatch'
+end 'storeSlotSlotAndValue'
+
+function memStoreSlotSlotAndValue(m StdMemoryOp) returns (bool, VarSlot, ValueId)
+	return match m 'check'
+		storeSlot(slotId, valueId) gives (true, slotId, valueId)
+		loadSlot gives (false, 0, 0)
+	end 'check'
+end 'memStoreSlotSlotAndValue'
+
+// (present, resultId, slotId) of a `memref.loadSlot`, else (false, 0, 0).
+function loadSlotResultAndSlot(op StdOp) returns (bool, ValueId, VarSlot)
+	return match op 'dispatch'
+		memory(m) gives memLoadSlotResultAndSlot(m)
+		arith gives (false, 0, 0)
+		control gives (false, 0, 0)
+		call gives (false, 0, 0)
+		system gives (false, 0, 0)
+	end 'dispatch'
+end 'loadSlotResultAndSlot'
+
+function memLoadSlotResultAndSlot(m StdMemoryOp) returns (bool, ValueId, VarSlot)
+	return match m 'check'
+		loadSlot(resultId, slotId) gives (true, resultId, slotId)
+		storeSlot gives (false, 0, 0)
+	end 'check'
+end 'memLoadSlotResultAndSlot'
 
 // True iff a `store_indirect` whose base is `addrId` writes a module-level
 // writable global (its base is a `sys.global_addr @__data_*` result). Such a
