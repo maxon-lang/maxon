@@ -5,6 +5,15 @@
 // literals have been folded to `MaxonOp.literal`) and tags the
 // corresponding `__ManagedMemory.create` call for a `.rdata` fast path.
 //
+// It also corrects the element STRIDE of NON-constant array literals. The
+// parser cannot know an element's type (unresolved at parse time), so it
+// hardcodes `elementSize = 8` in every `__ManagedMemory.create`. Constant
+// arrays get the true width via the rdata path below; non-constant narrow-
+// element arrays (e.g. `ByteArray from [aByteVar, bByteVar]`) would otherwise
+// keep the wrong pointer-width stride — so this pass rewrites their create's
+// `elementSize` operand to the resolved width too. See
+// `stampNonConstantArrayElementSize`.
+//
 // Why this exists
 // ---------------
 // The parser lowers `[Color.red, Color.green, Color.blue]` into a runtime
@@ -59,6 +68,12 @@
 // own label so the GlobalDataTable insertion-order layout is stable.
 // Reset per project to keep label names deterministic across compiles.
 var constantArrayLiteralCounter = 0 as ParsedInt
+
+// A managed pointer / heap reference is one machine word wide. An element type
+// whose storage width is at least this needs no element-size correction — the
+// parser's provisional `elementSize = 8` is already right. Only genuinely
+// narrow elements (Byte 1, u16/i16 2, u32/i32 4, bool 1) require rewriting.
+let pointerWidthBytes = 8 as MachineWord
 
 export function runConstantArrayLiteralRdata(project Project, module MaxonModule, globalData GlobalDataTable)
 	// Reset the counter so label names are stable across multiple
@@ -210,6 +225,10 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 			continue
 		end 'noProducer'
 		if not allElementsAreLiterals(litValues, producer: producer) 'notAllConst'
+			// Not an rdata-eligible constant array — but its parser-emitted
+			// runtime create still carries a hardcoded pointer-width elementSize.
+			// Correct it to the resolved element width before moving on.
+			stampNonConstantArrayElementSize(project, module: module, func: func, info: info)
 			pos = pos + 1
 			continue
 		end 'notAllConst'
@@ -258,31 +277,181 @@ function extractMmCreateInfo(project Project, op MaxonOp) returns MmCreateInfo
 	end 'notCall'
 	let createName = project.calleeNames.intern("__ManagedMemory.create")
 	match op 'shape'
-		tryCall(result, callee, _, _, _, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, createName: createName)
-		call(result, callee, _, _, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, createName: createName)
+		tryCall(result, callee, _, args, _, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, args: args, createName: createName)
+		call(result, callee, _, args, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, args: args, createName: createName)
 		default panic("extractMmCreateInfo: op.name was call/tryCall but match did not extract")
 	end 'shape'
 end 'extractMmCreateInfo'
 
-function matchMmCreateCallee(result ByteArray, callee ByteArray, createName ByteArray) returns MmCreateInfo
-	if callee == createName 'isCreate'
-		return MmCreateInfo.create(result)
-	end 'isCreate'
-	return MmCreateInfo.none()
+function matchMmCreateCallee(result ByteArray, callee ByteArray, args ByteArrayArray, createName ByteArray) returns MmCreateInfo
+	if callee != createName 'notCreate'
+		return MmCreateInfo.none()
+	end 'notCreate'
+	// The parser emits `__ManagedMemory.create(count, elementSize)`, so args[1]
+	// is the elementSize literal's value name. Guard the arity defensively so a
+	// future emission-shape change degrades to "no stamp" rather than a panic.
+	if args.count() < 2 'noElemSize'
+		return MmCreateInfo.create(result, elementSizeArgName: ByteArray.create())
+	end 'noElemSize'
+	let elemSizeArgName = try args.get(1) otherwise panic("matchMmCreateCallee: args.get(1) OOB after count check")
+	return MmCreateInfo.create(result, elementSizeArgName: elemSizeArgName)
 end 'matchMmCreateCallee'
 
 type MmCreateInfo
 	export var isMmCreate as bool
 	export var resultName as ByteArray
+	// The value name of the create call's second argument — the `elementSize`
+	// literal. The non-constant element-size stamp rewrites the literal op that
+	// defines this name. Empty when the create's arity is unexpectedly < 2.
+	export var elementSizeArgName as ByteArray
 
 	export static function none() returns MmCreateInfo
-		return Self{isMmCreate: false, resultName: ByteArray.create()}
+		return Self{isMmCreate: false, resultName: ByteArray.create(), elementSizeArgName: ByteArray.create()}
 	end 'none'
 
-	export static function create(resultName ByteArray) returns MmCreateInfo
-		return Self{isMmCreate: true, resultName: resultName}
+	export static function create(resultName ByteArray, elementSizeArgName ByteArray) returns MmCreateInfo
+		return Self{isMmCreate: true, resultName: resultName, elementSizeArgName: elementSizeArgName}
 	end 'create'
 end 'MmCreateInfo'
+
+// A NON-constant array literal (at least one element is not a compile-time
+// literal, so the rdata fast path above does not apply) keeps the parser-
+// emitted runtime `__ManagedMemory.create(count, elementSize)`. The parser
+// hardcodes `elementSize = 8` (pointer width) because element types are not
+// resolved at parse time (see `emitManagedMemoryFromElements`'s TODO). For a
+// NARROW element type (Byte 1, u16/i16 2, u32/i32 4, bool 1) that stride is
+// wrong: per-slot stores/loads, a later bulk read (`String.from`, `toCString`,
+// `memcpy`), and `__managed_mem_grow`'s `newCap * element_size` sizing would all
+// address every 8th byte. Post-TypeResolution the width is known, so rewrite the
+// create's `elementSize` operand to it — mirroring the C# bootstrap (which sizes
+// the record per element type at construction) and the grow-site layout stamp
+// (so a subsequent grow re-stamps the same width, a no-op). Pointer-width and
+// managed elements (width 8) need no change and are left untouched.
+function stampNonConstantArrayElementSize(project Project, module MaxonModule, func IrFunction, info MmCreateInfo)
+	let elementType = lookupElementTypeFromSetCall(module, func: func, mmName: info.resultName)
+	if isUnresolvedType(elementType) 'noType'
+		// Empty literal (no set calls) or a type TypeResolution could not pin —
+		// leave the pointer-width default; a later grow will stamp the real width.
+		return
+	end 'noType'
+
+	let width = primitiveStorageWidthBytes(project, t: elementType)
+	if width >= pointerWidthBytes 'pointerWidth'
+		return
+	end 'pointerWidth'
+
+	let loc = findManagedMemLiteralOp(module, func: func, name: info.elementSizeArgName)
+	if not loc.found 'noLiteral'
+		return
+	end 'noLiteral'
+
+	try module.ops.set(loc.opIdx, value: MaxonOp.literal(info.elementSizeArgName, value: width as ParsedInt, valueType: MaxonType.integer, range: loc.range)) otherwise panic("stampNonConstantArrayElementSize: ops.set OOB at {loc.opIdx}")
+end 'stampNonConstantArrayElementSize'
+
+// Recover the resolved element MaxonType of a non-constant array literal by
+// reading the backfilled value-arg type of one of its `mm.set(i, value: elem)`
+// calls. TypeResolution's `fillArgTypes` stamps the set call's `argTypes[1]`
+// with the unified element type. Unlike `lookupResolvedElementType` (which
+// probes the element's DEFINING op and only succeeds when that op is a
+// literal/convert), this works for arbitrary non-constant elements (params,
+// call results, field loads). Returns unresolved when no set call is found
+// (empty literal) or the type has not been pinned.
+function lookupElementTypeFromSetCall(module MaxonModule, func IrFunction, mmName ByteArray) returns MaxonType
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("lookupElementTypeFromSetCall: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("lookupElementTypeFromSetCall: opIdx OOB at {opIdx}")
+			if op.rawValue.category != OpCategory.callMethod 'notMethodCall'
+				continue
+			end 'notMethodCall'
+			let probe = setCallElementTypeProbe(op, mmName: mmName)
+			if probe.found 'hit'
+				return probe.valueType
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
+	return MaxonType.unresolved
+end 'lookupElementTypeFromSetCall'
+
+// Package a method-call op into an element-type probe: a `mm.set(i, value:)`
+// whose receiver is `mmName` yields its resolved value-arg type. The
+// `OpCategory.callMethod` guard in the caller ensures only method calls reach
+// here, so the `default` arm is unreachable.
+function setCallElementTypeProbe(op MaxonOp, mmName ByteArray) returns LiteralValueTypeProbe
+	let setName = "set".toByteArray()
+	match op 'shape'
+		tryMethodCall(_, receiver, methodName, _, _, argTypes, _, _, _) then return setCallValueType(receiver, methodName: methodName, argTypes: argTypes, mmName: mmName, setName: setName)
+		methodCall(_, receiver, methodName, _, _, argTypes, _, _) then return setCallValueType(receiver, methodName: methodName, argTypes: argTypes, mmName: mmName, setName: setName)
+		default panic("setCallElementTypeProbe: op category was callMethod but match did not extract")
+	end 'shape'
+end 'setCallElementTypeProbe'
+
+// Return the resolved element type from a `set` call's `argTypes[1]`, or a miss
+// when the call is not `mmName.set(...)` or its value type is not yet resolved.
+function setCallValueType(receiver ByteArray, methodName ByteArray, argTypes MaxonTypeArray, mmName ByteArray, setName ByteArray) returns LiteralValueTypeProbe
+	if receiver != mmName 'notOurs'
+		return LiteralValueTypeProbe.miss()
+	end 'notOurs'
+	if methodName != setName 'notSet'
+		return LiteralValueTypeProbe.miss()
+	end 'notSet'
+	if argTypes.count() < 2 'noValueType'
+		return LiteralValueTypeProbe.miss()
+	end 'noValueType'
+
+	let valueType = try argTypes.get(1) otherwise panic("setCallValueType: argTypes.get(1) OOB after count check")
+	if isUnresolvedType(valueType) 'unresolved'
+		return LiteralValueTypeProbe.miss()
+	end 'unresolved'
+	return LiteralValueTypeProbe.hit(valueType)
+end 'setCallValueType'
+
+// Locate the `literal` op that defines `name` anywhere in the function, so its
+// value (and only its value) can be rewritten in place. The elementSize literal
+// and the create call may sit in different blocks (`emitManagedMemoryFromElements`
+// emits the literal into `block` but the create into `currentBlock`), so the
+// scan spans every block. Returns its op index and source range.
+function findManagedMemLiteralOp(module MaxonModule, func IrFunction, name ByteArray) returns LiteralOpLoc
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("findManagedMemLiteralOp: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("findManagedMemLiteralOp: opIdx OOB at {opIdx}")
+			let probe = match op 'shape'
+				literal(result, _, _, range) gives literalOpLocProbe(opIdx, result: result, range: range, target: name)
+				convert gives LiteralOpLoc.missing()
+				stringConst to unop gives LiteralOpLoc.missing()
+				castCheck to sizeofType gives LiteralOpLoc.missing()
+			end 'shape'
+			if probe.found 'hit'
+				return probe
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
+	return LiteralOpLoc.missing()
+end 'findManagedMemLiteralOp'
+
+// Package a `literal` op into a location probe: a hit (with its op index and
+// range) when its result name matches `target`, else a miss.
+function literalOpLocProbe(opIdx OpIndex, result ByteArray, range SourceRange, target ByteArray) returns LiteralOpLoc
+	if result == target 'matched'
+		return LiteralOpLoc.hit(opIdx, range: range)
+	end 'matched'
+	return LiteralOpLoc.missing()
+end 'literalOpLocProbe'
+
+type LiteralOpLoc
+	export var found as bool
+	export var opIdx as OpIndex
+	export var range as SourceRange
+
+	export static function missing() returns LiteralOpLoc
+		return Self{found: false, opIdx: 0, range: SourceRange.none()}
+	end 'missing'
+
+	export static function hit(opIdx OpIndex, range SourceRange) returns LiteralOpLoc
+		return Self{found: true, opIdx: opIdx, range: range}
+	end 'hit'
+end 'LiteralOpLoc'
 
 // Every element value name in the array-literal producer must be the
 // result of a literal op. The producer's `elemNames` list is the parser-

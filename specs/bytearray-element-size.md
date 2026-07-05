@@ -27,6 +27,15 @@ case" (E3034). The two behaviours below pin the root cause (byte-slice
 reconstruction) and the shape that exposed it (a bare union case as a
 struct-literal field init).
 
+The same pointer-width hazard exists for an array *literal* (`[a, b, c]`,
+`ByteArray from [...]`): the parser cannot know the element type at parse time,
+so it emits `__ManagedMemory.create(count, elementSize = 8)`. A constant literal
+is corrected via the `.rdata` fast path, but a *non-constant* narrow-element
+literal (elements are runtime values) keeps the wrong stride unless corrected.
+The `ConstantArrayLiteralRdata` pass's `stampNonConstantArrayElementSize`
+rewrites the create's `elementSize` to the resolved element width post-
+TypeResolution — mirroring the C# bootstrap. The literal test below pins that.
+
 ## Tests
 
 <!-- test: bytearray-slice-roundtrip -->
@@ -111,6 +120,31 @@ function main() returns ExitCode
 		bytes(d) gives d.byteLength()
 	end 'i'
 	return e + i
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: array-literal-nonconstant-byte-stride -->
+### Non-constant Byte array literal has element_size 1, not pointer-width 8
+Builds a `Byte` array *literal* from runtime byte values (read out of a source
+string, so the elements are non-constant and cannot take the `.rdata` constant
+fast path), then bulk-reads it back with `String.from`. The parser emits the
+create with a provisional `elementSize = 8`; `stampNonConstantArrayElementSize`
+must rewrite it to `1`. With the wrong 8-byte stride `String.from` reads only
+every 8th byte and the equality check fails (verified: exit 1 on the pre-fix
+compiler, exit 0 after).
+```maxon
+function main() returns ExitCode
+	let src = "Hi!"
+	let sb = src.toByteArray()
+	let x = try sb.get(0) otherwise 0
+	let y = try sb.get(1) otherwise 0
+	let z = try sb.get(2) otherwise 0
+	let bytes = [x, y, z]
+	let s = String.from(bytes)
+	return 0 if s == "Hi!" else 1
 end 'main'
 ```
 ```exitcode

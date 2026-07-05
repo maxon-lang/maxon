@@ -15453,11 +15453,12 @@ export type Parser
 	// Shared between array-literal lowering (`[v0, ..., vN]`) and per-axis
 	// map-literal lowering (`[k0: v0, ...]` emits two of these).
 	function emitManagedMemoryFromElements(block IrBlock, elemNames ByteArrayArray, elemRanges SourceRangeArray, literalRange SourceRange) returns ByteArray
-		// TODO(elementSize): all current callers store 8-byte values, so the
-		// stride is hardcoded. Generalizing requires either (a) propagating
-		// the per-element MaxonType through TypeResolution to a real
-		// elementSize, or (b) lowering the array literal in a later pass
-		// after types are resolved.
+		// Provisional pointer-width stride: element types are unresolved at parse
+		// time, so `elementSize` is emitted as 8 here and CORRECTED to the true
+		// element width after TypeResolution. Constant arrays get their width via
+		// the `.rdata` fast path; non-constant narrow-element arrays are rewritten
+		// by `stampNonConstantArrayElementSize` — both in the ConstantArrayLiteralRdata
+		// pass. Pointer-width/managed elements keep the 8 unchanged.
 		let elemCount = elemNames.count()
 		let countLitName = emitLiteral(block, value: elemCount, valueType: MaxonType.integer, range: literalRange)
 		let elemSizeLitName = emitLiteral(block, value: 8, valueType: MaxonType.integer, range: literalRange)
