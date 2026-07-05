@@ -1,0 +1,126 @@
+// Test: try-block.multi-union-assoc-default
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+    bad(code Score)
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.bad(50)
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(true)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            ErrB.splat then sum = 99
+            default panic("unhandled error variant")
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at try-block.multi-union-assoc-default.test:36: unhandled error variant
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @callA(local0: i1) -> u16 {
+  entry:
+    %7 = mir.param local0 : i1
+    mir.cond_br %7 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 50 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9)
+    %12 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %10, %11, 0 width: qword
+    mir.store %2, %11, 8 width: qword
+    %4 = mir.mov_imm 0 : i64
+    mir.error_return %4, %11
+  c_0.after:
+    %5 = mir.mov_imm 5 : i64
+    %6 = mir.mov_imm 0 : i64
+    mir.error_return %5, %6
+  }
+  func @callB(local0: i1) -> u16 {
+  entry:
+    %6 = mir.param local0 : i1
+    mir.cond_br %6 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  c_0.after:
+    %4 = mir.mov_imm 6 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 1 : i64
+    %5, %6 = mir.try_call @callA(%4)
+    %8 = mir.cmp eq, %6, %0
+    %36 = mir.call @__mm_decref_maybenull_helper(%6)
+    mir.cond_br %8 [then: tryblock_0.cont(), else: tryblock_1.err(%0, %0)]
+  tryblock_0.cont:
+    %10, %11 = mir.try_call @callB(%0)
+    %12 = mir.mov_imm 1 : i64
+    %14 = mir.cmp eq, %11, %0
+    mir.cond_br %14 [then: tryblock_1.cont(), else: tryblock_1.err(%11, %12)]
+  tryblock_1.cont:
+    %17 = mir.add.i64 %5, %10
+    mir.br tryblock_5.after(%17)
+  tryblock_1.err(%34: i64, %35: i64):
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.cmp eq, %35, %21
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.cmp eq, %34, %24
+    %26 = mir.and.i64 %22, %25
+    mir.cond_br %26 [then: k_0.case0(), else: k_0.case1()]
+  tryblock_5.after(%33: i64):
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %33, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  k_0.case0:
+    %29 = mir.mov_imm 99 : i64
+    mir.br tryblock_5.after(%29)
+  k_0.case1:
+    %30 = mir.global_addr @__panic_msg_ee7077fe10574c43
+    %31 = mir.call @mrt_panic(%30)
+    mir.ret %0
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_71770dccf1f9f34a
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %33
+  }
+}
+---

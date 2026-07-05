@@ -1,0 +1,123 @@
+// Test: try-block.bare-throw-routed
+typealias Count = int(0 to 1000)
+
+enum Kind
+    alpha
+    beta
+    gamma
+end 'Kind'
+
+enum MyError implements Error
+    fooErr
+    barErr
+end 'MyError'
+
+function dispatch(k Kind) returns Count throws MyError
+    var result = 0
+    try 'd'
+        match k 'm'
+            alpha then result = 1
+            beta then throw MyError.barErr
+            default throws MyError.fooErr
+        end 'm'
+    end 'd' otherwise (e) 'h'
+        match e 'he'
+            fooErr then result = 40
+            barErr then result = 80
+        end 'he'
+    end 'h'
+    return result
+end 'dispatch'
+
+function main() returns ExitCode
+    let a = try dispatch(Kind.alpha) otherwise panic("alpha escaped")
+    let b = try dispatch(Kind.beta) otherwise panic("beta escaped")
+    let c = try dispatch(Kind.gamma) otherwise panic("gamma escaped")
+    return a + b + c
+end 'main'
+---
+ExitCode: 121
+---
+// CompiledIR
+module {
+  func @dispatch(local0: u8) -> u16 {
+  entry:
+    %30 = mir.param local0 : u8
+    %1 = mir.mov_imm 0 : i64
+    %7 = mir.cmp eq, %30, %1
+    mir.cond_br %7 [then: m_0.case0(), else: m_0.next0()]
+  tryblock_1.err(%29: i64):
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.sub.i64 %29, %9
+    %13 = mir.cmp eq, %10, %1
+    mir.cond_br %13 [then: he_0.case0(), else: he_0.next0()]
+  m_0.case0:
+    %14 = mir.mov_imm 1 : i64
+    mir.br tryblock_8.after(%14)
+  m_0.next0:
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.cmp eq, %30, %15
+    mir.cond_br %16 [then: m_0.case1(), else: m_0.case2()]
+  m_0.case1:
+    %17 = mir.mov_imm 2 : i64
+    mir.br tryblock_1.err(%17)
+  m_0.case2:
+    %19 = mir.mov_imm 1 : i64
+    mir.br tryblock_1.err(%19)
+  tryblock_8.after(%28: i64):
+    mir.error_return %28, %1
+  he_0.merge(%27: i64):
+    mir.br tryblock_8.after(%27)
+  he_0.case0:
+    %23 = mir.mov_imm 40 : i64
+    mir.br he_0.merge(%23)
+  he_0.next0:
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.cmp eq, %10, %24
+    mir.cond_br %25 [then: he_0.case1(), else: he_0.merge(%1)]
+  he_0.case1:
+    %26 = mir.mov_imm 80 : i64
+    mir.br he_0.merge(%26)
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1, %2 = mir.try_call @dispatch(%0)
+    %4 = mir.cmp ne, %2, %0
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %6 = mir.global_addr @__panic_msg_539c8b0b48b05f43
+    %7 = mir.call @mrt_panic(%6)
+    mir.ret %0
+  try_0.merge:
+    %10 = mir.mov_imm 1 : i64
+    %11, %12 = mir.try_call @dispatch(%10)
+    %14 = mir.cmp ne, %12, %0
+    mir.cond_br %14 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %16 = mir.global_addr @__panic_msg_65926b468e81d423
+    %17 = mir.call @mrt_panic(%16)
+    mir.ret %0
+  try_1.merge:
+    %20 = mir.mov_imm 2 : i64
+    %21, %22 = mir.try_call @dispatch(%20)
+    %24 = mir.cmp ne, %22, %0
+    mir.cond_br %24 [then: try_2.otherwise(), else: try_2.merge()]
+  try_2.otherwise:
+    %26 = mir.global_addr @__panic_msg_686a735bcf39825a
+    %27 = mir.call @mrt_panic(%26)
+    mir.ret %0
+  try_2.merge:
+    %32 = mir.add.i64 %1, %11
+    %34 = mir.add.i64 %32, %21
+    %35 = mir.mov_imm 125 : i64
+    %36 = mir.cmp ugt, %34, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %37 = mir.global_addr @__panic_msg_656d6448de697f0f
+    %38 = mir.call @mrt_panic(%37)
+  __range_ok_0:
+    mir.ret %34
+  }
+}
+---

@@ -93,6 +93,18 @@ export type Scope
 		return slot
 	end 'declareShadowing'
 
+	// Bind `name` to an ALREADY-ALLOCATED slot (no new slot). Used to alias a
+	// user binding onto a shared compiler slot — e.g. the block-form try's boxed
+	// `(e)` binding is aliased onto the shared box slot so `match e` reads the box
+	// directly and the slot's single scope-exit decref frees it (a separate `e`
+	// slot would double-free). Recorded in the current frame like a normal
+	// declaration so popScope removes it.
+	export function bindExistingSlot(name String, slot VarSlot, varType MaxonType, mutable bool)
+		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(name)
+	end 'bindExistingSlot'
+
 	// Declare a self-field alias. No local backing slot is materialized —
 	// reads and writes lower to maxon.fieldLoad/fieldStore through __self so
 	// nested method calls that mutate self.field are visible on return.

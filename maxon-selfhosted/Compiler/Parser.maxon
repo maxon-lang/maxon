@@ -174,13 +174,40 @@ end 'lookupClosureRename'
 export type TryBlockContext
 	export var errorBlockId as BlockId
 	export var errorFlagSlot as VarSlot
+	// Phase B: shared discriminant slot holding the union-member index (into
+	// `errorTypeNames`) of the enum a routed throw/call raised. Reserved for
+	// the multi-enum error-union path; the single-enum path leaves it dead.
+	export var discriminantSlot as VarSlot
+	// Phase B: shared managed slot that holds the heap-boxed-union POINTER when a
+	// routed multi-enum throw raises a boxed union. Kept SEPARATE from the i64
+	// `errorFlagSlot` so the flag slot never carries a heap pointer — a box
+	// pointer merging with a sibling simple-enum's ordinal+1 flag would force the
+	// refcount inserter to incref/decref the ordinal as if it were a pointer
+	// (crash). All stores into this slot are boxes, so it stays cleanly managed
+	// and its scope-exit decref frees the box. Every heap-boxed throw routes here
+	// (both single- and multi-enum), so the flag slot never carries a pointer.
+	export var boxSlot as VarSlot
 	export var blockLabel as String
 	export var errorTypeNames as StringArray
 	export var throwsClause as ThrowsClause
 
-	export static function create(errorBlockId BlockId, errorFlagSlot VarSlot, blockLabel String) returns TryBlockContext
-		return Self{errorBlockId: errorBlockId, errorFlagSlot: errorFlagSlot, blockLabel: blockLabel, errorTypeNames: StringArray.create(), throwsClause: ThrowsClause.none}
+	export static function create(errorBlockId BlockId, errorFlagSlot VarSlot, discriminantSlot VarSlot, boxSlot VarSlot, blockLabel String) returns TryBlockContext
+		return Self{errorBlockId: errorBlockId, errorFlagSlot: errorFlagSlot, discriminantSlot: discriminantSlot, boxSlot: boxSlot, blockLabel: blockLabel, errorTypeNames: StringArray.create(), throwsClause: ThrowsClause.none}
 	end 'create'
+
+	// Phase B: 0-based index of `name` within `errorTypeNames` (the union
+	// member ordinal used as the discriminant value). `name` must have been
+	// recorded via `recordErrorType` before this call — a routed site always
+	// records its type immediately before looking up its member index.
+	export function memberIndexOf(name String) returns ElementCount
+		for i in 0 upto self.errorTypeNames.count() 'each'
+			let existing = try self.errorTypeNames.get(i) otherwise panic("memberIndexOf: errorTypeNames.get OOB at {i}")
+			if existing == name 'hit'
+				return i
+			end 'hit'
+		end 'each'
+		panic("memberIndexOf: '{name}' was not recorded on the try-block context")
+	end 'memberIndexOf'
 
 	// Record a distinct error-enum name encountered while routing a bare throw
 	// or throwing call in this block. The first recorded clause types the
@@ -201,6 +228,24 @@ export type TryBlockContext
 end 'TryBlockContext'
 
 export typealias TryBlockContextArray = Array with TryBlockContext
+
+// Phase B: an active multi-enum error-union `(e)` binding. Registered while
+// parsing a block-form try's `otherwise (e) 'h'` handler whose body throws two
+// or more distinct error enum types. `parseMatchHeader` consults the registry
+// to recognise `match e` on such a binding and route it to
+// `parseErrorUnionMatch` (the synthesized-union dispatch) instead of the
+// generic enum-match path. `ctx` carries the shared discriminant / error-flag
+// slots and the ordered member-enum list the match compiles against.
+export type ErrorUnionBinding
+	export var bindingName as String
+	export var ctx as TryBlockContext
+
+	export static function create(bindingName String, ctx TryBlockContext) returns ErrorUnionBinding
+		return Self{bindingName: bindingName, ctx: ctx}
+	end 'create'
+end 'ErrorUnionBinding'
+
+export typealias ErrorUnionBindingArray = Array with ErrorUnionBinding
 
 // Thrown by the block-form try's parse-time enum-case ordinal lookup when the
 // thrown `EnumName.caseName` can't be resolved in the enum registries.
@@ -434,6 +479,13 @@ export type Parser
 	// that binding. An empty `tryBlockMatchedBinding` disables the check.
 	var tryBlockMatchedBinding as String
 	var tryBlockBindingWasMatched as bool
+	// Phase B: active multi-enum error-union `(e)` bindings (see
+	// `ErrorUnionBinding`). Pushed while parsing a multi-enum block-form try's
+	// `otherwise (e)` handler body and popped after; `parseMatchHeader`
+	// searches it by scrutinee name to route `match e` to the synthesized-union
+	// dispatch. A list (not a single field) so a nested multi-enum try block
+	// inside an outer handler routes `match` to its own innermost binding.
+	var errorUnionBindings as ErrorUnionBindingArray
 	// Stage E (closures): set true while parsing a closure body. Toggles the
 	// capture-detection branches in `emitSelfLoad` and the bare-name read
 	// path so outer-scope references emit `closureEnvLoad` ops instead of
@@ -541,7 +593,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, tryBlockStack: TryBlockContextArray.create(), tryBlockMatchedBinding: "", tryBlockBindingWasMatched: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), mutableVarLocations: ParamLocationArray.create(), reassignedVars: ReferencedVarSet.create(), lastExprImmutableVarRefName: "", lastExprFromImmutableRoot: false, lastExprVarRefName: "", lastExprProducerName: ByteArray.create(), pendingVarFromImmutable: VarFromImmutableCandidateArray.create(), paramReservations: ParamReservationArray.create(), synthNameCounter: 0, paramDefaultHelperCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, tryBlockStack: TryBlockContextArray.create(), tryBlockMatchedBinding: "", tryBlockBindingWasMatched: false, errorUnionBindings: ErrorUnionBindingArray.create(), inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), closureOuterReferencedVars: ReferencedVarSet.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -6358,6 +6410,37 @@ export type Parser
 		module.appendOp(targetBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: range))
 	end 'declareErrorBindingInBlock'
 
+	// Phase B: declare the multi-enum error-union `(e)` binding into the
+	// handler's error block. Unlike the single-enum binding (a typed enum/union
+	// local), a synthesized union has no single member type — `e` is bound to
+	// the raw error-flag value (an integer) purely so the handler-body parse
+	// sees `e` as a declared, used local; `parseErrorUnionMatch` dispatches off
+	// the shared discriminant + flag slots directly, never off this SSA. Pushes
+	// a fresh scope so the binding is local to the handler body — the caller
+	// unwinds it (`scope.popScope()` at handler-end / `popTryBlockBinding`).
+	function declareErrorUnionBindingInBlock(targetBlock IrBlock, ctx TryBlockContext, bindingName String, bindingLine LineNumber, bindingColumn ColumnNumber, tryToken Token) throws ParserError
+		scope.pushScope()
+		let bindingSlot = declareCheckedLocal(bindingName, varType: MaxonType.integer, mutable: false, line: bindingLine, column: bindingColumn)
+		localVarLocations.push(ParamLocation.create(bindingName, line: bindingLine, column: bindingColumn))
+		let flagLoad = bindingFlagLoadName(targetBlock, ctx: ctx, tryToken: tryToken)
+		module.appendOp(targetBlock, op: MaxonOp.varDecl(bindingSlot, value: flagLoad, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+	end 'declareErrorUnionBindingInBlock'
+
+	// Phase B: bind a single boxed-union `(e)` onto the shared box slot. The
+	// routing moved the box pointer into `ctx.boxSlot`; aliasing `e` to that slot
+	// (typed as the union) lets `match e` read the box through the normal
+	// single-union match path while the slot's one scope-exit decref frees it —
+	// no separate owning local, so no double-free. Pushes a fresh scope for the
+	// binding; the caller unwinds it. `match e`'s union-typed load upgrades the
+	// slot's recorded type to the boxed union so it becomes drop-tracked.
+	function declareSingleBoxedErrorBinding(ctx TryBlockContext, bindingName String, bindingLine LineNumber, bindingColumn ColumnNumber) throws ParserError
+		let throwsName = try throwsClauseName(ctx.throwsClause) otherwise panic("declareSingleBoxedErrorBinding: boxed single-enum try-block has no throws-clause name")
+		let unionType = internMaxonType(project, name: throwsName)
+		scope.pushScope()
+		scope.bindExistingSlot(bindingName, slot: ctx.boxSlot, varType: unionType, mutable: false)
+		localVarLocations.push(ParamLocation.create(bindingName, line: bindingLine, column: bindingColumn))
+	end 'declareSingleBoxedErrorBinding'
+
 	// Phase 9 Stage 5: synthesize the `__enum_<EnumName>_fromRawValue(raw)`
 	// and `__enum_<EnumName>_fromName(name)` lookup helpers for a bare-enum
 	// type (or a union's `.unionCases` companion, which is itself a bare
@@ -7796,6 +7879,14 @@ export type Parser
 		if not tryBlockMatchedBinding.isEmpty() and cur.kind == TokenKind.identifier and cur.value == tryBlockMatchedBinding 'matchedTryBinding'
 			tryBlockBindingWasMatched = true
 		end 'matchedTryBinding'
+		// Phase B: a `match e` whose scrutinee `e` is an active multi-enum
+		// error-union binding routes to `parseErrorUnionMatch`. Capture the name
+		// here (the identifier is still visible before parseExpression consumes
+		// it) and stamp it on the header for `parseMatchStatement` to dispatch on.
+		var errorUnionBindingName = ""
+		if cur.kind == TokenKind.identifier and isActiveErrorUnionBinding(cur.value) 'isErrorUnion'
+			errorUnionBindingName = cur.value
+		end 'isErrorUnion'
 		if cur.kind == TokenKind.identifier and nxt.kind == TokenKind.charLiteral and scope.contains(cur.value) 'isBareLocal'
 			let info = scope.getInfo(cur.value)
 			scrutineeMutable = info.mutable
@@ -7847,7 +7938,7 @@ export type Parser
 			scrutineeType = MaxonType.integer
 		end 'unboxChar'
 
-		return MatchHeader.create(scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, scrutineeMutable: scrutineeMutable)
+		return MatchHeader.create(scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, scrutineeMutable: scrutineeMutable, errorUnionBindingName: errorUnionBindingName)
 	end 'parseMatchHeader'
 
 	// Consume `'label'` after `end`, validating it matches the expected label.
@@ -9336,6 +9427,12 @@ export type Parser
 			synchronize()
 			return currentBlock
 		end 'bailout'
+		// Phase B: `match e` on a multi-enum error-union binding compiles against
+		// the shared discriminant + error-flag slots, not a single enum type —
+		// route it to the dedicated synthesized-union dispatch.
+		if not header.errorUnionBindingName.isEmpty() 'errorUnionMatch'
+			return try parseErrorUnionMatch(header)
+		end 'errorUnionMatch'
 		let mergeBlockId = header.mergeBlock.id
 
 		// Push a match context so `break` inside an arm body exits the match
@@ -12278,12 +12375,31 @@ export type Parser
 		let blockLabel = blockLabelToken.value
 		try skipNewlines()
 
-		// Shared mutable flag slot: 0 = success, ordinal + 1 = thrown case.
-		// Declared in the enclosing scope (not a body-local) so the shared error
-		// block can read it after the body's scope has logically closed.
+		// Shared mutable flag slot: 0 = success, ordinal + 1 = thrown case (or a
+		// heap-boxed-union pointer for an associated-value throw). Declared in the
+		// enclosing scope (not a body-local) so the shared error block can read it
+		// after the body's scope has logically closed.
 		let errorFlagSlot = scope.declareShadowing("__tryBlockErr_{currentFunc.nextBlockId}", varType: MaxonType.integer, mutable: true)
 		let flagZero = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
 		module.appendOp(block, op: MaxonOp.varDecl(errorFlagSlot, value: flagZero, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+
+		// Phase B: shared discriminant slot holding the union-member index of the
+		// enum a routed throw/call raised. Only read on the multi-enum error-union
+		// path (`parseErrorUnionMatch`); the single-enum path leaves the stores
+		// dead. Always declared + stored so the routing code stays uniform — the
+		// member count isn't known until the body is fully parsed.
+		let discriminantSlot = scope.declareShadowing("__tryBlockDiscr_{currentFunc.nextBlockId}", varType: MaxonType.integer, mutable: true)
+		let discrZero = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
+		module.appendOp(block, op: MaxonOp.varDecl(discriminantSlot, value: discrZero, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+
+		// Phase B: shared box slot for heap-boxed-union throws (multi-enum path).
+		// Seeded as integer here; the assoc arm's typed `var_load` upgrades its
+		// recorded type to the boxed union so it becomes drop-tracked (freed at
+		// scope exit). Unused (never box-stored / typed-loaded) on the single-enum
+		// and all-simple paths, where it stays a dead i64 slot.
+		let boxSlot = scope.declareShadowing("__tryBlockBox_{currentFunc.nextBlockId}", varType: MaxonType.integer, mutable: true)
+		let boxZero = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
+		module.appendOp(block, op: MaxonOp.varDecl(boxSlot, value: boxZero, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
 
 		let tryFilePath = filePath.toString()
 
@@ -12304,7 +12420,7 @@ export type Parser
 
 		// Push the context before parsing the body so a nested `try` block parses
 		// its own statements against its own innermost context.
-		var ctx = TryBlockContext.create(errorBlockId, errorFlagSlot: errorFlagSlot, blockLabel: blockLabel)
+		var ctx = TryBlockContext.create(errorBlockId, errorFlagSlot: errorFlagSlot, discriminantSlot: discriminantSlot, boxSlot: boxSlot, blockLabel: blockLabel)
 		tryBlockStack.push(ctx)
 		scope.pushScope()
 
@@ -12424,9 +12540,14 @@ export type Parser
 		var errorBlock = try module.getBlockByIdIn(currentFunc, id: errorBlockId) otherwise panic("parseTryBlockOtherwise: error block vanished")
 		currentBlock = errorBlock
 
+		// Phase B: the body threw two or more distinct error enum types, so the
+		// binding `e` is a synthesized error union (dispatched by
+		// `parseErrorUnionMatch`) rather than a single typed enum/union local.
+		let isErrorUnion = ctx.errorTypeNames.count() >= 2
+
 		// Optional `(binding)`. Present in every block-handler form and optionally
 		// in the divergent `panic` / `throws` forms. When present, declare the
-		// typed error binding into the error block up front (its unused-variable
+		// error binding into the error block up front (its unused-variable
 		// tracking then applies uniformly to all three forms).
 		var hasBinding = false
 		var bindingName = ""
@@ -12437,7 +12558,18 @@ export type Parser
 			try eat(TokenKind.rightParen)
 			hasBinding = true
 			bindingName = bindingToken.value
-			try declareErrorBindingInBlock(errorBlock, errorFlagName: bindingFlagLoadName(errorBlock, ctx: ctx, tryToken: tryToken), bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: ctx.throwsClause, range: SourceRange.ofToken(tryToken))
+			if isErrorUnion 'unionBinding'
+				try declareErrorUnionBindingInBlock(errorBlock, ctx: ctx, bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, tryToken: tryToken)
+			end 'unionBinding' else 'singleBinding'
+				if clauseThrowsBoxed(ctx.throwsClause) 'singleBoxed'
+					// Single heap-boxed union: the box lives in the shared box slot
+					// (the routing moved it there), so alias `e` onto that slot rather
+					// than binding a separate owning local (which would double-free).
+					try declareSingleBoxedErrorBinding(ctx, bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column)
+				end 'singleBoxed' else 'singleBare'
+					try declareErrorBindingInBlock(errorBlock, errorFlagName: bindingFlagLoadName(errorBlock, ctx: ctx, tryToken: tryToken), bindingName: bindingToken.value, bindingLine: bindingToken.line, bindingColumn: bindingToken.column, calleeThrowsTypeName: ctx.throwsClause, range: SourceRange.ofToken(tryToken))
+				end 'singleBare'
+			end 'singleBinding'
 		end 'hasBindingParen'
 
 		// Divergent terminal forms: `otherwise [(e)] panic(...)` and
@@ -12479,7 +12611,18 @@ export type Parser
 		tryBlockMatchedBinding = bindingName
 		tryBlockBindingWasMatched = false
 
+		// Phase B: register the error-union binding for the handler-body parse so
+		// `parseMatchHeader` recognises `match e` and routes it to
+		// `parseErrorUnionMatch`. Scoped strictly to this handler body.
+		if isErrorUnion 'registerEU'
+			registerErrorUnionBinding(bindingName, ctx: ctx)
+		end 'registerEU'
+
 		let handlerExitBlock = try parseStatements(currentFunc, block: errorBlock, lastWasReturn: false)
+
+		if isErrorUnion 'unregisterEU'
+			unregisterErrorUnionBinding(bindingName)
+		end 'unregisterEU'
 
 		let wasMatched = tryBlockBindingWasMatched
 		tryBlockMatchedBinding = savedBinding
@@ -12534,6 +12677,374 @@ export type Parser
 		module.appendOp(targetBlock, op: MaxonOp.varLoad(loadName, slotId: ctx.errorFlagSlot, slotType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
 		return loadName
 	end 'bindingFlagLoadName'
+
+	// --- Phase B: synthesized error-union `match e` dispatch ---
+	//
+	// Compiles `match e 'k' <arms> end 'k'` where `e` is a multi-enum error-union
+	// binding (the body of the enclosing block-form try threw two or more distinct
+	// error enum types). There is no single registered enum type to defer to, so —
+	// unlike the generic `enumMatchArm` path — this hand-emits the dispatch against
+	// the shared discriminant + error-flag slots:
+	//
+	//   simple member case `E.c`:  (discriminant == memberIdx(E)) and (flag == ord(c)+1)
+	//   assoc  member case `E.c`:  discriminant == memberIdx(E)      -- stage 1
+	//                              then enum_tag(flag) == ord(c)     -- stage 2 (flag is a box ptr)
+	//
+	// The two-stage form for associated-value members guards the heap-pointer
+	// deref behind the discriminant check: a wrong member means `flag` is an
+	// ordinal+1 (a sibling simple member) or a different box, so it must not be
+	// dereferenced. Payload bindings + box freeing reuse the single-union machinery
+	// by rebinding the box pointer to a member-typed managed local per arm.
+	function parseErrorUnionMatch(header MatchHeader) returns IrBlock throws ParserError
+		let ctx = errorUnionCtxForBinding(header.errorUnionBindingName)
+		let mergeBlock = header.mergeBlock
+		let mergeBlockId = mergeBlock.id
+		let baseLabel = header.baseLabel
+		let tryFilePath = filePath.toString()
+
+		// Resolve bare case names across all members, flagging any name shared by
+		// two members as ambiguous (a bare reference to it is E3085).
+		var byBareName = ErrorUnionCaseRefMap.create()
+		var ambiguousBare = ReferencedVarSet.create()
+		try buildErrorUnionBareNameMap(ctx, byBareName: byBareName, ambiguousBare: ambiguousBare)
+
+		matchStack.push(MatchContext.create(header.userLabel, mergeBlockId: mergeBlockId))
+
+		var coveredKeys = ReferencedVarSet.create()
+		var hasDefault = false
+		var anyArmReachesMerge = false
+		var currentDispatchId = currentBlock.id
+		var armIndex = 0 as IntConstant
+
+		while not isMatchArmsEnd() 'arms'
+			let armPrevPos = cursor.index()
+
+			if at(TokenKind.default) 'defaultArm'
+				let defaultToken = try consume()
+				// E2046: a plain `default then ...` would silently swallow error
+				// variants added later; only `default throws` / `default panic` opt out.
+				if not (at(TokenKind.throws) or at(TokenKind.panic)) 'plainDefault'
+					reportCompileError(project, code: ErrorCode.parserMatchDefaultEnumMustThrow, message: "'default' in a match on an error union must be followed by 'throws <error>' or 'panic(\"message\")'", line: defaultToken.line, column: defaultToken.column, filePath: filePath)
+					throw ParserError.unhandledToken
+				end 'plainDefault'
+				hasDefault = true
+				let defaultBodyId = module.addBlockAt(currentFunc, label: "{baseLabel}.case{armIndex}", filePath: tryFilePath, firstLine: defaultToken.line).id
+				var dispatchBlock = try blockById(currentDispatchId)
+				branchBlockTo(dispatchBlock, targetId: defaultBodyId, range: SourceRange.ofToken(defaultToken))
+				currentBlock = try blockById(defaultBodyId)
+				try emitDivergingDefaultArm(currentBlock)
+				armIndex = armIndex + 1
+				try skipNewlines()
+				break
+			end 'defaultArm'
+
+			// Case pattern: `EnumName.caseName[(bindings)]` or bare `caseName[(bindings)]`.
+			let head = try parseErrorUnionArmHead(ctx, byBareName: byBareName, ambiguousBare: ambiguousBare)
+			let caseRef = head.caseRef
+			let caseNameToken = head.caseToken
+
+			// Optional payload bindings — only valid on associated-value cases.
+			var pattern = MatchPatternSpec.enumCase(caseNameToken, caseName: caseRef.caseName)
+			if at(TokenKind.leftParen) 'hasBindings'
+				pattern = try parseCaseBindingPattern(caseNameToken)
+				if pattern.bindings.count() != caseRef.payloadArity 'wrongCount'
+					reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "wrong binding count: '{caseRef.enumName}.{caseRef.caseName}' expects {caseRef.payloadArity} associated value(s), got {pattern.bindings.count()}", line: caseNameToken.line, column: caseNameToken.column, filePath: filePath)
+					throw ParserError.unhandledToken
+				end 'wrongCount'
+			end 'hasBindings'
+
+			let coverageKey = "{caseRef.enumName}.{caseRef.caseName}"
+			if coveredKeys.contains(coverageKey) 'dupPattern'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "duplicate pattern in match: '{coverageKey}'", line: caseNameToken.line, column: caseNameToken.column, filePath: filePath)
+			end 'dupPattern' else 'recordCoverage'
+				coveredKeys.insert(coverageKey)
+			end 'recordCoverage'
+
+			try expect(TokenKind.then)
+
+			// A boxed member's throw delivers a heap pointer (routed through the box
+			// slot), so its dispatch reads the tag from the box (two-stage) and its
+			// arm reads/frees the box; a non-boxed member uses the i64 flag.
+			let isBoxed = caseRef.memberIsBoxed
+			let bodyBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.case{armIndex}", filePath: tryFilePath, firstLine: caseNameToken.line)
+			let bodyBlockId = bodyBlock.id
+			let nextBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.next{armIndex}", filePath: tryFilePath, firstLine: caseNameToken.line)
+			let nextBlockId = nextBlock.id
+			try emitErrorUnionArmDispatch(ctx, dispatchBlockId: currentDispatchId, caseRef: caseRef, isBoxed: isBoxed, bodyId: bodyBlockId, nextId: nextBlockId, baseLabel: baseLabel, armIndex: armIndex, range: SourceRange.ofToken(caseNameToken))
+
+			currentBlock = try blockById(bodyBlockId)
+			scope.pushScope()
+			if isBoxed 'boxedBind'
+				try emitErrorUnionAssocBinding(ctx, memberEnumName: caseRef.enumName, pattern: pattern, range: SourceRange.ofToken(caseNameToken))
+			end 'boxedBind'
+			let bodyExit = try parseMatchStatementArmBody(currentBlock)
+			scope.popScope()
+
+			if not bodyExit.exitBlock.isTerminated() 'reachesMerge'
+				anyArmReachesMerge = true
+				module.setTerminator(bodyExit.exitBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+			end 'reachesMerge'
+
+			currentDispatchId = nextBlockId
+			armIndex = armIndex + 1
+			try skipNewlines()
+			if cursor.index() <= armPrevPos 'stuck'
+				break
+			end 'stuck'
+		end 'arms'
+
+		let endTok = cursor.current()
+
+		// The final "no arm matched" fall-through. Exhaustiveness guarantees a
+		// non-default arm always matches when there is no default, so this edge is
+		// unreachable there — but the block still needs a terminator. A default arm
+		// already wired the fall-through to its body inside the loop.
+		if not hasDefault 'wireFallthrough'
+			var tailDispatch = try blockById(currentDispatchId)
+			branchBlockTo(tailDispatch, targetId: mergeBlockId, range: SourceRange.ofToken(endTok))
+		end 'wireFallthrough'
+
+		// E2026: every (member, case) pair must be covered unless a default is present.
+		if not hasDefault 'exhaustive'
+			try checkErrorUnionExhaustive(ctx, coveredKeys: coveredKeys, endTok: endTok)
+		end 'exhaustive'
+
+		let thisMatchCtx = try matchStack.get(matchStack.count() - 1) otherwise panic("parseErrorUnionMatch: matchStack empty before pop")
+		let mergeWasReached = thisMatchCtx.mergeReached
+		try matchStack.pop() otherwise panic("parseErrorUnionMatch: matchStack underflow")
+
+		try consumeMatchEndLabel(header.userLabel)
+
+		if not anyArmReachesMerge and not mergeWasReached 'mergeDead'
+			markBlockDeadIfUnset(mergeBlock)
+		end 'mergeDead'
+
+		currentBlock = mergeBlock
+		return mergeBlock
+	end 'parseErrorUnionMatch'
+
+	// Populate `byBareName` (case name -> owning member) and `ambiguousBare` (case
+	// names shared by two or more members) across every member of the error union.
+	function buildErrorUnionBareNameMap(ctx TryBlockContext, byBareName ErrorUnionCaseRefMap, ambiguousBare ReferencedVarSet) throws ParserError
+		for mi in 0 upto ctx.errorTypeNames.count() 'eachMember'
+			let memberName = try ctx.errorTypeNames.get(mi) otherwise panic("buildErrorUnionBareNameMap: errorTypeNames.get OOB at {mi}")
+			let memberBoxed = unionIsBoxed(memberName)
+			let cases = errorUnionMemberCases(memberName)
+			for ci in 0 upto cases.count() 'eachCase'
+				let c = try cases.get(ci) otherwise panic("buildErrorUnionBareNameMap: cases.get OOB at {ci}")
+				if byBareName.contains(c.name) 'dup'
+					ambiguousBare.insert(c.name)
+				end 'dup' else 'firstSeen'
+					try byBareName.insert(c.name, value: ErrorUnionCaseRef.create(mi, enumName: memberName, caseName: c.name, ordinal: c.ordinal, payloadArity: c.payloadFields.count(), memberIsBoxed: memberBoxed)) otherwise panic("buildErrorUnionBareNameMap: insert failed despite contains-guard for '{c.name}'")
+				end 'firstSeen'
+			end 'eachCase'
+		end 'eachMember'
+	end 'buildErrorUnionBareNameMap'
+
+	// The declared cases of an error-union member enum, from whichever registry
+	// holds it. Members were recorded from routed real throws, so the enum is
+	// always present by the time the handler's `match` is parsed.
+	function errorUnionMemberCases(enumName String) returns EnumCaseArray
+		if let resolved = try project.enumTypes.get(enumName) 'resolved'
+			return resolved.cases
+		end 'resolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'unresolved'
+			return unresolved.cases
+		end 'unresolved'
+		panic("errorUnionMemberCases: member enum '{enumName}' absent from enum registries")
+	end 'errorUnionMemberCases'
+
+	// Parse one error-union arm's case pattern head — `EnumName.caseName` or a
+	// bare `caseName` — and resolve it to its member/case reference plus the token
+	// naming the case. Reports E3085 (bare name shared across members) and E3034
+	// (unknown case) as the generic union-match compiler would.
+	function parseErrorUnionArmHead(ctx TryBlockContext, byBareName ErrorUnionCaseRefMap, ambiguousBare ReferencedVarSet) returns ErrorUnionArmHead throws ParserError
+		let firstToken = try consumeExpecting("error-union case pattern")
+		if at(TokenKind.dot) 'qualified'
+			try eat(TokenKind.dot)
+			let caseTok = try consumeExpecting("case name")
+			let caseRef = try resolveErrorUnionQualified(ctx, enumNameTok: firstToken, caseNameTok: caseTok)
+			return ErrorUnionArmHead.create(caseRef, caseToken: caseTok)
+		end 'qualified'
+		if ambiguousBare.contains(firstToken.value) 'ambiguous'
+			reportCompileError(project, code: ErrorCode.semanticUnionMatchPatternAmbiguous, message: "case '{firstToken.value}' is shared by multiple union members; qualify with 'EnumName.{firstToken.value}'", line: firstToken.line, column: firstToken.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'ambiguous'
+		if not byBareName.contains(firstToken.value) 'unknownBare'
+			reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "no case '{firstToken.value}' in the error union", line: firstToken.line, column: firstToken.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'unknownBare'
+		let bareRef = try byBareName.get(firstToken.value) otherwise panic("parseErrorUnionArmHead: byBareName.get miss after contains")
+		return ErrorUnionArmHead.create(bareRef, caseToken: firstToken)
+	end 'parseErrorUnionArmHead'
+
+	// Resolve a qualified `EnumName.caseName` error-union pattern to its member
+	// index + case ordinal + payload arity. Reports E3034 when `EnumName` is not a
+	// union member or has no such case.
+	function resolveErrorUnionQualified(ctx TryBlockContext, enumNameTok Token, caseNameTok Token) returns ErrorUnionCaseRef throws ParserError
+		var found = false
+		var memberIdx = 0 as ElementCount
+		for mi in 0 upto ctx.errorTypeNames.count() 'each'
+			let m = try ctx.errorTypeNames.get(mi) otherwise panic("resolveErrorUnionQualified: errorTypeNames.get OOB at {mi}")
+			if m == enumNameTok.value 'hit'
+				memberIdx = mi
+				found = true
+				break
+			end 'hit'
+		end 'each'
+		if not found 'notMember'
+			reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "'{enumNameTok.value}' is not a member of the error union", line: enumNameTok.line, column: enumNameTok.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'notMember'
+		let memberBoxed = unionIsBoxed(enumNameTok.value)
+		let cases = errorUnionMemberCases(enumNameTok.value)
+		for ci in 0 upto cases.count() 'eachCase'
+			let c = try cases.get(ci) otherwise panic("resolveErrorUnionQualified: cases.get OOB at {ci}")
+			if c.name == caseNameTok.value 'caseHit'
+				return ErrorUnionCaseRef.create(memberIdx, enumName: enumNameTok.value, caseName: c.name, ordinal: c.ordinal, payloadArity: c.payloadFields.count(), memberIsBoxed: memberBoxed)
+			end 'caseHit'
+		end 'eachCase'
+		reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "'{enumNameTok.value}' has no case '{caseNameTok.value}'", line: caseNameTok.line, column: caseNameTok.column, filePath: filePath)
+		throw ParserError.unhandledToken
+	end 'resolveErrorUnionQualified'
+
+	// Report E2026 with the ordered list of uncovered `(member, case)` pairs.
+	function checkErrorUnionExhaustive(ctx TryBlockContext, coveredKeys ReferencedVarSet, endTok Token) throws ParserError
+		var missing = ""
+		var missingCount = 0
+		for mi in 0 upto ctx.errorTypeNames.count() 'eachMember'
+			let memberName = try ctx.errorTypeNames.get(mi) otherwise panic("checkErrorUnionExhaustive: errorTypeNames.get OOB at {mi}")
+			let cases = errorUnionMemberCases(memberName)
+			for ci in 0 upto cases.count() 'eachCase'
+				let c = try cases.get(ci) otherwise panic("checkErrorUnionExhaustive: cases.get OOB at {ci}")
+				let key = "{memberName}.{c.name}"
+				if not coveredKeys.contains(key) 'isMissing'
+					if missingCount > 0 'sep'
+						missing.append(", ")
+					end 'sep'
+					missing.append(key)
+					missingCount = missingCount + 1
+				end 'isMissing'
+			end 'eachCase'
+		end 'eachMember'
+		if missingCount > 0 'report'
+			reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on error union is not exhaustive, missing: {missing}", line: endTok.line, column: endTok.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'report'
+	end 'checkErrorUnionExhaustive'
+
+	// Re-fetch a block by id, laundering its `module` borrow through a function
+	// return so the caller can assign it to `currentBlock` and still mutate
+	// `module` afterward (a direct `currentBlock = module.getBlockByIdIn(...)`
+	// links the field to `module`'s borrow and trips E3070 on the next
+	// `addBlockAt`). Callers use this instead of the raw method for that reason.
+	function blockById(blockId BlockId) returns IrBlock throws ParserError
+		return try module.getBlockByIdIn(currentFunc, id: blockId) otherwise panic("blockById: block id {blockId} not found in current function")
+	end 'blockById'
+
+	// Set `block`'s terminator to an unconditional branch. `block` is a parameter
+	// (fetched by the caller) so the module mutation doesn't collide with the
+	// caller's live block borrow — the same borrow-decoupling the routing helpers
+	// rely on (see `routeBareThrowingCallInBlock`).
+	function branchBlockTo(block IrBlock, targetId BlockId, range SourceRange)
+		module.setTerminator(block, op: MaxonOp.br(targetId, range: range))
+	end 'branchBlockTo'
+
+	// Append `discriminant == memberIdx` to `block` (mutated directly, as in
+	// `routeBareThrowingCallInBlock`) and return the boolean result SSA name.
+	function appendDiscriminantEq(block IrBlock, ctx TryBlockContext, memberIndex ElementCount, range SourceRange) returns ByteArray
+		let discrLoad = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(discrLoad, slotId: ctx.discriminantSlot, slotType: MaxonType.integer, range: range))
+		let discrLit = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
+		let discrEq = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(discrEq, left: discrLoad, right: discrLit, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: range))
+		return discrEq
+	end 'appendDiscriminantEq'
+
+	// Simple (non-payload) member dispatch on `block`: branch to `bodyId` when
+	// `(discriminant == memberIdx) and (flag == ordinal + 1)`, else to `nextId`.
+	// `block` is mutated in place through the module ops (a re-fetched `var` from
+	// the caller — the mutation-analysis pass-by-ref requirement).
+	function emitErrorUnionSimpleDispatch(block IrBlock, ctx TryBlockContext, caseRef ErrorUnionCaseRef, bodyId BlockId, nextId BlockId, range SourceRange)
+		let discrEq = appendDiscriminantEq(block, ctx: ctx, memberIndex: caseRef.memberIndex, range: range)
+		let flagLoad = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(flagLoad, slotId: ctx.errorFlagSlot, slotType: MaxonType.integer, range: range))
+		let flagLit = emitLiteral(block, value: caseRef.ordinal + 1, valueType: MaxonType.integer, range: range)
+		let flagEq = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(flagEq, left: flagLoad, right: flagLit, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: range))
+		let combined = freshSynthName()
+		module.appendOp(block, op: MaxonOp.binop(combined, left: discrEq, right: flagEq, opKind: BinOpKind.bitAnd, operandType: MaxonType.boolean, range: range))
+		module.setTerminator(block, op: MaxonOp.condBr(combined, thenTarget: bodyId, elseTarget: nextId, range: range))
+	end 'emitErrorUnionSimpleDispatch'
+
+	// Stage 1 of an associated-value member dispatch on `block`: branch to the
+	// tag-check block (`cmpTagId`) when the discriminant matches, else `nextId`.
+	function emitErrorUnionAssocStage1(block IrBlock, ctx TryBlockContext, memberIndex ElementCount, cmpTagId BlockId, nextId BlockId, range SourceRange)
+		let discrEq = appendDiscriminantEq(block, ctx: ctx, memberIndex: memberIndex, range: range)
+		module.setTerminator(block, op: MaxonOp.condBr(discrEq, thenTarget: cmpTagId, elseTarget: nextId, range: range))
+	end 'emitErrorUnionAssocStage1'
+
+	// Stage 2 of a boxed member dispatch on `block`: the box pointer is in the box
+	// slot (the discriminant already confirmed this member), so branch to `bodyId`
+	// when its tag (offset 0) equals the case ordinal, else `nextId`. The box slot
+	// is loaded as an i64 here — reading the raw pointer for `enum_tag` — so this
+	// borrow doesn't affect the slot's managed lifetime (freed via the arm read).
+	function emitErrorUnionBoxTagStage2(block IrBlock, ctx TryBlockContext, ordinal CaseOrdinal, bodyId BlockId, nextId BlockId, range SourceRange)
+		let boxLoad = freshSynthName()
+		module.appendOp(block, op: MaxonOp.varLoad(boxLoad, slotId: ctx.boxSlot, slotType: MaxonType.integer, range: range))
+		let tagName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.enumTag(tagName, enumValName: boxLoad, range: range))
+		let tagLit = emitLiteral(block, value: ordinal, valueType: MaxonType.integer, range: range)
+		let tagEq = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(tagEq, left: tagName, right: tagLit, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: range))
+		module.setTerminator(block, op: MaxonOp.condBr(tagEq, thenTarget: bodyId, elseTarget: nextId, range: range))
+	end 'emitErrorUnionBoxTagStage2'
+
+	// Emit the dispatch for one error-union arm onto the block identified by
+	// `dispatchBlockId`. Simple (non-boxed) members compare
+	// `(discr == idx) and (flag == ord+1)` in one block; boxed members split the
+	// check across a fresh tag-comparison block so the box deref (from the box
+	// slot) only happens once the discriminant confirms this member threw. Blocks
+	// are re-fetched into `var`s and handed to the emit helpers as parameters (they
+	// mutate the block), keeping the module mutation clear of the live block borrow
+	// (E3070).
+	function emitErrorUnionArmDispatch(ctx TryBlockContext, dispatchBlockId BlockId, caseRef ErrorUnionCaseRef, isBoxed bool, bodyId BlockId, nextId BlockId, baseLabel String, armIndex IntConstant, range SourceRange) throws ParserError
+		if isBoxed 'boxedTwoStage'
+			// Create stage 2's block first so the following dispatch-block re-fetch
+			// is valid after this block-array append.
+			let cmpTagId = module.addBlockAt(currentFunc, label: "{baseLabel}.cmpTag{armIndex}", filePath: filePath.toString(), firstLine: range.line).id
+			var dispatchBlock = try blockById(dispatchBlockId)
+			emitErrorUnionAssocStage1(dispatchBlock, ctx: ctx, memberIndex: caseRef.memberIndex, cmpTagId: cmpTagId, nextId: nextId, range: range)
+			var tagBlock = try blockById(cmpTagId)
+			emitErrorUnionBoxTagStage2(tagBlock, ctx: ctx, ordinal: caseRef.ordinal, bodyId: bodyId, nextId: nextId, range: range)
+			return
+		end 'boxedTwoStage'
+
+		var dispatchBlock = try blockById(dispatchBlockId)
+		emitErrorUnionSimpleDispatch(dispatchBlock, ctx: ctx, caseRef: caseRef, bodyId: bodyId, nextId: nextId, range: range)
+	end 'emitErrorUnionArmDispatch'
+
+	// In a boxed member's arm body, load the box pointer (moved into the shared box
+	// slot by the routing) as the member union type, then extract payload bindings
+	// via the shared union-arm helper. The union-typed load upgrades the box slot's
+	// recorded type to the boxed union so it is drop-tracked — its single
+	// scope-exit decref frees the box (the arm read is a borrow). A no-op payload
+	// extraction (bare `E.c` with no parens) still triggers the upgrade + free.
+	function emitErrorUnionAssocBinding(ctx TryBlockContext, memberEnumName String, pattern MatchPatternSpec, range SourceRange) throws ParserError
+		let memberType = internMaxonType(project, name: memberEnumName)
+		let boxVal = freshSynthName()
+		module.appendOp(currentBlock, op: MaxonOp.varLoad(boxVal, slotId: ctx.boxSlot, slotType: memberType, range: range))
+		_ = emitUnionArmBindings(boxVal, pattern: pattern, scrutineeMutable: false)
+	end 'emitErrorUnionAssocBinding'
+
+	// True when a routed throwing call's clause names a heap-boxed union (its
+	// throws deliver a heap pointer, which routes through the box slot rather than
+	// the i64 flag slot). A clause with no enum name (unreachable for a routed
+	// throwing call) is treated as non-boxed.
+	function clauseThrowsBoxed(clause ThrowsClause) returns bool
+		let name = try throwsClauseName(clause) otherwise return false
+		return unionIsBoxed(name)
+	end 'clauseThrowsBoxed'
 
 	// Scan every block of the try-block body (block-array indices
 	// [bodyFirstBlockIndex, liveBlockCount)) and route each bare throwing
@@ -12609,14 +13120,22 @@ export type Parser
 	end 'bareCallOpRange'
 
 	// Rewrite the bare throwing call at `callPos` in `block` to a tryCall /
-	// tryMethodCall with a fresh per-call flag SSA name, record its error type
-	// in the context, then split `block`: the call + a flag store + a success
-	// cmp/cond_br stay in `block`; every op after the call moves to a fresh
-	// continuation block inserted immediately after `block` in layout order.
-	// The cond_br routes success -> continuation, error -> shared error block.
+	// tryMethodCall with a fresh per-call error SSA name, record its error type in
+	// the context, then split `block`: the call + a success cmp/cond_br stay in
+	// `block`; every op after the call moves to a fresh continuation block.
+	//
+	// A simple-enum callee delivers `ordinal + 1` — stored (with the discriminant)
+	// straight into the i64 slots in `block`, then `cond_br` success -> cont, error
+	// -> shared error block. A heap-boxed-union callee delivers a POINTER, which is
+	// routed through a per-call landing block (error edge only, so the deref /
+	// managed store see a non-null box): the landing stores the box into the
+	// managed box slot + the discriminant, then branches to the shared handler. The
+	// i64 flag slot is left untouched for boxed throws so it never carries a pointer
+	// (see `TryBlockContext.boxSlot`).
 	function routeBareThrowingCallInBlock(ctx TryBlockContext, block IrBlock, callPos ElementCount, callOpRef OpIndex, callOp MaxonOp, tryToken Token) throws ParserError
 		let clause = throwsClauseForBareCallOp(callOp, opIdx: callOpRef)
-		try recordTryBlockErrorType(ctx, clause: clause, line: tryToken.line, column: tryToken.column)
+		let memberIndex = try recordTryBlockErrorType(ctx, clause: clause)
+		let calleeBoxed = clauseThrowsBoxed(clause)
 
 		// Rewrite the call op in place to carry a fresh error-flag SSA name,
 		// preserving the original call's source range.
@@ -12633,16 +13152,44 @@ export type Parser
 		// Split off the continuation: every op after the call, plus the original
 		// terminator, moves into a fresh block inserted right after `block`.
 		let contBlock = try splitBlockAfter(block, splitPos: callPos, label: "tryblock_{currentFunc.nextBlockId}.cont")
+		let contId = contBlock.id
+		let tokRange = SourceRange.ofToken(tryToken)
 
-		// In `block` (now ending at the call): store the call's flag into the
-		// shared slot, compute `flag == 0`, and branch success -> continuation,
-		// error -> shared error block.
-		module.appendOp(block, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: SourceRange.ofToken(tryToken)))
-		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryToken))
+		if calleeBoxed 'boxRoute'
+			// Boxed-union delivery: box pointer routed via a per-call landing block
+			// on the error edge (so the managed store sees a non-null box). Create
+			// the landing block first so the error target id is known.
+			let landId = module.addBlockAt(currentFunc, label: "tryblock_{currentFunc.nextBlockId}.boxland", filePath: filePath.toString(), firstLine: tryToken.line).id
+			let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: tokRange)
+			let cmpName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.cmp(cmpName, left: flagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: tokRange))
+			module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: contId, elseTarget: landId, range: tokRange))
+			var landing = try blockById(landId)
+			fillBoxSlotLanding(landing, ctx: ctx, boxName: flagName, memberIndex: memberIndex, range: tokRange)
+			return
+		end 'boxRoute'
+
+		// Simple-enum delivery: `ordinal + 1` flag + member discriminant into the
+		// i64 slots, then branch success -> continuation, error -> shared handler.
+		module.appendOp(block, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: tokRange))
+		let discrName = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: tokRange)
+		module.appendOp(block, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: tokRange))
+		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: tokRange)
 		let cmpName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: flagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
-		module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: contBlock.id, elseTarget: ctx.errorBlockId, range: SourceRange.ofToken(tryToken)))
+		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: flagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: tokRange))
+		module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: contId, elseTarget: ctx.errorBlockId, range: tokRange))
 	end 'routeBareThrowingCallInBlock'
+
+	// Fill a boxed-union throw's per-call landing block: move the box pointer into
+	// the managed box slot, record the member discriminant, then branch to the
+	// shared error handler. `block` is a re-fetched `var` (the module ops mutate
+	// it); the box store is the box's last use (an ownership move into the slot).
+	function fillBoxSlotLanding(block IrBlock, ctx TryBlockContext, boxName ByteArray, memberIndex ElementCount, range SourceRange)
+		module.appendOp(block, op: MaxonOp.varStore(ctx.boxSlot, value: boxName, range: range))
+		let discrName = emitLiteral(block, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
+		module.appendOp(block, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: range))
+		module.setTerminator(block, op: MaxonOp.br(ctx.errorBlockId, range: range))
+	end 'fillBoxSlotLanding'
 
 	// Emit-time interception for a bare `throw Enum.case` inside an active
 	// block-form try body: instead of the function-exit `throw` terminator,
@@ -12658,18 +13205,22 @@ export type Parser
 	// ordinal is resolved at parse time from the enum registry — the thrown case
 	// names a concrete variant, so no runtime lookup is needed.
 	//
-	// Associated-value union throws inside a block-form try would need a second
-	// routing slot for the heap pointer (Phase B) — reject them up front.
+	// A bare `throw AssocUnion.case(args)` inside a block-form try body would
+	// need to construct the payload box and route its POINTER (not an ordinal+1)
+	// through the shared flag — that construction path isn't wired here yet, so
+	// reject an associated-value bare throw up front. (Associated-value errors
+	// still route fine when raised INSIDE a called function — that path already
+	// delivers a boxed pointer through the routed try-call flag.)
 	function routeBareThrowToActiveTryBlock(block IrBlock, enumName String, variantName String, hasPayload bool, range SourceRange) returns bool throws ParserError
 		if tryBlockStack.count() == 0 'noActiveBlock'
 			return false
 		end 'noActiveBlock'
 		var ctx = try tryBlockStack.last() otherwise return false
 		if hasPayload 'assocValue'
-			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "throwing associated-value enum '{enumName}' inside a block-form try is not yet supported (Phase B)", line: range.line, column: range.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "throwing associated-value enum '{enumName}' with a bare 'throw' inside a block-form try is not yet supported", line: range.line, column: range.column, filePath: filePath)
 			throw ParserError.unhandledToken
 		end 'assocValue'
-		try recordTryBlockErrorType(ctx, clause: ThrowsClause.throwing(enumName), line: range.line, column: range.column)
+		let memberIndex = try recordTryBlockErrorType(ctx, clause: ThrowsClause.throwing(enumName))
 
 		let ordinalPlusOne = try lookupCaseOrdinalPlusOne(enumName, variantName: variantName) otherwise 'unknownCase'
 			reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case in block-form try throw: '{enumName}.{variantName}'", line: range.line, column: range.column, filePath: filePath)
@@ -12684,6 +13235,10 @@ export type Parser
 		currentBlock = block
 		let flagName = emitLiteral(currentBlock, value: ordinalPlusOne, valueType: MaxonType.integer, range: range)
 		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.errorFlagSlot, value: flagName, range: range))
+		// Store this throw's union-member index into the shared discriminant slot
+		// (dead on the single-enum path; read by `parseErrorUnionMatch`).
+		let discrName = emitLiteral(currentBlock, value: memberIndex as ParsedInt, valueType: MaxonType.integer, range: range)
+		module.appendOp(currentBlock, op: MaxonOp.varStore(ctx.discriminantSlot, value: discrName, range: range))
 		module.setTerminator(currentBlock, op: MaxonOp.br(ctx.errorBlockId, range: range))
 		return true
 	end 'routeBareThrowToActiveTryBlock'
@@ -12710,20 +13265,70 @@ export type Parser
 		throw CaseOrdinalLookupError.notFound
 	end 'caseOrdinalPlusOneInCases'
 
-	// Record a distinct error-enum name on the context. Phase A handles only the
-	// single-enum (degenerate) case; two or more distinct error enums in one
-	// block-form try would require an error-union synthesis (Phase B). Reject
-	// that with a clean compile error rather than crashing — Phase B will
-	// replace this branch with the union-binding path.
-	function recordTryBlockErrorType(ctx TryBlockContext, clause ThrowsClause, line LineNumber, column ColumnNumber) throws ParserError
+	// Record a distinct error-enum name on the context and return the routed
+	// throw/call's union-member index (its discriminant value). One recorded
+	// type => the single-enum (degenerate) path; two or more => the multi-enum
+	// error-union synthesis (Phase B), compiled by `parseErrorUnionMatch`. The
+	// clause always names a concrete enum here — the routing sites only invoke
+	// this for a bare `throw Enum.case` or a call whose callee throws.
+	function recordTryBlockErrorType(ctx TryBlockContext, clause ThrowsClause) returns ElementCount throws ParserError
 		var liveCtx = ctx
-		let enumName = try throwsClauseName(clause) otherwise return
-		let distinct = liveCtx.recordErrorType(enumName, clause: clause)
-		if distinct > 1 'multiEnum'
-			reportCompileError(project, code: ErrorCode.semanticTryBlockNoThrows, message: "multi-enum error union in block-form try is not yet implemented (Phase B): the body throws two or more distinct error enum types", line: line, column: column, filePath: filePath)
-			throw ParserError.unhandledToken
-		end 'multiEnum'
+		let enumName = try throwsClauseName(clause) otherwise panic("recordTryBlockErrorType: routed throwing clause carries no enum name")
+		_ = liveCtx.recordErrorType(enumName, clause: clause)
+		return liveCtx.memberIndexOf(enumName)
 	end 'recordTryBlockErrorType'
+
+	// --- Phase B: multi-enum error-union `(e)` binding registry ---
+	//
+	// Registered while parsing a multi-enum block-form try's `otherwise (e) 'h'`
+	// handler body so `parseMatchHeader` can recognise `match e` and route it to
+	// `parseErrorUnionMatch`. Registration is scoped to the handler-body parse:
+	// pushed just before it and popped just after.
+
+	function registerErrorUnionBinding(name String, ctx TryBlockContext)
+		errorUnionBindings.push(ErrorUnionBinding.create(name, ctx: ctx))
+	end 'registerErrorUnionBinding'
+
+	// Pop the innermost (last-pushed) error-union binding named `name`.
+	function unregisterErrorUnionBinding(name String)
+		var idx = errorUnionBindings.count()
+		while idx > 0 'scan'
+			idx = idx - 1
+			let b = try errorUnionBindings.get(idx) otherwise panic("unregisterErrorUnionBinding: get OOB at {idx}")
+			if b.bindingName == name 'hit'
+				_ = try errorUnionBindings.remove(idx) otherwise panic("unregisterErrorUnionBinding: remove OOB at {idx}")
+				return
+			end 'hit'
+		end 'scan'
+		panic("unregisterErrorUnionBinding: no active binding named '{name}'")
+	end 'unregisterErrorUnionBinding'
+
+	// True when `name` is an active multi-enum error-union `(e)` binding.
+	// Consulted by `parseMatchHeader` before `parseExpression` consumes the
+	// scrutinee identifier.
+	function isActiveErrorUnionBinding(name String) returns bool
+		for b in errorUnionBindings 'each'
+			if b.bindingName == name 'hit'
+				return true
+			end 'hit'
+		end 'each'
+		return false
+	end 'isActiveErrorUnionBinding'
+
+	// The try-block context (discriminant / error-flag slots + member list) for
+	// an active error-union binding. `name` must be an active binding — callers
+	// gate on `isActiveErrorUnionBinding` / a non-empty `header.errorUnionBindingName`.
+	function errorUnionCtxForBinding(name String) returns TryBlockContext
+		var idx = errorUnionBindings.count()
+		while idx > 0 'scan'
+			idx = idx - 1
+			let b = try errorUnionBindings.get(idx) otherwise panic("errorUnionCtxForBinding: get OOB at {idx}")
+			if b.bindingName == name 'hit'
+				return b.ctx
+			end 'hit'
+		end 'scan'
+		panic("errorUnionCtxForBinding: no active binding named '{name}'")
+	end 'errorUnionCtxForBinding'
 
 	// Split `block` after op position `splitPos` (0-based index into its
 	// opRefs): every op strictly after `splitPos`, plus the original terminator,
@@ -20312,6 +20917,44 @@ end 'MatchContext'
 
 typealias MatchContextArray = Array with MatchContext
 
+// Phase B: resolution of one bare case name against a synthesized error union
+// (`parseErrorUnionMatch`). Maps a case name to the member enum that owns it,
+// that member's discriminant index, and the case's ordinal + payload arity so
+// the match dispatch can emit the discriminant/flag/tag comparisons.
+type ErrorUnionCaseRef
+	export var memberIndex as ElementCount
+	export var enumName as String
+	export var caseName as String
+	export var ordinal as CaseOrdinal
+	export var payloadArity as ElementCount
+	// True when the OWNING member is a heap-boxed union (`unionIsBoxed`). Every
+	// throw of such a member — even a bare (payload-free) case — delivers a heap
+	// pointer routed through the box slot, so its dispatch reads the tag from the
+	// box (two-stage) rather than the flag. Distinct from `payloadArity > 0`,
+	// which is per-case.
+	export var memberIsBoxed as bool
+
+	export static function create(memberIndex ElementCount, enumName String, caseName String, ordinal CaseOrdinal, payloadArity ElementCount, memberIsBoxed bool) returns ErrorUnionCaseRef
+		return Self{memberIndex: memberIndex, enumName: enumName, caseName: caseName, ordinal: ordinal, payloadArity: payloadArity, memberIsBoxed: memberIsBoxed}
+	end 'create'
+end 'ErrorUnionCaseRef'
+
+typealias ErrorUnionCaseRefMap = Map with (String, ErrorUnionCaseRef)
+
+// The parsed head of one error-union match arm: the resolved case reference and
+// the token naming the case (`caseName` in `E.caseName`, or the bare case token).
+// Returned from `parseErrorUnionArmHead` so the caller reads a single immutable
+// binding instead of threading a mutable case-token alias through the qualified /
+// bare branches (Token has no exported `clone`).
+type ErrorUnionArmHead
+	export var caseRef as ErrorUnionCaseRef
+	export var caseToken as Token
+
+	export static function create(caseRef ErrorUnionCaseRef, caseToken Token) returns ErrorUnionArmHead
+		return Self{caseRef: caseRef, caseToken: caseToken}
+	end 'create'
+end 'ErrorUnionArmHead'
+
 // Result of parsing a `match <expr> '<label>'` prelude. `failed` is set when
 // the label is missing (the diagnostic was already emitted); callers branch
 // on it to pick a recovery path appropriate to the form (statement vs.
@@ -20333,13 +20976,18 @@ type MatchHeader
 	// rejected with E2013 because there's no source-level slot to write back
 	// to. For bare-let scrutinees the same E2013 fires.
 	export var scrutineeMutable as bool
+	// Phase B: non-empty when the scrutinee was a bare identifier naming an
+	// active multi-enum error-union `(e)` binding. `parseMatchStatement`
+	// dispatches such a match to `parseErrorUnionMatch` instead of the generic
+	// enum-match path.
+	export var errorUnionBindingName as String
 
-	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock, scrutineeMutable bool) returns MatchHeader
-		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false, scrutineeMutable: scrutineeMutable}
+	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock, scrutineeMutable bool, errorUnionBindingName String = "") returns MatchHeader
+		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false, scrutineeMutable: scrutineeMutable, errorUnionBindingName: errorUnionBindingName}
 	end 'create'
 
 	export static function failed() returns MatchHeader
-		return Self{scrutineeName: ByteArray.create(), scrutineeType: MaxonType.unresolved, userLabel: "", baseLabel: "", mergeBlock: IrBlock.create(0 as BlockId, label: ""), failed: true, scrutineeMutable: false}
+		return Self{scrutineeName: ByteArray.create(), scrutineeType: MaxonType.unresolved, userLabel: "", baseLabel: "", mergeBlock: IrBlock.create(0 as BlockId, label: ""), failed: true, scrutineeMutable: false, errorUnionBindingName: ""}
 	end 'failed'
 end 'MatchHeader'
 

@@ -1,0 +1,82 @@
+// Test: try-block.single-enum-error-path
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function maybeFail(x bool) returns Score throws MyError
+    if x 'check'
+        throw MyError.failed
+    end 'check'
+    return 7
+end 'maybeFail'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = maybeFail(false)
+        let b = maybeFail(true)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 42
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @maybeFail(local0: i1) -> u8 {
+  entry:
+    %6 = mir.param local0 : i1
+    mir.cond_br %6 [then: check_0(), else: check_0.after()]
+  check_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  check_0.after:
+    %4 = mir.mov_imm 7 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %5, %6 = mir.try_call @maybeFail(%0)
+    %9 = mir.cmp eq, %6, %0
+    mir.cond_br %9 [then: tryblock_0.cont(), else: tryblock_1.err(%6)]
+  tryblock_0.cont:
+    %10 = mir.mov_imm 1 : i64
+    %11, %12 = mir.try_call @maybeFail(%10)
+    %15 = mir.cmp eq, %12, %0
+    mir.cond_br %15 [then: tryblock_1.cont(), else: tryblock_1.err(%12)]
+  tryblock_1.cont:
+    %18 = mir.add.i64 %5, %11
+    mir.br tryblock_4.after(%18)
+  tryblock_1.err(%29: i64):
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.sub.i64 %29, %20
+    %24 = mir.cmp eq, %21, %0
+    mir.cond_br %24 [then: k_0.case0(), else: k_0.merge(%0)]
+  tryblock_4.after(%28: i64):
+    %30 = mir.mov_imm 125 : i64
+    %31 = mir.cmp ugt, %28, %30
+    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+  k_0.merge(%27: i64):
+    mir.br tryblock_4.after(%27)
+  k_0.case0:
+    %26 = mir.mov_imm 42 : i64
+    mir.br k_0.merge(%26)
+  __range_panic_0:
+    %32 = mir.global_addr @__panic_msg_0e7d92a963268e6e
+    %33 = mir.call @mrt_panic(%32)
+  __range_ok_0:
+    mir.ret %28
+  }
+}
+---

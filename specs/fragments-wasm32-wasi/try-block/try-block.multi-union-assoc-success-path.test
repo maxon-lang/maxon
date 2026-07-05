@@ -1,0 +1,134 @@
+// Test: try-block.multi-union-assoc-success-path
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+    bad(code Score)
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.bad(50)
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(false)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            ErrA.bad(code) then sum = code
+            ErrB.splat then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @callA(local0: i1) -> u16 {
+  entry:
+    %7 = mir.param local0 : i1
+    mir.cond_br %7 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 50 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9)
+    %12 = mir.call @stdlib.__mm_incref(%11)
+    mir.store %10, %11, 0 width: qword
+    mir.store %2, %11, 8 width: qword
+    %4 = mir.mov_imm 0 : i64
+    mir.error_return %4, %11
+  c_0.after:
+    %5 = mir.mov_imm 5 : i64
+    %6 = mir.mov_imm 0 : i64
+    mir.error_return %5, %6
+  }
+  func @callB(local0: i1) -> u16 {
+  entry:
+    %6 = mir.param local0 : i1
+    mir.cond_br %6 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  c_0.after:
+    %4 = mir.mov_imm 6 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %6, %7 = mir.try_call @callA(%0)
+    %9 = mir.cmp eq, %7, %0
+    mir.cond_br %9 [then: tryblock_0.cont(), else: tryblock_1.err(%0, %0, %7)]
+  tryblock_0.cont:
+    %47 = mir.call @__mm_decref_maybenull_helper(%7)
+    %11, %12 = mir.try_call @callB(%0)
+    %13 = mir.mov_imm 1 : i64
+    %15 = mir.cmp eq, %12, %0
+    mir.cond_br %15 [then: tryblock_1.cont(), else: tryblock_1.err(%12, %13, %0)]
+  tryblock_1.cont:
+    %18 = mir.add.i64 %6, %11
+    mir.br tryblock_5.after(%18)
+  tryblock_1.err(%43: i64, %44: i64, %45: i64):
+    %23 = mir.cmp eq, %44, %0
+    mir.cond_br %23 [then: k_0.cmpTag0(), else: __rc_edge_1_0()]
+  tryblock_5.after(%42: i64):
+    %50 = mir.mov_imm 125 : i64
+    %51 = mir.cmp ugt, %42, %50
+    mir.cond_br %51 [then: __range_panic_0(), else: __range_ok_0()]
+  k_0.merge(%41: i64):
+    mir.br tryblock_5.after(%41)
+  k_0.case0:
+    %27 = mir.load %45, 8 width: qword
+    %46 = mir.call @__mm_decref_maybenull_helper(%45)
+    mir.br k_0.merge(%27)
+  k_0.next0:
+    %30 = mir.mov_imm 1 : i64
+    %31 = mir.cmp eq, %44, %30
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.cmp eq, %43, %33
+    %35 = mir.and.i64 %31, %34
+    mir.cond_br %35 [then: k_0.case1(), else: k_0.merge(%0)]
+  k_0.cmpTag0:
+    %37 = mir.load %45, 0 width: qword
+    %39 = mir.cmp eq, %37, %0
+    mir.cond_br %39 [then: k_0.case0(), else: __rc_edge_9_0()]
+  k_0.case1:
+    %40 = mir.mov_imm 99 : i64
+    mir.br k_0.merge(%40)
+  __rc_edge_1_0:
+    %48 = mir.call @__mm_decref_maybenull_helper(%45)
+    mir.br k_0.next0()
+  __rc_edge_9_0:
+    %49 = mir.call @__mm_decref_maybenull_helper(%45)
+    mir.br k_0.next0()
+  __range_panic_0:
+    %52 = mir.global_addr @__panic_msg_192b5e2d59a25229
+    %53 = mir.call @mrt_panic(%52)
+  __range_ok_0:
+    mir.ret %42
+  }
+}
+---

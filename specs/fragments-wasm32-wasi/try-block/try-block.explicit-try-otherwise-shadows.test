@@ -1,0 +1,108 @@
+// Test: try-block.explicit-try-otherwise-shadows
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.kaboom
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = try callA(true) otherwise 0
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            splat then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @callA(local0: i1) -> u8 {
+  entry:
+    %6 = mir.param local0 : i1
+    mir.cond_br %6 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  c_0.after:
+    %4 = mir.mov_imm 5 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  }
+  func @callB(local0: i1) -> u8 {
+  entry:
+    %6 = mir.param local0 : i1
+    mir.cond_br %6 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  c_0.after:
+    %4 = mir.mov_imm 6 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 1 : i64
+    %5, %6 = mir.try_call @callA(%4)
+    %8 = mir.cmp ne, %6, %0
+    mir.cond_br %8 [then: try_0.merge(%0), else: try_0.ok()]
+  tryblock_0.err:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.sub.i64 %20, %11
+    %15 = mir.cmp eq, %12, %0
+    mir.cond_br %15 [then: k_0.case0(), else: k_0.merge(%0)]
+  try_0.ok:
+    mir.br try_0.merge(%5)
+  try_0.merge(%31: i64):
+    %19, %20 = mir.try_call @callB(%0)
+    %23 = mir.cmp eq, %20, %0
+    mir.cond_br %23 [then: tryblock_1.cont(), else: tryblock_0.err()]
+  tryblock_1.cont:
+    %26 = mir.add.i64 %31, %19
+    mir.br tryblock_6.after(%26)
+  tryblock_6.after(%30: i64):
+    %32 = mir.mov_imm 125 : i64
+    %33 = mir.cmp ugt, %30, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
+  k_0.merge(%29: i64):
+    mir.br tryblock_6.after(%29)
+  k_0.case0:
+    %28 = mir.mov_imm 99 : i64
+    mir.br k_0.merge(%28)
+  __range_panic_0:
+    %34 = mir.global_addr @__panic_msg_24d29cd33a495e22
+    %35 = mir.call @mrt_panic(%34)
+  __range_ok_0:
+    mir.ret %30
+  }
+}
+---

@@ -1,0 +1,62 @@
+// Test: try-block.bare-throw-in-nested-if
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        if true 'gate'
+            throw MyError.failed
+        end 'gate'
+    end 'work' otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 5
+        end 'k'
+    end 'h'
+    return sum as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br gate_0()
+  tryblock_0.err:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.sub.i64 %11, %6
+    %10 = mir.cmp eq, %7, %0
+    mir.cond_br %10 [then: k_0.case0(), else: k_0.merge(%0)]
+  gate_0:
+    %11 = mir.mov_imm 1 : i64
+    mir.br tryblock_0.err()
+  tryblock_4.after(%22: i64):
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp gt, %22, %14
+    mir.cond_br %15 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %17 = mir.cmp lt, %22, %0
+    mir.cond_br %17 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %18 = mir.global_addr @__panic_msg_ba90d27b9f88f44a
+    %19 = mir.call @mrt_panic(%18)
+  __cast_ok_0:
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %22, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  k_0.merge(%21: i64):
+    mir.br tryblock_4.after(%21)
+  k_0.case0:
+    %20 = mir.mov_imm 5 : i64
+    mir.br k_0.merge(%20)
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_ba90d27b9f88f44a
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %22
+  }
+}
+---
