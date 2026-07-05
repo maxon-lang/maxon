@@ -73,8 +73,10 @@ typealias ParamIndexSet = Set with ParamCount
 // returned-collection-then-mutate-the-map pattern).
 typealias MutatedParamsKeySet = Set with String
 
-// The `"funcName::paramIndex"` key for one mutated parameter.
-function mutatedParamKey(funcName String, paramIndex ParamCount) returns String
+// The `"funcName::paramIndex"` key for one mutated / reassigned parameter.
+// Exported so the pass-by-reference lowering builds the exact same key when it
+// consults `computeReassignedParams`'s result at call sites.
+export function mutatedParamKey(funcName String, paramIndex ParamCount) returns String
 	return "{funcName}::{paramIndex}"
 end 'mutatedParamKey'
 
@@ -92,39 +94,97 @@ function buildSlotToParamIndex(func IrFunction) returns SlotToParamIndexMap
 	return m
 end 'buildSlotToParamIndex'
 
-// Compute, per function name, the set of user-parameter positions its body
-// mutates. Two stages mirroring `ParameterMutationAnalysisPass`:
-//   1. Local: a `varStore` to a param slot (direct reassignment) or a mutating
-//      method call (`isMutatingMethodName`) on a param-derived receiver marks
-//      that param's position mutated.
-//   2. Transitive: a function that passes its own parameter P as the argument
-//      for a callee parameter the callee mutates, mutates P too. Iterated to a
-//      fixpoint over the (caller, argPos, calleePos) call edges.
-function computeMutatedParams(module MaxonModule) returns MutatedParamsKeySet
-	var mutated = MutatedParamsKeySet.create()
+// The per-function local seed for `computeParamKeySet`: given one function,
+// return the set of its user-parameter positions the relevant analysis marks
+// locally. `computeMutatedParams` and `computeReassignedParams` differ only in
+// which collector they plug in here.
+typealias LocalParamCollector = function(MaxonModule, IrFunction, SlotToParamIndexMap) returns ParamIndexSet
 
-	// Stage 1: local mutation per function.
+// Shared driver for both whole-module parameter-set analyses. Two stages
+// mirroring `ParameterMutationAnalysisPass`:
+//   1. Local: seed each function's marked positions with `collectLocal`, keyed
+//      `"funcName::paramIndex"`.
+//   2. Transitive: a function that passes its own parameter P as the argument
+//      for a callee parameter the callee marks, marks P too. Iterated to a
+//      fixpoint over the (caller, argPos, calleePos) call edges.
+function computeParamKeySet(module MaxonModule, collectLocal LocalParamCollector) returns MutatedParamsKeySet
+	var keys = MutatedParamsKeySet.create()
+
+	// Stage 1: local facts per function.
 	for func in module.functions 'eachFunc'
 		let slotToParam = buildSlotToParamIndex(func)
 		if slotToParam.count() == 0 'noParams'
 			continue
 		end 'noParams'
-		var indices = ParamIndexSet.create()
-		collectLocalParamMutations(module, func: func, slotToParam: slotToParam, indicesOut: indices)
+		let indices = collectLocal(module, func, slotToParam)
 		for idx in indices 'eachIdx'
-			mutated.insert(mutatedParamKey(func.name, paramIndex: idx))
+			keys.insert(mutatedParamKey(func.name, paramIndex: idx))
 		end 'eachIdx'
 	end 'eachFunc'
 
 	// Stage 2: transitive propagation to a fixpoint.
-	propagateMutatedParams(module, mutated: mutated)
+	propagateMutatedParams(module, mutated: keys)
 
-	return mutated
+	return keys
+end 'computeParamKeySet'
+
+// Compute, per function name, the set of user-parameter positions its body
+// mutates: a `varStore` to a param slot (direct reassignment) or a mutating
+// method call (`isMutatingMethodName`) on a param-derived receiver.
+function computeMutatedParams(module MaxonModule) returns MutatedParamsKeySet
+	return computeParamKeySet(module, collectLocal: collectLocalParamMutations)
 end 'computeMutatedParams'
 
-// Stage-1 local scan: record every user-parameter position `func` mutates
+// Compute, per function name, the set of user-parameter positions its body
+// DIRECTLY reassigns (`param = expr` — a `varStore` to a param slot),
+// transitively propagated through call edges to a fixpoint. This is the
+// subset of `computeMutatedParams` that seeds ONLY on direct reassignment
+// (not on a mutating method call like `list.clear()`): only a direct
+// reassignment changes the parameter-passing ABI, since a method mutation
+// already propagates through the shared struct pointer. Mirrors the C#
+// bootstrap's `IrFunction.ReassignedParams`, which drives pass-by-reference.
+// Keyed `"funcName::paramIndex"` like `computeMutatedParams`.
+export function computeReassignedParams(module MaxonModule) returns MutatedParamsKeySet
+	return computeParamKeySet(module, collectLocal: collectLocalParamReassignments)
+end 'computeReassignedParams'
+
+// Stage-1 local scan for `computeReassignedParams`: return the set of
+// user-parameter positions `func` DIRECTLY reassigns (a `varStore` to a param
+// slot). Unlike `collectLocalParamMutations` it deliberately ignores mutating
+// method calls — only a whole-value reassignment needs the by-reference ABI.
+function collectLocalParamReassignments(module MaxonModule, func IrFunction, slotToParam SlotToParamIndexMap) returns ParamIndexSet
+	var indicesOut = ParamIndexSet.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectLocalParamReassignments: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectLocalParamReassignments: opIdx OOB")
+			recordParamReassignmentFact(op, slotToParam: slotToParam, indicesOut: indicesOut)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("collectLocalParamReassignments: termIdx OOB")
+			recordParamReassignmentFact(termOp, slotToParam: slotToParam, indicesOut: indicesOut)
+		end 'hasTerm'
+	end 'eachBlock'
+	return indicesOut
+end 'collectLocalParamReassignments'
+
+// One op's contribution to the direct-reassignment scan: a `varStore` to a
+// param slot reassigns that parameter. Every other op variant contributes
+// nothing (covered by the surrounding `to`-range no-op arms so the match stays
+// exhaustive without a `default`).
+function recordParamReassignmentFact(op MaxonOp, slotToParam SlotToParamIndexMap, indicesOut ParamIndexSet)
+	match op 'op'
+		varStore(slotId, _, _) then markParamStore(slotId, slotToParam: slotToParam, indicesOut: indicesOut)
+		literal to varLoad then return
+		globalLoad to sizeofType then return
+	end 'op'
+end 'recordParamReassignmentFact'
+
+// Stage-1 local scan: return the set of user-parameter positions `func` mutates
 // directly (param reassignment or a mutating method on a param-derived value).
-function collectLocalParamMutations(module MaxonModule, func IrFunction, slotToParam SlotToParamIndexMap, indicesOut ParamIndexSet)
+function collectLocalParamMutations(module MaxonModule, func IrFunction, slotToParam SlotToParamIndexMap) returns ParamIndexSet
+	var indicesOut = ParamIndexSet.create()
+
 	// SSA value names derived from a parameter (a `varLoad` of a param slot, or a
 	// `fieldLoad` chained off an already-tainted value). A mutating method on such
 	// a receiver mutates the parameter it derives from. Maps the tainted value
@@ -143,6 +203,8 @@ function collectLocalParamMutations(module MaxonModule, func IrFunction, slotToP
 			recordParamMutationFacts(termOp, slotToParam: slotToParam, taintedParam: taintedParam, indicesOut: indicesOut)
 		end 'hasTerm'
 	end 'eachBlock'
+
+	return indicesOut
 end 'collectLocalParamMutations'
 
 // SSA value name -> the user-parameter ordinal it derives from.
@@ -464,6 +526,13 @@ function checkFunction(project Project, func IrFunction, module MaxonModule, mut
 	// already collected. Runs unconditionally (independent of pending borrows).
 	checkImmutableReceiverMutation(project, func: func, facts: facts, slotToVarInfo: slotToVarInfo, mutators: mutators)
 
+	// E3019: passing an immutable (`let`-bound) local as the argument for a
+	// parameter the callee MUTATES (reassigns it, or mutates its reachable
+	// state) — the mutation would reach data the user bound immutably. Uses the
+	// same whole-module `mutatedParams` facts the via-helper borrow check
+	// consults. Runs unconditionally, mirroring the C# call-lowering check.
+	checkImmutableArgToMutatingParam(project, func: func, facts: facts, slotToVarInfo: slotToVarInfo, mutatedParams: mutatedParams)
+
 	// Pass 2: detect pending borrows (a .get()-style call on a generic
 	// collection whose result binds into a user slot).
 	var pending = detectBorrows(project, facts: facts, slotToVarInfo: slotToVarInfo, mutators: mutators)
@@ -512,6 +581,48 @@ function checkImmutableReceiverMutation(project Project, func IrFunction, facts 
 		reportCompileError(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: "cannot pass '{info.name}' to function that mutates parameter 'self'{inFunc}", line: site.line, column: site.column, filePath: func.sourceFilePath)
 	end 'eachSite'
 end 'checkImmutableReceiverMutation'
+
+// E3019 (SemanticImmutableRefToMutatingParam): report a free call that passes
+// an immutable (`let`-bound) local as the argument for a parameter position the
+// callee MUTATES (`mutatedParams`). Mirrors the C# call-lowering check
+// (`MaxonToStandardConversion.Calls`): for each user-argument that names a
+// `let` local, if the callee mutates that parameter position, the write would
+// reach data the user bound immutably. `var` locals and parameters (implicitly
+// mutable — a parameter forwarded into a mutating position just becomes
+// by-reference itself) pass. Self-field arguments are exempt: a struct `self`
+// is passed by reference, so its fields are mutable through the receiver.
+function checkImmutableArgToMutatingParam(project Project, func IrFunction, facts BorrowFacts, slotToVarInfo SlotToVarInfoMap, mutatedParams MutatedParamsKeySet)
+	for site in facts.freeCallSites 'eachSite'
+		for argPos in 0 upto site.argNames.count() 'eachArg'
+			if not mutatedParams.contains(mutatedParamKey(site.callee, paramIndex: argPos)) 'notMutatedHere'
+				continue
+			end 'notMutatedHere'
+			let argName = try site.argNames.get(argPos) otherwise panic("checkImmutableArgToMutatingParam: argNames.get OOB at {argPos}")
+			let slot = try facts.ssaToSlot.get(argName) otherwise continue
+			let info = try slotToVarInfo.get(slot) otherwise continue
+			if info.isSelfField 'selfFieldArg'
+				continue
+			end 'selfFieldArg'
+			if info.mutable 'mutableArg'
+				continue
+			end 'mutableArg'
+			let paramName = calleeParamName(project, callee: site.callee, paramIndex: argPos)
+			let inFunc = "" if func.name.isEmpty() else " (in {func.name})"
+			reportCompileError(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: "cannot pass '{info.name}' to function that mutates parameter '{paramName}'{inFunc}", line: site.line, column: site.column, filePath: func.sourceFilePath)
+		end 'eachArg'
+	end 'eachSite'
+end 'checkImmutableArgToMutatingParam'
+
+// The declared name of the callee's parameter at `paramIndex` (self included at
+// ordinal 0 for instance methods), for the E3019 message. Empty when the callee
+// has no registered signature or the index is out of range — the diagnostic
+// still names the argument, so a blank parameter name only omits detail.
+function calleeParamName(project Project, callee String, paramIndex ParamCount) returns String
+	if let sig = try project.funcSignatures.get(callee) 'haveSig'
+		return try sig.paramNames.get(paramIndex) otherwise ""
+	end 'haveSig'
+	return ""
+end 'calleeParamName'
 
 // True when a mutating method on a `let` receiver of type `t` should fire
 // E3019: user-facing collections (`String`, or a generic instance whose base is

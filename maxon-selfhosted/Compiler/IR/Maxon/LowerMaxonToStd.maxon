@@ -56,6 +56,21 @@ end 'lowerMaxonToStd'
 // emits one helper per enum.
 typealias EnumNameHelperSet = Set with String
 
+// Pass-by-reference ABI. `ReassignedParamsKeySet` is the whole-module set of
+// `"funcName::paramIndex"` keys for parameters a function directly reassigns
+// (`param = expr`), transitively propagated — computed once by
+// `computeReassignedParams` and consulted at every call site to decide which
+// argument positions pass an ADDRESS rather than a value. `ByRefParamSlotSet`
+// is the current function's own by-reference scalar param SCOPE slots (its
+// varLoads dereference the incoming pointer, its varStores write back through
+// it). `ByRefArgSlotMap` records, per function, each SSA value name that a
+// `varLoad` produced together with the slot it loaded from, so a call site can
+// take that slot's address (`stackAddr`) — or forward the pointer when the
+// slot is itself a by-reference param.
+typealias ReassignedParamsKeySet = Set with String
+typealias ByRefParamSlotSet = Set with VarSlot
+typealias ByRefArgSlotMap = Map with (String, VarSlot)
+
 // Global-lock op selector for `lowerInternalsOsLock`: 0=init, 1=acquire,
 // 2=release. Narrowed so any out-of-domain value is a static impossibility.
 typealias OsLockKind = int(0 to 2)
@@ -2456,6 +2471,64 @@ function maxonTypeIsManagedOrInterface(project Project, t MaxonType) returns boo
 	return maxonTypeIsHeapManaged(project, t: t) or interfaceTypeIsFat(t)
 end 'maxonTypeIsManagedOrInterface'
 
+// Pass-by-reference eligibility: true when a value of type `t` is a plain,
+// non-refcounted scalar with an i64 (GP-register) ABI representation — a
+// `bool` / `integer` / byte, or an int-backed enum or payload-free union (a
+// bare i64 tag), or a numeric ranged typealias. These are the types a
+// reassigned parameter can pass by-reference through the simple redirect
+// (caller passes the slot's address; callee dereferences it), because there
+// is no reference count to maintain across the write-back and the pointer's
+// GP-register ABI matches the callee's param class. Deliberately EXCLUDES:
+//   - managed refs (structs, boxed unions, `string`, `character`) — the
+//     write-back would need refcount integration (deferred);
+//   - `float` and float-backed enums — the callee param would be an f64/XMM
+//     class while the pointer arrives in a GP register (an ABI mismatch that
+//     needs a per-param GP override; deferred);
+//   - fat pointers (interfaces), function values (fn+env pair), and opaque
+//     type parameters — multi-slot / possibly-managed.
+// A reassigned parameter that falls outside this set keeps the existing
+// by-value ABI on BOTH the callee and every call site — consistent, just not
+// propagated to the caller.
+function maxonTypeIsByRefScalar(project Project, t MaxonType) returns bool
+	if maxonTypeIsHeapManaged(project, t: t) or maxonTypeIsManagedRef(project, t: t) 'managed'
+		return false
+	end 'managed'
+	if interfaceTypeIsFat(t) or isFunctionMaxonType(chaseTypealiasToFunctionType(project, t: t)) 'multiSlot'
+		return false
+	end 'multiSlot'
+	return match t 'classify'
+		boolean gives true
+		integer gives true
+		float gives false
+		string gives false
+		character gives false
+		named gives not stdTypeIsFloat(maxonTypeToStdType(project, ref: t))
+		function to unresolved gives false
+		typeParameter to cstring gives false
+	end 'classify'
+end 'maxonTypeIsByRefScalar'
+
+// Pass-by-reference eligibility for a MANAGED (refcounted) parameter: a plain
+// user-defined heap struct (`type Foo`). Reassigning such a parameter through
+// the by-reference redirect needs manual refcount maintenance on the write-back
+// (release the caller's outgoing struct, retain the incoming one). Restricted
+// to bare `named(id)` struct types — generic instances (Array/Map/... backing a
+// collection), `string`/`character`, boxed unions, and interfaces are excluded
+// (their by-reference reassignment is not yet supported).
+function maxonTypeIsByRefManagedStruct(project Project, t MaxonType) returns bool
+	return match t 'classify'
+		named(id) gives project.structTypes.contains(project.typeNames.get(id))
+		boolean to character gives false
+		function to cstring gives false
+	end 'classify'
+end 'maxonTypeIsByRefManagedStruct'
+
+// Pass-by-reference eligibility overall: either a plain i64 scalar (simple
+// redirect, no refcount) or a managed heap struct (redirect + manual refcount).
+function maxonTypeIsByRefEligible(project Project, t MaxonType) returns bool
+	return maxonTypeIsByRefScalar(project, t: t) or maxonTypeIsByRefManagedStruct(project, t: t)
+end 'maxonTypeIsByRefEligible'
+
 // Refcount-insertion: the receiver type-param NAME for a `typeParameter(id)`
 // value, else "". Persisted alongside the type-param bit by `setValueType` so the
 // SSA inserter routes a generic value's `sys.dropTypeParam` through the matching
@@ -2930,6 +3003,28 @@ type MaxonToStdLowering
 	// projected to that one field's select-chain. Reset per function in
 	// `lower()`. See `DeferredStructRawValue`.
 	var deferredStructRawValues as DeferredStructRawValueMap
+	// Pass-by-reference: whole-module `"funcName::paramIndex"` set of directly-
+	// reassigned parameters, transitively propagated. Computed once at the top
+	// of `lower()`. Consulted by E3019 (passing an immutable to a reassigned
+	// parameter). Never reset.
+	var reassignedParams as ReassignedParamsKeySet
+	// Pass-by-reference: whole-module `"funcName::paramIndex"` set of parameters
+	// that actually use the by-reference ABI — the subset of `reassignedParams`
+	// whose parameter is an i64 scalar (`maxonTypeIsByRefScalar`), keyed on the
+	// CALLEE's own slot type (a single source of truth so the callee-side
+	// redirect and the caller-side address passing can never disagree about a
+	// parameter's ABI). `self` is excluded. Computed once at the top of
+	// `lower()`; never reset.
+	var byRefParamKeys as ReassignedParamsKeySet
+	// Pass-by-reference: the current function's own by-reference scalar param
+	// scope slots. A `varLoad` of one dereferences the incoming pointer; a
+	// `varStore` writes back through it. Rebuilt per function in `lower()`.
+	var byRefParamSlots as ByRefParamSlotSet
+	// Pass-by-reference: current function's map from a `varLoad` result SSA
+	// name to the scope slot it loaded from. Lets a call site recover the
+	// source slot of an argument so it can pass the slot's address for a
+	// by-reference parameter. Rebuilt per function in `lower()`.
+	var argNameToSourceSlot as ByRefArgSlotMap
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -2966,7 +3061,11 @@ type MaxonToStdLowering
 			pendingFnRefThunks: EnumNameHelperSet.create(),
 			pendingFnRefThunkTargets: StringArray.create(),
 			aliasValues: BoolArray.create(),
-			deferredStructRawValues: DeferredStructRawValueMap.create()
+			deferredStructRawValues: DeferredStructRawValueMap.create(),
+			reassignedParams: ReassignedParamsKeySet.create(),
+			byRefParamKeys: ReassignedParamsKeySet.create(),
+			byRefParamSlots: ByRefParamSlotSet.create(),
+			argNameToSourceSlot: ByRefArgSlotMap.create()
 		}
 	end 'create'
 
@@ -3300,6 +3399,16 @@ type MaxonToStdLowering
 		// offset 0 the moment `mrt_start` calls `__slab_init`.
 		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled, rcSanitizeEnabled: self.project.rcSanitizeEnabled)
 
+		// Pass-by-reference: compute the whole-module set of directly-reassigned
+		// parameters up front (transitively propagated). It drives both the
+		// callee-side redirect (which of a function's own params arrive as
+		// pointers) and the caller-side address passing (which argument positions
+		// of a callee must be handed an address). The set is stable across the
+		// whole lowering — a callee's ABI must agree at its definition and at
+		// every call site — so it is computed once here rather than per function.
+		self.reassignedParams = computeReassignedParams(self.maxonModule)
+		self.byRefParamKeys = self.buildByRefParamKeys()
+
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
 		// IrBlock is initially empty; ops are appended as we walk each function.
@@ -3481,6 +3590,11 @@ type MaxonToStdLowering
 			self.implicitWitnessValueIds = ValueIdArray.create()
 			self.implicitConstructLayoutValueIds = ValueIdArray.create()
 			self.currentMaxonFunc = srcFunc
+			// Pass-by-reference: rebuild this function's by-reference scalar param
+			// scope-slot set, and clear the per-function arg-name→slot map that
+			// the caller-side address passing consults.
+			self.byRefParamSlots = self.buildByRefParamSlots(srcFunc)
+			self.argNameToSourceSlot = ByRefArgSlotMap.create()
 			// Drop-tracking: clear the per-function alias flags (see aliasValues).
 			self.aliasValues = BoolArray.create()
 			// Clear the deferred struct-backed-enum `.rawValue` projection map so
@@ -5072,6 +5186,60 @@ type MaxonToStdLowering
 		return (bufId, lenId)
 	end 'materializeBoolToString'
 
+	// Pass-by-reference: build the whole-module set of `"funcName::paramIndex"`
+	// keys for parameters that actually use the by-reference ABI. A parameter
+	// qualifies when it is directly reassigned (or a caller forwards it into a
+	// reassigned position — `reassignedParams`), it is an i64 scalar
+	// (`maxonTypeIsByRefScalar`, keyed on the CALLEE's own slot type), and it is
+	// not the receiver `self` (method dispatch never passes self by address).
+	// This is the single source of truth both the callee-side redirect and the
+	// caller-side address passing consult, so they can never disagree about a
+	// parameter's ABI.
+	function buildByRefParamKeys() returns ReassignedParamsKeySet
+		var keys = ReassignedParamsKeySet.create()
+		// Iterate signatures rather than the module's function bodies: a
+		// function's `slotMaxonTypes` is populated per-function DURING lowering
+		// (not yet available here at the top of `lower()`), whereas its
+		// signature's `paramTypes` — the declared parameter types, ordinal 0 =
+		// self for instance methods — is built by TypeResolution before lowering
+		// and is exactly what a call site resolves the callee against. The
+		// signature ordinal k aligns with the `paramReservations` ordinal
+		// `reassignedParams` is keyed on (both count one entry per declared
+		// parameter, self included).
+		for (funcName, sig) in self.project.funcSignatures 'eachSig'
+			let firstIsSelf = signatureFirstParamIsSelf(sig)
+			for k in 0 upto sig.paramTypes.count() 'eachParam'
+				if firstIsSelf and k == 0 'skipSelf'
+					continue
+				end 'skipSelf'
+				if not self.reassignedParams.contains(mutatedParamKey(funcName, paramIndex: k)) 'notReassigned'
+					continue
+				end 'notReassigned'
+				let paramType = try sig.paramTypes.get(k) otherwise continue
+				if not maxonTypeIsByRefEligible(self.project, t: paramType) 'notEligible'
+					continue
+				end 'notEligible'
+				keys.insert(mutatedParamKey(funcName, paramIndex: k))
+			end 'eachParam'
+		end 'eachSig'
+		return keys
+	end 'buildByRefParamKeys'
+
+	// Pass-by-reference: the current function's by-reference scalar param scope
+	// slots, derived from the whole-module `byRefParamKeys`. A `varLoad` of one
+	// dereferences the incoming pointer; a `varStore` writes back through it.
+	function buildByRefParamSlots(func IrFunction) returns ByRefParamSlotSet
+		var slots = ByRefParamSlotSet.create()
+		for k in 0 upto func.paramReservations.count() 'eachParam'
+			if not self.byRefParamKeys.contains(mutatedParamKey(func.name, paramIndex: k)) 'notByRef'
+				continue
+			end 'notByRef'
+			let res = try func.paramReservations.get(k) otherwise panic("buildByRefParamSlots: paramReservations.get OOB at {k}")
+			slots.insert(res.paramSlot)
+		end 'eachParam'
+		return slots
+	end 'buildByRefParamSlots'
+
 	// C1.c: dispatch the varDecl op. For interface-typed slots, route
 	// through fat-pointer construction so the slot stores the value (or
 	// box pointer if width > 8) at slot N and the witness pointer at the
@@ -5134,10 +5302,77 @@ type MaxonToStdLowering
 		let storedValueType = self.getValueType(storedValueId)
 		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: slotType, dstBlock: dstBlock)
 		self.captureClosureEnvIfFunctionTyped(slotId, valueId: storedValueId, slotType: slotType)
+		// Pass-by-reference: a store to a by-reference param writes THROUGH the
+		// incoming pointer (the promoted param slot permanently holds it) so the
+		// reassignment is visible to the caller. The slot is never overwritten
+		// with the value — it stays the pointer — so every read and write
+		// dereferences it. A managed struct also needs refcount maintenance
+		// (release the caller's outgoing struct, retain the incoming one), since
+		// the storeIndirect bypasses the late refcount inserter that a plain
+		// storeSlot would drive.
+		if self.byRefParamSlots.contains(slotId) 'byRefStore'
+			if maxonTypeIsByRefManagedStruct(self.project, t: slotType) 'managedByRef'
+				self.emitByRefManagedParamStore(slotId, newValueId: widenedValueId, dstBlock: dstBlock)
+			end 'managedByRef' else 'scalarByRef'
+				self.emitByRefParamStore(slotId, valueId: widenedValueId, slotType: slotType, dstBlock: dstBlock)
+			end 'scalarByRef'
+			return
+		end 'byRefStore'
 		// Refcount-insertion: plain structural storeSlot; the late insert-refcounts
 		// pass supplies incref-new / decref-old maintenance.
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: widenedValueId)))
 	end 'lowerVarStore'
+
+	// Pass-by-reference: load the incoming pointer P that a by-reference param's
+	// promoted slot permanently holds (or that a forwarded by-reference arg
+	// carries). Returns the SSA value naming P, typed as an i64 address. Every
+	// by-reference read / write-back / pointer-forward reads P through this
+	// rather than reading the slot as a value.
+	function emitLoadByRefParamPointer(slotId VarSlot, dstBlock IrBlock) returns ValueId
+		let ptrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(ptrId, slotId: slotId)))
+		self.setValueType(ptrId, t: MaxonType.integer)
+		return ptrId
+	end 'emitLoadByRefParamPointer'
+
+	// Pass-by-reference (write side): load the incoming pointer P from the
+	// param's promoted slot and store `valueId` through it (`*P = valueId`).
+	// `slotType` selects a GP vs FP store. The slot permanently holds P, so it
+	// is never overwritten here.
+	function emitByRefParamStore(slotId VarSlot, valueId ValueId, slotType MaxonType, dstBlock IrBlock)
+		let ptrId = self.emitLoadByRefParamPointer(slotId, dstBlock: dstBlock)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(ptrId, offset: 0, valueId: valueId, width: StoreWidth.qword, isFloat: isFloat)))
+	end 'emitByRefParamStore'
+
+	// Pass-by-reference (write side, managed struct): reassign a by-reference
+	// managed struct parameter with correct ownership transfer. Loads the
+	// incoming pointer P and the caller's outgoing struct (`old = *P`), retains
+	// the incoming struct so it survives the late refcount inserter's scope-exit
+	// drop of the freshly-produced value, writes it back (`*P = new`), then
+	// releases the caller's outgoing struct (whose ownership this reassignment
+	// takes over). Net effect: the caller's slot ends owning `new`, its previous
+	// struct is released once, and no reference leaks or double-frees. Mirrors
+	// the C# bootstrap's decref-old + write-back on a reassigned struct param.
+	function emitByRefManagedParamStore(slotId VarSlot, newValueId ValueId, dstBlock IrBlock)
+		let ptrId = self.emitLoadByRefParamPointer(slotId, dstBlock: dstBlock)
+		let oldId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(oldId, addrId: ptrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
+		self.setValueType(oldId, t: MaxonType.integer)
+		self.emitMmRefcountCall(newValueId, callee: "stdlib.__mm_incref", dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(ptrId, offset: 0, valueId: newValueId, width: StoreWidth.qword, isFloat: false)))
+		self.emitMmRefcountCall(oldId, callee: "stdlib.__mm_decref", dstBlock: dstBlock)
+	end 'emitByRefManagedParamStore'
+
+	// Emit a single `stdlib.__mm_incref` / `__mm_decref` call on `ptrValueId`.
+	// The runtime helpers null-check the pointer, so a null slot is a safe no-op.
+	function emitMmRefcountCall(ptrValueId ValueId, callee String, dstBlock IrBlock)
+		var args = ValueIdArray.create()
+		args.push(ptrValueId)
+		let resultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: args)))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'emitMmRefcountCall'
 
 	function lookupSlotMaxonType(slotId VarSlot) returns MaxonType
 		// slotMaxonTypes is populated for every slot the parser declared, so
@@ -5258,6 +5493,28 @@ type MaxonToStdLowering
 
 	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
+		// Pass-by-reference: record this SSA name's source slot so a call site
+		// can take the slot's address for a by-reference argument (or forward
+		// the pointer when the slot is itself a by-reference param).
+		self.argNameToSourceSlot.upsert(String.from(result), value: slotId)
+		// Pass-by-reference (read side): a by-reference param's slot permanently
+		// holds the incoming pointer P, so the loaded value is `*P`. Dereference
+		// through a `loadIndirect` rather than reading the slot (which would
+		// yield P itself). Scalars carry no interface/closure companion, so the
+		// pairing logic below does not apply — return early. A managed struct
+		// dereference is a BORROW of the caller's value (owned by the caller's
+		// slot), so classify it borrowed to keep the refcount inserter from
+		// dropping it.
+		if self.byRefParamSlots.contains(slotId) 'byRefLoad'
+			let ptrId = self.emitLoadByRefParamPointer(slotId, dstBlock: dstBlock)
+			let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: ptrId, offset: 0, width: StoreWidth.qword, signed: true, isFloat: isFloat)))
+			self.setValueType(resultId, t: slotType)
+			if maxonTypeIsByRefManagedStruct(self.project, t: slotType) 'managedBorrow'
+				self.classifyValue(resultId, cls: OwnershipClass.borrowed, valueMaxonType: slotType)
+			end 'managedBorrow'
+			return
+		end 'byRefLoad'
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
 		// Drop-tracking: a loaded value is an alias of whatever the slot owns,
 		// so storing it into another drop-tracked slot/field must incref.
@@ -9723,6 +9980,45 @@ type MaxonToStdLowering
 	// index 0 and the user args at indices 1..userParamCount. The slot/
 	// default-fill scratch buffers stay user-arg-indexed (the receiver is
 	// not a "user param") so paramStartIndex math is unchanged.
+	// Pass-by-reference: true when the callee resolved for `opIdx` passes the
+	// parameter at `paramOrdinal` (the callee's own declaration-order ordinal,
+	// self included) by reference. Consults the whole-module `byRefParamKeys`
+	// — the same set the callee's own redirect uses — so the ABI can never
+	// disagree between the two sides.
+	function argPositionIsByRef(opIdx OpIndex, paramOrdinal ParsedInt) returns bool
+		let callee = try self.project.resolvedCallees.get(opIdx) otherwise return false
+		return self.byRefParamKeys.contains(mutatedParamKey(callee, paramIndex: paramOrdinal as ParamCount))
+	end 'argPositionIsByRef'
+
+	// Pass-by-reference: produce the pointer a by-reference argument passes.
+	//   - If the argument is a plain variable/param, take its slot's address
+	//     (`stackAddr`), which pins the slot in memory so the callee's write
+	//     lands in the caller's storage.
+	//   - If the argument is itself one of THIS function's by-reference params,
+	//     forward the pointer it holds so the write reaches the original
+	//     caller's storage rather than a copy in this frame (the transitive
+	//     `nested-calls` case).
+	//   - Otherwise the argument is a literal/expression with no backing slot,
+	//     which the self-hosted whitelist never exercises (reassigned parameters
+	//     are always fed a variable) — routed to a loud failure below.
+	function byRefArgAddress(arg ByteArray, dstBlock IrBlock) returns ValueId
+		if let sourceSlot = try self.argNameToSourceSlot.get(String.from(arg)) 'haveSlot'
+			if self.byRefParamSlots.contains(sourceSlot) 'forwardPtr'
+				return self.emitLoadByRefParamPointer(sourceSlot, dstBlock: dstBlock)
+			end 'forwardPtr'
+			let addrId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: sourceSlot)))
+			self.setValueType(addrId, t: MaxonType.integer)
+			return addrId
+		end 'haveSlot'
+		// Literal/expression argument to a parameter-reassigning function: there
+		// is no source slot to take the address of. Route it to a loud failure
+		// rather than silently passing a value where the callee expects a
+		// pointer. If a real program ever needs it, allocate a fresh scratch
+		// slot, store the coerced value, and take that slot's address here.
+		panic("byRefArgAddress: by-reference argument has no backing slot (literal/expression passed to a parameter-reassigning function is not yet supported)")
+	end 'byRefArgAddress'
+
 	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, opIdx OpIndex, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		if userParamCount < 0 'badArity'
@@ -9777,6 +10073,15 @@ type MaxonToStdLowering
 			end 'overflow'
 			let paramType = try resolvedParamTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
 			let paramName = try signature.paramNames.get(slot + paramStartIndex) otherwise ""
+			// Pass-by-reference: when the callee reassigns this parameter and it
+			// is a plain scalar, hand it the ADDRESS of the argument's storage
+			// instead of the value, so the callee's write is visible here.
+			if self.argPositionIsByRef(opIdx, paramOrdinal: slot + paramStartIndex) 'byRefArg'
+				let addrId = self.byRefArgAddress(arg, dstBlock: dstBlock)
+				try self.slotIdsScratch.set(slot, value: addrId) otherwise panic("invariant: slotIds.set OOB (by-ref)")
+				try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB (by-ref)")
+				continue
+			end 'byRefArg'
 			let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
 			// Hybrid-generics ABI bridge (write side). The callee's signature
 			// (`signature.paramTypes`) keeps the raw `typeParameter(Element)`
