@@ -75,6 +75,11 @@ var constantArrayLiteralCounter = 0 as ParsedInt
 // narrow elements (Byte 1, u16/i16 2, u32/i32 4, bool 1) require rewriting.
 let pointerWidthBytes = 8 as MachineWord
 
+// One byte holds this many bits. Drives the little-endian element encoder's
+// per-byte shift (`byteIndex * bitsPerByte`), the boolean bit-pack's
+// byte/bit split, and the narrow-width mask below.
+let bitsPerByte = 8 as MachineWord
+
 export function runConstantArrayLiteralRdata(project Project, module MaxonModule, globalData GlobalDataTable)
 	// Reset the counter so label names are stable across multiple
 	// pipeline runs in the same process (spec-test harness, etc.).
@@ -142,7 +147,7 @@ end 'collectLiteralValues'
 function maybeRecordConvert(project Project, litValues LiteralValueMap, result ByteArray, operand ByteArray, toType MaxonType)
 	let operandKey = String.from(operand)
 	let operandValue = try litValues.get(operandKey) otherwise return
-	let widthBytes = primitiveStorageWidthBytes(project, t: toType)
+	let widthBytes = primitiveWidth(project, t: toType)
 	let masked = maskToWidth(operandValue, widthBytes: widthBytes)
 	let key = String.from(result)
 	litValues.upsert(key, value: masked)
@@ -155,7 +160,7 @@ function maskToWidth(value ParsedInt, widthBytes MachineWord) returns ParsedInt
 	if widthBytes >= 8 'full'
 		return value
 	end 'full'
-	let mask = (1 shl (8 * widthBytes)) - 1
+	let mask = (1 shl (bitsPerByte * widthBytes)) - 1
 	return value and mask
 end 'maskToWidth'
 
@@ -250,7 +255,7 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 			bytes = encodeBitPackedBoolBytes(litValues, producer: producer)
 			elementSizeInt = 0
 		end 'boolArray' else 'narrowArray'
-			let widthBytes = primitiveStorageWidthBytes(project, t: elementType)
+			let widthBytes = primitiveWidth(project, t: elementType)
 			bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
 			elementSizeInt = widthBytes
 		end 'narrowArray'
@@ -335,7 +340,7 @@ function stampNonConstantArrayElementSize(project Project, module MaxonModule, f
 		return
 	end 'noType'
 
-	let width = primitiveStorageWidthBytes(project, t: elementType)
+	let width = primitiveWidth(project, t: elementType)
 	if width >= pointerWidthBytes 'pointerWidth'
 		return
 	end 'pointerWidth'
@@ -528,22 +533,6 @@ function literalValueTypeProbeFor(result ByteArray, valueType MaxonType, target 
 	return LiteralValueTypeProbe.miss()
 end 'literalValueTypeProbeFor'
 
-// Resolve a MaxonType to its in-memory storage width in bytes. Wraps
-// `resolveMaxonTypeToStd` + `storeWidthOfStdType` + `storeWidthBytes`
-// to centralize the chain. Returns 1 for boolean (booleans collapse to
-// one byte at the layout-descriptor level — see BuildLayoutDescriptors).
-function primitiveStorageWidthBytes(project Project, t MaxonType) returns MachineWord
-	return match t 'w'
-		boolean gives 1 as MachineWord
-		integer gives 8
-		float gives 8
-		named gives storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: t)))
-		string gives 8
-		character gives 8
-		function to cstring gives 8
-	end 'w'
-end 'primitiveStorageWidthBytes'
-
 // Pack each element value into the encoded byte sequence. Little-endian
 // per the target ABI — every supported target (x64, arm64, wasm) is
 // little-endian. Signedness is not threaded through: the two's-complement
@@ -586,8 +575,8 @@ function encodeBitPackedBoolBytes(litValues LiteralValueMap, producer ArrayLiter
 		let key = String.from(elemName)
 		let v = try litValues.get(key) otherwise panic("encodeBitPackedBoolBytes: missing literal for '{key}' (allElementsAreLiterals should have guarded)")
 		if v != 0 'setBit'
-			let byteIdx = i / 8
-			let bitInByte = i mod 8
+			let byteIdx = i / bitsPerByte
+			let bitInByte = i mod bitsPerByte
 			let cur = try bytes.get(byteIdx) otherwise panic("encodeBitPackedBoolBytes: byteIdx {byteIdx} OOB (byteCount {byteCount})")
 			try bytes.set(byteIdx, value: cur or (1 shl bitInByte)) otherwise panic("encodeBitPackedBoolBytes: set byteIdx {byteIdx} OOB")
 		end 'setBit'
@@ -602,7 +591,7 @@ end 'encodeBitPackedBoolBytes'
 function appendLittleEndian(bytes ByteArray, value ParsedInt, widthBytes MachineWord)
 	var i = 0 as MachineWord
 	while i < widthBytes 'each'
-		let shift = (i * 8)
+		let shift = (i * bitsPerByte)
 		let byteVal = ((value shr shift) and 0xff) as Byte
 		bytes.push(byteVal)
 		i = i + 1

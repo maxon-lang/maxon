@@ -2444,6 +2444,18 @@ export function maxonTypeIsHeapManaged(project Project, t MaxonType) returns boo
 	end 'classify'
 end 'maxonTypeIsHeapManaged'
 
+// Single source of truth for "this value/field is a managed heap reference,
+// INCLUDING an interface fat-pointer's value half". The base
+// `maxonTypeIsHeapManaged` deliberately reports `interface` as non-managed (its
+// value half is typed `i64` throughout the fat-pointer lowering, and ~30 callers
+// rely on `interface → false` for alloc-method selection), so the refcount-
+// classification sites that MUST treat a stored/loaded interface value as an owned
+// managed reference fold the interface case in here rather than each patching it
+// ad-hoc. Do NOT widen the base predicate itself.
+function maxonTypeIsManagedOrInterface(project Project, t MaxonType) returns bool
+	return maxonTypeIsHeapManaged(project, t: t) or interfaceTypeIsFat(t)
+end 'maxonTypeIsManagedOrInterface'
+
 // Refcount-insertion: the receiver type-param NAME for a `typeParameter(id)`
 // value, else "". Persisted alongside the type-param bit by `setValueType` so the
 // SSA inserter routes a generic value's `sys.dropTypeParam` through the matching
@@ -2512,9 +2524,14 @@ function fieldTypeIsDropTracked(project Project, structType StructType, field St
 	// so it must be recognized here — otherwise the struct gets a NULL destructor and the
 	// moved-in conformer's +1 is never released (leak) OR, paired with the consume-side
 	// transfer, the caller's drop frees it out from under the field (UAF).
-	if interfaceTypeIsFat(field.fieldType) 'interfaceValueHalf'
+	// `maxonTypeIsManagedOrInterface` folds that interface case in alongside a directly
+	// heap-managed field type (a registered struct / generic-instance, which the
+	// `structTypes.contains` arm below would also accept); the alias-chase below then
+	// handles only the residual inner-alias fields (`named("ElementMemory")` →
+	// `__ManagedMemory`) that neither arm recognizes without resolution.
+	if maxonTypeIsManagedOrInterface(project, t: field.fieldType) 'directlyManagedOrInterface'
 		return true
-	end 'interfaceValueHalf'
+	end 'directlyManagedOrInterface'
 	let directBase = try baseNameOfMaxonType(project, t: field.fieldType) otherwise return maxonTypeIsHeapManaged(project, t: field.fieldType)
 	// A field is "drop-tracked" (the enclosing struct's destructor must decref it) iff
 	// it is a HEAP-MANAGED reference the struct owns — ANY user struct / union / container
@@ -3000,7 +3017,7 @@ type MaxonToStdLowering
 		// a BORROWED interface value stored into a drop-tracked struct field while the
 		// destructor still decref's it → over-release (the FunctionRegAllocator
 		// `regTarget`/`opQuery` fields; see the interface-field spec).
-		let managed = maxonTypeIsHeapManaged(self.project, t: valueMaxonType) or interfaceTypeIsFat(valueMaxonType)
+		let managed = maxonTypeIsManagedOrInterface(self.project, t: valueMaxonType)
 		self.currentMaxonFunc.setValueManaged(id, managed: managed)
 		let isTypeParam = maxonTypeIsTypeParameter(valueMaxonType)
 		if managed or isTypeParam 'carriesClass'

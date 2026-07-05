@@ -10,6 +10,14 @@
 // accepting a TargetBackend parameter — the compiler monomorphizes the helper
 // for each concrete type.
 
+// The `stdlib.`-QUALIFIED label under which BOTH native backends register their
+// hand-emitted `__slab_current_p_id` override (see `emitX64SlabCurrentPId` and
+// `emitArm64SlabCurrentPId`). Every intra-stdlib caller (`__slab_alloc` /
+// `__slab_free` / …) resolves its call against this qualified key, so it MUST
+// stay in sync with the Internals `__slab_current_p_id` stub the runtime records
+// under the same qualified name (stdlib/Internals.maxon).
+export let RUNTIME_SLAB_CURRENT_P_ID_LABEL = "stdlib.__slab_current_p_id"
+
 // Parsed runtime.std module, cached for the process lifetime. The runtime
 // source is a build-time input that cannot change mid-process, so a simple
 // one-shot parse is safe — no revision tracking needed. Callers get back a
