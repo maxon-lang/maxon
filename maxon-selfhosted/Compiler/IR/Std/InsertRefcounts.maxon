@@ -830,14 +830,29 @@ type RcEdgeRelease
 	export var toBlockId as BlockId
 	export var valueId as ValueId
 	export var isIncref as bool
+	// A PRE-BUILT op to place on this edge verbatim, or `REFCOUNT_NO_VALUE` to let
+	// `buildEdgeRcOp` derive the op from `isIncref` + the value's `ReleaseKind` at
+	// emission time. The def-point planner (`queueInsertionAtDefPoint`) builds the
+	// exact op (decref / dropTypeParam / plain incref / layout-routed retain) BEFORE
+	// discovering that a discarded tryCall result's success block is SHARED (a
+	// critical edge), so it carries that op through unchanged rather than have the
+	// edge machinery re-derive a possibly-different flavor.
+	export var prebuiltOpIdx as OpIndex
 
 	static function release(fromBlockId BlockId, toBlockId BlockId, valueId ValueId) returns RcEdgeRelease
-		return Self{fromBlockId: fromBlockId, toBlockId: toBlockId, valueId: valueId, isIncref: false}
+		return Self{fromBlockId: fromBlockId, toBlockId: toBlockId, valueId: valueId, isIncref: false, prebuiltOpIdx: REFCOUNT_NO_VALUE}
 	end 'release'
 
 	static function incref(fromBlockId BlockId, toBlockId BlockId, valueId ValueId) returns RcEdgeRelease
-		return Self{fromBlockId: fromBlockId, toBlockId: toBlockId, valueId: valueId, isIncref: true}
+		return Self{fromBlockId: fromBlockId, toBlockId: toBlockId, valueId: valueId, isIncref: true, prebuiltOpIdx: REFCOUNT_NO_VALUE}
 	end 'incref'
+
+	// Route an ALREADY-BUILT op onto the edge fromBlock->toBlock. `applyEdgeReleases`
+	// splits the edge when `toBlock` has other predecessors, so the op runs only on
+	// this edge (where the value is provably live).
+	static function atEdge(fromBlockId BlockId, toBlockId BlockId, valueId ValueId, opIdx OpIndex) returns RcEdgeRelease
+		return Self{fromBlockId: fromBlockId, toBlockId: toBlockId, valueId: valueId, isIncref: false, prebuiltOpIdx: opIdx}
+	end 'atEdge'
 end 'RcEdgeRelease'
 
 typealias RcEdgeReleaseArray = Array with RcEdgeRelease
@@ -1712,7 +1727,25 @@ end 'planAcquireForOp'
 function queueInsertionAtDefPoint(ctx RcContext, defBlockRef BlockRef, defBlock IrBlock, pos NodeIndex, defId ValueId, opIdx OpIndex)
 	let successBlockId = tryCallResultSuccessBlock(ctx, block: defBlock, resultId: defId)
 	if successBlockId != REFCOUNT_NO_VALUE 'tryResult'
-		queueInsertion(ctx, blockRef: blockRefForId(ctx, blockId: successBlockId), pos: 0, opIdx: opIdx)
+		// The op (acquire / retain / discard-drop) for a tryCall result must land on
+		// the SUCCESS (non-throw) path, where the result is a valid non-null value.
+		// Its natural home is the success block's HEAD — but that is only safe when
+		// this def block is the success block's SOLE predecessor. When the success
+		// block is SHARED (reached on other paths where `defId` was never defined —
+		// e.g. a `_ = try coll.pop()` nested in an `if` whose success edge merges into
+		// the enclosing loop's step block), a head-placed op runs on those foreign
+		// edges too and touches an UNDEFINED register (the self-compiled
+		// `IrModule.compactBlocks` `blockSourceInfo.pop()` drop, hoisted to the loop
+		// step, decref'd a stale block index as a heap pointer → `__mm_decref(4)`).
+		// Route it onto the specific def->success EDGE, which `applyEdgeReleases`
+		// splits so the op runs only where `defId` is live — mirroring the C#
+		// bootstrap's dedicated success-continuation block.
+		let successPreds = try ctx.cfg.predecessors.get(successBlockId) otherwise panic("queueInsertionAtDefPoint: predecessors missing for success block {successBlockId} in func '{ctx.func.name}'")
+		if successPreds.count() > 1 'sharedSuccessBlock'
+			ctx.edgeReleases.push(RcEdgeRelease.atEdge(defBlock.id, toBlockId: successBlockId, valueId: defId, opIdx: opIdx))
+		end 'sharedSuccessBlock' else 'soleSuccessPred'
+			queueInsertion(ctx, blockRef: blockRefForId(ctx, blockId: successBlockId), pos: 0, opIdx: opIdx)
+		end 'soleSuccessPred'
 		return
 	end 'tryResult'
 	queueInsertion(ctx, blockRef: defBlockRef, pos: pos + 1, opIdx: opIdx)
@@ -6050,6 +6083,9 @@ end 'applyOneEdgeRelease'
 // form dispatches on the value's ReleaseKind (decref / free / dropTypeParam)
 // via `buildReleaseOp`.
 function buildEdgeRcOp(ctx RcContext, er RcEdgeRelease) returns OpIndex
+	if er.prebuiltOpIdx != REFCOUNT_NO_VALUE 'prebuilt'
+		return er.prebuiltOpIdx
+	end 'prebuilt'
 	if er.isIncref 'incref'
 		return buildIncrefOp(ctx.module, valueId: er.valueId, idRef: ctx.idRef)
 	end 'incref'
