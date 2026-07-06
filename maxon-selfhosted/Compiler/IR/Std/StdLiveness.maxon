@@ -598,7 +598,7 @@ function propagateBorrows(module StdModule, func IrFunction, baseOf ValueIdArray
 		if propagateStoreBorrows(storeEdges, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo) 'storeChanged'
 			changed = true
 		end 'storeChanged'
-		if propagatePhiBorrows(module, func: func, phiEdges: phiEdges, baseOf: baseOf) 'phiChanged'
+		if propagatePhiBorrows(module, func: func, phiEdges: phiEdges, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo) 'phiChanged'
 			changed = true
 		end 'phiChanged'
 	end 'fixpoint'
@@ -673,14 +673,14 @@ function borrowBaseDominatesAlloc(baseRoot ValueId, alloc ValueId, defBlockOf Va
 end 'borrowBaseDominatesAlloc'
 
 // One sweep of the PHI rule over every block-arg. Returns true iff any changed.
-function propagatePhiBorrows(module StdModule, func IrFunction, phiEdges PhiIncomingMap, baseOf ValueIdArray) returns bool
+function propagatePhiBorrows(module StdModule, func IrFunction, phiEdges PhiIncomingMap, baseOf ValueIdArray, defBlockOf ValueIdArray, domInfo DomInfo) returns bool
 	var changed = false
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("propagatePhiBorrows: blockRef not in module.blocks")
 		var argIdx = 0
 		while argIdx < block.blockArgs.count() 'eachArg'
 			let arg = try block.blockArgs.get(argIdx) otherwise panic("propagatePhiBorrows: blockArgs.get OOB")
-			if updatePhiBorrowBase(func, phiId: arg.valueId, block: block, argIdx: argIdx, edgeArgs: phiEdges, baseOf: baseOf) 'updated'
+			if updatePhiBorrowBase(func, phiId: arg.valueId, block: block, argIdx: argIdx, edgeArgs: phiEdges, baseOf: baseOf, defBlockOf: defBlockOf, domInfo: domInfo) 'updated'
 				changed = true
 			end 'updated'
 			argIdx = argIdx + 1
@@ -841,7 +841,7 @@ end 'recordEdgeArgList'
 //     after element 0. Its success edge carries the real iterator while its `try`
 //     error edge carries a `notManaged` null sentinel; the sentinel-skip below
 //     keeps that null from disagreeing the real borrow root away.
-function updatePhiBorrowBase(func IrFunction, phiId ValueId, block IrBlock, argIdx NodeIndex, edgeArgs PhiIncomingMap, baseOf ValueIdArray) returns bool
+function updatePhiBorrowBase(func IrFunction, phiId ValueId, block IrBlock, argIdx NodeIndex, edgeArgs PhiIncomingMap, baseOf ValueIdArray, defBlockOf ValueIdArray, domInfo DomInfo) returns bool
 	if phiId >= baseOf.count() 'oob'
 		return false
 	end 'oob'
@@ -914,6 +914,28 @@ function updatePhiBorrowBase(func IrFunction, phiId ValueId, block IrBlock, argI
 	if func.isValueManaged(phiId) and valueIdArrayContains(incoming, vid: commonRoot) 'ownedSelfMoveMerge'
 		return false
 	end 'ownedSelfMoveMerge'
+
+	// DOMINANCE GATE (mirrors the STORE rule in `applyStoreBorrow`): only record
+	// `baseOf[phiId] = commonRoot` when commonRoot's defining block DOMINATES the
+	// phi's block — i.e. commonRoot is defined at every program point the phi is
+	// live. A GENUINE interior-borrow phi (the for-in iterator) borrows a collection
+	// created in a dominating pre-header / a param (`self`), so this holds and the
+	// base is still recorded. When commonRoot is defined LATER — a loop-BODY value
+	// (e.g. a `readString` result) flowing back into an ENCLOSING loop-header phi via
+	// the back-edge — coupling the phi to it would extend commonRoot's live range
+	// BACKWARD to the loop header and on to the function entry. The release planner
+	// then decrefs commonRoot's uninitialized slot on early-exit edges that PRECEDE
+	// its definition (the `decodeLibraryTarget` stdlib-cache decode over-release: a
+	// header-validation `return false` strict-decref'd a loop-body String phi whose
+	// slot still held a leftover interned-rdata pointer → invalid-pointer fault).
+	// Skipping keeps commonRoot's live range local to its real definition; the phi's
+	// own last-use release still applies (no leak, and no premature free — where
+	// commonRoot does not dominate the phi, the phi cannot hold a valid borrow of it,
+	// so there is nothing to keep alive). Identical soundness argument to the STORE
+	// rule's gate; the two rules stay symmetric.
+	if not borrowBaseDominatesAlloc(commonRoot, alloc: phiId, defBlockOf: defBlockOf, domInfo: domInfo) 'notDominating'
+		return false
+	end 'notDominating'
 
 	let existing = try baseOf.get(phiId) otherwise BORROW_NO_BASE
 	if existing == commonRoot 'unchanged'
