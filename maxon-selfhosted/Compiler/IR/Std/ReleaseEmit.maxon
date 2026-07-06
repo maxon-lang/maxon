@@ -36,6 +36,70 @@
 // that thread the layout descriptor ValueId for `sys.dropTypeParam` emission.
 export let RELEASE_NO_LAYOUT = i64.max
 
+// Sentinel kind-const ValueId: "emit the PLAIN 1-arg refcount call". Passed to
+// `buildDecrefOp` / `buildIncrefOp` when the refcount LEDGER is off (a default
+// build) — the builder then emits `stdlib.__mm_decref(ptr)` exactly as before, so
+// the emitted IR is byte-identical. A real ValueId here (the entry-block const
+// naming an `RcOpKind`) instead selects the tagged `stdlib.__mm_*_tagged(ptr, kind)`
+// entry that records the op into the object's history ring (`--rc-sanitize` only).
+export let RELEASE_NO_KIND_CONST = i64.max
+
+// Why the compiler emitted a given refcount incref/decref/drop. Threaded from the
+// emission site into the tagged runtime entry under `--rc-sanitize`, where it
+// becomes an entry in the object's refcount-op history ring so an over-release
+// names the imbalanced op. The raw values MUST stay in lockstep with the
+// `RC_KIND_*` constants in stdlib/Internals.maxon (`__rc_kind_name`); `created`
+// (1) is owned by `__mm_alloc` and never emitted here. `unspecified` (0) tags an
+// op whose site has not yet been given a distinct kind — still recorded, shown by
+// that name. See the InsertRefcounts `plan*` sweeps for what each kind means.
+export enum RcOpKind
+	unspecified = 0
+	created = 1
+	storeIncrefNew = 2
+	fieldTransferIncref = 3
+	moduleGlobalIncref = 4
+	acquireAtDef = 5
+	retainForReturn = 6
+	borrowedElementRetain = 7
+	consumedArgCopyRetain = 8
+	transparentWrapRetain = 9
+	returnedBorrowRetain = 10
+	addressTakenSlotRetain = 11
+	phiEdgeIncref = 12
+	fieldOverwriteDecrefOld = 13
+	byRefParamDecrefOld = 14
+	lastUseDecref = 15
+	lastUseEdgeDecref = 16
+	terminatorDecref = 17
+	deadDefDrop = 18
+	deadBlockParamDrop = 19
+	addressTakenSlotDrop = 20
+	addressTakenSlotOverwriteDrop = 21
+	borrowRootEdgeDrop = 22
+	destructorFieldDrop = 23
+end 'RcOpKind'
+
+// The compiler classifies refcount ops BY CALLEE NAME in several passes (the
+// inliner's pair-elision, the SSA inserter's body-scan caches and its
+// `loadFeedsOnlyDecrefOldHelper` overwrite proof, the consume analysis). Under
+// `--rc-sanitize` the LEDGER emits TAGGED callees, so every one of those name
+// recognizers must ALSO match the tagged forms — otherwise a tagged decref-old
+// emitted by `lowerFieldStore` is not recognized and the inserter emits a SECOND
+// decref-old (double-free). These three predicates centralize the tagged names;
+// each recognizer ORs the matching one in. Tagged callees never appear in a
+// default build, so ORing these in is a no-op there (byte-identical preserved).
+export function calleeIsTaggedIncref(callee String) returns bool
+	return callee == "stdlib.__mm_incref_tagged"
+end 'calleeIsTaggedIncref'
+
+export function calleeIsTaggedRelease(callee String) returns bool
+	return callee == "stdlib.__mm_decref_tagged" or callee == "stdlib.__mm_decref_maybenull_tagged" or callee == "stdlib.__mm_drop_tagged"
+end 'calleeIsTaggedRelease'
+
+export function calleeIsTaggedMaybenullDecref(callee String) returns bool
+	return callee == "stdlib.__mm_decref_maybenull_tagged"
+end 'calleeIsTaggedMaybenullDecref'
+
 // ============================================================
 // Implicit `__layout` descriptor ValueId
 // ============================================================
@@ -81,10 +145,23 @@ end 'buildDropTypeParamOp'
 //             fresh allocation or a definition that dominates the release; a null
 //             here faults loudly rather than masking an inserter bug).
 // Returns the op's index in `module.ops`.
-export function buildDecrefOp(module StdModule, valueId ValueId, nullGuarded bool, idRef ValueIdRef) returns OpIndex
+export function buildDecrefOp(module StdModule, valueId ValueId, nullGuarded bool, idRef ValueIdRef, kindConstId ValueId = RELEASE_NO_KIND_CONST) returns OpIndex
 	let resultId = allocValueId(idRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
+
+	// Refcount LEDGER on: route to the tagged 2-arg entry that records this decref
+	// (with its `RcOpKind`) into the object's history ring. `kindConstId` names an
+	// entry-block `constI64` (minted by `kindConstId`, materialized by
+	// `flushKindConsts`) so it dominates every use — mirroring the ordinal consts.
+	if kindConstId != RELEASE_NO_KIND_CONST 'tagged'
+		argIds.push(kindConstId)
+		let taggedCallee = ("stdlib.__mm_decref_maybenull_tagged" if nullGuarded else "stdlib.__mm_decref_tagged")
+		let taggedIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: taggedCallee, argIds: argIds)))
+		return taggedIdx
+	end 'tagged'
+
 	let callee = ("__mm_decref_maybenull_helper" if nullGuarded else "stdlib.__mm_decref")
 	let idx = module.ops.count()
 	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
@@ -94,10 +171,19 @@ end 'buildDecrefOp'
 // Build a managed incref call (`stdlib.__mm_incref`) for `valueId`. Like
 // decref, an ordinary i64-returning runtime call needing a fresh result id.
 // Returns the op's index in `module.ops`.
-export function buildIncrefOp(module StdModule, valueId ValueId, idRef ValueIdRef) returns OpIndex
+export function buildIncrefOp(module StdModule, valueId ValueId, idRef ValueIdRef, kindConstId ValueId = RELEASE_NO_KIND_CONST) returns OpIndex
 	let resultId = allocValueId(idRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
+
+	// Refcount LEDGER on: tagged 2-arg incref recording (see `buildDecrefOp`).
+	if kindConstId != RELEASE_NO_KIND_CONST 'tagged'
+		argIds.push(kindConstId)
+		let taggedIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_incref_tagged", argIds: argIds)))
+		return taggedIdx
+	end 'tagged'
+
 	let idx = module.ops.count()
 	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_incref", argIds: argIds)))
 	return idx

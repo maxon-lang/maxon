@@ -1119,8 +1119,8 @@ end 'markRcCallArgFromCall'
 // bare runtime forms.
 function calleeIsRcCall(callee String, kind RcCallKind) returns bool
 	return match kind 'family'
-		incref gives callee == "stdlib.__mm_incref" or callee == "__mm_incref"
-		release gives callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper"
+		incref gives callee == "stdlib.__mm_incref" or callee == "__mm_incref" or calleeIsTaggedIncref(callee)
+		release gives callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper" or calleeIsTaggedRelease(callee)
 	end 'family'
 end 'calleeIsRcCall'
 
@@ -2411,7 +2411,7 @@ function callIsIncrefOfArg(c StdCallOp, vid ValueId) returns bool
 end 'callIsIncrefOfArg'
 
 function calleeNameIsIncrefOp(callee String) returns bool
-	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
+	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref" or calleeIsTaggedIncref(callee)
 end 'calleeNameIsIncrefOp'
 
 function firstArgIs(argIds ValueIdArray, vid ValueId) returns bool

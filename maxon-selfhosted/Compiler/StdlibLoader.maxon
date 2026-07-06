@@ -833,6 +833,24 @@ function seedRuntimeBootstrapStdlibRoots(project Project)
 	for r in roots 'seed'
 		project.livenessRoots.push(r)
 	end 'seed'
+
+	// Refcount-LEDGER tagged entries (`--rc-sanitize` only). The compiler emits
+	// calls to these from user-program IR, but no stdlib body calls them, so —
+	// like the plain `__mm_*` roots above — they must be seeded or stdlib DFE would
+	// drop them and leave the user program's tagged calls unresolved. Only exist in
+	// a sanitized stdlib (they sit inside `#if rcSanitize(true)`), so seed them only
+	// then.
+	if project.rcSanitizeEnabled 'ledgerRoots'
+		let ledgerRoots = [
+			"stdlib.__mm_incref_tagged",
+			"stdlib.__mm_decref_tagged",
+			"stdlib.__mm_decref_maybenull_tagged",
+			"stdlib.__mm_drop_tagged"
+		]
+		for r in ledgerRoots 'seedLedger'
+			project.livenessRoots.push(r)
+		end 'seedLedger'
+	end 'ledgerRoots'
 end 'seedRuntimeBootstrapStdlibRoots'
 
 export function getStdlibModule(project Project) returns MaxonModule

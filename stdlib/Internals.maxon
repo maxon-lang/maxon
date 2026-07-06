@@ -1177,6 +1177,101 @@ end '__slab_free'
 	let RC_QCTL_BYTE_TOTAL = 32
 	let RC_QCTL_CAPACITY = 40
 
+	// =========================================================================
+	// Refcount LEDGER — per-object refcount-op HISTORY ring.
+	//
+	// The quarantine machinery above localizes a use-AFTER-free (it catches the
+	// first touch of a poisoned object). The LEDGER localizes the OVER-RELEASE
+	// itself: for every managed object it records a small ring of the last N
+	// refcount ops as (KIND, resulting-refcount) pairs, so when a decref drives
+	// the refcount below zero the whole imbalanced sequence is visible end to end
+	// (created rc0 -> storeIncrefNew rc1 -> fieldOverwriteDecrefOld rc0 ->
+	// byRefParamDecrefOld rc-1 OVER-RELEASE). Each op's KIND names WHY the compiler
+	// emitted it (see `__rc_kind_name` and the mirrored `RcOpKind` enum in
+	// maxon-selfhosted/Compiler/IR/Std/ReleaseEmit.maxon — the raw values MUST
+	// stay in lockstep with that enum).
+	//
+	// STORAGE. Each object's ring lives in a fixed-size BLOCK, and the block's
+	// address is stashed in the object's otherwise-unused reserved header word at
+	// `slot_base + 0` (== `user_ptr - 32`). Nothing else ever reads that word (the
+	// destructor / size / refcount live at `user_ptr - 24/-16/-8`; the COW/inline
+	// paths never touch `-32`), and `__mm_alloc` overwrites it on EVERY allocation
+	// (to the block pointer under the sanitizer, to 0 otherwise), so the recording
+	// path never observes stale garbage there — no magic/disambiguation needed.
+	// Blocks come from a raw-OS-page bump arena (never the slab it instruments) and
+	// are RECYCLED onto a lock-free freelist when the object's slot ages out of the
+	// quarantine (its true free), so the arena is bounded by peak-in-flight objects.
+	// All of it is `#if rcSanitize(true)`-gated: a default build allocates no arena,
+	// stores 0 in the reserved word exactly as before, and is byte-identical.
+	//
+	// Block layout (RC_LEDGER_BLOCK_SIZE bytes):
+	//   +0  freelist-next (only meaningful while the block sits on the freelist)
+	//   +8  head          (ring write index, 0..RC_LEDGER_RING_ENTRIES-1)
+	//   +16 count         (total ops recorded; the dump shows the last N)
+	//   +24 entries[N]    each RC_LEDGER_ENTRY_SIZE bytes: +0 kind, +8 rc-after
+	let RC_LEDGER_RING_ENTRIES = 12
+	let RC_LEDGER_ENTRY_SIZE = 16
+	let RC_LEDGER_OFF_NEXT = 0
+	let RC_LEDGER_OFF_HEAD = 8
+	let RC_LEDGER_OFF_COUNT = 16
+	let RC_LEDGER_OFF_ENTRIES = 24
+	// 24 header bytes + 12 entries * 16 bytes = 216. Kept a literal (top-level
+	// `let` takes only a literal); update alongside the three sizes above.
+	let RC_LEDGER_BLOCK_SIZE = 216
+	// 256 MiB bump arena for ring blocks (~1.2M blocks). Blocks are recycled onto
+	// the freelist at slot age-out, so live usage tracks peak-in-flight objects,
+	// not total allocations; the arena is the hard ceiling before graceful
+	// degradation (exhaustion => new objects get no ring, existing rings persist).
+	let RC_LEDGER_ARENA_BYTES = 268435456
+
+	// Field offsets of the `__mm_rc_ledger_ctl` data-section global (registered in
+	// LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection alongside the
+	// quarantine ctl). Three i64 words:
+	//   +0 arena_next (bump cursor; 0 until the arena is lazily OS-allocated)
+	//   +8 arena_end  (exclusive upper bound of the arena)
+	//   +16 freelist  (lock-free Treiber-stack head of recycled blocks; 0 = empty)
+	let RC_LCTL_ARENA_NEXT = 0
+	let RC_LCTL_ARENA_END = 8
+	let RC_LCTL_FREELIST = 16
+
+	// Over-release backtrace geometry. The leading frames from
+	// `__rc_print_backtrace_skipping` are the tagged-decref / report plumbing
+	// (`__rc_report_over_release` <- `__mm_decref_tagged` <- possibly
+	// `__mm_decref_maybenull_tagged`); skip them so the first printed frame is the
+	// Maxon code that issued the imbalanced decref. Tuned conservatively — a
+	// slightly-off skip still shows the culprit within the printed window, and the
+	// trailing `panic` re-prints the full symbolized site backtrace as a backstop.
+	let RC_OVER_RELEASE_SKIP_FRAMES = 2
+	let RC_OVER_RELEASE_MAX_FRAMES = 12
+
+	// RcOpKind raw values — MIRROR of `RcOpKind` in ReleaseEmit.maxon. `created`
+	// is recorded by `__mm_alloc`; every other value is threaded from a compiler
+	// refcount-op emission site into the tagged `__mm_*_tagged` runtime entry.
+	let RC_KIND_UNSPECIFIED = 0
+	let RC_KIND_CREATED = 1
+	let RC_KIND_STORE_INCREF_NEW = 2
+	let RC_KIND_FIELD_TRANSFER_INCREF = 3
+	let RC_KIND_MODULE_GLOBAL_INCREF = 4
+	let RC_KIND_ACQUIRE_AT_DEF = 5
+	let RC_KIND_RETAIN_FOR_RETURN = 6
+	let RC_KIND_BORROWED_ELEMENT_RETAIN = 7
+	let RC_KIND_CONSUMED_ARG_COPY_RETAIN = 8
+	let RC_KIND_TRANSPARENT_WRAP_RETAIN = 9
+	let RC_KIND_RETURNED_BORROW_RETAIN = 10
+	let RC_KIND_ADDRESS_TAKEN_SLOT_RETAIN = 11
+	let RC_KIND_PHI_EDGE_INCREF = 12
+	let RC_KIND_FIELD_OVERWRITE_DECREF_OLD = 13
+	let RC_KIND_BY_REF_PARAM_DECREF_OLD = 14
+	let RC_KIND_LAST_USE_DECREF = 15
+	let RC_KIND_LAST_USE_EDGE_DECREF = 16
+	let RC_KIND_TERMINATOR_DECREF = 17
+	let RC_KIND_DEAD_DEF_DROP = 18
+	let RC_KIND_DEAD_BLOCK_PARAM_DROP = 19
+	let RC_KIND_ADDRESS_TAKEN_SLOT_DROP = 20
+	let RC_KIND_ADDRESS_TAKEN_SLOT_OVERWRITE_DROP = 21
+	let RC_KIND_BORROW_ROOT_EDGE_DROP = 22
+	let RC_KIND_DESTRUCTOR_FIELD_DROP = 23
+
 	// The `__slab_free` sanitizer gate: decide whether `slotBase` is quarantined.
 	// Returns true when the slot was parked on the ring (the caller must NOT free
 	// it); false when the free should proceed normally (pass-through cases and the
@@ -1379,6 +1474,15 @@ end '__slab_free'
 			end 'payloadTampered'
 		end 'hasPayloadWord'
 
+		// The slot is now truly freed: recycle its ledger ring block (stashed in
+		// the reserved word) onto the freelist before the slab reclaims the slot.
+		// The reserved word is never poisoned, so it still holds the block here.
+		let ledgerBlock = __Internals.loadIndirect(slotBase + 0)
+		if ledgerBlock != 0 'recycleLedger'
+			__rc_ledger_free_block(ledgerBlock)
+			__Internals.storeIndirect(slotBase + 0, value: 0)
+		end 'recycleLedger'
+
 		__Internals.storeIndirect(slotBase + 8, value: 0)
 		__Internals.storeIndirect(slotBase + 16, value: 0)
 		__Internals.storeIndirect(slotBase + 24, value: RC_SANITIZE_BYPASS)
@@ -1430,7 +1534,12 @@ end '__slab_free'
 	// __mm_free …); the deeper frames name the code that released the object.
 	// Reads nothing from the object itself beyond its header words — the
 	// payload may be arbitrarily stale.
-	function __rc_report_freed_touch(userPtr MachineWord, kind MachineWord)
+	// `rcOpKind` (RcOpKind raw value, RC_KIND_UNSPECIFIED when unknown) names the
+	// COMPILER emission reason for a tagged incref/decref/drop that touched the
+	// freed object — the same localization the live over-release report gives, but
+	// for the touch-after-free manifestation (the object was already freed and
+	// quarantined when the imbalanced op ran). Untagged callers pass the default.
+	function __rc_report_freed_touch(userPtr MachineWord, kind MachineWord, rcOpKind MachineWord = RC_KIND_UNSPECIFIED)
 		let slotBase = userPtr - 32
 
 		var what = ""
@@ -1449,6 +1558,9 @@ end '__slab_free'
 		end 'unknownKind'
 
 		printError("rc-sanitize: {what} 0x{userPtr:016x}\n")
+		if rcOpKind != RC_KIND_UNSPECIFIED 'namedKind'
+			printError("  imbalanced op KIND: {__rc_kind_name(rcOpKind)}\n")
+		end 'namedKind'
 
 		// Locate the quarantine entry. The scan walks the live window
 		// (head..head+count) without the lock — this is the panic path, and a
@@ -1488,8 +1600,323 @@ end '__slab_free'
 			printError("freed by: (no quarantine entry found for slot 0x{slotBase:016x} — poison without a live ring entry)\n")
 		end 'noEntry'
 
+		__rc_ledger_dump(userPtr)
 		panic("rc-sanitize: {what} 0x{userPtr:016x} — touch backtrace:")
 	end '__rc_report_freed_touch'
+
+	// =========================================================================
+	// Ledger ring-block arena + per-object recording (see the LEDGER design
+	// comment above). Bump-allocated raw OS pages, lock-free freelist recycling.
+	// =========================================================================
+
+	// Lazily OS-allocate the ring-block bump arena on first use. Guarded by the
+	// slab lock (a one-time cost; every subsequent alloc sees arena_next != 0 and
+	// skips the lock). `arena_next` is published LAST so the lock-free bump gate
+	// (`arena_next == 0`) stays correct for a racing allocator.
+	function __rc_ledger_arena_init(ctl MachineWord)
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		if __Internals.loadIndirect(ctl + RC_LCTL_ARENA_NEXT) == 0 'stillUnset'
+			let arena = __slab_assert_os_alloc(__Internals.osAllocPages(RC_LEDGER_ARENA_BYTES))
+			__Internals.storeIndirect(ctl + RC_LCTL_ARENA_END, value: arena + RC_LEDGER_ARENA_BYTES)
+			__Internals.storeIndirect(ctl + RC_LCTL_ARENA_NEXT, value: arena)
+		end 'stillUnset'
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+	end '__rc_ledger_arena_init'
+
+	// Obtain a ring block: pop the lock-free freelist first, else bump the arena.
+	// Returns 0 when the arena is exhausted (graceful degradation — the object
+	// simply gets no history ring).
+	function __rc_ledger_alloc_block() returns MachineWord
+		let ctl = __Internals.rcLedgerCtlAddr()
+
+		while true 'pop'
+			let head = __Internals.loadIndirect(ctl + RC_LCTL_FREELIST)
+			if head == 0 'freelistEmpty'
+				break
+			end 'freelistEmpty'
+			let next = __Internals.loadIndirect(head + RC_LEDGER_OFF_NEXT)
+			if __Internals.atomicCas(ctl + RC_LCTL_FREELIST, old: head, new: next) != 0 'popped'
+				return head
+			end 'popped'
+		end 'pop'
+
+		if __Internals.loadIndirect(ctl + RC_LCTL_ARENA_NEXT) == 0 'needInit'
+			__rc_ledger_arena_init(ctl)
+		end 'needInit'
+
+		let block = __Internals.atomicXadd(ctl + RC_LCTL_ARENA_NEXT, value: RC_LEDGER_BLOCK_SIZE)
+		if block + RC_LEDGER_BLOCK_SIZE > __Internals.loadIndirect(ctl + RC_LCTL_ARENA_END) 'exhausted'
+			return 0
+		end 'exhausted'
+		return block
+	end '__rc_ledger_alloc_block'
+
+	// Return a ring block to the lock-free freelist (called when the owning slot
+	// truly frees at quarantine age-out). Treiber-stack push.
+	function __rc_ledger_free_block(block MachineWord)
+		let ctl = __Internals.rcLedgerCtlAddr()
+		while true 'push'
+			let head = __Internals.loadIndirect(ctl + RC_LCTL_FREELIST)
+			__Internals.storeIndirect(block + RC_LEDGER_OFF_NEXT, value: head)
+			if __Internals.atomicCas(ctl + RC_LCTL_FREELIST, old: head, new: block) != 0 'pushed'
+				return
+			end 'pushed'
+		end 'push'
+	end '__rc_ledger_free_block'
+
+	// Attach a fresh (or recycled) ring block to a just-allocated object and seed
+	// it with the `created` op at rc 0 (the alloc-at-0 model). Returns the block
+	// pointer to stash in the object's reserved header word, or 0 on exhaustion.
+	// Called by `__mm_alloc` under `#if rcSanitize(true)`.
+	function __rc_ledger_attach() returns MachineWord
+		let block = __rc_ledger_alloc_block()
+		if block == 0 'exhausted'
+			return 0
+		end 'exhausted'
+		let entry = block + RC_LEDGER_OFF_ENTRIES
+		__Internals.storeIndirect(entry + 0, value: RC_KIND_CREATED)
+		__Internals.storeIndirect(entry + 8, value: 0)
+		__Internals.storeIndirect(block + RC_LEDGER_OFF_HEAD, value: 1)
+		__Internals.storeIndirect(block + RC_LEDGER_OFF_COUNT, value: 1)
+		return block
+	end '__rc_ledger_attach'
+
+	// Append one (kind, rc-after) op to `userPtr`'s ring. No-op if the object has
+	// no ring (arena was exhausted at its allocation). Best-effort under
+	// concurrency: a torn ring under a genuine data race on ONE object is an
+	// acceptable diagnostic imprecision, never a correctness hazard.
+	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter MachineWord)
+		let block = __Internals.loadIndirect(userPtr - 32)
+		if block == 0 'noRing'
+			return
+		end 'noRing'
+		let head = __Internals.loadIndirect(block + RC_LEDGER_OFF_HEAD)
+		let entry = block + RC_LEDGER_OFF_ENTRIES + head * RC_LEDGER_ENTRY_SIZE
+		__Internals.storeIndirect(entry + 0, value: kind)
+		__Internals.storeIndirect(entry + 8, value: rcAfter)
+		var nextHead = head + 1
+		if nextHead == RC_LEDGER_RING_ENTRIES 'wrap'
+			nextHead = 0
+		end 'wrap'
+		__Internals.storeIndirect(block + RC_LEDGER_OFF_HEAD, value: nextHead)
+		__Internals.storeIndirect(block + RC_LEDGER_OFF_COUNT, value: __Internals.loadIndirect(block + RC_LEDGER_OFF_COUNT) + 1)
+	end '__rc_ledger_record'
+
+	// Human-readable name for an RcOpKind raw value (mirror of ReleaseEmit's enum).
+	function __rc_kind_name(kind MachineWord) returns String
+		if kind == RC_KIND_CREATED 'k'
+			return "created"
+		end 'k'
+		if kind == RC_KIND_STORE_INCREF_NEW 'k'
+			return "storeIncrefNew"
+		end 'k'
+		if kind == RC_KIND_FIELD_TRANSFER_INCREF 'k'
+			return "fieldTransferIncref"
+		end 'k'
+		if kind == RC_KIND_MODULE_GLOBAL_INCREF 'k'
+			return "moduleGlobalIncref"
+		end 'k'
+		if kind == RC_KIND_ACQUIRE_AT_DEF 'k'
+			return "acquireAtDef"
+		end 'k'
+		if kind == RC_KIND_RETAIN_FOR_RETURN 'k'
+			return "retainForReturn"
+		end 'k'
+		if kind == RC_KIND_BORROWED_ELEMENT_RETAIN 'k'
+			return "borrowedElementRetain"
+		end 'k'
+		if kind == RC_KIND_CONSUMED_ARG_COPY_RETAIN 'k'
+			return "consumedArgCopyRetain"
+		end 'k'
+		if kind == RC_KIND_TRANSPARENT_WRAP_RETAIN 'k'
+			return "transparentWrapRetain"
+		end 'k'
+		if kind == RC_KIND_RETURNED_BORROW_RETAIN 'k'
+			return "returnedBorrowRetain"
+		end 'k'
+		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_RETAIN 'k'
+			return "addressTakenSlotRetain"
+		end 'k'
+		if kind == RC_KIND_PHI_EDGE_INCREF 'k'
+			return "phiEdgeIncref"
+		end 'k'
+		if kind == RC_KIND_FIELD_OVERWRITE_DECREF_OLD 'k'
+			return "fieldOverwriteDecrefOld"
+		end 'k'
+		if kind == RC_KIND_BY_REF_PARAM_DECREF_OLD 'k'
+			return "byRefParamDecrefOld"
+		end 'k'
+		if kind == RC_KIND_LAST_USE_DECREF 'k'
+			return "lastUseDecref"
+		end 'k'
+		if kind == RC_KIND_LAST_USE_EDGE_DECREF 'k'
+			return "lastUseEdgeDecref"
+		end 'k'
+		if kind == RC_KIND_TERMINATOR_DECREF 'k'
+			return "terminatorDecref"
+		end 'k'
+		if kind == RC_KIND_DEAD_DEF_DROP 'k'
+			return "deadDefDrop"
+		end 'k'
+		if kind == RC_KIND_DEAD_BLOCK_PARAM_DROP 'k'
+			return "deadBlockParamDrop"
+		end 'k'
+		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_DROP 'k'
+			return "addressTakenSlotDrop"
+		end 'k'
+		if kind == RC_KIND_ADDRESS_TAKEN_SLOT_OVERWRITE_DROP 'k'
+			return "addressTakenSlotOverwriteDrop"
+		end 'k'
+		if kind == RC_KIND_BORROW_ROOT_EDGE_DROP 'k'
+			return "borrowRootEdgeDrop"
+		end 'k'
+		if kind == RC_KIND_DESTRUCTOR_FIELD_DROP 'k'
+			return "destructorFieldDrop"
+		end 'k'
+		return "unspecified"
+	end '__rc_kind_name'
+
+	// Print `userPtr`'s recorded refcount-op history, oldest-first, capped at the
+	// ring depth. Reads only the ring block (never the possibly-freed object).
+	function __rc_ledger_dump(userPtr MachineWord)
+		let block = __Internals.loadIndirect(userPtr - 32)
+		if block == 0 'noRing'
+			printError("  refcount-op history: (none — ledger arena exhausted at this object's allocation)\n")
+			return
+		end 'noRing'
+
+		let count = __Internals.loadIndirect(block + RC_LEDGER_OFF_COUNT)
+		var shown = count
+		if shown > RC_LEDGER_RING_ENTRIES 'cap'
+			shown = RC_LEDGER_RING_ENTRIES
+		end 'cap'
+		printError("  refcount-op history (oldest first; last {shown} of {count} ops):\n")
+
+		// When the ring wrapped, the oldest retained entry sits at `head` (the
+		// next slot to be overwritten); otherwise entries fill [0, count).
+		var idx = 0
+		if count > RC_LEDGER_RING_ENTRIES 'wrapped'
+			idx = __Internals.loadIndirect(block + RC_LEDGER_OFF_HEAD)
+		end 'wrapped'
+
+		var shownCount = 0
+		while shownCount < shown 'each'
+			let entry = block + RC_LEDGER_OFF_ENTRIES + idx * RC_LEDGER_ENTRY_SIZE
+			let entKind = __Internals.loadIndirect(entry + 0)
+			let entRc = __Internals.loadIndirect(entry + 8)
+			printError("    {__rc_kind_name(entKind)} -> rc {entRc}\n")
+			idx = idx + 1
+			if idx == RC_LEDGER_RING_ENTRIES 'ringWrap'
+				idx = 0
+			end 'ringWrap'
+			shownCount = shownCount + 1
+		end 'each'
+	end '__rc_ledger_dump'
+
+	// Walk the frame-pointer chain from the over-release site, symbolizing each
+	// return address in-process (same `mrt_panic_print_frame` path the free-site
+	// chain uses). `skipFrames` drops the leading mm/sanitizer plumbing frames
+	// (the tagged decref entry + this report path); the rest name the Maxon code
+	// that actually issued the imbalanced decref. wasm has no fp chain
+	// (`loadFramePtr` yields 0) and degrades to nothing.
+	function __rc_print_backtrace_skipping(skipFrames MachineWord, maxFrames MachineWord)
+		var fp = __Internals.loadFramePtr()
+		var dropped = 0
+		while dropped < skipFrames and fp != 0 'skip'
+			fp = __Internals.loadIndirect(fp)
+			dropped = dropped + 1
+		end 'skip'
+
+		var printed = 0
+		while printed < maxFrames and fp != 0 'walk'
+			__rc_print_free_frame(__Internals.loadIndirect(fp + 8))
+			fp = __Internals.loadIndirect(fp)
+			printed = printed + 1
+		end 'walk'
+	end '__rc_print_backtrace_skipping'
+
+	// The OVER-RELEASE report: a tagged decref drove `userPtr`'s refcount below
+	// zero (prior <= 0) while the object was still LIVE (not yet poisoned). Prints
+	// the over-releasing op's KIND, the object's full refcount-op history, and a
+	// symbolized backtrace of the release site, then panics. This is the ledger's
+	// primary localization output for the fixpoint hunt.
+	function __rc_report_over_release(userPtr MachineWord, kind MachineWord)
+		printError("rc-sanitize: OVER-RELEASE of object 0x{userPtr:016x} — this decref drove the refcount below zero\n")
+		printError("  over-releasing op KIND: {__rc_kind_name(kind)}\n")
+		__rc_ledger_dump(userPtr)
+		printError("  over-release site (innermost first; leading mm/sanitizer frames skipped):\n")
+		__rc_print_backtrace_skipping(RC_OVER_RELEASE_SKIP_FRAMES, maxFrames: RC_OVER_RELEASE_MAX_FRAMES)
+		panic("rc-sanitize: over-release of 0x{userPtr:016x} (kind {__rc_kind_name(kind)})")
+	end '__rc_report_over_release'
+
+	// Tagged refcount entries. The compiler emits these (with a constant KIND arg)
+	// in a `--rc-sanitize` build; a default build emits the plain 1-arg forms and
+	// never references these — so the whole tagged surface is sanitizer-only.
+
+	// Tagged incref: freed-touch check (naming the emission kind), atomic +1,
+	// record (kind, rc-after).
+	function __mm_incref_tagged(ptr MachineWord, kind MachineWord)
+		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
+			__rc_report_freed_touch(ptr, kind: RC_TOUCH_INCREF, rcOpKind: kind)
+		end 'freedTouch'
+		let prior = __Internals.atomicXadd(ptr - 8, value: 1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior + 1)
+	end '__mm_incref_tagged'
+
+	// Tagged strict decref: freed-touch check (naming the emission kind), atomic
+	// -1, record (kind, rc-after), free at the 1->0 transition, and OVER-RELEASE
+	// report when prior <= 0.
+	function __mm_decref_tagged(ptr MachineWord, kind MachineWord)
+		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
+			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DECREF, rcOpKind: kind)
+		end 'freedTouch'
+		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1)
+		if prior == 1 'lastRef'
+			__mm_free(ptr)
+		end 'lastRef'
+		if prior <= 0 'overRelease'
+			__rc_report_over_release(ptr, kind: kind)
+		end 'overRelease'
+	end '__mm_decref_tagged'
+
+	// Tagged null-tolerant decref (the `__mm_decref_maybenull_helper` analogue):
+	// tolerates exactly null, otherwise the strict tagged body.
+	function __mm_decref_maybenull_tagged(ptr MachineWord, kind MachineWord)
+		if ptr == 0 'null'
+			return
+		end 'null'
+		__mm_decref_tagged(ptr, kind: kind)
+	end '__mm_decref_maybenull_tagged'
+
+	// Tagged owner-drop — MUST mirror `__mm_drop` exactly (balance parity): rc==0
+	// frees the sole owner; rc>0 decrefs the extra reference AND frees at the 1->0
+	// transition (the plain `__mm_drop` reaches that free by delegating to
+	// `__mm_decref`). Omitting the free-at-`prior==1` here decouples rc from the
+	// allocation lifetime and cascades into downstream double-frees. Records one op
+	// either way.
+	function __mm_drop_tagged(ptr MachineWord, kind MachineWord)
+		if ptr == 0 'null'
+			return
+		end 'null'
+		let rc = __Internals.loadIndirect(ptr - 8)
+		if rc == RC_SANITIZE_POISON_RC 'freedTouch'
+			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DROP, rcOpKind: kind)
+		end 'freedTouch'
+		if rc == 0 'soleOwner'
+			__rc_ledger_record(ptr, kind: kind, rcAfter: 0)
+			__mm_free(ptr)
+			return
+		end 'soleOwner'
+		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1)
+		if prior == 1 'lastRef'
+			__mm_free(ptr)
+		end 'lastRef'
+		if prior <= 0 'overRelease'
+			__rc_report_over_release(ptr, kind: kind)
+		end 'overRelease'
+	end '__mm_drop_tagged'
 #endif
 
 // Allocate a tracked block of `size` bytes through the slab allocator.
@@ -1518,8 +1945,15 @@ function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWor
 	let slotBase = __slab_alloc(clampedSize + 32)
 	// The first header word is reserved (always 0). It is kept so the
 	// destructor / size / refcount offsets stay at their historical
-	// `user_ptr - 24 / -16 / -8`.
-	__Internals.storeIndirect(slotBase, value: 0)
+	// `user_ptr - 24 / -16 / -8`. Under `--rc-sanitize` it instead carries this
+	// object's refcount-op history ring block (0 on arena exhaustion); nothing
+	// else reads this word, and a default build stores 0 here exactly as before,
+	// so the emitted bytes are identical when the sanitizer is off.
+	#if rcSanitize(true)
+		__Internals.storeIndirect(slotBase, value: __rc_ledger_attach())
+	#else
+		__Internals.storeIndirect(slotBase, value: 0)
+	#endif
 	__Internals.storeIndirect(slotBase + 8, value: destructor)
 	__Internals.storeIndirect(slotBase + 16, value: clampedSize)
 	// Refcount-insertion (Step 2): a fresh allocation owns NO reference — the

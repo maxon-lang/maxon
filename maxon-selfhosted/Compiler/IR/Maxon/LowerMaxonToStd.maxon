@@ -714,6 +714,14 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	// original `__rc_`-prefixed name crashed exactly that way).
 	if rcSanitizeEnabled 'rcSanitize'
 		addDataSectionEntry(globalData, name: "__mm_rc_quarantine_ctl", initialBytes: zeroBytesOfSize(48))
+		// Refcount-LEDGER control block (`--rc-sanitize` only). Anchors the ring-
+		// block bump arena + lock-free recycle freelist that back the per-object
+		// refcount-op history rings (see the LEDGER section in stdlib/Internals.maxon
+		// for the RC_LCTL_* field layout). Same `__mm_` name-prefix requirement as
+		// the quarantine ctl (classifyGlobalLabel keys reloc class off the prefix),
+		// and same sanitized-only registration so a default binary carries zero
+		// trace of the ledger.
+		addDataSectionEntry(globalData, name: "__mm_rc_ledger_ctl", initialBytes: zeroBytesOfSize(48))
 	end 'rcSanitize'
 
 	// Phase B3: lazy-init cache for the hand-rolled `mrt_win32_get_argc` /
@@ -1197,6 +1205,27 @@ end 'registerBuiltinsIntrinsicSignature'
 // validates argument shape against these signatures and the lowering pass
 // (`lowerInternalsIntrinsic`) intercepts the call before any signature-driven
 // `StdOp.call` would emit.
+// Map a plain refcount-runtime callee to its tagged (`--rc-sanitize`) 2-arg
+// variant, which records the op (with its `RcOpKind`) into the object's refcount-
+// op history ledger. Only the callees the Maxon-lowering layer emits for managed
+// refcounting are mapped; an unmapped callee is a plumbing bug (a new emission
+// site that forgot to declare a tagged form).
+function taggedRefcountCallee(callee String) returns String
+	if callee == "stdlib.__mm_incref" 'incref'
+		return "stdlib.__mm_incref_tagged"
+	end 'incref'
+	if callee == "stdlib.__mm_decref" 'decref'
+		return "stdlib.__mm_decref_tagged"
+	end 'decref'
+	if callee == "__mm_decref_maybenull_helper" 'maybenull'
+		return "stdlib.__mm_decref_maybenull_tagged"
+	end 'maybenull'
+	if callee == "mm_drop" 'drop'
+		return "stdlib.__mm_drop_tagged"
+	end 'drop'
+	panic("taggedRefcountCallee: no tagged variant for refcount callee '{callee}'")
+end 'taggedRefcountCallee'
+
 export function registerInternalsIntrinsicSignatures(project Project)
 	let intReturn = MaxonReturnType.value(MaxonType.integer)
 	let intType = MaxonType.integer
@@ -1261,6 +1290,11 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	// `#if rcSanitize(true)` regions, so a default build never lowers it (and the
 	// global itself is only registered for sanitized builds).
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.rcQuarantineCtlAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Address of the refcount-LEDGER control block (`__mm_rc_ledger_ctl`).
+	// Referenced only from Internals.maxon code inside `#if rcSanitize(true)`
+	// regions, so a default build never lowers it (and the global itself is only
+	// registered for sanitized builds).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.rcLedgerCtlAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	// Indirect call (one-arg variants). `indirectCall1` calls an `(i64) -> i64`
 	// target (the destructor ABI: `__mm_free` → `__destruct_*`); `indirectCallVoid1`
 	// calls an `(i64) -> void` target (the managed-element walk → `&__mm_decref`).
@@ -5387,14 +5421,31 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(oldId, addrId: ptrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(oldId, t: MaxonType.integer)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(ptrId, offset: 0, valueId: newValueId, width: StoreWidth.qword, isFloat: false)))
-		self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock)
+		self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock, kind: RcOpKind.byRefParamDecrefOld)
 	end 'emitByRefManagedParamStore'
 
 	// Emit a single `stdlib.__mm_incref` / `__mm_decref` call on `ptrValueId`.
 	// The runtime helpers null-check the pointer, so a null slot is a safe no-op.
-	function emitMmRefcountCall(ptrValueId ValueId, callee String, dstBlock IrBlock)
+	//
+	// Under `--rc-sanitize` (the refcount LEDGER), the call is routed to its tagged
+	// 2-arg variant with an inline `constI64` naming `kind`, so the runtime records
+	// this op into the object's refcount-op history ring. A default build emits the
+	// plain 1-arg call exactly as before — byte-identical.
+	function emitMmRefcountCall(ptrValueId ValueId, callee String, dstBlock IrBlock, kind RcOpKind = RcOpKind.unspecified)
 		var args = ValueIdArray.create()
 		args.push(ptrValueId)
+
+		if self.project.rcSanitizeEnabled 'ledgerTagged'
+			let kindId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: kindId, value: kind.rawValue as ParsedInt))))
+			self.setValueType(kindId, t: MaxonType.integer)
+			args.push(kindId)
+			let taggedResultId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(taggedResultId, callee: taggedRefcountCallee(callee), argIds: args)))
+			self.setValueType(taggedResultId, t: MaxonType.integer)
+			return
+		end 'ledgerTagged'
+
 		let resultId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: args)))
 		self.setValueType(resultId, t: MaxonType.integer)
@@ -11713,11 +11764,7 @@ type MaxonToStdLowering
 		let reassignsManagedField = not isInit and (maxonTypeIsHeapManaged(self.project, t: resolvedFieldType) or self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName))
 		if reassignsManagedField or (isInit and self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName)) 'synthOverwrite'
 			let oldId = self.emitLoadFieldI64(receiverId, offset: hit.offset, dstBlock: dstBlock)
-			var decrefArgs = ValueIdArray.create()
-			decrefArgs.push(oldId)
-			let decrefRetId = allocValueId(self.funcIdRef)
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "__mm_decref_maybenull_helper", argIds: decrefArgs)))
-			self.setValueType(decrefRetId, t: MaxonType.integer)
+			self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock, kind: RcOpKind.fieldOverwriteDecrefOld)
 		end 'synthOverwrite'
 		// Refcount-insertion: lowering no longer emits the field's RAII maintenance
 		// (incref-new / load-old + decref-old). A managed field store survives
@@ -13488,6 +13535,9 @@ function lookupInternalsGlobalAddrTarget(methodName String) returns String throw
 	end 'a'
 	if methodName == "rcQuarantineCtlAddr" 'a'
 		return "__mm_rc_quarantine_ctl"
+	end 'a'
+	if methodName == "rcLedgerCtlAddr" 'a'
+		return "__mm_rc_ledger_ctl"
 	end 'a'
 	throw InternalsBridgeLookupError.notBridge
 end 'lookupInternalsGlobalAddrTarget'

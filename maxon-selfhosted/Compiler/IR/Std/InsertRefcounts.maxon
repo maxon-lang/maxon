@@ -131,9 +131,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool, rcSanitize bool = false) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs, rcLedgerEmit: rcSanitize)
 	end 'eachFunc'
 
 	return module
@@ -169,7 +169,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet, rcLedgerEmit bool = false)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -262,7 +262,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// closure borrows it by reference) and released at scope exit, not at the SSA store.
 	let addressTakenSlots = collectAddressTakenSlots(func, module: module)
 
-	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, isWasmTarget: isWasmTarget, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
+	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, isWasmTarget: isWasmTarget, rcLedgerEmit: rcLedgerEmit, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
 
 	// Single-scan caches for the per-value body queries + the block-id index.
 	// Must precede `buildBodyRcCompleteSet` (which probes the released/acquired
@@ -385,6 +385,9 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// both plan-applied and edge-built drop/retain calls reference them, and the
 	// edge ones are only built inside `applyEdgeReleases`. See `flushOrdinalConsts`.
 	flushOrdinalConsts(ctx)
+	// Per-kind LEDGER constants share the same late-materialization requirement
+	// (tagged decref/incref calls are built at plan AND edge time). No-op off.
+	flushKindConsts(ctx)
 end 'insertRefcountsInFunction'
 
 // True iff this function has any value that needs a release op in an enabled
@@ -962,6 +965,12 @@ type RcContext
 	// When false (stdlib type-param-only mode), the managed `mm_incref`/
 	// `mm_decref` domain is suppressed and only `sys.dropTypeParam` is emitted.
 	export var includeManaged as bool
+	// True in a `--rc-sanitize` build: every managed incref/decref/drop this pass
+	// emits is routed through its tagged runtime entry (`stdlib.__mm_*_tagged`) with
+	// an `RcOpKind` constant, so the runtime records the op into the object's
+	// refcount-op history ring (the LEDGER). False in a default build => plain 1-arg
+	// calls => byte-identical output. See `releaseKindConst` / `flushKindConsts`.
+	export var rcLedgerEmit as bool
 	// True iff compiling for wasm32, whose module-wide linear-memory slot region cannot
 	// hold an unpromoted slot's value across a call (see `isInterfaceValueLocalSlot`).
 	export var isWasmTarget as bool
@@ -995,6 +1004,12 @@ type RcContext
 	// not yet minted). One const per ordinal serves every per-ordinal
 	// drop/retain call in the function — the entry block dominates all uses.
 	export var ordinalConstIds as ValueIdArray
+	// Entry-block `constI64` ValueIds for `RcOpKind` values, minted lazily by
+	// `kindConstId` (indexed by the kind's raw value; `REFCOUNT_NO_VALUE` = not yet
+	// minted) and materialized at the entry-block head by `flushKindConsts`. One
+	// const per kind serves every tagged refcount call of that kind in the
+	// function. Empty unless `rcLedgerEmit` (a `--rc-sanitize` build).
+	export var kindConstIds as ValueIdArray
 	// Per-block `computeBlockLiveAfter` result cache, indexed by block.id and
 	// built lazily on first request (`blockLiveAfterFor`). Every planning sweep
 	// (planInBlockDeaths / planDeadDefDrops / planConsumedArgCopyIncrefs /
@@ -1021,7 +1036,7 @@ type RcContext
 	// position-based `valueDirectlyReadElsewhere` cannot see.
 	export var loopDepth as RegIntArray
 
-	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, isWasmTarget bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
+	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, isWasmTarget bool, rcLedgerEmit bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
 		return Self{
 			func: func,
 			module: module,
@@ -1048,6 +1063,7 @@ type RcContext
 			layoutValueId: layoutValueId,
 			includeManaged: includeManaged,
 			isWasmTarget: isWasmTarget,
+			rcLedgerEmit: rcLedgerEmit,
 			incomingOwnerAcquire: BoolArray.create(),
 			insertions: RcInsertionArray.create(),
 			edgeReleases: RcEdgeReleaseArray.create(),
@@ -1055,6 +1071,7 @@ type RcContext
 			funcReturnsConsumedArg: funcReturnsConsumedArg,
 			funcRetainsParam: funcRetainsParam,
 			ordinalConstIds: ValueIdArray.create(),
+			kindConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
 			blockLiveAfterPresent: BoolArray.create(),
 			totalDirectReadingOps: ValueIdArray.create(),
@@ -1712,7 +1729,7 @@ function planAcquireForOp(ctx RcContext, blockRef BlockRef, opIdx OpIndex, pos N
 	for defId in scratch.writeIds 'eachDef'
 		if shouldAcquire(ctx, id: defId) 'acquire'
 			logTrace(LogCategory.ir, message: function() gives "RC-ACQUIRE func={ctx.func.name} val=%{defId} class={ownershipClassName(ctx.classOf(defId))}")
-			let incIdx = buildIncrefOp(ctx.module, valueId: defId, idRef: ctx.idRef)
+			let incIdx = buildIncrefOp(ctx.module, valueId: defId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.acquireAtDef))
 			// A `tryCall` result is NULL on the error edge (the throw ABI zeroes the
 			// result register), so its def-acquire must NOT run in the tryCall block
 			// (which executes on BOTH edges, before the error-flag branch) — that
@@ -2533,7 +2550,7 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 	// last use. The liveness check separates the two cases.
 	if storeTargetsModuleGlobal(ctx, addrId: addrId) and not liveAfter.isLiveAfterBodyOp(pos, vid: valueId) 'globalTransfer'
 		if not transferValueAlreadyOwnsPlusOne(ctx, valueId: valueId) 'needsStoreIncref'
-			let gIncIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef)
+			let gIncIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.moduleGlobalIncref))
 			queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: gIncIdx)
 		end 'needsStoreIncref'
 		planDecrefOldField(ctx, blockRef: blockRef, addrId: addrId, offset: offset, pos: pos)
@@ -2566,7 +2583,7 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 	if storeIsManagedFieldTransfer(ctx, liveAfter: liveAfter, addrId: addrId, valueId: valueId, pos: pos) 'fieldTransfer'
 		logTrace(LogCategory.ir, message: function() gives "RC-FIELD-TRANSFER func={ctx.func.name} val=%{valueId} addr=%{addrId} class={ownershipClassName(ctx.classOf(valueId))} ownsPlusOne={transferValueAlreadyOwnsPlusOne(ctx, valueId: valueId)}")
 		if not transferValueAlreadyOwnsPlusOne(ctx, valueId: valueId) 'fieldNeedsStoreIncref'
-			let fIncIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef)
+			let fIncIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.fieldTransferIncref))
 			// A field store CAN be a `tryCall` result (`Self{managed: arr.slice(...)}`):
 			// route the incref to the success block so the throw path never increfs null.
 			let fSuccessBlockId = tryCallResultSuccessBlock(ctx, block: block, resultId: valueId)
@@ -2589,7 +2606,7 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 	// store so the ordering is incref-new / store-new (a self-store keeps
 	// rc > 0 throughout).
 	logTrace(LogCategory.ir, message: function() gives "RC-STORE-INCREF func={ctx.func.name} val=%{valueId} addr=%{addrId} off={offset} class={ownershipClassName(ctx.classOf(valueId))}")
-	let incIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef)
+	let incIdx = buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.storeIncrefNew))
 	// A `tryCall` result stored into a wrapper in the SAME block as the tryCall is
 	// NULL on the error edge (the throw ABI zeroed it). The incref-new must run on
 	// the SUCCESS edge only — placing it before the error-flag branch would
@@ -2902,7 +2919,7 @@ function planDecrefOldField(ctx RcContext, blockRef BlockRef, addrId ValueId, of
 	queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: loadOld.opIdx)
 
 	logTrace(LogCategory.ir, message: function() gives "RC-DECREF-OLD func={ctx.func.name} addr=%{addrId} off={offset} atpos={pos}")
-	let decIdx = buildDecrefOp(ctx.module, valueId: loadOld.resultId, nullGuarded: true, idRef: ctx.idRef)
+	let decIdx = buildDecrefOp(ctx.module, valueId: loadOld.resultId, nullGuarded: true, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.fieldOverwriteDecrefOld))
 	queueInsertion(ctx, blockRef: blockRef, pos: pos + 1, opIdx: decIdx)
 end 'planDecrefOldField'
 
@@ -3058,7 +3075,7 @@ end 'opIsDecrefOldHelperOf'
 
 function callIsDecrefOldHelperOf(c StdCallOp, argId ValueId) returns bool
 	return match c 'check'
-		call(_, callee, argIds) gives (callee == "__mm_decref_maybenull_helper" and valueIdArrayContains(argIds, vid: argId))
+		call(_, callee, argIds) gives ((callee == "__mm_decref_maybenull_helper" or calleeIsTaggedMaybenullDecref(callee)) and valueIdArrayContains(argIds, vid: argId))
 		ret gives false
 		tryCall to errorReturn gives false
 	end 'check'
@@ -3166,7 +3183,7 @@ function planReturnIncrefValue(ctx RcContext, blockRef BlockRef, block IrBlock, 
 	end 'consumedParam'
 	// Place the incref right before the terminator (at the end of the body).
 	logTrace(LogCategory.ir, message: function() gives "RC-RETURN-INCREF func={ctx.func.name} val=%{retValId} class={ownershipClassName(ctx.classOf(retValId))}")
-	let incIdx = buildIncrefOp(ctx.module, valueId: retValId, idRef: ctx.idRef)
+	let incIdx = buildIncrefOp(ctx.module, valueId: retValId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.retainForReturn))
 	queueInsertion(ctx, blockRef: blockRef, pos: block.opRefs.count(), opIdx: incIdx)
 end 'planReturnIncrefValue'
 
@@ -3232,7 +3249,7 @@ function planDeadDefDrops(ctx RcContext)
 			for defId in scratch.writeIds 'eachDef'
 				if deadDefNeedsDrop(ctx, block: block, liveAfter: liveAfter, pos: pos, defId: defId) 'dead'
 					logTrace(LogCategory.ir, message: function() gives "RC-DEADDROP func={ctx.func.name} val=%{defId} atpos={pos} class={ownershipClassName(ctx.classOf(defId))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: defId))}")
-					let relIdx = buildReleaseOp(ctx, id: defId)
+					let relIdx = buildReleaseOp(ctx, id: defId, kind: RcOpKind.deadDefDrop)
 					queueInsertionAtDefPoint(ctx, defBlockRef: blockRef, defBlock: block, pos: pos, defId: defId, opIdx: relIdx)
 				end 'dead'
 			end 'eachDef'
@@ -3259,7 +3276,7 @@ function planDeadBlockParamDrops(ctx RcContext, blockRef NodeIndex, block IrBloc
 		let vid = arg.valueId
 		if deadBlockParamNeedsDrop(ctx, block: block, vid: vid) 'dead'
 			logTrace(LogCategory.ir, message: function() gives "RC-DEADDROP func={ctx.func.name} val=%{vid} blockparam block={block.id} class={ownershipClassName(ctx.classOf(vid))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: vid))}")
-			let relIdx = buildReleaseOp(ctx, id: vid)
+			let relIdx = buildReleaseOp(ctx, id: vid, kind: RcOpKind.deadBlockParamDrop)
 			queueInsertion(ctx, blockRef: blockRef, pos: 0, opIdx: relIdx)
 		end 'dead'
 		argIdx = argIdx + 1
@@ -3364,7 +3381,7 @@ function planBorrowedElementContainerRetains(ctx RcContext)
 			for argId in scratch.readIds 'eachArg'
 				if borrowedElementConsumedByContainer(ctx, op: op, argId: argId) and borrowedElementRetainable(ctx, argId: argId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-ELEM-RETAIN func={ctx.func.name} val=%{argId} atpos={pos}")
-					let retIdx = buildRetainForValue(ctx, valueId: argId)
+					let retIdx = buildRetainForValue(ctx, valueId: argId, kind: RcOpKind.borrowedElementRetain)
 					queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: retIdx)
 				end 'retain'
 			end 'eachArg'
@@ -3437,7 +3454,7 @@ function planConsumedArgCopyIncrefs(ctx RcContext)
 						// concrete managed pointer increfs directly; a type-param
 						// value takes the layout-routed retain (per-ordinal when
 						// the param name resolves).
-						let incIdx = buildRetainForValue(ctx, valueId: argId)
+						let incIdx = buildRetainForValue(ctx, valueId: argId, kind: RcOpKind.consumedArgCopyRetain)
 						queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: incIdx)
 					end 'eachCopy'
 				end 'notYetRetained'
@@ -3654,7 +3671,7 @@ function planBorrowedWrapRetains(ctx RcContext)
 			for argId in scratch.readIds 'eachArg'
 				if noPlusOneValueTransparentlyWrapped(ctx, op: op, argId: argId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-WRAP-RETAIN func={ctx.func.name} val=%{argId} atpos={pos}")
-					let incIdx = buildIncrefOp(ctx.module, valueId: argId, idRef: ctx.idRef)
+					let incIdx = buildIncrefOp(ctx.module, valueId: argId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.transparentWrapRetain))
 					queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: incIdx)
 				end 'retain'
 			end 'eachArg'
@@ -3714,7 +3731,7 @@ function planReturnedBorrowRetains(ctx RcContext)
 			for defId in scratch.writeIds 'eachDef'
 				if returnedBorrowNeedsRetainCtx(ctx, id: defId) 'retain'
 					logTrace(LogCategory.ir, message: function() gives "RC-RETBORROW-RETAIN func={ctx.func.name} val=%{defId} atpos={pos}")
-					let retIdx = buildRetainForValue(ctx, valueId: defId)
+					let retIdx = buildRetainForValue(ctx, valueId: defId, kind: RcOpKind.returnedBorrowRetain)
 					// A `tryCall` result is NULL on the error edge; `queueInsertionAtDefPoint`
 					// retains it at the SUCCESS-block head (provably non-null), else
 					// immediately after the def.
@@ -3893,7 +3910,7 @@ function planTerminatorDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 			continue
 		end 'consumedEarlier'
 		logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP func={ctx.func.name} val=%{vid} block_{block.id} class={ownershipClassName(ctx.classOf(vid))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: vid))}")
-		let relIdx = buildReleaseOp(ctx, id: vid)
+		let relIdx = buildReleaseOp(ctx, id: vid, kind: RcOpKind.terminatorDecref)
 		queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: relIdx)
 		_ = releasedHere.add(vid)
 	end 'eachLive'
@@ -3931,7 +3948,7 @@ function planAddressTakenSlotDrops(ctx RcContext)
 				let loadId = allocValueId(ctx.idRef)
 				let loadOpIdx = ctx.module.ops.count()
 				ctx.module.ops.push(StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: slotId as VarSlot)))
-				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: slotId as VarSlot)
+				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: slotId as VarSlot, kind: RcOpKind.addressTakenSlotDrop)
 				queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: decrefIdx)
 				queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: loadOpIdx)
 				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOTDROP func={ctx.func.name} slot_{slotId} block_{block.id}")
@@ -3968,7 +3985,7 @@ function planBorrowedAddressTakenSlotRetains(ctx RcContext)
 			let stored = addressTakenManagedStoreValue(ctx, op: op)
 			if stored != REFCOUNT_NO_VALUE and not transferValueAlreadyOwnsPlusOne(ctx, valueId: stored) 'needsIncref'
 				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOT-RETAIN func={ctx.func.name} val=%{stored} atpos={pos}")
-				let incIdx = buildIncrefOp(ctx.module, valueId: stored, idRef: ctx.idRef)
+				let incIdx = buildIncrefOp(ctx.module, valueId: stored, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.addressTakenSlotRetain))
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: incIdx)
 			end 'needsIncref'
 			pos = pos + 1
@@ -4037,7 +4054,7 @@ function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
 				let loadId = allocValueId(ctx.idRef)
 				let loadOpIdx = ctx.module.ops.count()
 				ctx.module.ops.push(StdOp.memory(StdMemoryOp.loadSlot(loadId, slotId: storedSlot)))
-				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: storedSlot)
+				let decrefIdx = buildSlotContentReleaseOp(ctx, loadId: loadId, slotId: storedSlot, kind: RcOpKind.addressTakenSlotOverwriteDrop)
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: decrefIdx)
 				queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: loadOpIdx)
 				logTrace(LogCategory.ir, message: function() gives "RC-ADDRSLOTRELSTORE func={ctx.func.name} slot_{storedSlot} block_{block.id}")
@@ -4317,11 +4334,11 @@ end 'shouldReleaseAtLastUse'
 // emitted on a value the inserter proved live up to this point, never null).
 // Panics on `none` — callers gate on `shouldReleaseAtLastUse` first.
 
-function buildReleaseOp(ctx RcContext, id ValueId) returns OpIndex
+function buildReleaseOp(ctx RcContext, id ValueId, kind RcOpKind = RcOpKind.unspecified) returns OpIndex
 	return match releaseKindAtLastUse(ctx, id: id) 'kind'
-		decref gives buildDecrefOp(ctx.module, valueId: id, nullGuarded: releaseIsNullGuarded(ctx, id: id), idRef: ctx.idRef)
+		decref gives buildDecrefOp(ctx.module, valueId: id, nullGuarded: releaseIsNullGuarded(ctx, id: id), idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: kind))
 		dropTypeParam gives buildDropTypeParamForValue(ctx, valueId: id)
-		dropManaged gives buildDropManagedOp(ctx.module, valueId: id, idRef: ctx.idRef)
+		dropManaged gives buildDropManagedOp(ctx.module, valueId: id, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: kind))
 		none panic("buildReleaseOp: value {id} has ReleaseKind.none — caller must gate on shouldReleaseAtLastUse")
 	end 'kind'
 end 'buildReleaseOp'
@@ -4332,10 +4349,19 @@ end 'buildReleaseOp'
 // seeded as a runtime-reachability root in BOTH link legs, so its always-present
 // `call __mm_drop` edge keeps the stdlib body symmetric (cache parity) and the
 // wrapper's signature is known from runtime.std. The result id is unused.
-function buildDropManagedOp(module StdModule, valueId ValueId, idRef ValueIdRef) returns OpIndex
+function buildDropManagedOp(module StdModule, valueId ValueId, idRef ValueIdRef, kindConstId ValueId = RELEASE_NO_KIND_CONST) returns OpIndex
 	let resultId = allocValueId(idRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
+
+	// LEDGER on: tagged 2-arg owner-drop that records the op (see buildDecrefOp).
+	if kindConstId != RELEASE_NO_KIND_CONST 'tagged'
+		argIds.push(kindConstId)
+		let taggedIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_drop_tagged", argIds: argIds)))
+		return taggedIdx
+	end 'tagged'
+
 	let opIdx = module.ops.count()
 	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "mm_drop", argIds: argIds)))
 	return opIdx
@@ -4352,11 +4378,11 @@ end 'buildDropManagedOp'
 //   - An address-taken (closure-captured) slot holds a value the capture path RETAINED
 //     to rc>=1 (it is read by-reference during the body), so its own reference is
 //     released with the strict null-guarded `__mm_decref`.
-function buildSlotContentReleaseOp(ctx RcContext, loadId ValueId, slotId VarSlot) returns OpIndex
+function buildSlotContentReleaseOp(ctx RcContext, loadId ValueId, slotId VarSlot, kind RcOpKind = RcOpKind.unspecified) returns OpIndex
 	if ctx.isInterfaceValueLocalSlot(slotId) 'interfaceOwner'
-		return buildDropManagedOp(ctx.module, valueId: loadId, idRef: ctx.idRef)
+		return buildDropManagedOp(ctx.module, valueId: loadId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: kind))
 	end 'interfaceOwner'
-	return buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef)
+	return buildDecrefOp(ctx.module, valueId: loadId, nullGuarded: true, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: kind))
 end 'buildSlotContentReleaseOp'
 
 // True iff `term` is a `ret`/`errorReturn` terminator that TRANSFERS `vid` to the
@@ -4508,6 +4534,76 @@ function flushOrdinalConsts(ctx RcContext)
 	end 'each'
 end 'flushOrdinalConsts'
 
+// The kind-const ValueId to pass into `buildDecrefOp` / `buildIncrefOp` for a
+// refcount op of reason `kind`: an entry-block `constI64(kind.rawValue)` when the
+// LEDGER is on, else `RELEASE_NO_KIND_CONST` (emit the plain 1-arg call — the
+// byte-identical default path). Every managed incref/decref/drop the inserter
+// materializes threads its kind through here so the sanitizer runtime can name
+// the op in the object's refcount-op history.
+function releaseKindConst(ctx RcContext, kind RcOpKind) returns ValueId
+	if not ctx.rcLedgerEmit 'off'
+		return RELEASE_NO_KIND_CONST
+	end 'off'
+	return kindConstId(ctx, kind: kind)
+end 'releaseKindConst'
+
+// The entry-block `constI64` ValueId for `kind`, minted on first request. Mirrors
+// `ordinalConstId`: only the ID is minted here; the const OP is materialized at
+// the entry-block head by `flushKindConsts` at the very end of insertion, because
+// tagged calls are built BOTH at plan time and at `applyEdgeReleases` time.
+function kindConstId(ctx RcContext, kind RcOpKind) returns ValueId
+	let k = kind.rawValue as NodeIndex
+	while ctx.kindConstIds.count() <= k 'grow'
+		ctx.kindConstIds.push(REFCOUNT_NO_VALUE)
+	end 'grow'
+	let existing = try ctx.kindConstIds.get(k) otherwise panic("kindConstId: get({k}) OOB after grow")
+	if existing != REFCOUNT_NO_VALUE 'cached'
+		return existing
+	end 'cached'
+
+	let resultId = allocValueId(ctx.idRef)
+	try ctx.kindConstIds.set(k, value: resultId) otherwise panic("kindConstId: set({k}) OOB after grow")
+	return resultId
+end 'kindConstId'
+
+// Materialize the lazily-minted per-kind `constI64` ops at the entry-block head,
+// after the leading `func.param` ops — the exact mechanism (and rationale) as
+// `flushOrdinalConsts`. Runs LAST so every tagged refcount call referencing these
+// ids is already placed; the entry head dominates every use.
+function flushKindConsts(ctx RcContext)
+	var hasMinted = false
+	for cid in ctx.kindConstIds 'scan'
+		if cid != REFCOUNT_NO_VALUE 'minted'
+			hasMinted = true
+		end 'minted'
+	end 'scan'
+	if not hasMinted 'nothing'
+		return
+	end 'nothing'
+
+	let entryBlock = try ctx.module.blocks.get(blockRefForId(ctx, blockId: ctx.entryBlockId)) otherwise panic("flushKindConsts: entry blockRef not in module.blocks")
+	var insertAt = 0
+	while insertAt < entryBlock.opRefs.count() 'skipParams'
+		let opIdx = try entryBlock.opRefs.get(insertAt) otherwise panic("flushKindConsts: opRefs.get({insertAt}) OOB despite insertAt < count")
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("flushKindConsts: opIdx not in module.ops")
+		if not opIsFuncParam(op) 'pastParams'
+			break
+		end 'pastParams'
+		insertAt = insertAt + 1
+	end 'skipParams'
+
+	var kindRaw = 0
+	while kindRaw < ctx.kindConstIds.count() 'each'
+		let cid = try ctx.kindConstIds.get(kindRaw) otherwise panic("flushKindConsts: get({kindRaw}) OOB despite kindRaw < count")
+		if cid != REFCOUNT_NO_VALUE 'minted'
+			let opIdx = ctx.module.ops.count()
+			ctx.module.ops.push(StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: cid, value: kindRaw as ParsedInt))))
+			try entryBlock.opRefs.insert(insertAt, value: opIdx) otherwise panic("flushKindConsts: entry opRefs.insert({insertAt}) failed")
+		end 'minted'
+		kindRaw = kindRaw + 1
+	end 'each'
+end 'flushKindConsts'
+
 function opIsFuncParam(op StdOp) returns bool
 	return match op 'dispatch'
 		call(c) gives callIsFuncParam(c)
@@ -4533,9 +4629,9 @@ end 'callIsFuncParam'
 // with a resolved ordinal routes through its per-arg heap-ref bit
 // (`mm_retain_type_param_at`); a type-param value with no recorded name falls
 // back to the aggregate-bit `mm_retain_type_param` (status quo).
-function buildRetainForValue(ctx RcContext, valueId ValueId) returns OpIndex
+function buildRetainForValue(ctx RcContext, valueId ValueId, kind RcOpKind = RcOpKind.unspecified) returns OpIndex
 	if ctx.isManaged(valueId) 'concreteManaged'
-		return buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef)
+		return buildIncrefOp(ctx.module, valueId: valueId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: kind))
 	end 'concreteManaged'
 	let ordinal = typeParamOrdinalForValue(ctx, valueId: valueId)
 	if ordinal >= 0 'perArg'
@@ -4603,7 +4699,7 @@ function planInBlockDeaths(ctx RcContext, blockRef BlockRef, block IrBlock, scra
 			if not valueIdArrayContains(releasedHere, vid: useId) 'notYetReleased'
 				if isInBlockDeathPoint(ctx, block: block, liveAfter: liveAfter, pos: pos, useId: useId) 'dies'
 					logTrace(LogCategory.ir, message: function() gives "RC-LASTUSE func={ctx.func.name} val=%{useId} atpos={pos} class={ownershipClassName(ctx.classOf(useId))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: useId))}")
-					let relIdx = buildReleaseOp(ctx, id: useId)
+					let relIdx = buildReleaseOp(ctx, id: useId, kind: RcOpKind.lastUseDecref)
 					// A tryCall RESULT that dies inside the tryCall's OWN block (the
 					// `if let x = try f() else (e) … x …` shape, where the bound value is
 					// consumed-and-dropped before/within the error-flag branch) must NOT be
@@ -5703,7 +5799,7 @@ function funcBodyReleasesValue(ctx RcContext, vid ValueId) returns bool
 end 'funcBodyReleasesValue'
 
 function calleeNameIsRelease(callee String) returns bool
-	return callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper"
+	return callee == "mm_drop" or callee == "stdlib.__mm_decref" or callee == "__mm_decref" or callee == "__mm_decref_maybenull_helper" or calleeIsTaggedRelease(callee)
 end 'calleeNameIsRelease'
 
 function edgeArgsContain(cf StdControlOp, toBlockId BlockId, vid ValueId) returns bool
@@ -5965,7 +6061,7 @@ function valueHasBodyAcquire(ctx RcContext, vid ValueId) returns bool
 end 'valueHasBodyAcquire'
 
 function calleeNameIsIncref(callee String) returns bool
-	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref"
+	return callee == "stdlib.__mm_incref" or callee == "__mm_incref" or callee == "mm_incref" or calleeIsTaggedIncref(callee)
 end 'calleeNameIsIncref'
 
 function binOpcodeIsSubI64(opcode StdArithBinaryOpcode) returns bool
@@ -6249,9 +6345,9 @@ function buildEdgeRcOp(ctx RcContext, er RcEdgeRelease) returns OpIndex
 		return er.prebuiltOpIdx
 	end 'prebuilt'
 	if er.isIncref 'incref'
-		return buildIncrefOp(ctx.module, valueId: er.valueId, idRef: ctx.idRef)
+		return buildIncrefOp(ctx.module, valueId: er.valueId, idRef: ctx.idRef, kindConstId: releaseKindConst(ctx, kind: RcOpKind.phiEdgeIncref))
 	end 'incref'
-	return buildReleaseOp(ctx, id: er.valueId)
+	return buildReleaseOp(ctx, id: er.valueId, kind: RcOpKind.lastUseEdgeDecref)
 end 'buildEdgeRcOp'
 
 // Find or create the edge block splitting fromBlock→toBlockId. The created
