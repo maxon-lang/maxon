@@ -50,6 +50,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    mir.ret %0
+  }
+}
+
+```
+
 <!-- test: int-var-roundtrip -->
 ```maxon
 function main() returns ExitCode
@@ -76,6 +87,17 @@ module {
   entry:
     arm64.mov x0, #99
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 99 : i64
+    mir.ret %0
   }
 }
 
@@ -113,6 +135,17 @@ module {
 
 ### Level 2: Multiple Values and Reuse
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 42 : i64
+    mir.ret %2
+  }
+}
+
+```
+
 <!-- test: int-two-vars-add -->
 ```maxon
 function main() returns ExitCode
@@ -140,6 +173,17 @@ module {
   entry:
     arm64.mov x0, #42
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 42 : i64
+    mir.ret %4
   }
 }
 
@@ -176,6 +220,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  }
+}
+
+```
+
 <!-- test: int-chained-assignments -->
 ```maxon
 function main() returns ExitCode
@@ -205,6 +260,17 @@ module {
   entry:
     arm64.mov x0, #42
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %9 = mir.mov_imm 42 : i64
+    mir.ret %9
   }
 }
 
@@ -245,6 +311,17 @@ module {
 
 ### Level 3: Register Pressure and Spilling
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 42 : i64
+    mir.ret %7
+  }
+}
+
+```
+
 <!-- test: int-six-vars-alive -->
 ```maxon
 function main() returns ExitCode
@@ -276,6 +353,17 @@ module {
   entry:
     arm64.mov x0, #21
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %16 = mir.mov_imm 21 : i64
+    mir.ret %16
   }
 }
 
@@ -316,6 +404,17 @@ module {
   entry:
     arm64.mov x0, #55
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %28 = mir.mov_imm 55 : i64
+    mir.ret %28
   }
 }
 
@@ -362,6 +461,17 @@ module {
   entry:
     arm64.mov x0, #8
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %48 = mir.mov_imm 8 : i64
+    mir.ret %48
   }
 }
 
@@ -417,6 +527,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %60 = mir.mov_imm 80 : i64
+    mir.ret %60
+  }
+}
+
+```
+
 <!-- test: int-interleaved-lifetimes -->
 ```maxon
 function main() returns ExitCode
@@ -452,6 +573,17 @@ module {
   entry:
     arm64.mov x0, #80
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %22 = mir.mov_imm 80 : i64
+    mir.ret %22
   }
 }
 
@@ -498,6 +630,17 @@ module {
 
 ### Level 4: Function Calls and Fixed Register Constraints
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %25 = mir.mov_imm 90 : i64
+    mir.ret %25
+  }
+}
+
+```
+
 <!-- test: int-call-preserves-value -->
 ```maxon
 
@@ -532,6 +675,17 @@ module {
   entry:
     arm64.mov x0, #42
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 42 : i64
+    mir.ret %4
   }
 }
 
@@ -582,6 +736,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %10 = mir.mov_imm 24 : i64
+    mir.ret %10
+  }
+}
+
+```
+
 <!-- test: int-call-result-used-later -->
 ```maxon
 
@@ -616,6 +781,17 @@ module {
   entry:
     arm64.mov x0, #72
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 72 : i64
+    mir.ret %6
   }
 }
 
@@ -684,6 +860,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  }
+}
+
+```
+
 <!-- test: int-mov-reg-reg-32bit -->
 ```maxon
 
@@ -725,6 +912,17 @@ module {
 
 ### Level 5: Control Flow and Loops
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.mov_imm 42 : i64
+    mir.ret %5
+  }
+}
+
+```
+
 <!-- test: int-if-else-simple -->
 ```maxon
 function main() returns ExitCode
@@ -755,6 +953,17 @@ module {
   entry:
     arm64.mov x0, #42
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 42 : i64
+    mir.ret %4
   }
 }
 
@@ -822,6 +1031,30 @@ module {
     arm64.mov x0, x3
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 40 : i64
+    mir.br check_0()
+  check_0:
+    %6 = mir.mov_imm 2 : i64
+    mir.br check_0.merge(%6)
+  check_0.merge(%11: i64):
+    %10 = mir.add.i64 %0, %11
+    %12 = mir.mov_imm 255 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_9083dd3838d7ca20
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
   }
 }
 
@@ -895,6 +1128,34 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0)
+  loop_0.header(%8: i64):
+    %2 = mir.mov_imm 42 : i64
+    %3 = mir.cmp lt, %8, %2
+    mir.cond_br %3 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.add.i64 %8, %5
+    mir.br loop_0.header(%6)
+  loop_0.exit:
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_fea5c1de7fb1df46
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
   }
 }
 
@@ -983,6 +1244,38 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header(%14: i64, %15: i64):
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.cmp lt, %15, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %7 = mir.add.i64 %14, %15
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %15, %9
+    mir.br loop_0.header(%7, %10)
+  loop_0.exit:
+    %12 = mir.mov_imm 256 : i64
+    %13 = mir.rem.i64 %14, %12
+    %16 = mir.mov_imm 255 : i64
+    %17 = mir.cmp ugt, %13, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_21624daf49be2c6a
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %13
   }
 }
 
@@ -1124,6 +1417,55 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1, %2, %3)
+  loop_0.header(%32: i64, %34: i64, %36: i64, %37: i64):
+    %5 = mir.mov_imm 20 : i64
+    %6 = mir.cmp lt, %37, %5
+    mir.cond_br %6 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.rem.i64 %37, %8
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.cmp eq, %9, %10
+    mir.cond_br %11 [then: even_0(), else: odd_0()]
+  loop_0.exit:
+    %14 = mir.add.i64 %32, %34
+    %16 = mir.add.i64 %14, %36
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.and.i64 %16, %17
+    %38 = mir.mov_imm 255 : i64
+    %39 = mir.cmp ugt, %18, %38
+    mir.cond_br %39 [then: __range_panic_0(), else: __range_ok_0()]
+  even_0:
+    %21 = mir.add.i64 %32, %37
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %36, %23
+    mir.br even_0.merge(%21, %34, %24)
+  odd_0:
+    %27 = mir.add.i64 %34, %37
+    mir.br even_0.merge(%32, %27, %36)
+  even_0.merge(%31: i64, %33: i64, %35: i64):
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.add.i64 %37, %29
+    mir.br loop_0.header(%31, %33, %35, %30)
+  __range_panic_0:
+    %40 = mir.global_addr @__panic_msg_e449517a4b4af179
+    %41 = mir.call @mrt_panic(%40)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+
+```
+
 <!-- test: int-nested-if-in-loop -->
 ```maxon
 function main() returns ExitCode
@@ -1234,6 +1576,49 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header(%23: i64, %24: i64):
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.cmp le, %24, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %6 = mir.mov_imm 5 : i64
+    %7 = mir.cmp le, %24, %6
+    mir.cond_br %7 [then: first_0(), else: second_0()]
+  loop_0.exit:
+    %9 = mir.mov_imm 256 : i64
+    %10 = mir.rem.i64 %23, %9
+    %25 = mir.mov_imm 255 : i64
+    %26 = mir.cmp ugt, %10, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+  first_0:
+    %13 = mir.add.i64 %23, %24
+    mir.br first_0.merge(%13)
+  second_0:
+    %16 = mir.mov_imm 2 : i64
+    %17 = mir.mul.i64 %24, %16
+    %18 = mir.add.i64 %23, %17
+    mir.br first_0.merge(%18)
+  first_0.merge(%22: i64):
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %24, %20
+    mir.br loop_0.header(%22, %21)
+  __range_panic_0:
+    %27 = mir.global_addr @__panic_msg_aea90f7456a1aa52
+    %28 = mir.call @mrt_panic(%27)
+  __range_ok_0:
+    mir.ret %10
   }
 }
 
@@ -1352,6 +1737,48 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br outer_0.header(%0, %1)
+  outer_0.header(%20: i64, %21: i64):
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.cmp lt, %21, %3
+    mir.cond_br %4 [then: outer_0(), else: outer_0.exit()]
+  outer_0:
+    %5 = mir.mov_imm 0 : i64
+    mir.br inner_0.header(%20, %5)
+  outer_0.exit:
+    %23 = mir.mov_imm 255 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  inner_0.header(%19: i64, %22: i64):
+    %8 = mir.mov_imm 4 : i64
+    %9 = mir.cmp lt, %22, %8
+    mir.cond_br %9 [then: inner_0(), else: inner_0.exit()]
+  inner_0:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %19, %11
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %22, %14
+    mir.br inner_0.header(%12, %15)
+  inner_0.exit:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %21, %17
+    mir.br outer_0.header(%19, %18)
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_1dbec400299d1eb2
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+
+```
+
 <!-- test: int-nested-loops-with-outer-var -->
 ```maxon
 function main() returns ExitCode
@@ -1464,6 +1891,47 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    mir.br outer_0.header(%0, %1)
+  outer_0.header(%20: i64, %21: i64):
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.cmp le, %21, %3
+    mir.cond_br %4 [then: outer_0(), else: outer_0.exit()]
+  outer_0:
+    %5 = mir.mov_imm 1 : i64
+    mir.br inner_0.header(%20, %5)
+  outer_0.exit:
+    %23 = mir.mov_imm 255 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  inner_0.header(%19: i64, %22: i64):
+    %9 = mir.cmp le, %22, %21
+    mir.cond_br %9 [then: inner_0(), else: inner_0.exit()]
+  inner_0:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %19, %11
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %22, %14
+    mir.br inner_0.header(%12, %15)
+  inner_0.exit:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %21, %17
+    mir.br outer_0.header(%19, %18)
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_d8bcae5a113f3996
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+
+```
+
 <!-- test: int-loop-with-function-call -->
 ```maxon
 
@@ -1562,6 +2030,38 @@ module {
 
 ### Level 6: Advanced Scenarios
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header(%13: i64, %14: i64):
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.cmp lt, %14, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %15 = mir.mov_imm 2 : i64
+    %16 = mir.mul.i64 %14, %15
+    %8 = mir.add.i64 %13, %16
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.add.i64 %14, %10
+    mir.br loop_0.header(%8, %11)
+  loop_0.exit:
+    %17 = mir.mov_imm 255 : i64
+    %18 = mir.cmp ugt, %13, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_c8a3486f5d92e518
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+
+```
+
 <!-- test: int-nested-expressions-deep -->
 ```maxon
 function main() returns ExitCode
@@ -1587,6 +2087,17 @@ module {
   entry:
     arm64.mov x0, #32
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %10 = mir.mov_imm 32 : i64
+    mir.ret %10
   }
 }
 
@@ -1621,6 +2132,17 @@ module {
   entry:
     arm64.mov x0, #40
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %10 = mir.mov_imm 40 : i64
+    mir.ret %10
   }
 }
 
@@ -1663,6 +2185,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %9 = mir.mov_imm 42 : i64
+    mir.ret %9
+  }
+}
+
+```
+
 <!-- test: int-nine-params-function -->
 ```maxon
 
@@ -1695,6 +2228,17 @@ module {
   entry:
     arm64.mov x0, #45
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %17 = mir.mov_imm 45 : i64
+    mir.ret %17
   }
 }
 
@@ -1808,6 +2352,43 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @factorial(local0: i64) -> i64 {
+  entry:
+    %11 = mir.param local0 : i64
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.cmp le, %11, %2
+    mir.cond_br %3 [then: base_0(), else: base_0.after()]
+  base_0:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  base_0.after:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.sub.i64 %11, %7
+    %9 = mir.call @factorial(%8)
+    %10 = mir.mul.i64 %11, %9
+    mir.ret %10
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.call @factorial(%0)
+    %2 = mir.mov_imm 256 : i64
+    %3 = mir.rem.i64 %1, %2
+    %4 = mir.mov_imm 255 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_65da0ac706b41d36
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %3
   }
 }
 
@@ -1935,6 +2516,49 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.mov_imm 4 : i64
+    %4 = mir.mov_imm 5 : i64
+    %5 = mir.mov_imm 6 : i64
+    %6 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %2, %4, %6)
+  loop_0.header(%36: i64, %37: i64, %38: i64, %39: i64):
+    %8 = mir.mov_imm 3 : i64
+    %9 = mir.cmp lt, %39, %8
+    mir.cond_br %9 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %13 = mir.add.i64 %36, %1
+    %17 = mir.add.i64 %37, %3
+    %21 = mir.add.i64 %38, %5
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %39, %23
+    mir.br loop_0.header(%13, %17, %21, %24)
+  loop_0.exit:
+    %27 = mir.add.i64 %36, %37
+    %29 = mir.add.i64 %27, %3
+    %31 = mir.add.i64 %29, %38
+    %33 = mir.add.i64 %31, %5
+    %34 = mir.mov_imm 256 : i64
+    %35 = mir.rem.i64 %33, %34
+    %40 = mir.mov_imm 255 : i64
+    %41 = mir.cmp ugt, %35, %40
+    mir.cond_br %41 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %42 = mir.global_addr @__panic_msg_3e90fd62943769c1
+    %43 = mir.call @mrt_panic(%42)
+  __range_ok_0:
+    mir.ret %35
+  }
+}
+
+```
+
 <!-- test: float-and-int-mixed-pressure -->
 ```maxon
 function main() returns ExitCode
@@ -1996,6 +2620,29 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989087 : f64
+    %1 = mir.mov_imm 4613622566267157217 : f64
+    %4 = mir.add.f64 %0, %1
+    %9 = mir.mov_imm 30 : i64
+    %11 = mir.fptosi.i64 %4
+    %13 = mir.add.i64 %11, %9
+    %14 = mir.mov_imm 255 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_289b40fc57b8fe49
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %13
   }
 }
 
@@ -2128,6 +2775,55 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 100 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br outer_0.header(%1, %2)
+  outer_0.header(%27: i64, %28: i64):
+    %4 = mir.mov_imm 3 : i64
+    %5 = mir.cmp lt, %28, %4
+    mir.cond_br %5 [then: outer_0(), else: outer_0.exit()]
+  outer_0:
+    %6 = mir.mov_imm 0 : i64
+    mir.br inner_0.header(%27, %6)
+  outer_0.exit:
+    %9 = mir.add.i64 %0, %27
+    %30 = mir.mov_imm 255 : i64
+    %31 = mir.cmp ugt, %9, %30
+    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+  inner_0.header(%26: i64, %29: i64):
+    %11 = mir.mov_imm 3 : i64
+    %12 = mir.cmp lt, %29, %11
+    mir.cond_br %12 [then: inner_0(), else: inner_0.exit()]
+  inner_0:
+    %15 = mir.cmp eq, %28, %29
+    mir.cond_br %15 [then: diag_0(), else: diag_0.after(%26)]
+  inner_0.exit:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %28, %17
+    mir.br outer_0.header(%26, %18)
+  diag_0:
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %26, %20
+    mir.br diag_0.after(%21)
+  diag_0.after(%25: i64):
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %29, %23
+    mir.br inner_0.header(%25, %24)
+  __range_panic_0:
+    %32 = mir.global_addr @__panic_msg_34b9b0cb2410b454
+    %33 = mir.call @mrt_panic(%32)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+
+```
+
 <!-- test: int-fibonacci -->
 ```maxon
 function main() returns ExitCode
@@ -2220,6 +2916,39 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1, %2)
+  loop_0.header(%17: i64, %18: i64, %19: i64):
+    %4 = mir.mov_imm 13 : i64
+    %5 = mir.cmp lt, %19, %4
+    mir.cond_br %5 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %8 = mir.add.i64 %17, %18
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %19, %12
+    mir.br loop_0.header(%18, %8, %13)
+  loop_0.exit:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.and.i64 %17, %15
+    %20 = mir.mov_imm 255 : i64
+    %21 = mir.cmp ugt, %16, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_5ffb4c10096b25df
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+
+```
+
 <!-- test: int-division-high-pressure -->
 ```maxon
 function main() returns ExitCode
@@ -2275,6 +3004,17 @@ module {
   entry:
     arm64.mov x0, #52
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %8 = mir.mov_imm 52 : i64
+    mir.ret %8
   }
 }
 
@@ -2340,6 +3080,27 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989087 : f64
+    %6 = mir.mov_imm 40 : i64
+    %3 = mir.fptosi.i64 %0
+    %5 = mir.add.i64 %3, %6
+    %7 = mir.mov_imm 255 : i64
+    %8 = mir.cmp ugt, %5, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_04f881d71f72fcd2
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %5
   }
 }
 
@@ -2424,6 +3185,28 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 100 : i64
+    %1 = mir.mov_imm 7 : i64
+    %2 = mir.mov_imm 10 : i64
+    %5 = mir.rem.i64 %0, %1
+    %8 = mir.mul.i64 %5, %2
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_bf3600189d269600
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+
+```
+
 <!-- test: int-call-arg-reverse -->
 ```maxon
 
@@ -2464,6 +3247,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 38 : i64
+    mir.ret %7
+  }
+}
+
+```
+
 <!-- test: int-subtraction-high-pressure -->
 ```maxon
 function main() returns ExitCode
@@ -2497,6 +3291,17 @@ module {
   entry:
     arm64.mov x0, #72
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %22 = mir.mov_imm 72 : i64
+    mir.ret %22
   }
 }
 
@@ -2579,6 +3384,30 @@ module {
 
 ### Level 7: Match Statements and Expressions
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.mov_imm 20 : i64
+    %8 = mir.mov_imm 12 : i64
+    mir.br branch_1.merge(%6, %7, %8)
+  branch_1.merge(%17: i64, %18: i64, %19: i64):
+    %14 = mir.add.i64 %17, %18
+    %16 = mir.add.i64 %14, %19
+    %20 = mir.mov_imm 255 : i64
+    %21 = mir.cmp ugt, %16, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_e2f81ed7640ab46a
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+
+```
+
 <!-- test: match-statement-simple -->
 ```maxon
 function main() returns ExitCode
@@ -2627,6 +3456,27 @@ module {
   check_0.case2:
     arm64.mov x0, #0
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br check_0.next0()
+  check_0.next0:
+    %5 = mir.mov_imm 2 : i64
+    %6 = mir.cmp eq, %0, %5
+    mir.cond_br %6 [then: check_0.case1(), else: check_0.case2()]
+  check_0.case1:
+    %7 = mir.mov_imm 20 : i64
+    mir.ret %7
+  check_0.case2:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
   }
 }
 
@@ -2720,6 +3570,38 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br process_0.next0()
+  process_0.merge(%13: i64):
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.and.i64 %13, %6
+    %14 = mir.mov_imm 255 : i64
+    %15 = mir.cmp ugt, %7, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  process_0.next0:
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.cmp eq, %0, %9
+    mir.cond_br %10 [then: process_0.case1(), else: process_0.case2()]
+  process_0.case1:
+    %11 = mir.mov_imm 200 : i64
+    mir.br process_0.merge(%11)
+  process_0.case2:
+    %12 = mir.mov_imm 0 : i64
+    mir.br process_0.merge(%12)
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_388127f7ac41c7d7
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+
+```
+
 <!-- test: match-statement-or-patterns -->
 ```maxon
 function main() returns ExitCode
@@ -2777,6 +3659,30 @@ module {
   check_0.case2:
     arm64.mov x0, #0
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    mir.br check_0.next0()
+  check_0.next0:
+    %8 = mir.mov_imm 3 : i64
+    %9 = mir.cmp eq, %0, %8
+    %10 = mir.mov_imm 4 : i64
+    %11 = mir.cmp eq, %0, %10
+    %12 = mir.or.i64 %9, %11
+    mir.cond_br %12 [then: check_0.case1(), else: check_0.case2()]
+  check_0.case1:
+    %13 = mir.mov_imm 20 : i64
+    mir.ret %13
+  check_0.case2:
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
   }
 }
 
@@ -2864,6 +3770,38 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 0 : i64
+    mir.br cascade_0.case0()
+  cascade_0.merge(%20: i64):
+    %23 = mir.mov_imm 255 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  cascade_0.case0:
+    %7 = mir.mov_imm 10 : i64
+    %8 = mir.add.i64 %1, %7
+    mir.br cascade_0.case1(%8)
+  cascade_0.case1(%22: i64):
+    %12 = mir.mov_imm 20 : i64
+    %13 = mir.add.i64 %22, %12
+    mir.br cascade_0.case2(%13)
+  cascade_0.case2(%21: i64):
+    %17 = mir.mov_imm 30 : i64
+    %18 = mir.add.i64 %21, %17
+    mir.br cascade_0.merge(%18)
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_6ac6ec73b5bac89c
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+
+```
+
 <!-- test: match-expression-basic -->
 ```maxon
 function main() returns ExitCode
@@ -2942,6 +3880,36 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br eval_0.next0()
+  eval_0.merge(%12: i64):
+    %13 = mir.mov_imm 255 : i64
+    %14 = mir.cmp ugt, %12, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  eval_0.next0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.cmp eq, %0, %8
+    mir.cond_br %9 [then: eval_0.case1(), else: eval_0.case2()]
+  eval_0.case1:
+    %10 = mir.mov_imm 20 : i64
+    mir.br eval_0.merge(%10)
+  eval_0.case2:
+    %11 = mir.mov_imm 0 : i64
+    mir.br eval_0.merge(%11)
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_c4227e4f5df12c9a
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %12
   }
 }
 
@@ -3039,6 +4007,39 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4 : i64
+    mir.br eval_0.next0()
+  eval_0.merge(%18: i64):
+    %19 = mir.mov_imm 255 : i64
+    %20 = mir.cmp ugt, %18, %19
+    mir.cond_br %20 [then: __range_panic_0(), else: __range_ok_0()]
+  eval_0.next0:
+    %11 = mir.mov_imm 3 : i64
+    %12 = mir.cmp eq, %0, %11
+    %13 = mir.mov_imm 4 : i64
+    %14 = mir.cmp eq, %0, %13
+    %15 = mir.or.i64 %12, %14
+    mir.cond_br %15 [then: eval_0.case1(), else: eval_0.case2()]
+  eval_0.case1:
+    %16 = mir.mov_imm 20 : i64
+    mir.br eval_0.merge(%16)
+  eval_0.case2:
+    %17 = mir.mov_imm 0 : i64
+    mir.br eval_0.merge(%17)
+  __range_panic_0:
+    %21 = mir.global_addr @__panic_msg_628d51227dda8cbd
+    %22 = mir.call @mrt_panic(%21)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+
+```
+
 <!-- test: match-expression-in-arithmetic -->
 ```maxon
 function main() returns ExitCode
@@ -3121,6 +4122,38 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br eval_0.next0()
+  eval_0.merge(%14: i64):
+    %6 = mir.mov_imm 2 : i64
+    %7 = mir.mul.i64 %14, %6
+    %15 = mir.mov_imm 255 : i64
+    %16 = mir.cmp ugt, %7, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  eval_0.next0:
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.cmp eq, %0, %10
+    mir.cond_br %11 [then: eval_0.case1(), else: eval_0.case2()]
+  eval_0.case1:
+    %12 = mir.mov_imm 20 : i64
+    mir.br eval_0.merge(%12)
+  eval_0.case2:
+    %13 = mir.mov_imm 0 : i64
+    mir.br eval_0.merge(%13)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_27e6ae53d7b1aeee
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %7
   }
 }
 
@@ -3219,6 +4252,36 @@ module {
 
 ### Level 8: Error Handling
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br process_0.next0()
+  process_0.merge(%13: i64):
+    %16 = mir.mov_imm 255 : i64
+    %17 = mir.cmp ugt, %13, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  process_0.next0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.cmp eq, %0, %8
+    mir.cond_br %9 [then: process_0.case1(), else: process_0.case2()]
+  process_0.case1:
+    %15 = mir.mov_imm 40 : i64
+    mir.br process_0.merge(%15)
+  process_0.case2:
+    %12 = mir.mov_imm 0 : i64
+    mir.br process_0.merge(%12)
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_4ec22f4a8f937639
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+
+```
+
 <!-- test: error-otherwise-ignore -->
 ```maxon
 
@@ -3260,6 +4323,20 @@ module {
   try_0.merge:
     arm64.mov x0, #42
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%5)
+  try_1.merge(%8: i64):
+    %7 = mir.mov_imm 42 : i64
+    mir.ret %7
   }
 }
 
@@ -3330,6 +4407,27 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 42 : i64
+    %7 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%6, %7)
+  try_1.merge(%10: i64, %11: i64):
+    %12 = mir.mov_imm 255 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_52fc415dc3ac3fb2
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
   }
 }
 
@@ -3418,6 +4516,37 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 1 : i64
+    mir.br inlined_middle_1_0()
+  inlined_middle_1_0:
+    %13 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%13, %10)
+  inline_cont_main_0(%15: i64, %16: i64):
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp ne, %16, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: try_0.merge(%15)]
+  try_0.otherwise:
+    %5 = mir.mov_imm 99 : i64
+    mir.br try_0.merge(%5)
+  try_0.merge(%8: i64):
+    %17 = mir.mov_imm 255 : i64
+    %18 = mir.cmp ugt, %8, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_765ddc695c2d01c9
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %8
   }
 }
 
@@ -3535,6 +4664,44 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %29 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%29)
+  try_1.merge(%26: i64):
+    %31 = mir.mov_imm 20 : i64
+    %32 = mir.mov_imm 0 : i64
+    %10 = mir.cmp ne, %32, %2
+    mir.cond_br %10 [then: try_0.merge(%2), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%31)
+  try_0.merge(%27: i64):
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.mov_imm 1 : i64
+    %17 = mir.cmp ne, %34, %2
+    mir.cond_br %17 [then: try_1.otherwise(), else: try_1.merge(%33)]
+  try_1.otherwise:
+    %19 = mir.mov_imm 12 : i64
+    mir.br try_1.merge(%19)
+  try_1.merge(%28: i64):
+    %23 = mir.add.i64 %26, %27
+    %25 = mir.add.i64 %23, %28
+    %35 = mir.mov_imm 255 : i64
+    %36 = mir.cmp ugt, %25, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %37 = mir.global_addr @__panic_msg_4088112a38757a69
+    %38 = mir.call @mrt_panic(%37)
+  __range_ok_0:
+    mir.ret %25
   }
 }
 
@@ -3731,6 +4898,86 @@ fallback (which spills the parent merge when a sub-range can't be colored,
 mirroring LLVM Greedy's stack-slot demotion). Without these techniques the
 chordal SSA coloring panics at `colorLookupGpr` on URL.resolve and on
 similar functions that mutate many locals across nested control flow.
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br inlined_lookup_0_0()
+  inlined_lookup_0_0:
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.cmp eq, %0, %23
+    mir.cond_br %24 [then: inlined_lookup_2_0(), else: inlined_lookup_3_0()]
+  inlined_lookup_2_0:
+    %25 = mir.mov_imm 100 : i64
+    %26 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%25, %26)
+  inlined_lookup_3_0:
+    %27 = mir.mov_imm 2 : i64
+    %28 = mir.cmp eq, %0, %27
+    mir.cond_br %28 [then: inlined_lookup_4_0(), else: inlined_lookup_6_0()]
+  inlined_lookup_4_0:
+    %29 = mir.mov_imm 200 : i64
+    %30 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%29, %30)
+  inlined_lookup_6_0:
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_0(%31, %32)
+  inline_cont_main_0(%33: i64, %34: i64):
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %34, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%33)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%6)
+  try_0.merge(%21: i64):
+    %8 = mir.mov_imm 99 : i64
+    mir.br inlined_lookup_0_1()
+  inlined_lookup_0_1:
+    %35 = mir.mov_imm 1 : i64
+    %36 = mir.cmp eq, %8, %35
+    mir.cond_br %36 [then: inlined_lookup_2_1(), else: inlined_lookup_3_1()]
+  inlined_lookup_2_1:
+    %37 = mir.mov_imm 100 : i64
+    %38 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%37, %38)
+  inlined_lookup_3_1:
+    %39 = mir.mov_imm 2 : i64
+    %40 = mir.cmp eq, %8, %39
+    mir.cond_br %40 [then: inlined_lookup_4_1(), else: inlined_lookup_6_1()]
+  inlined_lookup_4_1:
+    %41 = mir.mov_imm 200 : i64
+    %42 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%41, %42)
+  inlined_lookup_6_1:
+    %43 = mir.mov_imm 0 : i64
+    %44 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_3(%43, %44)
+  inline_cont_main_3(%45: i64, %46: i64):
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp ne, %46, %11
+    mir.cond_br %12 [then: try_1.otherwise(), else: try_1.merge(%45)]
+  try_1.otherwise:
+    %14 = mir.mov_imm 42 : i64
+    mir.br try_1.merge(%14)
+  try_1.merge(%22: i64):
+    %18 = mir.add.i64 %21, %22
+    %19 = mir.mov_imm 125 : i64
+    %20 = mir.and.i64 %18, %19
+    %47 = mir.mov_imm 255 : i64
+    %48 = mir.cmp ugt, %20, %47
+    mir.cond_br %48 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %49 = mir.global_addr @__panic_msg_f84624c80ce4f2a5
+    %50 = mir.call @mrt_panic(%49)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+
+```
 
 <!-- test: phi-merge-split-multi-anchor -->
 ```maxon

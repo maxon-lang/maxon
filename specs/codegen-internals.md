@@ -424,6 +424,86 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.mov_imm 48 : i64
+    %6 = mir.call @stdlib.__mm_alloc(%5, %4)
+    %63 = mir.call @stdlib.__mm_incref(%6)
+    %7 = mir.global_addr @__rdata_arr_main_0
+    mir.store %7, %6, 0 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %6, 8 width: qword
+    %9 = mir.mov_imm -2 : i64
+    mir.store %9, %6, 16 width: qword
+    %10 = mir.mov_imm 8 : i64
+    mir.store %10, %6, 24 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %6, 32 width: qword
+    mir.store %0, %6, 40 width: qword
+    %16 = mir.global_addr @__layout_Array_Int
+    %17 = mir.call @Array.init(%6, %16)
+    %20 = mir.mov_imm 77 : i64
+    mir.br inlined_Array.set_0_0()
+  inlined_Array.set_0_0:
+    %42 = mir.load %17, 0 width: qword
+    %43, %44 = mir.try_call @stdlib.__managed_mem_set(%42, %0, %20)
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.cmp ne, %44, %45
+    mir.cond_br %46 [then: inlined_Array.set_1_0(), else: inlined_Array.set_3_0()]
+  inlined_Array.set_1_0:
+    %47 = mir.mov_imm 0 : i64
+    %48 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%47, %48)
+  inlined_Array.set_3_0:
+    %49 = mir.mov_imm 0 : i64
+    %50 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%49, %50)
+  inline_cont_main_0(%51: i64, %52: i64):
+    %25 = mir.cmp ne, %52, %0
+    mir.cond_br %25 [then: try_0.otherwise(), else: inlined_Array.get_0_0()]
+  try_0.otherwise:
+    %65 = mir.call @__mm_decref_maybenull_helper(%17)
+    %27 = mir.global_addr @__panic_msg_ae90e3f7d6f93ae6
+    %28 = mir.call @mrt_panic(%27)
+    mir.ret %0
+  inlined_Array.get_0_0:
+    %53 = mir.load %17, 0 width: qword
+    %54, %55 = mir.try_call @stdlib.__managed_mem_get(%53, %0)
+    %56 = mir.mov_imm 0 : i64
+    %57 = mir.cmp ne, %55, %56
+    mir.cond_br %57 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %66 = mir.call @__mm_decref_maybenull_helper(%17)
+    %58 = mir.mov_imm 0 : i64
+    %59 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_3(%58, %59)
+  inlined_Array.get_3_0:
+    %60 = mir.mov_imm 0 : i64
+    %64 = mir.call @__mm_decref_maybenull_helper(%17)
+    mir.br inline_cont_main_3(%54, %60)
+  inline_cont_main_3(%61: i64, %62: i64):
+    %37 = mir.cmp ne, %62, %0
+    mir.cond_br %37 [then: try_1.merge(%0), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%61)
+  try_1.merge(%41: i64):
+    %67 = mir.mov_imm 255 : i64
+    %68 = mir.cmp ugt, %41, %67
+    mir.cond_br %68 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %69 = mir.global_addr @__panic_msg_62b6e9add79cfc21
+    %70 = mir.call @mrt_panic(%69)
+  __range_ok_0:
+    mir.ret %41
+  }
+}
+
+```
+
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
@@ -647,6 +727,17 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 13 : i64
+    mir.ret %4
+  }
+}
+
+```
+
 <!-- test: i32-unsigned-div -->
 ```maxon
 typealias SmallInt = int(0 to 1000)
@@ -703,6 +794,26 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_e03f78fd39cbf137
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
   }
 }
 
@@ -769,6 +880,26 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_dc6712b5d40a6c5e
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+
+```
+
 <!-- test: i32-unsigned-cmp -->
 ```maxon
 typealias SmallInt = int(0 to 1000)
@@ -801,6 +932,17 @@ module {
   entry:
     arm64.mov x0, #1
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
   }
 }
 
@@ -867,6 +1009,26 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.rem.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_c4ba6be625f9de38
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+
+```
+
 <!-- test: i64-signed-no-narrowing -->
 ```maxon
 typealias BigInt = int(-1000000000000 to 1000000000000)
@@ -923,6 +1085,26 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_e3b71750342575b4
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
   }
 }
 
@@ -989,6 +1171,26 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 21 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_771a87d3fb99fca9
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+
+```
+
 <!-- test: f32-arithmetic-uses-ss-instructions -->
 ```maxon
 typealias F = float(f32.min to f32.max)
@@ -1050,6 +1252,27 @@ module {
 
 ```
 
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4621819117588971520 : f64
+    %1 = mir.mov_imm 4613937818241073152 : f64
+    %4 = mir.add.f64 %0, %1
+    %5 = mir.fptosi.i64 %4
+    %6 = mir.mov_imm 255 : i64
+    %7 = mir.cmp ugt, %5, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_91aa5b022612377c
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+
+```
+
 <!-- test: f32-comparison-uses-ucomiss -->
 ```maxon
 typealias F = float(f32.min to f32.max)
@@ -1100,6 +1323,25 @@ module {
   less_0.after:
     arm64.mov x0, #0
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4613937818241073152 : f64
+    %1 = mir.mov_imm 4617315517961601024 : f64
+    %4 = mir.cmp flt, %0, %1
+    mir.cond_br %4 [then: less_0(), else: less_0.after()]
+  less_0:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  less_0.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
   }
 }
 
@@ -1156,6 +1398,25 @@ module {
   __range_ok_0:
     arm64.epilogue
     arm64.ret
+  }
+}
+
+```
+
+```RequiredIR:wasm32-wasi
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4631234455559942963 : f64
+    %2 = mir.fptosi.i64 %0
+    %3 = mir.mov_imm 255 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_74470c2bcd4c1409
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
   }
 }
 
