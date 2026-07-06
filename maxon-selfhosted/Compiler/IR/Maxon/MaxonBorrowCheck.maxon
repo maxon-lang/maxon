@@ -107,7 +107,7 @@ typealias LocalParamCollector = function(MaxonModule, IrFunction, SlotToParamInd
 //   2. Transitive: a function that passes its own parameter P as the argument
 //      for a callee parameter the callee marks, marks P too. Iterated to a
 //      fixpoint over the (caller, argPos, calleePos) call edges.
-function computeParamKeySet(module MaxonModule, collectLocal LocalParamCollector) returns MutatedParamsKeySet
+function computeParamKeySet(project Project, module MaxonModule, collectLocal LocalParamCollector) returns MutatedParamsKeySet
 	var keys = MutatedParamsKeySet.create()
 
 	// Stage 1: local facts per function.
@@ -123,7 +123,7 @@ function computeParamKeySet(module MaxonModule, collectLocal LocalParamCollector
 	end 'eachFunc'
 
 	// Stage 2: transitive propagation to a fixpoint.
-	propagateMutatedParams(module, mutated: keys)
+	propagateMutatedParams(project, module: module, mutated: keys)
 
 	return keys
 end 'computeParamKeySet'
@@ -131,8 +131,8 @@ end 'computeParamKeySet'
 // Compute, per function name, the set of user-parameter positions its body
 // mutates: a `varStore` to a param slot (direct reassignment) or a mutating
 // method call (`isMutatingMethodName`) on a param-derived receiver.
-function computeMutatedParams(module MaxonModule) returns MutatedParamsKeySet
-	return computeParamKeySet(module, collectLocal: collectLocalParamMutations)
+function computeMutatedParams(project Project, module MaxonModule) returns MutatedParamsKeySet
+	return computeParamKeySet(project, module: module, collectLocal: collectLocalParamMutations)
 end 'computeMutatedParams'
 
 // Compute, per function name, the set of user-parameter positions its body
@@ -144,8 +144,8 @@ end 'computeMutatedParams'
 // already propagates through the shared struct pointer. Mirrors the C#
 // bootstrap's `IrFunction.ReassignedParams`, which drives pass-by-reference.
 // Keyed `"funcName::paramIndex"` like `computeMutatedParams`.
-export function computeReassignedParams(module MaxonModule) returns MutatedParamsKeySet
-	return computeParamKeySet(module, collectLocal: collectLocalParamReassignments)
+export function computeReassignedParams(project Project, module MaxonModule) returns MutatedParamsKeySet
+	return computeParamKeySet(project, module: module, collectLocal: collectLocalParamReassignments)
 end 'computeReassignedParams'
 
 // Stage-1 local scan for `computeReassignedParams`: return the set of
@@ -273,7 +273,7 @@ end 'isBorrowCheckMutatingMethod'
 // a callee parameter the callee mutates, mutates its own parameter too. Iterate
 // the call edges to a fixpoint (monotonic — entries are only added — so the loop
 // terminates in at most #functions rounds).
-function propagateMutatedParams(module MaxonModule, mutated MutatedParamsKeySet)
+function propagateMutatedParams(project Project, module MaxonModule, mutated MutatedParamsKeySet)
 	var changed = true
 	while changed 'fixpoint'
 		changed = false
@@ -282,7 +282,7 @@ function propagateMutatedParams(module MaxonModule, mutated MutatedParamsKeySet)
 			if callerSlotToParam.count() == 0 'noParams'
 				continue
 			end 'noParams'
-			if propagateThroughCalls(module, caller: caller, callerSlotToParam: callerSlotToParam, mutated: mutated) 'grew'
+			if propagateThroughCalls(project, module: module, caller: caller, callerSlotToParam: callerSlotToParam, mutated: mutated) 'grew'
 				changed = true
 			end 'grew'
 		end 'eachCaller'
@@ -293,7 +293,7 @@ end 'propagateMutatedParams'
 // the caller's own parameters, if the callee mutates the parameter position the
 // argument lands in, mark the caller's parameter mutated. Returns true if any
 // new mutation was recorded (drives the fixpoint).
-function propagateThroughCalls(module MaxonModule, caller IrFunction, callerSlotToParam SlotToParamIndexMap, mutated MutatedParamsKeySet) returns bool
+function propagateThroughCalls(project Project, module MaxonModule, caller IrFunction, callerSlotToParam SlotToParamIndexMap, mutated MutatedParamsKeySet) returns bool
 	// Map each of the caller's SSA value names to the parameter ordinal it loads
 	// from, so a call argument naming that value resolves to the caller param.
 	var argValueToCallerParam = ParamTaintMap.create()
@@ -314,7 +314,7 @@ function propagateThroughCalls(module MaxonModule, caller IrFunction, callerSlot
 		let block = try module.blocks.get(blockRef) otherwise panic("propagateThroughCalls: blockRef2 OOB")
 		for opIdx in block.opRefs 'eachOp2'
 			let op = try module.ops.get(opIdx) otherwise panic("propagateThroughCalls: opIdx2 OOB")
-			if propagateOneCall(op, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated) 'callGrew'
+			if propagateOneCall(project, op: op, opIdx: opIdx, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated) 'callGrew'
 				grew = true
 			end 'callGrew'
 		end 'eachOp2'
@@ -332,59 +332,77 @@ function recordArgValueParamSource(op MaxonOp, callerSlotToParam SlotToParamInde
 	end 'op'
 end 'recordArgValueParamSource'
 
-// Propagate one direct `call` / `tryCall`: for each argument that names a
-// caller-param-derived value, if the callee mutates that argument's position,
-// record the caller's parameter as mutated. Returns true if a new entry was
-// added. A `tryCall` (the throwing form of a free/qualified call) carries the
-// SAME (callee, args) shape as `call` — plus a trailing `errorBoundName` — so a
-// parameter FORWARDED through a `try callee(...)` propagates identically. Without
-// the `tryCall` arm the by-reference ABI does not propagate up a chain of `try`
-// forwarders (e.g. `parseScopedStatementsRequireBody` -> `parseStatementsRequireBody`
-// -> `parseStatements`), so an owned value passed by-reference through the chain is
-// released BOTH by the callee's `byRefParamDecrefOld` and by the original owner's
-// last-use decref — a double free of a collection-owned block. Mirrors the C#
-// bootstrap, whose `ParameterMutationAnalysisPass` propagates across every
-// synchronous call-graph edge regardless of the throwing/non-throwing form.
-function propagateOneCall(op MaxonOp, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+// Propagate one call-graph edge — `call` / `tryCall` / `methodCall` /
+// `tryMethodCall` — into the caller's parameter facts: for each argument that
+// names a caller-param-derived value, if the resolved callee reassigns/mutates
+// the parameter that argument lands in, record the caller's parameter as
+// reassigned/mutated too. Returns true if a new entry was added.
+//
+// ALL FOUR call op shapes must propagate, because the by-reference CONSUMER
+// (`argPositionIsByRef` + `lowerCall`/`lowerMethodCall`) honours by-reference on
+// ALL of them. A value FORWARDED through a method-call or try-call edge to a
+// reassigning callee is released by the callee's `byRefParamDecrefOld`; if the
+// forwarding function is not itself marked, its OWN callers keep passing the
+// value BY VALUE (retaining ownership) and the value is released twice — the
+// bug-#9 double-free class, reached here through an explicit-receiver or `try`
+// chain. A `methodCall`/`tryMethodCall` carries the method's BARE name with the
+// receiver supplied out-of-band (its `args` EXCLUDE the receiver); a
+// `call`/`tryCall` carries the (possibly bare) callee. `calleePropagationKey`
+// maps whichever shape to the SAME qualified name + self-offset the consumer
+// keys on. Mirrors the C# bootstrap, whose `ParameterMutationAnalysisPass`
+// propagates across every synchronous call-graph edge regardless of call form.
+function propagateOneCall(project Project, op MaxonOp, opIdx OpIndex, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
 	return match op 'op'
-		call(_, callee, callContext, args, _, _, _, _) gives propagateFreeCall(String.from(callee), callContext: callContext, args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
-		tryCall(_, callee, callContext, args, _, _, _, _, _) gives propagateFreeCall(String.from(callee), callContext: callContext, args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		call(_, callee, _, args, _, _, _, _) gives propagateCallEdge(project, opIdx: opIdx, callee: String.from(callee), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		methodCall(_, _, methodName, args, _, _, _, _) gives propagateCallEdge(project, opIdx: opIdx, callee: String.from(methodName), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		tryCall(_, callee, _, args, _, _, _, _, _) gives propagateCallEdge(project, opIdx: opIdx, callee: String.from(callee), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		tryMethodCall(_, _, methodName, args, _, _, _, _, _) gives propagateCallEdge(project, opIdx: opIdx, callee: String.from(methodName), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
 		literal to br gives false
-		methodCall to throw gives false
-		tryMethodCall to sizeofType gives false
+		ret to throw gives false
+		rethrow to sizeofType gives false
 	end 'op'
 end 'propagateOneCall'
 
-// The QUALIFIED callee name + the SELF-OFFSET between a maxon call's argument
-// positions and the callee's parameter INDICES, derived from the call context. The
-// mutated set is keyed on `<qualified func.name>::<param-index-INCLUDING-self>`
-// (Stage-1 base facts key on `func.name`, and `buildByRefParamKeys` looks them up the
-// same way). But a maxon call op carries the BARE callee, and a `sibling`
-// (implicit-self, same-type) call's args EXCLUDE the self receiver — so the callee's
-// parameter `k` corresponds to argument position `k - 1`. Without both adjustments the
-// bare-name / raw-argPos lookup NEVER matches a qualified method, so the by-reference
-// ABI never propagates past a directly-reassigning function: the parseStatements ->
-// parseStatementsRequireBody -> parseScopedStatementsRequireBody -> parseIfStatement
-// `try`-forwarder chain leaves `block` by-VALUE, and parseStatements' unconditional
-// `byRefParamDecrefOld` then over-releases a block the caller/collection still owns
-// (the v-next self-compile over-release).
-function calleePropagationKey(callContext CallContext, callee String) returns (String, ParamCount)
-	return match callContext 'ctx'
-		sibling(typeName) gives ("{typeName}.{callee}", 1)
-		free gives (callee, 0)
-		qualified gives (callee, 0)
-	end 'ctx'
+// The QUALIFIED callee name + the SELF-OFFSET between a call op's argument
+// positions and the callee's parameter INDICES, read from the SAME
+// TypeResolution facts the by-reference CONSUMER keys on so producer and
+// consumer can never disagree:
+//   - name: `resolvedCallees[opIdx]` — the post overload/typealias-resolution
+//     callee (`{ReceiverType}.{method}` for method + sibling-instance calls, the
+//     bare function name for free/static calls). This is EXACTLY the key
+//     `argPositionIsByRef` looks up, so a name the consumer treats as by-ref is
+//     the same name the producer propagates against.
+//   - offset: 1 exactly when that callee's first parameter is the implicit
+//     `__self` (an instance method whose arg list excludes the receiver), else 0
+//     — the same `signatureFirstParamIsSelf` test `lowerCall`/`lowerMethodCall`
+//     use to derive `paramStartIndex`.
+// Deriving the offset from the RESOLVED signature (rather than hardcoding 1 for a
+// sibling call context) is what fixes the sibling-context bare call that resolves
+// to a no-self static/free function: that callee has offset 0, so an argument at
+// position `k` maps to callee parameter `k`, not `k + 1`. A missing
+// `resolvedCallees` entry (interface stub / unresolved site) falls back to the
+// bare op callee with offset 0 — the same site the consumer leaves
+// non-by-reference, so the two still agree.
+function calleePropagationKey(project Project, opIdx OpIndex, callee String) returns (String, ParamCount)
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise callee
+	var selfOffset = 0 as ParamCount
+	if let sig = try project.funcSignatures.get(resolved) 'haveSig'
+		if signatureFirstParamIsSelf(sig) 'firstIsSelf'
+			selfOffset = 1
+		end 'firstIsSelf'
+	end 'haveSig'
+	return (resolved, selfOffset)
 end 'calleePropagationKey'
 
-function propagateFreeCall(callee String, callContext CallContext, args ByteArrayArray, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
-	let (qualifiedCallee, selfOffset) = calleePropagationKey(callContext, callee: callee)
+function propagateCallEdge(project Project, opIdx OpIndex, callee String, args ByteArrayArray, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+	let (qualifiedCallee, selfOffset) = calleePropagationKey(project, opIdx: opIdx, callee: callee)
 	var grew = false
 	for argPos in 0 upto args.count() 'eachArg'
 		let calleeParamIndex = argPos + selfOffset
 		if not mutated.contains(mutatedParamKey(qualifiedCallee, paramIndex: calleeParamIndex)) 'notMutatedHere'
 			continue
 		end 'notMutatedHere'
-		let argName = try args.get(argPos) otherwise panic("propagateFreeCall: args.get OOB at {argPos}")
+		let argName = try args.get(argPos) otherwise panic("propagateCallEdge: args.get OOB at {argPos}")
 		let callerParam = try argValueToCallerParam.get(String.from(argName)) otherwise continue
 		let key = mutatedParamKey(caller.name, paramIndex: callerParam)
 		if not mutated.contains(key) 'newFact'
@@ -393,7 +411,7 @@ function propagateFreeCall(callee String, callContext CallContext, args ByteArra
 		end 'newFact'
 	end 'eachArg'
 	return grew
-end 'propagateFreeCall'
+end 'propagateCallEdge'
 
 // A pending or active borrow: the borrowing variable's slot borrows from the
 // source collection's slot. `borrowLine` is the source line of the `.get()`
@@ -523,7 +541,7 @@ export function runMaxonBorrowCheck(project Project, module MaxonModule) returns
 	// function mutates), consulted at every free-call conflict site. Computed
 	// once because a callee's facts depend on the whole module (transitive
 	// propagation); the per-function conflict walk is a read-only consumer.
-	let mutatedParams = computeMutatedParams(module)
+	let mutatedParams = computeMutatedParams(project, module: module)
 
 	for func in module.functions 'eachFunc'
 		checkFunction(project, func: func, module: module, mutatedParams: mutatedParams)
