@@ -159,11 +159,22 @@ __ManagedMemory layout (48 bytes):
 | +0   buffer          (ptr) -> heap data             |
 | +8   length          (i64) -> element count         |
 | +16  capacity        (i64) -> ownership mode        |
-| +24  element_size    (i64) -> bytes per elem        |
+| +24  element_size    (i64) -> stride; <0=bits/elem  |
 | +32  parent_ptr      (ptr) -> parent struct         |
 | +40  element_destroy (ptr) -> per-element destructor |
 +-----------------------------------------------------+
 ```
+
+The `element_size` field at +24 is normally the per-element byte stride (1, 2, 4,
+or 8). A **negative** value marks a *sub-byte-packed* element: the magnitude is the
+element's bit width, so `Array with bool` stores `element_size = -1` (1 bit per
+element, 8 per byte). Buffer sizing, get/set, and the shift/copy paths all route
+through shared packed-aware helpers (`__managed_mem_is_packed` /
+`__managed_mem_buffer_byte_len` / `__managed_mem_read_packed` /
+`__managed_mem_write_packed`), so the same machinery extends to a future 2-bit or
+nibble type (`-2` / `-4`) — the widths are restricted to those dividing 8 so a
+field never straddles a byte boundary. `element_size == 0` is reserved for an unset
+/ non-container record. See [bool-bit-packing](../specs/bool-bit-packing.md).
 
 The `element_destroy` field at +40 holds a per-element teardown function pointer
 (or `0` for raw/unmanaged elements). When a buffer is a destructor ROOT, the

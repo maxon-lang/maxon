@@ -244,21 +244,20 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 			continue
 		end 'noType'
 		let count = producer.elemNames.count()
-		// Boolean element arrays are BIT-PACKED in rdata (8 bools / byte), with
-		// `element_size = 0` as the sentinel the runtime `__managed_mem_*` path
-		// reads to switch to the bit-addressed get/set. This mirrors the C#
-		// bootstrap (`ConstantArrayAnalysisPass` `isBitPacked = elementSize == 0`).
-		// Non-bool elements use the narrow byte width as before.
+		// Boolean element arrays are BIT-PACKED in rdata (8 bools / byte). The record's
+		// `element_size@24` carries the sub-byte-packed encoding -1 (negative bit width)
+		// so the runtime `__managed_mem_*` path bit-addresses get/set — the same
+		// representation a dynamically-built `Array with bool` now uses. Non-bool
+		// elements use the narrow byte width as before; `elementStorageSize` returns
+		// both forms.
 		var bytes = ByteArray.create()
-		var elementSizeInt = 0 as MachineWord
 		if maxonTypeIsBoolean(elementType) 'boolArray'
 			bytes = encodeBitPackedBoolBytes(litValues, producer: producer)
-			elementSizeInt = 0
 		end 'boolArray' else 'narrowArray'
 			let widthBytes = primitiveWidth(project, t: elementType)
 			bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
-			elementSizeInt = widthBytes
 		end 'narrowArray'
+		let elementSizeInt = elementStorageSize(project, t: elementType)
 		let label = mintConstantArrayLabel(func.name)
 		project.staticRdataValues.upsert(label, value: bytes)
 		addNamedGlobalData(globalData, name: label, data: bytes)
@@ -324,14 +323,15 @@ end 'MmCreateInfo'
 // emitted runtime `__ManagedMemory.create(count, elementSize)`. The parser
 // hardcodes `elementSize = 8` (pointer width) because element types are not
 // resolved at parse time (see `emitManagedMemoryFromElements`'s TODO). For a
-// NARROW element type (Byte 1, u16/i16 2, u32/i32 4, bool 1) that stride is
-// wrong: per-slot stores/loads, a later bulk read (`String.from`, `toCString`,
+// NARROW element type (Byte 1, u16/i16 2, u32/i32 4) that stride is wrong:
+// per-slot stores/loads, a later bulk read (`String.from`, `toCString`,
 // `memcpy`), and `__managed_mem_grow`'s `newCap * element_size` sizing would all
-// address every 8th byte. Post-TypeResolution the width is known, so rewrite the
-// create's `elementSize` operand to it — mirroring the C# bootstrap (which sizes
-// the record per element type at construction) and the grow-site layout stamp
-// (so a subsequent grow re-stamps the same width, a no-op). Pointer-width and
-// managed elements (width 8) need no change and are left untouched.
+// address every 8th byte. A `bool` element is sub-byte-PACKED — its stored size is
+// the negative bit width -1, not 1. Post-TypeResolution the element type is known,
+// so rewrite the create's `elementSize` operand to `elementStorageSize` (the same
+// value the grow-site layout stamp derives, so a subsequent grow re-stamps the same
+// width, a no-op). Pointer-width and managed elements (width 8) need no change and
+// are left untouched.
 function stampNonConstantArrayElementSize(project Project, module MaxonModule, func IrFunction, info MmCreateInfo)
 	let elementType = lookupElementTypeFromSetCall(module, func: func, mmName: info.resultName)
 	if isUnresolvedType(elementType) 'noType'
@@ -340,8 +340,11 @@ function stampNonConstantArrayElementSize(project Project, module MaxonModule, f
 		return
 	end 'noType'
 
-	let width = primitiveWidth(project, t: elementType)
-	if width >= pointerWidthBytes 'pointerWidth'
+	// element_size@24 as a signed ParsedInt: -1 for a packed bool, else the byte
+	// width. Comparing signed avoids the unsigned-MachineWord trap where a negative
+	// width would read as a huge value.
+	let stored = elementStorageSize(project, t: elementType)
+	if stored == (pointerWidthBytes as ParsedInt) 'pointerWidth'
 		return
 	end 'pointerWidth'
 
@@ -350,7 +353,7 @@ function stampNonConstantArrayElementSize(project Project, module MaxonModule, f
 		return
 	end 'noLiteral'
 
-	try module.ops.set(loc.opIdx, value: MaxonOp.literal(info.elementSizeArgName, value: width as ParsedInt, valueType: MaxonType.integer, range: loc.range)) otherwise panic("stampNonConstantArrayElementSize: ops.set OOB at {loc.opIdx}")
+	try module.ops.set(loc.opIdx, value: MaxonOp.literal(info.elementSizeArgName, value: stored, valueType: MaxonType.integer, range: loc.range)) otherwise panic("stampNonConstantArrayElementSize: ops.set OOB at {loc.opIdx}")
 end 'stampNonConstantArrayElementSize'
 
 // Recover the resolved element MaxonType of a non-constant array literal by
@@ -549,7 +552,7 @@ function encodeConstantArrayBytes(litValues LiteralValueMap, producer ArrayLiter
 end 'encodeConstantArrayBytes'
 
 // True when a resolved MaxonType is the primitive boolean. Booleans get the
-// bit-packed rdata representation (element_size = 0 sentinel).
+// sub-byte-packed representation (element_size = -1, one bit per element).
 function maxonTypeIsBoolean(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true

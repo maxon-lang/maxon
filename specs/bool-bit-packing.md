@@ -8,11 +8,11 @@ category: types
 
 ## Documentation
 
-When `Array with bool` stores elements, they are bit-packed: each bool occupies a single bit instead of a full byte, giving 8x memory reduction. This is transparent to the user — the Array API works identically.
+When `Array with bool` stores elements, they are bit-packed: each bool occupies a single bit instead of a full byte, giving 8x memory reduction. This is transparent to the user — the Array API works identically. **Every** `Array with bool` is packed the same way, whether built from a constant literal, a non-constant literal, or dynamically via `Array.create()` + `push`.
 
-The `__ManagedMemory` struct uses `elementSize = 0` as a sentinel to indicate bit-packed mode. Bit `i` is stored at byte `i >> 3`, bit offset `i & 7`.
+`bool` is the first *sub-byte-packed* element type. The `__ManagedMemory` record marks such an element with a **negative** `elementSize`: the value is `-(bit width)`, so `bool` is `elementSize = -1` (1 bit per element). The general encoding is `elementSize > 0` = byte stride, `elementSize == 0` = unset/non-container, `elementSize < 0` = `(-elementSize)` bits per element. A future 2-bit or nibble type would reuse the same machinery with `-2` / `-4`. Element `i`'s field is at bit `i * width`, i.e. byte `(i * width) >> 3`, bit offset `(i * width) & 7`; widths are restricted to those dividing 8 (1, 2, 4) so a field never straddles a byte boundary.
 
-A *constant* bool-array literal (e.g. `[true, false, true]`) is lowered to a bit-packed `.rdata` buffer with `elementSize = 0`. Structurally mutating such a literal (`remove` / `insert` / `slice` / `append`) must copy-on-write the read-only buffer and perform the shift/copy at *bit* granularity — scaling those operations by `elementSize` would collapse to zero-length byte moves and silently corrupt the data. Dynamically-built bool arrays (`Array.create()` + `push`) use one byte per element (`elementSize = 1`) and take the ordinary byte path.
+A *constant* bool-array literal (e.g. `[true, false, true]`) is lowered to a bit-packed `.rdata` buffer (`elementSize = -1`). Structurally mutating such a literal (`remove` / `insert` / `slice` / `append`) must copy-on-write the read-only buffer and perform the shift/copy at *bit* granularity — scaling those operations by a byte `elementSize` would corrupt the data. Dynamically-built bool arrays get `elementSize = -1` at their first `grow`, stamped from the layout descriptor's `bitPacked` flag, so they take the identical bit-addressed path. Non-bool narrow elements (Byte, u16, u32) keep their positive byte stride.
 
 ## Tests
 

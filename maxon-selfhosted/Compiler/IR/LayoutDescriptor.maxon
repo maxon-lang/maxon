@@ -14,8 +14,12 @@
 //   +16  elementSize       u64    (storage width of the single type arg — a
 //                                  pointer-width 8 for struct/string elements;
 //                                  0 for non-container types. Drives buffer
-//                                  sizing for managed containers.)
-//   +24  flags             u64    (bit 0 = hasHeapRefs)
+//                                  sizing for managed containers. When the
+//                                  bitPacked flag (below) is set this is the
+//                                  element's BIT width instead — 1 for bool — and
+//                                  the runtime stamps element_size@24 = -this.)
+//   +24  flags             u64    (bit 0 = hasHeapRefs, bit 1 = bitPacked,
+//                                  bits 8+ = per-type-arg hasHeapRefs)
 //   +32  copyFunc          u64    (zero on disk; patched by funcAbs64InRdata)
 //   +40  destroyFunc       u64    (zero on disk; patched by funcAbs64InRdata)
 //   +48  fieldOffsetsPtr   u64    (rdata-rel ptr; 0 if no struct fields)
@@ -34,6 +38,14 @@
 
 let LAYOUT_DESCRIPTOR_BYTE_SIZE = 64
 let LAYOUT_FLAG_HAS_HEAP_REFS = 1
+
+// flags@24 bit 1: the single element type is sub-byte-packed (a `bool` bit-packs
+// 8 elements per byte). Set for `Array with bool` (and future sub-byte types) so
+// the runtime element-size stamp writes the NEGATIVE bit-width encoding
+// (element_size@24 = -(elementSize@16)) instead of a positive byte stride, making a
+// dynamically-built `Array with bool` bit-pack like a constant literal. See
+// `__managed_mem_set_element_size_from_layout` / `__managed_mem_is_packed`.
+let LAYOUT_FLAG_BIT_PACKED = 2
 
 // Per-type-arg HAS_HEAP_REFS bits are packed into the same `flags@24` qword,
 // starting at bit 8 (`flags` bit i+8 = heap-ref status of type-arg i). Bit 0
@@ -62,7 +74,7 @@ export let LAYOUT_ELEM_RAW_LABEL = "__layout_elem_raw"
 // `flags@24` bit 0 (`hasHeapRefs`). All sizing/func/field-offset slots are 0 —
 // the generic Array body never reads them through a forwarded layout.
 export function elementLayoutSingleton(hasHeapRefs bool) returns LayoutDescriptor
-	return LayoutDescriptor.create(0, alignment: 0, elementSize: 0, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: 0, copyFuncName: "", destroyFuncName: "", fieldOffsetsPtr: "", elementLogicalSize: 0)
+	return LayoutDescriptor.create(0, alignment: 0, elementSize: 0, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: 0, copyFuncName: "", destroyFuncName: "", fieldOffsetsPtr: "", elementLogicalSize: 0, bitPacked: false)
 end 'elementLayoutSingleton'
 
 let LAYOUT_OFFSET_SIZE = 0
@@ -97,8 +109,12 @@ export type LayoutDescriptor
 	// (fieldCount*8), NOT its pointer-width storage. Read by `sizeof(T)`
 	// lowering inside a generic body. 0 for non-single-arg instances.
 	export var elementLogicalSize as MachineWord
+	// The single element type is sub-byte-packed (bool → 1 bit/element). When set,
+	// `elementSize` above holds the element's BIT width and the runtime stamps
+	// element_size@24 with its negation. Encoded as flags@24 bit 1.
+	export var bitPacked as bool
 
-	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, perArgHeapRefBits MachineWord, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String, elementLogicalSize MachineWord = 0) returns LayoutDescriptor
+	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, perArgHeapRefBits MachineWord, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String, elementLogicalSize MachineWord = 0, bitPacked bool = false) returns LayoutDescriptor
 		return Self{
 			size: size,
 			alignment: alignment,
@@ -108,7 +124,8 @@ export type LayoutDescriptor
 			copyFuncName: copyFuncName,
 			destroyFuncName: destroyFuncName,
 			fieldOffsetsPtr: fieldOffsetsPtr,
-			elementLogicalSize: elementLogicalSize
+			elementLogicalSize: elementLogicalSize,
+			bitPacked: bitPacked
 		}
 	end 'create'
 end 'LayoutDescriptor'
@@ -128,6 +145,9 @@ export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
 	if d.hasHeapRefs 'setRef'
 		flags = flags or LAYOUT_FLAG_HAS_HEAP_REFS
 	end 'setRef'
+	if d.bitPacked 'setPacked'
+		flags = flags or LAYOUT_FLAG_BIT_PACKED
+	end 'setPacked'
 	// Pack the per-type-arg heap-ref bits above bit 0 (bits 8..63). A
 	// field-array call site projects the bit for its specific element by
 	// shifting `flags` right by `LAYOUT_PER_ARG_HEAPREF_SHIFT + ordinal`

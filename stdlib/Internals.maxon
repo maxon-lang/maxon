@@ -2105,10 +2105,13 @@ let MM_ALLOC_HEADER_SIZE = 32
 // either end requires updating the other in lockstep. `flags` bit 0 is set when
 // the instance's element type is heap-managed (a String / generic-instance
 // pointer, or — after the recursive widening — a struct with managed fields).
+// `flags` bit 1 (LAYOUT_FLAG_BIT_PACKED) marks a sub-byte-packed element (bool):
+// `elementSize@16` then holds the element's BIT width and the stamp negates it.
 let LAYOUT_OFFSET_ELEMENT_SIZE = 16
 let LAYOUT_OFFSET_FLAGS = 24
 let LAYOUT_OFFSET_DESTROY_FUNC = 40
 let LAYOUT_FLAG_HAS_HEAP_REFS = 1
+let LAYOUT_FLAG_BIT_PACKED = 2
 
 // Allocate a raw element buffer for an mm record and return it at refcount 1.
 // A ROOT `__ManagedMemory`'s `__destruct___ManagedMemory` does exactly ONE
@@ -2298,23 +2301,78 @@ function __managed_mem_set_length(self MachineWord, n MachineWord) returns Machi
 	return 0
 end '__managed_mem_set_length'
 
-// Bit-packed-bool element access (element_size == 0 sentinel): one bit per
-// element, bit (idx & 7) of byte (idx >> 3). These two helpers are the single
-// source of truth for that layout, shared by get / cursor_current (read) and
-// set / raw_set (write) so the masking math can never drift between sites.
-function __managed_mem_read_bit(buffer MachineWord, idx MachineWord) returns MachineWord
-	let byte = __Internals.loadByte(buffer + (idx shr 3), offset: 0)
-	return (byte shr (idx and 7)) and 1
-end '__managed_mem_read_bit'
+// Sub-byte-packed element access. An `Array with T` whose element occupies FEWER
+// than 8 bits stores `element_size@24 = -(bitWidth)`: a `bool` is 1 bit (-1); a
+// future 2-bit type would be -2, a nibble -4. This NEGATIVE-bit-width encoding is
+// the one representation the whole runtime reads:
+//   element_size  > 0  →  N-byte stride (byte-addressed: 1, 2, 4, 8)
+//   element_size == 0  →  reserved / unset (non-container, or a pre-stamp record)
+//   element_size  < 0  →  packed, (-element_size) BITS per element
+// `capacity` and `length` stay element counts (never bit counts), so bounds checks
+// and the COW gates are unchanged. The four helpers below are the SOLE source of
+// truth for the bit math, so it can never drift across the ~10 access sites
+// (get/set/swap/cursor/remove/insert/append/slice/grow/cow) that dispatch on it.
+//
+// Only widths that divide 8 (1, 2, 4) are supported: an element then never
+// straddles a byte boundary — bit offset `(idx*w) & 7` plus `w` stays <= 8 — so a
+// single load/store per access suffices. A future width that does not divide 8
+// (3/5/6/7) would need a multi-byte read-modify-write, and ONLY here.
+function __managed_mem_is_packed(elemSize MachineWord) returns bool
+	return elemSize < 0
+end '__managed_mem_is_packed'
 
-function __managed_mem_write_bit(buffer MachineWord, idx MachineWord, value MachineWord)
-	let byteAddr = buffer + (idx shr 3)
-	let bitOff = idx and 7
+function __managed_mem_packed_bit_width(elemSize MachineWord) returns MachineWord
+	return 0 - elemSize
+end '__managed_mem_packed_bit_width'
+
+// Bytes needed to hold `count` packed elements of this element_size.
+function __managed_mem_packed_byte_len(count MachineWord, elemSize MachineWord) returns MachineWord
+	let bits = count * __managed_mem_packed_bit_width(elemSize)
+	return (bits + 7) shr 3
+end '__managed_mem_packed_byte_len'
+
+function __managed_mem_read_packed(buffer MachineWord, idx MachineWord, elemSize MachineWord) returns MachineWord
+	let w = __managed_mem_packed_bit_width(elemSize)
+	let bitPos = idx * w
+	let byte = __Internals.loadByte(buffer + (bitPos shr 3), offset: 0)
+	let mask = (1 shl w) - 1
+	return (byte shr (bitPos and 7)) and mask
+end '__managed_mem_read_packed'
+
+function __managed_mem_write_packed(buffer MachineWord, idx MachineWord, elemSize MachineWord, value MachineWord)
+	let w = __managed_mem_packed_bit_width(elemSize)
+	let bitPos = idx * w
+	let byteAddr = buffer + (bitPos shr 3)
+	let bitOff = bitPos and 7
+	let mask = (1 shl w) - 1
 	let cur = __Internals.loadByte(byteAddr, offset: 0)
-	let cleared = cur and (255 xor (1 shl bitOff))
-	let newByte = cleared or ((value and 1) shl bitOff)
+	let cleared = cur and (255 xor (mask shl bitOff))
+	let newByte = cleared or ((value and mask) shl bitOff)
 	__Internals.storeByte(byteAddr, offset: 0, value: newByte)
-end '__managed_mem_write_bit'
+end '__managed_mem_write_packed'
+
+// Byte length of a buffer holding `count` elements. Sub-byte-packed elements
+// (element_size < 0) are measured in BITS; every byte-strided element is
+// count * element_size. Single source of truth for buffer sizing across
+// create / grow / cow_check / slice, so the packed-vs-byte split lives once.
+function __managed_mem_buffer_byte_len(count MachineWord, elemSize MachineWord) returns MachineWord
+	if __managed_mem_is_packed(elemSize) 'packed'
+		return __managed_mem_packed_byte_len(count, elemSize: elemSize)
+	end 'packed'
+	return count * elemSize
+end '__managed_mem_buffer_byte_len'
+
+// How many elements fit in `bytes` bytes of buffer for this element_size — the
+// inverse of `__managed_mem_buffer_byte_len`. The inline-storage fast path uses
+// it to reclaim the slab class slack as spare capacity: sub-byte-packed elements
+// are (-element_size) bits each, so `bytes * 8` bits hold `bytes*8 / bitWidth` of
+// them; byte-strided elements are `bytes / element_size`.
+function __managed_mem_capacity_for_bytes(bytes MachineWord, elemSize MachineWord) returns MachineWord
+	if __managed_mem_is_packed(elemSize) 'packed'
+		return (bytes shl 3) / __managed_mem_packed_bit_width(elemSize)
+	end 'packed'
+	return bytes / elemSize
+end '__managed_mem_capacity_for_bytes'
 
 // Width-dispatched scalar load/store at a precomputed element address. The
 // element_size cascade (1→byte, 2→halfword, 4→word, else qword) was copied
@@ -2363,11 +2421,11 @@ function __managed_mem_cursor_current(cursor MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(cursor)
 	let position = __Internals.loadIndirect(cursor + 8)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
-	// element_size == 0 is the bit-packed-bool sentinel: extract bit
-	// (position & 7) of byte (position >> 3) — same layout as __managed_mem_get.
-	if elemSize == 0 'bit'
-		return __managed_mem_read_bit(buffer, idx: position)
-	end 'bit'
+	// element_size < 0 is the sub-byte-packed sentinel: read the (-element_size)-bit
+	// field at `position` — same layout as __managed_mem_get.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		return __managed_mem_read_packed(buffer, idx: position, elemSize: elemSize)
+	end 'packed'
 	return __managed_mem_load_sized(buffer + position * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_current'
 
@@ -2394,11 +2452,11 @@ function __managed_mem_cursor_peek(cursor MachineWord, ahead MachineWord) return
 	end 'hi'
 	let buffer = __Internals.loadIndirect(cursor)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
-	// element_size == 0 is the bit-packed-bool sentinel — same layout as
+	// element_size < 0 is the sub-byte-packed sentinel — same layout as
 	// __managed_mem_get / cursor_current.
-	if elemSize == 0 'bit'
-		return __managed_mem_read_bit(buffer, idx: target)
-	end 'bit'
+	if __managed_mem_is_packed(elemSize) 'packed'
+		return __managed_mem_read_packed(buffer, idx: target, elemSize: elemSize)
+	end 'packed'
 	return __managed_mem_load_sized(buffer + target * elemSize, elemSize: elemSize)
 end '__managed_mem_cursor_peek'
 
@@ -2417,11 +2475,11 @@ function __managed_mem_get(self MachineWord, idx MachineWord) returns MachineWor
 	end 'hi'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: one bit per element.
-	// Extract bit (idx & 7) of byte (idx >> 3) and normalize to 0/1.
-	if elemSize == 0 'bit'
-		return __managed_mem_read_bit(buffer, idx: idx)
-	end 'bit'
+	// element_size < 0 is the sub-byte-packed sentinel: read the (-element_size)-bit
+	// field at `idx` (bool = 1 bit) and return it zero-extended.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		return __managed_mem_read_packed(buffer, idx: idx, elemSize: elemSize)
+	end 'packed'
 	let loaded = __managed_mem_load_sized(buffer + idx * elemSize, elemSize: elemSize)
 	// Empty-slot detection for managed-pointer (struct/string/union/array)
 	// elements only: `element_destroy != 0` marks a slot that holds a refcounted
@@ -2479,12 +2537,12 @@ function __managed_mem_set(self MachineWord, idx MachineWord, value MachineWord)
 			end 'haveOld'
 		end 'liveSlot'
 	end 'maybeReleaseOld'
-	// element_size == 0 is the bit-packed-bool sentinel: read-modify-write the
-	// single bit (idx & 7) of byte (idx >> 3).
-	if elemSize == 0 'bit'
-		__managed_mem_write_bit(buffer, idx: idx, value: value)
+	// element_size < 0 is the sub-byte-packed sentinel: read-modify-write the
+	// (-element_size)-bit field at `idx` in place.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: value)
 		return 0
-	end 'bit'
+	end 'packed'
 	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
 	return 0
 end '__managed_mem_set'
@@ -2522,26 +2580,17 @@ function __managed_mem_swap(self MachineWord, i MachineWord, j MachineWord) retu
 	end 'cow'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: swap the two bits in
-	// place (read both, write each to the other's slot) — no whole-byte copy.
-	if elemSize == 0 'bit'
-		let iByteAddr = buffer + (i shr 3)
-		let iBitOff = i and 7
-		let jByteAddr = buffer + (j shr 3)
-		let jBitOff = j and 7
-		let iCur = __Internals.loadByte(iByteAddr, offset: 0)
-		let jCur = __Internals.loadByte(jByteAddr, offset: 0)
-		let iBit = (iCur shr iBitOff) and 1
-		let jBit = (jCur shr jBitOff) and 1
-		let iCleared = iCur and (255 xor (1 shl iBitOff))
-		__Internals.storeByte(iByteAddr, offset: 0, value: iCleared or (jBit shl iBitOff))
-		// Re-read j's byte: i and j may live in the SAME byte, so the store above
-		// can have changed it — operate on the freshest value to avoid clobbering.
-		let jCur2 = __Internals.loadByte(jByteAddr, offset: 0)
-		let jCleared = jCur2 and (255 xor (1 shl jBitOff))
-		__Internals.storeByte(jByteAddr, offset: 0, value: jCleared or (iBit shl jBitOff))
+	// element_size < 0 is the sub-byte-packed sentinel: read both packed fields, then
+	// write each into the other's slot. Both reads happen before either write, and
+	// `write_packed` re-loads its byte each call, so this stays correct even when i
+	// and j share a byte — no whole-byte copy.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		let iVal = __managed_mem_read_packed(buffer, idx: i, elemSize: elemSize)
+		let jVal = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
+		__managed_mem_write_packed(buffer, idx: i, elemSize: elemSize, value: jVal)
+		__managed_mem_write_packed(buffer, idx: j, elemSize: elemSize, value: iVal)
 		return 0
-	end 'bit'
+	end 'packed'
 	let iAddr = buffer + i * elemSize
 	let jAddr = buffer + j * elemSize
 	// Byte-wise exchange of the two element_size-byte slots. The slots are
@@ -2581,11 +2630,11 @@ function __managed_mem_raw_set(self MachineWord, idx MachineWord, value MachineW
 	end 'hi'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: read-modify-write the bit.
-	if elemSize == 0 'bit'
-		__managed_mem_write_bit(buffer, idx: idx, value: value)
+	// element_size < 0 is the sub-byte-packed sentinel: read-modify-write the field.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: value)
 		return 0
-	end 'bit'
+	end 'packed'
 	__managed_mem_store_sized(buffer + idx * elemSize, elemSize: elemSize, value: value)
 	return 0
 end '__managed_mem_raw_set'
@@ -2613,9 +2662,7 @@ function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	end 'noCopy'
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	// Bit-packed bool buffers (element_size == 0) hold (length + 7) >> 3 bytes;
-	// every other element type holds length * element_size bytes.
-	let byteLen = ((length + 7) shr 3) if elemSize == 0 else (length * elemSize)
+	let byteLen = __managed_mem_buffer_byte_len(length, elemSize: elemSize)
 	// Owned (rc=1) raw byte buffer — see __managed_mem_alloc_buffer. mm_alloc
 	// clamps zero-sized requests to 1.
 	let newBuf = __managed_mem_alloc_buffer(byteLen)
@@ -2650,13 +2697,12 @@ function __managed_mem_grow(self MachineWord, newCap MachineWord) returns Machin
 		throw __ManagedMemoryError.invalidCapacity
 	end 'tooSmall'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	// element_size == 0 is the bit-packed-bool sentinel: the buffer is measured in
-	// BITS, so it holds (newCap + 7) >> 3 bytes; every other element type holds
-	// newCap * element_size bytes. Without the bit path `newCap * 0` reallocs to 0
-	// bytes and every later bit-write past byte 0 corrupts the heap — this grow is
-	// on the insert/append path for a mutated bit-packed literal (via
-	// `ensureCapacity`). Mirrors `__managed_mem_cow_check`'s byteLen formula.
-	let newSize = ((newCap + 7) shr 3) if elemSize == 0 else (newCap * elemSize)
+	// Buffer bytes for the new capacity — packed-aware via the shared helper. A
+	// sub-byte-packed element_size (< 0) would otherwise size `newCap * (negative)`
+	// wrong and every later packed write past byte 0 would corrupt the heap; this
+	// grow is on the insert/append path for a mutated packed array (via
+	// `ensureCapacity`). Same formula as create / cow_check / slice.
+	let newSize = __managed_mem_buffer_byte_len(newCap, elemSize: elemSize)
 	let oldBuf = __Internals.loadIndirect(self)
 	let newBuf = __Internals.mmRealloc(oldBuf, newSize: newSize)
 	__Internals.storeIndirect(self, value: newBuf)
@@ -2723,22 +2769,22 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 	end 'cow'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: one BIT per element, so
-	// the byte-scaled tail-shift below collapses to a no-op (every `* elemSize`
-	// is 0). Read the removed bit, then slide bits (idx+1 .. length-1) DOWN one
-	// position with the shared read_bit/write_bit primitives (same layout as
-	// __managed_mem_get) before decrementing length.
-	if elemSize == 0 'bitPacked'
-		let removed = __managed_mem_read_bit(buffer, idx: idx)
+	// element_size < 0 is the sub-byte-packed sentinel: the byte-scaled tail-shift
+	// below does not apply (its `* elemSize` would go negative). Read the removed
+	// field, then slide fields (idx+1 .. length-1) DOWN one position with the shared
+	// read_packed/write_packed primitives (same layout as __managed_mem_get) before
+	// decrementing length.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		let removed = __managed_mem_read_packed(buffer, idx: idx, elemSize: elemSize)
 		var j = idx + 1
 		while j < length 'shiftBits'
-			let bit = __managed_mem_read_bit(buffer, idx: j)
-			__managed_mem_write_bit(buffer, idx: j - 1, value: bit)
+			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
+			__managed_mem_write_packed(buffer, idx: j - 1, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'shiftBits'
 		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 		return removed
-	end 'bitPacked'
+	end 'packed'
 
 	let elemAddr = buffer + idx * elemSize
 	// Element-width dispatch mirrors __managed_mem_get. After the load we
@@ -2787,21 +2833,21 @@ function __managed_mem_shift_right(self MachineWord, idx MachineWord, count Mach
 	end 'oob'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: shift the `count` bits at
-	// [idx, idx+count) UP one position with a DESCENDING bit-loop (read_bit(j) ->
-	// write_bit(j+1)) so overlapping copies never clobber, then clear the vacated
-	// bit at idx. This is the bit-granular mirror of the byte-loop + hole-zeroing
-	// below; the caller's following set(idx, value) overwrites the cleared bit.
-	if elemSize == 0 'bitPacked'
+	// element_size < 0 is the sub-byte-packed sentinel: shift the `count` fields at
+	// [idx, idx+count) UP one position with a DESCENDING loop (read_packed(j) ->
+	// write_packed(j+1)) so overlapping copies never clobber, then clear the vacated
+	// field at idx. This is the packed mirror of the byte-loop + hole-zeroing below;
+	// the caller's following set(idx, value) overwrites the cleared field.
+	if __managed_mem_is_packed(elemSize) 'packed'
 		var j = idx + count - 1
 		while j >= idx 'shiftBits'
-			let bit = __managed_mem_read_bit(buffer, idx: j)
-			__managed_mem_write_bit(buffer, idx: j + 1, value: bit)
+			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
+			__managed_mem_write_packed(buffer, idx: j + 1, elemSize: elemSize, value: bit)
 			j = j - 1
 		end 'shiftBits'
-		__managed_mem_write_bit(buffer, idx: idx, value: 0)
+		__managed_mem_write_packed(buffer, idx: idx, elemSize: elemSize, value: 0)
 		return 0
-	end 'bitPacked'
+	end 'packed'
 
 	// sourceLastByte = (idx + count) * elemSize - 1; descend to
 	// startByte = idx * elemSize.
@@ -2847,19 +2893,19 @@ function __managed_mem_shift_left(self MachineWord, idx MachineWord, count Machi
 	end 'oob'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let buffer = __Internals.loadIndirect(self)
-	// element_size == 0 is the bit-packed-bool sentinel: shift the `count` bits at
-	// [idx, idx+count) DOWN one position with an ASCENDING bit-loop (read_bit(j) ->
-	// write_bit(j-1)) — overlap-safe because each destination bit was already read.
-	if elemSize == 0 'bitPacked'
+	// element_size < 0 is the sub-byte-packed sentinel: shift the `count` fields at
+	// [idx, idx+count) DOWN one position with an ASCENDING loop (read_packed(j) ->
+	// write_packed(j-1)) — overlap-safe because each destination field was already read.
+	if __managed_mem_is_packed(elemSize) 'packed'
 		let endBit = idx + count
 		var j = idx
 		while j < endBit 'shiftBits'
-			let bit = __managed_mem_read_bit(buffer, idx: j)
-			__managed_mem_write_bit(buffer, idx: j - 1, value: bit)
+			let bit = __managed_mem_read_packed(buffer, idx: j, elemSize: elemSize)
+			__managed_mem_write_packed(buffer, idx: j - 1, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'shiftBits'
 		return 0
-	end 'bitPacked'
+	end 'packed'
 
 	let endByte = (idx + count) * elemSize
 	var i = idx * elemSize
@@ -2904,22 +2950,22 @@ function __managed_mem_append(self MachineWord, other MachineWord) returns Machi
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let selfBuf = __Internals.loadIndirect(self)
 	let otherBuf = __Internals.loadIndirect(other)
-	// element_size == 0 is the bit-packed-bool sentinel: the byte-scaled memcpy
-	// below copies 0 bytes, so copy `other`'s otherLen bits onto self's end one bit
-	// at a time (self bit selfLen+j <- other bit j). The grow above (bit-aware)
-	// already sized self's buffer for newLength bits. Bit-packed bools are
+	// element_size < 0 is the sub-byte-packed sentinel: the byte-scaled memcpy below
+	// does not apply, so copy `other`'s otherLen fields onto self's end one field at a
+	// time (self field selfLen+j <- other field j). The grow above (packed-aware)
+	// already sized self's buffer for newLength fields. Sub-byte-packed elements are
 	// primitives (never managed pointers), so the managed-element retain/stamp path
 	// does not apply.
-	if elemSize == 0 'bitPacked'
+	if __managed_mem_is_packed(elemSize) 'packed'
 		var j = 0
 		while j < otherLen 'copyBits'
-			let bit = __managed_mem_read_bit(otherBuf, idx: j)
-			__managed_mem_write_bit(selfBuf, idx: selfLen + j, value: bit)
+			let bit = __managed_mem_read_packed(otherBuf, idx: j, elemSize: elemSize)
+			__managed_mem_write_packed(selfBuf, idx: selfLen + j, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'copyBits'
 		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
 		return 0
-	end 'bitPacked'
+	end 'packed'
 
 	let dst = selfBuf + selfLen * elemSize
 	let nBytes = otherLen * elemSize
@@ -2965,10 +3011,9 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	end 'endHi'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
 	let sliceLen = endIdx - start
-	// element_size == 0 is the bit-packed-bool sentinel: the buffer is measured in
-	// BITS, so it holds (sliceLen + 7) >> 3 bytes; every other element type holds
-	// sliceLen * element_size bytes (mirrors __managed_mem_cow_check / grow).
-	let byteLen = ((sliceLen + 7) shr 3) if elemSize == 0 else (sliceLen * elemSize)
+	// Buffer bytes for the slice — packed-aware via the shared helper (bit-measured
+	// when element_size < 0, else sliceLen * element_size).
+	let byteLen = __managed_mem_buffer_byte_len(sliceLen, elemSize: elemSize)
 	let destructor = __Internals.destructManagedMemoryAddr()
 	let newStruct = __mm_alloc(MANAGED_MEM_RECORD_SIZE, destructor: destructor)
 	// alloc-at-0 → restore the rc=1 contract callers assume. `Array.slice` binds this
@@ -2990,18 +3035,18 @@ function __managed_mem_slice(self MachineWord, start MachineWord, endIdx Machine
 	if sliceLen != 0 'hasContent'
 		newBuf = __managed_mem_alloc_buffer(byteLen)
 		let srcBuf = __Internals.loadIndirect(self)
-		// element_size == 0 (bit-packed bool): source bit `start` is not generally
-		// byte-aligned, so a raw memcpy would misalign every bit. Copy bit-by-bit
-		// into the fresh (zero-filled) buffer starting at bit 0; unwritten trailing
-		// bits stay false. Bit-packed bools are primitives, so no managed retain.
-		if elemSize == 0 'bitPacked'
+		// element_size < 0 (sub-byte-packed): source field `start` is not generally
+		// byte-aligned, so a raw memcpy would misalign every field. Copy field-by-field
+		// into the fresh (zero-filled) buffer starting at index 0; unwritten trailing
+		// bits stay false. Sub-byte-packed elements are primitives, so no managed retain.
+		if __managed_mem_is_packed(elemSize) 'packed'
 			var j = 0
 			while j < sliceLen 'copyBits'
-				let bit = __managed_mem_read_bit(srcBuf, idx: start + j)
-				__managed_mem_write_bit(newBuf, idx: j, value: bit)
+				let bit = __managed_mem_read_packed(srcBuf, idx: start + j, elemSize: elemSize)
+				__managed_mem_write_packed(newBuf, idx: j, elemSize: elemSize, value: bit)
 				j = j + 1
 			end 'copyBits'
-		end 'bitPacked' else 'byteWise'
+		end 'packed' else 'byteWise'
 			let srcAddr = srcBuf + start * elemSize
 			__Internals.memcpy(newBuf, src: srcAddr, size: byteLen)
 			if elementDestroy != 0 'managedElems'
@@ -3061,16 +3106,17 @@ function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, e
 	// `buffer@0` points into the record's own allocation and parent_ptr is tagged
 	// MM_PARENT_INLINE (-3). The slab rounds the record+inline request up to a size
 	// class anyway, so we reclaim ALL the class slack as spare element capacity (a
-	// few pushes past `count` stay single-allocation at zero extra cost). Bit-packed
-	// bool records (elemSize == 0) are deferred to the two-alloc path — their
-	// capacity is measured in bits, so the byte→slot division below does not apply.
-	if elemSize > 0 and count > 0 and count * elemSize <= MM_INLINE_CAP_BYTES 'inline'
-		let wantBytes = MANAGED_MEM_RECORD_SIZE + count * elemSize
+	// few pushes past `count` stay single-allocation at zero extra cost). Sizing and
+	// capacity go through the shared packed-aware helpers, so a sub-byte-packed array
+	// (element_size < 0, e.g. `Array with bool`) inlines its bit-packed buffer too.
+	// element_size == 0 (unset / singleton element-layout) is never inlined.
+	if elemSize != 0 and count > 0 and __managed_mem_buffer_byte_len(count, elemSize: elemSize) <= MM_INLINE_CAP_BYTES 'inline'
+		let wantBytes = MANAGED_MEM_RECORD_SIZE + __managed_mem_buffer_byte_len(count, elemSize: elemSize)
 		// Bytes __mm_alloc(wantBytes) actually hands back after slab class rounding
 		// (it calls __slab_alloc(wantBytes + MM_ALLOC_HEADER_SIZE) internally).
 		let slotUser = __slab_rounded_size(wantBytes + MM_ALLOC_HEADER_SIZE) - MM_ALLOC_HEADER_SIZE
 		let inlineBytes = slotUser - MANAGED_MEM_RECORD_SIZE
-		let cap = inlineBytes / elemSize
+		let cap = __managed_mem_capacity_for_bytes(inlineBytes, elemSize: elemSize)
 		let rec = __mm_alloc(MANAGED_MEM_RECORD_SIZE + inlineBytes, destructor: destructor)
 		// alloc-at-0 → restore the rc=1 contract (identical to the external path below).
 		__mm_incref(rec)
@@ -3107,12 +3153,11 @@ function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, e
 	__mm_incref(newStruct)
 	var newBuf = 0
 	if count > 0 'hasContent'
-		// element_size == 0 is the bit-packed-bool sentinel: capacity is measured
-		// in BITS, so the buffer holds (count + 7) >> 3 bytes (mirrors
-		// __managed_mem_cow_check / grow / slice). The inline path above defers
-		// bit-packed records here, so a byte-scaled `count * 0` would allocate a
-		// ZERO-byte buffer and every bit-write would corrupt the heap.
-		let size = ((count + 7) shr 3) if elemSize == 0 else (count * elemSize)
+		// Bit-packed records (element_size < 0, e.g. bool = -1) measure capacity in
+		// BITS; the general helper handles that and every byte-strided element size.
+		// (Supersedes upstream's bool-only `elemSize == 0` sizing — the local design
+		// migrated the sentinel from `== 0` to `< 0` to carry a bit width.)
+		let size = __managed_mem_buffer_byte_len(count, elemSize: elemSize)
 		newBuf = __managed_mem_alloc_buffer(size)
 	end 'hasContent'
 	__Internals.storeIndirect(newStruct, value: newBuf)
@@ -3153,38 +3198,49 @@ end '__managed_mem_set_element_destroy_from_layout'
 // instance layout descriptor's `elementSize@16`. Emitted at the `grow` site (the
 // generic container body where the concrete element type is an unbound
 // type-parameter, so the per-create stamp `synthesizeManagedFieldInits` left the
-// provisional pointer-width 8). Corrects a `Byte`/`bool` array's stride to 1 so
-// its slots pack contiguously instead of 8 bytes apart (the garbled-byte-slice
-// bug: a self-compiled compiler's `byteSliceToString` reconstructed wrong
-// strings → spurious E3034 on stdlib/Subprocess.maxon).
+// provisional pointer-width 8). Corrects a `Byte` array's stride to 1 so its slots
+// pack contiguously instead of 8 bytes apart (the garbled-byte-slice bug: a
+// self-compiled compiler's `byteSliceToString` reconstructed wrong strings →
+// spurious E3034 on stdlib/Subprocess.maxon), and a `bool` array's stride to the
+// packed -1 so its elements bit-pack (a dynamically-built `Array with bool`).
 //
 // `elementSize == 0` means the forwarded layout carries NO usable stride: it is a
 // singleton element-layout (`__layout_elem_managed` / `__layout_elem_raw`) that a
 // multi-type-param aggregate (e.g. a `Map`'s keys/values field-array) forwards,
 // where only the HAS_HEAP_REFS bit is meaningful and every sizing slot is 0.
 // Leaving the create-time default 8 untouched there is correct — those field
-// elements are pointer-width (String / struct / int). Zeroing `element_size`
-// would flip `grow` onto its bit-packed path and shred the buffer (the
+// elements are pointer-width (String / struct / int). Stamping the 0 in would
+// flip `grow` onto a degenerate sizing path and shred the buffer (the
 // `Map.insert` → `Array.set` over-release).
 function __managed_mem_set_element_size_from_layout(self MachineWord, layoutDesc MachineWord) returns MachineWord
 	if layoutDesc == 0 'noDesc'
 		return 0
 	end 'noDesc'
-	// Preserve a deliberate bit-packed-bool record: `element_size == 0` is the
-	// sentinel the bool-literal path sets so `grow` measures the buffer in BITS
-	// ((newCap+7)>>3 bytes) and the accessors bit-address it. The layout's
-	// `elementSize@16` is 1 for bool (its byte width), so stamping it would flip
-	// a bit-packed array to one-byte-per-bool mid-life and corrupt every packed
-	// slot (the `bool-bit-packing/literal-append` mismatch). Only Byte — whose
-	// records start at the provisional non-zero default — needs the correction.
+	// Preserve a deliberately sub-byte-packed record: `element_size < 0` is the
+	// negative-bit-width sentinel (bool = -1) the packed path sets so `grow`
+	// measures the buffer in BITS and the accessors bit-address it. Re-stamping is at
+	// best a no-op (the layout re-derives the same width) and must never clobber it
+	// back to a positive byte stride.
 	let current = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	if current == 0 'bitPacked'
+	if __managed_mem_is_packed(current) 'alreadyPacked'
 		return 0
-	end 'bitPacked'
+	end 'alreadyPacked'
+	// `elementSize@16` is the element's byte stride (1 Byte, 8 pointer/managed), or —
+	// when the layout's BIT_PACKED flag is set — its BIT width (1 for bool). `0` marks
+	// a forwarded singleton element-layout (a Map's keys/values field-array); leave the
+	// provisional pointer-width default there.
 	let elemSize = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_ELEMENT_SIZE)
-	if elemSize != 0 'hasStride'
-		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
-	end 'hasStride'
+	if elemSize == 0 'singletonSkip'
+		return 0
+	end 'singletonSkip'
+	let flags = __Internals.loadIndirect(layoutDesc + LAYOUT_OFFSET_FLAGS)
+	if (flags and LAYOUT_FLAG_BIT_PACKED) != 0 'packed'
+		// Sub-byte-packed: `elementSize@16` is the bit width; store its negation so the
+		// record carries the negative-bit-width encoding the accessors dispatch on.
+		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: 0 - elemSize)
+		return 0
+	end 'packed'
+	__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_SIZE, value: elemSize)
 	return 0
 end '__managed_mem_set_element_size_from_layout'
 

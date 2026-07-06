@@ -8660,15 +8660,18 @@ type MaxonToStdLowering
 			// receiver (arg 0) is the `__ManagedMemory` record.
 			//
 			// Same story for `element_size@24`: `synthesizeManagedFieldInits` left the
-			// pointer-width default 8, correct only for the 8-byte elements. For a
-			// `Byte`/`bool` element (width 1) that stride is wrong — every slot store
-			// jumps 8 bytes, so a `ByteArray` built via `create`+`push` packs its bytes
-			// 8 apart and `String.from` reads only every 8th (the garbled union-name
-			// slice in `byteSliceToString` → a self-compiled compiler's spurious E3034
-			// on stdlib/Subprocess.maxon). `grow` runs before the first slot store and
-			// `__managed_mem_grow` sizes the new buffer as `newCap * element_size`, so
-			// stamping the descriptor's concrete `elementSize@16` here corrects both the
-			// buffer size and the store stride. Idempotent (same value each grow).
+			// pointer-width default 8, correct only for the 8-byte elements. For a `Byte`
+			// element (width 1) that stride is wrong — every slot store jumps 8 bytes, so
+			// a `ByteArray` built via `create`+`push` packs its bytes 8 apart and
+			// `String.from` reads only every 8th (the garbled union-name slice in
+			// `byteSliceToString` → a self-compiled compiler's spurious E3034 on
+			// stdlib/Subprocess.maxon). A `bool` element is sub-byte-packed: the layout's
+			// BIT_PACKED flag makes the stamp write the negative bit-width -1, so a
+			// dynamically-built `Array with bool` bit-packs like a constant literal.
+			// `grow` runs before the first slot store and `__managed_mem_grow` sizes the
+			// new buffer through the packed-aware helper, so stamping the descriptor's
+			// `elementSize@16` here corrects both the buffer size and the store stride.
+			// Idempotent (same value each grow).
 			if methodName == "grow" and hasReceiver and self.implicitLayoutValueId != 0 'stampElementWalk'
 				self.emitStampElementDestroyFromLayout(receiverId, dstBlock: dstBlock)
 				self.emitStampElementSizeFromLayout(receiverId, dstBlock: dstBlock)

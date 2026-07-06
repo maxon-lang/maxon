@@ -293,11 +293,17 @@ function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyNam
 			alignment = size
 		end 'minAlign'
 	end 'isStruct'
-	let elementSize = primitiveElementSize(project, args: args)
+	// A sub-byte-packed element (bool → 1 bit) records its BIT width in
+	// `elementSize` and sets the bitPacked flag; the runtime element-size stamp then
+	// negates it into the packed encoding. Byte-or-wider elements keep their positive
+	// byte stride. This is what makes a dynamically-built `Array with bool` bit-pack.
+	let packedBits = packedElementBitsForArgs(args)
+	let bitPacked = packedBits > 0
+	let elementSize = packedBits if bitPacked else primitiveElementSize(project, args: args)
 	let elementLogicalSize = singleArgLogicalSize(project, args: args)
 	let hasHeapRefs = instanceHasHeapRefs(project, args: args)
 	let perArgHeapRefBits = computePerArgHeapRefBits(project, args: args)
-	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: perArgHeapRefBits, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "", elementLogicalSize: elementLogicalSize)
+	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, perArgHeapRefBits: perArgHeapRefBits, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "", elementLogicalSize: elementLogicalSize, bitPacked: bitPacked)
 end 'computeLayoutDescriptor'
 
 // Source-level `sizeof` of the single type arg, for the descriptor's
@@ -392,6 +398,43 @@ export function primitiveWidth(project Project, t MaxonType) returns MachineWord
 		function to cstring gives 8
 	end 'w'
 end 'primitiveWidth'
+
+// Bits per element for a SUB-BYTE-packed element type, or 0 for byte-or-wider
+// types. A `bool` packs to 1 bit (8 per byte); future sub-byte types (a 2-bit
+// enum, a nibble) extend this by returning 2, 4, … The runtime encodes the packed
+// stride as `element_size@24 = -(these bits)` — see stdlib `__managed_mem_is_packed`.
+// This is the single classifier the layout descriptor and the element-size stamps
+// consult to decide "is this element sub-byte-packed, and how wide".
+export function packedElementBits(t MaxonType) returns MachineWord
+	return match t 'w'
+		boolean gives 1
+		integer to cstring gives 0
+	end 'w'
+end 'packedElementBits'
+
+// The stored `element_size@24` for an element type, as a SIGNED ParsedInt: a
+// NEGATIVE bit width for a sub-byte-packed element (bool = -1), else the positive
+// primitive byte width. Single source of truth for the record/literal element-size
+// stamps (the constant-array rdata pass and the create fast paths) so the packed
+// encoding is written the same way everywhere.
+export function elementStorageSize(project Project, t MaxonType) returns ParsedInt
+	let bits = packedElementBits(t)
+	if bits > 0 'packed'
+		return 0 - (bits as ParsedInt)
+	end 'packed'
+	return primitiveWidth(project, t: t) as ParsedInt
+end 'elementStorageSize'
+
+// Bit width of a single-type-arg instance's element when it is sub-byte-packed,
+// else 0. Mirrors `primitiveElementSize`'s "single arg only" gate — a multi-arg or
+// zero-arg instance is never packed.
+export function packedElementBitsForArgs(args MaxonTypeArray) returns MachineWord
+	if args.count() != 1 'notSingleton'
+		return 0
+	end 'notSingleton'
+	let only = try args.get(0) otherwise panic("packedElementBitsForArgs: args.get(0) failed despite count==1")
+	return packedElementBits(only)
+end 'packedElementBitsForArgs'
 
 // True iff any type argument is itself a heap-managed value — a string, a
 // reference-counted generic instance, an interface existential, OR a `named`
