@@ -1154,19 +1154,18 @@ end '__slab_free'
 	let RC_QUARANTINE_CAPACITY = 1048576
 	let RC_QUARANTINE_BYTE_CAP = 536870912
 
-	// Ring entry layout (64 bytes). The free-site return-address CHAIN lives in
-	// the entry — NOT in the quarantined slot — so every slot size gets full
-	// attribution and the slot's header/payload carry only the poison. The
-	// freed-touch report finds the entry by scanning the ring for its slotBase
-	// (O(live entries), fine on the panic path).
-	let RC_QUARANTINE_ENTRY_SIZE = 64
+	// Ring entry layout (96 bytes: 16-byte header + RC_QENTRY_RA_COUNT
+	// return-address words at RC_QENTRY_RA_CHAIN, padded to a round size). The
+	// free-site return-address CHAIN lives in the entry — NOT in the quarantined
+	// slot — so every slot size gets full attribution and the slot's
+	// header/payload carry only the poison. The freed-touch report finds the
+	// entry by scanning the ring for its slotBase (O(live entries), fine on the
+	// panic path).
+	let RC_QUARANTINE_ENTRY_SIZE = 96
 	let RC_QENTRY_SLOT_BASE = 0
 	let RC_QENTRY_SLOT_SIZE = 8
-	let RC_QENTRY_RA1 = 16
-	let RC_QENTRY_RA2 = 24
-	let RC_QENTRY_RA3 = 32
-	let RC_QENTRY_RA4 = 40
-	let RC_QENTRY_RA5 = 48
+	let RC_QENTRY_RA_CHAIN = 16
+	let RC_QENTRY_RA_COUNT = 9
 
 	// Field offsets of the `__mm_rc_quarantine_ctl` data-section global (layout doc
 	// at its registration in LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection).
@@ -1208,21 +1207,24 @@ end '__slab_free'
 	//   +0  freelist-next (only meaningful while the block sits on the freelist)
 	//   +8  head          (ring write index, 0..RC_LEDGER_RING_ENTRIES-1)
 	//   +16 count         (total ops recorded; the dump shows the last N)
-	//   +24 entries[N]    each RC_LEDGER_ENTRY_SIZE bytes: +0 kind, +8 rc-after
+	//   +24 entries[N]    each RC_LEDGER_ENTRY_SIZE bytes: +0 kind, +8 rc-after, +16 caller-ra
 	let RC_LEDGER_RING_ENTRIES = 12
-	let RC_LEDGER_ENTRY_SIZE = 16
+	let RC_LEDGER_ENTRY_SIZE = 24
 	let RC_LEDGER_OFF_NEXT = 0
 	let RC_LEDGER_OFF_HEAD = 8
 	let RC_LEDGER_OFF_COUNT = 16
 	let RC_LEDGER_OFF_ENTRIES = 24
-	// 24 header bytes + 12 entries * 16 bytes = 216. Kept a literal (top-level
+	// 24 header bytes + 12 entries * 24 bytes = 312. Kept a literal (top-level
 	// `let` takes only a literal); update alongside the three sizes above.
-	let RC_LEDGER_BLOCK_SIZE = 216
-	// 256 MiB bump arena for ring blocks (~1.2M blocks). Blocks are recycled onto
-	// the freelist at slot age-out, so live usage tracks peak-in-flight objects,
-	// not total allocations; the arena is the hard ceiling before graceful
-	// degradation (exhaustion => new objects get no ring, existing rings persist).
-	let RC_LEDGER_ARENA_BYTES = 268435456
+	let RC_LEDGER_BLOCK_SIZE = 312
+	// 2 GiB bump arena for ring blocks (~6.9M blocks — a full self-compile keeps
+	// millions of objects in flight). Blocks are recycled onto the freelist at
+	// slot age-out, so live usage tracks peak-in-flight objects, not total
+	// allocations; the arena is the hard ceiling before graceful degradation
+	// (exhaustion => new objects get no ring, existing rings persist). The arena
+	// is lazily OS-allocated on first use, so a sanitized run that never records
+	// a ledger op pays nothing.
+	let RC_LEDGER_ARENA_BYTES = 2147483648
 
 	// Field offsets of the `__mm_rc_ledger_ctl` data-section global (registered in
 	// LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection alongside the
@@ -1313,43 +1315,6 @@ end '__slab_free'
 	// the evictee — `__slab_free` may itself take the lock (os-direct / raw-owned
 	// routing), and the write-to-freed panic must never fire while holding it.
 	function __rc_quarantine_push(slotBase MachineWord, slotSize MachineWord)
-		// Free-site attribution: a short return-address CHAIN captured by walking
-		// the frame-pointer links ([fp] = caller's fp, [fp+8] = return address —
-		// the same walk mrt_panic does on x64/arm64; the chain root is 0). One
-		// frame is not enough: this helper and its callers (__rc_quarantine_
-		// intercept ← __slab_free ← __mm_free ← the releasing decref/drop) are
-		// real out-of-line functions, so the first return addresses name the
-		// sanitizer's own plumbing and only the deeper entries reach the code
-		// that actually released the object. wasm has no frame-pointer chain
-		// (loadFramePtr yields 0): all entries stash 0 and the report degrades
-		// gracefully.
-		var freeRa1 = 0
-		var freeRa2 = 0
-		var freeRa3 = 0
-		var freeRa4 = 0
-		var freeRa5 = 0
-		var fp = __Internals.loadFramePtr()
-
-		if fp != 0 'frame1'
-			freeRa1 = __Internals.loadIndirect(fp + 8)
-			fp = __Internals.loadIndirect(fp)
-		end 'frame1'
-		if fp != 0 'frame2'
-			freeRa2 = __Internals.loadIndirect(fp + 8)
-			fp = __Internals.loadIndirect(fp)
-		end 'frame2'
-		if fp != 0 'frame3'
-			freeRa3 = __Internals.loadIndirect(fp + 8)
-			fp = __Internals.loadIndirect(fp)
-		end 'frame3'
-		if fp != 0 'frame4'
-			freeRa4 = __Internals.loadIndirect(fp + 8)
-			fp = __Internals.loadIndirect(fp)
-		end 'frame4'
-		if fp != 0 'frame5'
-			freeRa5 = __Internals.loadIndirect(fp + 8)
-		end 'frame5'
-
 		let ctl = __Internals.rcQuarantineCtlAddr()
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
 
@@ -1411,11 +1376,32 @@ end '__slab_free'
 		let entry = ringBase + tail * RC_QUARANTINE_ENTRY_SIZE
 		__Internals.storeIndirect(entry + RC_QENTRY_SLOT_BASE, value: slotBase)
 		__Internals.storeIndirect(entry + RC_QENTRY_SLOT_SIZE, value: slotSize)
-		__Internals.storeIndirect(entry + RC_QENTRY_RA1, value: freeRa1)
-		__Internals.storeIndirect(entry + RC_QENTRY_RA2, value: freeRa2)
-		__Internals.storeIndirect(entry + RC_QENTRY_RA3, value: freeRa3)
-		__Internals.storeIndirect(entry + RC_QENTRY_RA4, value: freeRa4)
-		__Internals.storeIndirect(entry + RC_QENTRY_RA5, value: freeRa5)
+
+		// Free-site attribution: a return-address CHAIN captured by walking the
+		// frame-pointer links ([fp] = caller's fp, [fp+8] = return address — the
+		// same walk mrt_panic does on x64/arm64; the chain root is 0). One frame
+		// is not enough: this helper and its callers (__rc_quarantine_intercept
+		// ← __slab_free ← __mm_free ← the releasing decref/drop) are real
+		// out-of-line functions, so the first return addresses name the
+		// sanitizer's own plumbing and only the deeper entries reach the code
+		// that actually released the object. Ring entries are recycled, so every
+		// RA slot is written — 0 past the chain root. wasm has no frame-pointer
+		// chain (loadFramePtr yields 0): all entries stash 0 and the report
+		// degrades gracefully.
+		var fp = __Internals.loadFramePtr()
+		var raIdx = 0
+
+		while raIdx < RC_QENTRY_RA_COUNT 'captureChain'
+			var ra = 0
+
+			if fp != 0 'liveFrame'
+				ra = __Internals.loadIndirect(fp + 8)
+				fp = __Internals.loadIndirect(fp)
+			end 'liveFrame'
+
+			__Internals.storeIndirect(entry + RC_QENTRY_RA_CHAIN + raIdx * 8, value: ra)
+			raIdx = raIdx + 1
+		end 'captureChain'
 
 		var nextTail = tail + 1
 		if nextTail == capacity 'wrapTail'
@@ -1580,11 +1566,13 @@ end '__slab_free'
 
 			if __Internals.loadIndirect(entry + RC_QENTRY_SLOT_BASE) == slotBase 'hit'
 				printError("freed by (innermost first, leading frames are mm/sanitizer plumbing):\n")
-				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA1))
-				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA2))
-				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA3))
-				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA4))
-				__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA5))
+				var raIdx = 0
+
+				while raIdx < RC_QENTRY_RA_COUNT 'chain'
+					__rc_print_free_frame(__Internals.loadIndirect(entry + RC_QENTRY_RA_CHAIN + raIdx * 8))
+					raIdx = raIdx + 1
+				end 'chain'
+
 				found = 1
 				break
 			end 'hit'
@@ -1676,6 +1664,7 @@ end '__slab_free'
 		let entry = block + RC_LEDGER_OFF_ENTRIES
 		__Internals.storeIndirect(entry + 0, value: RC_KIND_CREATED)
 		__Internals.storeIndirect(entry + 8, value: 0)
+		__Internals.storeIndirect(entry + 16, value: 0)
 		__Internals.storeIndirect(block + RC_LEDGER_OFF_HEAD, value: 1)
 		__Internals.storeIndirect(block + RC_LEDGER_OFF_COUNT, value: 1)
 		return block
@@ -1685,7 +1674,7 @@ end '__slab_free'
 	// no ring (arena was exhausted at its allocation). Best-effort under
 	// concurrency: a torn ring under a genuine data race on ONE object is an
 	// acceptable diagnostic imprecision, never a correctness hazard.
-	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter MachineWord)
+	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter MachineWord, ra MachineWord)
 		let block = __Internals.loadIndirect(userPtr - 32)
 		if block == 0 'noRing'
 			return
@@ -1694,6 +1683,7 @@ end '__slab_free'
 		let entry = block + RC_LEDGER_OFF_ENTRIES + head * RC_LEDGER_ENTRY_SIZE
 		__Internals.storeIndirect(entry + 0, value: kind)
 		__Internals.storeIndirect(entry + 8, value: rcAfter)
+		__Internals.storeIndirect(entry + 16, value: ra)
 		var nextHead = head + 1
 		if nextHead == RC_LEDGER_RING_ENTRIES 'wrap'
 			nextHead = 0
@@ -1804,7 +1794,9 @@ end '__slab_free'
 			let entry = block + RC_LEDGER_OFF_ENTRIES + idx * RC_LEDGER_ENTRY_SIZE
 			let entKind = __Internals.loadIndirect(entry + 0)
 			let entRc = __Internals.loadIndirect(entry + 8)
-			printError("    {__rc_kind_name(entKind)} -> rc {entRc}\n")
+			let entRa = __Internals.loadIndirect(entry + 16)
+			printError("    {__rc_kind_name(entKind)} -> rc {entRc}   @\n")
+			__rc_print_free_frame(entRa)
 			idx = idx + 1
 			if idx == RC_LEDGER_RING_ENTRIES 'ringWrap'
 				idx = 0
@@ -1849,44 +1841,84 @@ end '__slab_free'
 		panic("rc-sanitize: over-release of 0x{userPtr:016x} (kind {__rc_kind_name(kind)})")
 	end '__rc_report_over_release'
 
+	// An obviously-invalid refcount-op "pointer": null, inside the never-mapped
+	// low-64K page, or not 8-aligned (every mm user pointer is slot_base + 32 of
+	// an 8-aligned slab/OS allocation, and null is only legal on the maybenull /
+	// drop paths, which return before this check). Probing `ptr - 8` on such a
+	// value faults INSIDE the sanitizer with a bare rip/addr line and no
+	// attribution — exactly the crash class this check converts into a named,
+	// backtraced report. No ledger to dump: the value never was an object.
+	function __rc_check_invalid_ptr(ptr MachineWord, kind MachineWord)
+		var invalid = 0
+
+		if ptr < 65536 'lowPage'
+			invalid = 1
+		end 'lowPage'
+
+		if (ptr and 7) != 0 'misaligned'
+			invalid = 1
+		end 'misaligned'
+
+		if invalid == 1 'report'
+			printError("rc-sanitize: refcount op on INVALID pointer 0x{ptr:016x} — not a plausible heap object\n")
+			printError("  op KIND: {__rc_kind_name(kind)}\n")
+			printError("  issued by (innermost first; leading frames are mm/sanitizer plumbing):\n")
+			__rc_print_backtrace_skipping(1, maxFrames: RC_OVER_RELEASE_MAX_FRAMES)
+			panic("rc-sanitize: refcount op on invalid pointer 0x{ptr:016x} (kind {__rc_kind_name(kind)})")
+		end 'report'
+	end '__rc_check_invalid_ptr'
+
 	// Tagged refcount entries. The compiler emits these (with a constant KIND arg)
 	// in a `--rc-sanitize` build; a default build emits the plain 1-arg forms and
 	// never references these — so the whole tagged surface is sanitizer-only.
 
 	// Tagged incref: freed-touch check (naming the emission kind), atomic +1,
-	// record (kind, rc-after).
+	// record (kind, rc-after, caller-ra). The caller-ra is `[rbp+8]` — the return
+	// address into the Maxon function that issued this incref (the emission site).
 	function __mm_incref_tagged(ptr MachineWord, kind MachineWord)
+		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
+		__rc_check_invalid_ptr(ptr, kind: kind)
 		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_INCREF, rcOpKind: kind)
 		end 'freedTouch'
 		let prior = __Internals.atomicXadd(ptr - 8, value: 1)
-		__rc_ledger_record(ptr, kind: kind, rcAfter: prior + 1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior + 1, ra: ra)
 	end '__mm_incref_tagged'
 
-	// Tagged strict decref: freed-touch check (naming the emission kind), atomic
-	// -1, record (kind, rc-after), free at the 1->0 transition, and OVER-RELEASE
-	// report when prior <= 0.
-	function __mm_decref_tagged(ptr MachineWord, kind MachineWord)
+	// Tagged strict decref BODY, taking the pre-captured caller-ra so the null-
+	// tolerant wrapper can attribute the op to the PARSER frame (its own caller)
+	// rather than to the wrapper.
+	function __mm_decref_tagged_ra(ptr MachineWord, kind MachineWord, ra MachineWord)
+		__rc_check_invalid_ptr(ptr, kind: kind)
 		if __Internals.loadIndirect(ptr - 8) == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DECREF, rcOpKind: kind)
 		end 'freedTouch'
 		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
-		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1, ra: ra)
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
 		if prior <= 0 'overRelease'
 			__rc_report_over_release(ptr, kind: kind)
 		end 'overRelease'
+	end '__mm_decref_tagged_ra'
+
+	// Tagged strict decref: freed-touch check (naming the emission kind), atomic
+	// -1, record (kind, rc-after), free at the 1->0 transition, and OVER-RELEASE
+	// report when prior <= 0.
+	function __mm_decref_tagged(ptr MachineWord, kind MachineWord)
+		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
+		__mm_decref_tagged_ra(ptr, kind: kind, ra: ra)
 	end '__mm_decref_tagged'
 
 	// Tagged null-tolerant decref (the `__mm_decref_maybenull_helper` analogue):
 	// tolerates exactly null, otherwise the strict tagged body.
 	function __mm_decref_maybenull_tagged(ptr MachineWord, kind MachineWord)
+		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
 		if ptr == 0 'null'
 			return
 		end 'null'
-		__mm_decref_tagged(ptr, kind: kind)
+		__mm_decref_tagged_ra(ptr, kind: kind, ra: ra)
 	end '__mm_decref_maybenull_tagged'
 
 	// Tagged owner-drop — MUST mirror `__mm_drop` exactly (balance parity): rc==0
@@ -1896,20 +1928,22 @@ end '__slab_free'
 	// allocation lifetime and cascades into downstream double-frees. Records one op
 	// either way.
 	function __mm_drop_tagged(ptr MachineWord, kind MachineWord)
+		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
 		if ptr == 0 'null'
 			return
 		end 'null'
+		__rc_check_invalid_ptr(ptr, kind: kind)
 		let rc = __Internals.loadIndirect(ptr - 8)
 		if rc == RC_SANITIZE_POISON_RC 'freedTouch'
 			__rc_report_freed_touch(ptr, kind: RC_TOUCH_DROP, rcOpKind: kind)
 		end 'freedTouch'
 		if rc == 0 'soleOwner'
-			__rc_ledger_record(ptr, kind: kind, rcAfter: 0)
+			__rc_ledger_record(ptr, kind: kind, rcAfter: 0, ra: ra)
 			__mm_free(ptr)
 			return
 		end 'soleOwner'
 		let prior = __Internals.atomicXadd(ptr - 8, value: -1)
-		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1)
+		__rc_ledger_record(ptr, kind: kind, rcAfter: prior - 1, ra: ra)
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
