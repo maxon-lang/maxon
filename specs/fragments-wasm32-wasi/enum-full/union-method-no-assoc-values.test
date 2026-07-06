@@ -1,0 +1,66 @@
+// Test: union-method-no-assoc-values
+union Status
+	pending
+	active
+	closed
+
+	function isActive() returns bool
+		return match self 'check'
+			pending gives false
+			active gives true
+			closed gives false
+		end 'check'
+	end 'isActive'
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.active
+	if s.isActive() 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br inlined_Status.isActive_0_0()
+  inlined_Status.isActive_0_0:
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp eq, %0, %6
+    mir.cond_br %7 [then: inlined_Status.isActive_2_0(), else: inlined_Status.isActive_3_0()]
+  inlined_Status.isActive_1_4(%8: i64):
+    mir.br inline_cont_main_0(%8)
+  inlined_Status.isActive_2_0:
+    %9 = mir.mov_imm 0 : i64
+    mir.br inlined_Status.isActive_1_4(%9)
+  inlined_Status.isActive_3_0:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp eq, %0, %10
+    mir.cond_br %11 [then: inlined_Status.isActive_4_0(), else: inlined_Status.isActive_5_0()]
+  inlined_Status.isActive_4_0:
+    %12 = mir.mov_imm 1 : i64
+    mir.br inlined_Status.isActive_1_4(%12)
+  inlined_Status.isActive_5_0:
+    %13 = mir.mov_imm 2 : i64
+    %14 = mir.cmp eq, %0, %13
+    mir.cond_br %14 [then: inlined_Status.isActive_6_0(), else: inlined_Status.isActive_1_4(%5)]
+  inlined_Status.isActive_6_0:
+    %15 = mir.mov_imm 0 : i64
+    mir.br inlined_Status.isActive_1_4(%15)
+  inline_cont_main_0(%16: i1):
+    mir.cond_br %16 [then: check_0(), else: check_0.after()]
+  check_0:
+    %3 = mir.mov_imm 1 : i64
+    mir.ret %3
+  check_0.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

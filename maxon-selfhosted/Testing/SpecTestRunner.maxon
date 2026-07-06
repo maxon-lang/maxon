@@ -238,14 +238,25 @@ let whitelist = ["basics",
 	"match-jump-table",
 	"match-expr-arm-divergent",
 	"enum-hashable",
-	// "enum-match-only" / "enum-full" — need E3066 (union `==`/`!=` rejected,
-	//   "use match instead"). The check is simple, BUT enforcing it breaks the
-	//   self-hosted compiler's OWN source: many internal `union`s (CmpPredicate,
-	//   etc.) are payload-free and compared with `==` throughout. Enabling E3066
-	//   requires first rewriting every internal `union ==` to `match` (or
-	//   reclassifying payload-free internal unions as `enum`s) — a large,
-	//   separate refactor. enum-hashable's hash/equals synthesis (now landed) is
-	//   the complementary half and is unaffected.
+	// E3066 (union `==`/`!=` rejected, "use match instead") is now enforced in
+	//   `maybeRewriteCmpToEquals` (TypeResolution), gated on `not isStdlib` to
+	//   match the C# bootstrap. This unblocks `enum-match-only` (10/10 on x64 +
+	//   wasm). The old note's fear that E3066 would break the compiler's own
+	//   source was stale: CmpPredicate et al. are already `match`ed, never
+	//   `==`d, so both the compiler source and the stdlib stayed E3066-clean.
+	//   Enums (auto-Equatable) keep `==`/`!=`.
+	"enum-match-only",
+	// enum-full: union construction/matching + associated-value `fromName`.
+	//   Does NOT need E3066. `Union.fromName(name, payload...)` on an
+	//   associated-value union is handled by `handleUnionFromNameLookup`: a
+	//   literal case name resolves at compile time (E3034 unknown / E3036 wrong
+	//   arity), then routes to a per-case throwing helper
+	//   (`synthesizeUnionFromNameCaseHelperImpl`, so payload args reach a
+	//   fixed-arity constructor while `try` still sees a throwing call) or the
+	//   payload-free general helper (`synthesizeUnionFromNameGeneralHelperImpl`,
+	//   for a payload-free case or a dynamic name). Both construct via
+	//   `enumConstruct`.
+	"enum-full",
 	"per-instance-typealias",
 	"generic-type-inner-alias-multifile",
 	"generic-type-nested-array-typealias",

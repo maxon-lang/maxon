@@ -1,0 +1,76 @@
+// Test: union-method-with-assoc-values
+
+typealias Code = int(0 to 1000)
+
+union Outcome
+	ok
+	failure(code Code)
+
+	function statusCode() returns Code
+		return match self 'check'
+			ok gives 0
+			failure(code) gives code
+		end 'check'
+	end 'statusCode'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.failure(42)
+	return o.statusCode()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Outcome.statusCode(local0: i64) -> u16 {
+  entry:
+    %14 = mir.param local0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.load %14, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp eq, %3, %4
+    mir.cond_br %5 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge(%13: i64):
+    %15 = mir.mov_imm 1000 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.case0:
+    %7 = mir.mov_imm 0 : i64
+    mir.br check_0.merge(%7)
+  check_0.next0:
+    %8 = mir.load %14, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.cmp eq, %8, %9
+    mir.cond_br %10 [then: check_0.case1(), else: check_0.merge(%2)]
+  check_0.case1:
+    %11 = mir.load %14, 8 width: qword
+    mir.br check_0.merge(%11)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_b550ae844e1f0c2f
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%5, %6)
+    mir.store %7, %8, 0 width: qword
+    mir.store %1, %8, 8 width: qword
+    %4 = mir.call @Outcome.statusCode(%8)
+    %9 = mir.call @mm_drop(%8)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %4, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_24f5b3d7b82a869a
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

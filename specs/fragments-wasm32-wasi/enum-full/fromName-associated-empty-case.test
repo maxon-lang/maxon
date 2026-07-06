@@ -1,0 +1,81 @@
+// Test: fromName-associated-empty-case
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = try Container.fromName("empty") otherwise Container.value(99)
+	match c 'check'
+		empty then return 1
+		value then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 48 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.call @mrt_alloc_with_dtor(%3, %4)
+    mir.store %0, %5, 40 width: qword
+    mir.store %2, %5, 0 width: qword
+    %7 = mir.mov_imm 5 : i64
+    mir.store %7, %5, 8 width: qword
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %5, 16 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %5, 24 width: qword
+    mir.store %0, %5, 32 width: qword
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.func_addr @__destruct_String
+    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
+    mir.store %5, %11, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 8 width: qword
+    %15, %16 = mir.try_call @__enum_Container_fromName(%11)
+    %41 = mir.call @mm_drop(%11)
+    %18 = mir.cmp ne, %16, %0
+    %42 = mir.call @__mm_decref_maybenull_helper(%16)
+    mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge(%15)]
+  try_0.otherwise:
+    %20 = mir.mov_imm 99 : i64
+    %36 = mir.mov_imm 16 : i64
+    %37 = mir.mov_imm 0 : i64
+    %38 = mir.mov_imm 1 : i64
+    %39 = mir.call @stdlib.__mm_alloc(%36, %37)
+    %40 = mir.call @stdlib.__mm_incref(%39)
+    mir.store %38, %39, 0 width: qword
+    mir.store %20, %39, 8 width: qword
+    mir.br try_0.merge(%39)
+  try_0.merge(%35: i64):
+    %24 = mir.load %35, 0 width: qword
+    %26 = mir.cmp eq, %24, %0
+    mir.cond_br %26 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %44 = mir.call @__mm_decref_maybenull_helper(%35)
+    %27 = mir.mov_imm 1 : i64
+    mir.ret %27
+  check_0.next0:
+    %28 = mir.load %35, 0 width: qword
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.cmp eq, %28, %29
+    %43 = mir.call @__mm_decref_maybenull_helper(%35)
+    mir.cond_br %30 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    mir.ret %0
+  check_0.next1:
+    %32 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %33 = mir.call @mrt_panic(%32)
+    mir.ret %0
+  }
+}
+---

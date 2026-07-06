@@ -3137,9 +3137,14 @@ export type TopLevelConstant
 	export var value as ConstantValue
 	export var visibility as Visibility
 	export var sourceFilePath as FilePath
+	// Non-empty when this constant's initializer was an enum case (`let C =
+	// Color.red`): the enclosing enum's name. A read site types the folded
+	// literal as the enum rather than a bare int, so `match C` sees an
+	// enum-typed scrutinee. Empty for non-enum constants.
+	export var enumTypeName as String = ""
 
-	export static function create(value ConstantValue, visibility Visibility, sourceFilePath FilePath) returns TopLevelConstant
-		return Self{value: value, visibility: visibility, sourceFilePath: sourceFilePath}
+	export static function create(value ConstantValue, visibility Visibility, sourceFilePath FilePath, enumTypeName String = "") returns TopLevelConstant
+		return Self{value: value, visibility: visibility, sourceFilePath: sourceFilePath, enumTypeName: enumTypeName}
 	end 'create'
 end 'TopLevelConstant'
 

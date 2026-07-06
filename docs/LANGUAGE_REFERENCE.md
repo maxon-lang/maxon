@@ -1355,6 +1355,12 @@ var dir = Direction.north
 var opp = Direction.opposite(self: dir)  // Direction.south
 ```
 
+Enum methods carry their **own** visibility, exactly like struct methods — a
+method takes an optional `export` / `module` modifier before `function`, and a
+bare method (no modifier) is file-private. A non-exported method on an exported
+enum is a private helper: calling it from another file is rejected with
+`E3008`. The method's visibility does **not** inherit from the enum declaration.
+
 ### Enum as Function Parameter
 
 Enums can be used as function parameters and return types:
@@ -1617,6 +1623,10 @@ union Direction
 		end 'opposite'
 end 'Direction'
 ```
+
+As with enum and struct methods, a union method carries its own visibility: an
+optional `export` / `module` modifier before `function`, defaulting to
+file-private. The method's visibility is independent of the union declaration's.
 
 ### Union Interface Conformance
 

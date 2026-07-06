@@ -2902,8 +2902,16 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, block IrBloc
 		// downstream consumers (varDecl slotType inference, match scrutinee
 		// type recovery) can recover the case set rather than seeing a bare
 		// integer or float literal.
-		let intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
-		let floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
+		var intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
+		var floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
+		// A constant whose initializer was an enum case (`let C = Color.red`)
+		// carries the enum name — type its folded literal as the enum so a later
+		// `match C` sees an enum-typed scrutinee instead of a bare int/float.
+		if not entry.enumTypeName.isEmpty() 'enumTypedConst'
+			let namedEnum = MaxonType.named(project.typeNames.intern(entry.enumTypeName))
+			intValueType = namedEnum
+			floatValueType = namedEnum
+		end 'enumTypedConst'
 		match entry.value 'inline'
 			intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range, valueType: intValueType)
 			// Float-typed top-level constants store IEEE 754 raw bits in the
@@ -3195,9 +3203,22 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isUnionCase'
-	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
+	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown {enumDeclKindLabel(project, enumName: enumName)} case: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
 	try setOpCounted(module, opIdx: opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 end 'resolveOneEnumMatchArm'
+
+// "union" when `enumName` names an associated-value/scalar union, else "enum".
+// Used to word the E3034 "unknown <kind> case" diagnostic to match the
+// declaration form the user wrote. Mirrors the C# bootstrap's per-site choice.
+function enumDeclKindLabel(project Project, enumName String) returns String
+	if let et = try project.enumTypes.get(enumName) 'resolved'
+		return "union" if et.isUnion else "enum"
+	end 'resolved'
+	if let ut = try project.unresolvedEnums.get(enumName) 'unresolved'
+		return "union" if ut.isUnion else "enum"
+	end 'unresolved'
+	return "enum"
+end 'enumDeclKindLabel'
 
 // Phase 9 Stage 2: look up a union case's tag value (ordinal) from the
 // resolved enum registry. Returns hit=false when the name isn't found or
@@ -7676,15 +7697,15 @@ end 'boolToInt'
 // types so a separate validation pass surfaces the
 // "non-reference operand" diagnostic by walking refEq ops here.
 
-function dispatchEqualityOps(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+function dispatchEqualityOps(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath, isStdlib bool)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("dispatchEqualityOps: funcIdx OOB")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("dispatchEqualityOps: producerTypesPerFunc.get({funcIdx}) failed")
-		dispatchFuncEqualityOps(project, module: module, func: func, producerTypes: producerTypes, filePath: filePath)
+		dispatchFuncEqualityOps(project, module: module, func: func, producerTypes: producerTypes, filePath: filePath, isStdlib: isStdlib)
 	end 'eachFunc'
 end 'dispatchEqualityOps'
 
-function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, filePath FilePath)
+function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, filePath FilePath, isStdlib bool)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("dispatchFuncEqualityOps: blockRef OOB")
 		// Snapshot opRefs: a `!=`-on-ref rewrite splices a follow-up logicalNot
@@ -7699,21 +7720,55 @@ function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFun
 		for aIdx in 0 upto anchors.count() 'eachOp'
 			let opIdx = try anchors.get(aIdx) otherwise panic("dispatchFuncEqualityOps: anchors.get OOB")
 			let op = try module.ops.get(opIdx) otherwise panic("dispatchFuncEqualityOps: opIdx OOB")
-			dispatchEqualityForOp(project, module: module, block: block, opIdx: opIdx, op: op, producerTypes: producerTypes, filePath: filePath)
+			dispatchEqualityForOp(project, module: module, block: block, opIdx: opIdx, op: op, producerTypes: producerTypes, filePath: filePath, isStdlib: isStdlib)
 		end 'eachOp'
 	end 'eachBlock'
 end 'dispatchFuncEqualityOps'
 
-function dispatchEqualityForOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath)
+function dispatchEqualityForOp(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath, isStdlib bool)
 	match op 'dispatchEq'
-		cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+		cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, block: block, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range, filePath: filePath, isStdlib: isStdlib)
 		refEq(_, left, right, _, range) then validateRefEqOperands(project, left: left, right: right, producerTypes: producerTypes, range: range, filePath: filePath)
 		literal to castCheck then skipOpArm()
 		condBr to sizeofType then skipOpArm()
 	end 'dispatchEq'
 end 'dispatchEqualityForOp'
 
-function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
+// True when `predicate` is `==` (eq) or `!=` (ne) — the two operators that
+// dispatch to `.equals()` for reference types and that E3066 rejects on unions.
+function cmpPredicateIsEquality(predicate CmpPredicate) returns bool
+	return match predicate 'p'
+		eq gives true
+		ne gives true
+		lt gives false
+		le gives false
+		gt gives false
+		ge gives false
+	end 'p'
+end 'cmpPredicateIsEquality'
+
+// True when `t` (after typealias resolution) names a `union`. Unions carry no
+// synthesized equality, so E3066 rejects `==`/`!=` on them; plain enums (which
+// auto-implement Equatable) return false and keep integer-backed comparison.
+function maxonTypeIsUnion(project Project, t MaxonType) returns bool
+	let enumName = try enumNameFromMaxonType(project, t: t) otherwise return false
+	if let et = try project.enumTypes.get(enumName) 'resolved'
+		return et.isUnion
+	end 'resolved'
+	return false
+end 'maxonTypeIsUnion'
+
+function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange, filePath FilePath, isStdlib bool)
+	// E3066: `union` values are inspectable only via `match` — reject `==`/`!=`.
+	// Both payload-free (scalar-backed) and payload-bearing (boxed) unions reach
+	// here as a `cmp` op carrying the union operand type, so a single check
+	// covers both. Stdlib source is trusted and exempt (mirrors the C#
+	// bootstrap's `!_isStdlib` gate).
+	if not isStdlib and cmpPredicateIsEquality(predicate) and (maxonTypeIsUnion(project, t: leftType) or maxonTypeIsUnion(project, t: rightType)) 'unionCmp'
+		let opStr = cmpPredicateOpStr(predicate)
+		reportCompileError(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{opStr}', use 'match' instead", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'unionCmp'
 	if not maxonTypeIsRef(project, t: leftType) 'leftPrim'
 		return
 	end 'leftPrim'
@@ -8253,7 +8308,11 @@ function evaluateTopLevelDecl(project Project, name String, evaluating StringArr
 		let info = TopLevelVarInfo.create(name, slotType: slotType, initialValue: initialValue, visibility: entry.visibility, sourceFilePath: entry.filePath)
 		try project.topLevelVars.insert(name, value: info) otherwise ignore
 	end 'asGlobal' else 'asConst'
-		let constEntry = TopLevelConstant.create(result, visibility: entry.visibility, sourceFilePath: entry.filePath)
+		// Preserve the enum type of an `let C = Color.red` initializer so the
+		// read site can type C as `Color` (not bare int) and `match C` resolves.
+		let inferredType = inferSlotTypeFromExpr(project, exprId: entry.rootExprId, value: result)
+		let constEnumType = try enumNameFromMaxonType(project, t: inferredType) otherwise ""
+		let constEntry = TopLevelConstant.create(result, visibility: entry.visibility, sourceFilePath: entry.filePath, enumTypeName: constEnumType)
 		try project.topLevelConstants.insert(name, value: constEntry) otherwise ignore
 	end 'asConst'
 	_ = project.unresolvedTopLevelDecls.remove(name)
@@ -9065,6 +9124,19 @@ function validateDeferredMatchExhaustiveness(project Project, check PendingMatch
 	if check.hasDefault 'hasDefault'
 		return
 	end 'hasDefault'
+	// If any bare arm names a case this enum lacks, the match is malformed —
+	// defer to `resolveOneEnumMatchArm`'s E3034 "unknown <union|enum> case"
+	// (anchored at the arm) instead of reporting a misleading E2026. Mirrors
+	// the inline `validateEnumExhaustiveness` guard.
+	for unknownCheckArm in check.arms 'checkUnknownArm'
+		if not unknownCheckArm.isRange 'isBare'
+			for armCaseName in unknownCheckArm.caseNames 'eachName'
+				if not caseByName.contains(armCaseName) 'unknownCase'
+					return
+				end 'unknownCase'
+			end 'eachName'
+		end 'isBare'
+	end 'checkUnknownArm'
 	// Build the union of all arm coverage from the ordered `arms` list (the
 	// single source of truth) and report every uncovered case.
 	var covered = ReferencedNameSet.create()
@@ -9167,7 +9239,7 @@ end 'expandArmCoverage'
 // now-fully-typed ops. The typealias drain is idempotent: only the first
 // module's call does real work, every later module-level call walks an
 // empty map.
-module function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+module function runTypeResolution(project Project, module MaxonModule, filePath FilePath, isStdlib bool)
 	// `resolvedCallees` and `callParamTypes` are keyed by OpIndex, which is
 	// per-module. When the cache-miss stdlib build path runs `runTypeResolution`
 	// on the stdlib MaxonModule, those maps get populated with entries keyed
@@ -9460,7 +9532,7 @@ module function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `is` / `is not` operands. Runs after fillUnresolvedTypes so cmp
 	// operand types are concrete and refEq operand producers are reachable
 	// through the producer-type map.
-	dispatchEqualityOps(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+	dispatchEqualityOps(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath, isStdlib: isStdlib)
 
 	// E3005: emit "operator 'X' is not defined for type 'T'" for any
 	// arithmetic / bitwise binop whose operand type is a struct (String,
@@ -10690,6 +10762,17 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	if let direct = try maxonTypeStructName(project, t: receiverType) 'haveStruct'
 		receiverStructName = direct
 	end 'haveStruct'
+	// Enum / union receiver (`Signal.on.isOn()`): the value is int/heap-backed,
+	// not a struct, so `maxonTypeStructName` misses it. Resolve the method
+	// against the enum's own name so `resolvedCallees` / `callParamTypes` get
+	// populated — without this the call-visibility pass can't see the callee
+	// and a non-exported enum method leaks cross-file (E3008 never fires).
+	if receiverStructName.isEmpty() 'tryEnum'
+		let enumReceiverName = try enumNameFromMaxonType(project, t: receiverType) otherwise ""
+		if not enumReceiverName.isEmpty() 'isEnumReceiver'
+			receiverStructName = enumReceiverName
+		end 'isEnumReceiver'
+	end 'tryEnum'
 	if receiverStructName.isEmpty() 'tryPrimitive'
 		receiverStructName = try primitiveExtensionTypeNameWithProject(project, t: receiverType) otherwise return
 	end 'tryPrimitive'
@@ -10756,6 +10839,25 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	let monoCallee = try maybeMonomorphizeUserExtension(project, module: module, calleeQualified: resolved, receiverType: receiverType) otherwise resolved
 	resolved = monoCallee
 	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+	// Instance-method visibility (E3008 / E3088). The receiver value is already
+	// in hand, so only the method's OWN tier matters. `resolveAllCalls` runs
+	// AFTER `validateCallVisibility`, so a methodCall's resolved callee is
+	// invisible to that pass — check it here, where the qualified callee is
+	// first known. Mirrors the C# bootstrap's `IsFunctionVisible` gate in
+	// `ParseInstanceMethodCallArgs`. Unregistered callees default to `global`
+	// (visible), so only an explicit file/module tier hidden from the reader
+	// trips the diagnostic. Stdlib readers are exempt (trusted, and the stdlib
+	// makes cross-file file-local method calls) — mirrors the C# `!_isStdlib`.
+	if project.funcReturnTypes.contains(resolved) and not isStdlibDecl(readerFilePath) 'methodVisCheck'
+		let methodVisInfo = funcVisibilityOrDefault(project, qualifiedName: resolved)
+		// Stdlib-declared callees are always visible from user code — primitive
+		// extension methods (`int.hash`, `int.equals`, synthesized on demand) and
+		// other stdlib methods carry a file-local sidecar tier but are part of the
+		// public surface. Only user-declared file/module methods are gated.
+		if not isStdlibDecl(methodVisInfo.sourceFilePath) and not isVisibleFrom(methodVisInfo.visibility, declFilePath: methodVisInfo.sourceFilePath, readerFilePath: readerFilePath) 'methodHidden'
+			reportHiddenCalleeError(project, displayName: resolved, tier: methodVisInfo.visibility, range: range, filePath: readerFilePath)
+		end 'methodHidden'
+	end 'methodVisCheck'
 	// Record the full (pre-Self-substitution) receiver type so the E3005
 	// argument-type check can refine a `Self`-typed parameter that
 	// substitution collapsed to the bare base collection (`Array`) back to the
@@ -11904,7 +12006,12 @@ function checkCallArity(project Project, qualifiedCallee String, args ByteArrayA
 		return
 	end 'badSig'
 	let userArgCount = args.count()
-	if userArgCount > userParamCount 'tooMany'
+	// Union-case construction (`__construct_<Union>_<case>`) never gets a generic
+	// arity error: an excess POSITIONAL arg is already reported as E3005 ("second
+	// arg must be named") at parse, and an excess NAMED arg falls through to the
+	// E3003 unknown-parameter check below. Mirrors the C# bootstrap, which sizes
+	// the arg array to the case arity and produces no arity diagnostic here.
+	if userArgCount > userParamCount and not isUnionConstructorSymbol(qualifiedCallee) 'tooMany'
 		reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "too many arguments to '{qualifiedCallee}': expected {userParamCount}, got at least {userArgCount}", line: range.line, column: range.column, filePath: filePath)
 		return
 	end 'tooMany'

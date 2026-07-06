@@ -5774,21 +5774,18 @@ export type Parser
 			// keyword-named enum case. Method form is always followed by an
 			// identifier (the method name); case form is followed by either a
 			// newline, an `=` (for an explicit raw value), or end-of-block.
-			// An optional leading `export` is accepted so stdlib enum bodies
-			// that explicitly spell out the visibility — `export function f`
-			// — parse the same as the unprefixed form; enum methods inherit
-			// the enclosing enum's visibility.
+			// An optional leading `export` / `module` sets the METHOD's own
+			// visibility (a bare method is file-local — a private helper), so
+			// we peek past the modifier to find `function`.
 			var methodTokenOffset = 0 as ChainPeekOffset
-			if memberToken.kind == TokenKind.export 'sawExport'
+			if memberToken.kind == TokenKind.export or cursorOnContextualModuleBeforeFunction() 'sawModifier'
 				methodTokenOffset = 1 as ChainPeekOffset
-			end 'sawExport'
+			end 'sawModifier'
 			let leadingFunc = try cursor.peek(methodTokenOffset) otherwise Token.eof()
 			if leadingFunc.kind == TokenKind.function and lookaheadIsMethodSignatureAtOffset(methodTokenOffset) 'isMethod'
-				if methodTokenOffset == 1 'eatExport'
-					try eat(TokenKind.export)
-				end 'eatExport'
+				let methodVisibility = consumeVisibilityModifier()
 				try eat(TokenKind.function)
-				try parseEnumMethod(currentTypeName)
+				try parseEnumMethod(currentTypeName, visibility: methodVisibility)
 				try skipNewlines()
 				if cursor.index() <= bodyPrevPos 'methodStuck'
 					try cursor.advance() otherwise break
@@ -5983,23 +5980,18 @@ export type Parser
 			// `function` as method-keyword vs `function` as a keyword-named
 			// union case mirrors the enum rule: method form is always followed
 			// by an identifier (the method name); case form is followed by `(`
-			// or a newline / block end. An optional `export` prefix on the
-			// method is accepted (and discarded) so stdlib union bodies that
-			// spell out the visibility — `export function displayName(...)` —
-			// parse the same way as the unprefixed form; union methods
-			// inherit the enclosing union's visibility, so a leading `export`
-			// here is redundant rather than wrong.
+			// or a newline / block end. An optional leading `export` / `module`
+			// sets the METHOD's own visibility (a bare method is file-local — a
+			// private helper), so we peek past the modifier to find `function`.
 			var methodTokenOffset = 0 as ChainPeekOffset
-			if memberToken.kind == TokenKind.export 'sawExport'
+			if memberToken.kind == TokenKind.export or cursorOnContextualModuleBeforeFunction() 'sawModifier'
 				methodTokenOffset = 1 as ChainPeekOffset
-			end 'sawExport'
+			end 'sawModifier'
 			let leadingFunc = try cursor.peek(methodTokenOffset) otherwise Token.eof()
 			if leadingFunc.kind == TokenKind.function and lookaheadIsMethodSignatureAtOffset(methodTokenOffset) 'isMethod'
-				if methodTokenOffset == 1 'eatExport'
-					try eat(TokenKind.export)
-				end 'eatExport'
+				let methodVisibility = consumeVisibilityModifier()
 				try eat(TokenKind.function)
-				try parseEnumMethod(currentTypeName)
+				try parseEnumMethod(currentTypeName, visibility: methodVisibility)
 				try skipNewlines()
 				if cursor.index() <= bodyPrevPos 'methodStuck'
 					try cursor.advance() otherwise break
@@ -7029,12 +7021,26 @@ export type Parser
 	// parsing purposes — the method gets an implicit `__self` parameter typed
 	// to the enum, and registers under `{enumName}.{methodName}` so dot-call
 	// dispatch finds it. The empty fields array tells parseFunction not to
-	// set up self-field aliases — enums have no fields. Method visibility
-	// inherits from `currentEnumVisibility` so cross-file method calls match
-	// whatever the enum-decl declared.
-	function parseEnumMethod(enumName String) throws ParserError
-		try parseFunction(enumName, isInstance: true, fields: StructFieldArray.create(), visibility: currentEnumVisibility)
+	// set up self-field aliases — enums have no fields. `visibility` is the
+	// method's OWN tier (from its optional `export` / `module` prefix), NOT the
+	// enum's — a method without a modifier is file-local, so a non-exported
+	// method on an `export` enum is a private helper (E3008 cross-file). Mirrors
+	// struct-method rules and the C# bootstrap's per-method `ParseVisibilityModifier`.
+	function parseEnumMethod(enumName String, visibility Visibility) throws ParserError
+		try parseFunction(enumName, isInstance: true, fields: StructFieldArray.create(), visibility: visibility)
 	end 'parseEnumMethod'
+
+	// True when the cursor sits on the contextual `module` keyword immediately
+	// before `function` — the enum/union method-vs-case disambiguation needs to
+	// peek PAST a leading `module` modifier the same way it peeks past `export`.
+	function cursorOnContextualModuleBeforeFunction() returns bool
+		let tok = cursor.current()
+		if tok.kind != TokenKind.identifier or tok.value != "module" 'notModule'
+			return false
+		end 'notModule'
+		let next = try cursor.peek(1) otherwise Token.eof()
+		return next.kind == TokenKind.function
+	end 'cursorOnContextualModuleBeforeFunction'
 
 	// Read the next int / float literal for an enum raw value, recovering
 	// gracefully on overflow so the enclosing case-collection loop keeps
@@ -8152,7 +8158,16 @@ export type Parser
 		// clearly. Only fires when at least one binding was present —
 		// `case()` with zero parens is already arity-checked above.
 		if bindings.count() > 0 and allDiscard 'allDiscarded'
-			reportCompileError(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "all bindings in pattern '{caseToken.value}(...)' are discards; use the bare case name instead", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			// Rebuild the `(_, _, ...)` discard list — one `_` per binding — so the
+			// message shows the exact shape the user wrote. Mirrors the C# bootstrap.
+			var underscores = ""
+			for i in 0 upto bindings.count() 'buildUnderscores'
+				if i > 0 'sep'
+					underscores.append(", ")
+				end 'sep'
+				underscores.append("_")
+			end 'buildUnderscores'
+			reportCompileError(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseToken.value}' instead of '{caseToken.value}({underscores})' to ignore associated values", line: caseToken.line, column: caseToken.column, filePath: filePath)
 		end 'allDiscarded'
 
 		return MatchPatternSpec.enumCaseWithBindings(caseToken, caseName: caseToken.value, bindings: bindings, bindingNames: bindingNames)
@@ -8653,6 +8668,15 @@ export type Parser
 		if not enumKnown 'noEnumDecl'
 			return
 		end 'noEnumDecl'
+		// If any arm names a case this enum doesn't have, the match is malformed
+		// (E3034). Defer to TypeResolution's `resolveOneEnumMatchArm`, which emits
+		// "unknown <union|enum> case" anchored at the offending arm — reporting a
+		// misleading "not exhaustive" here would shadow the real error.
+		for coveredName in coveredCaseNames 'checkKnownCases'
+			if not caseByName.contains(coveredName) 'unknownCase'
+				return
+			end 'unknownCase'
+		end 'checkKnownCases'
 		let missing = missingCasesFromCoverage(enumCases, caseByName: caseByName, coveredCaseNames: coveredCaseNames, rangeArms: rangeArms)
 		if missing.isEmpty() 'allCovered'
 			return
@@ -18622,6 +18646,32 @@ function synthesizeEnumFromRawValueHelperImpl(project Project, module MaxonModul
 	module.functions.push(func)
 end 'synthesizeEnumFromRawValueHelperImpl'
 
+// Emit the per-case name test shared by every `.fromName` helper: a
+// `stringConst "<caseName>"` followed by `<receiver>.equals(...)`, both appended
+// to `block`. Returns the bool-result value name (feed it to the case's
+// `condBr`) and the advanced synth counter (each call mints two names). The
+// enum, union-general, and union-per-case synthesizers all walk their case list
+// emitting one such check per case.
+function emitFromNameEqualsCheck(project Project, module MaxonModule, block IrBlock, receiverName ByteArray, caseName String, stringMaxonType MaxonType, synthCounter ParsedInt) returns (ByteArray, ParsedInt)
+	var counter = synthCounter
+	let caseNameStringId = project.strings.intern(caseName)
+	let caseNameLitName = mintSynthName(counter)
+	counter = counter + 1
+	module.appendOp(block, op: MaxonOp.stringConst(caseNameLitName, stringId: caseNameStringId, range: SourceRange.none()))
+	var equalsArgs = ByteArrayArray.create()
+	equalsArgs.push(caseNameLitName)
+	var equalsArgLabels = StringArray.create()
+	equalsArgLabels.push("")
+	var equalsArgTypes = MaxonTypeArray.create()
+	equalsArgTypes.push(stringMaxonType)
+	var equalsArgRanges = SourceRangeArray.create()
+	equalsArgRanges.push(SourceRange.none())
+	let cmpName = mintSynthName(counter)
+	counter = counter + 1
+	module.appendOp(block, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+	return (cmpName, counter)
+end 'emitFromNameEqualsCheck'
+
 // Synthesize `__enum_<EnumName>_fromName(name String) returns <EnumName>
 // throws <EnumName>`. Body shape mirrors `fromRawValue` but the per-case
 // comparison is `name.equals("<caseName>")` (a methodCall the String
@@ -18695,24 +18745,10 @@ function synthesizeEnumFromNameHelperImpl(project Project, module MaxonModule, n
 			nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
 		end 'allocNext'
 
-		// Build a string literal for the case name and call
-		// `name.equals(<caseName>)`. The methodCall result type is
-		// pinned by TypeResolution from the receiver's String type.
-		let caseNameStringId = project.strings.intern(c.name)
-		let caseNameLitName = mintSynthName(synthCounter)
-		synthCounter = synthCounter + 1
-		module.appendOp(currentCheck, op: MaxonOp.stringConst(caseNameLitName, stringId: caseNameStringId, range: SourceRange.none()))
-		var equalsArgs = ByteArrayArray.create()
-		equalsArgs.push(caseNameLitName)
-		var equalsArgLabels = StringArray.create()
-		equalsArgLabels.push("")
-		var equalsArgTypes = MaxonTypeArray.create()
-		equalsArgTypes.push(stringMaxonType)
-		var equalsArgRanges = SourceRangeArray.create()
-		equalsArgRanges.push(SourceRange.none())
-		let cmpName = mintSynthName(synthCounter)
-		synthCounter = synthCounter + 1
-		module.appendOp(currentCheck, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+		// The methodCall result type is pinned by TypeResolution from the
+		// receiver's String type.
+		let (cmpName, advancedCounter) = emitFromNameEqualsCheck(project, module: module, block: currentCheck, receiverName: receiverName, caseName: c.name, stringMaxonType: stringMaxonType, synthCounter: synthCounter)
+		synthCounter = advancedCounter
 		let elseTarget = throwBlock.id if isLast else nextCheck.id
 		module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
 
@@ -18735,6 +18771,229 @@ function synthesizeEnumFromNameHelperImpl(project Project, module MaxonModule, n
 	// call-edge walk reaches the helper when needed.
 	module.functions.push(func)
 end 'synthesizeEnumFromNameHelperImpl'
+
+// Shared registration for a synthesized `.fromName` / `.fromRawValue` lookup
+// helper: funcReturnTypes + funcSignatures + methodNameIndex + funcVisibilities
+// + funcThrowsTypes, each recorded in the file's parse delta so an incremental
+// re-parse rolls them back. Factored out for the union-fromName helpers below.
+function registerSynthLookupHelper(project Project, filePath FilePath, funcName String, returnType MaxonReturnType, paramNames StringArray, paramTypes MaxonTypeArray, paramDefaults ParamDefaultArray, visibility Visibility, throwsClause ThrowsClause)
+	try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("registerSynthLookupHelper: funcReturnTypes collision on '{funcName}'")
+	recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
+	try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("registerSynthLookupHelper: funcSignatures collision on '{funcName}'")
+	recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
+	project.methodNameIndex.record(funcName)
+	recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+	var insertedVis = true
+	try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupVis'
+		insertedVis = false
+	end 'dupVis'
+	if insertedVis 'recVis'
+		recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+	end 'recVis'
+	var insertedTh = true
+	try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupTh'
+		insertedTh = false
+	end 'dupTh'
+	if insertedTh 'recTh'
+		recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+	end 'recTh'
+end 'registerSynthLookupHelper'
+
+// `Union.fromName(name, payload...)` on an associated-value union. Resolves a
+// compile-time literal case name (E3034 unknown / E3036 wrong arity) and picks
+// the helper: a per-case throwing helper for a payload case (so the payload
+// args reach a fixed-arity constructor while `try` still sees a throwing call),
+// or the payload-free general helper for a payload-free case / dynamic name.
+// Returns the rewritten per-case callee, or empty to leave the general-helper
+// call in place. Mirrors the C# bootstrap's `ParseEnumFromName`, but split into
+// synthesized helpers to fit the self-hosted's function-per-lookup model.
+function handleUnionFromNameLookup(project Project, module MaxonModule, enumName String, classification EnumLookupTarget, args ByteArrayArray, argRanges SourceRangeArray, range SourceRange, callerFilePath FilePath, callerFuncName String, litProducerMap LiteralOpIndexMap) returns ByteArray
+	let synthNamespace = deriveNamespace(classification.sourceFilePath, rootPath: project.rootPath)
+	if args.count() == 0 'noNameArg'
+		return ByteArray.create()
+	end 'noNameArg'
+	let nameArg = try args.get(0) otherwise panic("handleUnionFromNameLookup: args.get(0) failed despite count check")
+	if let producerOpIdx = try litProducerMap.get(nameArg) 'literalName'
+		let argRange0 = try argRanges.get(0) otherwise range
+		let lit = readLiteralArgInfo(project, module: module, opIdx: producerOpIdx, callerFuncName: callerFuncName, argName: nameArg)
+		if lit.kind != LiteralArgKind.stringLiteral 'notString'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'expected String, got {literalArgTypeName(lit)}'", line: argRange0.line, column: argRange0.column, filePath: callerFilePath)
+			return ByteArray.create()
+		end 'notString'
+		var matchedIdx = -1 as ParsedInt
+		for ci in 0 upto classification.cases.count() 'findCase'
+			let c = try classification.cases.get(ci) otherwise panic("handleUnionFromNameLookup: cases.get OOB at {ci}")
+			if c.name == lit.text 'hit'
+				matchedIdx = ci as ParsedInt
+				break
+			end 'hit'
+		end 'findCase'
+		if matchedIdx < 0 'unknownCase'
+			reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "no enum case named '{lit.text}': '{enumName}'", line: argRange0.line, column: argRange0.column, filePath: callerFilePath)
+			return ByteArray.create()
+		end 'unknownCase'
+		let theCase = try classification.cases.get(matchedIdx as ElementCount) otherwise panic("handleUnionFromNameLookup: matched cases.get failed")
+		let payloadArity = theCase.payloadFields.count()
+		let providedPayload = args.count() - 1
+		if providedPayload != payloadArity 'wrongCount'
+			reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "wrong argument count: 'case '{lit.text}' requires {payloadArity} associated value(s)'", line: argRange0.line, column: argRange0.column, filePath: callerFilePath)
+			return ByteArray.create()
+		end 'wrongCount'
+		if payloadArity > 0 'payloadCase'
+			synthesizeUnionFromNameCaseHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, theCase: theCase, visibility: classification.visibility, line: classification.line, column: classification.column)
+			return project.calleeNames.intern(enumFromNameCaseSymbolName(enumName, caseName: theCase.name))
+		end 'payloadCase'
+		synthesizeUnionFromNameGeneralHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, visibility: classification.visibility, line: classification.line, column: classification.column)
+		return ByteArray.create()
+	end 'literalName'
+	synthesizeUnionFromNameGeneralHelperImpl(project, module: module, namespace: synthNamespace, filePath: classification.sourceFilePath, enumName: enumName, cases: classification.cases, visibility: classification.visibility, line: classification.line, column: classification.column)
+	return ByteArray.create()
+end 'handleUnionFromNameLookup'
+
+// Synthesize `__enum_<Union>_fromName(name String) returns <Union> throws
+// <Union>` for an associated-value union. Unlike the bare-enum helper (which
+// returns an int rawValue), this constructs the matched PAYLOAD-FREE case as a
+// boxed union value via `enumConstruct`; payload-bearing cases can't be built
+// from a name alone, so they're omitted from the comparison chain and a dynamic
+// name matching one falls through to the throw (mirrors the C# bootstrap, which
+// "only matches cases without associated values" for a dynamic name).
+function synthesizeUnionFromNameGeneralHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, cases EnumCaseArray, visibility Visibility, line LineNumber, column ColumnNumber)
+	let funcName = enumFromNameSymbolName(enumName)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+	let stringMaxonType = builtinStringLiteralType(project)
+	let unionMaxonType = internMaxonType(project, name: enumName)
+	var paramNames = StringArray.create()
+	paramNames.push("name")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(stringMaxonType)
+	var paramDefaults = ParamDefaultArray.create()
+	paramDefaults.push(ParamDefault.none)
+	let returnType = MaxonReturnType.value(unionMaxonType)
+	let throwsClause = ThrowsClause.throwing(enumName)
+	registerSynthLookupHelper(project, filePath: filePath, funcName: funcName, returnType: returnType, paramNames: paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults, visibility: visibility, throwsClause: throwsClause)
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+
+	var synthCounter = 0 as ParsedInt
+	let nameSlot = func.scope.declareShadowing("name", varType: stringMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let receiverName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: nameSlot, slotType: stringMaxonType, range: SourceRange.none()))
+
+	var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+
+	var freeCases = EnumCaseArray.create()
+	for c in cases 'collectFree'
+		if c.payloadFields.count() == 0 'isFree'
+			freeCases.push(c)
+		end 'isFree'
+	end 'collectFree'
+	let freeCount = freeCases.count()
+	if freeCount == 0 'noFree'
+		module.setTerminator(entryBlock, op: MaxonOp.br(throwBlock.id, range: SourceRange.none()))
+	end 'noFree' else 'haveFree'
+		var currentCheck = entryBlock
+		for i in 0 upto freeCount 'eachFree'
+			let c = try freeCases.get(i) otherwise panic("synthesizeUnionFromNameGeneralHelperImpl: freeCases.get OOB at {i}")
+			var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+			let isLast = i == freeCount - 1
+			var nextCheck = currentCheck
+			if not isLast 'allocNext'
+				nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+			end 'allocNext'
+			let (cmpName, advancedCounter) = emitFromNameEqualsCheck(project, module: module, block: currentCheck, receiverName: receiverName, caseName: c.name, stringMaxonType: stringMaxonType, synthCounter: synthCounter)
+			synthCounter = advancedCounter
+			let elseTarget = throwBlock.id if isLast else nextCheck.id
+			module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+			let resultName = mintSynthName(synthCounter)
+			synthCounter = synthCounter + 1
+			module.appendOp(returnBlock, op: MaxonOp.enumConstruct(resultName, enumName: enumName, caseName: c.name, payloadValues: ByteArrayArray.create(), range: SourceRange.none()))
+			module.setTerminator(returnBlock, op: MaxonOp.ret(resultName, range: SourceRange.none()))
+			currentCheck = nextCheck
+		end 'eachFree'
+	end 'haveFree'
+
+	let firstCase = try cases.get(0) otherwise panic("synthesizeUnionFromNameGeneralHelperImpl: cases.get(0) failed")
+	module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+	module.functions.push(func)
+end 'synthesizeUnionFromNameGeneralHelperImpl'
+
+// Synthesize `__enum_<Union>_fromName_<case>(name String, p0 T0, ...) returns
+// <Union> throws <Union>` for one payload-bearing case. A literal
+// `Union.fromName("case", payload...)` call is rewritten to this symbol so the
+// payload args reach the constructor; `try` still sees a throwing call. The
+// body checks `name.equals("case")` (always true for the rewritten literal, but
+// keeps the helper self-contained), constructs the case via `enumConstruct`,
+// and throws on the — for a literal, unreachable — mismatch.
+function synthesizeUnionFromNameCaseHelperImpl(project Project, module MaxonModule, namespace String, filePath FilePath, enumName String, theCase EnumCase, visibility Visibility, line LineNumber, column ColumnNumber)
+	let funcName = enumFromNameCaseSymbolName(enumName, caseName: theCase.name)
+	if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+		return
+	end 'alreadyRegistered'
+	let stringMaxonType = builtinStringLiteralType(project)
+	let unionMaxonType = internMaxonType(project, name: enumName)
+	var paramNames = StringArray.create()
+	paramNames.push("name")
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(stringMaxonType)
+	var paramDefaults = ParamDefaultArray.create()
+	paramDefaults.push(ParamDefault.none)
+	for fi in 0 upto theCase.payloadFields.count() 'eachFieldSig'
+		let field = try theCase.payloadFields.get(fi) otherwise panic("synthesizeUnionFromNameCaseHelperImpl: payloadFields.get OOB at {fi}")
+		paramNames.push(field.name)
+		paramTypes.push(field.fieldType)
+		paramDefaults.push(ParamDefault.none)
+	end 'eachFieldSig'
+	let returnType = MaxonReturnType.value(unionMaxonType)
+	let throwsClause = ThrowsClause.throwing(enumName)
+	registerSynthLookupHelper(project, filePath: filePath, funcName: funcName, returnType: returnType, paramNames: paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults, visibility: visibility, throwsClause: throwsClause)
+
+	var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = filePath
+	func.nameLine = line
+	func.nameColumn = column
+
+	var synthCounter = 0 as ParsedInt
+	let nameSlot = func.scope.declareShadowing("name", varType: stringMaxonType, mutable: false)
+	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+	let receiverName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: nameSlot, slotType: stringMaxonType, range: SourceRange.none()))
+
+	var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+	var returnBlock = module.addBlockAt(func, label: "construct", filePath: filePath.toString(), firstLine: line)
+
+	let (cmpName, advancedCounter) = emitFromNameEqualsCheck(project, module: module, block: entryBlock, receiverName: receiverName, caseName: theCase.name, stringMaxonType: stringMaxonType, synthCounter: synthCounter)
+	synthCounter = advancedCounter
+	module.setTerminator(entryBlock, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: throwBlock.id, range: SourceRange.none()))
+
+	var payloadValueNames = ByteArrayArray.create()
+	for fi2 in 0 upto theCase.payloadFields.count() 'eachFieldLoad'
+		let field = try theCase.payloadFields.get(fi2) otherwise panic("synthesizeUnionFromNameCaseHelperImpl: payloadFields.get OOB at {fi2}")
+		let slot = func.scope.declareShadowing(field.name, varType: field.fieldType, mutable: false)
+		let loadedName = mintSynthName(synthCounter)
+		synthCounter = synthCounter + 1
+		module.appendOp(returnBlock, op: MaxonOp.varLoad(loadedName, slotId: slot, slotType: field.fieldType, range: SourceRange.none()))
+		payloadValueNames.push(loadedName)
+	end 'eachFieldLoad'
+	let resultName = mintSynthName(synthCounter)
+	synthCounter = synthCounter + 1
+	module.appendOp(returnBlock, op: MaxonOp.enumConstruct(resultName, enumName: enumName, caseName: theCase.name, payloadValues: payloadValueNames, range: SourceRange.none()))
+	module.setTerminator(returnBlock, op: MaxonOp.ret(resultName, range: SourceRange.none()))
+
+	module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: theCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+	module.functions.push(func)
+end 'synthesizeUnionFromNameCaseHelperImpl'
 
 // Synthesize `__enum_<EnumName>_fromRawValue(raw <String|Character>) returns
 // <EnumName> throws <EnumName>` for a string- or char-backed enum. Body shape
@@ -19376,6 +19635,12 @@ type EnumLookupTarget
 	// `synthesizeEnumLookupHelpersImpl` if the helper isn't already
 	// registered, then leaves the call op alone.
 	export var validBareEnum as bool
+	// Receiver is an associated-value union and the requested helper is
+	// `.fromName` (which IS supported for unions, unlike `.fromRawValue`). The
+	// validation pass routes to `handleUnionFromNameLookup`, which resolves a
+	// literal case name (E3034 / E3036), synthesizes a payload-free general
+	// helper and/or a per-case payload helper, and rewrites the callee.
+	export var isPayloadUnionFromName = false
 	// Cases / metadata used when the target is a valid bare enum and the
 	// helper still needs to be synthesized. Empty when not applicable.
 	export var cases as EnumCaseArray
@@ -19396,6 +19661,10 @@ type EnumLookupTarget
 	export static function bareEnum(cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, line LineNumber, column ColumnNumber) returns EnumLookupTarget
 		return Self{unknown: false, rejectKind: EnumLookupRejectKind.none, validBareEnum: true, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, sourceFilePath: sourceFilePath, line: line, column: column}
 	end 'bareEnum'
+
+	export static function payloadUnionFromName(cases EnumCaseArray, visibility Visibility, sourceFilePath FilePath, line LineNumber, column ColumnNumber) returns EnumLookupTarget
+		return Self{unknown: false, rejectKind: EnumLookupRejectKind.none, validBareEnum: false, isPayloadUnionFromName: true, cases: cases, isFloatBacked: false, visibility: visibility, sourceFilePath: sourceFilePath, line: line, column: column}
+	end 'payloadUnionFromName'
 end 'EnumLookupTarget'
 
 // G.2: discriminator for the spec-rejected enum shapes. Carries the
@@ -19466,13 +19735,13 @@ function classifyEnumLookupForFromName(project Project, enumName String) returns
 		// C# bootstrap which routes both enum and non-payload union receivers
 		// through `ParseEnumStaticMethod`.
 		if resolved.isUnion and enumCasesAnyHavePayload(resolved.cases) 'isPayloadUnion'
-			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+			return EnumLookupTarget.payloadUnionFromName(resolved.cases, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
 		end 'isPayloadUnion'
 		return EnumLookupTarget.bareEnum(resolved.cases, isFloatBacked: resolved.isFloatBacked, visibility: resolved.visibility, sourceFilePath: resolved.sourceFilePath, line: resolved.nameLine, column: resolved.nameColumn)
 	end 'fromResolved'
 	if let unresolved = try project.unresolvedEnums.get(enumName) 'fromUnresolved'
 		if unresolved.isUnion and enumCasesAnyHavePayload(unresolved.cases) 'isPayloadUnion2'
-			return EnumLookupTarget.rejected(EnumLookupRejectKind.associatedValueUnion)
+			return EnumLookupTarget.payloadUnionFromName(unresolved.cases, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
 		end 'isPayloadUnion2'
 		return EnumLookupTarget.bareEnum(unresolved.cases, isFloatBacked: unresolved.isFloatBacked, visibility: unresolved.visibility, sourceFilePath: unresolved.filePath, line: unresolved.line, column: unresolved.column)
 	end 'fromUnresolved'
@@ -19956,6 +20225,14 @@ function dispatchEnumLookupValidation(project Project, module MaxonModule, varia
 		let naturalCalleeStr = "{enumName}.{memberName}"
 		return project.calleeNames.intern(naturalCalleeStr)
 	end 'isUnknown'
+	if classification.isPayloadUnionFromName 'isPayloadUnionFN'
+		// `Union.fromName(name, payload...)` on an associated-value union. Resolve
+		// a literal case (E3034 / E3036), synthesize the payload-free general
+		// helper and/or a per-case payload helper, and return the (possibly
+		// rewritten) callee. Only reachable for `fromNameVariant` — fromRawValue
+		// on a union stays rejected below.
+		return handleUnionFromNameLookup(project, module: module, enumName: enumName, classification: classification, args: args, argRanges: argRanges, range: range, callerFilePath: callerFilePath, callerFuncName: callerFuncName, litProducerMap: litProducerMap)
+	end 'isPayloadUnionFN'
 	if classification.validBareEnum 'isBare'
 		// Compile-time literal validation: when the argument is a literal,
 		// reject an out-of-domain raw value / unknown case name (E3034) or a

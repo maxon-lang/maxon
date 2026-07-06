@@ -1,0 +1,55 @@
+// Test: associated-value-construction
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = Container.value(42)
+	match c 'check'
+		value then return 1
+		empty then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    %15 = mir.mov_imm 16 : i64
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.call @stdlib.__mm_alloc(%15, %16)
+    mir.store %17, %18, 0 width: qword
+    mir.store %1, %18, 8 width: qword
+    %4 = mir.load %18, 0 width: qword
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %20 = mir.call @mm_drop(%18)
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  check_0.next0:
+    %8 = mir.load %18, 0 width: qword
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %8, %9
+    %19 = mir.call @mm_drop(%18)
+    mir.cond_br %10 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  check_0.next1:
+    %12 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %13 = mir.call @mrt_panic(%12)
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  }
+}
+---

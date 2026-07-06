@@ -1,0 +1,70 @@
+// Test: enum-method-private-helper
+enum Signal
+	red
+	green
+	yellow
+
+	function isStop() returns bool
+		return match self 'check'
+			red gives true
+			green gives false
+			yellow gives false
+		end 'check'
+	end 'isStop'
+
+	export function action() returns bool
+		return self.isStop()
+	end 'action'
+end 'Signal'
+
+function main() returns ExitCode
+	let s = Signal.red
+	if s.action() 'isRed'
+		return 1
+	end 'isRed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_Signal.isStop_0_0()
+  inlined_Signal.isStop_0_0:
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: inlined_Signal.isStop_2_0(), else: inlined_Signal.isStop_3_0()]
+  inlined_Signal.isStop_1_4(%9: i64):
+    mir.br inline_cont_main_0(%9)
+  inlined_Signal.isStop_2_0:
+    %10 = mir.mov_imm 1 : i64
+    mir.br inlined_Signal.isStop_1_4(%10)
+  inlined_Signal.isStop_3_0:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.cmp eq, %0, %11
+    mir.cond_br %12 [then: inlined_Signal.isStop_4_0(), else: inlined_Signal.isStop_5_0()]
+  inlined_Signal.isStop_4_0:
+    %13 = mir.mov_imm 0 : i64
+    mir.br inlined_Signal.isStop_1_4(%13)
+  inlined_Signal.isStop_5_0:
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.cmp eq, %0, %14
+    mir.cond_br %15 [then: inlined_Signal.isStop_6_0(), else: inlined_Signal.isStop_1_4(%6)]
+  inlined_Signal.isStop_6_0:
+    %16 = mir.mov_imm 0 : i64
+    mir.br inlined_Signal.isStop_1_4(%16)
+  inline_cont_main_0(%17: i1):
+    mir.cond_br %17 [then: isRed_0(), else: isRed_0.after()]
+  isRed_0:
+    %3 = mir.mov_imm 1 : i64
+    mir.ret %3
+  isRed_0.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

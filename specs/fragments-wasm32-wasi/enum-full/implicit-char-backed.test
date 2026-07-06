@@ -1,0 +1,37 @@
+// Test: implicit-char-backed
+enum CharBacked
+	'N'
+	'S'
+	'E'
+end 'CharBacked'
+
+function main() returns ExitCode
+	let dir = CharBacked.N
+	let result = match dir 'check'
+		N gives 1
+		S gives 0
+		E gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%7)
+  check_1.merge(%14: i64):
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_2ea37ff74e58417a
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

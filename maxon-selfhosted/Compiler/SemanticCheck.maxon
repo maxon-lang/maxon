@@ -2113,20 +2113,28 @@ end 'checkCallArgumentTypes'
 // implicit receiver, which has no user-arg) and 0 for plain calls.
 function checkOneCallArgs(project Project, op MaxonOp, opIdx OpIndex, callerName String, readerFilePath FilePath)
 	match op 'argCheck'
-		call(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
-		tryCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
-		methodCall(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
-		tryMethodCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+		call(result, callee, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+		tryCall(result, callee, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 0, callerName: callerName, readerFilePath: readerFilePath)
+		methodCall(result, _, _, args, argLabels, argTypes, argRanges, _) then validateCallArgs(project, opIdx: opIdx, result: result, callee: ByteArray.create(), args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
+		tryMethodCall(result, _, _, args, argLabels, argTypes, argRanges, _, _) then validateCallArgs(project, opIdx: opIdx, result: result, callee: ByteArray.create(), args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramOffset: 1, callerName: callerName, readerFilePath: readerFilePath)
 		literal to br then noOp()
 		ret to throw then noOp()
 		rethrow to sizeofType then noOp()
 	end 'argCheck'
 end 'checkOneCallArgs'
 
-function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
+function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramOffset ArgIndex, callerName String, readerFilePath FilePath)
 	let paramTypes = try project.callParamTypes.get(opIdx) otherwise return
 	let paramNames = paramNamesForCall(project, opIdx: opIdx)
 	let effectiveOffset = effectiveParamOffset(project, opIdx: opIdx, paramOffset: paramOffset)
+	// Union-case construction args get the union-case wording ("type mismatch:
+	// 'expected X, got Y'") the C# bootstrap emits from `TypeCheckEnumArg`,
+	// rather than the generic "argument type mismatch for '<param>'" form. The op
+	// keeps the dotted `Union.case` callee; the mangled `__construct_*` symbol is
+	// in `resolvedCallees` (populated by `resolveAllCalls` before this pass), so
+	// prefer that and fall back to the op callee.
+	let resolvedCalleeName = try project.resolvedCallees.get(opIdx) otherwise String.from(callee)
+	let isUnionConstruct = isUnionConstructorSymbol(resolvedCalleeName) or isUnionConstructorSymbol(String.from(callee))
 
 	// `__Builtins.*` runtime intrinsics report argument mismatches in the
 	// runtime-symbol form ("type mismatch: __Builtins.maxon_x argument N
@@ -2162,7 +2170,8 @@ function validateCallArgs(project Project, opIdx OpIndex, result ByteArray, args
 		let range = try argRanges.get(i) otherwise SourceRange.none()
 		let expectedName = endpointName(project, t: paramType, other: argType)
 		let gotName = endpointName(project, t: argType, other: paramType)
-		reportArgTypeMismatch(project, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", range: range, result: result, callerName: callerName, readerFilePath: readerFilePath)
+		let message = argTypeMismatchMessage(paramName, expectedName: expectedName, gotName: gotName, isUnionConstruct: isUnionConstruct)
+		reportArgTypeMismatch(project, message: message, range: range, result: result, callerName: callerName, readerFilePath: readerFilePath)
 	end 'eachArg'
 end 'validateCallArgs'
 

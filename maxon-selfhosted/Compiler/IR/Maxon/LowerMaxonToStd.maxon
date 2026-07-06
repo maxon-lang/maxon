@@ -10161,6 +10161,10 @@ type MaxonToStdLowering
 		// resolver pass inserts both keys together — so a miss here means a
 		// pass-ordering or visit-set bug.
 		let resolvedParamTypes = try self.project.callParamTypes.get(opIdx) otherwise panic("slotArgsForCall: opIdx={opIdx} missing from project.callParamTypes despite having a resolvedCallees entry — resolveAllCalls invariant violated")
+		// Union-case construction routes arg type-mismatches to the union-case
+		// wording (see `coerceArgToParam`); every other callee keeps the generic
+		// per-parameter form.
+		let calleeIsUnionConstruct = isUnionConstructorSymbol(try self.project.resolvedCallees.get(opIdx) otherwise "")
 		// Stage K.X.1: General path: reuse scratch buffers. Array.resize()
 		// only sets the length field; the underlying backing memory still
 		// carries whatever the previous (longer-arity) call left there.
@@ -10208,7 +10212,7 @@ type MaxonToStdLowering
 				try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB (by-ref)")
 				continue
 			end 'byRefArg'
-			let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
+			let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock, calleeIsUnionConstruct: calleeIsUnionConstruct)
 			// Hybrid-generics ABI bridge (write side). The callee's signature
 			// (`signature.paramTypes`) keeps the raw `typeParameter(Element)`
 			// for generic params; substitution only refines the type at the
@@ -10336,7 +10340,7 @@ type MaxonToStdLowering
 		return self.resolveName(operandName)
 	end 'materializeCharByteOperand'
 
-	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
+	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock, calleeIsUnionConstruct bool = false) returns ValueId
 		// paramType comes from `project.callParamTypes` — substitution has
 		// already run during TypeResolution. The one defensive short-circuit
 		// left is `MaxonType.unresolved` on either side: that signals a
@@ -10428,7 +10432,8 @@ type MaxonToStdLowering
 		// (matches reportCompileError sites elsewhere) on the unexpected
 		// rejection rather than aborting compilation mid-diagnostic.
 		let path = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
-		reportCompileError(self.project, code: ErrorCode.semanticTypeMismatch, message: "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'", line: range.line, column: range.column, filePath: path)
+		let mismatchMessage = argTypeMismatchMessage(paramName, expectedName: expectedName, gotName: gotName, isUnionConstruct: calleeIsUnionConstruct)
+		reportCompileError(self.project, code: ErrorCode.semanticTypeMismatch, message: mismatchMessage, line: range.line, column: range.column, filePath: path)
 		// Return a placeholder ValueId. hasErrors(project) short-circuits
 		// before codegen, so this id never reaches a backend.
 		return allocValueId(self.funcIdRef)

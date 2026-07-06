@@ -2425,12 +2425,31 @@ export type UnionCaseRewriteResult
 	end 'found'
 end 'UnionCaseRewriteResult'
 
+// Shared prefix for every synthesized union-case constructor symbol.
+export let unionConstructorSymbolPrefix = "__construct_"
+
 // Mangled name for the synthesized constructor function backing a
 // payload-bearing union case. Centralized here so the parser, the call-
 // rewrite path, and the lowering pass all mint identical names.
 export function unionConstructorSymbolName(unionName String, caseName String) returns String
-	return "__construct_{unionName}_{caseName}"
+	return "{unionConstructorSymbolPrefix}{unionName}_{caseName}"
 end 'unionConstructorSymbolName'
+
+// True when `calleeName` is a synthesized union-case constructor (used to give
+// construction-arg diagnostics the union-case wording rather than the generic
+// call-arg wording).
+export function isUnionConstructorSymbol(calleeName String) returns bool
+	return calleeName.startsWith(unionConstructorSymbolPrefix)
+end 'isUnionConstructorSymbol'
+
+// Wording for an argument type-mismatch (E3005) diagnostic. Union-case
+// construction gets the C# bootstrap's `TypeCheckEnumArg` phrasing ("type
+// mismatch: 'expected X, got Y'"); every other call uses the generic
+// per-parameter form. Centralized so the lowering pass (LowerMaxonToStd) and the
+// arg-type pass (SemanticCheck) emit byte-identical messages.
+export function argTypeMismatchMessage(paramName String, expectedName String, gotName String, isUnionConstruct bool) returns String
+	return "type mismatch: 'expected {expectedName}, got {gotName}'" if isUnionConstruct else "argument type mismatch for '{paramName}': expected '{expectedName}', got '{gotName}'"
+end 'argTypeMismatchMessage'
 
 // Phase 9 Stage 5: mangled names for the per-enum `.fromRawValue` /
 // `.fromName` lookup helpers. The parser synthesizes one helper per
@@ -2445,6 +2464,16 @@ end 'enumFromRawValueSymbolName'
 export function enumFromNameSymbolName(enumName String) returns String
 	return "__enum_{enumName}_fromName"
 end 'enumFromNameSymbolName'
+
+// Per-case `.fromName` helper for an associated-value union case. A literal
+// `Union.fromName("case", payload...)` call rewrites to this symbol so the
+// payload args reach a fixed-arity throwing helper that constructs exactly that
+// case. The trailing `_<caseName>` distinguishes it from the payload-free
+// general helper (`__enum_<Union>_fromName`) and — since it does NOT end in the
+// bare `_fromName` suffix — keeps `splitEnumLookupCallee` from re-processing it.
+export function enumFromNameCaseSymbolName(enumName String, caseName String) returns String
+	return "__enum_{enumName}_fromName_{caseName}"
+end 'enumFromNameCaseSymbolName'
 
 export function tryRewriteUnionCaseCall(project Project, unionName String, caseName String) returns UnionCaseRewriteResult
 	let info = lookupUnionCasePayloadArity(project, unionName: unionName, caseName: caseName)

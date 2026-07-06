@@ -1,0 +1,71 @@
+// Test: associated-value-function-param-empty
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+		empty
+		value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+		match c 'handle'
+				empty then return 0
+				value(n) then return n
+		end 'handle'
+end 'process'
+
+function main() returns ExitCode
+		let c = Container.empty
+		return process(c)
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @process(local0: i64) -> i64 {
+  entry:
+    %14 = mir.param local0 : i64
+    %2 = mir.load %14, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: handle_0.case0(), else: handle_0.next0()]
+  handle_0.case0:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  handle_0.next0:
+    %6 = mir.load %14, 0 width: qword
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %6, %7
+    mir.cond_br %8 [then: handle_0.case1(), else: handle_0.next1()]
+  handle_0.case1:
+    %9 = mir.load %14, 8 width: qword
+    mir.ret %9
+  handle_0.next1:
+    %11 = mir.global_addr @__panic_msg_96c7daeb3f9a871f
+    %12 = mir.call @mrt_panic(%11)
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  }
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 16 : i64
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%4, %5)
+    mir.store %6, %7, 0 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %7, 8 width: qword
+    %3 = mir.call @process(%7)
+    %9 = mir.call @mm_drop(%7)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %3, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_8d835202a10e8cbf
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---
