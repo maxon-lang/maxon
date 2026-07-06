@@ -55,6 +55,10 @@ var result2 = double(a + b)   // expression result creates a temporary
 
 Closures capture variables by reference. Changes to the original variable are visible inside the closure, and assignments inside the closure are visible to the outer scope.
 
+### Reassigning Reference-Typed Parameters
+
+A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is a borrow from a container, a freshly created value, or another local — no reference leaks and no value is released twice.
+
 ## Tests
 
 <!-- test: pass-by-reference.basic-primitive-ref -->
@@ -296,6 +300,112 @@ end 'main'
 99
 99
 
+```
+
+<!-- test: pass-by-reference.managed-container-borrow-reassign -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+function repl(nodes NodeArray, cur Node) returns Integer
+	cur = try nodes.get(0) otherwise return -1
+	return cur.id
+end 'repl'
+
+function main() returns ExitCode
+	var nodes = NodeArray.create()
+	nodes.push(Node.create(0))
+	nodes.push(Node.create(1))
+	var c = try nodes.get(1) otherwise return 1
+	print("r={repl(nodes, cur: c)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=0
+```
+
+<!-- test: pass-by-reference.managed-owned-value-reassign -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+function replaceWithNew(cur Node) returns Integer
+	cur = Node.create(99)
+	return cur.id
+end 'replaceWithNew'
+
+function main() returns ExitCode
+	var nodes = NodeArray.create()
+	nodes.push(Node.create(0))
+	nodes.push(Node.create(1))
+	var c = try nodes.get(1) otherwise return 1
+	print("r={replaceWithNew(c)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=99
+```
+
+<!-- test: pass-by-reference.managed-local-variable-reassign -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+function replaceFromLocal(cur Node) returns Integer
+	let other = Node.create(42)
+	cur = other
+	return cur.id
+end 'replaceFromLocal'
+
+function main() returns ExitCode
+	var nodes = NodeArray.create()
+	nodes.push(Node.create(0))
+	nodes.push(Node.create(1))
+	var c = try nodes.get(1) otherwise return 1
+	print("r={replaceFromLocal(c)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=42
 ```
 
 <!-- test: pass-by-reference.let-to-mutating-param-error -->

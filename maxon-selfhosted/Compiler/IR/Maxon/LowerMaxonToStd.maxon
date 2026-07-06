@@ -5321,10 +5321,10 @@ type MaxonToStdLowering
 		// incoming pointer (the promoted param slot permanently holds it) so the
 		// reassignment is visible to the caller. The slot is never overwritten
 		// with the value — it stays the pointer — so every read and write
-		// dereferences it. A managed struct also needs refcount maintenance
-		// (release the caller's outgoing struct, retain the incoming one), since
-		// the storeIndirect bypasses the late refcount inserter that a plain
-		// storeSlot would drive.
+		// dereferences it. A managed struct additionally needs the caller's
+		// OUTGOING struct released (see emitByRefManagedParamStore); the INCOMING
+		// struct's caller-slot reference is supplied by the late refcount inserter,
+		// which drives the storeIndirect of a managed value as a managed field store.
 		if self.byRefParamSlots.contains(slotId) 'byRefStore'
 			if maxonTypeIsByRefManagedStruct(self.project, t: slotType) 'managedByRef'
 				self.emitByRefManagedParamStore(slotId, newValueId: widenedValueId, dstBlock: dstBlock)
@@ -5361,22 +5361,33 @@ type MaxonToStdLowering
 	end 'emitByRefParamStore'
 
 	// Pass-by-reference (write side, managed struct): reassign a by-reference
-	// managed struct parameter with correct ownership transfer. Loads the
-	// incoming pointer P and the caller's outgoing struct (`old = *P`), retains
-	// the incoming struct so it survives the late refcount inserter's scope-exit
-	// drop of the freshly-produced value, writes it back (`*P = new`), then
-	// releases the caller's outgoing struct (whose ownership this reassignment
-	// takes over). Net effect: the caller's slot ends owning `new`, its previous
-	// struct is released once, and no reference leaks or double-frees. Mirrors
-	// the C# bootstrap's decref-old + write-back on a reassigned struct param.
+	// managed struct parameter. Loads the incoming pointer P, writes the new value
+	// back (`*P = new`), and releases the caller's OUTGOING struct (`old = *P`,
+	// whose ownership this reassignment takes over).
+	//
+	// The write-back `store_indirect` of a MANAGED value is itself a managed field
+	// store, so the late refcount inserter's `planManagedHeapStore` already supplies
+	// the caller-slot's +1 for the INCOMING value — transferring the value's existing
+	// reference (an owned call result) or incref-ing a borrowed one — and suppresses
+	// that value's local drop (its lifetime is now the caller's slot's). Emitting a
+	// manual incref-new here would DOUBLE that and leak the caller's element, so it is
+	// left entirely to the inserter.
+	//
+	// Only the decref-OLD is emitted here, and it uses the null-guarded
+	// `__mm_decref_maybenull_helper` — the exact entry `lowerFieldStore`'s contiguous
+	// overwrite decref-old uses. The inserter's `storeIsFieldOverwrite` recognizes a
+	// prior field load feeding that helper as an ALREADY-released occupant
+	// (`loadFeedsOnlyDecrefOldHelper`) and therefore does NOT emit its own second
+	// decref-old (the double-release this path once produced). Net effect: the
+	// caller's slot ends owning `new` (released once at caller scope), and the
+	// previous occupant is released exactly once.
 	function emitByRefManagedParamStore(slotId VarSlot, newValueId ValueId, dstBlock IrBlock)
 		let ptrId = self.emitLoadByRefParamPointer(slotId, dstBlock: dstBlock)
 		let oldId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(oldId, addrId: ptrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(oldId, t: MaxonType.integer)
-		self.emitMmRefcountCall(newValueId, callee: "stdlib.__mm_incref", dstBlock: dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(ptrId, offset: 0, valueId: newValueId, width: StoreWidth.qword, isFloat: false)))
-		self.emitMmRefcountCall(oldId, callee: "stdlib.__mm_decref", dstBlock: dstBlock)
+		self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock)
 	end 'emitByRefManagedParamStore'
 
 	// Emit a single `stdlib.__mm_incref` / `__mm_decref` call on `ptrValueId`.
