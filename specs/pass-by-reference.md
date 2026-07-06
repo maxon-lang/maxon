@@ -59,6 +59,8 @@ Closures capture variables by reference. Changes to the original variable are vi
 
 A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is a borrow from a container, a freshly created value, or another local — no reference leaks and no value is released twice.
 
+Mutation is transitive across every direct synchronous call edge: a parameter forwarded to a callee that reassigns it (directly or through further forwarding) is itself by-reference, so the original caller observes the write-back. This holds regardless of the call form — plain calls, throwing (`try`) calls, and same-type sibling method calls all propagate.
+
 ## Tests
 
 <!-- test: pass-by-reference.basic-primitive-ref -->
@@ -452,6 +454,111 @@ end 'main'
 ```
 ```stdout
 77
+```
+
+<!-- test: pass-by-reference.transitive-reassign-through-try-chain -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+enum ForwardError implements Error
+	failed
+end 'ForwardError'
+
+function reassign(cur Node, replacement Node) returns Integer throws ForwardError
+	cur = replacement
+	return cur.id
+end 'reassign'
+
+function forward2(cur Node, replacement Node) returns Integer throws ForwardError
+	return try reassign(cur, replacement: replacement)
+end 'forward2'
+
+function forward1(cur Node, replacement Node) returns Integer throws ForwardError
+	return try forward2(cur, replacement: replacement)
+end 'forward1'
+
+function main() returns ExitCode
+	var nodes = NodeArray.create()
+	nodes.push(Node.create(0))
+	nodes.push(Node.create(1))
+	var c = try nodes.get(1) otherwise return 1
+	let r = try forward1(c, replacement: Node.create(99)) otherwise return 2
+	print("r={r} c={c.id}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=99 c=99
+```
+
+<!-- test: pass-by-reference.transitive-reassign-through-sibling-methods -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+type Forwarder
+	export var tag as Integer
+
+	static function create() returns Forwarder
+		return Self{tag: 0}
+	end 'create'
+
+	function reassign(cur Node, replacement Node) returns Integer
+		cur = replacement
+		return cur.id
+	end 'reassign'
+
+	function forwardInner(cur Node, replacement Node) returns Integer
+		return reassign(cur, replacement: replacement)
+	end 'forwardInner'
+
+	function forwardOuter(cur Node, replacement Node) returns Integer
+		return forwardInner(cur, replacement: replacement)
+	end 'forwardOuter'
+
+	function run() returns Integer
+		var nodes = NodeArray.create()
+		nodes.push(Node.create(0))
+		nodes.push(Node.create(1))
+		var c = try nodes.get(1) otherwise return -1
+		let r = forwardOuter(c, replacement: Node.create(88))
+		return r * 100 + c.id
+	end 'run'
+end 'Forwarder'
+
+function main() returns ExitCode
+	let f = Forwarder.create()
+	print("{f.run()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8888
 ```
 
 <!-- test: pass-by-reference.multiple-params-mixed -->

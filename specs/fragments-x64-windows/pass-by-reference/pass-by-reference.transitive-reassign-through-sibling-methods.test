@@ -1,0 +1,250 @@
+// Test: pass-by-reference.transitive-reassign-through-sibling-methods
+
+typealias Integer = int(i64.min to i64.max)
+typealias NodeArray = Array with Node
+
+type Node
+	export var id as Integer
+
+	static function create(id Integer) returns Node
+		return Self{id: id}
+	end 'create'
+end 'Node'
+
+type Forwarder
+	export var tag as Integer
+
+	static function create() returns Forwarder
+		return Self{tag: 0}
+	end 'create'
+
+	function reassign(cur Node, replacement Node) returns Integer
+		cur = replacement
+		return cur.id
+	end 'reassign'
+
+	function forwardInner(cur Node, replacement Node) returns Integer
+		return reassign(cur, replacement: replacement)
+	end 'forwardInner'
+
+	function forwardOuter(cur Node, replacement Node) returns Integer
+		return forwardInner(cur, replacement: replacement)
+	end 'forwardOuter'
+
+	function run() returns Integer
+		var nodes = NodeArray.create()
+		nodes.push(Node.create(0))
+		nodes.push(Node.create(1))
+		var c = try nodes.get(1) otherwise return -1
+		let r = forwardOuter(c, replacement: Node.create(88))
+		return r * 100 + c.id
+	end 'run'
+end 'Forwarder'
+
+function main() returns ExitCode
+	let f = Forwarder.create()
+	print("{f.run()}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+8888
+```
+---
+// CompiledIR
+module {
+  func @Forwarder.forwardOuter(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rdx
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov [rbx+0], rax (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.epilogue
+    x64.ret
+  }
+  func @Forwarder.run(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=112
+    x64.mov rbx, rcx
+    x64.xor r12d, r12d
+    x64.mov [rbp-40], r12
+    x64.lea rcx, [rip+__layout_Array_Node]
+    x64.call Array.create
+    x64.mov r13, r8
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r12 (8b)
+    x64.lea rax, [rip+__layout_Array_Node]
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.call Array.push
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 1
+    x64.mov [r12+0], r8 (8b)
+    x64.lea rax, [rip+__layout_Array_Node]
+    x64.mov rcx, r13
+    x64.mov rdx, r12
+    x64.call Array.push
+    x64.mov edx, 1
+  inlined_Array.get_0_0:
+    x64.mov rcx, [r13+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.mov r12, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.xor ecx, ecx
+    x64.mov r14, rcx
+    x64.jmp inline_cont_Forwarder.run_0
+  inlined_Array.get_3_0:
+    x64.xor r8d, r8d
+    x64.jmp __rc_edge_6_0
+  inline_cont_Forwarder.run_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp-40]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, -1
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.mov rcx, [rbp-40]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [rbp-40], r14
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 88
+    x64.mov [r14+0], r8 (8b)
+    x64.lea rax, [rbp-40]
+    x64.mov rdx, [rbp-48]
+    x64.mov rcx, rbx
+    x64.mov rax, r14
+    x64.call Forwarder.forwardOuter
+    x64.mov r14, r8
+    x64.mov r8, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.mov r15, [r8+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 100
+    x64.imul r14, r8
+    x64.mov r8, r14
+    x64.add r8, r15
+    x64.epilogue
+    x64.ret
+  __rc_edge_6_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rdx, 0
+    x64.mov r14, r12
+    x64.jmp inline_cont_Forwarder.run_0
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov rcx, rbx
+    x64.call Forwarder.run
+    x64.mov r12, r8
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call mrt_i64_to_string
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call mm_drop
+    x64.xor ebx, ebx
+    x64.mov r8, r12
+    x64.add r8, 0
+    x64.mov r14, r8
+    x64.add r14, 0
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r15, r8
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [rbp-8], r15
+    x64.mov [rbp-16], r8
+    x64.mov [rbp-24], rbx
+    x64.rep_movsb
+    x64.mov r8, r15
+    x64.add r8, 0
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r13
+    x64.mov [rbp-32], r12
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_0]
+    x64.add r8, r12
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], rbx
+    x64.rep_movsb
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r12, r8
+    x64.mov [r12+40], rbx (8b)
+    x64.mov [r12+0], r15 (8b)
+    x64.mov [r12+8], r14 (8b)
+    x64.mov [r12+16], r14 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [r12+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r12 (8b)
+    x64.mov [r13+8], rbx (8b)
+    x64.mov r12, [r13+0] (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [r12+8] (8b)
+    x64.mov rcx, [r12+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r13
+    x64.call mm_drop
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

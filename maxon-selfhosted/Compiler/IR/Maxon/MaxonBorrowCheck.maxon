@@ -332,21 +332,56 @@ function recordArgValueParamSource(op MaxonOp, callerSlotToParam SlotToParamInde
 	end 'op'
 end 'recordArgValueParamSource'
 
-// Propagate one free `call`: for each argument that names a caller-param-derived
-// value, if the callee mutates that argument's position, record the caller's
-// parameter as mutated. Returns true if a new entry was added.
+// Propagate one direct `call` / `tryCall`: for each argument that names a
+// caller-param-derived value, if the callee mutates that argument's position,
+// record the caller's parameter as mutated. Returns true if a new entry was
+// added. A `tryCall` (the throwing form of a free/qualified call) carries the
+// SAME (callee, args) shape as `call` — plus a trailing `errorBoundName` — so a
+// parameter FORWARDED through a `try callee(...)` propagates identically. Without
+// the `tryCall` arm the by-reference ABI does not propagate up a chain of `try`
+// forwarders (e.g. `parseScopedStatementsRequireBody` -> `parseStatementsRequireBody`
+// -> `parseStatements`), so an owned value passed by-reference through the chain is
+// released BOTH by the callee's `byRefParamDecrefOld` and by the original owner's
+// last-use decref — a double free of a collection-owned block. Mirrors the C#
+// bootstrap, whose `ParameterMutationAnalysisPass` propagates across every
+// synchronous call-graph edge regardless of the throwing/non-throwing form.
 function propagateOneCall(op MaxonOp, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
 	return match op 'op'
-		call(_, callee, _, args, _, _, _, _) gives propagateFreeCall(String.from(callee), args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		call(_, callee, callContext, args, _, _, _, _) gives propagateFreeCall(String.from(callee), callContext: callContext, args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
+		tryCall(_, callee, callContext, args, _, _, _, _, _) gives propagateFreeCall(String.from(callee), callContext: callContext, args: args, caller: caller, argValueToCallerParam: argValueToCallerParam, mutated: mutated)
 		literal to br gives false
-		methodCall to sizeofType gives false
+		methodCall to throw gives false
+		tryMethodCall to sizeofType gives false
 	end 'op'
 end 'propagateOneCall'
 
-function propagateFreeCall(callee String, args ByteArrayArray, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+// The QUALIFIED callee name + the SELF-OFFSET between a maxon call's argument
+// positions and the callee's parameter INDICES, derived from the call context. The
+// mutated set is keyed on `<qualified func.name>::<param-index-INCLUDING-self>`
+// (Stage-1 base facts key on `func.name`, and `buildByRefParamKeys` looks them up the
+// same way). But a maxon call op carries the BARE callee, and a `sibling`
+// (implicit-self, same-type) call's args EXCLUDE the self receiver — so the callee's
+// parameter `k` corresponds to argument position `k - 1`. Without both adjustments the
+// bare-name / raw-argPos lookup NEVER matches a qualified method, so the by-reference
+// ABI never propagates past a directly-reassigning function: the parseStatements ->
+// parseStatementsRequireBody -> parseScopedStatementsRequireBody -> parseIfStatement
+// `try`-forwarder chain leaves `block` by-VALUE, and parseStatements' unconditional
+// `byRefParamDecrefOld` then over-releases a block the caller/collection still owns
+// (the v-next self-compile over-release).
+function calleePropagationKey(callContext CallContext, callee String) returns (String, ParamCount)
+	return match callContext 'ctx'
+		sibling(typeName) gives ("{typeName}.{callee}", 1)
+		free gives (callee, 0)
+		qualified gives (callee, 0)
+	end 'ctx'
+end 'calleePropagationKey'
+
+function propagateFreeCall(callee String, callContext CallContext, args ByteArrayArray, caller IrFunction, argValueToCallerParam ParamTaintMap, mutated MutatedParamsKeySet) returns bool
+	let (qualifiedCallee, selfOffset) = calleePropagationKey(callContext, callee: callee)
 	var grew = false
 	for argPos in 0 upto args.count() 'eachArg'
-		if not mutated.contains(mutatedParamKey(callee, paramIndex: argPos)) 'notMutatedHere'
+		let calleeParamIndex = argPos + selfOffset
+		if not mutated.contains(mutatedParamKey(qualifiedCallee, paramIndex: calleeParamIndex)) 'notMutatedHere'
 			continue
 		end 'notMutatedHere'
 		let argName = try args.get(argPos) otherwise panic("propagateFreeCall: args.get OOB at {argPos}")
