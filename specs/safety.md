@@ -33,6 +33,14 @@ receive (e.g. a floating-point trap) to the divide-by-zero panic. The nil-pointe
 
 ## Tests
 
+On x64-Windows the diagnostic also walks the faulting thread's saved-RBP chain and
+prints a symbolized stack trace after the panic line (frame 0 is the faulting
+instruction, resolved from the faulting RIP; the remaining frames are the callers).
+This mirrors the ordinary `mrt_panic` software-panic trace. The frame addresses
+themselves are non-deterministic (ASLR), so only the resolved function names are
+asserted. arm64-macOS has no frame-walking fault diagnostic yet, so its tests
+assert only the panic line.
+
 <!-- test: divide-by-zero -->
 <!-- targets: x64-windows -->
 ### Integer divide-by-zero produces a clean panic
@@ -48,6 +56,9 @@ end 'main'
 ```
 ```stderr
 panic: integer divide by zero
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: mod-by-zero -->
@@ -65,11 +76,35 @@ end 'main'
 ```
 ```stderr
 panic: integer divide by zero
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: force-segfault -->
-<!-- targets: x64-windows, arm64-macos -->
-### Deliberate access violation produces a clean panic
+<!-- targets: x64-windows -->
+### Deliberate access violation produces a clean panic with backtrace
+```maxon
+function main() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: nil pointer or invalid memory access
+Stack trace:
+  in maxon_force_segfault
+  in main
+  in mrt_start
+```
+
+<!-- test: force-segfault-macos -->
+<!-- targets: arm64-macos -->
+<!-- SelfhostedOnly -->
+### Deliberate access violation produces a clean panic (arm64-macOS)
 ```maxon
 function main() returns ExitCode
 	__Builtins.forceSegfault()

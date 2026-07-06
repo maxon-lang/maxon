@@ -827,6 +827,13 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	addDataSectionEntry(globalData, name: "__gt_fault_rip", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_fault_last_addr", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__gt_fault_msg", initialBytes: zeroBytesOfSize(8))
+	// The faulting thread's RBP + RSP, stashed by the VEH thunk so the diagnostic
+	// (mrt_fault_backtrace) can walk the frame chain for a symbolized backtrace: RBP
+	// seeds the walk, RSP bounds it to the still-mapped faulted stack. Named with the
+	// `__gt_` prefix so classifyGlobalLabel routes them to writable .data (a wrong
+	// prefix would land them in read-only .rdata and the thunk's stores would fault).
+	addDataSectionEntry(globalData, name: "__gt_fault_rbp", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__gt_fault_rsp", initialBytes: zeroBytesOfSize(8))
 	// Re-entrancy guard: set to 1 by the thunk on the first converted fault. A
 	// second fault (e.g. a benign access violation Windows raises and would
 	// normally handle itself while the diagnostic's ExitProcess tears the process

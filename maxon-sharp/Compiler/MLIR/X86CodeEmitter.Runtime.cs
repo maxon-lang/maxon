@@ -30,6 +30,7 @@ public partial class X86CodeEmitter {
     EmitMaxonManagedReadStdin();
     EmitMaxonPanic();
     EmitMaxonPanicPrintFrame();
+    EmitMaxonFaultBacktrace();
     EmitMaxonI64ToString();
     EmitMaxonU64ToString();
     EmitMaxonF64ToString();
@@ -536,6 +537,156 @@ public partial class X86CodeEmitter {
     EmitDword(0);
 
     EmitByte(0xC3); // ret
+  }
+
+  /// <summary>
+  /// Emitted from the shared __gt_fault_diagnostic (via IEmitterBackend.EmitFaultBacktrace)
+  /// after the panic line: a single call to mrt_fault_backtrace, which walks the faulting
+  /// thread's stashed RBP chain. Kept as a call (not inlined) because mrt_fault_backtrace
+  /// needs its own frame to satisfy mrt_panic_print_frame's caller-frame contract, which
+  /// the diagnostic's tiny frame can't provide.
+  /// </summary>
+  internal void EmitFaultBacktrace() {
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "mrt_fault_backtrace"));
+    EmitDword(0);
+  }
+
+  /// <summary>
+  /// mrt_fault_backtrace(): print "Stack trace:\n" + a symbolized backtrace for a CPU
+  /// fault, then return (the diagnostic ExitProcess()es afterward). Frame 0 is the
+  /// faulting instruction, symbolized from P->currentGt->fault_rip; the remaining frames
+  /// come from walking the faulting thread's saved-RBP chain (__gt_fault_last_rbp upward),
+  /// range-validated against [__gt_fault_last_rsp, +64 MiB) and required to strictly
+  /// ascend so a corrupt RBP degrades to a short trace instead of a second fault. Reuses
+  /// mrt_panic_print_frame via its caller-frame contract (symtable_ptr @ [rbp-0x18],
+  /// count @ [rbp-0x30], text_offset @ [rbp-0x38]). Mirrors the self-hosted
+  /// mrt_fault_backtrace + mrt_panic_walk_frames (runtime.std) so both compilers print an
+  /// identical trace. Takes no args.
+  ///
+  /// Stack layout:
+  ///   [rbp-0x08] = fault_rip
+  ///   [rbp-0x10] = text_base (absolute address of mrt_start)
+  ///   [rbp-0x18] = symtable_ptr             (read by mrt_panic_print_frame)
+  ///   [rbp-0x20] = current frame rbp
+  ///   [rbp-0x28] = frame counter (counts down from 32)
+  ///   [rbp-0x30] = symtable entry count     (read by mrt_panic_print_frame)
+  ///   [rbp-0x38] = text_offset              (read by mrt_panic_print_frame)
+  ///   [rbp-0x40] = stack_low  (fault RSP)
+  ///   [rbp-0x48] = stack_high (fault RSP + 64 MiB)
+  /// </summary>
+  private void EmitMaxonFaultBacktrace() {
+    EmitRuntimeFunctionStart("mrt_fault_backtrace", 0, 0x60);
+
+    // text_base = &mrt_start
+    EmitLeaFuncAddr(X86Register.Rax, "mrt_start");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+    // symtable_ptr (from symdata section)
+    EmitLeaRegSymdataRel(X86Register.Rax, "__symtable");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    // count = [symtable] (first 4 bytes, zero-extended)
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x8B, 0x00); // MOV eax, [rax]
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    // Print "Stack trace:\n"
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_stacktrace");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+
+    // ---- Frame 0: the faulting instruction (P->currentGt->fault_rip) ----
+    EmitLoadCurrentGtInline(X86Register.R11);                              // R11 = currentGt
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R11, GtOffFaultRip); // Rax = fault_rip
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    // text_offset = rip - text_base
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitBytes(0x48, 0x29, 0xD0); // SUB rax, rdx
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    // if offset < 0 (outside .text) → skip frame 0
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("s", "rt_fbt_after_rip");
+    // textsize = symtable_ptr - text_base; if offset >= textsize → skip
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x29, 0xC8); // SUB rax, rcx  (rax = textsize)
+    EmitMovRegMem(X86Register.Rdx, -0x38, 8);
+    EmitCmpRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitJcc("ae", "rt_fbt_after_rip");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "mrt_panic_print_frame"));
+    EmitDword(0);
+
+    DefineLabel("rt_fbt_after_rip");
+
+    // ---- Frames 1..N: walk the saved-RBP chain ----
+    // stack_low = fault RSP; stack_high = stack_low + 64 MiB (larger than any thread
+    // or grown green-thread stack, so a corrupt RBP can't wander into unmapped pages).
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_fault_last_rsp");
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
+    EmitAddRegImm(X86Register.Rax, 0x4000000);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    // current frame = fault RBP
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_fault_last_rbp");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    // counter = 32
+    EmitMovRegImm(X86Register.Rax, 32);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    DefineLabel("rt_fbt_walk_loop");
+    // counter == 0 → done
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_fbt_walk_done");
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    // frame == 0 → done
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_fbt_walk_done");
+    // frame < stack_low → done (below the faulting RSP; not a live stack frame)
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("b", "rt_fbt_walk_done");
+    // frame >= stack_high → done (beyond the sane stack window)
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "rt_fbt_walk_done");
+    // ret_addr = [frame + 8]
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 8);
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("z", "rt_fbt_walk_done");
+    // text_offset = ret_addr - text_base
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x29, 0xCA); // SUB rdx, rcx
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("s", "rt_fbt_walk_done"); // outside .text (negative)
+    // if offset >= textsize → done
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // symtable_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // text_base
+    EmitBytes(0x48, 0x29, 0xC8); // SUB rax, rcx  (rax = textsize)
+    EmitCmpRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitJcc("ae", "rt_fbt_walk_done");
+    // save text_offset for print_frame
+    EmitMovMemReg(-0x38, X86Register.Rdx, 8);
+    // Advance frame BEFORE calling print_frame (which clobbers regs), with an
+    // ascending guard: next = [frame]; if next <= frame, set next = 0 so the loop
+    // stops after printing this frame (a corrupt/non-ascending link ends the walk).
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);                        // current frame
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0);      // next = [frame]
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitJcc("a", "rt_fbt_adv_ok");                                   // next > frame → keep
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);                 // else next = 0
+    DefineLabel("rt_fbt_adv_ok");
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8);
+    // print this frame
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "mrt_panic_print_frame"));
+    EmitDword(0);
+    EmitJmp("rt_fbt_walk_loop");
+
+    DefineLabel("rt_fbt_walk_done");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>

@@ -411,4 +411,15 @@ public interface IEmitterBackend {
   ///   macOS:   restore SIG_DFL for this signal and re-raise; process dies via default disposition.
   /// </summary>
   void EmitFaultHandlerEpilog();
+
+  /// <summary>
+  /// Emit a symbolized stack trace after the fault panic line. Called by the shared
+  /// EmitGtFaultDiagnostic just before process exit, running on the redirected stack.
+  /// x64-Windows walks the faulting thread's saved-RBP chain (stashed in
+  /// __gt_fault_last_rbp / __gt_fault_last_rsp) and resolves each return address
+  /// against the embedded symbol table, mirroring the ordinary mrt_panic trace.
+  /// Backends without a frame-walking fault diagnostic (arm64-macOS) implement this
+  /// as a no-op, so only the panic line is printed.
+  /// </summary>
+  void EmitFaultBacktrace();
 }

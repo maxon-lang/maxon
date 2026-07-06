@@ -57,6 +57,9 @@ public partial class RuntimeEmitter {
     // exit-time output today.
     _b.DefineGlobal("__gt_fault_last_addr", 8, 0);
     _b.DefineGlobal("__gt_fault_last_rbp", 8, 0);
+    // RSP at fault time, stashed alongside RBP so EmitFaultBacktrace can bound its
+    // saved-RBP walk to the still-mapped faulted stack ([rsp, rsp + 64 MiB)).
+    _b.DefineGlobal("__gt_fault_last_rsp", 8, 0);
   }
 
   /// <summary>
@@ -102,6 +105,8 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, GtOffFaultMsg, VReg.Scratch2);
     _b.LoadLocal(VReg.Scratch2, 3);                                       // RBP at fault (slot 3)
     _b.StoreGlobal("__gt_fault_last_rbp", VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch2, 2);                                       // RSP at fault (slot 2)
+    _b.StoreGlobal("__gt_fault_last_rsp", VReg.Scratch2);
 
     // Redirect target: pc=__gt_fault_diagnostic, fp=0, sp=faultRsp (intact stack)
     // OR gt.stack_base+4096 for stack-overflow (exhausted stack needs a clean spot).
@@ -173,10 +178,12 @@ public partial class RuntimeEmitter {
   /// Diagnostic printer. Reached by the OS resuming the worker thread at this address
   /// after the per-backend fault-handler epilog rewrote the context.
   ///
-  /// Writes gt.fault_msg to stderr and exits with status 1. Intentionally does NOT
-  /// call mrt_panic to avoid mrt_panic's stack walk — the RBP chain is fresh
-  /// (we redirected with FP=0), so any walk produces meaningless garbage. Once panic/
-  /// recover lands, this is the function that gets replaced with a defer-chain unwinder.
+  /// Writes gt.fault_msg to stderr, then a symbolized stack trace, and exits with
+  /// status 1. It does NOT call mrt_panic: mrt_panic walks its OWN RBP chain, but the
+  /// diagnostic's frame is meaningless (we redirected with FP=0). Instead it calls
+  /// EmitFaultBacktrace, which walks the FAULTING thread's stashed RBP chain (still
+  /// mapped — same thread, fresh RSP). Once panic/recover lands, this is the function
+  /// that gets replaced with a defer-chain unwinder.
   /// </summary>
   public void EmitGtFaultDiagnostic() {
     // Stand up a normal frame so RBP is valid for any helper that walks it.
@@ -222,6 +229,13 @@ public partial class RuntimeEmitter {
 
     _b.LeaSymdata(VReg.Arg0, "__gt_panic_msg_nl");
     _b.Call(_b.WriteStderrLabel);
+
+    // Symbolized stack trace. Our own RBP is meaningless (we were redirected with
+    // FP=0), so this walks the FAULTING thread's stashed RBP chain
+    // (__gt_fault_last_rbp/_rsp), which is still mapped — the diagnostic runs on the
+    // same thread with a fresh RSP. x64-Windows prints "Stack trace:" + frames;
+    // arm64-macOS has no frame-walking diagnostic yet and emits nothing here.
+    _b.EmitFaultBacktrace();
 
     // Exit the process with status 1.
     _b.MovRegImm(VReg.Arg0, 1);

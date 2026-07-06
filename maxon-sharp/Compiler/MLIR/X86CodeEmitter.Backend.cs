@@ -572,6 +572,10 @@ public partial class X86CodeEmitter {
       _e.EmitFaultHandlerEpilog();
     }
 
+    public void EmitFaultBacktrace() {
+      _e.EmitFaultBacktrace();
+    }
+
     // ---- Import resolution ----
 
     private static (string dll, string func) ResolveImport(string function) => function switch {

@@ -708,6 +708,12 @@ public partial class ARM64CodeEmitter {
       _e.EmitFaultHandlerEpilog();
     }
 
+    // arm64-macOS has no frame-walking fault diagnostic yet: the sigaction-based
+    // path prints only the panic line. No-op so the shared EmitGtFaultDiagnostic
+    // stays backend-agnostic (the x64-Windows backend supplies the real walk).
+    public void EmitFaultBacktrace() {
+    }
+
     // ---- Import resolution ----
 
     private static string ResolveImport(string function) => function switch {

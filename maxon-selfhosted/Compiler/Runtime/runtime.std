@@ -1421,24 +1421,34 @@ end
 // and backs `__Builtins.forceSegfault()` / the `safety` spec. The load always
 // faults, so the `ret` is unreachable. Mirrors the C# bootstrap's hand-rolled
 // EmitMaxonForceSegfault; expressed here as portable Std IR so every target gets it.
+//
+// The null pointer is routed through an ADDRESS-TAKEN stack slot (stackAddr) so
+// this function gets a real frame pointer instead of being frame-pointer-omitted
+// as a zero-frame leaf. mem2reg promotes a plain storeSlot/loadSlot away (leaving
+// no frame), but it never promotes an address-taken slot — so stackAddr guarantees
+// the frame survives optimization. That makes the fault's CONTEXT.Rbp point at THIS
+// frame, letting the diagnostic's mrt_fault_backtrace walk into the caller (main),
+// matching the C# bootstrap's EmitMaxonForceSegfault (which always frames via a
+// runtime prologue) so both compilers print an identical, main-naming stack trace.
 func maxon_force_segfault 0 void
   block entry:
-    v0 = std constI64 0
-    v1 = std loadIndirect v0 0
-    v2 = std constI64 0
-    std ret v2
+    v0 = std stackAddr 0
+    v1 = std constI64 0
+    std storeIndirect v0 0 v1
+    v2 = std loadIndirect v0 0
+    v3 = std loadIndirect v2 0
+    v4 = std constI64 0
+    std ret v4
 
 end
 
 // mrt_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
-// Walks the RBP/X29 chain to print up to 32 stack frames.
+// Delegates the RBP/X29 chain walk to mrt_panic_walk_frames (shared with the
+// CPU-fault backtrace). A software panic has a well-formed frame chain, so it
+// passes stack_low = stack_high = 0 to disable the fault-path range validation.
 //
 // Slot usage:
 //   slot 0 = msg_ptr (arg)
-//   slot 1 = text_base (mrt_start address)
-//   slot 2 = symtable_ptr
-//   slot 3 = frame_ptr (current frame being walked)
-//   slot 4 = frame_counter
 func mrt_panic 1 void
   block entry:
     v0 = std param 0 i64
@@ -1451,87 +1461,242 @@ func mrt_panic 1 void
     v2 = std globalAddr __panic_stacktrace
     v3 = std call mrt_write_cstr_stderr v2
 
-    // Get text_base and symtable for frame lookup
-    v4 = std funcAddr mrt_start
-    std storeSlot 1 v4
-    v5 = std funcAddr __symtable
-    std storeSlot 2 v5
+    // Walk the frame chain starting from our caller. loadFramePtr is mrt_panic's
+    // own RBP; the walk reads [rbp+8] as the first return address, so the frame
+    // it prints first is the function that called mrt_panic (the panic site).
+    v4 = std loadFramePtr
+    v5 = std constI64 0
+    v6 = std call mrt_panic_walk_frames v4 v5 v5
 
-    // Walk the frame chain starting from our caller
-    v6 = std loadFramePtr
-    std storeSlot 3 v6
+    v7 = std constI64 1
+    std osExit v7
+    v8 = std constI64 0
+    std ret v8
+
+end
+
+// mrt_panic_walk_frames(start_frame, stack_low, stack_high): walk the saved-RBP
+// chain from `start_frame`, printing up to 32 symbolized frames to stderr (each
+// "  in <fn>\n" via mrt_panic_print_frame). Shared by mrt_panic (software panic,
+// well-formed chain) and mrt_fault_backtrace (hardware fault, possibly corrupt
+// RBP). When stack_high != 0 each frame pointer is additionally required to lie
+// in [stack_low, stack_high) and to strictly ascend — bounding reads to the
+// faulted thread's mapped stack so a garbage RBP degrades to a short trace
+// instead of a second fault. stack_high == 0 disables that validation, giving
+// the historical inline walk byte-for-byte.
+//
+// Slot usage:
+//   slot 0 = frame_ptr (current frame being walked)
+//   slot 1 = text_base (mrt_start address)
+//   slot 2 = symtable_ptr
+//   slot 4 = frame_counter
+//   slot 5 = text_offset for the current frame
+//   slot 6 = return address of the current frame
+//   slot 7 = stack_low
+//   slot 8 = stack_high (0 = validation disabled)
+//   slot 9 = next frame_ptr (held across the ascending check)
+func mrt_panic_walk_frames 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 7 v1
+    v2 = std param 2 i64
+    std storeSlot 8 v2
+
+    // Get text_base and symtable for frame lookup
+    v3 = std funcAddr mrt_start
+    std storeSlot 1 v3
+    v4 = std funcAddr __symtable
+    std storeSlot 2 v4
 
     // frame_counter = 32
-    v13 = std constI64 32
-    std storeSlot 4 v13
+    v5 = std constI64 32
+    std storeSlot 4 v5
     std br walk_loop
 
   block walk_loop:
     // Check frame counter
-    v14 = std loadSlot 4
-    v15 = std constI64 0
-    v16 = std cmpI64Eq v14 v15
-    std condBr v16 walk_done check_frame_ptr
+    v6 = std loadSlot 4
+    v7 = std constI64 0
+    v8 = std cmpI64Eq v6 v7
+    std condBr v8 walk_done check_frame_ptr
 
   block check_frame_ptr:
     // Decrement counter
-    v17 = std loadSlot 4
-    v18 = std constI64 1
-    v19 = std subI64 v17 v18
-    std storeSlot 4 v19
+    v9 = std loadSlot 4
+    v10 = std constI64 1
+    v11 = std subI64 v9 v10
+    std storeSlot 4 v11
 
-    // Load current frame_ptr
-    v20 = std loadSlot 3
-    v21 = std constI64 0
-    v22 = std cmpI64Eq v20 v21
-    std condBr v22 walk_done get_return_addr
+    // Stop at a null frame pointer
+    v12 = std loadSlot 0
+    v13 = std constI64 0
+    v14 = std cmpI64Eq v12 v13
+    std condBr v14 walk_done range_check
+
+  block range_check:
+    // stack_high == 0 → range validation disabled (software-panic path).
+    v15 = std loadSlot 8
+    v16 = std constI64 0
+    v17 = std cmpI64Eq v15 v16
+    std condBr v17 get_return_addr range_low
+
+  block range_low:
+    // frame < stack_low → below the faulting RSP, not a live stack frame.
+    v18 = std loadSlot 0
+    v19 = std loadSlot 7
+    v20 = std cmpI64Lt v18 v19
+    std condBr v20 walk_done range_high
+
+  block range_high:
+    // Continue only while frame < stack_high (inside the sane stack window).
+    v21 = std loadSlot 0
+    v22 = std loadSlot 8
+    v23 = std cmpI64Lt v21 v22
+    std condBr v23 get_return_addr walk_done
 
   block get_return_addr:
     // Get return address: [frame_ptr + 8]
-    v23 = std loadSlot 3
-    v24 = std loadIndirect v23 8
-    std storeSlot 6 v24
-    v25 = std constI64 0
-    v26 = std cmpI64Eq v24 v25
-    std condBr v26 walk_done compute_offset
+    v24 = std loadSlot 0
+    v25 = std loadIndirect v24 8
+    std storeSlot 6 v25
+    v26 = std constI64 0
+    v27 = std cmpI64Eq v25 v26
+    std condBr v27 walk_done compute_offset
 
   block compute_offset:
     // Compute text_offset = return_addr - text_base
-    v52 = std loadSlot 6
-    v27 = std loadSlot 1
-    v28 = std subI64 v52 v27
-    std storeSlot 5 v28
+    v28 = std loadSlot 6
+    v29 = std loadSlot 1
+    v30 = std subI64 v28 v29
+    std storeSlot 5 v30
 
     // Check if outside .text (negative or beyond code end)
-    v29 = std constI64 0
-    v30 = std cmpI64Lt v28 v29
-    std condBr v30 walk_done check_upper_bound
+    v31 = std constI64 0
+    v32 = std cmpI64Lt v30 v31
+    std condBr v32 walk_done check_upper_bound
 
   block check_upper_bound:
-    v53 = std loadSlot 5
-    v54 = std loadSlot 2
-    v55 = std loadSlot 1
-    v56 = std subI64 v54 v55
-    v57 = std cmpI64Lt v53 v56
-    std condBr v57 print_frame walk_done
+    v33 = std loadSlot 5
+    v34 = std loadSlot 2
+    v35 = std loadSlot 1
+    v36 = std subI64 v34 v35
+    v37 = std cmpI64Lt v33 v36
+    std condBr v37 print_frame walk_done
 
   block print_frame:
     // Print this frame
-    v51 = std loadSlot 5
-    v31 = std loadSlot 2
-    v32 = std call mrt_panic_print_frame v51 v31
+    v38 = std loadSlot 5
+    v39 = std loadSlot 2
+    v40 = std call mrt_panic_print_frame v38 v39
 
-    // Advance frame_ptr to next frame: [frame_ptr] = prev frame pointer
-    v33 = std loadSlot 3
-    v34 = std loadIndirect v33 0
-    std storeSlot 3 v34
+    // Next frame pointer = [frame_ptr]
+    v41 = std loadSlot 0
+    v42 = std loadIndirect v41 0
+    std storeSlot 9 v42
+
+    // stack_high == 0 → skip the ascending check (software-panic path).
+    v43 = std loadSlot 8
+    v44 = std constI64 0
+    v45 = std cmpI64Eq v43 v44
+    std condBr v45 advance ascending_check
+
+  block ascending_check:
+    // Require next > frame (strictly ascending). A non-ascending link means a
+    // corrupt chain — stop rather than risk a wild read on the next iteration.
+    v46 = std loadSlot 0
+    v47 = std loadSlot 9
+    v48 = std cmpI64Lt v46 v47
+    std condBr v48 advance walk_done
+
+  block advance:
+    v49 = std loadSlot 9
+    std storeSlot 0 v49
     std br walk_loop
 
   block walk_done:
-    v35 = std constI64 1
-    std osExit v35
-    v36 = std constI64 0
-    std ret v36
+    v50 = std constI64 0
+    std ret v50
+
+end
+
+// mrt_fault_backtrace(fault_rip, fault_rbp, fault_rsp): print "Stack trace:\n"
+// followed by a symbolized backtrace for a hardware CPU fault, then return. The
+// hand-emitted x64-Windows fault diagnostic (emitX64GtFaultDiagnostic) calls this
+// after writing the panic line, passing the faulting thread's CONTEXT.Rip/Rbp/Rsp
+// (which the VEH thunk stashed in __gt_fault_rip/__gt_fault_rbp/__gt_fault_rsp).
+//
+// Frame 0 is the faulting instruction itself (symbolized from fault_rip); the
+// remaining frames come from walking the saved-RBP chain (fault_rbp upward). The
+// RBP walk is range-validated against [fault_rsp, fault_rsp + 64 MiB) so a fault
+// that corrupted RBP degrades to a short trace instead of faulting again inside
+// the diagnostic. mrt_panic can't be reused: the VEH thunk resumed us on a fresh
+// RSP with RBP=0, so the diagnostic's own frame chain is meaningless — the
+// faulting chain is reachable only through the stashed registers.
+//
+// Slot usage:
+//   slot 0 = fault_rip
+//   slot 1 = fault_rbp
+//   slot 2 = fault_rsp
+//   slot 3 = text_base (mrt_start address)
+//   slot 4 = symtable_ptr
+//   slot 5 = text_offset of the faulting instruction
+func mrt_fault_backtrace 3 void
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+
+    // Print "Stack trace:\n"
+    v3 = std globalAddr __panic_stacktrace
+    v4 = std call mrt_write_cstr_stderr v3
+
+    // text_base + symtable for symbolization
+    v5 = std funcAddr mrt_start
+    std storeSlot 3 v5
+    v6 = std funcAddr __symtable
+    std storeSlot 4 v6
+
+    // Frame 0: symbolize the faulting instruction (text_offset = rip - text_base).
+    // Guard the .text bounds — a fault whose RIP is in a system DLL has no local
+    // symbol, so skip frame 0 and start the trace at the RBP chain.
+    v7 = std loadSlot 0
+    v8 = std loadSlot 3
+    v9 = std subI64 v7 v8
+    std storeSlot 5 v9
+    v10 = std constI64 0
+    v11 = std cmpI64Lt v9 v10
+    std condBr v11 walk rip_upper_bound
+
+  block rip_upper_bound:
+    v12 = std loadSlot 5
+    v13 = std loadSlot 4
+    v14 = std loadSlot 3
+    v15 = std subI64 v13 v14
+    v16 = std cmpI64Lt v12 v15
+    std condBr v16 print_rip walk
+
+  block print_rip:
+    v17 = std loadSlot 5
+    v18 = std loadSlot 4
+    v19 = std call mrt_panic_print_frame v17 v18
+    std br walk
+
+  block walk:
+    // Frames 1..N: walk the caller chain. stack_high = rsp + 64 MiB (0x4000000)
+    // bounds the walk to the live stack (larger than any thread or grown green-
+    // thread stack) so a corrupt RBP can't wander into unmapped pages.
+    v20 = std loadSlot 1
+    v21 = std loadSlot 2
+    v22 = std constI64 0x4000000
+    v23 = std addI64 v21 v22
+    v24 = std call mrt_panic_walk_frames v20 v21 v23
+    v25 = std constI64 0
+    std ret v25
 
 end
 
@@ -4399,11 +4564,13 @@ end
 // on x64-Windows (to install the VEH fault handler before main runs).
 //
 // Like __gt_trace_emit below, the stub body doubles as a DCE anchor: it references
-// the two .std helpers the hand-emitted CPU-fault diagnostic (emitX64GtFaultDiagnostic)
-// calls — mrt_write_cstr_stderr and __diag_print_hex — so the dead-code pass keeps
-// their labels alive even though the only real callers are machine code the DCE can't
-// see (their fixups would otherwise resolve to .text+0). The body never executes (the
-// hand-emitted __gt_init overrides it); the arg is a throwaway constant string addr.
+// the .std helpers the hand-emitted CPU-fault diagnostic (emitX64GtFaultDiagnostic)
+// calls — mrt_write_cstr_stderr, __diag_print_hex, and mrt_fault_backtrace (the
+// symbolized-backtrace walker) — so the dead-code pass keeps their labels alive even
+// though the only real callers are machine code the DCE can't see (their fixups would
+// otherwise resolve to .text+0). mrt_fault_backtrace transitively roots
+// mrt_panic_walk_frames + mrt_panic_print_frame + __panic_stacktrace. The body never
+// executes (the hand-emitted __gt_init overrides it); the args are throwaway constants.
 func __gt_init 0 void
   block entry:
     v0 = std globalAddr __gt_panic_msg_other
@@ -4411,7 +4578,9 @@ func __gt_init 0 void
     v2 = std constI64 0
     v3 = std call __diag_print_hex v2
     v4 = std constI64 0
-    std ret v4
+    v5 = std call mrt_fault_backtrace v4 v4 v4
+    v6 = std constI64 0
+    std ret v6
 end
 
 // __io_init() -> void and __io_shutdown() -> void. Signature-only stubs: the real

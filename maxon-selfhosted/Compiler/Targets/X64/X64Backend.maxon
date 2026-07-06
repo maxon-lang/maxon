@@ -6263,14 +6263,17 @@ end 'emitX64SubprocessResultStreamCopy'
 
 // __gt_fault_diagnostic(): the redirect target the VEH thunk resumes the
 // faulting thread at (its CONTEXT.Rip is rewritten to this function's absolute
-// address). Runs on the faulting thread with a freshly chosen RSP and RBP=0, so
-// it must NOT walk the frame chain (that's why it doesn't call mrt_panic). Reads
-// the message + faulting RIP + bad VA the thunk stashed in globals, writes a
-// clean panic line to stderr, and ExitProcess(1). Ports the C# bootstrap's
-// EmitGtFaultDiagnostic (X86CodeEmitter.Runtime.cs), simplified to the internal
-// runtime helpers this backend already links (mrt_write_cstr_stderr +
-// __diag_print_hex). Hand-emitted (not a runtime.std body) so the redirect can
-// publish its absolute address and so no DCE root is needed for it.
+// address). Runs on the faulting thread with a freshly chosen RSP and RBP=0.
+// Reads the message + faulting RIP + bad VA the thunk stashed in globals, writes
+// a clean panic line to stderr, then prints a symbolized stack trace and
+// ExitProcess(1). Its own RBP is meaningless (redirected to 0), so it does NOT
+// call mrt_panic; instead it calls mrt_fault_backtrace with the faulting thread's
+// stashed RIP/RBP/RSP, which walks the still-mapped faulted stack. Ports the C#
+// bootstrap's EmitGtFaultDiagnostic (X86CodeEmitter.Runtime.cs), using the
+// internal runtime helpers this backend already links (mrt_write_cstr_stderr,
+// __diag_print_hex, mrt_fault_backtrace). Hand-emitted (not a runtime.std body)
+// so the redirect can publish its absolute address and so no DCE root is needed
+// for it.
 function emitX64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_fault_diagnostic", offset: code.count())
 	// Stand up a fresh frame (RBP was redirected to 0). 0x30 outgoing/local space
@@ -6292,6 +6295,15 @@ function emitX64GtFaultDiagnostic(code ByteArray, relocations RelocationArray, c
 	// Trailing newline.
 	emitLeaRipRelOp(code, dest: X64Register.rcx, rdataLabel: "__gt_panic_msg_nl", rdataRelocs: rdataRelocs)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_write_cstr_stderr")
+	// Symbolized backtrace: mrt_fault_backtrace(fault_rip, fault_rbp, fault_rsp).
+	// Internal ABI passes the three args in rcx/rdx/rax; all three were stashed by the
+	// VEH thunk from the faulting CONTEXT. This prints "Stack trace:" + one "  in <fn>"
+	// per frame (frame 0 symbolized from the faulting RIP, the rest by walking the
+	// still-mapped RBP chain), matching the mrt_panic software-panic trace.
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__gt_fault_rip")
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rdx, name: "__gt_fault_rbp")
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_fault_rsp")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "mrt_fault_backtrace")
 	// ExitProcess(1) — never returns.
 	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
 	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
@@ -6388,6 +6400,15 @@ function emitX64GtFaultThunk(code ByteArray, callFixups CallFixupArray, rdataRel
 	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // CONTEXT*
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rax, disp: ContextOffRip)
 	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rdx, name: "__gt_fault_rip")
+	// Stash the faulting Rbp + Rsp for the diagnostic's symbolized backtrace: the
+	// diagnostic runs on the same thread (the faulted stack is still mapped) but on a
+	// fresh RSP with RBP=0, so mrt_fault_backtrace must walk this stashed RBP chain,
+	// with RSP bounding the walk to the live stack. Stash the raw fault-time registers
+	// here — NOT the rounded/biased resume RSP chosen just below.
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rax, disp: ContextOffRbp)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rdx, name: "__gt_fault_rbp")
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.rax, disp: ContextOffRsp)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rdx, name: "__gt_fault_rsp")
 	// Default resume RSP = faulting RSP, 16-aligned downward (intact for nil-deref /
 	// divide / overflow). r8 holds the chosen RSP from here to block 6.
 	helperLoadIndirect(code, dest: X64Register.r8, base: X64Register.rax, disp: ContextOffRsp)
