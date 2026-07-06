@@ -1705,28 +1705,55 @@ function emitMovRspOffsetReg(code ByteArray, offset StackSize, srcReg X64Registe
 	code.push(disp)
 end 'emitMovRspOffsetReg'
 
-// mov destReg, [rbp+offset] (positive offset, for loading caller-passed stack args)
+// Load an INCOMING stack arg: mov destReg, [rbp + offset]. `offset` is a POSITIVE
+// `rbp` delta (X64_STACK_ARG_RBP_BASE + argIdx*8), so it grows past the signed-byte
+// range once a function overflows enough params onto the stack. The disp8 form
+// (mod=01) only encodes -128..+127, so a `+128` delta (the 15th stack arg, at
+// `[rbp+0x80]`) MUST use disp32 (mod=10): emitting it as disp8 would write the byte
+// `0x80`, which the CPU sign-extends to `-128`, silently reading `[rbp-128]` (a
+// caller/local slot) instead of the argument — a value miscompile, not a crash.
 function emitLoadRegRbpOffset(code ByteArray, destReg X64Register, offset StackSize)
-	let disp = offset and 0xFF
-	match destReg 'pickReg'
-		rax then code.append(b"\x48\x8b\x45")
-		rcx then code.append(b"\x48\x8b\x4d")
-		rdx then code.append(b"\x48\x8b\x55")
-		rbx then code.append(b"\x48\x8b\x5d")
-		rsp then code.append(b"\x48\x8b\x65")
-		rbp then code.append(b"\x48\x8b\x6d")
-		rsi then code.append(b"\x48\x8b\x75")
-		rdi then code.append(b"\x48\x8b\x7d")
-		r8 then code.append(b"\x4c\x8b\x45")
-		r9 then code.append(b"\x4c\x8b\x4d")
-		r10 then code.append(b"\x4c\x8b\x55")
-		r11 then code.append(b"\x4c\x8b\x5d")
-		r12 then code.append(b"\x4c\x8b\x65")
-		r13 then code.append(b"\x4c\x8b\x6d")
-		r14 then code.append(b"\x4c\x8b\x75")
-		r15 then code.append(b"\x4c\x8b\x7d")
-	end 'pickReg'
-	code.push(disp)
+	if offset <= i8.max 'disp8'
+		match destReg 'pickReg8'
+			rax then code.append(b"\x48\x8b\x45")
+			rcx then code.append(b"\x48\x8b\x4d")
+			rdx then code.append(b"\x48\x8b\x55")
+			rbx then code.append(b"\x48\x8b\x5d")
+			rsp then code.append(b"\x48\x8b\x65")
+			rbp then code.append(b"\x48\x8b\x6d")
+			rsi then code.append(b"\x48\x8b\x75")
+			rdi then code.append(b"\x48\x8b\x7d")
+			r8 then code.append(b"\x4c\x8b\x45")
+			r9 then code.append(b"\x4c\x8b\x4d")
+			r10 then code.append(b"\x4c\x8b\x55")
+			r11 then code.append(b"\x4c\x8b\x5d")
+			r12 then code.append(b"\x4c\x8b\x65")
+			r13 then code.append(b"\x4c\x8b\x6d")
+			r14 then code.append(b"\x4c\x8b\x75")
+			r15 then code.append(b"\x4c\x8b\x7d")
+		end 'pickReg8'
+		code.push(offset and 0xFF)
+	end 'disp8' else 'disp32'
+		match destReg 'pickReg32'
+			rax then code.append(b"\x48\x8b\x85")
+			rcx then code.append(b"\x48\x8b\x8d")
+			rdx then code.append(b"\x48\x8b\x95")
+			rbx then code.append(b"\x48\x8b\x9d")
+			rsp then code.append(b"\x48\x8b\xa5")
+			rbp then code.append(b"\x48\x8b\xad")
+			rsi then code.append(b"\x48\x8b\xb5")
+			rdi then code.append(b"\x48\x8b\xbd")
+			r8 then code.append(b"\x4c\x8b\x85")
+			r9 then code.append(b"\x4c\x8b\x8d")
+			r10 then code.append(b"\x4c\x8b\x95")
+			r11 then code.append(b"\x4c\x8b\x9d")
+			r12 then code.append(b"\x4c\x8b\xa5")
+			r13 then code.append(b"\x4c\x8b\xad")
+			r14 then code.append(b"\x4c\x8b\xb5")
+			r15 then code.append(b"\x4c\x8b\xbd")
+		end 'pickReg32'
+		writeDword(code, value: offset)
+	end 'disp32'
 end 'emitLoadRegRbpOffset'
 
 // --- Call fixup resolution (inter-function) ---

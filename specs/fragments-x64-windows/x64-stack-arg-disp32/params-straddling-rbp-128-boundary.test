@@ -1,0 +1,115 @@
+// Test: params-straddling-rbp-128-boundary
+
+typealias Integer = int(i64.min to i64.max)
+
+// Sum the three parameters straddling the boundary: a20 at [rbp+112], a21 at
+// [rbp+120], a22 at [rbp+128]. A miscompiled a22 load corrupts the total.
+function sum22(a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer) returns Integer
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22
+end 'sum22'
+
+function main() returns ExitCode
+	return sum22(0, a2: 0, a3: 0, a4: 0, a5: 0, a6: 0, a7: 0, a8: 0, a9: 0, a10: 0, a11: 0, a12: 0, a13: 0, a14: 0, a15: 0, a16: 0, a17: 0, a18: 0, a19: 0, a20: 40, a21: 50, a22: 60)
+end 'main'
+---
+ExitCode: 150
+---
+// CompiledIR
+module {
+  func @sum22(rcx: i64, rdx: i64, rax: i64, r9: i64, rsi: i64, rdi: i64, rbx: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64, stack: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=128
+    x64.mov [rbp+-8], rcx
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-24]
+    x64.mov r12, [rbp-32]
+    x64.mov r13, [rbp-40]
+    x64.mov r14, [rbp-48]
+    x64.mov r15, [rbp-56]
+    x64.mov [rbp+-16], r15
+    x64.mov r15, [rbp-64]
+    x64.mov [rbp+-24], r15
+    x64.mov r15, [rbp-72]
+    x64.mov [rbp+-32], r15
+    x64.mov r15, [rbp-80]
+    x64.mov [rbp+-40], r15
+    x64.mov r15, [rbp-88]
+    x64.mov [rbp+-48], r15
+    x64.mov r15, [rbp-96]
+    x64.mov [rbp+-56], r15
+    x64.mov r15, [rbp-104]
+    x64.mov [rbp+-64], r15
+    x64.mov r15, [rbp-112]
+    x64.mov [rbp+-72], r15
+    x64.mov r15, [rbp-120]
+    x64.mov [rbp+-80], r15
+    x64.mov r15, [rbp-128]
+    x64.mov [rbp+-88], r15
+    x64.mov r15, [rbp+-8]
+    x64.add r15, rdx
+    x64.add r15, rax
+    x64.add r15, r9
+    x64.add r15, rsi
+    x64.add r15, rdi
+    x64.add r15, rbx
+    x64.add r15, r8
+    x64.add r15, rcx
+    x64.add r15, r12
+    x64.add r15, r13
+    x64.add r15, r14
+    x64.add r15, [rbp+-16]
+    x64.add r15, [rbp+-24]
+    x64.add r15, [rbp+-32]
+    x64.add r15, [rbp+-40]
+    x64.add r15, [rbp+-48]
+    x64.add r15, [rbp+-56]
+    x64.add r15, [rbp+-64]
+    x64.add r15, [rbp+-72]
+    x64.add r15, [rbp+-80]
+    x64.mov r8, r15
+    x64.add r8, [rbp+-88]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=160
+    x64.mov r8d, 60
+    x64.mov r12d, 50
+    x64.mov r13d, 40
+    x64.xor r14d, r14d
+    x64.mov [rsp+0], r14
+    x64.mov [rsp+8], r14
+    x64.mov [rsp+16], r14
+    x64.mov [rsp+24], r14
+    x64.mov [rsp+32], r14
+    x64.mov [rsp+40], r14
+    x64.mov [rsp+48], r14
+    x64.mov [rsp+56], r14
+    x64.mov [rsp+64], r14
+    x64.mov [rsp+72], r14
+    x64.mov [rsp+80], r14
+    x64.mov [rsp+88], r14
+    x64.mov [rsp+96], r13
+    x64.mov [rsp+104], r12
+    x64.mov [rsp+112], r8
+    x64.mov rcx, r14
+    x64.mov rdx, r14
+    x64.mov rax, r14
+    x64.mov r9, r14
+    x64.mov rsi, r14
+    x64.mov rdi, r14
+    x64.mov rbx, r14
+    x64.call sum22
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_1ffef4b3bc1062d3]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
