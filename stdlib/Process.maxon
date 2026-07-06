@@ -7,17 +7,12 @@
 #if os(Windows)
 	export typealias ExitCode = int(0 to u32.max)
 #else
-	#if os(Wasi)
-		// WASI's `proc_exit` accepts a u32, but wasmtime's runtime
-		// validator rejects exit codes ≥ 126 with "exit with invalid
-		// exit status outside of [0..126)". Cap to 0..125 so programs
-		// that compute an exit value (e.g. a masked hash) automatically
-		// land in the runtime-accepted range on this target.
-		export typealias ExitCode = int(0 to 125)
-	#else
-		// POSIX-style byte-sized exit codes on Linux and macOS.
-		export typealias ExitCode = int(0 to 255)
-	#endif
+	// POSIX-style byte-sized exit codes on Linux and macOS. WASI shares this
+	// range: the wasm backend exits via `wasi:cli/exit.exit-with-code`, whose
+	// `status-code` is a `u8` (0..255) — wasmtime masks it to the low 8 bits.
+	// (The legacy `proc_exit` path, which wasmtime capped to [0..126), is no
+	// longer used; see `emitOsExit` in MirToWasm.)
+	export typealias ExitCode = int(0 to 255)
 #endif
 
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
