@@ -1,0 +1,147 @@
+// Test: straight-line-multiple-consume
+typealias Integer = int(i64.min to i64.max)
+
+interface Payload
+	function tag() returns Integer
+end 'Payload'
+
+type Desc implements Payload
+	export var v as Integer
+
+	export function tag() returns Integer
+		return self.v
+	end 'tag'
+end 'Desc'
+
+type Holder
+	export var p as Payload
+
+	export static function create(p Payload) returns Holder
+		return Holder{p: p}
+	end 'create'
+
+	export function run() returns Integer
+		return self.p.tag()
+	end 'run'
+end 'Holder'
+
+function twice(item Integer, p Payload) returns Integer
+	var h1 = Holder.create(p)
+	let a = h1.run()
+	var h2 = Holder.create(p)
+	let b = h2.run()
+	return a + b + item
+end 'twice'
+
+function driver() returns Integer
+	let p = Desc{v: 9}
+	return twice(4, p: p)
+end 'driver'
+
+function main() returns ExitCode
+	return driver()
+end 'main'
+---
+ExitCode: 22
+---
+// CompiledIR
+module {
+  func @Desc.tag(rcx: i64) -> i64 {
+  entry:
+    x64.mov r8, [rcx+0] (8b)
+    x64.ret
+  }
+  func @Holder.create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.lea rdx, [rip+__destruct_Holder]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov r12, [rbp-8]
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp-16]
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov rcx, [rbp-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @twice(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rax
+    x64.mov r12, [rbp-8]
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, r12
+    x64.call Holder.create
+    x64.mov r12, r8
+    x64.mov r8, [r12+8] (8b)
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r12, [rbp-8]
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, r12
+    x64.call Holder.create
+    x64.mov r12, r8
+    x64.mov r8, [r12+8] (8b)
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
+    x64.mov r14, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.add r13, r14
+    x64.mov r8, r13
+    x64.add r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 9
+    x64.mov [rbx+0], r8 (8b)
+    x64.lea rax, [rip+__witness_Desc_Payload]
+    x64.mov ecx, 4
+    x64.mov rdx, rbx
+    x64.call twice
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_6d000ca1952ea2aa]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1106,15 +1106,27 @@ type RcContext
 		if captured 'captured'
 			return true
 		end 'captured'
-		return self.isInterfaceValueLocalSlot(slotId)
+		if self.isInterfaceValueLocalSlot(slotId) 'localInterface'
+			return true
+		end 'localInterface'
+		// A CONSUMED interface parameter's fat-pointer value slot is ALSO slot-owned:
+		// Concept C moved the caller's +1 into it, so the callee owns that reference
+		// and must dispose it exactly once at scope exit — the same discipline a local
+		// interface value gets, routed through the same move-on-store / borrow-loads /
+		// scope-exit-drop machinery. Without this the +1 is disposed per-load (once per
+		// re-read of the unpromoted slot): a pre-loop borrow's premature last-use decref
+		// frees it before a later loop consume re-reads the slot (the
+		// `allocateRegistersWithTarget` regTarget/opQuery INCREF-of-freed), or, with no
+		// such borrow, nothing releases it at all (a per-call leak).
+		return self.isConsumedInterfaceParamSlot(slotId)
 	end 'isAddressTakenSlot'
 
-	// True iff `slotId` is a LOCAL interface value-half slot (its slot type is
-	// `interface`) whose owning refcount the slot machinery may manage. PARAM interface
-	// slots are EXCLUDED: a callee BORROWS (or separately CONSUMES, per `funcParamConsumes`)
-	// its interface parameter, so a scope-exit drop of it would over-release the caller's
-	// value. The witness companion slot is excluded by shape (its slot type is the
-	// opaque-pointer companion, never `interface`) so only the managed value half qualifies.
+	// Shared gate for the slot-owned interface-value predicates below: `slotId` is an
+	// interface fat-pointer VALUE-half slot on a target where an unpromoted slot persists
+	// across calls. The witness companion slot is excluded by shape — its slot type is the
+	// opaque-pointer companion, never `interface`, so only the managed value half passes.
+	// Callers add the param-region direction: a LOCAL interface value EXCLUDES param slots,
+	// a CONSUMED interface param REQUIRES them.
 	//
 	// SOUNDNESS — WASM IS EXCLUDED. The slot machinery's scope-exit drop reads the slot's
 	// content AT SCOPE END, which is only correct when the slot persists across the calls in
@@ -1122,25 +1134,66 @@ type RcContext
 	// is frame-local (per-invocation), so it does. On wasm every function shares ONE
 	// linear-memory slot region (`stackBase + slotId*8`, MirToWasm.emitMemRefStoreSlot) —
 	// mem2reg notes a slot store there "would clobber a downstream callee's slot" — so an
-	// interface local live across a call is overwritten by the callee and the scope-exit
+	// interface value live across a call is overwritten by the callee and the scope-exit
 	// load reads that clobbered value (a garbage-pointer double-free). Because the value is
-	// unrecoverable at scope exit on wasm regardless of what the inserter emits (the
-	// interface local across a call is a pre-existing wasm slot-model limitation needing a
-	// per-invocation shadow stack), the slot machinery is disabled there — the interface
-	// local keeps its pre-existing behavior rather than gaining an unsound drop.
-	export function isInterfaceValueLocalSlot(slotId VarSlot) returns bool
+	// unrecoverable at scope exit on wasm regardless of what the inserter emits (a
+	// pre-existing wasm slot-model limitation needing a per-invocation shadow stack), the
+	// slot machinery is disabled there — the interface value keeps its pre-existing behavior
+	// rather than gaining an unsound drop.
+	function slotIsInterfaceFatValueHalf(slotId VarSlot) returns bool
 		if self.isWasmTarget 'wasmSharedSlots'
 			return false
 		end 'wasmSharedSlots'
-		if self.func.isParamRegionScopeSlot(slotId) 'paramSlot'
-			return false
-		end 'paramSlot'
 		if slotId >= self.func.slotMaxonTypes.count() 'beyondTracked'
 			return false
 		end 'beyondTracked'
 		let slotType = try self.func.slotMaxonTypes.get(slotId) otherwise return false
 		return interfaceTypeIsFat(slotType)
+	end 'slotIsInterfaceFatValueHalf'
+
+	// True iff `slotId` is a LOCAL interface value-half slot whose owning refcount the slot
+	// machinery may manage. PARAM interface slots are EXCLUDED here: a BORROWED param is
+	// caller-owned (a scope-exit drop would over-release it), and a CONSUMED one is handled
+	// by `isConsumedInterfaceParamSlot` — kept distinct because a local move-in sits at
+	// rc==0 (owner-dropped via `mm_drop`) whereas a consumed param arrives RETAINED at
+	// rc>=1 (strict-decref'd); see `buildSlotContentReleaseOp`.
+	export function isInterfaceValueLocalSlot(slotId VarSlot) returns bool
+		if self.func.isParamRegionScopeSlot(slotId) 'paramSlot'
+			return false
+		end 'paramSlot'
+		return self.slotIsInterfaceFatValueHalf(slotId)
 	end 'isInterfaceValueLocalSlot'
+
+	// True iff `slotId` is the fat-pointer VALUE-half slot of an INTERFACE parameter
+	// this function CONSUMES (per `funcParamConsumes`). A consumed param received the
+	// caller's transferred +1 (Concept C — the caller's last-use decref was
+	// suppressed), so the CALLEE owns that reference and must release it exactly once.
+	// Because mem2reg leaves the interface param in an unpromoted slot and re-loads it
+	// at every use, keying the +1 disposal off any single load is wrong when the slot
+	// is loaded more than once (a pre-loop borrow + a loop consume, or two straight-
+	// line consumes): each load looks like the sole owner and either moves the +1 twice
+	// (over-release) or, at a borrow last-use, releases it before a later re-load
+	// (INCREF-of-freed). Treating the SLOT as the owner-of-record — move-on-store,
+	// borrow loads, one scope-exit drop — disposes the +1 once regardless of load count.
+	// A BORROWED interface param stays EXCLUDED (caller-owned; a scope-exit drop would
+	// over-release it). WASM is excluded by the shared gate.
+	export function isConsumedInterfaceParamSlot(slotId VarSlot) returns bool
+		if not self.func.isParamRegionScopeSlot(slotId) 'notParamSlot'
+			return false
+		end 'notParamSlot'
+		if not self.slotIsInterfaceFatValueHalf(slotId) 'notInterfaceFat'
+			return false
+		end 'notInterfaceFat'
+		// Resolve the slot's ABI parameter index. The decoupling map is authoritative;
+		// when it is empty (synthesized / pre-decoupling functions) the scope slot id IS
+		// the ABI index for param-region slots (`isParamRegionScopeSlot`'s own fallback).
+		let scopeMap = self.func.scopeSlotToAbiParamIndex
+		if scopeMap.count() == 0 'noDecoupleMap'
+			return paramConsumeBit(self.funcParamConsumes, callee: self.func.name, argIndex: slotId)
+		end 'noDecoupleMap'
+		let abi = try scopeMap.get(slotId) otherwise return false
+		return paramConsumeBit(self.funcParamConsumes, callee: self.func.name, argIndex: abi)
+	end 'isConsumedInterfaceParamSlot'
 
 	export function isReturned(id ValueId) returns bool
 		return try self.returnedValues.get(id) otherwise false
@@ -2751,7 +2804,16 @@ function buildParamAbiByValue(ctx RcContext) returns ParsedIntArray
 		let (isStore, storeSlotId, storeVal) = storeSlotSlotAndValue(op)
 		if isStore 'store'
 			let storedAbi = paramAbiAt(abiByValue, id: storeVal)
-			if storedAbi >= 0 and slotIsInterfaceParamRegion(ctx.func, slotId: storeSlotId) 'interfaceParamSlot'
+			// A CONSUMED interface param slot is slot-OWNED (`isConsumedInterfaceParamSlot`
+			// → the address-taken-slot machinery disposes its +1 once at scope exit), so its
+			// re-loads must be plain `incomingOwner` BORROWS — NOT the param carrier. Relaying
+			// them to the param would (mis)classify each load as sole owner of the moved-in +1:
+			// the entry borrow's last-use decref then frees the param before a later loop consume
+			// re-reads the slot (the `allocateRegistersWithTarget` INCREF-of-freed). The param-DEF
+			// mapping above still stands, so the entry store is still recognized as the param's +1
+			// moving into the slot. A BORROWED interface param slot is not slot-owned and keeps the
+			// relay (its re-loads DO carry the caller-owned pointer).
+			if storedAbi >= 0 and slotIsInterfaceParamRegion(ctx.func, slotId: storeSlotId) and not ctx.isConsumedInterfaceParamSlot(storeSlotId) 'interfaceParamSlot'
 				setParamAbiAt(slotAbiBySlot, id: storeSlotId, abi: storedAbi)
 			end 'interfaceParamSlot'
 		end 'store'
@@ -4040,7 +4102,12 @@ function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
 			// releases the just-stored value (the `dispatch-interface-return-type` over-release).
 			// The slot's single owned occupant is released by the scope-exit `mm_drop`
 			// (`planAddressTakenSlotDrops`).
-			if isManagedCaptureStore and ctx.isInterfaceValueLocalSlot(storedSlot) 'interfaceValueSlot'
+			// A CONSUMED interface param slot (`isConsumedInterfaceParamSlot`) is stored
+			// EXACTLY ONCE — the entry param→slot move — with no prior occupant, so a
+			// release-before-store there would decref the slot's pre-store garbage. Skip it
+			// for the same reason interface value LOCAL slots are skipped; the moved-in +1 is
+			// released by the scope-exit drop (`planAddressTakenSlotDrops`).
+			if isManagedCaptureStore and (ctx.isInterfaceValueLocalSlot(storedSlot) or ctx.isConsumedInterfaceParamSlot(storedSlot)) 'interfaceValueSlot'
 				pos = pos + 1
 				continue
 			end 'interfaceValueSlot'
@@ -4093,6 +4160,15 @@ end 'addressTakenManagedStoreSlotMem'
 // Uses `ctx.isManaged` on the stored value so it agrees with the suppression decision
 // (`moveIntoAddressTakenSlot`) that this slot's store was a managed transfer.
 function addressTakenSlotHoldsManaged(ctx RcContext, slotId VarSlot) returns bool
+	// A CONSUMED interface param slot ALWAYS holds a managed reference — the fat-pointer
+	// VALUE half is the caller's moved-in conformer pointer (a refcounted heap box). The
+	// raw `func.param` that seeds it is caller-owned and carries no `valueManaged` flag
+	// (params default un-flagged), so the storeSlot scan below — which gates on
+	// `isManaged(storedValue)` — would MISS it and skip the scope-exit drop, leaking the
+	// moved-in +1. Key off the slot's role: its content needs the scope-exit decref.
+	if ctx.isConsumedInterfaceParamSlot(slotId) 'consumedParamSlot'
+		return true
+	end 'consumedParamSlot'
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("addressTakenSlotHoldsManaged: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
