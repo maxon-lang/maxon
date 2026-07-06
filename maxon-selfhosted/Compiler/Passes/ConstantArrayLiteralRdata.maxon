@@ -243,17 +243,27 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 			pos = pos + 1
 			continue
 		end 'noType'
+		// A constant ranged-int literal packs when its element type is pinned to the
+		// alias: `[0 as Q, 1 as Q, …]` resolves through the `convert` op to `Q`, so
+		// `packedElementBits` sees the range and it bit-packs like a bool literal. A
+		// CONTEXT-typed bare literal (`[0, 1, 2, 3]` passed where `Array with Q` is
+		// expected) decays to bare `int` at both its defining op and set call — the
+		// alias lives only in the consuming context, invisible to this pass — so it
+		// stores byte-strided (correct, just unpacked). Dynamically-built ranged-int
+		// arrays carry the alias in their type arg and pack via the grow-site stamp.
 		let count = producer.elemNames.count()
-		// Boolean element arrays are BIT-PACKED in rdata (8 bools / byte). The record's
-		// `element_size@24` carries the sub-byte-packed encoding -1 (negative bit width)
-		// so the runtime `__managed_mem_*` path bit-addresses get/set — the same
-		// representation a dynamically-built `Array with bool` now uses. Non-bool
-		// elements use the narrow byte width as before; `elementStorageSize` returns
-		// both forms.
+		// Sub-byte-packed element arrays are BIT-PACKED in rdata (a bool packs 8/byte,
+		// an `int(0 to 3)` 4/byte, a nibble `int(0 to 15)` 2/byte). The record's
+		// `element_size@24` carries the negative-bit-width encoding (-1/-2/-4) so the
+		// runtime `__managed_mem_*` path bit-addresses get/set — the SAME representation
+		// a dynamically-built `Array with <packed>` uses, so const and dynamic arrays
+		// read identically. Byte-or-wider elements use the narrow byte width as before;
+		// `elementStorageSize` (stamped below) returns both forms.
 		var bytes = ByteArray.create()
-		if maxonTypeIsBoolean(elementType) 'boolArray'
-			bytes = encodeBitPackedBoolBytes(litValues, producer: producer)
-		end 'boolArray' else 'narrowArray'
+		let packBits = packedElementBits(project, t: elementType)
+		if packBits > 0 'packed'
+			bytes = encodePackedBytes(litValues, producer: producer, bitWidth: packBits)
+		end 'packed' else 'narrowArray'
 			let widthBytes = primitiveWidth(project, t: elementType)
 			bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
 		end 'narrowArray'
@@ -551,42 +561,38 @@ function encodeConstantArrayBytes(litValues LiteralValueMap, producer ArrayLiter
 	return bytes
 end 'encodeConstantArrayBytes'
 
-// True when a resolved MaxonType is the primitive boolean. Booleans get the
-// sub-byte-packed representation (element_size = -1, one bit per element).
-function maxonTypeIsBoolean(t MaxonType) returns bool
-	return match t 'check'
-		boolean gives true
-		integer to cstring gives false
-	end 'check'
-end 'maxonTypeIsBoolean'
-
-// Bit-pack boolean array elements into `(count + 7) / 8` bytes, LSB-first
-// within each byte (element i sets bit `i mod 8` of byte `i / 8`). A literal
-// value of 0 leaves the bit clear; any non-zero sets it. Matches the C#
-// bootstrap's bit-packed rdata layout (`[true,false,true,false]` -> `0x05`).
-function encodeBitPackedBoolBytes(litValues LiteralValueMap, producer ArrayLiteralProducer) returns ByteArray
+// Sub-byte-pack constant array elements into `ceil(count * bitWidth / 8)` bytes,
+// LSB-first: element i occupies the `bitWidth`-bit field at bit `i * bitWidth` —
+// bits [(i*bitWidth) mod 8, +bitWidth) of byte `(i*bitWidth) / 8`. Widths divide 8
+// (1/2/4) so a field never straddles a byte, and every byte starts zeroed, so a
+// single OR of the masked value places it (no clear-mask, unlike the runtime
+// `__managed_mem_write_packed` which writes into a live buffer). This MIRRORS that
+// runtime layout so a constant literal and a dynamically-built array read
+// identically. bitWidth 1 reduces to bool bit-packing (`[true,false,true,false]`
+// -> `0x05`); the `and mask` is a no-op for any in-range element value.
+function encodePackedBytes(litValues LiteralValueMap, producer ArrayLiteralProducer, bitWidth MachineWord) returns ByteArray
 	let count = producer.elemNames.count()
-	let byteCount = (count + 7) / 8
+	let byteCount = (count * bitWidth + 7) / 8
 	var bytes = ByteArray.create()
 	var b = 0 as MachineWord
 	while b < byteCount 'zero'
 		bytes.push(0)
 		b = b + 1
 	end 'zero'
+	let mask = (1 shl bitWidth) - 1
 	var i = 0
 	for elemName in producer.elemNames 'each'
 		let key = String.from(elemName)
-		let v = try litValues.get(key) otherwise panic("encodeBitPackedBoolBytes: missing literal for '{key}' (allElementsAreLiterals should have guarded)")
-		if v != 0 'setBit'
-			let byteIdx = i / bitsPerByte
-			let bitInByte = i mod bitsPerByte
-			let cur = try bytes.get(byteIdx) otherwise panic("encodeBitPackedBoolBytes: byteIdx {byteIdx} OOB (byteCount {byteCount})")
-			try bytes.set(byteIdx, value: cur or (1 shl bitInByte)) otherwise panic("encodeBitPackedBoolBytes: set byteIdx {byteIdx} OOB")
-		end 'setBit'
+		let v = try litValues.get(key) otherwise panic("encodePackedBytes: missing literal for '{key}' (allElementsAreLiterals should have guarded)")
+		let bitPos = i * bitWidth
+		let byteIdx = bitPos / bitsPerByte
+		let bitOff = bitPos mod bitsPerByte
+		let cur = try bytes.get(byteIdx) otherwise panic("encodePackedBytes: byteIdx {byteIdx} OOB (byteCount {byteCount})")
+		try bytes.set(byteIdx, value: cur or ((v and mask) shl bitOff)) otherwise panic("encodePackedBytes: set byteIdx {byteIdx} OOB")
 		i = i + 1
 	end 'each'
 	return bytes
-end 'encodeBitPackedBoolBytes'
+end 'encodePackedBytes'
 
 // Append `widthBytes` little-endian bytes of `value` to `bytes`. Sign
 // handling is implicit: `ParsedInt` is i64, two's-complement, and the

@@ -1,0 +1,70 @@
+// Test: nonzero-lower-not-packed
+typealias Offset = int(1 to 3)
+typealias OffsetArray = Array with Offset
+
+function main() returns ExitCode
+	var a = OffsetArray.create()
+	a.push(2)
+	if a.managed.elementSize() != 1 'shouldBeByte'
+		return 99
+	end 'shouldBeByte'
+	return try a.get(0) otherwise 1
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Offset
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 2 : i64
+    %5 = mir.global_addr @__layout_Array_Offset
+    %6 = mir.call @Array.push(%2, %4, %5)
+    %8 = mir.load %2, 0 width: qword
+    %9 = mir.load %8, 24 width: qword
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp ne, %9, %10
+    mir.cond_br %11 [then: shouldBeByte_0(), else: shouldBeByte_0.after()]
+  shouldBeByte_0:
+    %35 = mir.call @__mm_decref_maybenull_helper(%2)
+    %12 = mir.mov_imm 99 : i64
+    mir.ret %12
+  shouldBeByte_0.after:
+    %14 = mir.mov_imm 0 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %24 = mir.load %2, 0 width: qword
+    %25, %26 = mir.try_call @stdlib.__managed_mem_get(%24, %14)
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.cmp ne, %26, %27
+    mir.cond_br %28 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %36 = mir.call @__mm_decref_maybenull_helper(%2)
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%29, %30)
+  inlined_Array.get_3_0:
+    %31 = mir.mov_imm 0 : i64
+    %34 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br inline_cont_main_2(%25, %31)
+  inline_cont_main_2(%32: i64, %33: i64):
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %33, %18
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge(%32)]
+  try_0.otherwise:
+    %21 = mir.mov_imm 1 : i64
+    mir.br try_0.merge(%21)
+  try_0.merge(%23: i64):
+    %37 = mir.mov_imm 125 : i64
+    %38 = mir.cmp ugt, %23, %37
+    mir.cond_br %38 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %39 = mir.global_addr @__panic_msg_32a27e1a97db71e5
+    %40 = mir.call @mrt_panic(%39)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

@@ -1,0 +1,74 @@
+// Test: nonzero-lower-not-packed
+typealias Offset = int(1 to 3)
+typealias OffsetArray = Array with Offset
+
+function main() returns ExitCode
+	var a = OffsetArray.create()
+	a.push(2)
+	if a.managed.elementSize() != 1 'shouldBeByte'
+		return 99
+	end 'shouldBeByte'
+	return try a.get(0) otherwise 1
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rcx, [rip+__layout_Array_Offset]
+    x64.call Array.create
+    x64.mov rbx, r8
+    x64.lea rax, [rip+__layout_Array_Offset]
+    x64.mov edx, 2
+    x64.mov rcx, rbx
+    x64.call Array.push
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r9, [r8+24] (8b)
+    x64.cmp r9, 1
+    x64.je shouldBeByte_0.after
+  shouldBeByte_0:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 99
+    x64.epilogue
+    x64.ret
+  shouldBeByte_0.after:
+    x64.xor edx, edx
+  inlined_Array.get_0_0:
+    x64.mov rcx, [rbx+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.mov r12, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_3_0:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r12
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov r8d, 1
+  try_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_32a27e1a97db71e5]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

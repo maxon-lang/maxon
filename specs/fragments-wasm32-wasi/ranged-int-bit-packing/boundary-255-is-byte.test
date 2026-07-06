@@ -1,0 +1,72 @@
+// Test: boundary-255-is-byte
+typealias Octet = int(0 to 255)
+typealias OctetArray = Array with Octet
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(200)
+	if a.managed.elementSize() != 1 'shouldBeByte'
+		return 99
+	end 'shouldBeByte'
+	return (try a.get(0) otherwise 0) - 100
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Octet
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 200 : i64
+    %5 = mir.global_addr @__layout_Array_Octet
+    %6 = mir.call @Array.push(%2, %4, %5)
+    %8 = mir.load %2, 0 width: qword
+    %9 = mir.load %8, 24 width: qword
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp ne, %9, %10
+    mir.cond_br %11 [then: shouldBeByte_0(), else: shouldBeByte_0.after()]
+  shouldBeByte_0:
+    %37 = mir.call @__mm_decref_maybenull_helper(%2)
+    %12 = mir.mov_imm 99 : i64
+    mir.ret %12
+  shouldBeByte_0.after:
+    %14 = mir.mov_imm 0 : i64
+    mir.br inlined_Array.get_0_0()
+  inlined_Array.get_0_0:
+    %26 = mir.load %2, 0 width: qword
+    %27, %28 = mir.try_call @stdlib.__managed_mem_get(%26, %14)
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp ne, %28, %29
+    mir.cond_br %30 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
+  inlined_Array.get_1_0:
+    %38 = mir.call @__mm_decref_maybenull_helper(%2)
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%31, %32)
+  inlined_Array.get_3_0:
+    %33 = mir.mov_imm 0 : i64
+    %36 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.br inline_cont_main_2(%27, %33)
+  inline_cont_main_2(%34: i64, %35: i64):
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %35, %18
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge(%34)]
+  try_0.otherwise:
+    %21 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%21)
+  try_0.merge(%25: i64):
+    %23 = mir.mov_imm 100 : i64
+    %24 = mir.sub.i64 %25, %23
+    %39 = mir.mov_imm 125 : i64
+    %40 = mir.cmp ugt, %24, %39
+    mir.cond_br %40 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %41 = mir.global_addr @__panic_msg_60cdd05f63ebbff2
+    %42 = mir.call @mrt_panic(%41)
+  __range_ok_0:
+    mir.ret %24
+  }
+}
+---

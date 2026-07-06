@@ -297,7 +297,7 @@ function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyNam
 	// `elementSize` and sets the bitPacked flag; the runtime element-size stamp then
 	// negates it into the packed encoding. Byte-or-wider elements keep their positive
 	// byte stride. This is what makes a dynamically-built `Array with bool` bit-pack.
-	let packedBits = packedElementBitsForArgs(args)
+	let packedBits = packedElementBitsForArgs(project, args: args)
 	let bitPacked = packedBits > 0
 	let elementSize = packedBits if bitPacked else primitiveElementSize(project, args: args)
 	let elementLogicalSize = singleArgLogicalSize(project, args: args)
@@ -400,17 +400,62 @@ export function primitiveWidth(project Project, t MaxonType) returns MachineWord
 end 'primitiveWidth'
 
 // Bits per element for a SUB-BYTE-packed element type, or 0 for byte-or-wider
-// types. A `bool` packs to 1 bit (8 per byte); future sub-byte types (a 2-bit
-// enum, a nibble) extend this by returning 2, 4, … The runtime encodes the packed
+// types. `bool` packs to 1 bit; a non-negative ranged-int alias `int(0 to N)` packs
+// to the fewest bits that hold 0..N, rounded up to a width dividing 8 (2 bits for
+// `int(0 to 3)`, 4 bits for a nibble `int(0 to 15)`). The runtime encodes the packed
 // stride as `element_size@24 = -(these bits)` — see stdlib `__managed_mem_is_packed`.
 // This is the single classifier the layout descriptor and the element-size stamps
 // consult to decide "is this element sub-byte-packed, and how wide".
-export function packedElementBits(t MaxonType) returns MachineWord
+export function packedElementBits(project Project, t MaxonType) returns MachineWord
 	return match t 'w'
 		boolean gives 1
-		integer to cstring gives 0
+		named(id) gives packedBitsForRangedAlias(project, name: project.typeNames.get(id))
+		integer to character gives 0
+		function to cstring gives 0
 	end 'w'
 end 'packedElementBits'
+
+// A non-negative ranged-int alias `int(0 to N)` sub-byte-packs to the fewest bits
+// that hold 0..N. Only lower-bound-0 ranges pack: the value then maps directly to
+// its bits with no offset, and such a range resolves to an UNSIGNED store type, so
+// the masked packed read is zero-extended — exactly the value. A signed (lo < 0)
+// range would need an offset AND packed-bit-width sign extension the runtime does
+// not do, so it stays byte-strided. Returns 0 (not sub-byte) for a non-ranged alias
+// (struct/enum/other), a non-zero lower bound, or N >= 16.
+function packedBitsForRangedAlias(project Project, name String) returns MachineWord
+	// Enums and unions also register an ordinal range in `typealiasRanges` (0 ..
+	// caseCount-1), but a narrow enum array stays byte-per-element (see the
+	// enum-narrow-storage spec) — only genuine `int(0 to N)` typealiases sub-byte
+	// pack. Exclude enum/union names (both live in `enumTypes`).
+	if project.enumTypes.contains(name) 'enumOrUnion'
+		return 0
+	end 'enumOrUnion'
+	let range = try project.typealiasRanges.get(name) otherwise return 0
+	if range.lower != 0 'notZeroBased'
+		return 0
+	end 'notZeroBased'
+	return roundedPackedBits(range.upper)
+end 'packedBitsForRangedAlias'
+
+// bitsNeeded to hold 0..hi, rounded up to a width dividing 8 (1/2/4); `hi < 0` is a
+// u64 alias whose upper wrapped past i64.max (never sub-byte), and `hi >= 16` needs
+// a full byte (8 bits, byte-strided — not sub-byte). The value thresholds are
+// exactly "position of hi's highest set bit + 1, rounded up to {1,2,4}".
+function roundedPackedBits(hi RangeBound) returns MachineWord
+	if hi < 0 'wrappedU64'
+		return 0
+	end 'wrappedU64'
+	if hi <= 1 'oneBit'
+		return 1
+	end 'oneBit'
+	if hi <= 3 'twoBit'
+		return 2
+	end 'twoBit'
+	if hi <= 15 'fourBit'
+		return 4
+	end 'fourBit'
+	return 0
+end 'roundedPackedBits'
 
 // The stored `element_size@24` for an element type, as a SIGNED ParsedInt: a
 // NEGATIVE bit width for a sub-byte-packed element (bool = -1), else the positive
@@ -418,7 +463,7 @@ end 'packedElementBits'
 // stamps (the constant-array rdata pass and the create fast paths) so the packed
 // encoding is written the same way everywhere.
 export function elementStorageSize(project Project, t MaxonType) returns ParsedInt
-	let bits = packedElementBits(t)
+	let bits = packedElementBits(project, t: t)
 	if bits > 0 'packed'
 		return 0 - (bits as ParsedInt)
 	end 'packed'
@@ -443,12 +488,12 @@ end 'elementBufferByteLen'
 // Bit width of a single-type-arg instance's element when it is sub-byte-packed,
 // else 0. Mirrors `primitiveElementSize`'s "single arg only" gate — a multi-arg or
 // zero-arg instance is never packed.
-export function packedElementBitsForArgs(args MaxonTypeArray) returns MachineWord
+function packedElementBitsForArgs(project Project, args MaxonTypeArray) returns MachineWord
 	if args.count() != 1 'notSingleton'
 		return 0
 	end 'notSingleton'
 	let only = try args.get(0) otherwise panic("packedElementBitsForArgs: args.get(0) failed despite count==1")
-	return packedElementBits(only)
+	return packedElementBits(project, t: only)
 end 'packedElementBitsForArgs'
 
 // True iff any type argument is itself a heap-managed value — a string, a

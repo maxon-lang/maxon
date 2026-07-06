@@ -1,0 +1,46 @@
+// Test: dynamic-bool-packed
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var a = BoolArray.create()
+	a.push(true)
+	a.push(false)
+	a.push(true)
+	if a.managed.elementSize() != -1 'notPacked'
+		return 99
+	end 'notPacked'
+	return 5
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__layout_Array_Bool
+    %2 = mir.call @Array.create(%1)
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.global_addr @__layout_Array_Bool
+    %6 = mir.call @Array.push(%2, %4, %5)
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.global_addr @__layout_Array_Bool
+    %10 = mir.call @Array.push(%2, %8, %9)
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.global_addr @__layout_Array_Bool
+    %14 = mir.call @Array.push(%2, %12, %13)
+    %16 = mir.load %2, 0 width: qword
+    %17 = mir.load %16, 24 width: qword
+    %18 = mir.mov_imm -1 : i64
+    %19 = mir.cmp ne, %17, %18
+    %22 = mir.call @__mm_decref_maybenull_helper(%2)
+    mir.cond_br %19 [then: notPacked_0(), else: notPacked_0.after()]
+  notPacked_0:
+    %20 = mir.mov_imm 99 : i64
+    mir.ret %20
+  notPacked_0.after:
+    %21 = mir.mov_imm 5 : i64
+    mir.ret %21
+  }
+}
+---

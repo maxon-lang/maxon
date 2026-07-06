@@ -167,14 +167,16 @@ __ManagedMemory layout (48 bytes):
 
 The `element_size` field at +24 is normally the per-element byte stride (1, 2, 4,
 or 8). A **negative** value marks a *sub-byte-packed* element: the magnitude is the
-element's bit width, so `Array with bool` stores `element_size = -1` (1 bit per
-element, 8 per byte). Buffer sizing, get/set, and the shift/copy paths all route
-through shared packed-aware helpers (`__managed_mem_is_packed` /
-`__managed_mem_buffer_byte_len` / `__managed_mem_read_packed` /
-`__managed_mem_write_packed`), so the same machinery extends to a future 2-bit or
-nibble type (`-2` / `-4`) — the widths are restricted to those dividing 8 so a
-field never straddles a byte boundary. `element_size == 0` is reserved for an unset
-/ non-container record. See [bool-bit-packing](../specs/bool-bit-packing.md).
+element's bit width. `Array with bool` stores `element_size = -1` (1 bit per element,
+8 per byte); a non-negative ranged-int typealias packs the same way — `int(0 to 3)`
+is `-2` (4 per byte) and a nibble `int(0 to 15)` is `-4` (2 per byte). Buffer sizing,
+get/set, and the shift/copy paths all route through shared packed-aware helpers
+(`__managed_mem_is_packed` / `__managed_mem_buffer_byte_len` /
+`__managed_mem_read_packed` / `__managed_mem_write_packed`), so one code path serves
+every width — the widths are restricted to those dividing 8 (1/2/4) so a field never
+straddles a byte boundary. `element_size == 0` is reserved for an unset / non-container
+record. See [bool-bit-packing](../specs/bool-bit-packing.md) and
+[ranged-int-bit-packing](../specs/ranged-int-bit-packing.md).
 
 The `element_destroy` field at +40 holds a per-element teardown function pointer
 (or `0` for raw/unmanaged elements). When a buffer is a destructor ROOT, the
