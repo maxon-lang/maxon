@@ -425,6 +425,21 @@ export function elementStorageSize(project Project, t MaxonType) returns ParsedI
 	return primitiveWidth(project, t: t) as ParsedInt
 end 'elementStorageSize'
 
+// Compile-time buffer byte length for `count` elements of a given stored
+// `element_size` (the ParsedInt from `elementStorageSize`): a sub-byte-packed
+// element (element_size < 0) is measured in BITS and rounded up to a whole byte,
+// every byte-strided element is `count * element_size`. The compile-time twin of
+// the runtime `__managed_mem_buffer_byte_len` (stdlib/Internals.maxon), used where
+// the compiler must size a raw buffer for a known element count — the sized-Vector
+// factory — without a negative packed stride leaking into the byte arithmetic.
+export function elementBufferByteLen(count ParsedInt, elementSize ParsedInt) returns ParsedInt
+	if elementSize < 0 'packed'
+		let bits = count * (0 - elementSize)
+		return (bits + 7) shr 3
+	end 'packed'
+	return count * elementSize
+end 'elementBufferByteLen'
+
 // Bit width of a single-type-arg instance's element when it is sub-byte-packed,
 // else 0. Mirrors `primitiveElementSize`'s "single arg only" gate — a multi-arg or
 // zero-arg instance is never packed.

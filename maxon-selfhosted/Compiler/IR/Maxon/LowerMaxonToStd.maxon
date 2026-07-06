@@ -6252,8 +6252,9 @@ type MaxonToStdLowering
 	// called against a `Vec<N, Element>` sized typealias, the callee's body
 	// returns `Self{}` whose `managed` field was zero-init'd by
 	// `synthesizeManagedFieldInits` (capacity 0, length 0, no buffer).
-	// Resize that managed-memory record here to length = capacity = N with
-	// a buffer of `N * elementSize` bytes so subsequent set/get calls hit
+	// Resize that managed-memory record here to length = capacity = N with a
+	// buffer sized for N elements (byte-strided `N * elementSize`, or the packed
+	// ceil for a sub-byte element like `bool`) so subsequent set/get calls hit
 	// real storage. No-op for non-Vector callees and for receiver contexts
 	// without a `constInt` first arg.
 	function maybePopulateSizedManagedMemory(result ByteArray, qualifiedCallee String, receiverContext MaxonType, dstBlock IrBlock)
@@ -6286,18 +6287,25 @@ type MaxonToStdLowering
 			return
 		end 'notConst'
 		let elementArg = try gidArgs.get(1) otherwise return
-		let elementSize = primitiveWidth(self.project, t: elementArg)
-		// Load the Vector struct's `managed` field (offset 0 in Vector,
-		// which has a single field). `synthesizeManagedFieldInits` already
-		// allocated the 40-byte mm record; we patch its capacity / length /
-		// element_size / buffer in place rather than reallocating.
+		// element_size@24 as a SIGNED ParsedInt: -1 for a packed bool (matching the
+		// Array literal / dynamic paths), else the positive byte width. Using
+		// `elementStorageSize` — not `primitiveWidth` — is what makes a sized
+		// `Vector with N bool` bit-pack instead of storing one byte per element.
+		let elementSize = elementStorageSize(self.project, t: elementArg)
+		// Load the Vector struct's `managed` field (offset 0 in Vector, which has a
+		// single field). `synthesizeManagedFieldInits` already allocated the 48-byte
+		// mm record; we patch its capacity / length / element_size / buffer in place
+		// rather than reallocating.
 		let resultId = self.resolveName(result)
 		let mmPtrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmPtrId, addrId: resultId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(mmPtrId, t: MaxonType.integer)
 		self.storeI64Const(mmPtrId, offset: 16, value: n, dstBlock: dstBlock)
 		self.storeI64Const(mmPtrId, offset: 24, value: elementSize, dstBlock: dstBlock)
-		let totalBytes = n * (elementSize)
+		// Packed-aware buffer size: the sub-byte ceil for a bool element (a raw
+		// `n * -1` would size the mrt_alloc — which allocates AND zeroes exactly this
+		// many bytes — as a negative garbage count), else `n * elementSize`.
+		let totalBytes = elementBufferByteLen(n, elementSize: elementSize)
 		let totalBytesId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: totalBytesId, value: totalBytes))))
 		self.setValueType(totalBytesId, t: MaxonType.integer)

@@ -11,7 +11,10 @@ category: stdlib
 
 ### Overview
 
-`Vector` is a generic fixed-size collection. 
+`Vector` is a generic fixed-size collection. A `Vector with N bool` is bit-packed
+(8 elements per byte, `element_size = -1`) exactly like `Array with bool` — a
+`Vector with 16 bool` allocates a 2-byte buffer, not 16 — and the packing is
+transparent to the `get`/`set`/iterate API. See [bool-bit-packing](bool-bit-packing.md).
 
 ### Creating Vectors
 
@@ -834,4 +837,72 @@ end 'main'
 ```
 ```exitcode
 15
+```
+
+<!-- test: bool-vector-cross-byte -->
+```maxon
+typealias Bits16 = Vector with 16 bool
+
+function main() returns ExitCode
+	var v = Bits16.create()
+	try v.set(0, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(8, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(15, value: true) otherwise panic("test invariant: set OOB")
+	var count = 0
+	var i = 0
+	while i < v.count() 'scan'
+		let bit = try v.get(i) otherwise false
+		if bit 'isSet'
+			count = count + 1
+		end 'isSet'
+		i = i + 1
+	end 'scan'
+	return count
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: bool-vector-overwrite-clear -->
+```maxon
+typealias Bits8 = Vector with 8 bool
+
+function main() returns ExitCode
+	var v = Bits8.create()
+	try v.set(2, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(5, value: true) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: false) otherwise panic("test invariant: set OOB")
+	let a = try v.get(2) otherwise true
+	let b = try v.get(5) otherwise false
+	var r = 0
+	if not a 'cleared'
+		r = r + 1
+	end 'cleared'
+	if b 'stillSet'
+		r = r + 10
+	end 'stillSet'
+	return r
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: bool-vector-from-literal -->
+```maxon
+function main() returns ExitCode
+	let v = Vector from [true, false, true, true, false, true, false, false, true]
+	var count = 0
+	for bit in v 'each'
+		if bit 'isSet'
+			count = count + 1
+		end 'isSet'
+	end 'each'
+	return count
+end 'main'
+```
+```exitcode
+5
 ```

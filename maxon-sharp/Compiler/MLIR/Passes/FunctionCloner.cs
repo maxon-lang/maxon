@@ -1009,7 +1009,12 @@ internal class FunctionCloner {
         ("parent_ptr", parentPtrLit.Result)
       };
       var managedTypeName = resolvedStruct.GetField("managed")!.Type.Name;
-      var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields);
+      // A bool element bit-packs with element_size == 0 as the sentinel (see
+      // ManagedMemoryElementSize). Flag the synthesized managed struct bit-packed so
+      // the conversion skips the element_size==0 runtime guard — mirrors the parser's
+      // Self{}+__capacity path. Without it a sized bool Vector.create() panics at
+      // runtime ("element_size must be > 0").
+      var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields) { IsBitPacked = elemSize == 0 };
       extraOps.Add(managedStruct);
       // Replace the existing zero-initialized managed field with the capacity-aware one
       var existingIdx = newFieldValues.FindIndex(fv => fv.FieldName == "managed");

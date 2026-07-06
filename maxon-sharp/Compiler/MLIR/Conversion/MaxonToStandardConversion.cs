@@ -338,12 +338,18 @@ public static partial class MaxonToStandardConversion {
           int i = 0;
           var ops = block.Operations;
           while (i < ops.Count - 1) {
-            // Look for: MaxonLiteralOp(0) + MaxonAssignOp(__tag.N, isDecl)
+            // Look for: MaxonLiteralOp(0) + MaxonAssignOp(__tag.N, isDecl).
+            // Bit-packed bool slots (ValueKind == Bool) are excluded: the bit-packed
+            // buffer-patch branch reads each `__arr_*.i` slot by name to pack it, so
+            // collapsing them into a StdBulkZeroOp would erase the vars it loads —
+            // a sized bool Vector.create() (>= 8 zero-init bool slots) otherwise fails
+            // to lower ("key '__arr_*.0' was not present in the dictionary").
             if (ops[i] is MaxonLiteralOp lit0
                 && lit0.ValueKind == MaxonValueKind.Integer && lit0.IntValue == 0
                 && ops[i + 1] is MaxonAssignOp assign0
                 && assign0.Value.Id == lit0.Result.Id
-                && assign0.IsDeclaration) {
+                && assign0.IsDeclaration
+                && assign0.ValueKind != MaxonValueKind.Bool) {
               var dotIdx = assign0.VarName.IndexOf('.');
               if (dotIdx >= 0 && assign0.VarName.StartsWith("__arr_")) {
                 var tag = assign0.VarName[..dotIdx];
@@ -356,6 +362,7 @@ public static partial class MaxonToStandardConversion {
                     && ops[i + 1] is MaxonAssignOp assignN
                     && assignN.Value.Id == litN.Result.Id
                     && assignN.IsDeclaration
+                    && assignN.ValueKind != MaxonValueKind.Bool
                     && assignN.VarName.StartsWith($"{tag}.")) {
                   count++;
                   i += 2;
