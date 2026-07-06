@@ -504,3 +504,37 @@ end 'main'
 ```stdout
 1011 len=4
 ```
+
+<!-- test: literal-remove-crossbyte -->
+```maxon
+// Edge cases for the bit-packed remove shift-down loop: removing index 0 starts
+// the loop at the first bit, and removing from a 9-element literal shifts bits
+// across the byte-0/byte-1 boundary (bit 8 -> bit 7). A byte-scaled shift would
+// no-op both; the bit-loop must slide every trailing bit down one position.
+typealias BoolArray = Array with bool
+
+function printBits(a BoolArray)
+	for b in a 'each'
+		print("1" if b else "0")
+	end 'each'
+	print(" len={a.count()}\n")
+end 'printBits'
+
+function main() returns ExitCode
+	var front = [false, true, true]
+	_ = try front.remove(0) otherwise panic("test invariant: remove OOB")
+	printBits(front)
+
+	var wide = [true, false, true, false, true, false, true, false, true]
+	_ = try wide.remove(4) otherwise panic("test invariant: remove OOB")
+	printBits(wide)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 len=2
+10100101 len=8
+```

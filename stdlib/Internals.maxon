@@ -3107,7 +3107,12 @@ function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, e
 	__mm_incref(newStruct)
 	var newBuf = 0
 	if count > 0 'hasContent'
-		let size = count * elemSize
+		// element_size == 0 is the bit-packed-bool sentinel: capacity is measured
+		// in BITS, so the buffer holds (count + 7) >> 3 bytes (mirrors
+		// __managed_mem_cow_check / grow / slice). The inline path above defers
+		// bit-packed records here, so a byte-scaled `count * 0` would allocate a
+		// ZERO-byte buffer and every bit-write would corrupt the heap.
+		let size = ((count + 7) shr 3) if elemSize == 0 else (count * elemSize)
 		newBuf = __managed_mem_alloc_buffer(size)
 	end 'hasContent'
 	__Internals.storeIndirect(newStruct, value: newBuf)
