@@ -5998,7 +5998,16 @@ function planPhiArgEdgeIncrefs(ctx RcContext, block IrBlock, preds BlockIdArray,
 		// constant-zero null sentinel must NOT be increfed here — `phiArgGetsEdgeIncref`
 		// is the single source of truth for that decision, shared with the term-drop
 		// suppression predicate (`borrowRootDeferredOnEdge`) so the two can never drift.
-		if not phiArgGetsEdgeIncref(ctx, toBlockId: block.id, phiValueId: phiArg.valueId, incoming: incoming) 'noIncref'
+		//
+		// EXCEPTION — one value feeding SEVERAL block-args on the SAME edge (`br dst(%v, %v)`):
+		// its single transferable +1 can MOVE into only the FIRST such phi. `phiArgGetsEdgeIncref`
+		// decides per-phi in isolation, so it would let EVERY co-fed phi take that one move,
+		// leaving the 2nd+ under-referenced — releasing one phi then frees the shared box while
+		// another still holds it (the enum-const `named(T)` UAF: masked when the consuming
+		// `MaxonOp.literal` constructor INLINES its store-incref-new, exposed when it stays
+		// out-of-line under `--fast`). So a later co-fed managed phi takes its OWN edge-incref.
+		let needsEdgeIncref = phiArgGetsEdgeIncref(ctx, toBlockId: block.id, phiValueId: phiArg.valueId, incoming: incoming) or (incoming != phiArg.valueId and edgeValueCarriesPlusOne(ctx, vid: incoming) and moveClaimedByEarlierBlockArgOnEdge(ctx, block: block, predBlock: predBlock, toBlockId: block.id, argIdx: argIdx, incoming: incoming))
+		if not needsEdgeIncref 'noIncref'
 			continue
 		end 'noIncref'
 		// No +1 on this edge — incref the incoming value so the phi owns a
@@ -6020,6 +6029,27 @@ function planPhiArgEdgeIncrefs(ctx RcContext, block IrBlock, preds BlockIdArray,
 		planBorrowRootEdgeRelease(ctx, predId: predId, toBlockId: block.id, borrowed: incoming)
 	end 'eachPred'
 end 'planPhiArgEdgeIncrefs'
+
+// True iff a MANAGED block-arg at an index BEFORE `argIdx` on the SAME predecessor
+// edge is fed the SAME `incoming` value — so that earlier phi already claimed
+// `incoming`'s single moved +1 on this edge, and a later block-arg fed the same
+// value must take its OWN edge-incref instead of a (second) move of the one +1.
+// Same `incoming` ⇒ same `phiArgGetsEdgeIncref` verdict, so if THIS phi would take
+// the move, the earlier same-incoming phi did too — detecting one earlier occurrence
+// is sufficient (the first takes the move; every later one increfs).
+function moveClaimedByEarlierBlockArgOnEdge(ctx RcContext, block IrBlock, predBlock IrBlock, toBlockId BlockId, argIdx NodeIndex, incoming ValueId) returns bool
+	var earlierIdx = 0
+	while earlierIdx < argIdx 'scan'
+		let earlierArg = try block.blockArgs.get(earlierIdx) otherwise panic("moveClaimedByEarlierBlockArgOnEdge: blockArgs.get({earlierIdx}) OOB despite earlierIdx < argIdx")
+		if ctx.isManaged(earlierArg.valueId) 'managedEarlier'
+			if incomingPhiArg(ctx, predBlock: predBlock, toBlockId: toBlockId, argIdx: earlierIdx) == incoming 'sameIncoming'
+				return true
+			end 'sameIncoming'
+		end 'managedEarlier'
+		earlierIdx = earlierIdx + 1
+	end 'scan'
+	return false
+end 'moveClaimedByEarlierBlockArgOnEdge'
 
 // The borrow ROOT whose release defers onto a phi edge when `borrowed` is
 // increfed there, or `REFCOUNT_NO_VALUE` if `borrowed` does not qualify. The
