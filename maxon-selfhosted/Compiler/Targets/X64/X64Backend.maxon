@@ -8082,6 +8082,23 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	// block 2: got_gt — the GT struct is in slot 3 either way.
 	helperMarkBlock(state, code: code, blockId: 2)
 
+	// Zero the whole GreenThread struct. Both allocation paths leave it dirty: a
+	// fresh __slab_alloc region is uninitialized (unlike C#'s zeroed mm_raw_alloc)
+	// and a free-list slot carries its previous tenant's fields. The C# EmitGtSpawn
+	// relies on the whole struct starting at zero, so mirror that here — otherwise
+	// read-before-write fields hold garbage. The critical one is cancel_flag (0x78):
+	// maxon_pipe_overlapped_read's entry cancel-check reads it and, if non-zero,
+	// aborts every I/O with -1 → __subp_read_line_inner returns an empty line →
+	// readStdoutLine reports a spurious EOF → the spec-runner's drain green thread
+	// wrongly declares its (live) worker crashed and the run deadlocks. The io_*
+	// result/handle and fault-redirect fields (0x60-0x80, 0xB0-0xD0) were likewise
+	// uncleared. rep stosq clears all GtStructSize bytes; the explicit non-zero
+	// field stores below still overwrite the ones that need concrete values.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rdi)  // gt
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperMovRegImm(code, dest: X64Register.rcx, value: GtStructSize / 8)  // qword count
+	code.append(b"\xf3\x48\xab")  // rep stosq
+
 	// stack_base = VirtualAlloc(NULL, GtInitialStackSize, MEM_COMMIT|RESERVE, PAGE_RW)
 	// Win64 ABI: rcx=lpAddress, rdx=dwSize, r8=flAllocationType, r9=flProtect → rax
 	code.append(b"\x48\x31\xc9")  // xor rcx, rcx (lpAddress = NULL)
@@ -8112,13 +8129,8 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffFuncPtr, src: X64Register.rax)
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffArgBuf, src: X64Register.rax)
-	// status=ready(0), result=0, waiter=0, next=0, threw=0
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rax)
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffResult, src: X64Register.rax)
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffWaiter, src: X64Register.rax)
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffNext, src: X64Register.rax)
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffThrew, src: X64Register.rax)
+	// status(ready=0), result, waiter, next and threw are already zero from the
+	// whole-struct clear at got_gt; only ioYielded needs a concrete non-zero value.
 	// ioYielded = 1
 	helperMovRegImm(code, dest: X64Register.rax, value: 1)
 	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoYielded, src: X64Register.rax)
