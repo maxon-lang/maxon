@@ -1195,6 +1195,32 @@ type RcContext
 		return paramConsumeBit(self.funcParamConsumes, callee: self.func.name, argIndex: abi)
 	end 'isConsumedInterfaceParamSlot'
 
+	// True iff `slotId` is a by-reference R-VALUE SCRATCH slot — the caller-side backing
+	// `LowerMaxonToStd.byRefArgAddress` materializes when an r-value (literal / expression
+	// / call result / field load) is passed to a by-reference MANAGED parameter
+	// (`allocByRefScratchSlot`). Two shape facts identify it, and both hold BY CONSTRUCTION:
+	//   - it is stack_addr'd (so `isAddressTakenSlot`), because the callee receives its
+	//     ADDRESS; and
+	//   - its slot id is PAST every real scope slot — `allocByRefScratchSlot` seeds the
+	//     cursor at `scope.nextSlot`, which is exactly `slotMaxonTypes.count()` (the parser
+	//     locals/params plus the interface-witness companions), and nothing else stack_addr's
+	//     a slot beyond that bound. So a captured slot at `slotId >= slotMaxonTypes.count()`
+	//     is a scratch slot and only a scratch slot.
+	// Unlike a closure-captured slot it is written EXACTLY ONCE — the caller's spill store;
+	// the callee mutates its content THROUGH the pointer (`store_indirect`), never via a
+	// caller-side `storeSlot`. It therefore has NO prior occupant to release before that
+	// single store (the release-before-store sweep must SKIP it, else it decrefs the slot's
+	// pre-store stack garbage). But its FINAL occupant IS caller-owned — the r-value's +1 was
+	// MOVED in, and a callee write-back leaves the reassigned value's +1 there — so it must be
+	// dropped exactly once at scope exit (`planAddressTakenSlotDrops` covers it via the
+	// address-taken-slot bound, not `slotMaxonTypes.count()`).
+	export function isByRefRvalueScratchSlot(slotId VarSlot) returns bool
+		if slotId < self.func.slotMaxonTypes.count() 'realSlot'
+			return false
+		end 'realSlot'
+		return self.isAddressTakenSlot(slotId)
+	end 'isByRefRvalueScratchSlot'
+
 	export function isReturned(id ValueId) returns bool
 		return try self.returnedValues.get(id) otherwise false
 	end 'isReturned'
@@ -3988,7 +4014,20 @@ end 'planTerminatorDeaths'
 // bootstrap's scope-exit drop of a captured local; the env block itself is freed
 // separately by `planClosureEnvFrees`.
 function planAddressTakenSlotDrops(ctx RcContext)
-	let slotCount = ctx.func.slotMaxonTypes.count()
+	// Cover EVERY address-taken slot, not just the real scope slots. A by-reference
+	// r-value SCRATCH slot (`isByRefRvalueScratchSlot`) is seeded PAST
+	// `slotMaxonTypes.count()`, so bounding the sweep on that count alone would skip
+	// it and leak the r-value's moved-in +1 (its content is caller-owned and released
+	// nowhere else — the caller's SSA-store release was suppressed by
+	// `moveIntoAddressTakenSlot`). The captured-slot bitmap `addressTakenSlots` extends
+	// to the highest stack_addr'd slot, so widening the bound to it picks up the scratch
+	// slots; the non-scratch iterations it adds all miss `addressTakenSlotHoldsManaged`
+	// (nothing else is captured beyond the real slots), so this is a no-op for functions
+	// without an r-value by-reference scratch slot.
+	var slotCount = ctx.func.slotMaxonTypes.count()
+	if ctx.addressTakenSlots.count() > slotCount 'coverScratchSlots'
+		slotCount = ctx.addressTakenSlots.count()
+	end 'coverScratchSlots'
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planAddressTakenSlotDrops: blockRef not in module.blocks")
 		if not block.hasTerminatorOp() 'noTerm'
@@ -4107,10 +4146,17 @@ function planAddressTakenSlotReleaseBeforeStore(ctx RcContext)
 			// release-before-store there would decref the slot's pre-store garbage. Skip it
 			// for the same reason interface value LOCAL slots are skipped; the moved-in +1 is
 			// released by the scope-exit drop (`planAddressTakenSlotDrops`).
-			if isManagedCaptureStore and (ctx.isInterfaceValueLocalSlot(storedSlot) or ctx.isConsumedInterfaceParamSlot(storedSlot)) 'interfaceValueSlot'
+			// A by-reference r-value SCRATCH slot (`isByRefRvalueScratchSlot`) is likewise
+			// written EXACTLY ONCE — the caller's spill of the r-value; the callee mutates it
+			// through the pointer, not via a caller-side `storeSlot`. It has no prior occupant
+			// and, unlike the real scope slots, is NOT zero-init'd at entry (it is seeded past
+			// `slotMaxonTypes.count()`, which the entry zero-init loop bounds on), so a
+			// release-before-store here would decref UNINITIALIZED STACK. Skip it; its single
+			// moved-in +1 is released by the scope-exit drop.
+			if isManagedCaptureStore and (ctx.isInterfaceValueLocalSlot(storedSlot) or ctx.isConsumedInterfaceParamSlot(storedSlot) or ctx.isByRefRvalueScratchSlot(storedSlot)) 'writeOnceNoPriorOccupant'
 				pos = pos + 1
 				continue
-			end 'interfaceValueSlot'
+			end 'writeOnceNoPriorOccupant'
 			if isManagedCaptureStore 'isManagedCaptureStore'
 				// Insert `loadSlot` THEN `decref(loaded)` at the store's own pos so both
 				// land BEFORE the store (same-pos ties apply in reverse plan-order — see

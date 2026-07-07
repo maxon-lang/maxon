@@ -3051,11 +3051,13 @@ type MaxonToStdLowering
 	var reassignedParams as ReassignedParamsKeySet
 	// Pass-by-reference: whole-module `"funcName::paramIndex"` set of parameters
 	// that actually use the by-reference ABI — the subset of `reassignedParams`
-	// whose parameter is an i64 scalar (`maxonTypeIsByRefScalar`), keyed on the
-	// CALLEE's own slot type (a single source of truth so the callee-side
-	// redirect and the caller-side address passing can never disagree about a
-	// parameter's ABI). `self` is excluded. Computed once at the top of
-	// `lower()`; never reset.
+	// whose parameter is by-reference ELIGIBLE (`maxonTypeIsByRefEligible`): either
+	// an i64 scalar (`maxonTypeIsByRefScalar` — simple pointer redirect, no refcount)
+	// OR a managed heap struct (`maxonTypeIsByRefManagedStruct` — pointer redirect
+	// plus manual decref-old / incref-new on the write-back). Keyed on the CALLEE's
+	// own slot type (a single source of truth so the callee-side redirect and the
+	// caller-side address passing can never disagree about a parameter's ABI). `self`
+	// is excluded. Computed once at the top of `lower()`; never reset.
 	var byRefParamKeys as ReassignedParamsKeySet
 	// Pass-by-reference: the current function's own by-reference scalar param
 	// scope slots. A `varLoad` of one dereferences the incoming pointer; a
@@ -5245,12 +5247,13 @@ type MaxonToStdLowering
 	// Pass-by-reference: build the whole-module set of `"funcName::paramIndex"`
 	// keys for parameters that actually use the by-reference ABI. A parameter
 	// qualifies when it is directly reassigned (or a caller forwards it into a
-	// reassigned position — `reassignedParams`), it is an i64 scalar
-	// (`maxonTypeIsByRefScalar`, keyed on the CALLEE's own slot type), and it is
-	// not the receiver `self` (method dispatch never passes self by address).
-	// This is the single source of truth both the callee-side redirect and the
-	// caller-side address passing consult, so they can never disagree about a
-	// parameter's ABI.
+	// reassigned position — `reassignedParams`), it is by-reference ELIGIBLE
+	// (`maxonTypeIsByRefEligible`, keyed on the CALLEE's own slot type — an i64
+	// scalar OR a managed heap struct; the managed case adds decref-old/incref-new
+	// on the pointer write-back), and it is not the receiver `self` (method dispatch
+	// never passes self by address). This is the single source of truth both the
+	// callee-side redirect and the caller-side address passing consult, so they can
+	// never disagree about a parameter's ABI.
 	function buildByRefParamKeys() returns ReassignedParamsKeySet
 		var keys = ReassignedParamsKeySet.create()
 		// Iterate signatures rather than the module's function bodies: a
@@ -8903,11 +8906,11 @@ type MaxonToStdLowering
 		let isNodeSetValue = receiverName == "__ManagedListNode" and methodName == "setValue"
 		if isNodeSetValue and self.nodeSetValueElementIsManaged(argTypes) 'setValueDecrefOld'
 			let oldValueId = self.emitLoadFieldI64(receiverId, offset: NODE_VALUE_OFFSET, dstBlock: dstBlock)
-			var decrefArgs = ValueIdArray.create()
-			decrefArgs.push(oldValueId)
-			let decrefRetId = allocValueId(self.funcIdRef)
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "__mm_decref_maybenull_helper", argIds: decrefArgs)))
-			self.setValueType(decrefRetId, t: MaxonType.integer)
+			// The node's value slot is a field being overwritten — route the decref-old
+			// through the shared helper (which single-sources the `--rc-sanitize` ledger
+			// tag + the `loadFeedsOnlyDecrefOldHelper` contract), tagging it as the
+			// field-overwrite decref-old that it is. Byte-identical in a default build.
+			self.emitMmRefcountCall(oldValueId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock, kind: RcOpKind.fieldOverwriteDecrefOld)
 		end 'setValueDecrefOld'
 
 		let helperName = try managedHandleHelperFor(receiverName, methodName: methodName) otherwise 'noHelper'
@@ -10099,11 +10102,20 @@ type MaxonToStdLowering
 		// result, field load — anything without a caller-visible backing slot)
 		// passed to a parameter-reassigning callee. Coerce it to the parameter
 		// type, spill it into a fresh scratch slot, and hand the callee THAT
-		// slot's address so its dereference reads a valid location. The callee's
-		// write-back lands in the scratch slot and is discarded after the call —
-		// the r-value has no caller-visible identity, so this is exactly
-		// pass-by-value-of-an-rvalue. Mirrors the C# bootstrap's `__ref_temp`
-		// temporary in FlattenCallArgs.
+		// slot's address so its dereference reads a valid location. The r-value
+		// has no caller-visible identity, so this is pass-by-value-of-an-rvalue.
+		// Mirrors the C# bootstrap's `__ref_temp` temporary in FlattenCallArgs.
+		//
+		// Ownership of the scratch slot's content: for a SCALAR by-reference param the
+		// slot holds a bare i64 — no reference to maintain, and the write-back is simply
+		// dropped after the call. For a MANAGED by-reference struct (`Node`) the r-value's
+		// +1 is MOVED into the slot, and a callee write-back leaves the reassigned value's
+		// +1 there — so the slot's FINAL occupant is caller-owned and must be released once
+		// at scope exit. Because the `stackAddr` below makes the slot address-taken, the
+		// late refcount inserter recognizes it (`isByRefRvalueScratchSlot`) and drops its
+		// content at each `ret` (`planAddressTakenSlotDrops`), while SKIPPING the
+		// release-before-store on this single write (the slot has no prior occupant and is
+		// not zero-init'd — see `allocByRefScratchSlot`).
 		let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: range, dstBlock: dstBlock)
 		let scratchSlot = self.allocByRefScratchSlot()
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(scratchSlot, valueId: coercedId)))
@@ -10118,6 +10130,15 @@ type MaxonToStdLowering
 	// function entry, so a scratch slot never aliases a real parser/witness
 	// slot; the backend's `scanLoadedSlots` grows the frame to cover it because
 	// it is referenced by `storeSlot` + `stackAddr`.
+	//
+	// A scratch slot is deliberately NOT registered in `slotMaxonTypes` and NOT
+	// zero-init'd at entry (the entry zero-init loop and the real-slot bounds all
+	// key off `slotMaxonTypes.count()`, which excludes these trailing ids). That is
+	// sound because a scratch slot is written EXACTLY ONCE and the refcount inserter
+	// treats it specially via its address-taken-ness: it is `slotId >=
+	// slotMaxonTypes.count()` + captured, which `isByRefRvalueScratchSlot` uses to
+	// (a) skip the release-before-store that would otherwise decref the slot's
+	// uninitialized stack, and (b) still drop its owned final occupant at scope exit.
 	function allocByRefScratchSlot() returns VarSlot
 		let slot = self.byRefScratchSlotCursor
 		self.byRefScratchSlotCursor = self.byRefScratchSlotCursor + 1
@@ -13757,7 +13778,7 @@ export function signatureFirstParamIsSelf(signature FuncSignature) returns bool
 		return false
 	end 'noParams'
 	let firstParam = try signature.paramNames.get(0) otherwise panic("invariant: paramNames.count() > 0 just checked but get(0) failed")
-	return firstParam == "__self"
+	return firstParam == SELF_PARAM_NAME
 end 'signatureFirstParamIsSelf'
 
 // Recover the source file path of `func` by reading its entry block's

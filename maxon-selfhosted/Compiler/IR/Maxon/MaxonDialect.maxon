@@ -6,6 +6,14 @@
 // of width unification. An i32 is an i32, not "a 32-bit int that lowers to i64".
 // Width/signedness collapse happens only in lowerMaxonToStd.
 
+// The synthetic name the parser gives the implicit receiver parameter of every
+// instance method / struct-or-enum method. A signature whose first parameter is
+// named this is an instance method (the caller passes the receiver by reference);
+// static functions and free functions never have it. Single source of truth for
+// every "is this the self param" check across the parser, type resolution,
+// semantic checks, lowering, and witness-table synthesis.
+export let SELF_PARAM_NAME = "__self"
+
 export typealias ValueIdArray = Array with ValueId
 
 // Multi-push conveniences for ValueIdArray, shared by every pass that
@@ -656,7 +664,7 @@ export function referenceableFunctionTypeId(project Project, qualified String) r
 	let sig = try project.funcSignatures.get(qualified) otherwise panic("referenceableFunctionTypeId: funcSignatures.contains(true) but get() failed for '{qualified}'")
 	if sig.paramNames.count() > 0 'hasParams'
 		let firstParam = try sig.paramNames.get(0) otherwise panic("referenceableFunctionTypeId: paramNames.get(0) failed after count guard")
-		if firstParam == "__self" 'isInstanceMethod'
+		if firstParam == SELF_PARAM_NAME 'isInstanceMethod'
 			return (false, 0 as FunctionTypeId)
 		end 'isInstanceMethod'
 	end 'hasParams'
@@ -3271,7 +3279,7 @@ end 'OverloadLabelError'
 // itself already records whether `__self` is present.
 function signatureFirstUserParamIndex(sig FuncSignature) returns ParsedInt
 	let firstParam = try sig.paramNames.get(0) otherwise return 0
-	if firstParam == "__self" 'hasSelf'
+	if firstParam == SELF_PARAM_NAME 'hasSelf'
 		return 1
 	end 'hasSelf'
 	return 0

@@ -521,7 +521,7 @@ end 'findOverloadMatchingSignature'
 // must keep the names the same as the interface or call sites that go through
 // the interface will fail to bind.
 function signatureMatches(project Project, expected InterfaceMethodSig, actualParamNames StringArray, actualParamTypes MaxonTypeArray, actualReturn MaxonReturnType) returns bool
-	let skipSelf = 1 if actualParamNames.count() > 0 and (try actualParamNames.get(0) otherwise "") == "__self" else 0
+	let skipSelf = 1 if actualParamNames.count() > 0 and (try actualParamNames.get(0) otherwise "") == SELF_PARAM_NAME else 0
 	let actualUserCount = actualParamNames.count() - skipSelf
 	if actualUserCount != expected.paramTypes.count() 'arity'
 		return false
@@ -717,7 +717,7 @@ end 'formatReturnPart'
 // so instance methods print as `name(p1 T1, p2 T2) returns R` without leaking
 // the implicit self parameter into user-facing diagnostics.
 function formatActualSignature(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType) returns String
-	let skipSelf = 1 if paramNames.count() > 0 and (try paramNames.get(0) otherwise "") == "__self" else 0
+	let skipSelf = 1 if paramNames.count() > 0 and (try paramNames.get(0) otherwise "") == SELF_PARAM_NAME else 0
 	let paramList = formatParamList(project, paramNames: paramNames, paramTypes: paramTypes, startIndex: skipSelf)
 	return "{methodName}({paramList}){formatReturnPart(project, returnType: returnType)}"
 end 'formatActualSignature'

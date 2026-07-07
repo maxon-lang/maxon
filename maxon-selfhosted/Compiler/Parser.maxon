@@ -2086,9 +2086,9 @@ export type Parser
 		// enclosing type; lowerMaxonToStd resolves it to i64 (pointer width).
 		if isInstance 'addSelfParam'
 			let selfMaxonType = internMaxonType(project, name: typeName)
-			let selfSlot = defineVariableWithType("__self", varType: selfMaxonType)
+			let selfSlot = defineVariableWithType(SELF_PARAM_NAME, varType: selfMaxonType)
 			paramTypes.push(selfMaxonType)
-			paramNames.push("__self")
+			paramNames.push(SELF_PARAM_NAME)
 			paramDefaults.push(ParamDefault.none)
 			paramCount = paramCount + 1
 			// C1.d: `__self`'s type is the ENCLOSING type, fully known at parse
@@ -17936,7 +17936,7 @@ export type Parser
 
 	// Emit a varLoad for the implicit `__self` slot and return the fresh name
 	// that holds the struct pointer. Caller must ensure we are inside an
-	// instance method — in a static context lookupVariable("__self", …) will
+	// instance method — in a static context lookupVariable(SELF_PARAM_NAME, …) will
 	// report "Undefined variable '__self'".
 	//
 	// Inside a closure body (`inClosure == true`), `__self` lives in the
@@ -17948,10 +17948,10 @@ export type Parser
 	// "Undefined variable '__self'".
 	function emitSelfLoad(block IrBlock, token Token, range SourceRange) returns ByteArray
 		let selfType = internMaxonType(project, name: currentTypeName)
-		if inClosure and not scope.contains("__self") and closureOuterScope.contains("__self") 'captureSelf'
-			return emitClosureCapture(block, name: "__self", captureType: selfType, range: range)
+		if inClosure and not scope.contains(SELF_PARAM_NAME) and closureOuterScope.contains(SELF_PARAM_NAME) 'captureSelf'
+			return emitClosureCapture(block, name: SELF_PARAM_NAME, captureType: selfType, range: range)
 		end 'captureSelf'
-		let selfSlot = lookupVariable("__self", token: token)
+		let selfSlot = lookupVariable(SELF_PARAM_NAME, token: token)
 		let selfLoadName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: selfType, range: range))
 		return selfLoadName
@@ -18967,7 +18967,7 @@ function synthesizeEnumHashMethod(project Project, module MaxonModule, namespace
 	end 'alreadyRegistered'
 
 	var paramNames = StringArray.create()
-	paramNames.push("__self")
+	paramNames.push(SELF_PARAM_NAME)
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(enumMaxonType)
 	let returnType = MaxonReturnType.value(MaxonType.integer)
@@ -18975,7 +18975,7 @@ function synthesizeEnumHashMethod(project Project, module MaxonModule, namespace
 	var func = registerSynthMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
 
 	var synthCounter = 0 as ParsedInt
-	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
+	let selfSlot = func.scope.declareShadowing(SELF_PARAM_NAME, varType: enumMaxonType, mutable: false)
 	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
 	let primName = emitEnumSelfAsPrimitive(module, block: entryBlock, slot: selfSlot, enumMaxonType: enumMaxonType, valueType: valueType, synthCounter: synthCounter)
 	synthCounter = synthCounter + 2
@@ -18998,7 +18998,7 @@ function synthesizeEnumEqualsMethod(project Project, module MaxonModule, namespa
 	end 'alreadyRegistered'
 
 	var paramNames = StringArray.create()
-	paramNames.push("__self")
+	paramNames.push(SELF_PARAM_NAME)
 	paramNames.push("other")
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(enumMaxonType)
@@ -19008,7 +19008,7 @@ function synthesizeEnumEqualsMethod(project Project, module MaxonModule, namespa
 	var func = registerSynthMethod(project, namespace: namespace, filePath: filePath, funcName: funcName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
 
 	var synthCounter = 0 as ParsedInt
-	let selfSlot = func.scope.declareShadowing("__self", varType: enumMaxonType, mutable: false)
+	let selfSlot = func.scope.declareShadowing(SELF_PARAM_NAME, varType: enumMaxonType, mutable: false)
 	let otherSlot = func.scope.declareShadowing("other", varType: enumMaxonType, mutable: false)
 	var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
 
@@ -19283,13 +19283,13 @@ function synthesizeStructCloneImpl(project Project, module MaxonModule, structNa
 	let column = st.nameColumn
 
 	var paramNames = StringArray.create()
-	paramNames.push("__self")
+	paramNames.push(SELF_PARAM_NAME)
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(structMaxonType)
 
 	var func = registerSynthMethod(project, namespace: "", filePath: st.sourceFilePath, funcName: cloneName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, visibility: visibility, line: line, column: column)
 
-	let selfSlot = func.scope.declareShadowing("__self", varType: structMaxonType, mutable: false)
+	let selfSlot = func.scope.declareShadowing(SELF_PARAM_NAME, varType: structMaxonType, mutable: false)
 	var entryBlock = module.addBlockAt(func, label: "entry", filePath: st.sourceFilePath.toString(), firstLine: line)
 
 	var synthCounter = 0 as ParsedInt

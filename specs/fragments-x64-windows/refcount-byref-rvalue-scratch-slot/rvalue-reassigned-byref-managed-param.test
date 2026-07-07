@@ -1,0 +1,139 @@
+// Test: rvalue-reassigned-byref-managed-param
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var value as Integer
+
+	static function create(v Integer) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Node'
+
+function reassign(n Node) returns Integer
+	let before = n.value
+	n = Node.create(99)
+	return before + n.value
+end 'reassign'
+
+function main() returns ExitCode
+	print("r={reassign(Node.create(1))}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+r=100
+```
+---
+// CompiledIR
+module {
+  func @reassign(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r12, [r8+0] (8b)
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 99
+    x64.mov [r13+0], r8 (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r13 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, r12
+    x64.add r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=160
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 1
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbp-8], rbx
+    x64.lea rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.call reassign
+    x64.mov rbx, r8
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call mrt_i64_to_string
+    x64.mov rbx, r8
+    x64.xor r13d, r13d
+    x64.mov r8, rbx
+    x64.add r8, 2
+    x64.mov r14, r8
+    x64.add r14, 0
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r15, r8
+    x64.mov r8d, 2
+    x64.lea r9, [rip+__istr_0]
+    x64.mov [rbp-24], r15
+    x64.mov [rbp-32], r9
+    x64.mov [rbp-40], r8
+    x64.rep_movsb
+    x64.mov r8, r15
+    x64.add r8, 2
+    x64.mov [rbp-48], r8
+    x64.mov [rbp-56], r12
+    x64.mov [rbp-64], rbx
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, rbx
+    x64.mov [rbp-72], r8
+    x64.mov [rbp-80], r9
+    x64.mov [rbp-88], r13
+    x64.rep_movsb
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.mov [rbx+40], r8 (8b)
+    x64.mov [rbx+0], r15 (8b)
+    x64.mov [rbx+8], r14 (8b)
+    x64.mov [rbx+16], r14 (8b)
+    x64.mov r8d, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], rbx (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov rdx, [r8+8] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov rcx, [rbp-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+}
+---
