@@ -3366,8 +3366,20 @@ function emitX64SubprocessRuntime(code ByteArray, relocations RelocationArray, c
 	// error per Phase 1). __subp_rli_append + __subp_read_line_inner are emitted
 	// before the read-line wrappers that call them (label resolution is by
 	// callFixup, but keeping the definition order matches the call graph).
+	//
+	// Overlapped-pipe machinery (the streaming-drain deadlock fix): the streaming
+	// stdout/stderr read ends are FILE_FLAG_OVERLAPPED named pipes registered with
+	// the IOCP (__subp_create_overlapped_pipe), and __subp_read_line_inner drives
+	// them via maxon_pipe_overlapped_read, which YIELDS the green thread on
+	// ERROR_IO_PENDING instead of blocking the scheduler M. Mirrors the C#
+	// bootstrap (EmitMaxonSubprocessCreateOverlappedPipe / EmitPipeOverlappedRead).
+	// Emitted before read_line_inner / spawn_streaming that call them.
+	emitX64SubprocessWideAppendU64(code, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64SubprocessBuildPipeNameWide(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64SubprocessCreateOverlappedPipe(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64PipeOverlappedRead(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessReadLineAppend(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
-	emitX64SubprocessReadLineInner(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64SubprocessReadLineInner(code, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessReadStdoutLine(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessReadStderrLine(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessSpawnStreaming(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -4721,13 +4733,6 @@ function emitX64SubprocessSpawnStreaming(code ByteArray, relocations RelocationA
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
 	helperStoreSlot(code, slotIndex: 5, src: X64Register.r8)  // cmdline
-	// SECURITY_ATTRIBUTES: nLength=24 @slot15, lpSD=0 @slot14, bInherit=1 @slot13.
-	helperMovRegImm(code, dest: X64Register.rax, value: 24)
-	helperStoreSlot(code, slotIndex: 15, src: X64Register.rax)
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	helperStoreSlot(code, slotIndex: 14, src: X64Register.rax)
-	helperMovRegImm(code, dest: X64Register.rax, value: 1)
-	helperStoreSlot(code, slotIndex: 13, src: X64Register.rax)
 	// STARTUPINFOEX: cb=112 @slot31 (STARTUPINFOW(104) + lpAttributeList(8));
 	// dwFlags=STARTF_USESTDHANDLES @SI+0x3C.
 	helperMovRegImm(code, dest: X64Register.rax, value: 112)
@@ -4735,53 +4740,39 @@ function emitX64SubprocessSpawnStreaming(code ByteArray, relocations RelocationA
 	helperLeaStackSlot(code, slotIndex: 31, dest: X64Register.rax)  // SI base
 	helperMovRegImm(code, dest: X64Register.rcx, value: 256)  // STARTF_USESTDHANDLES = 0x100
 	helperStoreIndirect(code, base: X64Register.rax, disp: 0x3C, src: X64Register.rcx)
-	// stdin pipe: CreatePipe(&hStdinRead@6, &hStdinWrite@7, &SA, 0). SA.bInherit=1
-	// makes BOTH ends inheritable; strip inheritance off the parent WRITE end so
-	// only the child inherits the read end. The parent write end stays open for
-	// writeStdinLine; close_stdin / release_handle close it.
-	helperLeaStackSlot(code, slotIndex: 6, dest: X64Register.rcx)  // &hStdinRead (child)
+	// stdin/stdout/stderr pipes via __subp_create_overlapped_pipe(dirCode, &parent,
+	// &child). Each is a NAMED pipe so the parent stdout/stderr READ ends can be
+	// FILE_FLAG_OVERLAPPED + IOCP-registered — readStdoutLine/readStderrLine drive
+	// them through maxon_pipe_overlapped_read, which yields the green thread instead
+	// of blocking the scheduler M (the streaming-drain deadlock fix). The helper
+	// writes parent → *arg1, child → *arg2, strips inheritance off the parent end,
+	// and IOCP-registers the read pipes. dirCode 0=stdin (parent writes, sync),
+	// 1=stdout / 2=stderr (parent reads, overlapped). The parent write end (stdin)
+	// stays open for writeStdinLine; close_stdin / release_handle close all parent ends.
+	helperMovRegImm(code, dest: X64Register.rcx, value: 0)  // dirCode = stdin
 	helperLeaStackSlot(code, slotIndex: 7, dest: X64Register.rdx)  // &hStdinWrite (parent)
-	helperLeaStackSlot(code, slotIndex: 15, dest: X64Register.r8)  // &SA
-	helperMovRegImm(code, dest: X64Register.r9, value: 0)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.CreatePipe))
-	helperTestReg(code, reg: X64Register.rax)
+	helperLeaStackSlot(code, slotIndex: 6, dest: X64Register.rax)  // &hStdinRead (child)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_create_overlapped_pipe")
+	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
-	helperLoadSlot(code, slotIndex: 7, dest: X64Register.rcx)  // parent write end
-	helperMovRegImm(code, dest: X64Register.rdx, value: 1)  // HANDLE_FLAG_INHERIT
-	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // clear → not inherited
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.SetHandleInformation))
 	helperLoadSlot(code, slotIndex: 6, dest: X64Register.rax)  // child read end
 	helperStoreSlot(code, slotIndex: 21, src: X64Register.rax)  // SI.hStdInput
-	// stdout pipe: CreatePipe(&hStdoutRead@8, &hStdoutWrite@9, &SA, 0). Strip
-	// inheritance off the parent READ end.
-	helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.rcx)
-	helperLeaStackSlot(code, slotIndex: 9, dest: X64Register.rdx)
-	helperLeaStackSlot(code, slotIndex: 15, dest: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.r9, value: 0)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.CreatePipe))
-	helperTestReg(code, reg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)  // dirCode = stdout
+	helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.rdx)  // &hStdoutRead (parent)
+	helperLeaStackSlot(code, slotIndex: 9, dest: X64Register.rax)  // &hStdoutWrite (child)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_create_overlapped_pipe")
+	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
-	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rcx)
-	helperMovRegImm(code, dest: X64Register.rdx, value: 1)
-	helperMovRegImm(code, dest: X64Register.r8, value: 0)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.SetHandleInformation))
-	helperLoadSlot(code, slotIndex: 9, dest: X64Register.rax)
-	helperStoreSlot(code, slotIndex: 20, src: X64Register.rax)  // SI.hStdOutput = child write end
-	// stderr pipe: CreatePipe(&hStderrRead@10, &hStderrWrite@11, &SA, 0). Strip
-	// inheritance off the parent READ end.
-	helperLeaStackSlot(code, slotIndex: 10, dest: X64Register.rcx)
-	helperLeaStackSlot(code, slotIndex: 11, dest: X64Register.rdx)
-	helperLeaStackSlot(code, slotIndex: 15, dest: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.r9, value: 0)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.CreatePipe))
-	helperTestReg(code, reg: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 9, dest: X64Register.rax)  // child write end
+	helperStoreSlot(code, slotIndex: 20, src: X64Register.rax)  // SI.hStdOutput
+	helperMovRegImm(code, dest: X64Register.rcx, value: 2)  // dirCode = stderr
+	helperLeaStackSlot(code, slotIndex: 10, dest: X64Register.rdx)  // &hStderrRead (parent)
+	helperLeaStackSlot(code, slotIndex: 11, dest: X64Register.rax)  // &hStderrWrite (child)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_create_overlapped_pipe")
+	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
-	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rcx)
-	helperMovRegImm(code, dest: X64Register.rdx, value: 1)
-	helperMovRegImm(code, dest: X64Register.r8, value: 0)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.SetHandleInformation))
-	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rax)
-	helperStoreSlot(code, slotIndex: 19, src: X64Register.rax)  // SI.hStdError = child write end
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rax)  // child write end
+	helperStoreSlot(code, slotIndex: 19, src: X64Register.rax)  // SI.hStdError
 	// ===== Build PROC_THREAD_ATTRIBUTE_LIST with HANDLE_LIST (mirrors the sync
 	// spawn). The stdio handles are now final in SI (slots 21/20/19), so the inherit
 	// vector reads the child-visible handles. Must run BEFORE CreateProcessW. Blocks
@@ -5101,6 +5092,292 @@ function emitX64SubprocessWaitExit(code ByteArray, relocations RelocationArray, 
 	helperEpilogue(code)
 end 'emitX64SubprocessWaitExit'
 
+// __subp_wide_append_u64(buf=rcx, value=rdx) → (r8) the cursor one past the last
+// digit written. Renders `value` as decimal UTF-16 code units into the caller's
+// buffer (no NUL). Always writes at least one digit ('0' for value 0). A leaf
+// helper — no IAT / runtime calls — so it clobbers only volatile regs and a small
+// stack scratch. Ports the C# __subp_wide_append_u64. The scratch buffer at the
+// bottom of the frame (base &slot5) holds up to 20 ASCII digit bytes written
+// ascending, then re-read descending and widened to wchars into the output.
+function emitX64SubprocessWideAppendU64(code ByteArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_wide_append_u64", offset: code.count())
+	// Blocks: 0=entry (+ value==0 case), 1=div_loop, 2=write_setup, 3=emit, 4=done.
+	var state = Win32HelperState.create(5, outgoingBytes: 0, localBytes: 48)
+	helperPrologue(code, frameSize: 48)
+	helperMarkBlock(state, code: code, blockId: 0)
+	emitMovRegRegOp(code, dest: X64Register.r9, src: X64Register.rcx)  // r9 = buf (survives)
+	emitMovRegRegOp(code, dest: X64Register.r11, src: X64Register.rdx)  // r11 = value
+	helperLeaStackSlot(code, slotIndex: 5, dest: X64Register.rdi)  // rdi = scratch write ptr
+	helperMovRegImm(code, dest: X64Register.r10, value: 0)  // r10 = digit count
+	helperTestReg(code, reg: X64Register.r11)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 1)  // jnz div_loop
+	// value == 0 → a single '0' digit.
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0x30)  // '0'
+	helperStoreByteRcx(code, base: X64Register.rdi, disp: 0, src: X64Register.rdx)
+	emitAddRegImmParam(code, dest: X64Register.rdi, value: 1)
+	emitAddRegImmParam(code, dest: X64Register.r10, value: 1)
+	helperEmitJmp(code, state: state, targetBlock: 2)  // write_setup
+
+	helperMarkBlock(state, code: code, blockId: 1)  // div_loop
+	helperTestReg(code, reg: X64Register.r11)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz write_setup
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r11)  // rax = value
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)  // rdx = 0 (high dividend)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 10)
+	code.append(b"\x48\xf7\xf1")  // div rcx → rax=quotient, rdx=remainder
+	emitMovRegRegOp(code, dest: X64Register.r11, src: X64Register.rax)  // value = quotient
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: 0x30)  // digit → ASCII
+	helperStoreByteRcx(code, base: X64Register.rdi, disp: 0, src: X64Register.rdx)
+	emitAddRegImmParam(code, dest: X64Register.rdi, value: 1)
+	emitAddRegImmParam(code, dest: X64Register.r10, value: 1)
+	helperEmitJmp(code, state: state, targetBlock: 1)
+
+	helperMarkBlock(state, code: code, blockId: 2)  // write_setup
+	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r9)  // output cursor = buf
+	helperLeaStackSlot(code, slotIndex: 5, dest: X64Register.rsi)  // scratch base
+	emitAddRegRegParam(code, dest: X64Register.rsi, src: X64Register.r10)  // + count
+	emitAddRegImmParam(code, dest: X64Register.rsi, value: -1)  // rsi → last digit byte
+
+	helperMarkBlock(state, code: code, blockId: 3)  // emit
+	helperTestReg(code, reg: X64Register.r10)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)  // jz done
+	helperLoadByte(code, dest: X64Register.rax, base: X64Register.rsi, disp: 0)  // movzx rax, digit
+	helperStoreWordRegLow(code, base: X64Register.rdi, disp: 0, src: X64Register.rax)  // wchar
+	emitAddRegImmParam(code, dest: X64Register.rdi, value: 2)
+	emitAddRegImmParam(code, dest: X64Register.rsi, value: -1)
+	emitAddRegImmParam(code, dest: X64Register.r10, value: -1)
+	helperEmitJmp(code, state: state, targetBlock: 3)
+
+	helperMarkBlock(state, code: code, blockId: 4)  // done
+	emitMovRegRegOp(code, dest: X64Register.r8, src: X64Register.rdi)  // return cursor
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64SubprocessWideAppendU64'
+
+// __subp_build_pipe_name_wide(buf=rcx, dirCode=rdx) → void. Writes a
+// NUL-terminated UTF-16 name L"\\.\pipe\maxon_stream_<pid>_<seq>_<dir>" into the
+// caller's 256-byte buffer at `buf`. The per-process PID (read import-free from
+// the TEB at gs:[0x40]) plus a LOCK-XADD'd `__subp_stream_pipe_seq` counter make
+// every FIRST_PIPE_INSTANCE name globally unique across concurrent spawns and
+// sibling worker processes. Ports the C# __subp_build_pipe_name_wide.
+// Slots: 0=dirCode, 1=cursor.
+function emitX64SubprocessBuildPipeNameWide(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_build_pipe_name_wide", offset: code.count())
+	var state = Win32HelperState.create(1, outgoingBytes: 32, localBytes: 16)
+	helperPrologue(code, frameSize: 48)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rdx)  // dirCode
+	// Write the fixed prefix L"\\.\pipe\maxon_stream_" (22 wchars) into buf (rcx).
+	emitX64WritePipeNamePrefix(code, base: X64Register.rcx)
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 44)  // cursor = buf + 22 wchars
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rcx)
+	// Append the current process id (TEB.ClientId.UniqueProcess at gs:[0x40]).
+	code.append(b"\x65\x48\x8b\x04\x25\x40\x00\x00\x00")  // mov rax, gs:[0x40]
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)  // buf = cursor
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.rax)  // value = pid
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_wide_append_u64")
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.r8)  // cursor = new pos
+	// Append L"_".
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreWordImm(code, base: X64Register.rcx, disp: 0, value: 0x5F)  // '_'
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 2)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rcx)
+	// seq = (LOCK XADD __subp_stream_pipe_seq, 1) + 1 (post-increment value).
+	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__subp_stream_pipe_seq", rdataRelocs: rdataRelocs)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	emitLockXaddMemRegOp(code, addrReg: X64Register.rax, valReg: X64Register.rcx)  // rcx = prior value
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 1)
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.rcx)  // value = seq
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)  // buf = cursor
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_wide_append_u64")
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.r8)
+	// Append L"_".
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreWordImm(code, base: X64Register.rcx, disp: 0, value: 0x5F)  // '_'
+	emitAddRegImmParam(code, dest: X64Register.rcx, value: 2)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rcx)
+	// Append the direction digit (0/1/2).
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)  // buf = cursor
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)  // value = dirCode
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_wide_append_u64")
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.r8)
+	// NUL-terminate.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperStoreWordImm(code, base: X64Register.rcx, disp: 0, value: 0)
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // void
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64SubprocessBuildPipeNameWide'
+
+// Write the 22-wchar literal prefix L"\\.\pipe\maxon_stream_" into [base] as
+// UTF-16 code units (44 bytes, no NUL). The code units are emitted inline rather
+// than via an rdata blob so the helper is self-contained.
+function emitX64WritePipeNamePrefix(code ByteArray, base X64Register)
+	// "\\.\pipe\maxon_stream_" — two leading backslashes, ".", backslash, "pipe",
+	// backslash, "maxon_stream_".
+	helperStoreWordImm(code, base: base, disp: 0, value: 0x5C)  // '\'
+	helperStoreWordImm(code, base: base, disp: 2, value: 0x5C)  // '\'
+	helperStoreWordImm(code, base: base, disp: 4, value: 0x2E)  // '.'
+	helperStoreWordImm(code, base: base, disp: 6, value: 0x5C)  // '\'
+	helperStoreWordImm(code, base: base, disp: 8, value: 0x70)  // 'p'
+	helperStoreWordImm(code, base: base, disp: 10, value: 0x69)  // 'i'
+	helperStoreWordImm(code, base: base, disp: 12, value: 0x70)  // 'p'
+	helperStoreWordImm(code, base: base, disp: 14, value: 0x65)  // 'e'
+	helperStoreWordImm(code, base: base, disp: 16, value: 0x5C)  // '\'
+	helperStoreWordImm(code, base: base, disp: 18, value: 0x6D)  // 'm'
+	helperStoreWordImm(code, base: base, disp: 20, value: 0x61)  // 'a'
+	helperStoreWordImm(code, base: base, disp: 22, value: 0x78)  // 'x'
+	helperStoreWordImm(code, base: base, disp: 24, value: 0x6F)  // 'o'
+	helperStoreWordImm(code, base: base, disp: 26, value: 0x6E)  // 'n'
+	helperStoreWordImm(code, base: base, disp: 28, value: 0x5F)  // '_'
+	helperStoreWordImm(code, base: base, disp: 30, value: 0x73)  // 's'
+	helperStoreWordImm(code, base: base, disp: 32, value: 0x74)  // 't'
+	helperStoreWordImm(code, base: base, disp: 34, value: 0x72)  // 'r'
+	helperStoreWordImm(code, base: base, disp: 36, value: 0x65)  // 'e'
+	helperStoreWordImm(code, base: base, disp: 38, value: 0x61)  // 'a'
+	helperStoreWordImm(code, base: base, disp: 40, value: 0x6D)  // 'm'
+	helperStoreWordImm(code, base: base, disp: 42, value: 0x5F)  // '_'
+end 'emitX64WritePipeNamePrefix'
+
+// __subp_create_overlapped_pipe(dirCode=rcx, parentSlotPtr=rdx, childSlotPtr=rax)
+// → (r8) 1 on success, 0 on failure. Creates one redirected-stdio pipe as a
+// NAMED pipe so the parent-side handle can be FILE_FLAG_OVERLAPPED (anonymous
+// CreatePipe handles cannot). dirCode 0 = stdin (parent writes, sync — no
+// OVERLAPPED, no IOCP), 1 = stdout / 2 = stderr (parent reads, OVERLAPPED +
+// IOCP-registered so maxon_pipe_overlapped_read can yield the green thread). The
+// child end is an inheritable CreateFileW handle; the parent end has inheritance
+// stripped. Writes parent → *parentSlotPtr, child → *childSlotPtr. Ports the C#
+// __subp_create_overlapped_pipe. Slots: 0=dirCode, 1=parentSlotPtr, 2=childSlotPtr,
+// 3=parentHandle, 4=childHandle, 5=openMode/childAccess scratch; SA at slots 6..8
+// (base &slot8); wide name at slots 9..28 (160 bytes, base &slot28 — the name is at
+// most ~56 wchars: 22 prefix + ≤10 pid + ≤20 seq + 2 separators + 1 dir + NUL).
+function emitX64SubprocessCreateOverlappedPipe(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_create_overlapped_pipe", offset: code.count())
+	// Blocks: 0=entry, 1=stdin_mode, 2=access_done, 3=child_read, 4=child_access_done,
+	//   5=skip_iocp, 6=success, 7=close_parent_fail, 8=fail.
+	// localBytes 232 = 29 slots (0..28): scalars 0..5, SA 6..8, wide name 9..28.
+	var state = Win32HelperState.create(9, outgoingBytes: 80, localBytes: 232)
+	helperPrologue(code, frameSize: 320)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // dirCode
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // parentSlotPtr
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // childSlotPtr
+	// Build the pipe name into the 160-byte buffer (base = &slot28).
+	helperLeaStackSlot(code, slotIndex: 28, dest: X64Register.rcx)  // &wideName
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)  // dirCode
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_build_pipe_name_wide")
+	// SECURITY_ATTRIBUTES (base &slot8): nLength=24 @0, lpSD=0 @8, bInherit=1 @16.
+	helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.rdi)
+	helperMovRegImm(code, dest: X64Register.rax, value: 24)
+	helperStoreIndirect(code, base: X64Register.rdi, disp: 0, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreIndirect(code, base: X64Register.rdi, disp: 8, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreIndirect(code, base: X64Register.rdi, disp: 16, src: X64Register.rax)
+	// openMode: dirCode 0 → 0x00080002 (OUTBOUND | FIRST_PIPE_INSTANCE, sync);
+	// dirCode 1/2 → 0x40080001 (INBOUND | OVERLAPPED | FIRST_PIPE_INSTANCE).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz stdin_mode
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x40080001)
+	helperEmitJmp(code, state: state, targetBlock: 2)  // access_done
+	helperMarkBlock(state, code: code, blockId: 1)  // stdin_mode
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x00080002)
+	helperMarkBlock(state, code: code, blockId: 2)  // access_done (openMode in rax)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // openMode
+	// CreateNamedPipeW(name, openMode, pipeMode=0, nMaxInstances=1,
+	//   nOutBuf=0x10000, nInBuf=0x10000, nDefaultTimeout=0, lpSA=NULL). 8 args →
+	// system stack; frameSize 0x40 = shadow(0x20) + 4 stack args.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	helperLeaStackSlot(code, slotIndex: 28, dest: X64Register.rcx)  // name
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // openMode
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (pipeMode = 0)
+	helperMovRegImm(code, dest: X64Register.r9, value: 1)  // nMaxInstances
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x10000)
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // nOutBufferSize
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // nInBufferSize
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 0x30, srcReg: X64Register.rax)  // nDefaultTimeOut = 0
+	emitMovRspOffsetReg(code, offset: 0x38, srcReg: X64Register.rax)  // lpSecurityAttributes = NULL
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.CreateNamedPipeW))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	// INVALID_HANDLE_VALUE (-1) → fail.
+	helperMovRegImm(code, dest: X64Register.rcx, value: -1)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 8)  // je fail
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)  // parentHandle
+	// childAccess: dirCode 0 → GENERIC_READ (0x80000000), else GENERIC_WRITE (0x40000000).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // jz child_read
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x40000000)  // GENERIC_WRITE
+	helperEmitJmp(code, state: state, targetBlock: 4)  // child_access_done
+	helperMarkBlock(state, code: code, blockId: 3)  // child_read
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x80000000)  // GENERIC_READ
+	helperMarkBlock(state, code: code, blockId: 4)  // child_access_done (childAccess in rax)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // childAccess
+	// CreateFileW(name, childAccess, 0, &SA, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL).
+	// 7 args → system stack; frameSize 0x40.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	helperLeaStackSlot(code, slotIndex: 28, dest: X64Register.rcx)  // name
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // childAccess
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (dwShareMode = 0)
+	helperLeaStackSlot(code, slotIndex: 8, dest: X64Register.r9)  // &SA (inheritable)
+	helperMovRegImm(code, dest: X64Register.rax, value: 3)  // OPEN_EXISTING
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x80)  // FILE_ATTRIBUTE_NORMAL
+	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 0x30, srcReg: X64Register.rax)  // hTemplateFile = NULL
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.CreateFileW))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x40)
+	helperMovRegImm(code, dest: X64Register.rcx, value: -1)
+	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // je close_parent_fail
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)  // childHandle
+	// Strip inheritance from the parent-side (server) handle so only the child's
+	// CreateFileW handle is inherited.
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // parentHandle
+	helperMovRegImm(code, dest: X64Register.rdx, value: 1)  // HANDLE_FLAG_INHERIT
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (clear the flag)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.SetHandleInformation))
+	// Register the parent read end with the IOCP for READ pipes (dirCode != 0).
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz skip_iocp
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // parentHandle
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rdx, name: "__io_iocp")
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (completion key = 0)
+	code.append(b"\x4d\x31\xc9")  // xor r9, r9 (concurrent threads = 0)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.CreateIoCompletionPort))
+	// SetFileCompletionNotificationModes(parentHandle, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS=1).
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 1)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.SetFileCompletionNotificationModes))
+	helperMarkBlock(state, code: code, blockId: 5)  // skip_iocp
+	// *parentSlotPtr = parentHandle ; *childSlotPtr = childHandle ; return 1.
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)  // parentSlotPtr
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // parentHandle
+	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)  // childSlotPtr
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)  // childHandle
+	helperStoreIndirect(code, base: X64Register.rax, disp: 0, src: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.r8, value: 1)
+	helperEmitJmp(code, state: state, targetBlock: 6)  // success (single epilogue)
+	helperMarkBlock(state, code: code, blockId: 6)  // success
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+	// CreateFileW failed — close the parent-side handle, then fail.
+	helperMarkBlock(state, code: code, blockId: 7)  // close_parent_fail
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.CloseHandle))
+	helperMarkBlock(state, code: code, blockId: 8)  // fail
+	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__subp_err_create_pipe", rdataRelocs: rdataRelocs)
+	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__subp_last_error")
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)
+	helperEpilogue(code)
+end 'emitX64SubprocessCreateOverlappedPipe'
+
 // __subp_rli_append(resultBufAddr=rcx, resultCapAddr=rdx, resultLenAddr=rax,
 //   n=r9, src=rsi) → (r8) 1 on success, 0 on alloc failure. Appends n bytes from
 // `src` to the caller's growable result buffer, growing (doubling, with a +1 NUL
@@ -5205,7 +5482,7 @@ end 'emitX64SubprocessReadLineAppend'
 // 4=maxBytes, 5=hRead, 6=pushbackPtrAddr, 7=pushbackLenAddr, 8=resultBuf,
 // 9=resultCap, 10=resultLen, 11=pushbackPtr, 12=pushbackLen, 13=chunkBuf,
 // 14=nRead, 15=newlineIdx, 16=mm, 17=tailLen.
-function emitX64SubprocessReadLineInner(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+function emitX64SubprocessReadLineInner(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_read_line_inner", offset: code.count())
 	// Blocks: 0 (entry), 1 (eof_initial), 2 (pb_scan), 3 (pb_nl), 4 (pb_no_nl),
 	// 5 (pb_done), 6 (rf_loop), 7 (chunk_scan), 8 (chunk_nl), 9 (chunk_no_nl),
@@ -5329,24 +5606,18 @@ function emitX64SubprocessReadLineInner(code ByteArray, relocations RelocationAr
 	emitCmpRegRegOp(code, lhs: X64Register.rcx, rhs: X64Register.rax)  // cmp len, maxBytes
 	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 10)  // jae finish (len >= maxBytes)
 	helperMarkBlock(state, code: code, blockId: 13)  // rf_read
-	// nRead = 0 (zero high half); ReadFile(hRead, chunkBuf, 4096, &nRead, NULL).
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	helperStoreSlot(code, slotIndex: 14, src: X64Register.rax)  // nRead = 0
+	// nRead = maxon_pipe_overlapped_read(hRead, chunkBuf, 4096). Overlapped ReadFile
+	// that YIELDS the green thread on ERROR_IO_PENDING instead of blocking the
+	// scheduler M — the streaming-drain deadlock fix. Returns bytesRead (>0), 0 on
+	// clean EOF, or -1 on error; both non-positive results terminate the read loop.
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // hRead
 	helperLoadSlot(code, slotIndex: 13, dest: X64Register.rdx)  // chunk buf
-	helperMovRegImm(code, dest: X64Register.r8, value: 4096)
-	helperLeaStackSlot(code, slotIndex: 14, dest: X64Register.r9)  // &nRead
-	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)  // lpOverlapped = NULL
-	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.ReadFile))
-	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
-	code.append(b"\x89\xc0")  // mov eax, eax — clear the dirty high half before the 64-bit test
+	helperMovRegImm(code, dest: X64Register.rax, value: 4096)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "maxon_pipe_overlapped_read")  // r8 = bytesRead
+	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
+	helperStoreSlot(code, slotIndex: 14, src: X64Register.rax)  // nRead
 	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz finish (EOF / broken pipe)
-	helperLoadSlot(code, slotIndex: 14, dest: X64Register.rax)  // nRead (slot pre-zeroed → high bytes clean)
-	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz finish (0 bytes = EOF)
+	helperEmitCondJump(code, state: state, opcode: 0x8E, targetBlock: 10)  // jle finish (0 = EOF, <0 = error)
 	// scan chunk[0..nRead) for '\n'. rcx = index.
 	helperMovRegImm(code, dest: X64Register.rcx, value: 0)
 	helperMarkBlock(state, code: code, blockId: 7)  // chunk_scan
@@ -9434,11 +9705,14 @@ function emitX64IoSubmitSync(code ByteArray, relocations RelocationArray, callFi
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffCancelFlag)
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 6)  // jnz cancelled
-	// req = __slab_alloc(IoSyncReqSize) (zeroed).
+	// req = __slab_alloc(IoSyncReqSize).
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoSyncReqSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // req
-	// Fill op/arg0/arg1/waiter ; next stays 0 from the zeroed alloc.
+	// Fill op/arg0/arg1/waiter. __slab_alloc does NOT zero the slot, so explicitly
+	// null req.next — a garbage next link would corrupt the sync-request queue.
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.r8, disp: IoSyncReqOffNext, src: X64Register.rcx)
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoSyncReqOffOp, src: X64Register.rdx)
 	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
@@ -9534,6 +9808,213 @@ function emitX64IoSubmitSync(code ByteArray, relocations RelocationArray, callFi
 	helperEpilogue(code)
 end 'emitX64IoSubmitSync'
 
+// Shared yield → park → resume tail for the overlapped-submit helpers
+// (emitX64IoSubmitOverlapped and emitX64PipeOverlappedRead). By the time it runs,
+// the overlapped ReadFile/WriteFile has returned ERROR_IO_PENDING: this parks the
+// current green thread until the IOCP completion loop (__io_completion_loop →
+// __io_complete_gt) re-enqueues it, then (in the resume block) clears self.io_handle
+// and loads self.io_result_val into r8. Both callers reserve the same six block ids
+// for it — 3=yield, 4=worker_switch, 5=mainthread_loop, 6=mt_run, 7=mt_park,
+// 8=resume — and slot 4 for the GT dequeued while driving the mainthread scheduler
+// loop (matching their entry blocks 0..2). Does NOT call helperFinalize; the caller's
+// final return block resolves the shared block fixups.
+function emitX64GtOverlappedParkResumeTail(code ByteArray, state Win32HelperState, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray)
+	// block 3: yield — I/O pending. If self == mainThread → mainthread_loop else switch.
+	helperMarkBlock(state, code: code, blockId: 3)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStackBase)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz mainthread_loop
+
+	// block 4: worker_switch — self.ioYielded = 0 before switch; mainThread running;
+	// context_switch(self → mainThread).
+	helperMarkBlock(state, code: code, blockId: 4)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffIoYielded, src: X64Register.rax)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r10, disp: POffMainThread + GtOffStatus, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)  // from = self
+	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r10)
+	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
+
+	// block 5: mainthread_loop — drive the scheduler until our I/O completes.
+	helperMarkBlock(state, code: code, blockId: 5)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_check_completions")
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusWaiting)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 8)  // jne resume
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // jz park
+
+	// block 6: mt_run — run the dequeued GT.
+	helperMarkBlock(state, code: code, blockId: 6)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.rcx, value: GtStatusRunning)
+	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rcx)
+	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)  // from = self
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rdx)  // to = g
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
+	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
+	helperEmitJmp(code, state: state, targetBlock: 5)  // re-loop
+
+	// block 7: mt_park — WaitForSingleObject(done event, 50ms), then re-loop.
+	helperMarkBlock(state, code: code, blockId: 7)
+	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__io_done_event")
+	helperMovRegImm(code, dest: X64Register.rdx, value: 50)
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.WaitForSingleObject))
+	helperEmitJmp(code, state: state, targetBlock: 5)
+
+	// block 8: resume — clear io_handle, return self.io_result_val in r8.
+	helperMarkBlock(state, code: code, blockId: 8)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rax)
+	helperLoadIndirect(code, dest: X64Register.r8, base: X64Register.r10, disp: GtOffIoResultVal)
+	helperEpilogue(code)
+end 'emitX64GtOverlappedParkResumeTail'
+
+// maxon_pipe_overlapped_read(handle=rcx, buf=rdx, cap=rax) → (r8) bytesRead
+// (positive), 0 on clean EOF (peer closed / ERROR_BROKEN_PIPE), or -1 on a real
+// error (sets self.io_error_code). Issues an overlapped ReadFile against a
+// FILE_FLAG_OVERLAPPED + IOCP-registered named pipe (__subp_create_overlapped_pipe)
+// and yields the green thread on ERROR_IO_PENDING; the IOCP completion loop
+// (__io_completion_loop → __io_complete_gt) re-readies it with the byte count.
+// Keeping the read off the scheduler M lets N sibling streaming drains multiplex
+// on one M instead of serialising — the streaming line-reader deadlock fix. Ports
+// the C# maxon_pipe_overlapped_read (EmitIoSubmitPipeOverlapped, read side).
+// Internal ABI: 3 params rcx/rdx/rax → slots 0..2; result r8. Slots: 0=handle,
+// 1=buf, 2=cap, 3=ctx, 4=dequeued GT (park tail), 5=bytesOut.
+function emitX64PipeOverlappedRead(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "maxon_pipe_overlapped_read", offset: code.count())
+	// Blocks: 0=entry, 1=sync_err, 2=sync_done, 3..8=park/resume tail, 9=cancelled,
+	// 10=sync_eof.
+	var state = Win32HelperState.create(11, outgoingBytes: 48, localBytes: 48)
+	helperPrologue(code, frameSize: 96)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // handle
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // buf
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.rax)  // cap
+	// Cancel check.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffCancelFlag)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 9)  // jnz cancelled
+	// ctx = __slab_alloc(IoAsyncCtxSize).
+	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
+	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
+	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
+	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
+	// completion packet, so a parked op would never wake (deadlock). Zero the whole
+	// ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
+	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
+	code.append(b"\xf3\x48\xab")  // rep stosq
+	// ctx.waiter = self.
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
+	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
+	// self.io_handle = handle ; self.status = waiting.
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffIoHandle, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusWaiting)
+	helperStoreIndirect(code, base: X64Register.rdx, disp: GtOffStatus, src: X64Register.rax)
+	// Zero the bytesOut slot (ReadFile fills a DWORD on sync completion).
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)
+	// ReadFile(handle, buf, cap, &bytesOut, ctx) — 5 args (4 reg + ctx at [rsp+0x20])
+	// on the per-P system stack. A REAL &bytesOut lets the sync-completion path read
+	// the count without GetOverlappedResult (which misreports 0 on some builds for
+	// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS named pipes).
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r8)
+	helperLeaStackSlot(code, slotIndex: 5, dest: X64Register.r9)  // &bytesOut
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // lpOverlapped = ctx
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.ReadFile))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	code.append(b"\x89\xc0")  // mov eax, eax — clear the dirty high half before the test
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jnz sync_done
+	// FALSE → GetLastError; 997 IO_PENDING → yield; 109 BROKEN_PIPE → EOF; else error.
+	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.GetLastError))
+	code.append(b"\x89\xc0")  // mov eax, eax — Win32 error codes are DWORDs
+	helperCmpRegImm(code, reg: X64Register.rax, value: 997)  // ERROR_IO_PENDING
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // je yield
+	helperCmpRegImm(code, reg: X64Register.rax, value: 109)  // ERROR_BROKEN_PIPE
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // je sync_eof
+
+	// block 1: sync_err — clear io_handle/status, store error, free ctx, return -1.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)  // save error code
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rcx)  // ready
+	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperMovRegImm(code, dest: X64Register.r8, value: -1)
+	helperEpilogue(code)
+
+	// block 2: sync_done — bytesOut already filled; set io_result_val, free ctx, resume.
+	helperMarkBlock(state, code: code, blockId: 2)
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // bytesOut
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoResultVal, src: X64Register.rcx)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rax)  // ready
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
+
+	// blocks 3..8: shared yield → park → resume tail.
+	emitX64GtOverlappedParkResumeTail(code, state: state, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs)
+
+	// block 9: cancelled — store ERROR_OPERATION_ABORTED, return -1.
+	helperMarkBlock(state, code: code, blockId: 9)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0x3EF)  // ERROR_OPERATION_ABORTED
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rax)
+	helperMovRegImm(code, dest: X64Register.r8, value: -1)
+	helperEpilogue(code)
+
+	// block 10: sync_eof — peer closed with no bytes: free ctx, clear, return 0.
+	helperMarkBlock(state, code: code, blockId: 10)
+	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
+	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
+	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rcx)
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffStatus, src: X64Register.rcx)  // ready
+	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoErrorCode, src: X64Register.rcx)  // no error
+	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rcx)  // free ctx
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
+	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (return 0 = EOF)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64PipeOverlappedRead'
+
 // __io_submit_read / __io_submit_write (handle=rcx, buf=rdx, size=rax) -> r8 :
 // issue an overlapped ReadFile / WriteFile and yield the current green thread until
 // IOCP signals completion; return the bytes transferred. `ioFuncSlot` selects the IAT
@@ -9556,10 +10037,19 @@ function emitX64IoSubmitOverlapped(code ByteArray, relocations RelocationArray, 
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffCancelFlag)
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 9)  // jnz cancelled
-	// ctx = __slab_alloc(IoAsyncCtxSize) (zeroed OVERLAPPED + fields).
+	// ctx = __slab_alloc(IoAsyncCtxSize).
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
+	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
+	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
+	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
+	// completion packet, so a parked op would never wake (deadlock). Zero the whole
+	// ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
+	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
+	code.append(b"\xf3\x48\xab")  // rep stosq
 	// ctx.waiter = self.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
@@ -9625,71 +10115,8 @@ function emitX64IoSubmitOverlapped(code ByteArray, relocations RelocationArray, 
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
 	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
 
-	// block 3: yield — I/O pending. If self == mainThread → mainthread_loop else switch.
-	helperMarkBlock(state, code: code, blockId: 3)
-	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
-	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)
-	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStackBase)
-	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz mainthread_loop
-
-	// block 4: worker_switch — self.ioYielded = 0 before switch; mainThread running;
-	// context_switch(self → mainThread).
-	helperMarkBlock(state, code: code, blockId: 4)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperStoreIndirect(code, base: X64Register.rcx, disp: GtOffIoYielded, src: X64Register.rax)
-	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
-	helperMovRegImm(code, dest: X64Register.rax, value: GtStatusRunning)
-	helperStoreIndirect(code, base: X64Register.r10, disp: POffMainThread + GtOffStatus, src: X64Register.rax)
-	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.r10, disp: POffCurrentGt)  // from = self
-	emitMovRegRegOp(code, dest: X64Register.rdx, src: X64Register.r10)
-	emitAddRegImmParam(code, dest: X64Register.rdx, value: POffMainThread)  // to = &P.mainThread
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
-	helperEmitJmp(code, state: state, targetBlock: 8)  // resume
-
-	// block 5: mainthread_loop — drive the scheduler until our I/O completes.
-	helperMarkBlock(state, code: code, blockId: 5)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_process_pending_waiter")
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__io_check_completions")
-	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
-	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
-	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r10, disp: GtOffStatus)
-	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusWaiting)
-	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 8)  // jne resume
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_dequeue")
-	helperTestReg(code, reg: X64Register.r8)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 7)  // jz park
-
-	// block 6: mt_run — run the dequeued GT.
-	helperMarkBlock(state, code: code, blockId: 6)
-	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.rcx, value: GtStatusRunning)
-	helperStoreIndirect(code, base: X64Register.r8, disp: GtOffStatus, src: X64Register.rcx)
-	emitX64GtLoadCurrentP(code, dest: X64Register.rcx, rdataRelocs: rdataRelocs)
-	helperLoadIndirect(code, dest: X64Register.rcx, base: X64Register.rcx, disp: POffCurrentGt)  // from = self
-	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rdx)  // to = g
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_context_switch")
-	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)
-	helperMovRegImm(code, dest: X64Register.rcx, value: 1)
-	helperStoreIndirect(code, base: X64Register.rax, disp: GtOffIoYielded, src: X64Register.rcx)
-	helperEmitJmp(code, state: state, targetBlock: 5)  // re-loop
-
-	// block 7: mt_park — WaitForSingleObject(done event, 50ms), then re-loop.
-	helperMarkBlock(state, code: code, blockId: 7)
-	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, name: "__io_done_event")
-	helperMovRegImm(code, dest: X64Register.rdx, value: 50)
-	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.WaitForSingleObject))
-	helperEmitJmp(code, state: state, targetBlock: 5)
-
-	// block 8: resume — clear io_handle, return self.io_result_val in r8.
-	helperMarkBlock(state, code: code, blockId: 8)
-	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
-	helperLoadIndirect(code, dest: X64Register.r10, base: X64Register.r10, disp: POffCurrentGt)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperStoreIndirect(code, base: X64Register.r10, disp: GtOffIoHandle, src: X64Register.rax)
-	helperLoadIndirect(code, dest: X64Register.r8, base: X64Register.r10, disp: GtOffIoResultVal)
-	helperFinalize(state, code: code)
-	helperEpilogue(code)
+	// blocks 3..8: shared yield → park → resume tail.
+	emitX64GtOverlappedParkResumeTail(code, state: state, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs)
 
 	// block 9: cancelled — store ERROR_OPERATION_ABORTED, return 0.
 	helperMarkBlock(state, code: code, blockId: 9)
