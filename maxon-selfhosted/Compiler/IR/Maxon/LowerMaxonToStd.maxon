@@ -1322,6 +1322,7 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabAlloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabFree", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabInit", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabScavenge", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaAllocChunks", paramNames: mmParamNames1("num"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaFreeChunks", paramNames: mmParamNames3("arenaBase", second: "chunkIndex", third: "numChunks"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMemzero", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
@@ -1342,6 +1343,8 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osAllocPages", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osAllocPagesLarge", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osFreePages", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osDecommitPages", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osRecommitPages", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osWrite", paramNames: mmParamNames2("ptr", second: "len"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osWriteErr", paramNames: mmParamNames2("ptr", second: "len"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osExit", paramNames: mmParamNames1("code"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
@@ -7773,6 +7776,12 @@ type MaxonToStdLowering
 		if methodName == "osFreePages" 'isOsFreePages'
 			return self.lowerInternalsOsFreePages(result, args: args, dstBlock: dstBlock)
 		end 'isOsFreePages'
+		if methodName == "osDecommitPages" 'isOsDecommitPages'
+			return self.lowerInternalsOsDecommitLike(result, args: args, dstBlock: dstBlock, recommit: false)
+		end 'isOsDecommitPages'
+		if methodName == "osRecommitPages" 'isOsRecommitPages'
+			return self.lowerInternalsOsDecommitLike(result, args: args, dstBlock: dstBlock, recommit: true)
+		end 'isOsRecommitPages'
 		if methodName == "osWrite" 'isOsWrite'
 			return self.lowerInternalsOsWriteAny(result, args: args, dstBlock: dstBlock, toStderr: false)
 		end 'isOsWrite'
@@ -8115,6 +8124,34 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsOsFreePages'
+
+	// osDecommitPages(ptr, size) / osRecommitPages(ptr, size): the slab scavenger's
+	// page-discard and page-reback primitives. Both take (ptr, size) and return
+	// void; `recommit` selects which StdSystemOp arm to emit. Mirrors
+	// lowerInternalsOsFreePages (same const-0 result binding for the void call).
+	function lowerInternalsOsDecommitLike(result ByteArray, args ByteArrayArray, dstBlock IrBlock, recommit bool) returns bool
+		if args.count() != 2 'badArity'
+			var opName = "osDecommitPages"
+			if recommit 'isRecommit'
+				opName = "osRecommitPages"
+			end 'isRecommit'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.{opName}: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let ptrName = try args.get(0) otherwise panic("invariant")
+		let sizeName = try args.get(1) otherwise panic("invariant")
+		let ptrId = self.resolveName(ptrName)
+		let sizeId = self.resolveName(sizeName)
+		if recommit 'emitRecommit'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osRecommitPages(ptrId, sizeId: sizeId)))
+		end 'emitRecommit' else 'emitDecommit'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osDecommitPages(ptrId, sizeId: sizeId)))
+		end 'emitDecommit'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsOsDecommitLike'
 
 	function lowerInternalsOsWriteAny(result ByteArray, args ByteArrayArray, dstBlock IrBlock, toStderr bool) returns bool
 		if args.count() != 2 'badArity'
@@ -13627,6 +13664,9 @@ function lookupInternalsRuntimeCallTarget(methodName String) returns InternalsRu
 	end 'a'
 	if methodName == "slabInit" 'a'
 		return InternalsRuntimeCallHit.create("__slab_init", arity: 0 as VarSlot)
+	end 'a'
+	if methodName == "slabScavenge" 'a'
+		return InternalsRuntimeCallHit.create("__slab_scavenge", arity: 0 as VarSlot)
 	end 'a'
 	if methodName == "slabArenaAllocChunks" 'a'
 		return InternalsRuntimeCallHit.create("__slab_arena_alloc_chunks", arity: 1 as VarSlot)

@@ -1952,6 +1952,8 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		osAllocPages gives false
 		osAllocPagesLarge gives false
 		osFreePages gives false
+		osDecommitPages gives false
+		osRecommitPages gives false
 		osFileOpen to osDirMkdir gives false
 		atomicInc gives false
 		atomicDec gives false
@@ -2148,6 +2150,8 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		osAllocPages(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osAllocPagesLarge(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osFreePages gives nextId
+		osDecommitPages gives nextId
+		osRecommitPages gives nextId
 		osFileOpen(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osFileRead(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osFileWrite(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -2580,6 +2584,8 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
+		osDecommitPages(ptrId, sizeId) gives StdSystemOp.osDecommitPages(lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
+		osRecommitPages(ptrId, sizeId) gives StdSystemOp.osRecommitPages(lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
 		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives StdSystemOp.osFileOpen(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId), flagsId: lookupRemap(remap, key: flagsId), fileModeId: lookupRemap(remap, key: fileModeId))
 		osFileRead(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileRead(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), bufPtrId: lookupRemap(remap, key: bufPtrId), countId: lookupRemap(remap, key: countId))
 		osFileWrite(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileWrite(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), bufPtrId: lookupRemap(remap, key: bufPtrId), countId: lookupRemap(remap, key: countId))

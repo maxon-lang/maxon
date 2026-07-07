@@ -156,9 +156,12 @@ export let MACHO_IMPORT_SLOT_PTHREAD_COND_SIGNAL = 54
 export let MACHO_IMPORT_SLOT_SIGPROCMASK = 55
 export let MACHO_IMPORT_SLOT_RAISE = 56
 
+// madvise(addr, len, advice): slab scavenger page discard (osDecommitPages).
+export let MACHO_IMPORT_SLOT_MADVISE = 57
+
 // usleep(microseconds) is already imported at slot 18 (MACHO_IMPORT_SLOT_USLEEP);
 // the wait-collect timeout poll loop reuses it for its inter-poll sleep.
-let MACHO_IMPORT_COUNT = 57
+let MACHO_IMPORT_COUNT = 58
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -258,6 +261,8 @@ function machoImportNames() returns StringArray
 	names.push("_pthread_cond_signal")
 	names.push("_sigprocmask")
 	names.push("_raise")
+	// slot 57: slab scavenger page discard (osDecommitPages → madvise(MADV_FREE)).
+	names.push("_madvise")
 	return names
 end 'machoImportNames'
 

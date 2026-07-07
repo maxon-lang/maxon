@@ -4974,6 +4974,8 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osAllocPages(resultId, sizeId) then writeStdSysOsAllocPages(buf, resultId: resultId, sizeId: sizeId)
 		osAllocPagesLarge(resultId, sizeId) then writeStdSysOsAllocPagesLarge(buf, resultId: resultId, sizeId: sizeId)
 		osFreePages(ptrId, sizeId) then writeStdSysOsFreePages(buf, ptrId: ptrId, sizeId: sizeId)
+		osDecommitPages(ptrId, sizeId) then writeStdSysOsFreePages(buf, ptrId: ptrId, sizeId: sizeId)
+		osRecommitPages(ptrId, sizeId) then writeStdSysOsFreePages(buf, ptrId: ptrId, sizeId: sizeId)
 		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then writeStdSysOsFileOpen(buf, resultId: resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId)
 		osFileRead(resultId, fdId, bufPtrId, countId) then writeStdSysOsFileRead(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)
 		osFileWrite(resultId, fdId, bufPtrId, countId) then writeStdSysOsFileWrite(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)
@@ -5275,6 +5277,8 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osAllocPages gives try readStdSysOsAllocPages(buf, offset: pos)
 		osAllocPagesLarge gives try readStdSysOsAllocPagesLarge(buf, offset: pos)
 		osFreePages gives try readStdSysOsFreePages(buf, offset: pos)
+		osDecommitPages gives try readStdSysOsDecommitPages(buf, offset: pos)
+		osRecommitPages gives try readStdSysOsRecommitPages(buf, offset: pos)
 		osFileOpen gives try readStdSysOsFileOpen(buf, offset: pos)
 		osFileRead gives try readStdSysOsFileRead(buf, offset: pos)
 		osFileWrite gives try readStdSysOsFileWrite(buf, offset: pos)
@@ -5474,6 +5478,21 @@ function readStdSysOsFreePages(buf ByteArray, offset ByteOffset) returns (StdSys
 	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osFreePages(ptrId, sizeId: sizeId), offset + 16)
 end 'readStdSysOsFreePages'
+
+// osDecommitPages / osRecommitPages share the (ptrId, sizeId) payload shape with
+// osFreePages, so they reuse writeStdSysOsFreePages on the write side and decode
+// the same two qwords here.
+function readStdSysOsDecommitPages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	return (StdSystemOp.osDecommitPages(ptrId, sizeId: sizeId), offset + 16)
+end 'readStdSysOsDecommitPages'
+
+function readStdSysOsRecommitPages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let ptrId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let sizeId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	return (StdSystemOp.osRecommitPages(ptrId, sizeId: sizeId), offset + 16)
+end 'readStdSysOsRecommitPages'
 
 function readStdSysOsFileOpen(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding

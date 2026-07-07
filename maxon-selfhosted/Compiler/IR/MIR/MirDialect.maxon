@@ -161,6 +161,11 @@ export union MirOp
 	osAllocPages(resultId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	osAllocPagesLarge(resultId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	osFreePages(ptrId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	// osDecommitPages / osRecommitPages: scavenger page discard + re-back. Both are
+	// syscall-class barriers like osFreePages (isStore keeps them from being reordered
+	// past loads/stores to the pages they affect).
+	osDecommitPages(ptrId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osRecommitPages(ptrId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Phase 15c Stream 4.1: Linux file-I/O ops. Each lowers to a raw syscall
 	// on x64-linux / arm64-linux backends. Path arguments are mm_alloc'd
 	// NUL-terminated buffers; the helper bodies that emit these ops own
@@ -287,6 +292,8 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		osAllocPages(resultId, sizeId) gives "%{resultId} = mir.os_alloc_pages %{sizeId}"
 		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = mir.os_alloc_pages_large %{sizeId}"
 		osFreePages(ptrId, sizeId) gives "mir.os_free_pages %{ptrId}, %{sizeId}"
+		osDecommitPages(ptrId, sizeId) gives "mir.os_decommit_pages %{ptrId}, %{sizeId}"
+		osRecommitPages(ptrId, sizeId) gives "mir.os_recommit_pages %{ptrId}, %{sizeId}"
 		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives "%{resultId} = mir.os_file_open %{cStringPtrId}, %{flagsId}, %{fileModeId}"
 		osFileRead(resultId, fdId, bufPtrId, countId) gives "%{resultId} = mir.os_file_read %{fdId}, %{bufPtrId}, %{countId}"
 		osFileWrite(resultId, fdId, bufPtrId, countId) gives "%{resultId} = mir.os_file_write %{fdId}, %{bufPtrId}, %{countId}"
@@ -397,6 +404,8 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osAllocPages(_, sizeId) then result.push(sizeId)
 		osAllocPagesLarge(_, sizeId) then result.push(sizeId)
 		osFreePages(ptrId, sizeId) then pushTwo(ptrId, b: sizeId, into: result)
+		osDecommitPages(ptrId, sizeId) then pushTwo(ptrId, b: sizeId, into: result)
+		osRecommitPages(ptrId, sizeId) then pushTwo(ptrId, b: sizeId, into: result)
 		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then pushThree(cStringPtrId, b: flagsId, c: fileModeId, into: result)
 		osFileRead(_, fdId, bufPtrId, countId) then pushThree(fdId, b: bufPtrId, c: countId, into: result)
 		osFileWrite(_, fdId, bufPtrId, countId) then pushThree(fdId, b: bufPtrId, c: countId, into: result)

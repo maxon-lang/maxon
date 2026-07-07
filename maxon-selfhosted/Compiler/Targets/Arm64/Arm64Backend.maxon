@@ -484,6 +484,8 @@ export type Arm64Backend implements TargetBackend
 			osAllocPages gives 8
 			osAllocPagesLarge gives 8
 			osFreePages gives 4
+			osDecommitPages gives 8
+			osRecommitPages gives 8
 			// Phase 15c Stream 4.1 file-I/O syscalls. Worst case: 4 args (some with
 			// AT_FDCWD pre-pended for the *at variants), a couple of materialized
 			// constants for flags/modes, plus the result slot. 8 covers every op
@@ -1130,6 +1132,8 @@ export type Arm64Backend implements TargetBackend
 			osAllocPages(resultId, sizeId) then result = lowerOsAllocPagesArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osAllocPagesLarge(resultId, sizeId) then result = lowerOsAllocPagesArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osFreePages(ptrId, sizeId) then result = lowerOsFreePagesArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osDecommitPages(ptrId, sizeId) then result = lowerOsDecommitPagesArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osRecommitPages then result = nextTempSlot
 			osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then result = lowerOsFileOpenArm64(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osFileRead(resultId, fdId, bufPtrId, countId) then result = lowerOsFileReadArm64(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osFileWrite(resultId, fdId, bufPtrId, countId) then result = lowerOsFileWriteArm64(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -2097,6 +2101,78 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MUNMAP, argSlots: argSlots))
 		return tempSlot + 1
 	end 'lowerOsFreePagesMacosArm64'
+
+	// osDecommitPages: discard a range's physical backing (scavenger). Linux uses a
+	// raw madvise syscall; macOS routes through the libSystem `_madvise` dyld import.
+	function lowerOsDecommitPagesArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'osPick'
+			linux then return lowerOsDecommitPagesLinuxArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			windows then panic("ARM64 osDecommitPages not supported on Windows")
+			macos then return lowerOsDecommitPagesMacosArm64(ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			wasi then panic("ARM64 osDecommitPages not supported on WASI")
+		end 'osPick'
+	end 'lowerOsDecommitPagesArm64'
+
+	// Linux arm64: madvise(ptr, size, MADV_DONTNEED=4) — syscall 233. Frees the
+	// pages; a later access faults them back in zeroed, so recommit is a no-op.
+	function lowerOsDecommitPagesLinuxArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTempPtr'
+			tempSlot = tempSlot + 1
+		end 'usedTempPtr'
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		// advice = MADV_DONTNEED = 4
+		let adviceSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 4))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(adviceSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		argSlots.push(adviceSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 233, argSlots: argSlots))
+		return tempSlot + 1
+	end 'lowerOsDecommitPagesLinuxArm64'
+
+	// macOS arm64: madvise(ptr, size, MADV_FREE=5) via the libSystem `_madvise`
+	// dyld import. MADV_FREE lets the kernel reclaim the pages lazily; the reuse
+	// path re-zeroes them, so old contents that survive until reclaim are harmless.
+	function lowerOsDecommitPagesMacosArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTempPtr'
+			tempSlot = tempSlot + 1
+		end 'usedTempPtr'
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		// advice = MADV_FREE = 5
+		let adviceSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 5))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(adviceSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		argSlots.push(adviceSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: MACHO_IMPORT_SLOT_MADVISE, argSlots: argSlots))
+		return tempSlot + 1
+	end 'lowerOsDecommitPagesMacosArm64'
+
+	// osRecommitPages has no arm64 lowering function: on both POSIX arm64 targets it
+	// is a no-op (MADV_DONTNEED / MADV_FREE pages fault back in on first touch), so
+	// the dispatch handles it inline as `result = nextTempSlot`.
 
 	// ============================================================
 	// Phase 15c Stream 4.1: file/directory I/O op lowerings (ARM64).

@@ -462,6 +462,17 @@ let SLAB_MCACHE_ROW_STRIDE = 144
 // cross-P free that observes it has hit a returned-span invariant violation.
 let MSPAN_OWNING_P_PARKED = 0xFFFFFFFF
 
+// mspan scavenge state (+0x48), a two-epoch grace guard so the scavenger only
+// hands back spans that have stayed fully free across two scavenge passes — the
+// active working set (spans freed then reused between passes) is never decommitted,
+// which is what prevents decommit/recommit thrash on a busy allocator.
+//   ACTIVE      — committed and recently live; a fresh or just-reused span.
+//   SEEN_FREE   — observed fully free by one scavenge pass; in its grace period.
+//   DECOMMITTED — pages handed back to the OS; must be re-backed + rebuilt on reuse.
+let SPAN_SCAV_ACTIVE = 0
+let SPAN_SCAV_SEEN_FREE = 1
+let SPAN_SCAV_DECOMMITTED = 2
+
 // The mcache row reserved for ALL raw OS threads (id < 0: the subprocess sync
 // worker, the IOCP completion poller — threads with no adopted P). It MUST be
 // distinct from every real P's row (a real P's row is its id, 0..num_procs-1),
@@ -562,6 +573,44 @@ function __slab_drain_remote_frees(pPtr MachineWord)
 	end 'walk'
 end '__slab_drain_remote_frees'
 
+// Build a span's intrusive free list in place: slot[i] links to slot[i+1] and the
+// last slot links to 0, so `free_list = pageBase` walks every slot once. Shared by
+// the fresh-span path in __slab_refill_mcache and the scavenged-span rebuild in
+// __slab_reback_span (a decommitted span loses its in-page links and must be rebuilt).
+function __slab_build_freelist(pageBase MachineWord, slotSize MachineWord, totalSlots MachineWord)
+	for i in 0 upto totalSlots 'linkLoop'
+		let current = pageBase + i * slotSize
+		if i + 1 == totalSlots 'lastSlot'
+			__Internals.storeIndirect(current, value: 0)
+		end 'lastSlot'
+		if i + 1 != totalSlots 'midSlot'
+			__Internals.storeIndirect(current, value: pageBase + (i + 1) * slotSize)
+		end 'midSlot'
+	end 'linkLoop'
+end '__slab_build_freelist'
+
+// Reset a just-reclaimed span's scavenge grace state to ACTIVE and, if the
+// scavenger actually handed its pages back to the OS (DECOMMITTED), re-back and
+// re-zero them and rebuild the intrusive free list before the owning P allocates
+// from it — the free-list head/links lived in the discarded data pages. A span
+// merely in its grace period (SEEN_FREE) still has an intact free list, so it just
+// gets the reset. Caller holds __slab_lock, so this cannot race a concurrent
+// scavenge of the same span.
+function __slab_reback_span(span MachineWord)
+	if __Internals.loadIndirect(span + 0x48) == SPAN_SCAV_DECOMMITTED 'wasDecommitted'
+		let slotSize = __Internals.loadIndirect(span + 0x08)
+		let totalSlots = __Internals.loadIndirect(span + 0x30)
+		let footprint = ((slotSize * totalSlots + 8191) shr 13) shl 13
+		let base = __Internals.loadIndirect(span)
+		__Internals.osRecommitPages(base, size: footprint)
+		__slab_memzero(base, size: footprint)
+		__slab_build_freelist(base, slotSize: slotSize, totalSlots: totalSlots)
+		__Internals.storeIndirect(span + 0x10, value: base)
+		__Internals.storeIndirect(span + 0x18, value: totalSlots)
+	end 'wasDecommitted'
+	__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_ACTIVE)
+end '__slab_reback_span'
+
 // Repopulates this P's mcache row entry mcache[shard][classIdx] with a span
 // that has at least one free slot. Two-tier:
 //   1. Pop the head of mcentral[classIdx].partial (clearing its next_span) and
@@ -597,6 +646,10 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 		// Re-stamp owning_p = rawId — this P now exclusively owns the span (it
 		// carried the 0xFFFFFFFF sentinel while parked in mcentral).
 		__Internals.storeIndirect(partial + 0x40, value: rawId)
+		// Reset the scavenge grace state and re-back the pages if the scavenger handed
+		// them to the OS. Factored into __slab_reback_span so refill's hot body stays
+		// free of the syscall / rebuild calls.
+		__slab_reback_span(span)
 	end 'takePartial'
 
 	if partial == 0 'growNew'
@@ -624,21 +677,17 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 		// (not the clamped shard) lets __slab_free compare it exactly against a
 		// freeing thread's raw id, so raw OS threads (id -1) always route remote.
 		__Internals.storeIndirect(span + 0x40, value: rawId)
+		// scavenge state (+0x48) = ACTIVE: a fresh span's pages are committed. The
+		// scavenger advances it to SEEN_FREE then DECOMMITTED across two idle passes;
+		// __slab_reback_span resets it to ACTIVE (re-backing the pages) on reuse.
+		__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_ACTIVE)
 
 		// Register the new mspan in the arena map. num_pages == num_chunks
 		// because chunks and pages are both 8KB.
 		__slab_arena_map_set(pageBase, numPages: numChunks, mspan: span)
 
 		// Build the intrusive free list: slot[i] -> slot[i+1], last slot -> 0.
-		for i in 0 upto totalSlots 'linkLoop'
-			let current = pageBase + i * slotSize
-			if i + 1 == totalSlots 'lastSlot'
-				__Internals.storeIndirect(current, value: 0)
-			end 'lastSlot'
-			if i + 1 != totalSlots 'midSlot'
-				__Internals.storeIndirect(current, value: pageBase + (i + 1) * slotSize)
-			end 'midSlot'
-		end 'linkLoop'
+		__slab_build_freelist(pageBase, slotSize: slotSize, totalSlots: totalSlots)
 	end 'growNew'
 
 	// mcache[rowShard][classIdx] = span
@@ -760,6 +809,73 @@ function __slab_mcentral_return_span(span MachineWord)
 
 	__Internals.osLockRelease(__Internals.slabLockAddr())
 end '__slab_mcentral_return_span'
+
+// Return the physical backing of GENUINELY IDLE fully-free spans parked in mcentral
+// to the OS, dropping the resident set without giving up the arena's address space.
+// Every span on a class's partial list is fully free by construction
+// (__slab_mcentral_return_span only ever prepends fully-emptied spans, and
+// __slab_refill_mcache removes a span before handing it to a P).
+//
+// A two-epoch grace guard (the +0x48 state) gates the actual decommit: a span is
+// only handed back once it has been observed fully free by TWO consecutive scavenge
+// passes without an intervening reuse. This keeps the active working set — spans
+// freed and reused between passes — committed, avoiding decommit/recommit thrash.
+//
+// Runs entirely under the global __slab_lock so it cannot race an allocation that
+// pulls a span off the same partial list.
+function __slab_scavenge()
+	// Nothing is parked before the allocator is initialised.
+	if __Internals.loadIndirect(__Internals.slabInitDoneAddr()) == 0 'notInit'
+		return
+	end 'notInit'
+
+	__Internals.osLockAcquire(__Internals.slabLockAddr())
+
+	for classIdx in 0 upto SLAB_NUM_SIZE_CLASSES 'classLoop'
+		// mcentral entry = base + classIdx * 16; partial_head is at offset 0.
+		let mcentralEntry = __Internals.slabMcentralArrayAddr() + (classIdx shl 4)
+		var span = __Internals.loadIndirect(mcentralEntry)
+		while span != 0 'walk'
+			// Read the entry-state once; the two branches below act on it as a
+			// two-epoch grace guard (ACTIVE -> SEEN_FREE this pass, SEEN_FREE ->
+			// DECOMMITTED the next). They are mutually exclusive on the entry state.
+			let state = __Internals.loadIndirect(span + 0x48)
+			if state == SPAN_SCAV_ACTIVE 'firstSeen'
+				// First pass to find this span fully free: open its grace period but do
+				// not decommit. A span about to be reused resets to ACTIVE on reuse, so
+				// the active working set never reaches the decommit branch.
+				__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_SEEN_FREE)
+			end 'firstSeen'
+			if state == SPAN_SCAV_SEEN_FREE 'stillFree'
+				// Free across two consecutive passes → genuinely idle. Hand its pages
+				// back to the OS and mark it decommitted until a reuse re-backs it.
+				let slotSize = __Internals.loadIndirect(span + 0x08)
+				let totalSlots = __Internals.loadIndirect(span + 0x30)
+				// Chunk-aligned footprint = ceil(slotSize * totalSlots / 8192) * 8192,
+				// matching how __slab_refill_mcache sized the span's chunk run.
+				let footprint = ((slotSize * totalSlots + 8191) shr 13) shl 13
+				let base = __Internals.loadIndirect(span)
+				__Internals.osDecommitPages(base, size: footprint)
+				__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_DECOMMITTED)
+			end 'stillFree'
+			// SPAN_SCAV_DECOMMITTED: already handed back — nothing to do this pass.
+			// Advance via next_span (+0x20).
+			span = __Internals.loadIndirect(span + 0x20)
+		end 'walk'
+	end 'classLoop'
+
+	__Internals.osLockRelease(__Internals.slabLockAddr())
+end '__slab_scavenge'
+
+// Public entry point for the slab scavenger. Compiler / library code may not invoke
+// `__Internals.*` intrinsics directly (the lowering pass gates them to this file),
+// so this thin exported wrapper is what callers use to hand fully-free spans' pages
+// back to the OS. Call it at points where a burst of transient allocations has just
+// been freed; two calls (spanning the grace period) are needed before any pages are
+// actually released.
+export function scavengeMemory()
+	__slab_scavenge()
+end 'scavengeMemory'
 
 // Returns `slot` to its owning mspan's free list:
 //   [slot] = mspan.free_list ; mspan.free_list = slot ; mspan.free_count += 1

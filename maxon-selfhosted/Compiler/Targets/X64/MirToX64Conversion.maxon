@@ -249,6 +249,8 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osAllocPagesLarge gives 8
 		// osFreePages: VirtualFree(ptr, 0, 0x8000) on Windows; munmap(ptr, len) on Linux.
 		osFreePages gives 4
+		osDecommitPages gives 8
+		osRecommitPages gives 8
 		// Phase 15c Stream 4.1 file-I/O syscalls. Worst-case shape per op: up to
 		// 4 input arg slots + a couple of materialized constants (open's flags +
 		// mode, getdents fixed-size args) + 1 result slot. 8 covers every case
@@ -1526,6 +1528,8 @@ type X64FunctionLowering
 			osAllocPages(resultId, sizeId) then lowerOsAllocPages(resultId, sizeId: sizeId, large: false, dstBlock: dstBlock)
 			osAllocPagesLarge(resultId, sizeId) then lowerOsAllocPages(resultId, sizeId: sizeId, large: true, dstBlock: dstBlock)
 			osFreePages(ptrId, sizeId) then lowerOsFreePages(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			osDecommitPages(ptrId, sizeId) then lowerOsDecommitPages(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			osRecommitPages(ptrId, sizeId) then lowerOsRecommitPages(ptrId, sizeId: sizeId, dstBlock: dstBlock)
 			osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then lowerOsFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, dstBlock: dstBlock)
 			osFileRead(resultId, fdId, bufPtrId, countId) then lowerOsFileReadOp(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock)
 			osFileWrite(resultId, fdId, bufPtrId, countId) then lowerOsFileWriteOp(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock)
@@ -2147,6 +2151,84 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 11, argSlots: args))  // SYS_munmap
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsFreePagesLinux'
+
+	// osDecommitPages: discard a range's physical backing while keeping its
+	// reservation, so the slab scavenger can hand a fully-free span's pages back
+	// to the OS without giving up the address space.
+	function lowerOsDecommitPages(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsDecommitPagesWindows(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			linux then lowerOsDecommitPagesLinux(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			macos then panic("osDecommitPages not supported on x64 macos target")
+			wasi then panic("osDecommitPages not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsDecommitPages'
+
+	// Windows: VirtualFree(ptr, size, MEM_DECOMMIT). Unlike MEM_RELEASE, dwSize is
+	// significant and the range stays reserved for a later osRecommitPages.
+	function lowerOsDecommitPagesWindows(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
+		let decommitSlot = materializeConstSlot(0x4000, dstBlock: dstBlock)  // MEM_DECOMMIT
+
+		var args = VarSlotArray.create()
+		args.push(ptrSlot)
+		args.push(sizeSlot)
+		args.push(decommitSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.VirtualFree), argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsDecommitPagesWindows'
+
+	// Linux: madvise(ptr, size, MADV_DONTNEED). Frees the pages immediately; a later
+	// access faults zeroed pages back in, so osRecommitPages is a no-op on Linux.
+	function lowerOsDecommitPagesLinux(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
+		let adviceSlot = materializeConstSlot(4, dstBlock: dstBlock)  // MADV_DONTNEED
+
+		var args = VarSlotArray.create()
+		args.push(ptrSlot)
+		args.push(sizeSlot)
+		args.push(adviceSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 28, argSlots: args))  // SYS_madvise
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsDecommitPagesLinux'
+
+	// osRecommitPages: re-back a decommitted range so it can be written again.
+	// Real work only on Windows; on Linux the MADV_DONTNEED pages fault back in on
+	// first touch, so nothing is emitted.
+	function lowerOsRecommitPages(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsRecommitPagesWindows(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			linux then break 'pickOs'
+			macos then panic("osRecommitPages not supported on x64 macos target")
+			wasi then panic("osRecommitPages not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsRecommitPages'
+
+	// Windows: VirtualAlloc(ptr, size, MEM_COMMIT, PAGE_READWRITE). The range is
+	// still reserved (osDecommitPages used MEM_DECOMMIT, not MEM_RELEASE), so this
+	// only re-commits the physical backing; the returned pages are zero-filled.
+	function lowerOsRecommitPagesWindows(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
+		let commitSlot = materializeConstSlot(0x1000, dstBlock: dstBlock)  // MEM_COMMIT
+		let protectSlot = materializeConstSlot(0x04, dstBlock: dstBlock)  // PAGE_READWRITE
+
+		var args = VarSlotArray.create()
+		args.push(ptrSlot)
+		args.push(sizeSlot)
+		args.push(commitSlot)
+		args.push(protectSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc), argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsRecommitPagesWindows'
 
 	// ============================================================
 	// Phase 15c Stream 4.1: file/directory I/O op lowerings.
