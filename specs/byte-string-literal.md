@@ -1,6 +1,6 @@
 ---
 feature: byte-string-literal
-status: experimental
+status: stable
 keywords: [byte, string, literal, bytebuffer]
 category: types
 ---
@@ -19,7 +19,18 @@ let empty = b""                // Empty ByteArray
 let escaped = b"line\n"        // Supports escape sequences
 ```
 
-The byte string literal supports the same escape sequences as regular string literals (`\n`, `\t`, `\\`, `\0`, etc.).
+The byte string literal supports the same escape sequences as regular string literals (`\n`, `\t`, `\\`, `\0`, etc.), including the `\xNN` hex escape (see the `hex-escape` spec) and the `\uNNNN` unicode escape.
+
+### Non-ASCII characters and byte values
+
+Unlike a regular string literal — where a source character is stored as its multi-byte UTF-8 encoding — a byte string literal is a raw byte sequence. A literal character (or a `\uNNNN` escape) whose codepoint is in the range `0x00`–`0xFF` (Latin-1) contributes exactly **one** byte equal to that codepoint. So `b"À"` (U+00C0) and `b"\xc0"` produce the identical single byte `0xC0` (192), and `b"é"` (U+00E9) produces the single byte `0xE9` (233).
+
+```text
+let a = b"À"        // one byte: [192]
+let b = b"\xc0"     // one byte: [192] — identical to b"À"
+```
+
+A codepoint above `0xFF` cannot be represented as a single byte, so a literal character or `\uNNNN` escape that names one is rejected at compile time with **E1004**. Use a `\xNN` hex escape to embed a specific raw byte regardless of its Unicode interpretation.
 
 ### Use Cases
 
@@ -172,4 +183,80 @@ end 'main'
 ```
 ```exitcode
 4
+```
+
+<!-- test: byte-string-literal.latin1-char -->
+
+```maxon
+function main() returns ExitCode
+		let bytes = b"À"
+		let b0 = try bytes.get(0) otherwise 0
+		print("{bytes.count()} {b0}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 192
+```
+
+<!-- test: byte-string-literal.latin1-two -->
+
+```maxon
+function main() returns ExitCode
+		let bytes = b"Àé"
+		let b0 = try bytes.get(0) otherwise 0
+		let b1 = try bytes.get(1) otherwise 0
+		print("{bytes.count()} {b0} {b1}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 192 233
+```
+
+<!-- test: byte-string-literal.latin1-hex-equivalent -->
+
+```maxon
+function main() returns ExitCode
+		let literal = b"À"
+		let hex = b"\xc0"
+		let a = try literal.get(0) otherwise 0
+		let b = try hex.get(0) otherwise 1
+		if a == b 'equal'
+				print("{a}")
+				return 0
+		end 'equal'
+		return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+192
+```
+
+<!-- test: byte-string-literal.latin1-mixed -->
+
+```maxon
+function main() returns ExitCode
+		let bytes = b"AÀB"
+		let b0 = try bytes.get(0) otherwise 0
+		let b1 = try bytes.get(1) otherwise 0
+		let b2 = try bytes.get(2) otherwise 0
+		print("{bytes.count()} {b0} {b1} {b2}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 65 192 66
 ```

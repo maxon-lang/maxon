@@ -11010,11 +11010,11 @@ export type Parser
 	// decoded bytes. Used at parse time to canonicalize string literals
 	// before interning so identical-after-decode literals share a single
 	// StringId (e.g. `"\n"` collapses to a single 0x0A byte).
-	function decodeStringEscapes(fragment String) returns ByteArray
+	function decodeStringEscapes(fragment String, byteString bool = false) returns ByteArray
 		let fragBytes = fragment.toByteArray()
 		let fragLen = fragBytes.count()
 		var buf = ByteArray.create()
-		var i = 0
+		var i = 0 as ByteOffset
 		while i < fragLen 'decode'
 			let ch = try fragBytes.get(i) otherwise panic("decodeStringEscapes: loop guard i < fragLen just succeeded but get({i}) failed (fragLen={fragLen})")
 			if ch == '\\' and i + 1 < fragLen 'escape'
@@ -11097,17 +11097,32 @@ export type Parser
 					let hexC = try fragBytes.get(i + 4) otherwise panic("decodeStringEscapes.escUni: hex digit 3 out of bounds")
 					let hexD = try fragBytes.get(i + 5) otherwise panic("decodeStringEscapes.escUni: hex digit 4 out of bounds")
 					if isHexDigitByte(hexA) and isHexDigitByte(hexB) and isHexDigitByte(hexC) and isHexDigitByte(hexD) 'uniOk'
-						let nibA = hexDigitValue(hexA)
-						let nibB = hexDigitValue(hexB)
-						let nibC = hexDigitValue(hexC)
-						let nibD = hexDigitValue(hexD)
-						let cp = (nibA shl 12) or (nibB shl 8) or (nibC shl 4) or nibD
-						encodeUtf8Codepoint(buf, codepoint: cp)
+						let cp = uniEscapeCodepoint(fragBytes, at: i)
+						if byteString 'uniByte'
+							// Byte string: a resolved codepoint maps to one Latin-1
+							// byte. validateEscapes(byteString: true) already rejected
+							// cp > 0xFF, so `cp and 0xFF` is the exact byte for valid
+							// input and a harmless recovery value otherwise.
+							buf.push((cp and 0xFF) as Byte)
+						end 'uniByte' else 'uniUtf8'
+							encodeUtf8Codepoint(buf, codepoint: cp)
+						end 'uniUtf8'
 						i = i + 6
 						continue
 					end 'uniOk'
 				end 'escUni'
 			end 'escape'
+			if byteString and ch >= 0x80 'bsLiteralChar'
+				// Byte string: a literal non-ASCII character is a multi-byte UTF-8
+				// sequence in the source. Decode it to a codepoint and emit the
+				// single Latin-1 byte (validated <= 0xFF above); the low-byte mask
+				// is exact for valid input and a harmless recovery value on
+				// already-diagnosed input.
+				let (cpChar, seqLen) = decodeUtf8Sequence(fragBytes, start: i)
+				buf.push((cpChar and 0xFF) as Byte)
+				i = i + seqLen
+				continue
+			end 'bsLiteralChar'
 			buf.push(ch)
 			i = i + 1
 		end 'decode'
@@ -11156,6 +11171,61 @@ export type Parser
 		buf.push((0x80 or ((codepoint shr 6) and 0x3F)) as Byte)
 		buf.push((0x80 or (codepoint and 0x3F)) as Byte)
 	end 'encodeUtf8Codepoint'
+
+	// Decode the UTF-8 sequence beginning at `start` in `bytes`, returning the
+	// decoded codepoint and the number of bytes it occupies (1..4). Used by the
+	// byte-string literal path, where a literal non-ASCII character reaches the
+	// parser as its raw multi-byte UTF-8 encoding and must be collapsed back to a
+	// single Latin-1 byte. A malformed or truncated sequence decodes as the lone
+	// lead byte (length 1) so callers degrade to raw-byte handling instead of
+	// desyncing — byte-string validation has already rejected such input, so the
+	// value is never observed in a successful compile.
+	function decodeUtf8Sequence(bytes ByteArray, start ByteOffset) returns (UnicodeCodepoint, ByteOffset)
+		let n = bytes.count()
+		let i0 = try bytes.get(start) otherwise panic("decodeUtf8Sequence: start out of bounds")
+		if i0 < 0x80 'ascii'
+			return (i0, 1)
+		end 'ascii'
+		if i0 < 0xC0 or start + 1 >= n 'loneLead'
+			return (i0, 1)
+		end 'loneLead'
+		let i1 = try bytes.get(start + 1) otherwise panic("decodeUtf8Sequence: continuation byte 1 out of bounds")
+		if i0 < 0xE0 'twoByte'
+			return (((i0 and 0x1F) shl 6) or (i1 and 0x3F), 2)
+		end 'twoByte'
+		if start + 2 >= n 'truncated3'
+			return (i0, 1)
+		end 'truncated3'
+		let i2 = try bytes.get(start + 2) otherwise panic("decodeUtf8Sequence: continuation byte 2 out of bounds")
+		if i0 < 0xF0 'threeByte'
+			return (((i0 and 0x0F) shl 12) or ((i1 and 0x3F) shl 6) or (i2 and 0x3F), 3)
+		end 'threeByte'
+		if start + 3 >= n 'truncated4'
+			return (i0, 1)
+		end 'truncated4'
+		let i3 = try bytes.get(start + 3) otherwise panic("decodeUtf8Sequence: continuation byte 3 out of bounds")
+		return (((i0 and 0x07) shl 18) or ((i1 and 0x3F) shl 12) or ((i2 and 0x3F) shl 6) or (i3 and 0x3F), 4)
+	end 'decodeUtf8Sequence'
+
+	// Decode the four hex digits of a `\uNNNN` escape at `bytes[at+2 .. at+5]`
+	// into a codepoint. The caller must have already validated that those four
+	// bytes are hex digits (and are in bounds), so the reads never fail.
+	function uniEscapeCodepoint(bytes ByteArray, at ByteOffset) returns UnicodeCodepoint
+		let d1 = hexDigitValue(try bytes.get(at + 2) otherwise panic("uniEscapeCodepoint: digit 1 OOB after bounds check"))
+		let d2 = hexDigitValue(try bytes.get(at + 3) otherwise panic("uniEscapeCodepoint: digit 2 OOB after bounds check"))
+		let d3 = hexDigitValue(try bytes.get(at + 4) otherwise panic("uniEscapeCodepoint: digit 3 OOB after bounds check"))
+		let d4 = hexDigitValue(try bytes.get(at + 5) otherwise panic("uniEscapeCodepoint: digit 4 OOB after bounds check"))
+		return (d1 shl 12) or (d2 shl 8) or (d3 shl 4) or d4
+	end 'uniEscapeCodepoint'
+
+	// Report E1004 for a byte-string literal codepoint that cannot fit in a
+	// single byte. Byte strings are raw-byte sequences: only codepoints 0x00-0xFF
+	// (Latin-1) have a one-byte encoding, so a larger literal character or
+	// `\uNNNN` escape is rejected and the user pointed at the `\xNN` hex escape,
+	// which embeds an exact raw byte regardless of its Unicode interpretation.
+	function reportByteStringCodepointRange(token Token, kind String, codepoint UnicodeCodepoint, columnOffset ByteOffset)
+		reportCompileError(project, code: ErrorCode.lexerInvalidEscape, message: "Codepoint U+{codepoint:04x} exceeds the byte range 0-255 in {kind}; use a \\xNN hex escape to embed a raw byte", line: token.line, column: token.column + columnOffset, filePath: filePath)
+	end 'reportByteStringCodepointRange'
 
 	// Lexer invariant: every stringInterpEnd is followed by a stringLiteral
 	// fragment (possibly empty when the interpolation is adjacent to the closing
@@ -16486,8 +16556,8 @@ export type Parser
 	// .get(i), etc. resolve to Array's stdlib methods.
 	function parseByteStringLiteralExpr(block IrBlock) returns ExprResult throws ParserError
 		let token = try consume()
-		validateEscapes(token, kind: "byte string literal")
-		let decoded = decodeStringEscapes(token.value)
+		validateEscapes(token, kind: "byte string literal", byteString: true)
+		let decoded = decodeStringEscapes(token.value, byteString: true)
 		let range = SourceRange.ofToken(token)
 		let stringId = project.strings.intern(String.from(decoded))
 		let name = freshSynthName()
@@ -16789,7 +16859,7 @@ export type Parser
 	// `kind` is the trailing context phrase — "string interpolation" for
 	// double-quoted strings, "character literal" for single-quoted strings,
 	// "byte string literal" for `b"..."` byte strings.
-	function validateEscapes(token Token, kind String)
+	function validateEscapes(token Token, kind String, byteString bool = false)
 		let bytes = token.value.toByteArray()
 		let n = bytes.count()
 		var i = 0 as ByteOffset
@@ -16827,12 +16897,35 @@ export type Parser
 						reportCompileError(project, code: ErrorCode.lexerInvalidEscape, message: "Invalid unicode escape '\\{availStr}': expected 4 hex digits in {kind}", line: token.line, column: token.column + i, filePath: filePath)
 						return
 					end 'badUni'
+					if byteString 'uniByteRange'
+						// Byte string: a `\uNNNN` escape must name a codepoint that
+						// fits in a single byte (0x00-0xFF), since the literal
+						// produces raw bytes, not UTF-8.
+						let uniCp = uniEscapeCodepoint(bytes, at: i)
+						if uniCp > 0xFF 'uniByteTooBig'
+							reportByteStringCodepointRange(token, kind: kind, codepoint: uniCp, columnOffset: i)
+							return
+						end 'uniByteTooBig'
+					end 'uniByteRange'
 					i = i + 6
 				end 'uni' else 'simple'
 					i = i + 2
 				end 'simple'
 			end 'esc' else 'plain'
-				i = i + 1
+				if byteString and b >= 0x80 'plainByteRange'
+					// Byte string: a literal non-ASCII character is a multi-byte
+					// UTF-8 sequence. Reject any codepoint that cannot fit in one
+					// byte; advance past the whole sequence either way so the walk
+					// stays aligned.
+					let (litCp, litLen) = decodeUtf8Sequence(bytes, start: i)
+					if litCp > 0xFF 'plainByteTooBig'
+						reportByteStringCodepointRange(token, kind: kind, codepoint: litCp, columnOffset: i)
+						return
+					end 'plainByteTooBig'
+					i = i + litLen
+				end 'plainByteRange' else 'plainAscii'
+					i = i + 1
+				end 'plainAscii'
 			end 'plain'
 		end 'walk'
 	end 'validateEscapes'
