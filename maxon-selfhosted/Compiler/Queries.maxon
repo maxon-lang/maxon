@@ -1209,28 +1209,31 @@ function findStdFunctionIndex(module StdModule, name String) returns StdFuncInde
 	return u64.max
 end 'findStdFunctionIndex'
 
-// Name → index directory over `module.functions`, for callers that resolve
-// MANY names against the same module snapshot. The incremental backend's
-// per-function precheck does one lookup per MIR function, and runtime/stdlib
-// helper names (`mrt_*`, `__slab_*`, `stdlib.*`) are guaranteed misses that
-// a `findStdFunctionIndex` probe would scan the ENTIRE array for — O(F²)
-// across the precheck. First occurrence wins on duplicate names, matching
-// `findStdFunctionIndex`'s front-to-back scan order. The directory reflects
-// the array at build time: it stays valid across `stampStdContentHash`
-// (in-place `functions.set`, no reorder) but must be rebuilt if functions
-// are appended or removed.
-module typealias StdFuncIndexMap = Map with (String, FuncIndex)
+// Name → index directory over a module's `functions` array, for callers that
+// resolve MANY names against the same module snapshot. The incremental
+// backend's per-function precheck does one lookup per MIR function, and
+// runtime/stdlib helper names (`mrt_*`, `__slab_*`, `stdlib.*`) are guaranteed
+// misses that a `findStdFunctionIndex` probe would scan the ENTIRE array for —
+// O(F²) across the precheck (and the same shape recurs for the target-lowered
+// function array on a cold, all-miss build). First occurrence wins on
+// duplicate names, matching `findStdFunctionIndex`'s front-to-back scan order.
+// The directory reflects the array at build time: it stays valid across
+// `stampStdContentHash` (in-place `functions.set`, no reorder) but must be
+// rebuilt if functions are appended or removed.
+module typealias FuncNameToIndexMap = Map with (String, FuncIndex)
 
-module function buildStdFunctionIndex(module StdModule) returns StdFuncIndexMap
-	var index = StdFuncIndexMap.create()
-	for i in 0 upto module.functions.count() 'each'
-		let f = try module.functions.get(i) otherwise panic("buildStdFunctionIndex: functions.get OOB at {i}")
+// `StdModule.functions` and `TargetModule.functions` are both `IrFunctionArray`,
+// so this one builder serves both the mid-module and target-module directories.
+module function buildFuncNameToIndex(functions IrFunctionArray) returns FuncNameToIndexMap
+	var index = FuncNameToIndexMap.create()
+	for i in 0 upto functions.count() 'each'
+		let f = try functions.get(i) otherwise panic("buildFuncNameToIndex: functions.get OOB at {i}")
 		if not index.contains(f.name) 'firstWins'
 			index.upsert(f.name, value: i)
 		end 'firstWins'
 	end 'each'
 	return index
-end 'buildStdFunctionIndex'
+end 'buildFuncNameToIndex'
 
 // Per-function Mid (Std-tier) query.
 //
@@ -1465,12 +1468,12 @@ end 'stampChunkMemo'
 // revision, so it bypasses the wrapper's `verifiedAt`/dep arms entirely
 // and writes the freshly-computed hash straight into the memo.
 // The `module` and `funcIndex` parameters are the precheck loop's shared
-// snapshot (`currentAllMidModule` + `buildStdFunctionIndex`), resolved ONCE
+// snapshot (`currentAllMidModule` + `buildFuncNameToIndex`), resolved ONCE
 // per emit instead of once per function — a per-call `findStdFunctionIndex`
 // scan (a guaranteed full-array miss for runtime/stdlib helper names) made
 // the precheck O(functions²). A map miss is the exact no-op tail the old
 // sentinel-index path took.
-module function refreshMidContentHashForFunction(project Project, funcName String, module StdModule, funcIndex StdFuncIndexMap)
+module function refreshMidContentHashForFunction(project Project, funcName String, module StdModule, funcIndex FuncNameToIndexMap)
 	if let idx = try funcIndex.get(funcName) 'inModule'
 		stampStdContentHash(project, module: module, funcIdx: idx)
 		let func = try module.functions.get(idx) otherwise panic("refreshMidContentHashForFunction: functions.get OOB at {idx}")

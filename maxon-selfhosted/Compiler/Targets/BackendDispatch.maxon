@@ -1839,7 +1839,7 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 	// place), so the directory stays valid for every iteration. The previous
 	// per-function `findStdFunctionIndex` scan made this loop O(functions²).
 	let midModule = try currentAllMidModule(pipeline.project)
-	let midFuncIndex = buildStdFunctionIndex(midModule)
+	let midFuncIndex = buildFuncNameToIndex(midModule.functions)
 	for func in pipeline.mirModule.functions 'precheck'
 		// Record the per-function dep here so the outer `queryCodeResult`
 		// memo knows the whole-binary result transitively depends on each
@@ -1870,10 +1870,10 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 	// `targetModule.functions` is not mutated during the assemble loop
 	// (`emitFunctionChunk` only reads blocks/ops), so the directory stays
 	// valid throughout.
-	var targetFuncIndexByName = TargetFuncIndexMap.create()
+	var targetFuncIndexByName = FuncNameToIndexMap.create()
 	if missFuncs.count() > 0 'hasMisses'
 		try prepareTargetModuleForFunctions(pipeline, backend: backend, funcsToLower: missFuncs)
-		targetFuncIndexByName = buildTargetFuncIndex(pipeline.targetModule)
+		targetFuncIndexByName = buildFuncNameToIndex(pipeline.targetModule.functions)
 	end 'hasMisses'
 
 	let emitStart = passTimerStart()
@@ -1931,23 +1931,6 @@ function isCachedChunkValid(project Project, funcName String, freshKeyHash Conte
 	end 'checkCache'
 	return false
 end 'isCachedChunkValid'
-
-typealias TargetFuncIndexMap = Map with (String, FuncIndex)
-
-// Stage P Step 3.5b: name → index directory over `targetModule.functions`,
-// built once per emit so each cache-miss lookup in the assemble loop is
-// O(1). First occurrence wins on duplicate names, matching the front-to-back
-// order the previous per-miss linear scan resolved.
-function buildTargetFuncIndex(targetModule TargetModule) returns TargetFuncIndexMap
-	var index = TargetFuncIndexMap.create()
-	for i in 0 upto targetModule.functions.count() 'each'
-		let f = try targetModule.functions.get(i) otherwise panic("buildTargetFuncIndex: functions.get OOB at {i}")
-		if not index.contains(f.name) 'firstWins'
-			index.upsert(f.name, value: i)
-		end 'firstWins'
-	end 'each'
-	return index
-end 'buildTargetFuncIndex'
 
 // Stage P Step 3.5b: chunk-driven Phase 7 driver. Same as `prepareTargetModule`
 // but restricts target lowering / regalloc / prologue-epilogue to
