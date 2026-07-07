@@ -3544,7 +3544,9 @@ function emitX64SubprocessBuildAttrList(code ByteArray, state Win32HelperState, 
 	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // dwFlags = 0
 	helperLeaStackSlot(code, slotIndex: 57, dest: X64Register.r9)  // &lpSize (attrListSize)
 	emitX64GtIatCallOnSystemStack(code, relocations: relocations, rdataRelocs: rdataRelocs, slotIndex: iatSlotIndex(IatSlot.InitializeProcThreadAttributeList))
-	// 2) attrListPtr = __slab_alloc(size). Slab memory is zeroed.
+	// 2) attrListPtr = __slab_alloc(size). InitializeProcThreadAttributeList below
+	//    fully populates the buffer, so no pre-zeroing is needed (__slab_alloc does
+	//    NOT zero its slots).
 	helperLoadSlot(code, slotIndex: 57, dest: X64Register.rcx)  // size
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
@@ -8975,8 +8977,10 @@ end 'emitX64SchedWorkerLoop'
 // once — see emitX64GtAwait.
 //
 // Deliberate divergences from the C# reference, all driven by self-hosted realities:
-//   * Allocations use `__slab_alloc`/`__slab_free` (the self-hosted raw allocator,
-//     which zeroes like HEAP_ZERO_MEMORY) rather than C#'s `mm_raw_alloc`/`mm_raw_free`.
+//   * Allocations use `__slab_alloc`/`__slab_free` (the self-hosted raw allocator)
+//     rather than C#'s `mm_raw_alloc`/`mm_raw_free`. Unlike `mm_raw_alloc`
+//     (HEAP_ZERO_MEMORY), `__slab_alloc` does NOT zero its slots — callers that need
+//     clean memory (e.g. an OVERLAPPED context) must zero it explicitly after alloc.
 //   * `__io_init` omits the ConnectEx-pointer acquisition (WSAStartup + WSASocketW +
 //     WSAIoctl): that is a networking detail requiring the ws2_32 import DLL, and
 //     `__io_connectex_ptr` is consumed only by the ConnectEx networking path which is
@@ -10343,7 +10347,8 @@ end 'emitX64IoShutdown'
 // recvFailed 5). `close` is non-throwing (void) so it just returns.
 //
 // Allocator split (crossing these corrupts the heap): AsyncOpContext + scratch →
-// `__slab_alloc`/`__slab_free` (zeroed); the `__ManagedSocket` wrapper →
+// `__slab_alloc`/`__slab_free` (NOT zeroed — each AsyncOpContext path zeroes the
+// OVERLAPPED header explicitly after alloc); the `__ManagedSocket` wrapper →
 // `mm_alloc(8, &__destruct___ManagedSocket, 0)` (refcounted/drop-tracked); the
 // host cstring from `mrt_cstr_from_mm` is `mm_alloc`-backed → `mm_decref` it.
 //
@@ -10707,10 +10712,19 @@ function emitX64IoSubmitSocketOverlapped(code ByteArray, relocations RelocationA
 		emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.r9)
 		helperStoreSlot(code, slotIndex: 6, src: X64Register.rax)  // WSABUF.buf = dataPtr+offset (slot 6 = base+8)
 	end 'sendBoundsJump'
-	// ctx = __slab_alloc(IoAsyncCtxSize) (zeroed OVERLAPPED + fields).
+	// ctx = __slab_alloc(IoAsyncCtxSize).
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)  // ctx
+	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
+	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
+	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
+	// completion packet, so a parked send/recv would never wake (deadlock). Zero the
+	// whole ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
+	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
+	code.append(b"\xf3\x48\xab")  // rep stosq
 	// ctx.waiter = self ; self.io_handle = handle ; self.status = waiting.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
@@ -11146,6 +11160,15 @@ function emitX64NetTcpConnect(code ByteArray, relocations RelocationArray, callF
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
+	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
+	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
+	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
+	// completion packet, so a parked ConnectEx would never wake (deadlock). Zero the
+	// whole ctx (7 qwords) — clears the OVERLAPPED and waiter; custom_result is set next.
+	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
+	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
+	code.append(b"\xf3\x48\xab")  // rep stosq
 	// ctx.waiter = self ; ctx.custom_result = socket ; self.io_handle = socket ; waiting.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
