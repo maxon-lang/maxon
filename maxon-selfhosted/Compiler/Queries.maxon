@@ -929,29 +929,27 @@ end 'queryCodeResult'
 // later compared against a callee's stamped `contentHash` in
 // `callerInlineDepsUnchanged`, so any divergence would break invalidation.
 //
-// The hash folds in `stdOpToString` for every op in every block (Step 3.5a),
-// so a body edit that preserves shape (e.g. flipping the constant in
-// `return 1` to `return 2`) still produces a distinct contentHash. Before
-// this, the hash only covered block count / opRefs count / terminator kind /
-// labels — none of which change when a literal value flips, so two
-// materially-different functions hashed identically and the per-function
-// chunk cache served stale bytes.
+// The hash folds in a STRUCTURAL per-op hash (`mixStdOp`) for every op in
+// every block (Step 3.5a), so a body edit that preserves shape (e.g. flipping
+// the constant in `return 1` to `return 2`) still produces a distinct
+// contentHash. Before this, the hash only covered block count / opRefs count /
+// terminator kind / labels — none of which change when a literal value flips,
+// so two materially-different functions hashed identically and the
+// per-function chunk cache served stale bytes.
+//
+// The structural hash replaced an earlier fold over `stdOpToString`, which
+// pretty-printed every op (one or more String allocations per op, then a
+// byte-wise mix of the printed text) — O(total ops) String churn on every
+// build, in the always-taken incremental emit path. Hash VALUES therefore
+// differ from the printed-form era: any persisted chunk cache invalidates
+// once when this lands (acceptable — a one-time cold rebuild, never a stale
+// hit). Every in-process caller (the chunk-cache stamp, the inliner's
+// `recordInlineEdge`, the stdlib-cache snapshot) shares this one function,
+// so in-memory hash consistency is unaffected.
 module function computeStdContentHashFor(project Project, module StdModule, func IrFunction) returns ContentHash
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount)
 	h = mix(h, value: func.blockRefs.count())
-	// Collect THIS function's blocks once so the per-op control-flow
-	// stringification (`stdOpToString` → `cfBrToString` → `resolveBlockLabel`)
-	// resolves branch-target labels against only this function's blocks. Passing
-	// `module.blocks` (every block of every function in the module) made each
-	// branch label lookup an O(total-module-blocks) linear scan — a module-wide
-	// O(branches × blocks) blowup that dominated once the earlier O(n²) passes
-	// were fixed. Branch targets are intra-function, so the function's own block
-	// list resolves every label identically.
-	var funcBlocks = IrBlockArray.create()
-	for blockRef in func.blockRefs 'collectBlocks'
-		funcBlocks.push(try module.blocks.get(blockRef) otherwise panic("computeStdContentHashFor: blocks.get OOB collecting funcBlocks"))
-	end 'collectBlocks'
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("computeStdContentHashFor: blocks.get OOB")
 		h = mixString(h, s: block.label)
@@ -963,20 +961,194 @@ module function computeStdContentHashFor(project Project, module StdModule, func
 			opIndex gives 3
 		end 'tk'
 		h = mix(h, value: termKind)
-		// Op-content mixing: fold each op's printed form into the hash so a
+		// Op-content mixing: fold each op's structural hash in so a
 		// literal-value edit (or any other intra-op change) flips the
 		// contentHash even when block shape is preserved.
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeStdContentHashFor: ops.get OOB at {opIdx}")
-			h = mixString(h, s: stdOpToString(op, blocks: funcBlocks))
+			h = mixStdOp(h, op: op)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTermOp'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("computeStdContentHashFor: ops.get OOB at terminator {block.terminatorIndex()}")
-			h = mixString(h, s: stdOpToString(termOp, blocks: funcBlocks))
+			h = mixStdOp(h, op: termOp)
 		end 'hasTermOp'
 	end 'eachBlock'
 	return h
 end 'computeStdContentHashFor'
+
+// --- Structural StdOp hashing (replaces the stdOpToString fold) ---
+//
+// Every field the printed form carried is mixed, and then some: fields the
+// printer omitted (e.g. `indirectCall`'s isVoid/isThrowing/errorFlagId) are
+// hashed too. Extra coverage is safe for a cache key — it can only invalidate
+// MORE than the printed form did, never produce a stale hit. A variant tag
+// (the union ordinal) is mixed at every union level so same-shaped payloads
+// in different variants cannot collide. The matches are exhaustive on
+// purpose: adding or reshaping a variant fails loudly here instead of
+// silently hashing to a stale value.
+
+// Hash a bool field as a 0/1 scalar.
+function mixBool(state ContentHash, value bool) returns ContentHash
+	let bit = 1 if value else 0
+	return mix(state, value: bit)
+end 'mixBool'
+
+// ParsedInt is signed (i64 range) and cannot widen into ContentHash's
+// unsigned 0-to-u64.max range, so fold its decimal text — the same bytes the
+// old printed form carried, and deterministic across runs.
+function mixParsedInt(state ContentHash, value ParsedInt) returns ContentHash
+	return mixString(state, s: "{value}")
+end 'mixParsedInt'
+
+// Two-to-five scalar mix chains: collapse the deeply-nested `mix(mix(...))`
+// calls the per-variant hash arms would otherwise need.
+function mix2(state ContentHash, a ContentHash, b ContentHash) returns ContentHash
+	return mix(mix(state, value: a), value: b)
+end 'mix2'
+
+function mix3(state ContentHash, a ContentHash, b ContentHash, c ContentHash) returns ContentHash
+	return mix(mix2(state, a: a, b: b), value: c)
+end 'mix3'
+
+function mix4(state ContentHash, a ContentHash, b ContentHash, c ContentHash, d ContentHash) returns ContentHash
+	return mix(mix3(state, a: a, b: b, c: c), value: d)
+end 'mix4'
+
+function mix5(state ContentHash, a ContentHash, b ContentHash, c ContentHash, d ContentHash, e ContentHash) returns ContentHash
+	return mix(mix4(state, a: a, b: b, c: c, d: d), value: e)
+end 'mix5'
+
+// Hash a value-id list with a leading count tag so adjacent lists cannot
+// alias across field boundaries (e.g. [1,2]+[] vs [1]+[2]).
+function mixValueIds(state ContentHash, ids ValueIdArray) returns ContentHash
+	var h = mix(state, value: ids.count())
+	for id in ids 'each'
+		h = mix(h, value: id)
+	end 'each'
+	return h
+end 'mixValueIds'
+
+// Branch arms hash the target BlockId scalar instead of resolving the target
+// block's label text (what the old printed form folded in). BlockIds are
+// finer-grained than labels — a renumbered-but-identically-labeled block
+// flips the hash — which is SAFE for a cache key: it can only invalidate
+// more, never produce a stale hit.
+function mixBranchArm(state ContentHash, target BlockId, argIds ValueIdArray) returns ContentHash
+	return mixValueIds(mix(state, value: target), ids: argIds)
+end 'mixBranchArm'
+
+function mixStdOp(state ContentHash, op StdOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'category'
+		arith(inner) gives mixStdArithOp(h, op: inner)
+		control(inner) gives mixStdControlOp(h, op: inner)
+		call(inner) gives mixStdCallOp(h, op: inner)
+		memory(inner) gives mixStdMemoryOp(h, op: inner)
+		system(inner) gives mixStdSystemOp(h, op: inner)
+	end 'category'
+end 'mixStdOp'
+
+function mixStdArithOp(state ContentHash, op StdArithOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'variant'
+		const(c) gives mixParsedInt(mix2(h, a: c.opcode.ordinal, b: c.resultId), value: c.value)
+		unary(u) gives mix3(h, a: u.opcode.ordinal, b: u.resultId, c: u.operandId)
+		binary(bin) gives mix4(h, a: bin.opcode.ordinal, b: bin.resultId, c: bin.leftId, d: bin.rightId)
+	end 'variant'
+end 'mixStdArithOp'
+
+function mixStdControlOp(state ContentHash, op StdControlOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'variant'
+		br(target, argIds) gives mixBranchArm(h, target: target, argIds: argIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives mixBranchArm(mixBranchArm(mix(h, value: condId), target: thenTarget, argIds: thenArgIds), target: elseTarget, argIds: elseArgIds)
+	end 'variant'
+end 'mixStdControlOp'
+
+function mixStdCallOp(state ContentHash, op StdCallOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'variant'
+		ret(retValId) gives mix(h, value: retValId)
+		call(resultId, callee, argIds) gives mixValueIds(mixString(mix(h, value: resultId), s: callee), ids: argIds)
+		tryCall(resultId, callee, argIds, errorFlagId) gives mix(mixValueIds(mixString(mix(h, value: resultId), s: callee), ids: argIds), value: errorFlagId)
+		indirectCall(resultId, calleeId, argIds, isVoid, isThrowing, errorFlagId) gives mix(mixBool(mixBool(mixValueIds(mix2(h, a: resultId, b: calleeId), ids: argIds), value: isVoid), value: isThrowing), value: errorFlagId)
+		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives mixValueIds(mixBool(mix3(h, a: resultId, b: witnessAddrId, c: methodIndex), value: isVoid), ids: argIds)
+		witnessTryCall(resultId, witnessAddrId, methodIndex, isVoid, argIds, errorFlagId) gives mix(mixValueIds(mixBool(mix3(h, a: resultId, b: witnessAddrId, c: methodIndex), value: isVoid), ids: argIds), value: errorFlagId)
+		funcRef(resultId, funcName) gives mixString(mix(h, value: resultId), s: funcName)
+		tailCall(callee, argIds) gives mixValueIds(mixString(h, s: callee), ids: argIds)
+		param(resultId, paramIndex, paramType) gives mix3(h, a: resultId, b: paramIndex, c: paramType.ordinal)
+		errorReturn(retValId, errorFlagId) gives mix2(h, a: retValId, b: errorFlagId)
+	end 'variant'
+end 'mixStdCallOp'
+
+function mixStdMemoryOp(state ContentHash, op StdMemoryOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'variant'
+		storeSlot(slotId, valueId) gives mix2(h, a: slotId, b: valueId)
+		loadSlot(resultId, slotId) gives mix2(h, a: resultId, b: slotId)
+	end 'variant'
+end 'mixStdMemoryOp'
+
+function mixStdSystemOp(state ContentHash, op StdSystemOp) returns ContentHash
+	let h = mix(state, value: op.ordinal)
+	return match op 'variant'
+		globalAddr(resultId, name) gives mixString(mix(h, value: resultId), s: name)
+		memcpy(dstId, srcId, lenId) gives mix3(h, a: dstId, b: srcId, c: lenId)
+		stackAddr(resultId, slotId) gives mix2(h, a: resultId, b: slotId)
+		storeByte(baseId, offsetId, byteId) gives mix3(h, a: baseId, b: offsetId, c: byteId)
+		loadByte(resultId, baseId, offsetId) gives mix3(h, a: resultId, b: baseId, c: offsetId)
+		osExit(codeId) gives mix(h, value: codeId)
+		osSleep(msId) gives mix(h, value: msId)
+		osWrite(ptrId, lenId) gives mix2(h, a: ptrId, b: lenId)
+		free(ptrId) gives mix(h, value: ptrId)
+		osWriteErr(ptrId, lenId) gives mix2(h, a: ptrId, b: lenId)
+		osRead(resultId, ptrId, lenId) gives mix3(h, a: resultId, b: ptrId, c: lenId)
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives mix3(h, a: resultId, b: pathPtrId, c: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) gives mix3(h, a: fdId, b: ptrId, c: lenId)
+		osClose(fdId) gives mix(h, value: fdId)
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives mix5(h, a: resultId, b: namePtrId, c: nameLenId, d: outBufPtrId, e: outBufLenId)
+		osGetArgc(resultId) gives mix(h, value: resultId)
+		osClockMs(resultId) gives mix(h, value: resultId)
+		osGetArgv(resultId, indexId) gives mix2(h, a: resultId, b: indexId)
+		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives mix3(h, a: resultId, b: bufPtrId, c: bufSizeId)
+		loadFramePtr(resultId) gives mix(h, value: resultId)
+		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives mixBool(mixBool(mix4(h, a: resultId, b: addrId, c: offset, d: width.ordinal), value: signed), value: isFloat)
+		funcAddr(resultId, name) gives mixString(mix(h, value: resultId), s: name)
+		storeIndirect(addrId, offset, valueId, width, isFloat) gives mixBool(mix4(h, a: addrId, b: offset, c: valueId, d: width.ordinal), value: isFloat)
+		drop(valueId) gives mix(h, value: valueId)
+		osAllocPages(resultId, sizeId) gives mix2(h, a: resultId, b: sizeId)
+		osAllocPagesLarge(resultId, sizeId) gives mix2(h, a: resultId, b: sizeId)
+		osFreePages(ptrId, sizeId) gives mix2(h, a: ptrId, b: sizeId)
+		osDecommitPages(ptrId, sizeId) gives mix2(h, a: ptrId, b: sizeId)
+		osRecommitPages(ptrId, sizeId) gives mix2(h, a: ptrId, b: sizeId)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives mix4(h, a: resultId, b: cStringPtrId, c: flagsId, d: fileModeId)
+		osFileRead(resultId, fdId, bufPtrId, countId) gives mix4(h, a: resultId, b: fdId, c: bufPtrId, d: countId)
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives mix4(h, a: resultId, b: fdId, c: bufPtrId, d: countId)
+		osFileClose(resultId, fdId) gives mix2(h, a: resultId, b: fdId)
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives mix4(h, a: resultId, b: fdId, c: offsetId, d: whenceId)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives mix3(h, a: resultId, b: cStringPtrId, c: statBufPtrId)
+		osFileAccess(resultId, cStringPtrId, modeId) gives mix3(h, a: resultId, b: cStringPtrId, c: modeId)
+		osFileUnlink(resultId, cStringPtrId) gives mix2(h, a: resultId, b: cStringPtrId)
+		osFileRename(resultId, oldPathPtrId, newPathPtrId) gives mix3(h, a: resultId, b: oldPathPtrId, c: newPathPtrId)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives mix4(h, a: resultId, b: fdId, c: bufPtrId, d: bufSizeId)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives mix3(h, a: resultId, b: bufPtrId, c: bufSizeId)
+		osDirMkdir(resultId, cStringPtrId, modeId) gives mix3(h, a: resultId, b: cStringPtrId, c: modeId)
+		atomicInc(addrId) gives mix(h, value: addrId)
+		atomicDec(addrId) gives mix(h, value: addrId)
+		atomicXadd(resultId, addrId, valId) gives mix3(h, a: resultId, b: addrId, c: valId)
+		atomicCas(resultId, addrId, oldId, newId) gives mix4(h, a: resultId, b: addrId, c: oldId, d: newId)
+		osLockInit(addrId) gives mix(h, value: addrId)
+		osLockAcquire(addrId) gives mix(h, value: addrId)
+		osLockRelease(addrId) gives mix(h, value: addrId)
+		boxValue(resultId, valueId, sizeId) gives mix3(h, a: resultId, b: valueId, c: sizeId)
+		unboxValue(resultId, ptrId, sizeId) gives mix3(h, a: resultId, b: ptrId, c: sizeId)
+		loadLayoutDescriptor(resultId, label) gives mixString(mix(h, value: resultId), s: label)
+		loadWitnessTable(resultId, label) gives mixString(mix(h, value: resultId), s: label)
+		descriptorField(resultId, descAddrId, field) gives mix3(h, a: resultId, b: descAddrId, c: field.ordinal)
+		witnessMethod(resultId, witnessAddrId, methodIndex) gives mix3(h, a: resultId, b: witnessAddrId, c: methodIndex)
+		dropTypeParam(slotValueId, layoutValueId) gives mix2(h, a: slotValueId, b: layoutValueId)
+	end 'variant'
+end 'mixStdSystemOp'
 
 // Stamp one StdModule function's contentHash with its op-content-deep hash.
 // Called lazily from the per-function queries because the Maxon→Std lowerer
@@ -1036,6 +1208,29 @@ function findStdFunctionIndex(module StdModule, name String) returns StdFuncInde
 	end 'scan'
 	return u64.max
 end 'findStdFunctionIndex'
+
+// Name → index directory over `module.functions`, for callers that resolve
+// MANY names against the same module snapshot. The incremental backend's
+// per-function precheck does one lookup per MIR function, and runtime/stdlib
+// helper names (`mrt_*`, `__slab_*`, `stdlib.*`) are guaranteed misses that
+// a `findStdFunctionIndex` probe would scan the ENTIRE array for — O(F²)
+// across the precheck. First occurrence wins on duplicate names, matching
+// `findStdFunctionIndex`'s front-to-back scan order. The directory reflects
+// the array at build time: it stays valid across `stampStdContentHash`
+// (in-place `functions.set`, no reorder) but must be rebuilt if functions
+// are appended or removed.
+module typealias StdFuncIndexMap = Map with (String, FuncIndex)
+
+module function buildStdFunctionIndex(module StdModule) returns StdFuncIndexMap
+	var index = StdFuncIndexMap.create()
+	for i in 0 upto module.functions.count() 'each'
+		let f = try module.functions.get(i) otherwise panic("buildStdFunctionIndex: functions.get OOB at {i}")
+		if not index.contains(f.name) 'firstWins'
+			index.upsert(f.name, value: i)
+		end 'firstWins'
+	end 'each'
+	return index
+end 'buildStdFunctionIndex'
 
 // Per-function Mid (Std-tier) query.
 //
@@ -1269,35 +1464,40 @@ end 'stampChunkMemo'
 // The chunk-driven path needs per-function granularity inside a single
 // revision, so it bypasses the wrapper's `verifiedAt`/dep arms entirely
 // and writes the freshly-computed hash straight into the memo.
-module function refreshMidContentHashForFunction(project Project, funcName String) throws CompileError
-	// Reuse the already-computed mid module from `allMidCache` rather than
-	// re-invoking `queryAllMid`. By the time the incremental backend's
-	// per-function precheck loop calls this, `queryCodeResult` -> `queryAllMid`
-	// has already run once and populated the cache (the memo is stored
-	// unconditionally, even under --emit-ir / --dump-stages). Re-running
-	// `queryAllMid` per function would be O(functions) full mid-pipeline runs;
-	// worse, under IR-dump (which bypasses the allMid cache) it would re-run the
-	// pipeline over the SAME merged module the first run already mutated in place
-	// (TypeResolution rewrites ops + expands the ABI param vector; DCE prunes
-	// blockRefs), so the re-run walks pruned blockRefs and panics
-	// ("blockRef OOB"). Reading the cached result sidesteps both: one
-	// computation, no re-mutation. Fall back to `queryAllMid` only if the cache
-	// isn't populated yet (defensive — shouldn't happen on this path).
-	var module = StdModule.create()
-	if project.db.allMidCache.computedAt > 0 'haveCache'
-		module = project.db.allMidCache.value
-	end 'haveCache' else 'noCache'
-		module = try queryAllMid(project)
-	end 'noCache'
-	let idx = findStdFunctionIndex(module, name: funcName)
-	if idx == u64.max as StdFuncIndexResult 'missing'
-		return
-	end 'missing'
-	stampStdContentHash(project, module: module, funcIdx: idx)
-	let func = try module.functions.get(idx) otherwise panic("refreshMidContentHashForFunction: functions.get OOB at {idx}")
-	let memo = MidFuncMemo.create(func, keyHash: func.contentHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
-	project.db.midPerFunc.upsert(funcName, value: memo)
+// The `module` and `funcIndex` parameters are the precheck loop's shared
+// snapshot (`currentAllMidModule` + `buildStdFunctionIndex`), resolved ONCE
+// per emit instead of once per function — a per-call `findStdFunctionIndex`
+// scan (a guaranteed full-array miss for runtime/stdlib helper names) made
+// the precheck O(functions²). A map miss is the exact no-op tail the old
+// sentinel-index path took.
+module function refreshMidContentHashForFunction(project Project, funcName String, module StdModule, funcIndex StdFuncIndexMap)
+	if let idx = try funcIndex.get(funcName) 'inModule'
+		stampStdContentHash(project, module: module, funcIdx: idx)
+		let func = try module.functions.get(idx) otherwise panic("refreshMidContentHashForFunction: functions.get OOB at {idx}")
+		let memo = MidFuncMemo.create(func, keyHash: func.contentHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+		project.db.midPerFunc.upsert(funcName, value: memo)
+	end 'inModule'
 end 'refreshMidContentHashForFunction'
+
+// The StdModule the incremental precheck hashes against: reuse the already-
+// computed mid module from `allMidCache` rather than re-invoking
+// `queryAllMid`. By the time the incremental backend's precheck runs,
+// `queryCodeResult` -> `queryAllMid` has already run once and populated the
+// cache (the memo is stored unconditionally, even under --emit-ir /
+// --dump-stages). Re-running `queryAllMid` would be another full mid-pipeline
+// run; worse, under IR-dump (which bypasses the allMid cache) it would re-run
+// the pipeline over the SAME merged module the first run already mutated in
+// place (TypeResolution rewrites ops + expands the ABI param vector; DCE
+// prunes blockRefs), so the re-run walks pruned blockRefs and panics
+// ("blockRef OOB"). Reading the cached result sidesteps both: one
+// computation, no re-mutation. Fall back to `queryAllMid` only if the cache
+// isn't populated yet (defensive — shouldn't happen on this path).
+module function currentAllMidModule(project Project) returns StdModule throws CompileError
+	if project.db.allMidCache.computedAt > 0 'haveCache'
+		return project.db.allMidCache.value
+	end 'haveCache'
+	return try queryAllMid(project)
+end 'currentAllMidModule'
 
 // Capture the inline-dependency fingerprint for `callerName` from the current
 // build: the callees the inliner spliced into it, each paired with the content

@@ -1454,6 +1454,23 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 		return
 	end 'allColored'
 
+	// Per-range priority/eligibility keys, hoisted once so pickHighestPriority
+	// and pickEvictionVictim read scalars instead of copying a LiveRange per
+	// scanned candidate. Built only when some range is actually pending (the
+	// common all-colored case returns above without paying for them).
+	// `cascade` is the only key that changes during the fixup; every bump goes
+	// through bumpEvicteeCascade, which mirrors it into cascadeByRange.
+	var spillWeightByRange = RegIntArray.create()
+	var cascadeByRange = RegIntArray.create()
+	var fixedRegByRange = RegIntArray.create()
+	var crossesCallByRange = BoolArray.create()
+	for range in ranges 'hoistKeys'
+		spillWeightByRange.push(range.spillWeight)
+		cascadeByRange.push(range.cascade)
+		fixedRegByRange.push(range.fixedReg)
+		crossesCallByRange.push(range.crossesCall)
+	end 'hoistKeys'
+
 	// Safety belt: hard cap on total pops. With proper cascade discipline
 	// the cap is `numRanges * (MAX_CASCADE + 1)`; the extra headroom catches
 	// any subtle ordering bug without masking a real infinite loop.
@@ -1476,7 +1493,7 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 		// (so reload vregs with SPILL_WEIGHT_INFINITE go before normal-weight
 		// ranges), tiebreak by lowest cascade (a freshly-pending range goes
 		// before a range that has already cycled through eviction).
-		let pickPos = pickHighestPriority(pending, ranges: ranges)
+		let pickPos = pickHighestPriority(pending, spillWeightByRange: spillWeightByRange, cascadeByRange: cascadeByRange)
 		let sortedIdx = try pending.get(pickPos) otherwise panic("invariant: pickPos in pending bounds")
 		swapPopAt(pending, idx: pickPos)
 
@@ -1544,7 +1561,7 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 			continue
 		end 'cascadeExhausted'
 
-		let evicteeIdx = pickEvictionVictim(sortedIdx, ranges: ranges, ig: ig, rangeColors: rangeColors, pool: pool, callerSavedMask: callerSavedMask)
+		let evicteeIdx = pickEvictionVictim(sortedIdx, ig: ig, rangeColors: rangeColors, pool: pool, callerSavedMask: callerSavedMask, spillWeightByRange: spillWeightByRange, cascadeByRange: cascadeByRange, fixedRegByRange: fixedRegByRange, crossesCallByRange: crossesCallByRange)
 		if evicteeIdx < 0 'noVictim'
 			// Phase 6 backstop: try last-chance recursive recoloring before
 			// giving up. Eviction failed because every colored neighbor is
@@ -1577,7 +1594,7 @@ function runEvictionFixup(ranges LiveRangeArray, ig InterferenceGraph, rangeColo
 		// Mutate the evictee's cascade and clear its color in result.
 		// Pulled into a helper so the `var evictee` borrow of `ranges`
 		// is released before the next iteration tries to scan it.
-		let evicteeVid = bumpEvicteeCascade(ranges, evicteeIdx: evicteeIdx, cascadeByValueId: cascadeByValueId, result: result)
+		let evicteeVid = bumpEvicteeCascade(ranges, evicteeIdx: evicteeIdx, cascadeByValueId: cascadeByValueId, result: result, cascadeByRange: cascadeByRange)
 		pending.push(evicteeIdx)
 		anyEvicted = true
 
@@ -2099,7 +2116,7 @@ end 'isFixedInRecolor'
 // `ranges.get(...)`-and-mutate cycle) without tripping the borrow checker.
 // Returns the evictee's valueId so the caller can fold it into a log
 // message without re-borrowing `ranges`.
-function bumpEvicteeCascade(ranges LiveRangeArray, evicteeIdx RegInt, cascadeByValueId RegIntArray, result ColoringResult) returns RegInt
+function bumpEvicteeCascade(ranges LiveRangeArray, evicteeIdx RegInt, cascadeByValueId RegIntArray, result ColoringResult, cascadeByRange RegIntArray) returns RegInt
 	var evictee = try ranges.get(evicteeIdx) otherwise panic("invariant: evicteeIdx in ranges bounds")
 	let vid = evictee.valueId
 	if vid < result.assignment.count() 'inBounds'
@@ -2107,6 +2124,9 @@ function bumpEvicteeCascade(ranges LiveRangeArray, evicteeIdx RegInt, cascadeByV
 	end 'inBounds'
 	evictee.cascade = evictee.cascade + 1
 	set(cascadeByValueId, index: vid, value: evictee.cascade, sentinel: 0)
+	// Mirror the bump into the fixup's hoisted key array so the priority and
+	// victim scans keep reading the current cascade.
+	try cascadeByRange.set(evicteeIdx, value: evictee.cascade) otherwise panic("bumpEvicteeCascade: cascadeByRange.set({evicteeIdx}) OOB; sized to numRanges")
 	return vid
 end 'bumpEvicteeCascade'
 
@@ -2114,29 +2134,32 @@ end 'bumpEvicteeCascade'
 // weight wins; equal weight tiebreaks on lower cascade (a fresher range goes
 // before a stale one). Linear scan — `pending` is bounded by the count of
 // uncolored ranges, which is small in practice (the first-fit pass colors
-// the vast majority).
-function pickHighestPriority(pending RegIntArray, ranges LiveRangeArray) returns RegInt
+// the vast majority). Reads the hoisted scalar key arrays instead of copying
+// a LiveRange per candidate; scan order and tie-breaking (first-encountered
+// wins) are unchanged.
+function pickHighestPriority(pending RegIntArray, spillWeightByRange RegIntArray, cascadeByRange RegIntArray) returns RegInt
 	let n = pending.count()
 	if n == 0 'empty'
 		panic("pickHighestPriority: pending list empty (caller must check before calling)")
 	end 'empty'
 	var bestPos = 0
-	var bestIdx = try pending.get(0) otherwise panic("invariant: n > 0 but pending.get(0) failed")
-	var bestRange = try ranges.get(bestIdx) otherwise panic("invariant: bestIdx in ranges bounds")
+	let firstIdx = try pending.get(0) otherwise panic("invariant: n > 0 but pending.get(0) failed")
+	var bestWeight = try spillWeightByRange.get(firstIdx) otherwise panic("invariant: firstIdx in spillWeightByRange bounds")
+	var bestCascade = try cascadeByRange.get(firstIdx) otherwise panic("invariant: firstIdx in cascadeByRange bounds")
 	var i = 1
 	while i < n 'scan'
 		let candIdx = try pending.get(i) otherwise panic("invariant: i < n but pending.get failed")
-		let cand = try ranges.get(candIdx) otherwise panic("invariant: candIdx in ranges bounds")
+		let candWeight = try spillWeightByRange.get(candIdx) otherwise panic("invariant: candIdx in spillWeightByRange bounds")
+		let candCascade = try cascadeByRange.get(candIdx) otherwise panic("invariant: candIdx in cascadeByRange bounds")
 		// Higher weight wins; equal-weight tiebreak: lower cascade wins.
-		if cand.spillWeight > bestRange.spillWeight 'higherWeight'
+		if candWeight > bestWeight 'higherWeight'
 			bestPos = i
-			bestIdx = candIdx
-			bestRange = cand
+			bestWeight = candWeight
+			bestCascade = candCascade
 		end 'higherWeight' else 'sameOrLower'
-			if cand.spillWeight == bestRange.spillWeight and cand.cascade < bestRange.cascade 'lowerCascade'
+			if candWeight == bestWeight and candCascade < bestCascade 'lowerCascade'
 				bestPos = i
-				bestIdx = candIdx
-				bestRange = cand
+				bestCascade = candCascade
 			end 'lowerCascade'
 		end 'sameOrLower'
 		i = i + 1
@@ -2166,8 +2189,13 @@ end 'swapPopAt'
 // Fixed-reg ranges are excluded — their assignment is hardwired and cannot
 // be moved. Returns -1 if no eligible victim exists; in that case the
 // evictor must remain uncolored and fall through to the spill loop.
-function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig InterferenceGraph, rangeColors RegIntArray, pool RegIntArray, callerSavedMask BoolArray) returns RegInt
-	let evictor = try ranges.get(evictorIdx) otherwise panic("invariant: evictorIdx in ranges bounds")
+function pickEvictionVictim(evictorIdx RegInt, ig InterferenceGraph, rangeColors RegIntArray, pool RegIntArray, callerSavedMask BoolArray, spillWeightByRange RegIntArray, cascadeByRange RegIntArray, fixedRegByRange RegIntArray, crossesCallByRange BoolArray) returns RegInt
+	// All range fields this scan needs are read from the hoisted scalar key
+	// arrays (no LiveRange copy per neighbor); scan order and tie-breaking
+	// (first-encountered wins) are unchanged.
+	let evictorWeight = try spillWeightByRange.get(evictorIdx) otherwise panic("invariant: evictorIdx in spillWeightByRange bounds")
+	let evictorCascade = try cascadeByRange.get(evictorIdx) otherwise panic("invariant: evictorIdx in cascadeByRange bounds")
+	let evictorCrossesCall = try crossesCallByRange.get(evictorIdx) otherwise panic("invariant: evictorIdx in crossesCallByRange bounds")
 	let nbrs = try ig.neighbors.get(evictorIdx) otherwise panic("invariant: evictorIdx in ig.neighbors bounds")
 
 	// The evictor must be able to USE the evictee's register after the swap.
@@ -2175,7 +2203,7 @@ function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig Interfe
 	// evictor's class-safety constraint (e.g. crossesCall + caller-saved)
 	// would reject. We probe this per-victim by checking whether the
 	// candidate register would be acceptable for the evictor.
-	let evictorPrefersCallerSaved = not evictor.crossesCall
+	let evictorPrefersCallerSaved = not evictorCrossesCall
 
 	var bestNbr = -1
 	var bestWeight = i64.max
@@ -2186,15 +2214,17 @@ function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig Interfe
 			continue
 		end 'uncolored'
 
-		let nbr = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx in ranges bounds")
+		let nbrFixedReg = try fixedRegByRange.get(nbrIdx) otherwise panic("invariant: nbrIdx in fixedRegByRange bounds")
+		let nbrWeight = try spillWeightByRange.get(nbrIdx) otherwise panic("invariant: nbrIdx in spillWeightByRange bounds")
+		let nbrCascade = try cascadeByRange.get(nbrIdx) otherwise panic("invariant: nbrIdx in cascadeByRange bounds")
 		// Fixed-reg ranges and infinite-weight reload ranges cannot be
 		// evicted — the former because their assignment is hardwired, the
 		// latter because the spill loop already considers them
 		// unspillable (any attempt to "respill" loops indefinitely).
-		if nbr.fixedReg != RM_NONE 'fixed'
+		if nbrFixedReg != RM_NONE 'fixed'
 			continue
 		end 'fixed'
-		if nbr.spillWeight == SPILL_WEIGHT_INFINITE 'unspillable'
+		if nbrWeight == SPILL_WEIGHT_INFINITE 'unspillable'
 			continue
 		end 'unspillable'
 
@@ -2202,8 +2232,8 @@ function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig Interfe
 		// weight, or equal weight with lower cascade. Equal (weight, cascade)
 		// is NOT allowed — that would enable cycles where two same-priority
 		// ranges trade the same register forever.
-		let weightLower = nbr.spillWeight < evictor.spillWeight
-		let weightEqualCascadeLower = nbr.spillWeight == evictor.spillWeight and nbr.cascade < evictor.cascade
+		let weightLower = nbrWeight < evictorWeight
+		let weightEqualCascadeLower = nbrWeight == evictorWeight and nbrCascade < evictorCascade
 		if not weightLower and not weightEqualCascadeLower 'notEligible'
 			continue
 		end 'notEligible'
@@ -2219,14 +2249,14 @@ function pickEvictionVictim(evictorIdx RegInt, ranges LiveRangeArray, ig Interfe
 
 		// Among eligible victims, pick the cheapest (lowest weight); break
 		// ties on lowest cascade.
-		if nbr.spillWeight < bestWeight 'newBest'
+		if nbrWeight < bestWeight 'newBest'
 			bestNbr = nbrIdx
-			bestWeight = nbr.spillWeight
-			bestCascade = nbr.cascade
+			bestWeight = nbrWeight
+			bestCascade = nbrCascade
 		end 'newBest' else 'sameOrHigher'
-			if nbr.spillWeight == bestWeight and nbr.cascade < bestCascade 'tiebreak'
+			if nbrWeight == bestWeight and nbrCascade < bestCascade 'tiebreak'
 				bestNbr = nbrIdx
-				bestCascade = nbr.cascade
+				bestCascade = nbrCascade
 			end 'tiebreak'
 		end 'sameOrHigher'
 	end 'each'
@@ -2326,9 +2356,16 @@ function buildInterferenceGraph(ranges LiveRangeArray, callerSavedByOrdinal Bool
 
 	// Build a block -> list of (rangeIdx, startPos, endPos) map
 	// for efficient per-block overlap checking.
-	// First find the max blockId
+	// First find the max blockId; on the same walk, hoist the per-range
+	// scalar keys the O(edges) emit loop below needs, so the copy-boundary
+	// and redundancy tests read scalars instead of copying two LiveRanges
+	// (retain/release on every managed field) per overlapping pair.
 	var maxBlockId = 0
+	var fixedRegByRange = RegIntArray.create()
+	var crossesCallByRange = BoolArray.create()
 	for range in ranges 'findMaxBlock'
+		fixedRegByRange.push(range.fixedReg)
+		crossesCallByRange.push(range.crossesCall)
 		for interval in range.intervals 'eachInt'
 			if interval.blockId > maxBlockId 'higher'
 				maxBlockId = interval.blockId
@@ -2451,13 +2488,18 @@ function buildInterferenceGraph(ranges LiveRangeArray, callerSavedByOrdinal Bool
 				// exactly 1 position at the copy boundary. This happens when
 				// the source's interval is [_, P+1) and the dest starts at [P, _):
 				// they share only position P (the movRegReg instruction).
-				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
+				// The overlap size is computed from the scalars already in
+				// hand so the common path (`and` short-circuits) never pays
+				// isCopyBoundaryOverlap's two LiveRange fetches.
+				let minEnd = e1 if e1 < e2 else e2
+				let maxStart = s1 if s1 > s2 else s2
+				let isCopyBoundary = minEnd - maxStart == 1 and isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
 				if not isCopyBoundary 'realOverlap'
 					// Drop edges between a caller-saved fixed-reg pseudo-range and a
 					// call-crossing virtual: the picker never assigns that virtual to
 					// any caller-saved register on any path, so the edge is provably
 					// inert yet inflates the virtual's degree and apparent pressure.
-					if not interferenceEdgeIsRedundant(ranges, ri1: ri1, ri2: ri2, callerSavedByOrdinal: callerSavedByOrdinal) 'notRedundant'
+					if not interferenceEdgeIsRedundantKeys(ri1, ri2: ri2, fixedRegByRange: fixedRegByRange, crossesCallByRange: crossesCallByRange, callerSavedByOrdinal: callerSavedByOrdinal) 'notRedundant'
 						addInterference(ig, a: ri1, b: ri2)
 					end 'notRedundant'
 				end 'realOverlap'
@@ -2613,19 +2655,31 @@ end 'buildCallerSavedByOrdinal'
 export function interferenceEdgeIsRedundant(ranges LiveRangeArray, ri1 RegInt, ri2 RegInt, callerSavedByOrdinal BoolArray) returns bool
 	let r1 = try ranges.get(ri1) otherwise panic("interferenceEdgeIsRedundant: ri1={ri1} OOB in ranges")
 	let r2 = try ranges.get(ri2) otherwise panic("interferenceEdgeIsRedundant: ri2={ri2} OOB in ranges")
-	return edgeRedundantOrdered(r1, other: r2, callerSavedByOrdinal: callerSavedByOrdinal) or edgeRedundantOrdered(r2, other: r1, callerSavedByOrdinal: callerSavedByOrdinal)
+	return edgeRedundantOrderedKeys(r1.fixedReg, otherCrossesCall: r2.crossesCall, otherFixedReg: r2.fixedReg, callerSavedByOrdinal: callerSavedByOrdinal) or edgeRedundantOrderedKeys(r2.fixedReg, otherCrossesCall: r1.crossesCall, otherFixedReg: r1.fixedReg, callerSavedByOrdinal: callerSavedByOrdinal)
 end 'interferenceEdgeIsRedundant'
 
-// Directed half of `interferenceEdgeIsRedundant`: true when `fixed` is a
-// caller-saved fixed-reg range and `other` is a call-crossing virtual.
-function edgeRedundantOrdered(fixed LiveRange, other LiveRange, callerSavedByOrdinal BoolArray) returns bool
-	if fixed.fixedReg == RM_NONE 'notFixed'
+// Hot-path variant of `interferenceEdgeIsRedundant` for buildInterferenceGraph:
+// reads the hoisted per-range scalar keys instead of copying two LiveRanges
+// per overlapping interval pair. Same predicate, same result.
+function interferenceEdgeIsRedundantKeys(ri1 RegInt, ri2 RegInt, fixedRegByRange RegIntArray, crossesCallByRange BoolArray, callerSavedByOrdinal BoolArray) returns bool
+	let fixed1 = try fixedRegByRange.get(ri1) otherwise panic("interferenceEdgeIsRedundantKeys: ri1={ri1} OOB in fixedRegByRange")
+	let fixed2 = try fixedRegByRange.get(ri2) otherwise panic("interferenceEdgeIsRedundantKeys: ri2={ri2} OOB in fixedRegByRange")
+	let crosses1 = try crossesCallByRange.get(ri1) otherwise panic("interferenceEdgeIsRedundantKeys: ri1={ri1} OOB in crossesCallByRange")
+	let crosses2 = try crossesCallByRange.get(ri2) otherwise panic("interferenceEdgeIsRedundantKeys: ri2={ri2} OOB in crossesCallByRange")
+	return edgeRedundantOrderedKeys(fixed1, otherCrossesCall: crosses2, otherFixedReg: fixed2, callerSavedByOrdinal: callerSavedByOrdinal) or edgeRedundantOrderedKeys(fixed2, otherCrossesCall: crosses1, otherFixedReg: fixed1, callerSavedByOrdinal: callerSavedByOrdinal)
+end 'interferenceEdgeIsRedundantKeys'
+
+// Directed half of `interferenceEdgeIsRedundant`, over scalar keys: true when
+// the (fixedReg) endpoint is a caller-saved fixed-reg range and the other
+// endpoint is a call-crossing virtual.
+function edgeRedundantOrderedKeys(fixedReg RegOrdinal, otherCrossesCall bool, otherFixedReg RegOrdinal, callerSavedByOrdinal BoolArray) returns bool
+	if fixedReg == RM_NONE 'notFixed'
 		return false
 	end 'notFixed'
-	if not other.crossesCall 'otherNotCallCrossing'
+	if not otherCrossesCall 'otherNotCallCrossing'
 		return false
 	end 'otherNotCallCrossing'
-	if other.fixedReg != RM_NONE 'otherIsFixed'
+	if otherFixedReg != RM_NONE 'otherIsFixed'
 		// Two fixed-reg ranges: their colors are hardwired, never picked, so
 		// the edge is moot — but leave it in to avoid reasoning about fixed
 		// vs fixed overlap; the cheap early-outs above already exclude the
@@ -2637,11 +2691,11 @@ function edgeRedundantOrdered(fixed LiveRange, other LiveRange, callerSavedByOrd
 	end 'otherIsFixed'
 	// Out-of-range ordinals (a register outside this class's pool) read false:
 	// such a fixed range is not caller-saved from this class's perspective.
-	if fixed.fixedReg < 0 or fixed.fixedReg >= callerSavedByOrdinal.count() 'outOfRange'
+	if fixedReg < 0 or fixedReg >= callerSavedByOrdinal.count() 'outOfRange'
 		return false
 	end 'outOfRange'
-	return try callerSavedByOrdinal.get(fixed.fixedReg) otherwise false
-end 'edgeRedundantOrdered'
+	return try callerSavedByOrdinal.get(fixedReg) otherwise false
+end 'edgeRedundantOrderedKeys'
 
 export function addInterference(ig InterferenceGraph, a RegInt, b RegInt)
 	// Add edge a <-> b, deduplicating against the existing neighbor set. The edge
@@ -2706,6 +2760,20 @@ function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns 
 		i = i + 1
 	end 'init'
 
+	// Hoist the comparator's key tuple per range index ONCE. The comparator
+	// used to fetch (copy) both LiveRanges on every comparison inside the
+	// merge sort; the keys (defBlock's dom-preorder position, fixed-vs-
+	// virtual kind, defPosition) are immutable during the sort, so extract
+	// them up front and compare scalars.
+	var domPosByRange = RegIntArray.create()
+	var isVirtualByRange = BoolArray.create()
+	var defPositionByRange = RegIntArray.create()
+	for range in ranges 'hoistKeys'
+		domPosByRange.push(getOr(domIndex, index: range.defBlock, fallback: i64.max))
+		isVirtualByRange.push(range.fixedReg == RM_NONE)
+		defPositionByRange.push(range.defPosition)
+	end 'hoistKeys'
+
 	// Sort by (domPreorderIndex[range.defBlock], fixed-before-virtual,
 	// defPosition, range index). Fixed-reg ranges sort before virtual ranges at
 	// the same dom position so their physical register is marked used before
@@ -2725,7 +2793,7 @@ function sortByDomPreorder(ranges LiveRangeArray, domIndex RegIntArray) returns 
 			scratch.push(0)
 			s = s + 1
 		end 'initScratch'
-		mergeSortByDomPreorder(order, lo: 0, hi: numRanges, scratch: scratch, ranges: ranges, domIndex: domIndex)
+		mergeSortByDomPreorder(order, lo: 0, hi: numRanges, scratch: scratch, domPosByRange: domPosByRange, isVirtualByRange: isVirtualByRange, defPositionByRange: defPositionByRange)
 	end 'doSort'
 
 	return order
@@ -2735,13 +2803,13 @@ end 'sortByDomPreorder'
 // `rangeBeforeByDomPreorder`. `scratch` is a caller-provided buffer sized to
 // order.count(); each merge writes only its own [lo, hi) slice, so the shared
 // buffer is safe under depth-first recursion.
-function mergeSortByDomPreorder(order RegIntArray, lo RegInt, hi RegInt, scratch RegIntArray, ranges LiveRangeArray, domIndex RegIntArray)
+function mergeSortByDomPreorder(order RegIntArray, lo RegInt, hi RegInt, scratch RegIntArray, domPosByRange RegIntArray, isVirtualByRange BoolArray, defPositionByRange RegIntArray)
 	if hi - lo < 2 'base'
 		return
 	end 'base'
 	let mid = lo + (hi - lo) / 2
-	mergeSortByDomPreorder(order, lo: lo, hi: mid, scratch: scratch, ranges: ranges, domIndex: domIndex)
-	mergeSortByDomPreorder(order, lo: mid, hi: hi, scratch: scratch, ranges: ranges, domIndex: domIndex)
+	mergeSortByDomPreorder(order, lo: lo, hi: mid, scratch: scratch, domPosByRange: domPosByRange, isVirtualByRange: isVirtualByRange, defPositionByRange: defPositionByRange)
+	mergeSortByDomPreorder(order, lo: mid, hi: hi, scratch: scratch, domPosByRange: domPosByRange, isVirtualByRange: isVirtualByRange, defPositionByRange: defPositionByRange)
 
 	var i = lo
 	var j = mid
@@ -2749,7 +2817,7 @@ function mergeSortByDomPreorder(order RegIntArray, lo RegInt, hi RegInt, scratch
 	while i < mid and j < hi 'merge'
 		let a = try order.get(i) otherwise panic("mergeSortByDomPreorder: order.get({i}) OOB")
 		let b = try order.get(j) otherwise panic("mergeSortByDomPreorder: order.get({j}) OOB")
-		if rangeBeforeByDomPreorder(a, bIdx: b, ranges: ranges, domIndex: domIndex) 'takeLeft'
+		if rangeBeforeByDomPreorder(a, bIdx: b, domPosByRange: domPosByRange, isVirtualByRange: isVirtualByRange, defPositionByRange: defPositionByRange) 'takeLeft'
 			try scratch.set(k, value: a) otherwise panic("mergeSortByDomPreorder: scratch.set OOB")
 			i = i + 1
 		end 'takeLeft' else 'takeRight'
@@ -2781,23 +2849,25 @@ end 'mergeSortByDomPreorder'
 // True iff range `aIdx` sorts strictly before range `bIdx`: by dom-preorder
 // index of the def block, then fixed-reg before virtual, then def position,
 // then range index (tiebreaker → total order). Matches the former insertion
-// sort's stable (domPos, isVirtual, defPos) ordering exactly.
-function rangeBeforeByDomPreorder(aIdx RegInt, bIdx RegInt, ranges LiveRangeArray, domIndex RegIntArray) returns bool
-	let aRange = try ranges.get(aIdx) otherwise panic("rangeBeforeByDomPreorder: ranges.get({aIdx}) OOB")
-	let bRange = try ranges.get(bIdx) otherwise panic("rangeBeforeByDomPreorder: ranges.get({bIdx}) OOB")
-	let aDomPos = getOr(domIndex, index: aRange.defBlock, fallback: i64.max)
-	let bDomPos = getOr(domIndex, index: bRange.defBlock, fallback: i64.max)
+// sort's stable (domPos, isVirtual, defPos) ordering exactly. Compares the
+// key tuples hoisted by sortByDomPreorder — no LiveRange copies inside the
+// merge sort's comparison loop.
+function rangeBeforeByDomPreorder(aIdx RegInt, bIdx RegInt, domPosByRange RegIntArray, isVirtualByRange BoolArray, defPositionByRange RegIntArray) returns bool
+	let aDomPos = try domPosByRange.get(aIdx) otherwise panic("rangeBeforeByDomPreorder: domPosByRange.get({aIdx}) OOB")
+	let bDomPos = try domPosByRange.get(bIdx) otherwise panic("rangeBeforeByDomPreorder: domPosByRange.get({bIdx}) OOB")
 	if aDomPos != bDomPos 'domDiffers'
 		return aDomPos < bDomPos
 	end 'domDiffers'
-	let aIsVirtual = aRange.fixedReg == RM_NONE
-	let bIsVirtual = bRange.fixedReg == RM_NONE
+	let aIsVirtual = try isVirtualByRange.get(aIdx) otherwise panic("rangeBeforeByDomPreorder: isVirtualByRange.get({aIdx}) OOB")
+	let bIsVirtual = try isVirtualByRange.get(bIdx) otherwise panic("rangeBeforeByDomPreorder: isVirtualByRange.get({bIdx}) OOB")
 	if aIsVirtual != bIsVirtual 'kindDiffers'
 		// fixed-reg (not virtual) sorts first: a is before b iff a is fixed.
 		return not aIsVirtual
 	end 'kindDiffers'
-	if aRange.defPosition != bRange.defPosition 'defDiffers'
-		return aRange.defPosition < bRange.defPosition
+	let aDefPos = try defPositionByRange.get(aIdx) otherwise panic("rangeBeforeByDomPreorder: defPositionByRange.get({aIdx}) OOB")
+	let bDefPos = try defPositionByRange.get(bIdx) otherwise panic("rangeBeforeByDomPreorder: defPositionByRange.get({bIdx}) OOB")
+	if aDefPos != bDefPos 'defDiffers'
+		return aDefPos < bDefPos
 	end 'defDiffers'
 	return aIdx < bIdx
 end 'rangeBeforeByDomPreorder'
@@ -2909,6 +2979,12 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 		ri = ri + 1
 	end 'buildVidMap'
 
+	// blockId -> blockRef index so hintBranchArgs resolves each branch
+	// edge's target block in O(1). It used to re-scan func.blockRefs (an
+	// IrBlock copy per probed block) once per outgoing edge of every block —
+	// O(blocks²) on branch-dense functions.
+	let blockIdToRef = buildFuncBlockIdToRef(module, func: func)
+
 	// Scan all ops for copy-like patterns. opIdx is the 0-indexed position
 	// within the block; opPos = opIdx + 1 matches the interval space used by
 	// scanDefinitions (block-arg defs at 0, ops at 1..N, terminator at N+1).
@@ -2931,7 +3007,7 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 		let predBlockLen = block.opRefs.count() + 1
 		let copyPos = predBlockLen - 1
 		for edge in block.branchEdges 'eachEdge'
-			hintBranchArgs(edge.argIds, targetBlockId: edge.targetBlockId, predBlockId: block.id, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+			hintBranchArgs(edge.argIds, targetBlockId: edge.targetBlockId, predBlockId: block.id, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx, blockIdToRef: blockIdToRef, module: module)
 		end 'eachEdge'
 	end 'eachBlock'
 
@@ -3133,11 +3209,11 @@ end 'extractCopyHintsWith'
 // corresponding block arg in the target block. The parallel copy for this
 // edge executes in the predecessor block at `copyPos`; CopyEdges anchored
 // there let isCopyBoundaryOverlap distinguish per-edge interference (Step 7).
-function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, predBlockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func IrFunction, module TargetModule)
+function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, predBlockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray, blockIdToRef FuncBlockIdToRefMap, module TargetModule)
 	if argIds.count() == 0 'noArgs'
 		return
 	end 'noArgs'
-	let targetBlock = findBlockForHint(module, func: func, blockId: targetBlockId)
+	let targetBlock = getBlockInFunc(module, blockIdToRef: blockIdToRef, blockId: targetBlockId)
 	var i = 0
 	while i < argIds.count() 'eachArg'
 		let srcId = try argIds.get(i) otherwise 'skipArg'
@@ -3153,16 +3229,6 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, predBlockId 
 		i = i + 1
 	end 'eachArg'
 end 'hintBranchArgs'
-
-function findBlockForHint(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
-	for blockRef in func.blockRefs 'search'
-		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-		if block.id == blockId 'found'
-			return block
-		end 'found'
-	end 'search'
-	panic("findBlockForHint: block {blockId} not found")
-end 'findBlockForHint'
 
 // Hint a virtual register to prefer a specific physical register ordinal.
 export function setPhysHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)

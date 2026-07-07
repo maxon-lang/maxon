@@ -1833,6 +1833,13 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 	// the warm-rebuild cost roughly linearly in (1 / N) for N-function edits.
 	var freshKeyHashByName = StringContentHashMap.create()
 	var missFuncs = IrFunctionArray.create()
+	// Resolve the mid module and its name → index directory ONCE for the
+	// whole precheck. Nothing below appends to or reorders
+	// `midModule.functions` (the per-function content-hash stamp writes in
+	// place), so the directory stays valid for every iteration. The previous
+	// per-function `findStdFunctionIndex` scan made this loop O(functions²).
+	let midModule = try currentAllMidModule(pipeline.project)
+	let midFuncIndex = buildStdFunctionIndex(midModule)
 	for func in pipeline.mirModule.functions 'precheck'
 		// Record the per-function dep here so the outer `queryCodeResult`
 		// memo knows the whole-binary result transitively depends on each
@@ -1845,7 +1852,7 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 		// queryAllMid's StdModule — the refresh is a no-op for those names,
 		// and their chunk memos rely on the stable `mix(0, mirPassVersion,
 		// backendVersion)` keyHash.
-		try refreshMidContentHashForFunction(pipeline.project, funcName: func.name)
+		refreshMidContentHashForFunction(pipeline.project, funcName: func.name, module: midModule, funcIndex: midFuncIndex)
 		let freshKeyHash = computeChunkKeyHash(pipeline.project, funcName: func.name)
 		freshKeyHashByName.upsert(func.name, value: freshKeyHash)
 		if isCachedChunkValid(pipeline.project, funcName: func.name, freshKeyHash: freshKeyHash) 'isHit'
@@ -1856,8 +1863,17 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 
 	// Only run the target-lowering pipeline when there's at least one cache
 	// miss — a same-source rebuild after a no-op edit gets a free pass.
+	// The name → index directory over the freshly-lowered target functions is
+	// built once here so each per-miss lookup in the assemble loop below is
+	// O(1): on a cold build EVERY function is a miss, and a per-miss linear
+	// scan (an IrFunction struct copy per probe) made assembly O(functions²).
+	// `targetModule.functions` is not mutated during the assemble loop
+	// (`emitFunctionChunk` only reads blocks/ops), so the directory stays
+	// valid throughout.
+	var targetFuncIndexByName = TargetFuncIndexMap.create()
 	if missFuncs.count() > 0 'hasMisses'
 		try prepareTargetModuleForFunctions(pipeline, backend: backend, funcsToLower: missFuncs)
+		targetFuncIndexByName = buildTargetFuncIndex(pipeline.targetModule)
 	end 'hasMisses'
 
 	let emitStart = passTimerStart()
@@ -1878,11 +1894,10 @@ function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCac
 		end 'cached'
 		// Miss tail: pull the freshly-target-lowered IrFunction out of the
 		// backend's `targetModule.functions` (populated by the
-		// `prepareTargetModuleForFunctions` call above) and emit its chunk.
-		// The lookup is a linear scan, but `targetModule.functions` is the
-		// miss set only — typically one function on a single-edit rebuild —
-		// so the cost is negligible.
-		let targetFunc = try findTargetFuncByName(pipeline.targetModule, name: func.name) otherwise panic("emitBackendIncrementalWith: missing target func '{func.name}' after prepareTargetModuleForFunctions ({pipeline.targetModule.functions.count()} lowered)")
+		// `prepareTargetModuleForFunctions` call above) via the O(1) name
+		// directory built after lowering, and emit its chunk.
+		let targetFuncIdx = try targetFuncIndexByName.get(func.name) otherwise panic("emitBackendIncrementalWith: missing target func '{func.name}' after prepareTargetModuleForFunctions ({pipeline.targetModule.functions.count()} lowered)")
+		let targetFunc = try pipeline.targetModule.functions.get(targetFuncIdx) otherwise panic("emitBackendIncrementalWith: targetModule.functions.get OOB at {targetFuncIdx}")
 		pipeline.project.db.codePerFuncMisses = pipeline.project.db.codePerFuncMisses + 1
 		// Phase 5: track misses of PERSISTABLE (user-owned) functions separately
 		// so a fully-warm rebuild whose only miss is a per-compile runtime entry
@@ -1917,19 +1932,22 @@ function isCachedChunkValid(project Project, funcName String, freshKeyHash Conte
 	return false
 end 'isCachedChunkValid'
 
-// Stage P Step 3.5b: linear lookup over `targetModule.functions`. The lookup
-// is called once per cache-miss function; on a single-function-edit rebuild
-// (the dominant warm-rebuild shape) there's exactly one miss and one entry to
-// scan. Used by the chunk-driven path to find the target-lowered IrFunction
-// corresponding to a MIR function whose chunk needs fresh emission.
-function findTargetFuncByName(targetModule TargetModule, name String) returns IrFunction throws ChunkCacheLookupError
-	for func in targetModule.functions 'scan'
-		if func.name == name 'match'
-			return func
-		end 'match'
-	end 'scan'
-	throw ChunkCacheLookupError.miss
-end 'findTargetFuncByName'
+typealias TargetFuncIndexMap = Map with (String, FuncIndex)
+
+// Stage P Step 3.5b: name → index directory over `targetModule.functions`,
+// built once per emit so each cache-miss lookup in the assemble loop is
+// O(1). First occurrence wins on duplicate names, matching the front-to-back
+// order the previous per-miss linear scan resolved.
+function buildTargetFuncIndex(targetModule TargetModule) returns TargetFuncIndexMap
+	var index = TargetFuncIndexMap.create()
+	for i in 0 upto targetModule.functions.count() 'each'
+		let f = try targetModule.functions.get(i) otherwise panic("buildTargetFuncIndex: functions.get OOB at {i}")
+		if not index.contains(f.name) 'firstWins'
+			index.upsert(f.name, value: i)
+		end 'firstWins'
+	end 'each'
+	return index
+end 'buildTargetFuncIndex'
 
 // Stage P Step 3.5b: chunk-driven Phase 7 driver. Same as `prepareTargetModule`
 // but restricts target lowering / regalloc / prologue-epilogue to

@@ -27,6 +27,7 @@ let SCHED_NONE = -1
 typealias SchedInt = int(i64.min to i64.max)
 typealias SchedIntArray = Array with SchedInt
 typealias SchedIntArrayArray = Array with SchedIntArray
+typealias OperandListArray = Array with ValueIdArray
 
 // Per-block scheduling state with methods for each scheduling phase.
 // Built fresh for each basic block; owns all the per-block indexed arrays
@@ -42,6 +43,14 @@ type ScheduleState
 	// scheduling O(ops²) per block — a dominant backend cost at self-host scale.
 	// The array gives O(1) indexed access. Built once in `create`.
 	export var opRefsArray as OpIndexArray
+	// Cached operand lists and def ValueIds, parallel to opRefsArray.
+	// extractMirUsesPacked/extractDefValueIdPacked are pure (result depends
+	// only on the op) but heap-allocate/re-match per call; the scheduler
+	// consults operands per dependency edge, per scheduled op, and per
+	// candidate per scoring round, so extracting once in `create` removes
+	// the dominant repeated-extraction cost of scheduling.
+	export var usesByIdx as OperandListArray
+	export var defByIdx as SchedIntArray
 	export var scheduled as BoolArray
 	export var successorCount as SchedIntArray
 	export var criticalPathLen as SchedIntArray
@@ -50,6 +59,10 @@ type ScheduleState
 	export var currentPressure as SchedInt
 	export var latencyTable as TargetLatencyTable
 	export var terminatorUseIds as ValueIdArray
+	// termUse[valueId] = true when the block's terminator reads valueId as a
+	// branch arg. O(1) replacement for scanning terminatorUseIds once per
+	// unique use per candidate scoring round in useDiesNow.
+	export var termUse as BoolArray
 	export var terminatorFeeders as SchedIntArray
 	// Stored for the flag-barrier pass in `buildDependencies`: when the
 	// block ends in a cond_br, the cmp that produces its condition value
@@ -62,6 +75,9 @@ type ScheduleState
 	export var successorsOf as SchedIntArrayArray
 	// useCount[valueId] = number of unscheduled ops that use this value
 	export var useCount as SchedIntArray
+	// Reusable dedup scratch for estimatePressureDelta (cleared per call) so
+	// the hot per-candidate scoring path performs no per-call allocation.
+	export var seenUsesScratch as ValueIdArray
 
 	// Build the per-block state. Initializes the per-op arrays in parallel with
 	// opRefs and pre-computes latencies so the scheduling phases see a ready
@@ -75,9 +91,13 @@ type ScheduleState
 		var predecessorsOf = SchedIntArrayArray.create()
 		var successorsOf = SchedIntArrayArray.create()
 		var opRefsArray = OpIndexArray.create()
+		var usesByIdx = OperandListArray.create()
+		var defByIdx = SchedIntArray.create()
 
 		for packed in opRefs 'init'
 			opRefsArray.push(packed)
+			usesByIdx.push(extractMirUsesPacked(module, packed: packed))
+			defByIdx.push(extractDefValueIdPacked(module, packed: packed))
 			scheduled.push(false)
 			successorCount.push(0)
 			let lat = getMirLatencyPacked(module, packed: packed, table: table)
@@ -96,10 +116,20 @@ type ScheduleState
 			fallthrough then break 'hasTerm'
 		end 'hasTerm'
 
+		// Flag map over terminator uses so useDiesNow answers "kept live by
+		// the terminator?" in O(1) instead of rescanning terminatorUseIds.
+		var termUse = BoolArray.create()
+		for termUseId in terminatorUseIds 'markTermUse'
+			schedGrowFalse(termUse, size: termUseId + 1)
+			try termUse.set(termUseId, value: true) otherwise panic("invariant: termUse grown to termUseId+1={termUseId + 1} but set({termUseId}) failed")
+		end 'markTermUse'
+
 		return Self{
 			module: module,
 			opRefs: opRefs,
 			opRefsArray: opRefsArray,
+			usesByIdx: usesByIdx,
+			defByIdx: defByIdx,
 			scheduled: scheduled,
 			successorCount: successorCount,
 			criticalPathLen: criticalPathLen,
@@ -108,11 +138,13 @@ type ScheduleState
 			currentPressure: 0,
 			latencyTable: table,
 			terminatorUseIds: terminatorUseIds,
+			termUse: termUse,
 			terminatorFeeders: SchedIntArray.create(),
 			terminator: terminator,
 			predecessorsOf: predecessorsOf,
 			successorsOf: successorsOf,
-			useCount: SchedIntArray.create()
+			useCount: SchedIntArray.create(),
+			seenUsesScratch: ValueIdArray.create()
 		}
 	end 'create'
 
@@ -161,24 +193,20 @@ type ScheduleState
 				panic("schedule: readySet empty with {opRefs.count() - scheduledCount} unscheduled ops remaining — dependency graph has a cycle (dep construction bug)")
 			end 'noReady'
 
-			let bestIdx = self.selectBestReady(readySet)
+			let (bestIdx, bestPos) = self.selectBestReady(readySet)
 
-			// Remove bestIdx from the ready set.
-			var newReadySet = SchedIntArray.create()
-			for ri in readySet 'filterReady'
-				if ri != bestIdx 'keep'
-					newReadySet.push(ri)
-				end 'keep'
-			end 'filterReady'
-			readySet = newReadySet
+			// Remove bestIdx from the ready set in place. remove(at) shifts the
+			// tail left one slot, preserving the relative order of the remaining
+			// entries — selectBestReady tie-breaks on the FIRST max in iteration
+			// order, so order preservation is required for identical schedules.
+			_ = try readySet.remove(bestPos) otherwise panic("invariant: bestPos from selectBestReady is a valid readySet index but remove({bestPos}) failed")
 
 			try scheduled.set(bestIdx, value: true) otherwise panic("invariant: scheduled.set OOB")
 			scheduleOrder.push(bestIdx)
 			scheduledCount = scheduledCount + 1
 
 			// Decrement use counts for values used by this op.
-			let bestPacked = try opRefsArray.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but opRefs.get failed")
-			let bestUseIds = extractMirUsesPacked(module, packed: bestPacked)
+			let bestUseIds = try usesByIdx.get(bestIdx) otherwise panic("invariant: bestIdx from readySet is a valid op index but usesByIdx.get failed")
 			for uid in bestUseIds 'decUse'
 				let oldUC = schedLookupZero(useCount, index: uid)
 				if oldUC > 0 'decrement'
@@ -241,7 +269,7 @@ type ScheduleState
 		for packed in opRefs 'buildDeps'
 
 			// Data dependencies: for each use, add edge from definer -> this op.
-			let useIds = extractMirUsesPacked(module, packed: packed)
+			let useIds = try usesByIdx.get(i) otherwise panic("invariant: usesByIdx built parallel to opRefs but get({i}) failed")
 			for useId in useIds 'eachUse'
 				let defIdx = schedLookup(defMap, index: useId)
 				if defIdx != SCHED_NONE 'hasDef'
@@ -249,7 +277,7 @@ type ScheduleState
 				end 'hasDef'
 			end 'eachUse'
 
-			let defId = extractDefValueIdPacked(module, packed: packed)
+			let defId = try defByIdx.get(i) otherwise panic("invariant: defByIdx built parallel to opRefs but get({i}) failed")
 			if defId != SCHED_NONE 'hasDef'
 				schedGrow(defMap, size: defId + 1)
 				try defMap.set(defId, value: i) otherwise panic("invariant: defMap.set OOB")
@@ -452,13 +480,16 @@ type ScheduleState
 	// linear combination would risk one component overwhelming another at
 	// extreme values; an explicit split keeps the heuristic legible and
 	// the pressure-relief priority sharp.
-	function selectBestReady(readySet SchedIntArray) returns SchedInt
+	// Returns (op index, position within readySet) so the caller can remove
+	// the winner in place without re-scanning the ready set.
+	function selectBestReady(readySet SchedIntArray) returns (SchedInt, SchedInt)
 		let highPressure = currentPressure >= latencyTable.pressureThreshold
 
 		var bestIdx = SCHED_NONE
+		var bestPos = SCHED_NONE
 		var bestScore = i64.min
 
-		for candidateIdx in readySet 'pickBest'
+		for (iter, candidateIdx) in readySet.withIterator() 'pickBest'
 			var candidateScore = 0
 			if highPressure 'modeScore'
 				candidateScore = self.scoreHighPressure(candidateIdx)
@@ -467,6 +498,7 @@ type ScheduleState
 			end 'lowMode'
 			if candidateScore > bestScore 'better'
 				bestIdx = candidateIdx
+				bestPos = iter.index()
 				bestScore = candidateScore
 			end 'better'
 		end 'pickBest'
@@ -475,7 +507,7 @@ type ScheduleState
 			panic("selectBestReady: readySet empty — caller must guarantee non-empty")
 		end 'empty'
 
-		return bestIdx
+		return (bestIdx, bestPos)
 	end 'selectBestReady'
 
 	// High-pressure mode score: most-negative pressure delta wins, then
@@ -487,8 +519,7 @@ type ScheduleState
 	//   - -criticalPathLen * 1000  — secondary: keep long chains moving
 	//   - -latency                 — tertiary: prefer expensive ops
 	function scoreHighPressure(opIdx SchedInt) returns SchedInt
-		let packed = try opRefsArray.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but opRefs.get failed")
-		let pressureDelta = self.estimatePressureDelta(packed)
+		let pressureDelta = self.estimatePressureDelta(opIdx)
 		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
 		let latency = try latencies.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
 		return (0 - pressureDelta) * 1000000 - critPath * 1000 - latency
@@ -512,24 +543,26 @@ type ScheduleState
 	//
 	// Duplicate uses within the same op (e.g. `xor v, v`) are counted once:
 	// the value dies once regardless of how many slots in this op read it.
-	// We dedup by recording each unique useId in `seenUses` as we walk;
-	// every duplicate after the first contributes 0. The "dies now" check
-	// then compares the global useCount to this op's local use count for
-	// that valueId — if they match (and the terminator doesn't keep it
-	// live), this op is the sole remaining user and the value dies.
-	function estimatePressureDelta(packed OpIndex) returns SchedInt
+	// We dedup by recording each unique useId in `seenUsesScratch` as we
+	// walk (a reused per-state scratch, cleared per call, so this hot path
+	// allocates nothing); every duplicate after the first contributes 0.
+	// The "dies now" check then compares the global useCount to this op's
+	// local use count for that valueId — if they match (and the terminator
+	// doesn't keep it live), this op is the sole remaining user and the
+	// value dies.
+	function estimatePressureDelta(opIdx SchedInt) returns SchedInt
 		var delta = 0
 
-		let defId = extractDefValueIdPacked(module, packed: packed)
+		let defId = try defByIdx.get(opIdx) otherwise panic("estimatePressureDelta: opIdx from readySet is a valid op index but defByIdx.get({opIdx}) failed")
 		if defId != SCHED_NONE 'hasDef'
 			delta = delta + 1
 		end 'hasDef'
 
-		let useIds = extractMirUsesPacked(module, packed: packed)
-		var seenUses = ValueIdArray.create()
+		let useIds = try usesByIdx.get(opIdx) otherwise panic("estimatePressureDelta: opIdx from readySet is a valid op index but usesByIdx.get({opIdx}) failed")
+		seenUsesScratch.clear()
 		for useId in useIds 'eachUse'
 			var alreadySeen = false
-			for prior in seenUses 'dupCheck'
+			for prior in seenUsesScratch 'dupCheck'
 				if prior == useId 'isDup'
 					alreadySeen = true
 					break
@@ -538,7 +571,7 @@ type ScheduleState
 			if alreadySeen 'skipDup'
 				continue
 			end 'skipDup'
-			seenUses.push(useId)
+			seenUsesScratch.push(useId)
 
 			let myUses = countUsesOfId(useIds, target: useId)
 			if self.useDiesNow(useId, myUses: myUses) 'lastUse'
@@ -555,11 +588,10 @@ type ScheduleState
 	// the global unscheduled-use count equals the number of times this op
 	// itself uses the value.
 	function useDiesNow(valueId SchedInt, myUses SchedInt) returns bool
-		for termUseId in terminatorUseIds 'checkTerm'
-			if termUseId == valueId 'usedByTerm'
-				return false
-			end 'usedByTerm'
-		end 'checkTerm'
+		if schedLookupFlag(termUse, index: valueId) 'usedByTerm'
+			return false
+		end 'usedByTerm'
+
 		let count = schedLookupZero(useCount, index: valueId)
 		return count <= myUses
 	end 'useDiesNow'
@@ -567,8 +599,7 @@ type ScheduleState
 	// Build the useCount map: for each unscheduled op, count how many times
 	// each valueId is used as an operand.
 	function buildUseCountMap()
-		for packed in opRefs 'eachOp'
-			let useIds = extractMirUsesPacked(module, packed: packed)
+		for useIds in usesByIdx 'eachOp'
 			for uid in useIds 'eachUse'
 				schedGrowZero(useCount, size: uid + 1)
 				let old = try useCount.get(uid) otherwise panic("buildUseCountMap: useCount grown to uid+1={uid + 1} but get({uid}) failed")
@@ -579,11 +610,9 @@ type ScheduleState
 
 	// Update the pressure model after scheduling an op (bottom-up).
 	function updatePressureForScheduledOp(opIdx SchedInt)
-		let packed = try opRefsArray.get(opIdx) otherwise panic("invariant: opIdx is valid op index but opRefs.get failed")
-
 		// In bottom-up order: scheduling an op means we're moving backward in time.
 		// A definition means the value is born — pressure goes up.
-		let defId = extractDefValueIdPacked(module, packed: packed)
+		let defId = try defByIdx.get(opIdx) otherwise panic("invariant: opIdx is a valid op index but defByIdx.get({opIdx}) failed")
 		if defId != SCHED_NONE 'hasDef'
 			let currentLive = schedLookupZero(liveVregs, index: defId)
 			if currentLive == 0 'notYetLive'
@@ -595,7 +624,7 @@ type ScheduleState
 
 		// Each use: if this is the first time we see this value used (bottom-up),
 		// mark it as live (we're seeing its use for first time).
-		let useIds = extractMirUsesPacked(module, packed: packed)
+		let useIds = try usesByIdx.get(opIdx) otherwise panic("invariant: opIdx is a valid op index but usesByIdx.get({opIdx}) failed")
 		for useId in useIds 'eachUse'
 			let currentLive = schedLookupZero(liveVregs, index: useId)
 			if currentLive == 0 'newLive'
@@ -797,3 +826,21 @@ function schedGrowZero(arr SchedIntArray, size SchedInt)
 		arr.push(0)
 	end 'grow'
 end 'schedGrowZero'
+
+// Look up a flag in a BoolArray, returning false if out of bounds.
+// Used for termUse where the map is sized lazily to the largest marked
+// valueId, so OOB is a real "not marked" answer, not a bug.
+function schedLookupFlag(arr BoolArray, index SchedInt) returns bool
+	if index < 0 'negative'
+		return false
+	end 'negative'
+	return try arr.get(index) otherwise false
+end 'schedLookupFlag'
+
+// Grow a BoolArray to at least the given size, filling with false.
+// Used for termUse where false means "not used by the terminator".
+function schedGrowFalse(arr BoolArray, size SchedInt)
+	while arr.count() < size 'grow'
+		arr.push(false)
+	end 'grow'
+end 'schedGrowFalse'

@@ -93,6 +93,10 @@ export function inlineModule(module StdModule, project Project, skipCallerNames 
 	// keep edges for splices that no longer happen after an edit. See
 	// `Project.inlineEdges` and `recordInlineEdge`.
 	project.inlineEdges = InlineEdgeMap.create()
+	// Per-callee body memo (see the CalleeBodyMemo block comment). Persists
+	// across fixpoint rounds: a body only changes via a splice into it, and
+	// every splice drops the spliced-into function's entry.
+	var calleeMemo = CalleeBodyMemoMap.create()
 	var rounds = 0
 	var keepGoing = true
 	var totalSplices = 0
@@ -102,7 +106,7 @@ export function inlineModule(module StdModule, project Project, skipCallerNames 
 		let cg = buildCallGraph(module)
 		let sccs = computeSccs(cg)
 		let recursive = collectRecursive(sccs, cg: cg)
-		let roundCounts = inlineOneRound(module, project: project, recursive: recursive, skipCallers: skipSet)
+		let roundCounts = inlineOneRound(module, project: project, recursive: recursive, skipCallers: skipSet, memoMap: calleeMemo)
 		totalSplices = totalSplices + roundCounts.splices
 		totalLoopBonus = totalLoopBonus + roundCounts.loopBonus
 		if roundCounts.splices == 0 'noChange'
@@ -138,7 +142,178 @@ type RoundCounts
 	end 'zero'
 end 'RoundCounts'
 
-function inlineOneRound(module StdModule, project Project, recursive CallGraphStringSet, skipCallers CallerSkipSet) returns RoundCounts
+// =====================================================================
+// Per-callee body memo
+// =====================================================================
+//
+// `decideInline` runs for EVERY call op in the module, and several of its
+// gates are full walks of the CALLEE's body (isSpliceableShape,
+// calleeProducesObservableFrame's panic scan, countCalleeOps,
+// calleeBodyIsPure); each splice adds more per-callee walks
+// (scanMaxValueId, calleeBodyTouchesSlots) and each unique inline edge a
+// computeStdContentHashFor. Popular callees (stdlib accessors) were
+// re-walked at thousands of call sites, making the pass's cost
+// callSites × calleeSize — its other quadratic term. Every one of these
+// facts is a pure function of the callee's CURRENT blocks/ops (plus
+// pass-constant project metadata: the return-type range registry feeding
+// calleeReturnHasRangeCheck, and the signature inputs of the content hash),
+// so they are memoized per callee name, each field populated lazily on its
+// first query.
+//
+// INVALIDATION: during this pass a function's blocks/ops change in exactly
+// one place — a successful splice INTO it (`performInline` mutates only the
+// caller it was handed; failed attempts return before any block/op
+// mutation, and the ownership side-tables a late-failing attempt may have
+// touched feed none of the memoized facts). Both splice paths drop the
+// CALLER's memo entry right where they invalidate the per-function
+// MIR/code memos, so a live entry always answers exactly what the direct
+// body walk would return at that moment.
+type CalleeBodyMemo
+	export var spliceable as bool
+	export var spliceableValid as bool
+	export var observableFrame as bool
+	export var observableFrameValid as bool
+	export var opCount as ParsedInt
+	export var opCountValid as bool
+	export var bodyPure as bool
+	export var bodyPureValid as bool
+	export var maxValueId as ValueId
+	export var maxValueIdValid as bool
+	export var touchesSlots as bool
+	export var touchesSlotsValid as bool
+	export var contentHash as ContentHash
+	export var contentHashValid as bool
+
+	export static function create() returns CalleeBodyMemo
+		return Self{
+			spliceable: false,
+			spliceableValid: false,
+			observableFrame: false,
+			observableFrameValid: false,
+			opCount: 0,
+			opCountValid: false,
+			bodyPure: false,
+			bodyPureValid: false,
+			maxValueId: 0,
+			maxValueIdValid: false,
+			touchesSlots: false,
+			touchesSlotsValid: false,
+			contentHash: 0,
+			contentHashValid: false
+		}
+	end 'create'
+end 'CalleeBodyMemo'
+
+typealias CalleeBodyMemoMap = Map with (String, CalleeBodyMemo)
+
+// The memo entry for `calleeName`, creating an empty one on first touch.
+// The returned struct aliases the map's stored entry (struct assignment is
+// by reference), so the accessors below mutate it in place — no write-back
+// upsert is needed.
+function calleeMemoFor(memoMap CalleeBodyMemoMap, calleeName String) returns CalleeBodyMemo
+	let existing = try memoMap.get(calleeName) otherwise 'miss'
+		let fresh = CalleeBodyMemo.create()
+		memoMap.upsert(calleeName, value: fresh)
+		return fresh
+	end 'miss'
+	return existing
+end 'calleeMemoFor'
+
+// Memoized isSpliceableShape (see the CalleeBodyMemo invalidation note).
+function memoCalleeSpliceable(module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction) returns bool
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.spliceableValid 'compute'
+		entry.spliceable = isSpliceableShape(module, callee: callee)
+		entry.spliceableValid = true
+	end 'compute'
+
+	return entry.spliceable
+end 'memoCalleeSpliceable'
+
+// Memoized calleeProducesObservableFrame. The range-check half reads only
+// pass-constant project metadata; the panic half walks the body — both are
+// covered by the body-splice invalidation, and the first evaluation keeps
+// the direct call's short-circuit order (range check first).
+function memoCalleeObservableFrame(module StdModule, project Project, memoMap CalleeBodyMemoMap, callee IrFunction) returns bool
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.observableFrameValid 'compute'
+		entry.observableFrame = calleeProducesObservableFrame(module, project: project, callee: callee)
+		entry.observableFrameValid = true
+	end 'compute'
+
+	return entry.observableFrame
+end 'memoCalleeObservableFrame'
+
+// Memoized countCalleeOps (see the CalleeBodyMemo invalidation note).
+function memoCalleeOpCount(module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction) returns ParsedInt
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.opCountValid 'compute'
+		entry.opCount = countCalleeOps(module, callee: callee)
+		entry.opCountValid = true
+	end 'compute'
+
+	return entry.opCount
+end 'memoCalleeOpCount'
+
+// Memoized calleeBodyIsPure (see the CalleeBodyMemo invalidation note).
+function memoCalleeBodyIsPure(module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction) returns bool
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.bodyPureValid 'compute'
+		entry.bodyPure = calleeBodyIsPure(module, callee: callee)
+		entry.bodyPureValid = true
+	end 'compute'
+
+	return entry.bodyPure
+end 'memoCalleeBodyIsPure'
+
+// Memoized scanMaxValueId over `callee`'s body. A function serves as caller
+// and callee through the same body, so `ensureCallerAnalysis` reuses this
+// for the caller-side scan too.
+function memoCalleeMaxValueId(module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction) returns ValueId
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.maxValueIdValid 'compute'
+		entry.maxValueId = scanMaxValueId(callee, module: module)
+		entry.maxValueIdValid = true
+	end 'compute'
+
+	return entry.maxValueId
+end 'memoCalleeMaxValueId'
+
+// Memoized calleeBodyTouchesSlots. Only queried on the single-block splice
+// path, so `calleeBlock` is always the callee's lone entry block — the
+// cached bit is per-callee consistent.
+function memoCalleeTouchesSlots(module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction, calleeBlock IrBlock) returns bool
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.touchesSlotsValid 'compute'
+		entry.touchesSlots = calleeBodyTouchesSlots(module, calleeBlock: calleeBlock)
+		entry.touchesSlotsValid = true
+	end 'compute'
+
+	return entry.touchesSlots
+end 'memoCalleeTouchesSlots'
+
+// Memoized computeStdContentHashFor. Exact because the hash is a pure
+// function of the callee's current blocks/ops (+ its pass-constant
+// signature), and any splice INTO the callee drops its memo entry — so a
+// live entry always equals what a fresh hash of the body would return.
+function memoCalleeContentHash(project Project, module StdModule, memoMap CalleeBodyMemoMap, callee IrFunction) returns ContentHash
+	var entry = calleeMemoFor(memoMap, calleeName: callee.name)
+
+	if not entry.contentHashValid 'compute'
+		entry.contentHash = computeStdContentHashFor(project, module: module, func: callee)
+		entry.contentHashValid = true
+	end 'compute'
+
+	return entry.contentHash
+end 'memoCalleeContentHash'
+
+function inlineOneRound(module StdModule, project Project, recursive CallGraphStringSet, skipCallers CallerSkipSet, memoMap CalleeBodyMemoMap) returns RoundCounts
 	var funcMap = StdFuncByNameForInliner.create()
 	for func in module.functions 'index'
 		funcMap.upsert(func.name, value: func)
@@ -154,7 +329,7 @@ function inlineOneRound(module StdModule, project Project, recursive CallGraphSt
 				continue
 			end 'skipThisCaller'
 		end 'maybeSkip'
-		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, recursive: recursive)
+		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, recursive: recursive, memoMap: memoMap)
 		splices = splices + counts.splices
 		loopBonus = loopBonus + counts.loopBonus
 	end 'eachCaller'
@@ -163,34 +338,146 @@ end 'inlineOneRound'
 
 typealias StdFuncByNameForInliner = Map with (String, IrFunction)
 
+// One reader list per ValueId, indexed by the value.
+typealias ValueReaderLists = Array with OpIndexArray
+
+// Per-value reader index over the caller's LIVE ops: `readers[v]` holds the
+// `module.ops` indices of every live body op or terminator that READS value
+// `v`. Lets a splice substitute a call result by rewriting only the ops that
+// actually read it (the former full-caller rewrite per splice — two union
+// copies per op — was one of the pass's two quadratic terms) and answers the
+// `callerBodyReleasesValue` ownership probe without another full-body scan.
+//
+// Maintenance contract (exactness matters — see substituteCallResultInCaller):
+//   - built from the caller's live ops in `ensureCallerAnalysis`
+//   - spliced-in ops are folded in by `absorbSplicedOps`
+//   - a substitution appends each rewritten op under the NEW id (it now
+//     reads that id, and a later splice may substitute it in turn)
+//   - an unlinked call op's entries are dropped (`removeUnlinkedOpReads`)
+//     so the index never rewrites a dead `module.ops` entry the former
+//     live-block walk would have skipped
+type CallerUseIndex
+	export var readers as ValueReaderLists
+
+	export static function create() returns CallerUseIndex
+		return Self{readers: ValueReaderLists.create()}
+	end 'create'
+
+	// Make ids up to `maxValueId` addressable (new slots start with no readers).
+	export function growTo(maxValueId ValueId)
+		while self.readers.count() <= maxValueId 'fill'
+			self.readers.push(OpIndexArray.create())
+		end 'fill'
+	end 'growTo'
+
+	export function addReader(valueId ValueId, opIdx OpIndex)
+		self.growTo(valueId)
+		var list = try self.readers.get(valueId) otherwise panic("CallerUseIndex.addReader: readers.get OOB after growTo")
+		// One op's reads are recorded consecutively, so a same-op duplicate
+		// (e.g. `add v, v`) is always adjacent — checking the last entry
+		// dedups it. Non-adjacent duplicates (a substitution appending an op
+		// under an id it already read at build time) slip through; they are
+		// harmless because a repeat in-place rewrite is a value-identical
+		// no-op and `removeReader` removes every occurrence.
+		let n = list.count()
+
+		if n > 0 'nonEmpty'
+			let last = try list.get(n - 1) otherwise panic("CallerUseIndex.addReader: last-entry get OOB")
+			if last == opIdx 'dup'
+				return
+			end 'dup'
+		end 'nonEmpty'
+
+		list.push(opIdx)
+	end 'addReader'
+
+	// Remove every occurrence of `opIdx` under `valueId` (duplicates can be
+	// non-adjacent — see addReader). No-op for an id with no reader slot.
+	export function removeReader(valueId ValueId, opIdx OpIndex)
+		if valueId >= self.readers.count() 'outOfRange'
+			return
+		end 'outOfRange'
+		var list = try self.readers.get(valueId) otherwise panic("CallerUseIndex.removeReader: readers.get OOB despite bound check")
+		var i = list.count()
+
+		while i > 0 'scan'
+			i = i - 1
+			let entry = try list.get(i) otherwise panic("CallerUseIndex.removeReader: list.get OOB during scan")
+			if entry == opIdx 'hit'
+				_ = try list.remove(i) otherwise panic("CallerUseIndex.removeReader: remove OOB despite bound check")
+			end 'hit'
+		end 'scan'
+	end 'removeReader'
+
+	// The op-indices reading `valueId`; empty for ids with no recorded readers.
+	export function readersOf(valueId ValueId) returns OpIndexArray
+		if valueId >= self.readers.count() 'outOfRange'
+			return OpIndexArray.create()
+		end 'outOfRange'
+		return try self.readers.get(valueId) otherwise panic("CallerUseIndex.readersOf: readers.get OOB despite bound check")
+	end 'readersOf'
+
+	// Drop every reader of `valueId` — used after a substitution rewrote them
+	// all onto the replacement id. No-op for ids with no reader slot.
+	export function clearReaders(valueId ValueId)
+		if valueId >= self.readers.count() 'outOfRange'
+			return
+		end 'outOfRange'
+		try self.readers.set(valueId, value: OpIndexArray.create()) otherwise panic("CallerUseIndex.clearReaders: readers.set OOB despite bound check")
+	end 'clearReaders'
+end 'CallerUseIndex'
+
 // Lazily-built per-caller-per-round analysis: the caller's max ValueId, its
-// value→defining-op index, and its per-block loop depths. Building these is
-// a full walk of the caller, so it happens only when a call site survives
-// `decideInline`'s cheap gates (most callers have no inlinable site at all),
-// and successful splices update the state incrementally instead of paying a
-// rebuild per splice — the former rebuild-per-splice (plus two more full
-// caller scans inside the splice itself) made the inliner's cost
-// splices × callerSize, the pass's dominant term on large modules.
+// value→defining-op index, its per-value reader index, and its per-block
+// loop depths. Building these is a full walk of the caller, so it happens
+// only when a call site survives `decideInline`'s cheap gates (most callers
+// have no inlinable site at all), and successful splices update the state
+// incrementally instead of paying a rebuild per splice — the former
+// rebuild-per-splice (plus two more full caller scans inside the splice
+// itself) made the inliner's cost splices × callerSize, the pass's dominant
+// term on large modules.
 type CallerAnalysisState
 	export var ready as bool
 	export var maxId as ValueId
 	export var defs as ValueDefMap
+	export var readerIndex as CallerUseIndex
 	export var loopDepth as RegIntArray
 
 	export static function create() returns CallerAnalysisState
-		return Self{ready: false, maxId: 0, defs: ValueDefMap.create(0), loopDepth: RegIntArray.create()}
+		return Self{ready: false, maxId: 0, defs: ValueDefMap.create(0), readerIndex: CallerUseIndex.create(), loopDepth: RegIntArray.create()}
 	end 'create'
 end 'CallerAnalysisState'
 
 // Populate `state` from the caller's current IR if it hasn't been built this
 // round. Runs before the first budget decision, so the first splice always
 // sees exactly what a from-scratch scan would.
-function ensureCallerAnalysis(module StdModule, caller IrFunction, state CallerAnalysisState)
+function ensureCallerAnalysis(module StdModule, caller IrFunction, state CallerAnalysisState, memoMap CalleeBodyMemoMap)
 	if state.ready 'done'
 		return
 	end 'done'
-	state.maxId = scanMaxValueId(caller, module: module)
-	state.defs = buildValueDefMapSized(module, func: caller, maxValueId: state.maxId)
+	state.maxId = memoCalleeMaxValueId(module, memoMap: memoMap, callee: caller)
+	state.defs = ValueDefMap.create(state.maxId)
+	state.readerIndex = CallerUseIndex.create()
+	state.readerIndex.growTo(state.maxId)
+	// Single walk building both the value→def map and the per-value reader
+	// index (the former delegated to buildValueDefMapSized, whose walk shape
+	// this reproduces exactly — body ops only on the def side).
+	var scratch = StdOpOperands.create()
+
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("ensureCallerAnalysis: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			indexCallerOp(module, state: state, opIdx: opIdx, scratch: scratch, recordDefs: true)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			// Reads only: legal terminators define nothing, and the former
+			// def-map build (buildValueDefMapSized) never visited them —
+			// skipping the def side keeps the def-map contents identical
+			// even if a def-carrying terminator ever appeared.
+			indexCallerOp(module, state: state, opIdx: block.terminatorIndex(), scratch: scratch, recordDefs: false)
+		end 'hasTerm'
+	end 'eachBlock'
+
 	// Loop-depth for the budget multiplier (C2.c). The depth array stays
 	// valid for every original block even after splices append fresh blocks:
 	// new back-edges from inlined bodies can't extend a loop containing an
@@ -200,22 +487,58 @@ function ensureCallerAnalysis(module StdModule, caller IrFunction, state CallerA
 	state.ready = true
 end 'ensureCallerAnalysis'
 
+// Record one op's ValueId references into the caller's analysis state:
+// writes into the def-map (skipped for terminators — see ensureCallerAnalysis)
+// and reads into the reader index. Single source of truth for the
+// from-scratch build and the per-splice absorb, so both agree on what counts
+// as a def/read (`extractStdOpOperandsInto` is exhaustive over every op
+// category — params, terminators, and every call shape included).
+function indexCallerOp(module StdModule, state CallerAnalysisState, opIdx OpIndex, scratch StdOpOperands, recordDefs bool)
+	let op = try module.ops.get(opIdx) otherwise panic("indexCallerOp: opIdx {opIdx} not in module.ops")
+	extractStdOpOperandsInto(op, operands: scratch)
+
+	if recordDefs 'defs'
+		for writeId in scratch.writeIds 'eachDef'
+			state.defs.set(writeId, opIdx: opIdx)
+		end 'eachDef'
+	end 'defs'
+
+	for readId in scratch.readIds 'eachRead'
+		state.readerIndex.addReader(readId, opIdx: opIdx)
+	end 'eachRead'
+end 'indexCallerOp'
+
 // Fold the ops a splice just appended to `module.ops` into the caller's
-// def-map. `module.ops` is append-only during inlining, so everything from
-// `opsBefore` to the current count belongs to this splice; terminators in
-// that range have no writeIds and fall through harmlessly.
-function absorbSplicedDefs(module StdModule, defs ValueDefMap, opsBefore OpIndex)
+// def-map and reader index. `module.ops` is append-only during inlining, so
+// everything from `opsBefore` to the current count belongs to this splice —
+// including the multi-block path's split `br` and rewritten terminators,
+// which are pushed through the same append path (no splice-created op
+// bypasses it; the continuation's drained tail ops keep their original,
+// already-indexed indices). Appended terminators have no writeIds and fall
+// through the def side harmlessly.
+function absorbSplicedOps(module StdModule, state CallerAnalysisState, opsBefore OpIndex)
 	var scratch = StdOpOperands.create()
 	for idx in opsBefore upto module.ops.count() 'eachNew'
-		let op = try module.ops.get(idx) otherwise panic("absorbSplicedDefs: appended index {idx} not in module.ops")
-		extractStdOpOperandsInto(op, operands: scratch)
-		for writeId in scratch.writeIds 'eachDef'
-			defs.set(writeId, opIdx: idx)
-		end 'eachDef'
+		indexCallerOp(module, state: state, opIdx: idx, scratch: scratch, recordDefs: true)
 	end 'eachNew'
-end 'absorbSplicedDefs'
+end 'absorbSplicedOps'
 
-function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet) returns RoundCounts
+// Drop the just-unlinked call op's reader entries. The op stays in
+// `module.ops` (its result ids are still read for the def-map cleanup), but
+// it is no longer part of any block — a later substitution must NOT rewrite
+// it: the former implementation walked live blocks and so skipped unlinked
+// ops, and the stdlib cache serializes ALL of `module.ops` (dead entries
+// verbatim), so touching one would change the serialized bytes.
+function removeUnlinkedOpReads(module StdModule, readerIndex CallerUseIndex, opIdx OpIndex)
+	let op = try module.ops.get(opIdx) otherwise panic("removeUnlinkedOpReads: opIdx {opIdx} not in module.ops")
+	var scratch = StdOpOperands.create()
+	extractStdOpOperandsInto(op, operands: scratch)
+	for readId in scratch.readIds 'eachRead'
+		readerIndex.removeReader(readId, opIdx: opIdx)
+	end 'eachRead'
+end 'removeUnlinkedOpReads'
+
+function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, memoMap CalleeBodyMemoMap) returns RoundCounts
 	var splices = 0
 	var loopBonus = 0
 	// Snapshot the caller's block list — multi-block splices append fresh
@@ -233,26 +556,27 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 		// place), and the iteration must not observe its own mutations.
 		let snapshot = block.opRefs.clone()
 		for opIdx in snapshot 'eachOp'
-			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, blockId: block.id, state: state)
+			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, blockId: block.id, state: state, memoMap: memoMap)
 			if decision.inline 'wantInline'
 				// The splice unlinks the call op but leaves it in `module.ops`,
 				// so its result/error-flag ids can still be read for the
 				// def-map cleanup below.
 				let callShape = extractCallShape(module, opIdx: opIdx)
 				let opsBefore = module.ops.count()
-				let outcome = performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap, callerOrigMaxId: state.maxId)
+				let outcome = performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap, state: state, memoMap: memoMap)
 				if outcome.inlined 'didInline'
 					splices = splices + 1
 					if decision.loopBonus 'wasBonus'
 						loopBonus = loopBonus + 1
 					end 'wasBonus'
 					// Incremental maintenance replacing the former full
-					// rebuild: absorb the spliced body's defs, and drop the
-					// unlinked call's own result defs (result substitution
-					// already rewrote every reader onto the inlined ids).
+					// rebuild: absorb the spliced body's defs and reads, and
+					// drop the unlinked call's own result defs (result
+					// substitution already rewrote every reader onto the
+					// inlined ids).
 					state.maxId = outcome.nextFreshId - 1
 					state.defs.growTo(state.maxId)
-					absorbSplicedDefs(module, defs: state.defs, opsBefore: opsBefore)
+					absorbSplicedOps(module, state: state, opsBefore: opsBefore)
 					state.defs.clear(callShape.resultId)
 					if callShape.errorFlagId != 0 'clearFlag'
 						state.defs.clear(callShape.errorFlagId)
@@ -307,8 +631,10 @@ end 'InlineSpliceOutcome'
 //
 // The caller-wide analysis (`state`) is materialized here, on the first call
 // site that survives the cheap gates — callers with no viable site never pay
-// the full-function walks it requires.
-function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, blockId BlockId, state CallerAnalysisState) returns InlineDecision
+// the full-function walks it requires. The callee-body gates below go
+// through the per-callee memo (`memoMap`) so a popular callee's body is
+// walked once, not once per call site.
+function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, blockId BlockId, state CallerAnalysisState, memoMap CalleeBodyMemoMap) returns InlineDecision
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notInlinable'
 		return InlineDecision.skip()
@@ -330,10 +656,10 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 		// module — there's nothing to splice, so leave the call alone.
 		return InlineDecision.skip()
 	end 'noBody'
-	if not isSpliceableShape(module, callee: callee) 'unsupportedShape'
+	if not memoCalleeSpliceable(module, memoMap: memoMap, callee: callee) 'unsupportedShape'
 		return InlineDecision.skip()
 	end 'unsupportedShape'
-	if calleeProducesObservableFrame(module, project: project, callee: callee) 'frameVisible'
+	if memoCalleeObservableFrame(module, project: project, memoMap: memoMap, callee: callee) 'frameVisible'
 		// Skip callees whose stack frame must remain observable: any callee
 		// whose return goes through a typealias range check (insertRangeChecks
 		// runs after the inliner; folding it away would erase the
@@ -343,7 +669,7 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 		// `panic.in-function`, so the gate is mandatory for parity.
 		return InlineDecision.skip()
 	end 'frameVisible'
-	let calleeOps = countCalleeOps(module, callee: callee)
+	let calleeOps = memoCalleeOpCount(module, memoMap: memoMap, callee: callee)
 	if calleeOps == 0 'emptyBody'
 		return InlineDecision.skip()
 	end 'emptyBody'
@@ -360,8 +686,8 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	// of loop depth, so compute them once: `baseBudget` is the loop-depth-0
 	// budget and the depth-scaled budget is just `baseBudget × loopMult`. This
 	// avoids the former double evaluation of the three caller-scan heuristics.
-	ensureCallerAnalysis(module, caller: caller, state: state)
-	let baseBudget = computeArgShapeBudget(module, project: project, callShape: callShape, funcMap: funcMap, defs: state.defs)
+	ensureCallerAnalysis(module, caller: caller, state: state, memoMap: memoMap)
+	let baseBudget = computeArgShapeBudget(module, project: project, callShape: callShape, funcMap: funcMap, defs: state.defs, memoMap: memoMap)
 	let budget = baseBudget * loopDepthMultiplier(lookupLoopDepth(state.loopDepth, blockId: blockId))
 	if calleeOps > budget 'overBudget'
 		return InlineDecision.skip()
@@ -398,7 +724,7 @@ end 'loopDepthMultiplier'
 // rather than re-scanning the caller's whole op set. The loop-depth multiplier
 // (`loopDepthMultiplier`) is applied separately by the caller so this need only
 // run once per call site.
-function computeArgShapeBudget(module StdModule, project Project, callShape CallShape, funcMap StdFuncByNameForInliner, defs ValueDefMap) returns ParsedInt
+function computeArgShapeBudget(module StdModule, project Project, callShape CallShape, funcMap StdFuncByNameForInliner, defs ValueDefMap, memoMap CalleeBodyMemoMap) returns ParsedInt
 	var budget = OP_THRESHOLD as ParsedInt
 	if callSiteHasConcreteDescriptorArg(module, project: project, defs: defs, argIds: callShape.argIds) 'concreteDesc'
 		budget = budget * CONCRETE_DESC_MULT
@@ -415,7 +741,7 @@ function computeArgShapeBudget(module StdModule, project Project, callShape Call
 		// `__slab_alloc` + `atomicInc` + struct stores — those don't fold,
 		// so inlining is pure code bloat. Gate the bonus on purity.
 		let callee = try funcMap.get(callShape.callee) otherwise return budget
-		if calleeBodyIsPure(module, callee: callee) 'pure'
+		if memoCalleeBodyIsPure(module, memoMap: memoMap, callee: callee) 'pure'
 			budget = budget * ALL_CONST_ARGS_MULT
 		end 'pure'
 	end 'allConst'
@@ -1216,11 +1542,11 @@ end 'threadReturnPhiOwnership'
 // multi-block `threadReturnPhiOwnership` guard (`if caller.isValueManaged(callResultId)`)
 // which leaves a `notManaged` old result unclassed; the call-site class is
 // authoritative in BOTH directions, not only managed→raw.
-function preserveCallSiteOwnership(module StdModule, caller IrFunction, oldResultId ValueId, newId ValueId)
+function preserveCallSiteOwnership(module StdModule, caller IrFunction, readerIndex CallerUseIndex, oldResultId ValueId, newId ValueId)
 	if caller.isValueManaged(oldResultId) and not caller.isValueManaged(newId) 'blindCallee'
 		caller.setValueManaged(newId, managed: true)
 		caller.setValueOwnership(newId, cls: caller.ownershipOfValue(oldResultId))
-	end 'blindCallee' else if not caller.isValueManaged(oldResultId) and caller.isValueManaged(newId) and callerBodyReleasesValue(module, fn: caller, valueId: oldResultId) 'releasedByPriorInline'
+	end 'blindCallee' else if not caller.isValueManaged(oldResultId) and caller.isValueManaged(newId) and callerBodyReleasesValue(module, readerIndex: readerIndex, valueId: oldResultId) 'releasedByPriorInline'
 		// The body-release check is LOAD-BEARING: a call result can be notManaged
 		// for reasons OTHER than a prior-inline splice (e.g. a managed allocator
 		// inlined once into a site whose result is notManaged for an unrelated
@@ -1234,18 +1560,46 @@ function preserveCallSiteOwnership(module StdModule, caller IrFunction, oldResul
 	end 'releasedByPriorInline'
 end 'preserveCallSiteOwnership'
 
-// True when `fn`'s body contains a release-family call (`mm_drop` / `__mm_decref`
-// / `__mm_decref_maybenull_helper`) whose argument is `valueId`. Lets
-// `preserveCallSiteOwnership` confirm a `notManaged` call result was demoted
-// because a prior inline round spliced a verbatim release of it. Reuses the same
-// release-arg detection as `collectCalleeRcCallArgs`.
-function callerBodyReleasesValue(module StdModule, fn IrFunction, valueId ValueId) returns bool
-	let releasedArgs = collectCalleeRcCallArgs(module, callee: fn, kind: RcCallKind.release)
-	if valueId < 0 or valueId >= releasedArgs.count() 'outOfRange'
-		return false
-	end 'outOfRange'
-	return try releasedArgs.get(valueId) otherwise false
+// True when the caller's body contains a release-family call (`mm_drop` /
+// `__mm_decref` / `__mm_decref_maybenull_helper`) whose FIRST arg is `valueId`.
+// Lets `preserveCallSiteOwnership` confirm a `notManaged` call result was
+// demoted because a prior inline round spliced a verbatim release of it.
+// Answered from the per-caller reader index (a release call reads its arg, so
+// it is always listed) instead of the former full-body
+// `collectCalleeRcCallArgs` scan — the same first-arg-of-release-callee
+// predicate, probed per reader op.
+function callerBodyReleasesValue(module StdModule, readerIndex CallerUseIndex, valueId ValueId) returns bool
+	for opIdx in readerIndex.readersOf(valueId) 'eachReader'
+		let op = try module.ops.get(opIdx) otherwise panic("callerBodyReleasesValue: reader opIdx {opIdx} not in module.ops")
+		if opIsReleaseCallOfArg(op, vid: valueId) 'hit'
+			return true
+		end 'hit'
+	end 'eachReader'
+	return false
 end 'callerBodyReleasesValue'
+
+// True iff `op` is a static call to a release-family runtime entry with `vid`
+// as arg 0 — the per-value form of `markRcCallArgFromCall`'s release marking.
+function opIsReleaseCallOfArg(op StdOp, vid ValueId) returns bool
+	return match op 'outer'
+		call(inner) gives callIsReleaseOfArg(inner, vid: vid)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'opIsReleaseCallOfArg'
+
+function callIsReleaseOfArg(inner StdCallOp, vid ValueId) returns bool
+	let shape = extractFromCallOp(inner)
+	if shape.kind != CallShapeKind.staticCall 'notStatic'
+		return false
+	end 'notStatic'
+	if not calleeIsRcCall(shape.callee, kind: RcCallKind.release) 'notRelease'
+		return false
+	end 'notRelease'
+	return firstArgIs(shape.argIds, vid: vid)
+end 'callIsReleaseOfArg'
 
 // True for container methods that TRANSFER a managed element out of the collection
 // (the slot relinquishes its +1 to the returned value). These must NOT be inlined — the
@@ -1259,7 +1613,14 @@ function calleeIsContainerTransferMethod(callee String) returns bool
 	return callee == "Array.remove" or callee == "Array.pop" or callee == "Vector.remove" or callee == "Vector.pop"
 end 'calleeIsContainerTransferMethod'
 
-function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner, callerOrigMaxId ValueId) returns InlineSpliceOutcome
+function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner, state CallerAnalysisState, memoMap CalleeBodyMemoMap) returns InlineSpliceOutcome
+	if not state.ready 'notReady'
+		// decideInline materializes the caller analysis before accepting a
+		// site; a splice without it would read a stale maxId and mint
+		// colliding ValueIds.
+		panic("performInline: caller analysis not built for '{caller.name}'")
+	end 'notReady'
+	let callerOrigMaxId = state.maxId
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notStatic'
 		return InlineSpliceOutcome.failed()
@@ -1284,7 +1645,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		return InlineSpliceOutcome.failed()
 	end 'transferCallee'
 	if callee.blockRefs.count() > 1 'multi'
-		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape, callerOrigMaxId: callerOrigMaxId)
+		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape, state: state, memoMap: memoMap)
 	end 'multi'
 	let calleeBlockRef = try callee.blockRefs.get(0) otherwise panic("performInline: callee.blockRefs.get(0) failed after count==1")
 	let calleeBlock = try module.blocks.get(calleeBlockRef) otherwise panic("performInline: blockRef {calleeBlockRef} not in module")
@@ -1296,7 +1657,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if retValId == REMAP_INVALID and not stdReturnTypeIsVoid(callee.returnType) 'badRet'
 		return InlineSpliceOutcome.failed()
 	end 'badRet'
-	if calleeBodyTouchesSlots(module, calleeBlock: calleeBlock) 'usesSlots'
+	if memoCalleeTouchesSlots(module, memoMap: memoMap, callee: callee, calleeBlock: calleeBlock) 'usesSlots'
 		// Slot ops would need slot-id remapping into the caller's frame —
 		// not yet implemented. Most accessors don't touch slots after
 		// mem2reg, so this gate is rarely hit.
@@ -1305,8 +1666,9 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 
 	// Phase 1: build the remap. The caller's max ValueId arrives from the
 	// incrementally-maintained per-round state — rescanning the (large)
-	// caller here on every splice was a dominant inliner cost.
-	let calleeMaxId = scanMaxValueId(callee, module: module)
+	// caller here on every splice was a dominant inliner cost — and the
+	// callee-side scan goes through the per-callee memo.
+	let calleeMaxId = memoCalleeMaxValueId(module, memoMap: memoMap, callee: callee)
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
@@ -1326,6 +1688,10 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
 	end 'mismatch'
+	// The call op is now unlinked; drop its reader entries so a later
+	// substitution never rewrites the dead `module.ops` entry (the stdlib
+	// cache serializes dead entries verbatim — see removeUnlinkedOpReads).
+	removeUnlinkedOpReads(module, readerIndex: state.readerIndex, opIdx: opIdx)
 	// Elide the spliced `return self`/`return <param>` return-incref when the
 	// returned param aliases the caller-managed receiver (see
 	// `collectReturnSelfIncrefSkips`).
@@ -1346,8 +1712,8 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
 		end 'unmapped'
 
-		preserveCallSiteOwnership(module, caller: caller, oldResultId: callShape.resultId, newId: inlinedRet)
-		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
+		preserveCallSiteOwnership(module, caller: caller, readerIndex: state.readerIndex, oldResultId: callShape.resultId, newId: inlinedRet)
+		substituteCallResultInCaller(module, readerIndex: state.readerIndex, oldId: callShape.resultId, newId: inlinedRet)
 	end 'hasReturn'
 
 	// Phase 3b: when the call site was a tryCall, also rebind the caller's
@@ -1378,12 +1744,12 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		// heap-boxed-union throw classified the flag `callReturnRc1` (`classifyTryCallErrorFlag`);
 		// an ownership-blind spliced value would otherwise erase that, orphaning the caught
 		// box's transferred +1.
-		preserveCallSiteOwnership(module, caller: caller, oldResultId: callShape.errorFlagId, newId: inlinedFlag)
-		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: inlinedFlag)
+		preserveCallSiteOwnership(module, caller: caller, readerIndex: state.readerIndex, oldResultId: callShape.errorFlagId, newId: inlinedFlag)
+		substituteCallResultInCaller(module, readerIndex: state.readerIndex, oldId: callShape.errorFlagId, newId: inlinedFlag)
 	end 'tryCallSite'
 
-	invalidateCachedHash(project, callerName: caller.name)
-	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
+	invalidateCachedHash(project, callerName: caller.name, memoMap: memoMap)
+	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee, memoMap: memoMap)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id})")
 	return InlineSpliceOutcome.spliced(nextFreshId)
 end 'performInline'
@@ -1401,7 +1767,8 @@ end 'performInline'
 // invariants the rest of the pipeline assumes). BlockIds are allocated
 // from `caller.nextBlockId`; the caller's `nextBlockId` is bumped by
 // (calleeBlocks + 1) — one slot per cloned block plus the continuation.
-function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape, callerOrigMaxId ValueId) returns InlineSpliceOutcome
+function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape, state CallerAnalysisState, memoMap CalleeBodyMemoMap) returns InlineSpliceOutcome
+	let callerOrigMaxId = state.maxId
 	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return InlineSpliceOutcome.failed()
 
 	// Phase 1: allocate fresh BlockIds for every callee block plus the
@@ -1428,8 +1795,9 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// (when the call site is a tryCall).
 	// The caller's max ValueId arrives from the incrementally-maintained
 	// per-round state — rescanning the (large) caller here on every splice
-	// was a dominant inliner cost.
-	let calleeMaxId = scanMaxValueId(callee, module: module)
+	// was a dominant inliner cost — and the callee-side scan goes through
+	// the per-callee memo.
+	let calleeMaxId = memoCalleeMaxValueId(module, memoMap: memoMap, callee: callee)
 	var nextId = callerOrigMaxId + 1
 	var remap = ValueIdArray.create()
 	while remap.count() <= calleeMaxId 'init'
@@ -1468,6 +1836,9 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 
 	var continuationBlock = IrBlock.create(continuationBlockId, label: "inline_cont_{caller.name}_{block.id}")
 	splitCallerBlock(module, originalBlock: block, continuation: continuationBlock, callPosition: posInBlock, entryInlinedBlockId: entryNewBlockId)
+	// splitCallerBlock just unlinked the call op; drop its reader entries so
+	// a later substitution never rewrites the dead `module.ops` entry.
+	removeUnlinkedOpReads(module, readerIndex: state.readerIndex, opIdx: opIdx)
 	if needsPrimaryPhi 'phiArg'
 		// For void throwing-callees (no inner type), pick i64 as the
 		// primary register's type — the throw-lowering writes a const i64
@@ -1511,7 +1882,7 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 		// Refcount-insertion: the continuation phi (a fresh id) inherits the original
 		// call result's managed-ness/class so the inserter releases it at its last use.
 		threadReturnPhiOwnership(caller, callResultId: callShape.resultId, phiValueId: phiValueId)
-		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
+		substituteCallResultInCaller(module, readerIndex: state.readerIndex, oldId: callShape.resultId, newId: phiValueId)
 	end 'subRet'
 	if isTryCallSite 'subErrFlag'
 		// Refcount-insertion: the error-flag continuation phi (a fresh id) inherits the
@@ -1523,11 +1894,11 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 		// dangling phi (the inlined assoc-value throw-catch UAF). A bare-enum flag is
 		// notManaged, so this is a no-op there.
 		threadReturnPhiOwnership(caller, callResultId: callShape.errorFlagId, phiValueId: phiErrorFlagId)
-		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
+		substituteCallResultInCaller(module, readerIndex: state.readerIndex, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
 	end 'subErrFlag'
 
-	invalidateCachedHash(project, callerName: caller.name)
-	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee)
+	invalidateCachedHash(project, callerName: caller.name, memoMap: memoMap)
+	recordInlineEdge(project, module: module, callerName: caller.name, callee: callee, memoMap: memoMap)
 	logTrace(LogCategory.ir, message: function() gives "inliner: spliced multi-block @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id}, +{callee.blockRefs.count()} block(s))")
 	return InlineSpliceOutcome.spliced(nextId)
 end 'performMultiBlockInline'
@@ -2623,27 +2994,32 @@ function rewriteValueIds(ids ValueIdArray, remap ValueIdArray) returns ValueIdAr
 	return out
 end 'rewriteValueIds'
 
-// Replace every reference to `oldId` in the caller's ops with `newId`,
-// in place via `module.ops.set`. Walks the caller's blocks plus their
-// terminator ops. Define-side fields (resultId, errorFlagId) are also
-// rewritten so any future caller-only re-emission stays consistent —
-// in practice the only meaningful substitution is operand-side, but
-// touching both keeps the rewrite symmetric with `rewriteOp` above.
-function substituteCallResultInCaller(module StdModule, caller IrFunction, oldId ValueId, newId ValueId)
+// Replace every reference to `oldId` in the caller's LIVE ops with `newId`,
+// in place via `module.ops.set`, visiting only the ops the per-caller reader
+// index lists for `oldId` — the former whole-body walk (two union copies per
+// op, once per splice) was one of the pass's two quadratic terms. Each
+// rewritten op is re-registered under `newId` (a later splice may substitute
+// it in turn), and `oldId`'s reader list is emptied: those ops no longer
+// read it, and a substituted call result is never re-minted. A stale index
+// entry (an op already rewritten away from `oldId`) is harmless — a rewrite
+// that matches nothing is a value-identical no-op — while the unlink hooks
+// (`removeUnlinkedOpReads`) keep dead call ops out of the list entirely.
+function substituteCallResultInCaller(module StdModule, readerIndex CallerUseIndex, oldId ValueId, newId ValueId)
 	var single = ValueIdArray.create()
 	while single.count() <= oldId 'grow'
 		single.push(REMAP_INVALID)
 	end 'grow'
 	try single.set(oldId, value: newId) otherwise panic("substituteCallResultInCaller: single.set OOB")
-	for blockRef in caller.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("substituteCallResultInCaller: blockRef {blockRef} not in module")
-		for opPos in block.opRefs 'eachOp'
-			rewriteOpInPlace(module, opIdx: opPos, remap: single)
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			rewriteOpInPlace(module, opIdx: block.terminatorIndex(), remap: single)
-		end 'hasTerm'
-	end 'eachBlock'
+
+	// `newId` is always a fresh id minted by this splice (body remap or
+	// continuation phi), so it never aliases `oldId` and appending under it
+	// cannot disturb the list being iterated.
+	for opIdx in readerIndex.readersOf(oldId) 'eachReader'
+		rewriteOpInPlace(module, opIdx: opIdx, remap: single)
+		readerIndex.addReader(newId, opIdx: opIdx)
+	end 'eachReader'
+
+	readerIndex.clearReaders(oldId)
 end 'substituteCallResultInCaller'
 
 function rewriteOpInPlace(module StdModule, opIdx OpIndex, remap ValueIdArray)
@@ -2656,11 +3032,15 @@ end 'rewriteOpInPlace'
 // caller's body, its cached MIR/code memo no longer reflects the real
 // shape. Drop the per-function entries so the next per-function query
 // recomputes from scratch. Idempotent — calling without a prior splice
-// just no-ops on already-empty slots.
-function invalidateCachedHash(project Project, callerName String)
+// just no-ops on already-empty slots. The pass-local callee-body memo is
+// dropped here too: the splice changed the caller's body, so every
+// memoized fact about it as a CALLEE (op count, spliceability, max
+// ValueId, content hash, ...) is stale.
+function invalidateCachedHash(project Project, callerName String, memoMap CalleeBodyMemoMap)
 	_ = project.db.midPerFunc.remove(callerName)
 	_ = project.db.mirPerFunc.remove(callerName)
 	_ = project.db.codePerFunc.remove(callerName)
+	_ = memoMap.remove(callerName)
 end 'invalidateCachedHash'
 
 // Record that the inliner spliced `callee`'s body into `callerName` this build,
@@ -2673,12 +3053,12 @@ end 'invalidateCachedHash'
 // multiple call sites, or across fixpoint rounds) are collapsed so the
 // dependency set stays minimal; the first recorded hash wins, which is correct
 // because all splices of the same callee in one build see the same body.
-function recordInlineEdge(project Project, module StdModule, callerName String, callee IrFunction)
+function recordInlineEdge(project Project, module StdModule, callerName String, callee IrFunction, memoMap CalleeBodyMemoMap)
 	var deps = captureInlineDeps(project, callerName: callerName)
 	if inlineDepsContainCallee(deps, calleeName: callee.name) 'already'
 		return
 	end 'already'
-	let calleeHash = computeStdContentHashFor(project, module: module, func: callee)
+	let calleeHash = memoCalleeContentHash(project, module: module, memoMap: memoMap, callee: callee)
 	deps.push(InlineDep.create(callee.name, calleeHash: calleeHash))
 	project.inlineEdges.upsert(callerName, value: deps)
 end 'recordInlineEdge'

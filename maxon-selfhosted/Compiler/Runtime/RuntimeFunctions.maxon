@@ -320,38 +320,101 @@ export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap, fun
 	return rdata
 end 'buildRdataSection'
 
-// Selection sort of a StringArray by byte-wise lexicographic order. Panic-label
-// lists are small (a handful per program), so O(n^2) is fine, and selection sort
-// avoids needing an array insert/shift primitive.
+// Position within a string list being sorted (an index into `names` or a
+// bound of a merge run).
+typealias RdataSortPos = int(0 to u64.max)
+typealias RdataSortPosArray = Array with RdataSortPos
+
+// Stable ascending sort of a StringArray by byte-wise lexicographic order.
+// Bottom-up merge sort over an index permutation: each comparison fetches
+// two elements by index (2 String copies), for O(n log n) comparisons total,
+// and the sorted array is materialized exactly once at the end. The rdata
+// string directory reaches 10^4+ entries and `buildRdataSection` sorts it
+// three times per build — the previous selection sort was O(n²) String
+// copies plus compares (~10^8 refcount operations per build).
+//
+// Stability: when the two run heads compare equal, the LEFT run's element is
+// taken first, so equal names keep their original relative order (classic
+// stable merge). Byte-identical output to the old selection sort: the
+// comparator orders by FULL byte content, so "equal keys" are byte-identical
+// Strings and any relative order among them materializes the same bytes —
+// while all distinct names get the unique ascending order both algorithms
+// agree on.
 export function sortStringsAscending(names StringArray) returns StringArray
-	var remaining = StringArray.create()
-	for name in names 'copy'
-		remaining.push(name)
-	end 'copy'
+	let n = names.count()
+	var src = RdataSortPosArray.create()
+	src.reserve(n)
+	for i in 0 upto n 'seed'
+		src.push(i)
+	end 'seed'
+	var dst = RdataSortPosArray.create()
+	dst.resize(n)
+	var runWidth = 1
+	while runWidth < n 'widen'
+		var lo = 0
+		while lo < n 'mergePass'
+			var mid = lo + runWidth
+			if mid > n 'clampMid'
+				mid = n
+			end 'clampMid'
+			var hi = lo + runWidth * 2
+			if hi > n 'clampHi'
+				hi = n
+			end 'clampHi'
+			mergeSortedIndexRuns(names, src: src, dst: dst, lo: lo, mid: mid, hi: hi)
+			lo = lo + runWidth * 2
+		end 'mergePass'
+		// Ping-pong: this pass wrote every position of `dst`, which becomes
+		// the next pass's input (or the final permutation once runs cover n).
+		let merged = dst
+		dst = src
+		src = merged
+		runWidth = runWidth * 2
+	end 'widen'
 	var out = StringArray.create()
-	while remaining.count() > 0 'pickMin'
-		var minIdx = 0
-		var minName = try remaining.get(0) otherwise panic("sortStringsAscending: remaining.get(0) failed")
-		var j = 1
-		while j < remaining.count() 'scan'
-			let candidate = try remaining.get(j) otherwise panic("sortStringsAscending: remaining.get({j}) failed")
-			if stringLexLess(candidate, b: minName) 'smaller'
-				minIdx = j
-				minName = candidate
-			end 'smaller'
-			j = j + 1
-		end 'scan'
-		out.push(minName)
-		// Remove minIdx from `remaining` by swapping the tail in and popping.
-		let lastIdx = remaining.count() - 1
-		if minIdx != lastIdx 'notLast'
-			let tail = (try remaining.get(lastIdx) otherwise panic("sortStringsAscending: remaining.get(last) failed")).clone()
-			try remaining.set(minIdx, value: tail) otherwise panic("sortStringsAscending: remaining.set({minIdx}) failed")
-		end 'notLast'
-		try remaining.pop() otherwise panic("sortStringsAscending: remaining.pop on non-empty failed")
-	end 'pickMin'
+	out.reserve(n)
+	for i in 0 upto n 'materialize'
+		let nameIdx = try src.get(i) otherwise panic("sortStringsAscending: src.get OOB at {i}")
+		out.push(try names.get(nameIdx) otherwise panic("sortStringsAscending: names.get OOB at {nameIdx}"))
+	end 'materialize'
 	return out
 end 'sortStringsAscending'
+
+// Merge the adjacent sorted index runs src[lo..mid) and src[mid..hi) into
+// dst[lo..hi), comparing the names the indices point at. Only a strictly
+// smaller RIGHT head takes from the right run, so equal keys drain the left
+// run first — the stability guarantee `sortStringsAscending` documents.
+function mergeSortedIndexRuns(names StringArray, src RdataSortPosArray, dst RdataSortPosArray, lo RdataSortPos, mid RdataSortPos, hi RdataSortPos)
+	var left = lo
+	var right = mid
+	var write = lo
+	while left < mid and right < hi 'both'
+		let leftIdx = try src.get(left) otherwise panic("mergeSortedIndexRuns: src.get OOB at {left}")
+		let rightIdx = try src.get(right) otherwise panic("mergeSortedIndexRuns: src.get OOB at {right}")
+		let leftName = try names.get(leftIdx) otherwise panic("mergeSortedIndexRuns: names.get OOB at {leftIdx}")
+		let rightName = try names.get(rightIdx) otherwise panic("mergeSortedIndexRuns: names.get OOB at {rightIdx}")
+		if stringLexLess(rightName, b: leftName) 'takeRight'
+			try dst.set(write, value: rightIdx) otherwise panic("mergeSortedIndexRuns: dst.set OOB at {write}")
+			right = right + 1
+		end 'takeRight' else 'takeLeft'
+			try dst.set(write, value: leftIdx) otherwise panic("mergeSortedIndexRuns: dst.set OOB at {write}")
+			left = left + 1
+		end 'takeLeft'
+		write = write + 1
+	end 'both'
+	while left < mid 'drainLeft'
+		let leftIdx = try src.get(left) otherwise panic("mergeSortedIndexRuns: src.get OOB at {left}")
+		try dst.set(write, value: leftIdx) otherwise panic("mergeSortedIndexRuns: dst.set OOB at {write}")
+		left = left + 1
+		write = write + 1
+	end 'drainLeft'
+	while right < hi 'drainRight'
+		let rightIdx = try src.get(right) otherwise panic("mergeSortedIndexRuns: src.get OOB at {right}")
+		try dst.set(write, value: rightIdx) otherwise panic("mergeSortedIndexRuns: dst.set OOB at {write}")
+		right = right + 1
+		write = write + 1
+	end 'drainRight'
+end 'mergeSortedIndexRuns'
 
 // The canonical, cache-leg-independent ORDER for the `names`/`values` rdata
 // entries of a GlobalDataTable: user entries sorted by label, then panic

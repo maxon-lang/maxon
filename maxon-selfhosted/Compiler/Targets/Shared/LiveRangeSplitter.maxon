@@ -64,53 +64,116 @@ export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, m
 	var predBlockIds = BlockIdArray.create()
 	var predCopyPositions = RegIntArray.create()
 
-	for blockRef in func.blockRefs 'eachBlock'
+	// Single O(blocks + edges) predecessor-discovery pass. The previous
+	// shape re-scanned EVERY block of the function once per merge block
+	// (an IrBlock copy per probe) to find that block's predecessors;
+	// inverting the walk visits each block once, records its branch edges
+	// into a per-target pred list, and keeps a blockId -> blockRef index
+	// for the copy-edge redirection below. Membership and per-merge pred
+	// order are identical to the old scan: predecessors are discovered in
+	// func.blockRefs layout order either way, and a block is recorded at
+	// most once per target (the old scan broke out of the edge loop on
+	// first match; the adjacent-duplicate check below replicates that,
+	// since a block's edges are processed contiguously).
+	var predsByTarget = BlockIdArrayArray.create()
+	// copyPosById[blockId] = that block's parallel-copy slot
+	// (predBlockLen - 1 == opRefs.count()), matching
+	// addBlockArgEdgeIntervals in LiveRangeBuilder. -1 = block not in func.
+	var copyPosById = RegIntArray.create()
+	var initBid = 0
+	while initBid < func.nextBlockId 'initPredTables'
+		predsByTarget.push(BlockIdArray.create())
+		copyPosById.push(-1)
+		initBid = initBid + 1
+	end 'initPredTables'
+
+	var blockIdToRef = FuncBlockIdToRefMap.create()
+
+	// Merge blocks (blocks with blockArgs) in layout order, with their
+	// block-arg valueIds flattened into mergeArgVids; consumed by the
+	// flattening pass below once every predecessor list is complete (a
+	// merge's predecessors can appear later in layout order).
+	var mergeBlockIds = BlockIdArray.create()
+	var mergeArgCounts = RegIntArray.create()
+	var mergeArgVids = ValueIdArray.create()
+
+	for blockRef in func.blockRefs 'discoverEdges'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-		if block.blockArgs.count() == 0 'noArgs'
-			continue
-		end 'noArgs'
 
-		// Compute predBlockLen-1 for each predecessor of `block` once per
-		// merge block; every block-arg in this block shares the same pred
-		// list. The block-arg copy slot anchors at predBlockLen-1 in each
-		// predecessor (matching addBlockArgEdgeIntervals in LiveRangeBuilder).
-		var localPredBlockIds = BlockIdArray.create()
-		var localPredCopyPositions = RegIntArray.create()
-		for predRef in func.blockRefs 'findPreds'
-			let predBlock = try module.blocks.get(predRef) otherwise panic("invariant: predRef from func.blockRefs not in module.blocks")
-			var isPred = false
-			for edge in predBlock.branchEdges 'eachEdge'
-				if edge.targetBlockId == block.id 'matchTarget'
-					isPred = true
-					break
-				end 'matchTarget'
-			end 'eachEdge'
-			if isPred 'recordPred'
-				let predBlockLen = predBlock.opRefs.count() + 1
-				localPredBlockIds.push(predBlock.id)
-				localPredCopyPositions.push(predBlockLen - 1)
-			end 'recordPred'
-		end 'findPreds'
+		try copyPosById.set(block.id, value: block.opRefs.count()) otherwise panic("splitter.discoverEdges: block.id {block.id} >= func.nextBlockId")
+		blockIdToRef.upsert(block.id, value: blockRef)
 
-		let listStart = predBlockIds.count()
-		let listLen = localPredBlockIds.count()
-		for pbid in localPredBlockIds 'flatPred'
-			predBlockIds.push(pbid)
-		end 'flatPred'
-		for pcp in localPredCopyPositions 'flatPos'
-			predCopyPositions.push(pcp)
-		end 'flatPos'
+		for edge in block.branchEdges 'recordEdge'
+			let target = edge.targetBlockId
 
-		for blockArg in block.blockArgs 'eachArg'
-			blockArgVids.push(blockArg.valueId)
-			predListStarts.push(listStart)
-			predListCounts.push(listLen)
-		end 'eachArg'
-	end 'eachBlock'
+			if target < 0 or target >= func.nextBlockId 'targetOutOfRange'
+				// The old per-merge scan compared targets against merge block
+				// ids only, so an out-of-range target never matched anything.
+				continue
+			end 'targetOutOfRange'
 
-	if blockArgVids.count() == 0 'noBlockArgs'
+			var targetPreds = try predsByTarget.get(target) otherwise panic("splitter.recordEdge: predsByTarget sized to func.nextBlockId but get({target}) failed")
+			// Two edges from the same block to the same target (e.g. a
+			// conditional branch whose arms converge) record the pred once,
+			// like the old scan's first-match break. Duplicates are always
+			// adjacent because a block's edges are processed contiguously.
+			let lastPred = try targetPreds.get(targetPreds.count() - 1) otherwise -1
+
+			if lastPred != block.id 'newPred'
+				targetPreds.push(block.id)
+			end 'newPred'
+		end 'recordEdge'
+
+		if block.blockArgs.count() > 0 'isMerge'
+			mergeBlockIds.push(block.id)
+			mergeArgCounts.push(block.blockArgs.count())
+			for blockArg in block.blockArgs 'collectArgs'
+				mergeArgVids.push(blockArg.valueId)
+			end 'collectArgs'
+		end 'isMerge'
+	end 'discoverEdges'
+
+	if mergeBlockIds.count() == 0 'noBlockArgs'
 		return result
 	end 'noBlockArgs'
+
+	// Flatten each merge block's completed predecessor list into the shared
+	// (predBlockIds, predCopyPositions) table and stamp the per-arg slice
+	// bounds, exactly as the former per-merge discovery scan did.
+	var argCursor = 0
+	var mbIdx = 0
+	let mergeBlockCount = mergeBlockIds.count()
+	while mbIdx < mergeBlockCount 'flattenMerges'
+		let mergeBlockId = try mergeBlockIds.get(mbIdx) otherwise panic("splitter.flattenMerges: mbIdx < mergeBlockCount but mergeBlockIds.get({mbIdx}) failed")
+		let argCount = try mergeArgCounts.get(mbIdx) otherwise panic("splitter.flattenMerges: mergeArgCounts.get({mbIdx}) failed")
+
+		mbIdx = mbIdx + 1
+
+		let listStart = predBlockIds.count()
+		let mergePreds = try predsByTarget.get(mergeBlockId) otherwise panic("splitter.flattenMerges: predsByTarget sized to func.nextBlockId but get({mergeBlockId}) failed")
+		let listLen = mergePreds.count()
+
+		for pbid in mergePreds 'flattenPreds'
+			let pcp = try copyPosById.get(pbid) otherwise panic("splitter.flattenPreds: copyPosById sized to func.nextBlockId but get({pbid}) failed")
+
+			if pcp < 0 'predNotInFunc'
+				panic("splitter.flattenPreds: predecessor block {pbid} has an edge into the function but is not in func.blockRefs")
+			end 'predNotInFunc'
+
+			predBlockIds.push(pbid)
+			predCopyPositions.push(pcp)
+		end 'flattenPreds'
+
+		var ai = 0
+		while ai < argCount 'eachArg'
+			let vid = try mergeArgVids.get(argCursor) otherwise panic("splitter.eachArg: argCursor tracks mergeArgVids but get({argCursor}) failed")
+			argCursor = argCursor + 1
+			blockArgVids.push(vid)
+			predListStarts.push(listStart)
+			predListCounts.push(listLen)
+			ai = ai + 1
+		end 'eachArg'
+	end 'flattenMerges'
 
 	// Build a valueId -> ranges-index map. New sub-ranges are appended
 	// during the walk; we resize the map as we mint fresh ids so source
@@ -254,7 +317,7 @@ export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, m
 
 			info.anchors.push(SplitPredAnchor.create(predBlockId, subRangeValueId: subId))
 
-			redirectSourceCopyEdges(ranges, vidToRangeIdx: vidToRangeIdx, mergeVid: mergeVid, predBlockId: predBlockId, copyPos: copyPos, newPartnerVid: subId, module: module, func: func)
+			redirectSourceCopyEdges(ranges, vidToRangeIdx: vidToRangeIdx, mergeVid: mergeVid, predBlockId: predBlockId, copyPos: copyPos, newPartnerVid: subId, module: module, blockIdToRef: blockIdToRef)
 		end 'eachPredInterval'
 
 		// Re-fetch the merge range now that all sub-range pushes are done.
@@ -288,18 +351,18 @@ end 'splitMultiAnchorMerges'
 // to newPartnerVid so isCopyBoundaryOverlap correctly suppresses the
 // source ↔ sub-range 1-position overlap instead of the (now-impossible)
 // source ↔ merge one.
-function redirectSourceCopyEdges(ranges LiveRangeArray, vidToRangeIdx RegIntArray, mergeVid ValueId, predBlockId BlockId, copyPos RegInt, newPartnerVid ValueId, module TargetModule, func IrFunction)
+function redirectSourceCopyEdges(ranges LiveRangeArray, vidToRangeIdx RegIntArray, mergeVid ValueId, predBlockId BlockId, copyPos RegInt, newPartnerVid ValueId, module TargetModule, blockIdToRef FuncBlockIdToRefMap)
 	// The source vregs for this edge are the branch-arg ids the
 	// predecessor sends to the merge block. Look them up from the
 	// predecessor's branchEdges; for each, find its LiveRange and rewrite
 	// the CopyEdge that targets mergeVid at (predBlockId, copyPos).
-	let predBlock = findBlockById(module, func: func, blockId: predBlockId)
+	let predBlock = getBlockInFunc(module, blockIdToRef: blockIdToRef, blockId: predBlockId)
 
 	for edge in predBlock.branchEdges 'eachEdge'
 		// Find the arg index whose dest valueId equals mergeVid in the
 		// successor's blockArgs list. Then the source on this edge is
 		// edge.argIds[argIdx].
-		let succBlock = findBlockById(module, func: func, blockId: edge.targetBlockId)
+		let succBlock = getBlockInFunc(module, blockIdToRef: blockIdToRef, blockId: edge.targetBlockId)
 
 		var argIdx = 0
 		for blockArg in succBlock.blockArgs 'eachArg'

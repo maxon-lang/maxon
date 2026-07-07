@@ -470,6 +470,27 @@ export function findBlockById(module TargetModule, func IrFunction, blockId Bloc
 	panic("findBlockById: blockId {blockId} not found in func.blockRefs")
 end 'findBlockById'
 
+// Function-scoped blockId -> blockRef lookup. Block ids collide across
+// functions (each function numbers its own blocks from 0), so the map must
+// be built per function. Replaces repeated `findBlockById` linear scans
+// (an IrBlock copy per probed block) on hot per-edge paths — branch-arg
+// hint coalescing and phi-merge split redirection.
+export typealias FuncBlockIdToRefMap = Map with (BlockId, BlockRef)
+
+export function buildFuncBlockIdToRef(module TargetModule, func IrFunction) returns FuncBlockIdToRefMap
+	var map = FuncBlockIdToRefMap.create()
+	for blockRef in func.blockRefs 'each'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildFuncBlockIdToRef: blockRef from func.blockRefs not in module.blocks")
+		map.upsert(block.id, value: blockRef)
+	end 'each'
+	return map
+end 'buildFuncBlockIdToRef'
+
+export function getBlockInFunc(module TargetModule, blockIdToRef FuncBlockIdToRefMap, blockId BlockId) returns IrBlock
+	let blockRef = try blockIdToRef.get(blockId) otherwise panic("getBlockInFunc: block {blockId} not in the function's block-ref map")
+	return try module.blocks.get(blockRef) otherwise panic("getBlockInFunc: blockRef from blockIdToRef not in module.blocks")
+end 'getBlockInFunc'
+
 // True if `intervals` already contains an entry with the given anchor.
 // Per-range interval lists are small (one per live block); a linear scan
 // keeps the dedup honest without growing the LiveRange type.
@@ -965,6 +986,54 @@ end 'loopWeightForDepth'
 // interference graph and prevent the coloring from assigning virtual
 // values to registers that would be destroyed.
 
+// Lazily-extended first-match valueId -> range-index lookup used by
+// linkClobberToVirtSrc. It replaces a forward scan of `ranges` from index 0
+// (a LiveRange copy per probed range, once per phys-dest mov — i.e. every
+// call-argument setup mov). The scan's semantics are replicated exactly:
+// it returned the FIRST range index whose valueId matched, over the LIVE
+// array — including pseudo-ranges appended earlier in the same constraint
+// walk (reachable when a vreg id absent from `ranges` exceeds every range's
+// valueId, so the pseudo-id counter re-mints it). extendTo() folds new tail
+// entries in first-wins before every lookup, preserving both properties.
+type ValueIdFirstRangeIndex
+	// slots[valueId] = smallest range index carrying that valueId, or -1.
+	var slots as RegIntArray
+	// Count of `ranges` entries already folded into `slots`.
+	var indexedCount as RegInt
+
+	static function create() returns ValueIdFirstRangeIndex
+		return Self{slots: RegIntArray.create(), indexedCount: 0}
+	end 'create'
+
+	function extendTo(ranges LiveRangeArray)
+		let total = ranges.count()
+		while self.indexedCount < total 'index'
+			let range = try ranges.get(self.indexedCount) otherwise panic("ValueIdFirstRangeIndex: indexedCount < ranges.count() by loop guard but get failed")
+			let vid = range.valueId
+			if vid >= 0 'validVid'
+				while self.slots.count() <= vid 'grow'
+					self.slots.push(-1)
+				end 'grow'
+				let existing = try self.slots.get(vid) otherwise panic("ValueIdFirstRangeIndex: slots grown past vid but get({vid}) failed")
+				if existing < 0 'firstWins'
+					try self.slots.set(vid, value: self.indexedCount) otherwise panic("ValueIdFirstRangeIndex: slots.set OOB after grow")
+				end 'firstWins'
+			end 'validVid'
+			self.indexedCount = self.indexedCount + 1
+		end 'index'
+	end 'extendTo'
+
+	// First range index whose valueId == vid, or -1 when absent.
+	function firstIndexOf(ranges LiveRangeArray, vid ValueId) returns RegInt
+		self.extendTo(ranges)
+
+		if vid < 0 or vid >= self.slots.count() 'outOfRange'
+			return -1
+		end 'outOfRange'
+		return try self.slots.get(vid) otherwise -1
+	end 'firstIndexOf'
+end 'ValueIdFirstRangeIndex'
+
 export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeArray, func IrFunction, regTarget RegAllocTarget, opQuery TargetOpQuery)
 	// Find the next available value ID above all existing ranges
 	var nextPseudoId = 0
@@ -973,6 +1042,11 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 			nextPseudoId = range.valueId + 1
 		end 'higher'
 	end 'findMax'
+
+	// Shared valueId -> first-range-index lookup for the phys-dest copy-link
+	// step; extends itself lazily so pseudo-ranges appended during this walk
+	// stay visible exactly as they were to the former linear scan.
+	var srcRangeIndex = ValueIdFirstRangeIndex.create()
 
 	var isFirstBlock = true
 
@@ -1056,7 +1130,7 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 				// instead of routing through a scratch register first.
 				let probe = opQuery.decodeReturnMovProbe(module, packed: packed)
 				if probe.found and probe.destOrd != RM_NONE and probe.srcId >= 0 'isPhysToVirtMov'
-					linkClobberToVirtSrc(ranges, firstPseudoId: firstPseudoId, lastPseudoId: nextPseudoId, physOrd: probe.destOrd, virtSrcId: probe.srcId, blockId: blockId, opPos: opIdx + 1)
+					linkClobberToVirtSrc(ranges, firstPseudoId: firstPseudoId, lastPseudoId: nextPseudoId, physOrd: probe.destOrd, virtSrcId: probe.srcId, blockId: blockId, opPos: opIdx + 1, srcRangeIndex: srcRangeIndex)
 				end 'isPhysToVirtMov'
 			end 'hasPhysDest'
 
@@ -1211,7 +1285,7 @@ end 'buildNextCallPositions'
 // vreg-to-vreg movRegReg. The (blockId, opPos) pair anchors a CopyEdge
 // so the edge-aware suppression check in isCopyBoundaryOverlap can match
 // this pair exactly at the overlap position.
-function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastPseudoId RegInt, physOrd RegOrdinal, virtSrcId RegInt, blockId BlockId, opPos RegInt)
+function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastPseudoId RegInt, physOrd RegOrdinal, virtSrcId RegInt, blockId BlockId, opPos RegInt, srcRangeIndex ValueIdFirstRangeIndex)
 	let total = ranges.count()
 	var i = total - 1
 	var clobberValueId = -1
@@ -1232,20 +1306,18 @@ function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastP
 
 	// Push the reverse edge on the virtual source range too. vidToRangeIdx
 	// isn't built yet at this phase (insertPhysicalConstraints runs before
-	// coalesceRanges), so locate the source range by linear scan. Either
-	// direction matching is enough for isCopyBoundaryOverlap, but recording
-	// both keeps the model symmetric with setGprCopyHintEdge.
+	// coalesceRanges), so locate the source range through the shared
+	// first-match index (same result as the former linear scan from 0, minus
+	// the per-probe LiveRange copies). Either direction matching is enough
+	// for isCopyBoundaryOverlap, but recording both keeps the model
+	// symmetric with setGprCopyHintEdge.
 	if clobberValueId >= 0 'foundClobber'
-		var j = 0
-		let rangeCount = ranges.count()
-		while j < rangeCount 'findSrc'
-			var srcRange = try ranges.get(j) otherwise break
-			if srcRange.valueId == virtSrcId 'isVirtSrc'
-				addCopyEdge(srcRange, partner: clobberValueId, blockId: blockId, copyPos: opPos)
-				break
-			end 'isVirtSrc'
-			j = j + 1
-		end 'findSrc'
+		let srcIdx = srcRangeIndex.firstIndexOf(ranges, vid: virtSrcId)
+
+		if srcIdx >= 0 'haveSrc'
+			var srcRange = try ranges.get(srcIdx) otherwise panic("linkClobberToVirtSrc: srcRangeIndex returned {srcIdx} but ranges.get failed")
+			addCopyEdge(srcRange, partner: clobberValueId, blockId: blockId, copyPos: opPos)
+		end 'haveSrc'
 	end 'foundClobber'
 end 'linkClobberToVirtSrc'
 
