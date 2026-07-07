@@ -6690,56 +6690,57 @@ end 'edgeValueCarriesPlusOne'
 // DESCENDING position order so an earlier insert never shifts the index of a
 // later one. Positions were all computed against the original op list.
 //
-// The queue is bucketed by blockRef in ONE pass up front (offset-indexed dense
-// buckets over the [min, max] blockRef span of the queue — this function's
-// blockRefs are near-contiguous, so the span is about the block count, not the
-// module's). A single forward fill preserves each bucket's relative queue
-// order, which `sortInsertionsDescending`'s stability REQUIRES (equal-key
-// entries keep queue order — see its comment). The former per-block rescan of
-// the whole queue made plan application O(blocks × insertions).
+// The queue is bucketed in ONE pass up front, keyed by the block's POSITION in
+// `func.blockRefs` (dense and function-sized). Bucketing by raw blockRef span
+// was quadratic after inlining: spliced blocks are APPENDED to module.blocks,
+// so a function that received a multi-block splice has blockRefs reaching from
+// its original low refs to near the module's end, and a span-sized bucket
+// array degenerated to O(module blocks) of allocations PER FUNCTION. A single
+// forward fill preserves each bucket's relative queue order, which
+// `sortInsertionsDescending`'s stability REQUIRES (equal-key entries keep
+// queue order — see its comment). The former per-block rescan of the whole
+// queue made plan application O(blocks × insertions).
 function applyPlans(ctx RcContext)
 	if ctx.insertions.count() == 0 'nothingQueued'
 		return
 	end 'nothingQueued'
 
-	let firstIns = try ctx.insertions.get(0) otherwise panic("applyPlans: insertions non-empty but get(0) failed")
-	var minRef = firstIns.blockRef
-	var maxRef = firstIns.blockRef
-	for ins in ctx.insertions 'measure'
-		if ins.blockRef < minRef 'lower'
-			minRef = ins.blockRef
-		end 'lower'
-		if ins.blockRef > maxRef 'higher'
-			maxRef = ins.blockRef
-		end 'higher'
-	end 'measure'
-
+	var localIdxByRef = BlockRefLocalIndexMap.create()
 	var buckets = RcInsertionBucketArray.create()
-	var slot = minRef
-	while slot <= maxRef 'presizeBuckets'
+	var localIdx = 0
+	for blockRef in ctx.func.blockRefs 'indexRefs'
+		localIdxByRef.upsert(blockRef, value: localIdx as BlockPosition)
 		buckets.push(RcInsertionArray.create())
-		slot = slot + 1
-	end 'presizeBuckets'
+		localIdx = localIdx + 1
+	end 'indexRefs'
 
 	for ins in ctx.insertions 'bucket'
-		var bucket = try buckets.get(ins.blockRef - minRef) otherwise panic("applyPlans: bucket for blockRef {ins.blockRef} OOB despite [min, max] sizing")
+		// An insertion whose blockRef is not in func.blockRefs stays
+		// unapplied — exactly as the old rescan (which only visited
+		// func.blockRefs) left it.
+		let local = try localIdxByRef.get(ins.blockRef) otherwise continue
+		var bucket = try buckets.get(local) otherwise panic("applyPlans: bucket for local index {local} OOB despite blockRefs sizing")
 		bucket.push(ins)
 	end 'bucket'
 
 	// Same per-block application order as the former rescan: walk the
-	// function's blockRefs and apply each block's bucket. An insertion whose
-	// blockRef is not in func.blockRefs stays unapplied — exactly as the old
-	// rescan (which only visited func.blockRefs) left it.
+	// function's blockRefs and apply each block's bucket.
+	var applyIdx = 0
 	for blockRef in ctx.func.blockRefs 'eachBlock'
-		if blockRef < minRef or blockRef > maxRef 'noBucket'
-			continue
-		end 'noBucket'
-		var mine = try buckets.get(blockRef - minRef) otherwise panic("applyPlans: bucket for blockRef {blockRef} OOB despite range check")
+		var mine = try buckets.get(applyIdx) otherwise panic("applyPlans: bucket for blockRefs position {applyIdx} OOB despite parallel build")
 		applyPlansForBlock(ctx, blockRef: blockRef, mine: mine)
+		applyIdx = applyIdx + 1
 	end 'eachBlock'
 end 'applyPlans'
 
 typealias RcInsertionBucketArray = Array with RcInsertionArray
+
+// Position of a block within one function's `blockRefs` list.
+typealias BlockPosition = int(0 to u64.max)
+
+// blockRef -> position-in-func.blockRefs lookup backing `applyPlans`'
+// function-local bucketing.
+typealias BlockRefLocalIndexMap = Map with (BlockRef, BlockPosition)
 
 // Apply one block's queued insertions (`mine` — this block's bucket, in queue
 // order).
