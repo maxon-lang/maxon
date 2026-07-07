@@ -470,7 +470,6 @@ public partial class ARM64CodeEmitter {
     new Runtime.RuntimeEmitter(CreateBackend()).EmitMmRawAlloc260(Compiler.MmTrace);
     EmitMaxonU64ToStringFmt();
     EmitMaxonSleep();
-    EmitGtSetSingleThreaded();
 
     // Green thread runtime for async/await
     EmitGreenThreadRuntime();
@@ -3124,7 +3123,6 @@ public partial class ARM64CodeEmitter {
     DefineGlobal("__sched_procs", 8, 0);           // P*[] array pointer
     DefineGlobal("__sched_num_procs", 8, 0);       // number of P structs allocated
     DefineGlobal("__sched_max_procs", 8, 0);       // max worker threads (CPU count)
-    DefineGlobal("__sched_alloc_procs", 8, 0);     // immutable count of allocated P slots (ncpu); NEVER capped — used as the wake-scan bound so a worker M spawned before maxon_gt_set_single_threaded() caps num_procs is still reachable for wakeups
 
     DefineGlobal("__sched_active_workers", 8, 0);   // atomic count of running workers
     DefineGlobal("__sched_shutdown_flag", 8, 0);     // 1 = shutdown requested
@@ -3269,10 +3267,6 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // [x29+32] = max_procs
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_procs");
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_num_procs");
-    // Immutable allocation count — the wake-scan bound. Unlike num_procs/max_procs,
-    // this is never lowered by maxon_gt_set_single_threaded(), so any worker M that
-    // was already spawned (before the cap) stays reachable for cross-M wakeups.
-    EmitGlobalStoreReg(ARM64Register.X0, "__sched_alloc_procs");
 
     // Step 3: Allocate P*[] array — mmap(max_procs * 8). OS-backed (see
     // EmitMmapAnon) to match x86's VirtualAlloc and stay off the MM leak ledger.
@@ -3482,8 +3476,8 @@ public partial class ARM64CodeEmitter {
 
     // Atomically increment active_workers (mirrors x86's LOCK INC on worker entry).
     // Balances the decrement at __sched_worker_loop_exit so the count stays accurate
-    // across spawn/retire cycles (e.g. when maxon_gt_set_single_threaded retires a
-    // surplus M). The spawn-scan gate (active_workers >= max_procs) relies on this.
+    // across spawn cycles. The spawn-scan gate (active_workers >= max_procs) relies
+    // on this.
     EmitGlobalLeaReg(ARM64Register.X9, "__sched_active_workers");
     EmitAtomicIncReg(ARM64Register.X9);
 
@@ -3561,22 +3555,6 @@ public partial class ARM64CodeEmitter {
     // that fired before our idleFlag store would skip our semaphore signal.
     EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
     EmitCbnz(ARM64Register.X0, "__sched_worker_loop_exit");
-
-    // Retire if this M is now surplus: maxon_gt_set_single_threaded() lowers
-    // num_procs (e.g. to 1 for the spec dispatcher) AFTER startup async I/O may have
-    // already spawned this worker M. A surplus M (P->id >= num_procs) must EXIT rather
-    // than park forever — otherwise it is orphaned (the enqueue wake-scan iterates only
-    // [1, num_procs) and can never re-find it) yet still occupies an active_workers slot.
-    // Letting it run GTs instead (by widening the wake-scan) corrupts stacks, because the
-    // dispatcher's single-M design assumes its cooperatively-multiplexed GTs never migrate
-    // off the main M. Checking here (idle, holding no GT) makes retirement safe; the GT we
-    // are about to NOT run stays queued for the main M. gtSetSingleThreaded signals our
-    // semaphore so we reach this check promptly.
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffId, 8); // P->id
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_num_procs");
-    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__sched_worker_loop_exit"); // id >= num_procs → retire
 
     // Park on the wake lock block (Go semasleep) with a 100ms timed wait — the
     // missed-wakeup safety net: a timeout just loops back to re-check count. Load
@@ -6063,60 +6041,6 @@ public partial class ARM64CodeEmitter {
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__io_panic_msg");
     EmitBranchLink("mrt_panic");
     // mrt_panic does not return
-  }
-
-  /// maxon_gt_set_single_threaded(): Pin the green-thread scheduler to a single
-  /// OS thread (P[0]) by capping __sched_max_procs to 1, so __gt_enqueue never
-  /// spawns additional worker Ms. The parallel spec runner calls this before its
-  /// dispatch loop: it is an I/O multiplexer (its parallelism comes from the N
-  /// worker SUBPROCESSES, not in-process green threads), so its drain GTs only
-  /// need to be cooperatively multiplexed on one M via kqueue. Running single-M
-  /// keeps the dispatcher off the multi-M scheduler paths entirely. Must be
-  /// called before any async work spawns a second M.
-  private void EmitGtSetSingleThreaded() {
-    // [x29+16] = loop index i
-    EmitRuntimeFunctionStart("maxon_gt_set_single_threaded", 0, 0x30);
-    EmitMovRegImm(ARM64Register.X0, 1);
-    EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_procs");
-    EmitGlobalStoreReg(ARM64Register.X0, "__sched_num_procs");
-
-    // Retire any worker M already spawned during startup async I/O. Lowering num_procs
-    // alone would orphan such an M: the enqueue wake-scan iterates [1, num_procs=1) and
-    // can never re-find it, yet it holds an active_workers slot and (once woken) would
-    // run GTs the single-M dispatcher requires stay on the main M. Wake every spawned M
-    // (P[1..alloc_procs)) so it reaches the retire check (P->id >= num_procs) and exits.
-    // A full barrier orders the num_procs store above before the idle worker reads it.
-    EmitDmbIsh();
-    EmitMovRegImm(ARM64Register.X0, 1);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // i = 1
-    DefineLabel("__set_single_retire_loop");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // i
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_alloc_procs");
-    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__set_single_retire_done");
-
-    // P[i] = __sched_procs[i]
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_procs");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // i
-    EmitWord(0x8B000C00 | (Reg(ARM64Register.X0) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.X1)); // ADD X1, X1, X0, LSL #3
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X1, 0, 8); // X1 = P[i]
-
-    // Skip slots never activated (status == 0 → no worker M to retire).
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X1, POffStatus, 8);
-    EmitCbz(ARM64Register.X0, "__set_single_retire_next");
-
-    // Wake P[i] (semawakeup) so the parked M wakes and retires.
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X1, POffWakeSemaphore, 8);
-    EmitSemaWakeup(ARM64Register.X9);
-
-    DefineLabel("__set_single_retire_next");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-    EmitBranch("__set_single_retire_loop");
-
-    DefineLabel("__set_single_retire_done");
-    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>

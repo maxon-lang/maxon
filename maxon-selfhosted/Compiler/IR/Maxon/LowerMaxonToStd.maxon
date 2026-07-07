@@ -1138,11 +1138,6 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// inner pointer) is in status=completed, 0 otherwise. Mirrors the
 	// bootstrap entry in 2-Parser.cs (RuntimeCallIntrinsic "__gt_is_complete").
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.gtIsComplete", paramNames: mmParamNames1("gt"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
-	// Pins the green-thread scheduler to a single M (lowers to
-	// `maxon_gt_set_single_threaded`). Zero-arg, void return. The parallel spec
-	// dispatcher calls this. Mirrors the bootstrap entry in 2-Parser.cs
-	// (RuntimeCallIntrinsic "maxon_gt_set_single_threaded", arity 0).
-	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.gtSetSingleThreaded", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
 end 'registerBuiltinsIntrinsicSignatures'
 
 // 14-arg spawn/detach contract: argv (MM), argc (int), cwd (MM), envBlock (MM),
@@ -7667,9 +7662,6 @@ type MaxonToStdLowering
 		if methodName == "gtIsComplete" 'isGtIsComplete'
 			return self.lowerBuiltinsGtIsComplete(result, args: args, dstBlock: dstBlock)
 		end 'isGtIsComplete'
-		if methodName == "gtSetSingleThreaded" 'isGtSetSingleThreaded'
-			return self.lowerBuiltinsGtSetSingleThreaded(result, args: args, dstBlock: dstBlock)
-		end 'isGtSetSingleThreaded'
 		// Phase 3.4: subprocess builtins each route to a fixed `maxon_subprocess_*`
 		// runtime symbol. `lookupSubprocessBuiltin` keeps the (methodName ->
 		// callee, arity, return-shape) mapping in one place; the actual emit is
@@ -8430,12 +8422,6 @@ type MaxonToStdLowering
 	function lowerBuiltinsForceSegfault(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		return self.lowerVoidZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.forceSegfault", callee: "maxon_force_segfault")
 	end 'lowerBuiltinsForceSegfault'
-
-	// `__Builtins.gtSetSingleThreaded()`: pins the green-thread scheduler to a single M
-	// (lowers to `maxon_gt_set_single_threaded`).
-	function lowerBuiltinsGtSetSingleThreaded(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		return self.lowerVoidZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.gtSetSingleThreaded", callee: "maxon_gt_set_single_threaded")
-	end 'lowerBuiltinsGtSetSingleThreaded'
 
 	function lowerBuiltinsGtIsComplete(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 1 'badArity'

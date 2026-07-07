@@ -3243,6 +3243,7 @@ function emitX64GreenThreadRuntime(code ByteArray, relocations RelocationArray, 
 	emitX64RtOsLockRelease(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SchedWorkerLoop(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtAwait(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64GtIsComplete(code, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtTimerAdd(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64GtTimerCheck(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -7316,6 +7317,31 @@ end 'emitX64RtOsLockRelease'
 // Regular-GT waiters are marked ready and re-enqueued (so they MIGRATE to whichever
 // worker dequeues them); a parked main-thread waiter (stackBase==0) is left for its
 // own spin-recheck (Step B.4 adds a SetEvent wake). Internal ABI; no args/result.
+// __gt_is_complete(promise=rcx) -> (r8) 1 if the promise's GT reached completed
+// status (GtStatusCompleted), else 0. Non-blocking status peek the parallel spec
+// dispatcher's poll loop uses to find the first-ready drain among N concurrent
+// overlapped-read drains without head-of-line blocking on a slow worker. Ports the C#
+// EmitGtIsComplete; overrides the runtime.std signature stub, whose always-0 return
+// (harmless while the pre-fix blocking drains deadlocked before the poll ran) made the
+// dispatcher spin forever collecting nothing once the overlapped-read parking fix let
+// the poll loop actually run. Internal ABI: 1 param rcx -> result r8.
+function emitX64GtIsComplete(code ByteArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_is_complete", offset: code.count())
+	// Blocks: 0=entry (+ not-complete fallthrough), 1=complete, 2=done.
+	var state = Win32HelperState.create(3, outgoingBytes: 0, localBytes: 0)
+	helperPrologue(code, frameSize: 0)
+	helperMarkBlock(state, code: code, blockId: 0)
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // r8 = 0 (default: not complete). NOT `code.append(b"M1À")`: that exact 3-byte constant hits a self-hosted rdata dedup bug (the trailing 0xC0 gets UTF-8-re-encoded to 0xC3 0x80 when this backend is compiled by an earlier self-hosted stage), corrupting emitted `xor r8,r8`. Building the mov via helperMovRegImm sidesteps the literal.
+	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStatus)
+	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusCompleted)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jne done -> r8 stays 0
+	helperMarkBlock(state, code: code, blockId: 1)  // complete
+	helperMovRegImm(code, dest: X64Register.r8, value: 1)
+	helperMarkBlock(state, code: code, blockId: 2)  // done
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64GtIsComplete'
+
 function emitX64GtProcessPendingWaiter(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_process_pending_waiter", offset: code.count())
 	// localBytes 16 → slot 0 holds `w` across the ioYielded spin + the __gt_enqueue BL.
