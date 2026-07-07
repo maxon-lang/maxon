@@ -129,9 +129,9 @@ func mrt_i64_to_string 2 i64
     std condBr v10 negate setup
 
   block negate:
-    v11 = std loadSlot 6
-    v12 = std negI64 v11
-    std storeSlot 6 v12
+    // Keep the SIGNED value in slot 6 and only record the sign (slot 5). Negating
+    // the whole value overflows for i64.min, so the digit loop negates each small
+    // remainder instead — see digit_loop.
     v13 = std constI64 1
     std storeSlot 5 v13
     std br setup
@@ -154,15 +154,24 @@ func mrt_i64_to_string 2 i64
     v22 = std loadSlot 6
     v23 = std constI64 10
     v24 = std remI64 v22 v23
+    // rem/div toward zero keep the sign of the (possibly negative) value, so
+    // conditionally negate the raw remainder into a 0..9 digit using the
+    // is_negative mask (0 -> 0, 1 -> all-ones): (r XOR mask) - mask.
+    vNegFlag5 = std loadSlot 5
+    vNegMask5 = std negI64 vNegFlag5
+    vXor5 = std xorI64 v24 vNegMask5
+    vDigit5 = std subI64 vXor5 vNegMask5
     v25 = std divI64 v22 v23
     std storeSlot 6 v25
     v26 = std constI64 0x30
-    v27 = std addI64 v24 v26
+    v27 = std addI64 vDigit5 v26
     v28 = std constI64 0
     std storeByte v21 v28 v27
     v29 = std constI64 0
     v30 = std loadSlot 6
-    v31 = std cmpI64Gt v30 v29
+    // Loop while the running value is non-zero (equality test, not signed
+    // `> 0`): a negative value counts UP toward zero via truncating division.
+    v31 = std cmpI64Ne v30 v29
     std condBr v31 digit_loop check_sign
 
   block check_sign:
@@ -451,6 +460,11 @@ end
 //   slot 12 = digits_start_offset (offset into buffer; first digit)
 //   slot 13 = parse_idx
 //   slot 14 = scratch / loop counter
+//   slot 15 = content_len (sign_len + digit_count)
+//   slot 16 = pad_count
+//   slot 17 = bits_per_digit (log2 of a power-of-two base; used to divide the
+//             value by a LOGICAL shift on the unsigned hex/octal/binary path)
+//   slot 18 = current_digit (extracted digit for the shared emit blocks)
 func mrt_i64_to_string_fmt 4 i64
   block entry:
     v0 = std param 0 i64
@@ -472,6 +486,10 @@ func mrt_i64_to_string_fmt 4 i64
     std storeSlot 7 v7
     v8 = std constI64 0
     std storeSlot 8 v8
+    // bits_per_digit defaults to 0 (decimal path never reads it); the
+    // power-of-two base arms below set it to log2(base).
+    vBitsPerDigitDflt = std constI64 0
+    std storeSlot 17 vBitsPerDigitDflt
     // Skip parse if fmt_len == 0
     v9 = std constI64 0
     v10 = std cmpI64Eq v3 v9
@@ -557,6 +575,8 @@ func mrt_i64_to_string_fmt 4 i64
     std storeSlot 7 v46
     v47 = std constI64 0
     std storeSlot 8 v47
+    vHexLowerBits = std constI64 4
+    std storeSlot 17 vHexLowerBits
     std br parse_done
 
   block check_upper_hex:
@@ -569,6 +589,8 @@ func mrt_i64_to_string_fmt 4 i64
     std storeSlot 7 v50
     v51 = std constI64 1
     std storeSlot 8 v51
+    vHexUpperBits = std constI64 4
+    std storeSlot 17 vHexUpperBits
     std br parse_done
 
   block check_binary:
@@ -579,6 +601,8 @@ func mrt_i64_to_string_fmt 4 i64
   block set_binary:
     v54 = std constI64 2
     std storeSlot 7 v54
+    vBinaryBits = std constI64 1
+    std storeSlot 17 vBinaryBits
     std br parse_done
 
   block check_octal:
@@ -589,6 +613,8 @@ func mrt_i64_to_string_fmt 4 i64
   block set_octal:
     v57 = std constI64 8
     std storeSlot 7 v57
+    vOctalBits = std constI64 3
+    std storeSlot 17 vOctalBits
     std br parse_done
 
   block parse_done:
@@ -611,9 +637,12 @@ func mrt_i64_to_string_fmt 4 i64
     std condBr v64 negate_value abs_done
 
   block negate_value:
+    // Keep the SIGNED value in slot 10 and only record the sign. Negating the
+    // whole value up front overflows for i64.min (its magnitude 2^63 has no
+    // positive i64), so instead the decimal digit loop negates each small
+    // remainder based on is_negative — see decimal_digit.
     v65 = std loadSlot 0
-    v66 = std negI64 v65
-    std storeSlot 10 v66
+    std storeSlot 10 v65
     v67 = std constI64 1
     std storeSlot 9 v67
     std br abs_done
@@ -658,18 +687,57 @@ func mrt_i64_to_string_fmt 4 i64
     std br pad_setup
 
   block digit_loop:
+    // Loop while the running value is non-zero. Must be an EQUALITY test, not a
+    // signed `<= 0`: on the unsigned (hex/octal/binary) path the value can have
+    // bit 63 set (negative as i64), which a signed compare would treat as "done"
+    // and emit zero digits. The decimal path keeps a non-negative abs value, so
+    // `== 0` terminates it identically to the old `<= 0`.
     v82 = std loadSlot 10
     v83 = std constI64 0
-    v84 = std cmpI64Le v82 v83
+    v84 = std cmpI64Eq v82 v83
     std condBr v84 pad_setup write_digit
 
   block write_digit:
-    // digit = abs_val % base; abs_val = abs_val / base
+    // digit = value mod base; value = value / base. The decimal path (base 10)
+    // keeps the SIGNED value and negates each remainder in decimal_digit, so
+    // signed rem/div are correct (and i64.min needs no up-front negation). The
+    // hex/octal/binary bases are always powers of two and treat the value as
+    // UNSIGNED — signed div/rem would mis-handle a value with bit 63 set, so
+    // extract the digit with a mask and divide with a LOGICAL shift instead.
     v85 = std loadSlot 10
     v86 = std loadSlot 7
-    v87 = std remI64 v85 v86
-    v88 = std divI64 v85 v86
-    std storeSlot 10 v88
+    vBaseIsDec = std constI64 10
+    vBaseDecEq = std cmpI64Eq v86 vBaseIsDec
+    std condBr vBaseDecEq decimal_digit pow2_digit
+
+  block decimal_digit:
+    // rem/div toward zero keep the sign of the (possibly negative) value, so the
+    // raw remainder is in (-10, 10). Conditionally negate it to a 0..9 digit
+    // using the is_negative mask (0 -> 0, 1 -> all-ones): (r XOR mask) - mask is
+    // r when positive and -r when negative — branchless two's-complement negate.
+    vDecRemRaw = std remI64 v85 v86
+    vDecNegFlag = std loadSlot 9
+    vDecNegMask = std negI64 vDecNegFlag
+    vDecXor = std xorI64 vDecRemRaw vDecNegMask
+    vDecDigit = std subI64 vDecXor vDecNegMask
+    std storeSlot 18 vDecDigit
+    vDecQuot = std divI64 v85 v86
+    std storeSlot 10 vDecQuot
+    std br have_digit
+
+  block pow2_digit:
+    // digit = value AND (base - 1); value = value LOGICAL-SHR bits_per_digit.
+    vPow2One = std constI64 1
+    vPow2Mask = std subI64 v86 vPow2One
+    vPow2Digit = std andI64 v85 vPow2Mask
+    std storeSlot 18 vPow2Digit
+    vPow2Shift = std loadSlot 17
+    vPow2Quot = std shrI64 v85 vPow2Shift
+    std storeSlot 10 vPow2Quot
+    std br have_digit
+
+  block have_digit:
+    v87 = std loadSlot 18
     // ch = digit < 10 ? digit + '0' : digit - 10 + ('a' or 'A')
     v89 = std constI64 10
     v90 = std cmpI64Lt v87 v89
@@ -872,10 +940,12 @@ func mrt_i64_to_string_fmt 4 i64
 end
 
 // mrt_u64_to_string_fmt(value, buffer, fmt_ptr, fmt_len) -> length.
-// Unsigned variant — tail-calls into the signed implementation. Safe
-// because our unsigned types (byte, u16, u32) are zero-extended to 64
-// bits before reaching here, so the sign-bit check in the signed code
-// path is a no-op.
+// Unsigned variant — tail-calls into the signed implementation. The hex /
+// octal / binary (non-decimal) bases treat the value as unsigned bits, so a
+// full u64 with bit 63 set (e.g. a content hash) formats correctly there. The
+// decimal base still interprets the value as signed; that is a no-op for the
+// zero-extended small unsigned types (byte, u16, u32) that reach here, and a
+// full-range u64 is only ever formatted in hex by current callers.
 func mrt_u64_to_string_fmt 4 i64
   block entry:
     v0 = std param 0 i64

@@ -99,174 +99,174 @@ module {
   }
   func @mrt_write_cstr_stderr(local0: i64) {
   entry:
-    %538 = mir.param local0 : i64
-    %539 = mir.mov_imm 0 : i64
-    mir.br scan(%539)
-  scan(%552: i64):
-    %542 = mir.load_byte %538, %552
-    %543 = mir.mov_imm 0 : i64
-    %544 = mir.cmp eq, %542, %543
-    mir.cond_br %544 [then: write(), else: scan_next()]
+    %556 = mir.param local0 : i64
+    %557 = mir.mov_imm 0 : i64
+    mir.br scan(%557)
+  scan(%570: i64):
+    %560 = mir.load_byte %556, %570
+    %561 = mir.mov_imm 0 : i64
+    %562 = mir.cmp eq, %560, %561
+    mir.cond_br %562 [then: write(), else: scan_next()]
   scan_next:
-    %546 = mir.mov_imm 1 : i64
-    %547 = mir.add.i64 %552, %546
-    mir.br scan(%547)
+    %564 = mir.mov_imm 1 : i64
+    %565 = mir.add.i64 %570, %564
+    mir.br scan(%565)
   write:
-    %550 = mir.call @mrt_write_stderr(%538, %552)
-    %551 = mir.mov_imm 0 : i64
-    mir.ret %551
+    %568 = mir.call @mrt_write_stderr(%556, %570)
+    %569 = mir.mov_imm 0 : i64
+    mir.ret %569
   }
   func @mrt_panic(local0: i64) {
   entry:
-    %598 = mir.param local0 : i64
-    %599 = mir.call @mrt_write_cstr_stderr(%598)
-    %600 = mir.global_addr @__panic_stacktrace
-    %601 = mir.call @mrt_write_cstr_stderr(%600)
-    %602 = mir.load_frame_ptr
-    %603 = mir.mov_imm 0 : i64
-    %604 = mir.call @mrt_panic_walk_frames(%602, %603, %603)
-    %605 = mir.mov_imm 1 : i64
-    mir.os_exit %605
-    %606 = mir.mov_imm 0 : i64
-    mir.ret %606
+    %616 = mir.param local0 : i64
+    %617 = mir.call @mrt_write_cstr_stderr(%616)
+    %618 = mir.global_addr @__panic_stacktrace
+    %619 = mir.call @mrt_write_cstr_stderr(%618)
+    %620 = mir.load_frame_ptr
+    %621 = mir.mov_imm 0 : i64
+    %622 = mir.call @mrt_panic_walk_frames(%620, %621, %621)
+    %623 = mir.mov_imm 1 : i64
+    mir.os_exit %623
+    %624 = mir.mov_imm 0 : i64
+    mir.ret %624
   }
   func @mrt_panic_walk_frames(local0: i64, local1: i64, local2: i64) {
   entry:
-    %607 = mir.param local0 : i64
-    %608 = mir.param local1 : i64
-    %609 = mir.param local2 : i64
-    %610 = mir.func_addr @mrt_start
-    %611 = mir.func_addr @__symtable
-    %612 = mir.mov_imm 32 : i64
-    mir.br walk_loop(%607, %612)
-  walk_loop(%658: i64, %659: i64):
-    %614 = mir.mov_imm 0 : i64
-    %615 = mir.cmp eq, %659, %614
-    mir.cond_br %615 [then: walk_done(), else: check_frame_ptr()]
+    %625 = mir.param local0 : i64
+    %626 = mir.param local1 : i64
+    %627 = mir.param local2 : i64
+    %628 = mir.func_addr @mrt_start
+    %629 = mir.func_addr @__symtable
+    %630 = mir.mov_imm 32 : i64
+    mir.br walk_loop(%625, %630)
+  walk_loop(%676: i64, %677: i64):
+    %632 = mir.mov_imm 0 : i64
+    %633 = mir.cmp eq, %677, %632
+    mir.cond_br %633 [then: walk_done(), else: check_frame_ptr()]
   check_frame_ptr:
-    %617 = mir.mov_imm 1 : i64
-    %618 = mir.sub.i64 %659, %617
-    %620 = mir.mov_imm 0 : i64
-    %621 = mir.cmp eq, %658, %620
-    mir.cond_br %621 [then: walk_done(), else: range_check()]
-  range_check:
-    %623 = mir.mov_imm 0 : i64
-    %624 = mir.cmp eq, %609, %623
-    mir.cond_br %624 [then: get_return_addr(), else: range_low()]
-  range_low:
-    %627 = mir.cmp lt, %658, %608
-    mir.cond_br %627 [then: walk_done(), else: range_high()]
-  range_high:
-    %630 = mir.cmp lt, %658, %609
-    mir.cond_br %630 [then: get_return_addr(), else: walk_done()]
-  get_return_addr:
-    %632 = mir.load %658, 8 width: qword
-    %633 = mir.mov_imm 0 : i64
-    %634 = mir.cmp eq, %632, %633
-    mir.cond_br %634 [then: walk_done(), else: compute_offset()]
-  compute_offset:
-    %637 = mir.sub.i64 %632, %610
+    %635 = mir.mov_imm 1 : i64
+    %636 = mir.sub.i64 %677, %635
     %638 = mir.mov_imm 0 : i64
-    %639 = mir.cmp lt, %637, %638
-    mir.cond_br %639 [then: walk_done(), else: check_upper_bound()]
-  check_upper_bound:
-    %643 = mir.sub.i64 %611, %610
-    %644 = mir.cmp lt, %637, %643
-    mir.cond_br %644 [then: print_frame(), else: walk_done()]
-  print_frame:
-    %647 = mir.call @mrt_panic_print_frame(%637, %611)
-    %649 = mir.load %658, 0 width: qword
+    %639 = mir.cmp eq, %676, %638
+    mir.cond_br %639 [then: walk_done(), else: range_check()]
+  range_check:
+    %641 = mir.mov_imm 0 : i64
+    %642 = mir.cmp eq, %627, %641
+    mir.cond_br %642 [then: get_return_addr(), else: range_low()]
+  range_low:
+    %645 = mir.cmp lt, %676, %626
+    mir.cond_br %645 [then: walk_done(), else: range_high()]
+  range_high:
+    %648 = mir.cmp lt, %676, %627
+    mir.cond_br %648 [then: get_return_addr(), else: walk_done()]
+  get_return_addr:
+    %650 = mir.load %676, 8 width: qword
     %651 = mir.mov_imm 0 : i64
-    %652 = mir.cmp eq, %609, %651
-    mir.cond_br %652 [then: advance(), else: ascending_check()]
+    %652 = mir.cmp eq, %650, %651
+    mir.cond_br %652 [then: walk_done(), else: compute_offset()]
+  compute_offset:
+    %655 = mir.sub.i64 %650, %628
+    %656 = mir.mov_imm 0 : i64
+    %657 = mir.cmp lt, %655, %656
+    mir.cond_br %657 [then: walk_done(), else: check_upper_bound()]
+  check_upper_bound:
+    %661 = mir.sub.i64 %629, %628
+    %662 = mir.cmp lt, %655, %661
+    mir.cond_br %662 [then: print_frame(), else: walk_done()]
+  print_frame:
+    %665 = mir.call @mrt_panic_print_frame(%655, %629)
+    %667 = mir.load %676, 0 width: qword
+    %669 = mir.mov_imm 0 : i64
+    %670 = mir.cmp eq, %627, %669
+    mir.cond_br %670 [then: advance(), else: ascending_check()]
   ascending_check:
-    %655 = mir.cmp lt, %658, %649
-    mir.cond_br %655 [then: advance(), else: walk_done()]
+    %673 = mir.cmp lt, %676, %667
+    mir.cond_br %673 [then: advance(), else: walk_done()]
   advance:
-    mir.br walk_loop(%649, %618)
+    mir.br walk_loop(%667, %636)
   walk_done:
-    %657 = mir.mov_imm 0 : i64
-    mir.ret %657
+    %675 = mir.mov_imm 0 : i64
+    mir.ret %675
   }
   func @mrt_panic_print_frame(local0: i64, local1: i64) {
   entry:
-    %684 = mir.param local0 : i64
-    %685 = mir.param local1 : i64
-    %686 = mir.global_addr @__panic_in
-    %687 = mir.call @mrt_write_cstr_stderr(%686)
-    %688 = mir.load %685, 0 width: qword
-    %689 = mir.mov_imm 4294967295 : i64
-    %690 = mir.and.i64 %688, %689
-    %691 = mir.mov_imm 0 : i64
-    %692 = mir.mov_imm -1 : i64
-    mir.br lookup_loop(%691, %692)
-  lookup_loop(%729: i64, %731: i64):
-    %695 = mir.cmp lt, %729, %690
-    mir.cond_br %695 [then: lookup_body(), else: lookup_done()]
+    %702 = mir.param local0 : i64
+    %703 = mir.param local1 : i64
+    %704 = mir.global_addr @__panic_in
+    %705 = mir.call @mrt_write_cstr_stderr(%704)
+    %706 = mir.load %703, 0 width: qword
+    %707 = mir.mov_imm 4294967295 : i64
+    %708 = mir.and.i64 %706, %707
+    %709 = mir.mov_imm 0 : i64
+    %710 = mir.mov_imm -1 : i64
+    mir.br lookup_loop(%709, %710)
+  lookup_loop(%747: i64, %749: i64):
+    %713 = mir.cmp lt, %747, %708
+    mir.cond_br %713 [then: lookup_body(), else: lookup_done()]
   lookup_body:
-    %697 = mir.mov_imm 4 : i64
-    %698 = mir.add.i64 %685, %697
-    %700 = mir.mov_imm 8 : i64
-    %701 = mir.mul.i64 %729, %700
-    %702 = mir.add.i64 %698, %701
-    %703 = mir.load %702, 0 width: qword
-    %704 = mir.mov_imm 4294967295 : i64
-    %705 = mir.and.i64 %703, %704
-    %707 = mir.cmp lt, %684, %705
-    mir.cond_br %707 [then: lookup_next(%731), else: lookup_update()]
+    %715 = mir.mov_imm 4 : i64
+    %716 = mir.add.i64 %703, %715
+    %718 = mir.mov_imm 8 : i64
+    %719 = mir.mul.i64 %747, %718
+    %720 = mir.add.i64 %716, %719
+    %721 = mir.load %720, 0 width: qword
+    %722 = mir.mov_imm 4294967295 : i64
+    %723 = mir.and.i64 %721, %722
+    %725 = mir.cmp lt, %702, %723
+    mir.cond_br %725 [then: lookup_next(%749), else: lookup_update()]
   lookup_update:
-    %709 = mir.mov_imm 4 : i64
-    %710 = mir.add.i64 %702, %709
-    %711 = mir.load %710, 0 width: qword
-    %712 = mir.mov_imm 4294967295 : i64
-    %713 = mir.and.i64 %711, %712
-    mir.br lookup_next(%713)
-  lookup_next(%730: i64):
-    %715 = mir.mov_imm 1 : i64
-    %716 = mir.add.i64 %729, %715
-    mir.br lookup_loop(%716, %730)
+    %727 = mir.mov_imm 4 : i64
+    %728 = mir.add.i64 %720, %727
+    %729 = mir.load %728, 0 width: qword
+    %730 = mir.mov_imm 4294967295 : i64
+    %731 = mir.and.i64 %729, %730
+    mir.br lookup_next(%731)
+  lookup_next(%748: i64):
+    %733 = mir.mov_imm 1 : i64
+    %734 = mir.add.i64 %747, %733
+    mir.br lookup_loop(%734, %748)
   lookup_done:
-    %718 = mir.mov_imm -1 : i64
-    %719 = mir.cmp eq, %731, %718
-    mir.cond_br %719 [then: print_unknown(), else: print_name()]
+    %736 = mir.mov_imm -1 : i64
+    %737 = mir.cmp eq, %749, %736
+    mir.cond_br %737 [then: print_unknown(), else: print_name()]
   print_name:
-    %722 = mir.add.i64 %685, %731
-    %723 = mir.call @mrt_write_cstr_stderr(%722)
+    %740 = mir.add.i64 %703, %749
+    %741 = mir.call @mrt_write_cstr_stderr(%740)
     mir.br print_newline()
   print_unknown:
-    %724 = mir.global_addr @__panic_unknown
-    %725 = mir.call @mrt_write_cstr_stderr(%724)
+    %742 = mir.global_addr @__panic_unknown
+    %743 = mir.call @mrt_write_cstr_stderr(%742)
     mir.br print_newline()
   print_newline:
-    %726 = mir.global_addr @__panic_newline
-    %727 = mir.call @mrt_write_cstr_stderr(%726)
-    %728 = mir.mov_imm 0 : i64
-    mir.ret %728
+    %744 = mir.global_addr @__panic_newline
+    %745 = mir.call @mrt_write_cstr_stderr(%744)
+    %746 = mir.mov_imm 0 : i64
+    mir.ret %746
   }
   func @mm_decref(local0: i64) {
   entry:
-    %1430 = mir.param local0 : i64
-    %1431 = mir.call @__mm_decref(%1430)
-    %1432 = mir.mov_imm 0 : i64
-    mir.ret %1432
+    %1448 = mir.param local0 : i64
+    %1449 = mir.call @__mm_decref(%1448)
+    %1450 = mir.mov_imm 0 : i64
+    mir.ret %1450
   }
   func @__mm_decref_maybenull_helper(local0: i64) -> i64 {
   entry:
-    %1542 = mir.param local0 : i64
-    %1543 = mir.mov_imm 0 : i64
-    %1544 = mir.cmp eq, %1542, %1543
-    mir.cond_br %1544 [then: done(), else: do_decref()]
+    %1560 = mir.param local0 : i64
+    %1561 = mir.mov_imm 0 : i64
+    %1562 = mir.cmp eq, %1560, %1561
+    mir.cond_br %1562 [then: done(), else: do_decref()]
   do_decref:
-    %1546 = mir.call @mm_decref(%1542)
+    %1564 = mir.call @mm_decref(%1560)
     mir.br done()
   done:
-    %1547 = mir.mov_imm 0 : i64
-    mir.ret %1547
+    %1565 = mir.mov_imm 0 : i64
+    mir.ret %1565
   }
   func @mrt_wasm_free_argv_cache() {
   entry:
-    %1659 = mir.mov_imm 0 : i64
-    mir.ret %1659
+    %1677 = mir.mov_imm 0 : i64
+    mir.ret %1677
   }
   func @__gt_init() {
   entry:

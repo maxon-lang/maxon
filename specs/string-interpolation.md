@@ -957,6 +957,38 @@ FF
 ffff
 ```
 
+### Integer Format Specifier - Hex High Bit (unsigned bases)
+
+<!-- test: int-format-high-bit-unsigned -->
+```maxon
+function main() returns ExitCode
+	// Values with bit 63 set exceed i64.max (negative as signed i64). The
+	// hex/octal/binary formatter must treat the value as unsigned bits and emit
+	// every digit — a signed `<= 0` loop guard or signed div/rem would bail out
+	// early and print only zero-padding.
+	let high = 1 shl 63
+	print("{high:016x}\n")
+	let allBits = 0 - 1
+	print("{allBits:x}\n")
+	let upper = 11 shl 60
+	print("{upper:X}\n")
+	let mixed = 15 shl 60
+	print("{mixed:o}\n")
+	print("{high:b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8000000000000000
+ffffffffffffffff
+B000000000000000
+1700000000000000000000
+1000000000000000000000000000000000000000000000000000000000000000
+```
+
 ### Integer Format Specifier - Width
 
 <!-- test: int-format-width -->
