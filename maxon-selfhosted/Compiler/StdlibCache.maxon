@@ -302,7 +302,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // stdlib source checksum stay identical. Pre-v88 caches predate the token and
 // could be a sanitized stdlib written by an interrupted experiment, so the
 // version gate forces clean regeneration.
-let CACHE_FORMAT_VERSION = 88
+let CACHE_FORMAT_VERSION = 89
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -475,6 +475,15 @@ export type StdlibCacheData
 	// acquire-and-keep (`markRetainedCallArgs`) to fire. Same `Map<String, BoolArray>`
 	// shape as `funcParamConsumes`; bits reference no type-interner id, round-trip verbatim.
 	export var funcRetainsParam as FuncRetainsParamMap
+	// Persisted MAY-RETURN-ARG facts (`funcMayReturnArg`) computed by
+	// `analyzeParamConsumes` (`computeMayReturnArgMap`) over the stdlib. A passthrough
+	// stdlib callee (`FilePath.resolveFileURL`/`normalizeSeparators` returning its
+	// input unchanged) is a signature-only stub on the user build, so its
+	// may-return-arg bits must be restored for the inserter's acquire analysis
+	// (`collectOwnershipTransferredValues`) to launder ownership transfers backward
+	// through it. Same `Map<String, BoolArray>` shape as `funcParamConsumes`; bits
+	// reference no type-interner id, round-trip verbatim.
+	export var funcMayReturnArg as MayReturnArgMap
 	// Cache v72: persisted RETURN-BORROW facts (`funcReturnsBorrow`) computed by
 	// `analyzeReturnBorrows` over the stdlib, so the user build restores a stdlib
 	// function's borrow-returning status (notably the bodyless-in-user-build element
@@ -654,6 +663,7 @@ export type StdlibCacheData
 			funcParamConsumes: FuncParamConsumesMap.create(),
 			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
 			funcRetainsParam: FuncRetainsParamMap.create(),
+			funcMayReturnArg: MayReturnArgMap.create(),
 			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
@@ -1425,6 +1435,17 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 		end 'eachRetainBit'
 	end 'eachRetain'
 
+	// May-return-arg bits: same name+per-position-bit shape as the consume/retain
+	// blocks above.
+	writeDword(buf, value: data.funcMayReturnArg.count())
+	for (name, bits) in data.funcMayReturnArg 'eachMayReturn'
+		try writeString(buf, s: name)
+		writeDword(buf, value: bits.count())
+		for b in bits 'eachMayReturnBit'
+			writeBoolByte(buf, b: b)
+		end 'eachMayReturnBit'
+	end 'eachMayReturn'
+
 	// Cache v72: return-borrow function-name set (same shape as the wrapper set above).
 	writeDword(buf, value: data.funcReturnsBorrow.count())
 	for borrowName in data.funcReturnsBorrow 'eachBorrow'
@@ -2164,6 +2185,23 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 		end 'eachRetainBit'
 		data.funcRetainsParam.upsert(retainName, value: retainBits)
 	end 'eachRetain'
+
+	// May-return-arg bits, read in the exact order written above.
+	let mayReturnCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto mayReturnCount 'eachMayReturn'
+		let (mayReturnName, pM0) = try readString(buf, offset: pos)
+		pos = pM0
+		let mayReturnBitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		var mayReturnBits = BoolArray.create()
+		for _ in 0 upto mayReturnBitCount 'eachMayReturnBit'
+			let (b, pM1) = try readBoolByte(buf, offset: pos)
+			pos = pM1
+			mayReturnBits.push(b)
+		end 'eachMayReturnBit'
+		data.funcMayReturnArg.upsert(mayReturnName, value: mayReturnBits)
+	end 'eachMayReturn'
 
 	// Cache v72: return-borrow function-name set (read in write order).
 	let borrowCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
@@ -2915,6 +2953,16 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		data.funcRetainsParam.upsert(name, value: bitsCopy)
 	end 'copyRetains'
 
+	// Snapshot the stdlib may-return-arg facts so a cached user build sees a
+	// passthrough stdlib callee's bits (its body is a signature-only stub there).
+	for (name, bits) in project.funcMayReturnArg 'copyMayReturn'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		data.funcMayReturnArg.upsert(name, value: bitsCopy)
+	end 'copyMayReturn'
+
 	// Cache v72: snapshot the stdlib's structural return-borrow facts so the user
 	// build restores them (notably the element-loader intrinsics, classified from
 	// their bodies here) instead of a name allowlist.
@@ -3205,6 +3253,16 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		end 'eachBit'
 		project.funcRetainsParam.upsert(name, value: bitsCopy)
 	end 'restoreRetains'
+
+	// Replay the stdlib may-return-arg facts so the inserter's acquire analysis
+	// launders transfers backward through a non-inlined passthrough stdlib callee.
+	for (name, bits) in data.funcMayReturnArg 'restoreMayReturn'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		project.funcMayReturnArg.upsert(name, value: bitsCopy)
+	end 'restoreMayReturn'
 
 	// Cache v72: replay the stdlib's structural return-borrow facts into the user
 	// project so `analyzeReturnBorrows` / the inserter see a stdlib callee's

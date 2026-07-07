@@ -376,6 +376,18 @@ export type Project
 	// leak, never a double-free).
 	export var funcParamConsumes as FuncParamConsumesMap
 
+	// IDENTITY-PASSTHROUGH (may-return-arg) relation: `funcMayReturnArg[callee][i]`
+	// is true iff `callee` RETURNS its argument at position `i` UNCHANGED on some
+	// path (`FilePath.resolveFileURL`/`normalizeSeparators`'s `return input`/`return
+	// path` no-op branch). Computed whole-module by `analyzeParamConsumes`
+	// (`computeMayReturnArgMap`) and read by the refcount inserter's acquire analysis
+	// (`collectOwnershipTransferredValues`) to launder an ownership transfer BACKWARD
+	// through a passthrough chain — so an extracted borrow (a tuple element) that
+	// escapes into a durable store ONLY as the result of inlined-wrapper passthroughs
+	// is acquired. Same shape/lifetime as `funcParamConsumes` (per-ABI-position bits,
+	// interner-id-free, cached alongside the consume facts).
+	export var funcMayReturnArg as MayReturnArgMap
+
 	// Qualified names of functions SPAWNED as async green-thread coroutines (`async f()`
 	// records `f` here at lowering time). Such a function's thrown error box is captured
 	// by the runtime and consumed by the awaiter, NOT handed to a direct `try`-call
@@ -1131,6 +1143,7 @@ export type Project
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),
+			funcMayReturnArg: MayReturnArgMap.create(),
 			asyncSpawnedFuncs: FuncReturnsBorrowSet.create(),
 			funcReturnsConsumedArg: FuncReturnsBorrowSet.create(),
 			funcRetainsParam: FuncRetainsParamMap.create(),

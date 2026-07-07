@@ -131,9 +131,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool, rcSanitize bool = false) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool, rcSanitize bool = false) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs, rcLedgerEmit: rcSanitize)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, funcMayReturnArg: funcMayReturnArg, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs, rcLedgerEmit: rcSanitize)
 	end 'eachFunc'
 
 	return module
@@ -154,12 +154,13 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyReturnsBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsInterior = FuncReturnsBorrowSet.create()
 	let emptyRetains = FuncRetainsParamMap.create()
+	let emptyMayReturnArg = MayReturnArgMap.create()
 	let emptyAsyncSpawned = FuncReturnsBorrowSet.create()
 	for func in module.functions 'eachFunc'
 		// The stdlib type-param sandbox runs the type-param-only domain (`includeManaged:
 		// false`), which never reaches the interface-value-slot machinery, so its
 		// `isWasmTarget` is inert — pass false.
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, includeManaged: false, isWasmTarget: false, asyncSpawnedFuncs: emptyAsyncSpawned)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, funcMayReturnArg: emptyMayReturnArg, includeManaged: false, isWasmTarget: false, asyncSpawnedFuncs: emptyAsyncSpawned)
 	end 'eachFunc'
 
 	return module
@@ -169,7 +170,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet, rcLedgerEmit bool = false)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet, rcLedgerEmit bool = false)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -262,7 +263,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// closure borrows it by reference) and released at scope exit, not at the SSA store.
 	let addressTakenSlots = collectAddressTakenSlots(func, module: module)
 
-	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, isWasmTarget: isWasmTarget, rcLedgerEmit: rcLedgerEmit, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam)
+	var ctx = RcContext.create(func, module: module, cfg: cfg, rpo: rpo, domInfo: domInfo, liveness: liveness, idRef: idRef, paramValues: paramValues, returnedValues: returnedValues, globalAddrValues: globalAddrValues, transparentWrapResults: transparentWrapResults, borrowReturningCallResults: borrowReturningCallResults, addressTakenSlots: addressTakenSlots, entryBlockId: entryBlockId, numBlocks: numBlocks, layoutValueId: layoutValueId, includeManaged: includeManaged, isWasmTarget: isWasmTarget, rcLedgerEmit: rcLedgerEmit, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcRetainsParam: funcRetainsParam, funcMayReturnArg: funcMayReturnArg)
 
 	// Single-scan caches for the per-value body queries + the block-id index.
 	// Must precede `buildBodyRcCompleteSet` (which probes the released/acquired
@@ -999,6 +1000,19 @@ type RcContext
 	// escape→acquire pipeline (caller acquires-and-keeps) WITHOUT suppressing the caller's
 	// release. Empty in type-param-only mode.
 	export var funcRetainsParam as FuncRetainsParamMap
+	// MAY-RETURN-ARG registry (`analyzeParamConsumes`'s `computeMayReturnArgMap`):
+	// `funcMayReturnArg[callee][i]` is true iff `callee` RETURNS its argument at
+	// position `i` UNCHANGED on some path (`resolveFileURL`/`normalizeSeparators`'s
+	// `return input`/`return path` no-op branch). The acquire analysis
+	// (`collectOwnershipTransferredValues`) reads this to LAUNDER an ownership
+	// transfer BACKWARD through such an identity-passthrough call: when a call
+	// RESULT is transferred (moved into a durable owner), the passed-through
+	// argument is another handle on the same reference and is transferred too —
+	// so an `incomingOwner` value (a tuple element the caller extracted) whose
+	// only escape is via a passthrough chain into a durable store is correctly
+	// acquired. Empty in type-param-only mode. Mirrors the consume analysis's
+	// passthrough-following (`paramValueReachesConsumeSink`).
+	export var funcMayReturnArg as MayReturnArgMap
 	// Entry-block `constI64` ValueIds for per-arg layout-bit ordinals, minted
 	// lazily by `ordinalConstId` (indexed by ordinal; `REFCOUNT_NO_VALUE` =
 	// not yet minted). One const per ordinal serves every per-ordinal
@@ -1036,7 +1050,7 @@ type RcContext
 	// position-based `valueDirectlyReadElsewhere` cannot see.
 	export var loopDepth as RegIntArray
 
-	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, isWasmTarget bool, rcLedgerEmit bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap) returns RcContext
+	static function create(func IrFunction, module StdModule, cfg CfgInfo, rpo RpoInfo, domInfo DomInfo, liveness StdLivenessInfo, idRef ValueIdRef, paramValues BoolArray, returnedValues BoolArray, globalAddrValues BoolArray, transparentWrapResults BoolArray, borrowReturningCallResults BoolArray, addressTakenSlots BoolArray, entryBlockId BlockId, numBlocks BlockId, layoutValueId ValueId, includeManaged bool, isWasmTarget bool, rcLedgerEmit bool, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap) returns RcContext
 		return Self{
 			func: func,
 			module: module,
@@ -1070,6 +1084,7 @@ type RcContext
 			funcParamConsumes: funcParamConsumes,
 			funcReturnsConsumedArg: funcReturnsConsumedArg,
 			funcRetainsParam: funcRetainsParam,
+			funcMayReturnArg: funcMayReturnArg,
 			ordinalConstIds: ValueIdArray.create(),
 			kindConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
@@ -2246,8 +2261,167 @@ function collectOwnershipTransferredValues(ctx RcContext, maxVal ValueId) return
 		end 'eachOp'
 	end 'eachBlock'
 
+	// Launder the transfer BACKWARD through identity-passthrough calls
+	// (`funcMayReturnArg`). When a wrapper like `FilePath.from`/`create` is INLINED,
+	// an extracted borrow (a tuple element `pathStr = readTuple().0`) reaches the
+	// wrapper's durable field-store ONLY as the RESULT of a chain of no-op passthrough
+	// calls (`resolveFileURL(pathStr)` then `normalizeSeparators(...)` return their
+	// input unchanged). The direct-operand scan above marks the FINAL stored value
+	// transferred but not the passthrough inputs, so the extracted borrow is never
+	// acquired and the tuple's destructor frees the reference out from under the
+	// durable owner. Propagate: if a call RESULT is transferred and the callee RETURNS
+	// an argument unchanged, that argument (another handle on the same reference) is
+	// transferred too. The acquire the resulting `transferred` bit triggers
+	// (`decideIncomingOwnerAcquire` case (a)) balances the extracted value's last-use
+	// release so the container's own reference survives. The consume analysis already
+	// follows this same passthrough chain (`paramValueReachesConsumeSink`) to mark the
+	// wrapper consuming — this mirrors it on the caller's acquire side, which the
+	// inlining otherwise erases. No-op when `funcMayReturnArg` is empty (type-param-only
+	// mode / a module with no passthrough callee).
+	propagateTransferThroughPassthroughs(ctx, transferred: transferred)
+
 	return transferred
 end 'collectOwnershipTransferredValues'
+
+// Fixpoint over the module's identity-passthrough calls: mark a passed-through
+// argument transferred whenever the call's RESULT is transferred. Iterated so a
+// CHAIN of passthroughs (`resolveFileURL` then `normalizeSeparators`) carries the
+// transfer all the way back to the originally-extracted value.
+function propagateTransferThroughPassthroughs(ctx RcContext, transferred BoolArray)
+	if ctx.funcMayReturnArg.count() == 0 'noPassthroughs'
+		return
+	end 'noPassthroughs'
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for blockRef in ctx.func.blockRefs 'eachBlock'
+			let block = try ctx.module.blocks.get(blockRef) otherwise panic("propagateTransferThroughPassthroughs: blockRef not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try ctx.module.ops.get(opIdx) otherwise panic("propagateTransferThroughPassthroughs: opIdx not in module.ops")
+				if propagateTransferForOp(ctx, op: op, transferred: transferred) 'flipped'
+					changed = true
+				end 'flipped'
+			end 'eachOp'
+			// Launder the transfer BACKWARD across a phi (block-arg) edge: when a
+			// merged block-arg is transferred, the branch operand feeding it on this
+			// edge is another handle on the same reference and is transferred too. This
+			// closes the chain the call step alone cannot: an INLINED identity passthrough
+			// (`normalizeSeparators`, whose no-op `return path` becomes an inline-
+			// continuation phi) routes the extracted value through a block-arg, not a
+			// call, so `propagateTransferForOp` never sees it. The direct feeder is
+			// typically a call result (inert for the acquire — not `incomingOwner`); the
+			// chain continues through it (via `propagateTransferForCall` on the may-
+			// return-arg call) to the genuinely-extracted `incomingOwner` at its root.
+			if propagateTransferThroughPhiEdges(ctx, block: block, transferred: transferred) 'flippedPhi'
+				changed = true
+			end 'flippedPhi'
+		end 'eachBlock'
+	end 'fixpoint'
+end 'propagateTransferThroughPassthroughs'
+
+function propagateTransferForOp(ctx RcContext, op StdOp, transferred BoolArray) returns bool
+	return match op 'dispatch'
+		call(c) gives propagateTransferForCall(ctx, c: c, transferred: transferred)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'propagateTransferForOp'
+
+function propagateTransferForCall(ctx RcContext, c StdCallOp, transferred BoolArray) returns bool
+	return match c 'check'
+		call(resultId, callee, argIds) gives propagateTransferPassthrough(ctx, resultId: resultId, callee: callee, argIds: argIds, transferred: transferred)
+		tryCall(resultId, callee, argIds, _) gives propagateTransferPassthrough(ctx, resultId: resultId, callee: callee, argIds: argIds, transferred: transferred)
+		ret gives false
+		indirectCall to tailCall gives false
+		param gives false
+		errorReturn gives false
+	end 'check'
+end 'propagateTransferForCall'
+
+// If `resultId` (the call result) is transferred and `callee` RETURNS one of its
+// arguments unchanged (`funcMayReturnArg[callee][pos]`), mark that argument
+// transferred. Returns true iff any bit newly flipped (drives the outer fixpoint).
+function propagateTransferPassthrough(ctx RcContext, resultId ValueId, callee String, argIds ValueIdArray, transferred BoolArray) returns bool
+	let resultTransferred = try transferred.get(resultId) otherwise false
+	if not resultTransferred 'resultNotTransferred'
+		return false
+	end 'resultNotTransferred'
+	let positions = try ctx.funcMayReturnArg.get(callee) otherwise return false
+	var flipped = false
+	var idx = 0
+	while idx < argIds.count() 'eachArg'
+		let argId = try argIds.get(idx) otherwise panic("propagateTransferPassthrough: argIds.get OOB despite idx < count")
+		let returnsThisPos = try positions.get(idx) otherwise false
+		// NOT gated on `ctx.isManaged(argId)`: a passthrough result whose stdlib
+		// callee is a signature-only stub often has an un-propagated (non-managed-
+		// classified) type, and gating here would break the transfer chain before it
+		// reaches the genuinely-managed extracted value at its root. Marking an
+		// intermediate non-managed value transferred is inert — `decideIncomingOwnerAcquire`
+		// only acts on managed `incomingOwner` values (`classIsIncomingOwner` is
+		// isManaged-gated), so the surplus bit is harmless and only the chain matters.
+		if returnsThisPos 'passthroughArg'
+			let already = try transferred.get(argId) otherwise false
+			if not already 'newTransfer'
+				setBoolAt(transferred, id: argId, value: true)
+				flipped = true
+			end 'newTransfer'
+		end 'passthroughArg'
+		idx = idx + 1
+	end 'eachArg'
+	return flipped
+end 'propagateTransferPassthrough'
+
+// Propagate transfer BACKWARD across `block`'s out-edges: for each edge, if a
+// successor phi (block-arg) is transferred, the branch operand feeding it (same
+// positional index) is transferred too. Mirrors `argsFeedReleasablePhi`'s
+// positional block-arg binding, on the acquire-analysis side.
+function propagateTransferThroughPhiEdges(ctx RcContext, block IrBlock, transferred BoolArray) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let term = try ctx.module.ops.get(block.terminatorIndex()) otherwise panic("propagateTransferThroughPhiEdges: terminator not in module.ops")
+	return match term 'dispatch'
+		control(cf) gives propagateTransferForPhiEdge(ctx, cf: cf, transferred: transferred)
+		arith gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'propagateTransferThroughPhiEdges'
+
+function propagateTransferForPhiEdge(ctx RcContext, cf StdControlOp, transferred BoolArray) returns bool
+	return match cf 'c'
+		br(target, argIds) gives propagatePhiEdgeArgs(ctx, target: target, argIds: argIds, transferred: transferred)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives propagatePhiEdgeArgs(ctx, target: thenTarget, argIds: thenArgIds, transferred: transferred) or propagatePhiEdgeArgs(ctx, target: elseTarget, argIds: elseArgIds, transferred: transferred)
+	end 'c'
+end 'propagateTransferForPhiEdge'
+
+// The Nth edge arg feeds the Nth successor block-arg. If that block-arg is
+// transferred, mark the Nth edge arg transferred. Returns true iff a bit newly
+// flipped (drives the outer fixpoint).
+function propagatePhiEdgeArgs(ctx RcContext, target BlockId, argIds ValueIdArray, transferred BoolArray) returns bool
+	let toBlock = findBlockById(ctx, blockId: target)
+	var flipped = false
+	var i = 0
+	while i < argIds.count() 'eachArg'
+		if i < toBlock.blockArgs.count() 'inRange'
+			let phiArg = try toBlock.blockArgs.get(i) otherwise panic("propagatePhiEdgeArgs: blockArgs.get OOB despite i < count")
+			let phiTransferred = try transferred.get(phiArg.valueId) otherwise false
+			if phiTransferred 'phiT'
+				let argId = try argIds.get(i) otherwise panic("propagatePhiEdgeArgs: argIds.get OOB despite i < count")
+				let already = try transferred.get(argId) otherwise false
+				if not already 'newTransfer'
+					setBoolAt(transferred, id: argId, value: true)
+					flipped = true
+				end 'newTransfer'
+			end 'phiT'
+		end 'inRange'
+		i = i + 1
+	end 'eachArg'
+	return flipped
+end 'propagatePhiEdgeArgs'
 
 // Mark every operand of `op` that this op MOVES/CONSUMES into a durable owner —
 // the acquire-analysis view over the Concept B dispatcher (`opTransferDisposition`).

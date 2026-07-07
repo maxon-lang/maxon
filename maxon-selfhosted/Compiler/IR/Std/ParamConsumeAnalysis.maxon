@@ -86,6 +86,18 @@ export function analyzeParamConsumes(module StdModule, project Project) returns 
 	// global UAF). Computed where bodies are present (stdlib build); the consume bits it
 	// produces are cached, so the user build needs no separate persistence.
 	let mayReturnArg = computeMayReturnArgMap(module)
+	// Publish the may-return-arg relation for the refcount inserter's acquire
+	// analysis (`collectOwnershipTransferredValues` launders transfers backward
+	// through these identity-passthrough calls). Computed here where every body is
+	// present (whole-module, pre-`insertRefcounts`); the inserter runs per-function
+	// on singletons and cannot recompute it. MERGED (not assigned) into `project` so
+	// the CACHE-RESTORED stdlib bits survive: on a user build the passthrough stdlib
+	// callees are signature-only stubs, so `computeMayReturnArgMap` over the user
+	// module returns nothing for them — an overwrite would clobber the restored facts
+	// (mirrors how `setConsumeBit` upserts rather than replacing `funcParamConsumes`).
+	for (name, bits) in mayReturnArg 'publish'
+		project.funcMayReturnArg.upsert(name, value: bits)
+	end 'publish'
 
 	// SCC-condensation-ordered single pass. The consume bits are MONOTONIC and depend
 	// ONLY on the callees' bits (`updateFuncConsumeBits` reads other functions' bits
@@ -1115,7 +1127,7 @@ end 'boolArrayToString'
 // positions that function MAY RETURN on some path (the identity-passthrough relation).
 // Built ONCE up front by `computeMayReturnArgMap` and consulted by the consume walk's
 // passthrough-aliasing edge (`calleeResultAliasesArg`).
-typealias MayReturnArgMap = Map with (String, BoolArray)
+export typealias MayReturnArgMap = Map with (String, BoolArray)
 
 // Build the may-return-arg relation for every function in `module`: a position is
 // flagged iff SOME `ret`/`errorReturn` terminator returns that parameter's SSA value
