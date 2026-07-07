@@ -63,6 +63,10 @@ Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`. E
 "{n:04}"            // format specifier: zero-pad to width 4
 "{f:.2}"            // format specifier: 2 decimal places
 "Line1\nLine2"      // escape sequences: \n \t \r \0 \\ \" \{ \} \xNN \uXXXX
+
+// Byte strings (ByteArray, one byte per char)
+b"data"             // chars up to U+00FF encode as a single Latin-1 byte
+b"\xFF\x00"         // \xNN for raw bytes; chars above U+00FF are rejected (E1004)
 ```
 
 ## Operators

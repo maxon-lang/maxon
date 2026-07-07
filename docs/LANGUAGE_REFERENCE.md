@@ -64,7 +64,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-The return value becomes the program's exit code (0-255 on Windows).
+The return value becomes the program's exit code. The `ExitCode` range is platform-dependent: `0` to `u32.max` on Windows, `0` to `255` on Linux, macOS, and WASI.
 
 ### File Structure
 - One or more function, type, enum, or typealias declarations
@@ -323,9 +323,10 @@ let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
 let empty = b""                // Empty ByteArray
 let escaped = b"line\n"        // Supports escape sequences
 let raw = b"\xFF\x00"          // Hex escape: raw bytes [255, 0]
+let latin = b"À"               // Non-ASCII char up to U+00FF: one Latin-1 byte [192]
 ```
 
-Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF) and `\uXXXX` Unicode escapes. This is useful when working with raw bytes or APIs that expect byte arrays.
+Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF) and `\uXXXX` Unicode escapes. Every source character encodes to exactly one byte: codepoints `U+0000`–`U+00FF` — written literally or as `\uNNNN` — emit their Latin-1 byte value, and a character or `\uNNNN` escape above `U+00FF` has no single-byte encoding, so it is rejected at compile time (E1004) with a hint to use a `\xNN` hex escape for the exact raw byte intended. This is useful when working with raw bytes or APIs that expect byte arrays.
 
 **Boolean Literals**
 ```maxon
@@ -5096,7 +5097,7 @@ Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at 
 
 **Caught at runtime (clean panic, exit 1)**
 
-CPU faults — division (or modulo) by zero, null pointer dereference, and stack overflow — are caught by the runtime safety handler, which writes a `panic: ...` line to stderr and exits with status 1.
+CPU faults — division (or modulo) by zero, null pointer dereference, and stack overflow — are caught by the runtime safety handler, which writes a `panic: ...` line to stderr and exits with status 1. On x64 the panic line is followed by a symbolized stack trace of the faulting thread (frame 0 names the faulting function, resolved from the faulting instruction pointer); on arm64-macos only the panic line is printed.
 
 **Undefined Behavior (no error)**
 - Array out-of-bounds access
