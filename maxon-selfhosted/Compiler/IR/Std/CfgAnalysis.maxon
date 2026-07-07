@@ -176,6 +176,22 @@ end 'dfsPostorder'
 
 export type DomInfo
 	export var idom as ValueIdArray
+	// Dominator-tree PREORDER INTERVALS backing the O(1) `dominates` test:
+	// `domIn[b]` is `b`'s preorder number in a DFS over the idom-derived child
+	// lists from the entry block, and `domOut[b]` is the largest preorder number
+	// in `b`'s dominator subtree — so `a` dominates `b` iff
+	// `domIn[a] <= domIn[b] <= domOut[a]` (subtrees are contiguous preorder
+	// ranges). Blocks the DFS never reaches (unreachable from entry — their idom
+	// stayed BLOCK_NONE) keep the `BLOCK_NONE` sentinel in BOTH arrays, which
+	// `dominates` maps to false for any `a != b` pair involving them — exactly
+	// what the former idom-chain walk answered. Filled by `computeDominators`
+	// via `fillDominatorIntervals`; the declaration defaults keep direct
+	// placeholder constructions (e.g. the register allocator's pre-`run()`
+	// `DomInfo.create(ValueIdArray.create())`) compiling, and empty interval
+	// arrays answer `dominates` identically to an empty idom chain walk
+	// (false for every `a != b`).
+	export var domIn as ValueIdArray = ValueIdArray.create()
+	export var domOut as ValueIdArray = ValueIdArray.create()
 
 	export static function create(idom ValueIdArray) returns DomInfo
 		return Self{idom: idom}
@@ -249,8 +265,63 @@ export function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg C
 		end 'eachRpo'
 	end 'converge'
 
-	return DomInfo.create(idom)
+	var domInfo = DomInfo.create(idom)
+	fillDominatorIntervals(domInfo, entryBlockId: entryBlockId, numBlocks: numBlocks)
+	return domInfo
 end 'computeDominators'
+
+// Fill `domInfo.domIn` / `domInfo.domOut` (see the field doc on `DomInfo`) from
+// the converged idom array. One dominator-tree preorder DFS (reusing
+// `computeDomTreePreorder`, which builds the child lists from idom) numbers the
+// reachable blocks; a reverse-preorder accumulation then sizes each subtree, so
+// `domOut[b] = domIn[b] + subtreeSize(b) - 1` (a subtree is a contiguous
+// preorder range). Unreachable blocks are absent from the preorder and keep the
+// `BLOCK_NONE` sentinel in both arrays.
+function fillDominatorIntervals(domInfo DomInfo, entryBlockId BlockId, numBlocks BlockId)
+	var domIn = ValueIdArray.create()
+	var domOut = ValueIdArray.create()
+	var subtreeSize = ValueIdArray.create()
+
+	var i = 0
+	while i < numBlocks 'init'
+		domIn.push(BLOCK_NONE)
+		domOut.push(BLOCK_NONE)
+		subtreeSize.push(0)
+		i = i + 1
+	end 'init'
+
+	let preorder = computeDomTreePreorder(entryBlockId, domInfo: domInfo, numBlocks: numBlocks)
+
+	var p = 0
+	while p < preorder.count() 'number'
+		let b = try preorder.get(p) otherwise panic("fillDominatorIntervals: preorder.get({p}) OOB despite p < count")
+		try domIn.set(b, value: p) otherwise panic("fillDominatorIntervals: domIn.set({b}) OOB; arrays sized to numBlocks")
+		p = p + 1
+	end 'number'
+
+	// Reverse preorder visits every child before its parent, so each block's
+	// subtree size is complete when its parent accumulates it.
+	var r = preorder.count() - 1
+	while r >= 0 'sizes'
+		let b = try preorder.get(r) otherwise panic("fillDominatorIntervals: preorder.get({r}) OOB despite r < count")
+		let childSum = try subtreeSize.get(b) otherwise panic("fillDominatorIntervals: subtreeSize.get({b}) OOB; arrays sized to numBlocks")
+		let total = childSum + 1
+		try subtreeSize.set(b, value: total) otherwise panic("fillDominatorIntervals: subtreeSize.set({b}) OOB")
+		let bIn = try domIn.get(b) otherwise panic("fillDominatorIntervals: domIn.get({b}) OOB; b was numbered above")
+		try domOut.set(b, value: bIn + total - 1) otherwise panic("fillDominatorIntervals: domOut.set({b}) OOB")
+
+		let parent = try domInfo.idom.get(b) otherwise BLOCK_NONE
+		if parent != BLOCK_NONE and parent != b 'accumulate'
+			let parentSum = try subtreeSize.get(parent) otherwise panic("fillDominatorIntervals: subtreeSize.get(parent={parent}) OOB")
+			try subtreeSize.set(parent, value: parentSum + total) otherwise panic("fillDominatorIntervals: subtreeSize.set(parent={parent}) OOB")
+		end 'accumulate'
+
+		r = r - 1
+	end 'sizes'
+
+	domInfo.domIn = domIn
+	domInfo.domOut = domOut
+end 'fillDominatorIntervals'
 
 function intersectDom(b1 BlockId, b2 BlockId, idom ValueIdArray, rpo RpoInfo) returns BlockId
 	var finger1 = b1
@@ -277,26 +348,30 @@ function intersectDom(b1 BlockId, b2 BlockId, idom ValueIdArray, rpo RpoInfo) re
 	return finger1
 end 'intersectDom'
 
-// Check if block a dominates block b.
+// Check if block a dominates block b. O(1) via the dominator-tree preorder
+// intervals (`DomInfo.domIn` / `domOut`): a dominates b iff b's preorder
+// number lies inside a's subtree range. Replaces the former idom-chain walk
+// with identical semantics:
+//   - a == b answers true even for unreachable / out-of-range blocks (the
+//     chain walk returned true before ever reading idom);
+//   - any a != b pair where either block is unreachable from entry (or out of
+//     the id range) answers false — the chain walk either hit BLOCK_NONE
+//     (unreachable b) or reached the entry root without meeting a
+//     (unreachable a is never on a reachable b's chain).
 export function dominates(a BlockId, b BlockId, domInfo DomInfo) returns bool
 	if a == b 'same'
 		return true
 	end 'same'
 
-	var runner = b
-	while runner != BLOCK_NONE 'walkUp'
-		let parent = try domInfo.idom.get(runner) otherwise BLOCK_NONE
-		if parent == a 'found'
-			return true
-		end 'found'
-		if parent == runner 'atRoot'
-			// Reached the entry block without finding a
-			return false
-		end 'atRoot'
-		runner = parent
-	end 'walkUp'
+	let aIn = try domInfo.domIn.get(a) otherwise BLOCK_NONE
+	let bIn = try domInfo.domIn.get(b) otherwise BLOCK_NONE
 
-	return false
+	if aIn == BLOCK_NONE or bIn == BLOCK_NONE 'unreachable'
+		return false
+	end 'unreachable'
+
+	let aOut = try domInfo.domOut.get(a) otherwise panic("dominates: domIn[{a}] is set but domOut.get({a}) failed; intervals are filled together")
+	return aIn <= bIn and bIn <= aOut
 end 'dominates'
 
 // ============================================================

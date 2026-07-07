@@ -477,13 +477,29 @@ function buildBodyScanCaches(ctx RcContext)
 	var liveAfterCache = StdLiveAfterArray.create()
 	var liveAfterPresent = BoolArray.create()
 	liveAfterPresent.resize(ctx.numBlocks)
+	// The lazy first-unconditional-consume tables and the eager tryCall site
+	// lists share the liveAfter cache's indexing (block.id, numBlocks slots;
+	// later edge-split blocks are never queried by the pre-edit sweeps).
+	var consumePresent = BoolArray.create()
+	consumePresent.resize(ctx.numBlocks)
+	var consumeCache = UncondConsumeSiteTableArray.create()
+	var trySites = TryCallSiteTableArray.create()
 	var lac = 0
 	while lac < ctx.numBlocks 'presizeLiveAfter'
 		liveAfterCache.push(emptyStdLiveAfter(ctx.liveness.maxValueId))
+		consumeCache.push(UncondConsumeSiteArray.create())
+		trySites.push(TryCallSiteArray.create())
 		lac = lac + 1
 	end 'presizeLiveAfter'
 	ctx.blockLiveAfterCache = liveAfterCache
 	ctx.blockLiveAfterPresent = liveAfterPresent
+	ctx.uncondConsumeSiteCache = consumeCache
+	ctx.uncondConsumeSitePresent = consumePresent
+	ctx.tryCallSitesByBlock = trySites
+
+	// Whole-function field-load index (see `RcContext.fieldLoadIndex`), filled
+	// by the same walk below in discovery order.
+	var fieldLoads = FieldLoadIndexMap.create()
 
 	// Stamped header-address maps for the inlined-acquire pattern. Values are
 	// stored +1 so 0 means absent; stamps hold (block ordinal + 1).
@@ -511,11 +527,15 @@ function buildBodyScanCaches(ctx RcContext)
 			try blockIndex.set(block.id, value: blockRef + 1) otherwise panic("buildBodyScanCaches: blockIndex.set OOB despite bound check")
 		end 'indexBlock'
 
+		var opPos = 0
 		for opIdx in block.opRefs 'eachOp'
 			let op = try ctx.module.ops.get(opIdx) otherwise panic("buildBodyScanCaches: opIdx not in module.ops")
 			markBodyReleaseArgs(op, released: released)
 			markConstantZeroResult(op, constZero: constZero)
 			tallyOpDirectReads(op, readCounts: readCounts, scratch: readScratch)
+			recordTryCallSite(op, opIdx: opIdx, blockId: block.id, trySites: trySites)
+			recordFieldLoadSite(op, blockRef: blockRef, blockId: block.id, pos: opPos as NodeIndex, fieldLoads: fieldLoads)
+			opPos = opPos + 1
 
 			let increfArg = increfCallArgOrSentinel(op)
 			if increfArg != REFCOUNT_NO_VALUE and increfArg >= 0 and increfArg < acquired.count() 'callAcquire'
@@ -562,7 +582,90 @@ function buildBodyScanCaches(ctx RcContext)
 	ctx.constantZeroValues = constZero
 	ctx.blockRefIndex = blockIndex
 	ctx.totalDirectReadingOps = readCounts
+	ctx.fieldLoadIndex = fieldLoads
 end 'buildBodyScanCaches'
+
+// Record `op` into the per-block tryCall site list if it is a
+// `tryCall`/`witnessTryCall`. A block id outside the pre-sized window is
+// skipped (mirroring the blockRefIndex guard above); `tryCallSitesFor` covers
+// such blocks with a direct scan, so nothing is lost.
+function recordTryCallSite(op StdOp, opIdx OpIndex, blockId BlockId, trySites TryCallSiteTableArray)
+	let (found, resultId, errorFlagId) = tryCallResultAndFlag(op)
+	if not found 'notTryCall'
+		return
+	end 'notTryCall'
+	if blockId < 0 or blockId >= trySites.count() 'outOfRange'
+		return
+	end 'outOfRange'
+	var sites = try trySites.get(blockId) otherwise panic("recordTryCallSite: trySites.get({blockId}) OOB despite bound check")
+	sites.push(TryCallSite.create(opIdx, resultId: resultId, errorFlagId: errorFlagId))
+end 'recordTryCallSite'
+
+// Record `op` into the whole-function field-load index if it is a
+// `load_indirect`, keyed by its `(base value, offset)` field identity. Width /
+// sign / float tags are deliberately ignored — any read of the field address
+// proves the field was initialized, matching the former scans' predicate,
+// which accepted every load of the same base + offset.
+function recordFieldLoadSite(op StdOp, blockRef BlockRef, blockId BlockId, pos NodeIndex, fieldLoads FieldLoadIndexMap)
+	let fieldLoad = loadIndirectFieldOf(op)
+	if not fieldLoad.found 'notLoad'
+		return
+	end 'notLoad'
+	let key = storedFieldKey(fieldLoad.addrId, offset: fieldLoad.offset)
+	let site = FieldLoadSite.create(blockRef, blockId: blockId, pos: pos, resultId: fieldLoad.valueId)
+
+	// A map hit returns an alias of the stored array, so pushing mutates the
+	// entry in place — upserting while that borrow is live is both redundant
+	// and an E3070. Only a miss inserts a fresh list.
+	var sites = try fieldLoads.get(key) otherwise 'miss'
+		var fresh = FieldLoadSiteArray.create()
+		fresh.push(site)
+		fieldLoads.upsert(key, value: fresh)
+		return
+	end 'miss'
+
+	sites.push(site)
+end 'recordFieldLoadSite'
+
+// The `(found, resultId, errorFlagId)` of a `tryCall`/`witnessTryCall` op —
+// the two SSA defs the edge-death guards key their error-flag lookups on.
+function tryCallResultAndFlag(op StdOp) returns (bool, ValueId, ValueId)
+	return match op 'dispatch'
+		call(c) gives match c 'inner'
+			tryCall(r, _, _, errorFlagId) gives (true, r, errorFlagId)
+			witnessTryCall(r, _, _, _, _, errorFlagId) gives (true, r, errorFlagId)
+			ret gives (false, 0, 0)
+			call gives (false, 0, 0)
+			indirectCall to witnessCall gives (false, 0, 0)
+			funcRef to errorReturn gives (false, 0, 0)
+		end 'inner'
+		arith gives (false, 0, 0)
+		control gives (false, 0, 0)
+		memory gives (false, 0, 0)
+		system gives (false, 0, 0)
+	end 'dispatch'
+end 'tryCallResultAndFlag'
+
+// The per-block tryCall site list for `block` (see `TryCallSite`). Blocks in
+// the pre-sized window read the eagerly-built list; a block created after the
+// caches (edge splitting — never queried by the pre-edit sweeps) falls back to
+// a direct scan so correctness never depends on the cache.
+function tryCallSitesFor(ctx RcContext, block IrBlock) returns TryCallSiteArray
+	let bid = block.id
+	if bid >= 0 and bid < ctx.tryCallSitesByBlock.count() 'inRange'
+		return try ctx.tryCallSitesByBlock.get(bid) otherwise panic("tryCallSitesFor: table.get({bid}) OOB despite bound check")
+	end 'inRange'
+
+	var sites = TryCallSiteArray.create()
+	for opIdx in block.opRefs 'eachOp'
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("tryCallSitesFor: opIdx not in module.ops")
+		let (found, resultId, errorFlagId) = tryCallResultAndFlag(op)
+		if found 'isTryCall'
+			sites.push(TryCallSite.create(opIdx, resultId: resultId, errorFlagId: errorFlagId))
+		end 'isTryCall'
+	end 'eachOp'
+	return sites
+end 'tryCallSitesFor'
 
 // Increment `readCounts[v]` once for every DISTINCT value `op` directly reads
 // (op-presence granularity). A value read at several operand positions of one op
@@ -605,7 +708,7 @@ end 'readIdAlreadySeenBefore'
 // it only makes the pre-sized cache array element-addressable so a real result
 // can be stored in place when `blockLiveAfterFor` first builds it.
 function emptyStdLiveAfter(maxVal ValueId) returns StdLiveAfter
-	return StdLiveAfter.create(StdLiveSetArray.create(), liveAfterBody: StdLiveSetArray.create(), maxValueId: maxVal)
+	return StdLiveAfter.create(StdLiveSetArray.create(), maxValueId: maxVal)
 end 'emptyStdLiveAfter'
 
 // The per-op-position liveness for `block`, computed once and cached by block.id.
@@ -870,6 +973,68 @@ end 'RcEdgeRelease'
 
 typealias RcEdgeReleaseArray = Array with RcEdgeRelease
 
+// One first-unconditional-consume record for a block: the earliest body-op
+// position at which `vid`'s +1 was unconditionally consumed
+// (`opUnconditionallyConsumesOperand`). At most one entry per vid per block
+// (first-match-wins, exactly like the per-query prefix scan this replaces).
+type UncondConsumeSite
+	export var vid as ValueId
+	export var pos as NodeIndex
+
+	export static function create(vid ValueId, pos NodeIndex) returns UncondConsumeSite
+		return Self{vid: vid, pos: pos}
+	end 'create'
+end 'UncondConsumeSite'
+
+typealias UncondConsumeSiteArray = Array with UncondConsumeSite
+
+// Per-block.id table of `UncondConsumeSiteArray`s (the cache behind
+// `valueConsumedEarlierInBlock`), filled lazily like `blockLiveAfterCache`.
+typealias UncondConsumeSiteTableArray = Array with UncondConsumeSiteArray
+
+// One `tryCall`/`witnessTryCall` op of a block: its op index plus its two SSA
+// defs (result + error flag). Collected once per block so the per-(value,
+// successor) edge-death guards resolve a tryCall's error flag by scanning the
+// handful of tryCalls in the block instead of every op.
+type TryCallSite
+	export var opIdx as OpIndex
+	export var resultId as ValueId
+	export var errorFlagId as ValueId
+
+	export static function create(opIdx OpIndex, resultId ValueId, errorFlagId ValueId) returns TryCallSite
+		return Self{opIdx: opIdx, resultId: resultId, errorFlagId: errorFlagId}
+	end 'create'
+end 'TryCallSite'
+
+typealias TryCallSiteArray = Array with TryCallSite
+
+// Per-block.id table of `TryCallSiteArray`s, filled eagerly by the
+// `buildBodyScanCaches` walk (a tryCall op is cheap to recognize inline).
+typealias TryCallSiteTableArray = Array with TryCallSiteArray
+
+// One `load_indirect` site of the function, recorded in discovery order
+// (func.blockRefs walk order, then op-position order — the exact order the
+// former whole-function rescans visited loads in). Keyed in `FieldLoadIndexMap`
+// by the `(base SSA value, byte offset)` packing `storedFieldKey` builds, so
+// `storeIsFieldOverwrite` consults only the loads of the SAME field.
+type FieldLoadSite
+	export var blockRef as BlockRef
+	export var blockId as BlockId
+	export var pos as NodeIndex
+	export var resultId as ValueId
+
+	export static function create(blockRef BlockRef, blockId BlockId, pos NodeIndex, resultId ValueId) returns FieldLoadSite
+		return Self{blockRef: blockRef, blockId: blockId, pos: pos, resultId: resultId}
+	end 'create'
+end 'FieldLoadSite'
+
+typealias FieldLoadSiteArray = Array with FieldLoadSite
+
+typealias FieldLoadIndexMap = Map with (FieldKey, FieldLoadSiteArray)
+
+// Shared empty result for `fieldLoadSitesFor` misses (a field never loaded).
+let EMPTY_FIELD_LOAD_SITES = FieldLoadSiteArray.create()
+
 type RcContext
 	export var func as IrFunction
 	export var module as StdModule
@@ -1035,6 +1200,27 @@ type RcContext
 	// `blockLiveAfterPresent[block.id]` gates the cached slot (0 = not yet built).
 	export var blockLiveAfterCache as StdLiveAfterArray
 	export var blockLiveAfterPresent as BoolArray
+	// Per-block first-unconditional-consume tables backing
+	// `valueConsumedEarlierInBlock` (see `UncondConsumeSite`). Indexed by
+	// block.id, built lazily on first query (`uncondConsumeSitesFor`) — the
+	// former per-query scan re-ran `opUnconditionallyConsumesOperand` over the
+	// whole block prefix for EVERY managed death candidate. Like the liveAfter
+	// cache, the planning sweeps only query the read-only pre-edit IR, so one
+	// forward walk per block is authoritative.
+	export var uncondConsumeSiteCache as UncondConsumeSiteTableArray
+	export var uncondConsumeSitePresent as BoolArray
+	// Per-block tryCall site lists (result + error-flag SSA defs per
+	// `tryCall`/`witnessTryCall` op), indexed by block.id and filled by the
+	// `buildBodyScanCaches` walk. Backs the O(#tryCalls) error-flag lookups in
+	// `tryCallErrorFlagForResult` / `tryCallErrorFlagForTransferredArg`, which
+	// previously rescanned every op of the block per (value, successor) query.
+	export var tryCallSitesByBlock as TryCallSiteTableArray
+	// Whole-function `(base value, offset)` -> load_indirect sites index (see
+	// `FieldLoadSite`), filled by the `buildBodyScanCaches` walk. Backs
+	// `storeIsFieldOverwrite`'s nearest-prior-load and dominating-block-load
+	// proofs, which previously rescanned the block prefix (and, on a miss,
+	// every block of the function) per managed store.
+	export var fieldLoadIndex as FieldLoadIndexMap
 	// Per-ValueId count of ops (body ops + terminators, across the whole function)
 	// that DIRECTLY read the value at least once. Built in one O(ops) pass by
 	// `buildBodyScanCaches` and consumed by `valueDirectlyReadElsewhere` to answer
@@ -1089,6 +1275,10 @@ type RcContext
 			kindConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
 			blockLiveAfterPresent: BoolArray.create(),
+			uncondConsumeSiteCache: UncondConsumeSiteTableArray.create(),
+			uncondConsumeSitePresent: BoolArray.create(),
+			tryCallSitesByBlock: TryCallSiteTableArray.create(),
+			fieldLoadIndex: FieldLoadIndexMap.create(),
 			totalDirectReadingOps: ValueIdArray.create(),
 			loopDepth: computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
 		}
@@ -3237,13 +3427,16 @@ end 'planDecrefOldField'
 //     for x in old` frees the old list under the live iterator borrow (case c not
 //     firing → the `ListIterator` node double-free in `rewriteFunctionInPlace`).
 function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId, offset MachineWord, storePos NodeIndex, contiguousDecrefOldCountsAsRelease bool) returns bool
-	// NEAREST-PRIOR-LOAD scan, BACKWARD from the store: the closest earlier
-	// in-block read of `[addrId + offset]` decides.
+	// NEAREST-PRIOR-LOAD check: the closest earlier in-block read of
+	// `[addrId + offset]` decides.
 	//   - a genuine load of the slot → the classic read-modify-write proof.
 	//   - a load feeding ONLY `__mm_decref_maybenull_helper` → `lowerFieldStore`
 	//     ALREADY released this slot's occupant for this store (its decref-old
 	//     sequence is emitted contiguously with the store, so it is always the
 	//     nearest slot read); see the two questions in the header comment.
+	// Resolved from `ctx.fieldLoadIndex` (this field's load sites, in block-walk
+	// then position order) instead of the former backward op rescan: the LAST
+	// same-block site before `storePos` is exactly the scan's nearest hit.
 	//
 	// NOTE: the SOURCE-LEVEL managed-field reassign (`c.arguments = args`) is
 	// handled by `lowerFieldStore`'s typed decref-old, NOT by a proof here — an
@@ -3252,21 +3445,25 @@ function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId
 	// (a `__ManagedMemoryCursor` field holds a raw rdata pointer; decref'ing
 	// its "prior occupant" faulted in the image), so slot ownership must be
 	// decided where the field's declared type is known.
-	var pos = storePos
-	while pos > 0 'scanBack'
-		pos = pos - 1
-		let opIdx = try storeBlock.opRefs.get(pos) otherwise panic("storeIsFieldOverwrite: opRefs.get({pos}) failed despite pos < storePos")
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("storeIsFieldOverwrite: opIdx not in module.ops")
-		let loadResult = fieldLoadResultId(op, addrId: addrId, offset: offset)
-		if loadResult != REFCOUNT_NO_VALUE 'priorLoad'
-			if contiguousDecrefOldCountsAsRelease 'countsAsRelease'
-				return true
-			end 'countsAsRelease'
-			return not loadFeedsOnlyDecrefOldHelper(ctx, block: storeBlock, loadResultId: loadResult)
-		end 'priorLoad'
-	end 'scanBack'
+	let sites = fieldLoadSitesFor(ctx, addrId: addrId, offset: offset)
 
-	if hasMatchingLoadInDominatingBlock(ctx, storeBlockId: storeBlock.id, addrId: addrId, offset: offset) 'dominating'
+	var nearestResultId = REFCOUNT_NO_VALUE
+	for site in sites 'findNearest'
+		if site.blockId == storeBlock.id and site.pos < storePos 'priorInBlock'
+			// Sites of one block are recorded in ascending position order, so the
+			// last match is the nearest load below the store.
+			nearestResultId = site.resultId
+		end 'priorInBlock'
+	end 'findNearest'
+
+	if nearestResultId != REFCOUNT_NO_VALUE 'priorLoad'
+		if contiguousDecrefOldCountsAsRelease 'countsAsRelease'
+			return true
+		end 'countsAsRelease'
+		return not loadFeedsOnlyDecrefOldHelper(ctx, block: storeBlock, loadResultId: nearestResultId)
+	end 'priorLoad'
+
+	if hasMatchingLoadInDominatingBlock(ctx, storeBlockId: storeBlock.id, sites: sites) 'dominating'
 		return true
 	end 'dominating'
 
@@ -3280,36 +3477,15 @@ function storeIsFieldOverwrite(ctx RcContext, storeBlock IrBlock, addrId ValueId
 	return ctx.isParam(addrId) or ctx.func.isValueInlinedArg(addrId)
 end 'storeIsFieldOverwrite'
 
-// The result ValueId of `op` if it is a `load_indirect` of `[addrId + offset]` (same
-// base SSA value and same offset; width/sign/float tags are irrelevant — any read of
-// the field address proves the field was initialized), else REFCOUNT_NO_VALUE. Callers
-// inspect the loaded value's consumers, e.g. to tell a genuine prior-occupant read from
-// a lowering-emitted decref-old sequence (`loadFeedsOnlyDecrefOldHelper`).
-function fieldLoadResultId(op StdOp, addrId ValueId, offset MachineWord) returns ValueId
-	return match op 'dispatch'
-		system(s) gives sysFieldLoadResultId(s, addrId: addrId, offset: offset)
-		arith gives REFCOUNT_NO_VALUE
-		control gives REFCOUNT_NO_VALUE
-		call gives REFCOUNT_NO_VALUE
-		memory gives REFCOUNT_NO_VALUE
-	end 'dispatch'
-end 'fieldLoadResultId'
-
-function sysFieldLoadResultId(s StdSystemOp, addrId ValueId, offset MachineWord) returns ValueId
-	return match s 'check'
-		loadIndirect(resultId, loadAddrId, loadOffset, _, _, _) gives (resultId if (loadAddrId == addrId and loadOffset == offset) else REFCOUNT_NO_VALUE)
-		globalAddr to loadByte gives REFCOUNT_NO_VALUE
-		osExit to osWrite gives REFCOUNT_NO_VALUE
-		free gives REFCOUNT_NO_VALUE
-		osWriteErr to loadFramePtr gives REFCOUNT_NO_VALUE
-		funcAddr gives REFCOUNT_NO_VALUE
-		storeIndirect gives REFCOUNT_NO_VALUE
-		drop gives REFCOUNT_NO_VALUE
-		osAllocPages to osDirMkdir gives REFCOUNT_NO_VALUE
-		atomicInc to osLockRelease gives REFCOUNT_NO_VALUE
-		boxValue to dropTypeParam gives REFCOUNT_NO_VALUE
-	end 'check'
-end 'sysFieldLoadResultId'
+// The recorded `load_indirect` sites of `[addrId + offset]` (same base SSA
+// value and same offset; width/sign/float tags are irrelevant — any read of
+// the field address proves the field was initialized), in discovery order, or
+// the shared empty array for a never-loaded field. Callers inspect a site's
+// loaded value's consumers, e.g. to tell a genuine prior-occupant read from a
+// lowering-emitted decref-old sequence (`loadFeedsOnlyDecrefOldHelper`).
+function fieldLoadSitesFor(ctx RcContext, addrId ValueId, offset MachineWord) returns FieldLoadSiteArray
+	return try ctx.fieldLoadIndex.get(storedFieldKey(addrId, offset: offset)) otherwise EMPTY_FIELD_LOAD_SITES
+end 'fieldLoadSitesFor'
 
 // True iff `loadResultId` is consumed within `block` by a `__mm_decref_maybenull_helper`
 // call — the signature of `lowerFieldStore`'s synth-overwrite decref-old sequence
@@ -3343,40 +3519,31 @@ function callIsDecrefOldHelperOf(c StdCallOp, argId ValueId) returns bool
 	end 'check'
 end 'callIsDecrefOldHelperOf'
 
-// True iff some OTHER block that STRICTLY DOMINATES `storeBlockId` contains a
-// `load_indirect` of the same field. The store's own block is excluded here
-// (the within-block case is handled positionally by `hasMatchingLoadWithinBlock`
-// — a load LATER in the store's block does not dominate the store, so scanning
-// the whole block here would be unsound).
-function hasMatchingLoadInDominatingBlock(ctx RcContext, storeBlockId BlockId, addrId ValueId, offset MachineWord) returns bool
-	for blockRef in ctx.func.blockRefs 'eachBlock'
-		let block = try ctx.module.blocks.get(blockRef) otherwise panic("hasMatchingLoadInDominatingBlock: blockRef not in module.blocks")
-		if block.id == storeBlockId 'sameBlock'
+// True iff some OTHER block that STRICTLY DOMINATES `storeBlockId` holds one of
+// this field's recorded load sites (`sites` — the caller's `fieldLoadSitesFor`
+// result) that is a GENUINE prior-occupant read (NOT a lowering-emitted
+// decref-old sequence, which has already released its occupant). The store's
+// own block is excluded here (the within-block case is handled positionally by
+// the caller's nearest-prior-load check — a load LATER in the store's block
+// does not dominate the store, so counting the whole block here would be
+// unsound). Site discovery order equals the former all-blocks rescan's visit
+// order (blockRefs walk, then op position), and the predicate is pure, so the
+// first genuine hit yields the same answer.
+function hasMatchingLoadInDominatingBlock(ctx RcContext, storeBlockId BlockId, sites FieldLoadSiteArray) returns bool
+	for site in sites 'eachSite'
+		if site.blockId == storeBlockId 'sameBlock'
 			continue
 		end 'sameBlock'
-		if not dominates(block.id, b: storeBlockId, domInfo: ctx.domInfo) 'notDominator'
+		if not dominates(site.blockId, b: storeBlockId, domInfo: ctx.domInfo) 'notDominator'
 			continue
 		end 'notDominator'
-		if blockHasMatchingLoad(ctx, block: block, addrId: addrId, offset: offset) 'found'
+		let siteBlock = try ctx.module.blocks.get(site.blockRef) otherwise panic("hasMatchingLoadInDominatingBlock: site.blockRef not in module.blocks")
+		if not loadFeedsOnlyDecrefOldHelper(ctx, block: siteBlock, loadResultId: site.resultId) 'genuine'
 			return true
-		end 'found'
-	end 'eachBlock'
+		end 'genuine'
+	end 'eachSite'
 	return false
 end 'hasMatchingLoadInDominatingBlock'
-
-// True iff any body op in `block` is a `load_indirect` of `[addrId + offset]` that is
-// a GENUINE prior-occupant read (NOT a lowering-emitted decref-old sequence, which has
-// already released its occupant — see `hasMatchingLoadWithinBlock`).
-function blockHasMatchingLoad(ctx RcContext, block IrBlock, addrId ValueId, offset MachineWord) returns bool
-	for opIdx in block.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("blockHasMatchingLoad: opIdx not in module.ops")
-		let loadResult = fieldLoadResultId(op, addrId: addrId, offset: offset)
-		if loadResult != REFCOUNT_NO_VALUE and not loadFeedsOnlyDecrefOldHelper(ctx, block: block, loadResultId: loadResult) 'match'
-			return true
-		end 'match'
-	end 'eachOp'
-	return false
-end 'blockHasMatchingLoad'
 
 // ============================================================
 // Return increfs (param returned → hand caller a fresh +1)
@@ -5082,17 +5249,90 @@ end 'isInBlockDeathPoint'
 // direct later read) handed the callee the minted +1 instead; the original is
 // still owed its death-point release, so it does not suppress.
 function valueConsumedEarlierInBlock(ctx RcContext, block IrBlock, liveAfter StdLiveAfter, beforePos NodeIndex, vid ValueId) returns bool
-	var p = 0
-	while p < beforePos 'scan'
-		let earlierIdx = try block.opRefs.get(p) otherwise panic("valueConsumedEarlierInBlock: opRefs.get({p}) failed despite p < beforePos")
-		let earlierOp = try ctx.module.ops.get(earlierIdx) otherwise panic("valueConsumedEarlierInBlock: opIdx not in module.ops")
-		if opUnconditionallyConsumesOperand(ctx, op: earlierOp, argId: vid) 'consumed'
-			return not consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: block, pos: p, argId: vid)
-		end 'consumed'
-		p = p + 1
-	end 'scan'
+	// The per-block table records each vid's FIRST unconditional consume over
+	// the WHOLE block; a recorded position at/after `beforePos` therefore means
+	// no consume exists in the [0, beforePos) prefix either — exactly the
+	// former prefix scan's miss. `consumedArgRetainedPastOp` stays evaluated
+	// lazily at query time, exactly as the scan evaluated it at its hit.
+	let sites = uncondConsumeSitesFor(ctx, block: block)
+	for site in sites 'eachSite'
+		if site.vid == vid 'hit'
+			if site.pos >= beforePos 'afterWindow'
+				return false
+			end 'afterWindow'
+			return not consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: block, pos: site.pos, argId: vid)
+		end 'hit'
+	end 'eachSite'
 	return false
 end 'valueConsumedEarlierInBlock'
+
+// The first-unconditional-consume table for `block` (see `UncondConsumeSite`),
+// computed once and cached by block.id — the same lazy pattern as
+// `blockLiveAfterFor`, and safe for the same reason (the planning sweeps all
+// query the read-only pre-edit IR). A block outside the pre-sized window falls
+// back to a direct build so correctness never depends on the cache.
+function uncondConsumeSitesFor(ctx RcContext, block IrBlock) returns UncondConsumeSiteArray
+	let bid = block.id
+	if bid >= 0 and bid < ctx.uncondConsumeSitePresent.count() 'inRange'
+		let present = try ctx.uncondConsumeSitePresent.get(bid) otherwise false
+		if present 'cached'
+			return try ctx.uncondConsumeSiteCache.get(bid) otherwise panic("uncondConsumeSitesFor: present set but cache.get({bid}) OOB")
+		end 'cached'
+		let built = buildUncondConsumeSites(ctx, block: block)
+		try ctx.uncondConsumeSiteCache.set(bid, value: built) otherwise panic("uncondConsumeSitesFor: cache.set({bid}) OOB despite bound check")
+		try ctx.uncondConsumeSitePresent.set(bid, value: true) otherwise panic("uncondConsumeSitesFor: present.set({bid}) OOB despite bound check")
+		return built
+	end 'inRange'
+
+	return buildUncondConsumeSites(ctx, block: block)
+end 'uncondConsumeSitesFor'
+
+// One forward walk of `block` recording, per value, the FIRST body-op position
+// that unconditionally consumes it. Enumerating only each op's READ operands is
+// equivalent to the former scan's `opUnconditionallyConsumesOperand(op, vid)`
+// over every (op, vid) pair: all four unconditional dispositions
+// (container-mutator arg / intrinsic consumer / transparent wrap / type-param
+// sink) test `argId` against specific operand positions of the op — a call's
+// argIds, a `store_indirect`/`box_value`'s stored value — every one of which
+// `extractStdOpOperandsInto` reports as a read, so the predicate is false for
+// any vid that is not a read operand of the op.
+function buildUncondConsumeSites(ctx RcContext, block IrBlock) returns UncondConsumeSiteArray
+	var sites = UncondConsumeSiteArray.create()
+	var scratch = StdOpOperands.create()
+
+	var pos = 0
+	for opIdx in block.opRefs 'eachOp'
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("buildUncondConsumeSites: opIdx not in module.ops")
+		extractStdOpOperandsInto(op, operands: scratch)
+
+		for readId in scratch.readIds 'eachRead'
+			// First-match-wins: a vid already recorded keeps its earlier position,
+			// exactly like the former forward prefix scan.
+			if uncondConsumeSiteRecorded(sites, vid: readId) 'alreadyRecorded'
+				continue
+			end 'alreadyRecorded'
+			if opUnconditionallyConsumesOperand(ctx, op: op, argId: readId) 'consumes'
+				sites.push(UncondConsumeSite.create(readId, pos: pos as NodeIndex))
+			end 'consumes'
+		end 'eachRead'
+
+		pos = pos + 1
+	end 'eachOp'
+
+	return sites
+end 'buildUncondConsumeSites'
+
+// True iff `vid` already has a recorded first-consume site. The site lists are
+// tiny (a handful of consuming ops per block), so a linear probe beats a
+// value-id-space table per block.
+function uncondConsumeSiteRecorded(sites UncondConsumeSiteArray, vid ValueId) returns bool
+	for site in sites 'each'
+		if site.vid == vid 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'uncondConsumeSiteRecorded'
 
 // The UNCONDITIONAL subset of `opTransferDisposition`'s move kinds: ones whose
 // consume does not depend on the op being the value's last use.
@@ -5711,14 +5951,18 @@ end 'valueConsumedByTryCallOnSuccessEdgeInto'
 // its SUCCESS (non-throw) target. The two facts together mean `vid`'s +1 left via the
 // callee precisely on the edge into `successBlockId`.
 function tryCallArgConsumedReachingSuccess(ctx RcContext, predBlock IrBlock, successBlockId BlockId, vid ValueId) returns bool
+	// Only a tryCall/witnessTryCall op can satisfy `opIsTryCallTransferringArg`,
+	// so probing the block's collected tryCall sites (in op order) finds the
+	// same first hit the former every-op scan did.
 	var foundConsumingTry = false
-	for opIdx in predBlock.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("tryCallArgConsumedReachingSuccess: opIdx not in module.ops")
+	let sites = tryCallSitesFor(ctx, block: predBlock)
+	for site in sites 'eachSite'
+		let op = try ctx.module.ops.get(site.opIdx) otherwise panic("tryCallArgConsumedReachingSuccess: site.opIdx not in module.ops")
 		if opIsTryCallTransferringArg(ctx, op: op, argId: vid) 'consumingTry'
 			foundConsumingTry = true
 			break
 		end 'consumingTry'
-	end 'eachOp'
+	end 'eachSite'
 	if not foundConsumingTry 'noConsumingTry'
 		return false
 	end 'noConsumingTry'
@@ -5771,34 +6015,19 @@ end 'tryCallTransferringArgSuccessBlock'
 // The error-flag ValueId of the `tryCall` in `block` that TRANSFERS `argId` as a
 // consumed argument, or `REFCOUNT_NO_VALUE`. The tryCall's two SSA defs are its result
 // and its error flag; here we key off the consumed ARGUMENT instead of the result.
+// Consults only the block's collected tryCall sites (in op order, so the FIRST
+// transferring tryCall wins exactly as the former full-block scan's first hit
+// did) instead of re-matching every op per query.
 function tryCallErrorFlagForTransferredArg(ctx RcContext, block IrBlock, argId ValueId) returns ValueId
-	for opIdx in block.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("tryCallErrorFlagForTransferredArg: opIdx not in module.ops")
+	let sites = tryCallSitesFor(ctx, block: block)
+	for site in sites 'eachSite'
+		let op = try ctx.module.ops.get(site.opIdx) otherwise panic("tryCallErrorFlagForTransferredArg: site.opIdx not in module.ops")
 		if opIsTryCallTransferringArg(ctx, op: op, argId: argId) 'transferringTry'
-			return tryCallErrorFlagOf(op)
+			return site.errorFlagId
 		end 'transferringTry'
-	end 'eachOp'
+	end 'eachSite'
 	return REFCOUNT_NO_VALUE
 end 'tryCallErrorFlagForTransferredArg'
-
-// The error-flag SSA id of a `tryCall`/`witnessTryCall` op, or `REFCOUNT_NO_VALUE` for
-// any other op shape.
-function tryCallErrorFlagOf(op StdOp) returns ValueId
-	return match op 'dispatch'
-		call(c) gives match c 'inner'
-			tryCall(_, _, _, errorFlagId) gives errorFlagId
-			witnessTryCall(_, _, _, _, _, errorFlagId) gives errorFlagId
-			ret gives REFCOUNT_NO_VALUE
-			call gives REFCOUNT_NO_VALUE
-			indirectCall to witnessCall gives REFCOUNT_NO_VALUE
-			funcRef to errorReturn gives REFCOUNT_NO_VALUE
-		end 'inner'
-		arith gives REFCOUNT_NO_VALUE
-		control gives REFCOUNT_NO_VALUE
-		memory gives REFCOUNT_NO_VALUE
-		system gives REFCOUNT_NO_VALUE
-	end 'dispatch'
-end 'tryCallErrorFlagOf'
 
 // The SUCCESS-edge BlockId for a `tryCall` whose result is `resultId` defined in
 // `block`, or `REFCOUNT_NO_VALUE` if `resultId` is not a tryCall result in `block`.
@@ -5856,34 +6085,18 @@ end 'errorFlagSuccessTarget'
 
 // The error-flag ValueId of a `tryCall` in `block` whose result is `resultId`, or
 // `REFCOUNT_NO_VALUE` if no such tryCall exists. The tryCall result and error flag
-// are the two SSA defs of a `func.try_call` op.
+// are the two SSA defs of a `func.try_call` op. Consults the block's collected
+// tryCall sites (a result id has a single def, so at most one site matches)
+// instead of re-matching every op per query.
 function tryCallErrorFlagForResult(ctx RcContext, block IrBlock, resultId ValueId) returns ValueId
-	for opIdx in block.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("tryCallErrorFlagForResult: opIdx not in module.ops")
-		let flag = tryCallErrorFlagIfResult(op, resultId: resultId)
-		if flag != REFCOUNT_NO_VALUE 'hit'
-			return flag
+	let sites = tryCallSitesFor(ctx, block: block)
+	for site in sites 'eachSite'
+		if site.resultId == resultId 'hit'
+			return site.errorFlagId
 		end 'hit'
-	end 'eachOp'
+	end 'eachSite'
 	return REFCOUNT_NO_VALUE
 end 'tryCallErrorFlagForResult'
-
-function tryCallErrorFlagIfResult(op StdOp, resultId ValueId) returns ValueId
-	return match op 'dispatch'
-		call(c) gives match c 'inner'
-			tryCall(r, _, _, errorFlagId) gives (errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
-			witnessTryCall(r, _, _, _, _, errorFlagId) gives (errorFlagId if r == resultId else REFCOUNT_NO_VALUE)
-			ret gives REFCOUNT_NO_VALUE
-			call gives REFCOUNT_NO_VALUE
-			indirectCall to witnessCall gives REFCOUNT_NO_VALUE
-			funcRef to errorReturn gives REFCOUNT_NO_VALUE
-		end 'inner'
-		arith gives REFCOUNT_NO_VALUE
-		control gives REFCOUNT_NO_VALUE
-		memory gives REFCOUNT_NO_VALUE
-		system gives REFCOUNT_NO_VALUE
-	end 'dispatch'
-end 'tryCallErrorFlagIfResult'
 
 // True iff `cf` is a `condBr` whose THROW (error) target is `succId`. Polarity-aware:
 // for a `flag != 0` condition the throw target is THEN; for a `flag == 0` condition
@@ -6483,22 +6696,61 @@ end 'edgeValueCarriesPlusOne'
 // Apply all queued body-op insertions. Insertions for one block are applied in
 // DESCENDING position order so an earlier insert never shifts the index of a
 // later one. Positions were all computed against the original op list.
+//
+// The queue is bucketed by blockRef in ONE pass up front (offset-indexed dense
+// buckets over the [min, max] blockRef span of the queue — this function's
+// blockRefs are near-contiguous, so the span is about the block count, not the
+// module's). A single forward fill preserves each bucket's relative queue
+// order, which `sortInsertionsDescending`'s stability REQUIRES (equal-key
+// entries keep queue order — see its comment). The former per-block rescan of
+// the whole queue made plan application O(blocks × insertions).
 function applyPlans(ctx RcContext)
-	// Group by blockRef. blockRefs are dense small integers; a per-blockRef
-	// bucket list keeps this O(n) without a map.
+	if ctx.insertions.count() == 0 'nothingQueued'
+		return
+	end 'nothingQueued'
+
+	let firstIns = try ctx.insertions.get(0) otherwise panic("applyPlans: insertions non-empty but get(0) failed")
+	var minRef = firstIns.blockRef
+	var maxRef = firstIns.blockRef
+	for ins in ctx.insertions 'measure'
+		if ins.blockRef < minRef 'lower'
+			minRef = ins.blockRef
+		end 'lower'
+		if ins.blockRef > maxRef 'higher'
+			maxRef = ins.blockRef
+		end 'higher'
+	end 'measure'
+
+	var buckets = RcInsertionBucketArray.create()
+	var slot = minRef
+	while slot <= maxRef 'presizeBuckets'
+		buckets.push(RcInsertionArray.create())
+		slot = slot + 1
+	end 'presizeBuckets'
+
+	for ins in ctx.insertions 'bucket'
+		var bucket = try buckets.get(ins.blockRef - minRef) otherwise panic("applyPlans: bucket for blockRef {ins.blockRef} OOB despite [min, max] sizing")
+		bucket.push(ins)
+	end 'bucket'
+
+	// Same per-block application order as the former rescan: walk the
+	// function's blockRefs and apply each block's bucket. An insertion whose
+	// blockRef is not in func.blockRefs stays unapplied — exactly as the old
+	// rescan (which only visited func.blockRefs) left it.
 	for blockRef in ctx.func.blockRefs 'eachBlock'
-		applyPlansForBlock(ctx, blockRef: blockRef)
+		if blockRef < minRef or blockRef > maxRef 'noBucket'
+			continue
+		end 'noBucket'
+		var mine = try buckets.get(blockRef - minRef) otherwise panic("applyPlans: bucket for blockRef {blockRef} OOB despite range check")
+		applyPlansForBlock(ctx, blockRef: blockRef, mine: mine)
 	end 'eachBlock'
 end 'applyPlans'
 
-function applyPlansForBlock(ctx RcContext, blockRef BlockRef)
-	// Collect this block's insertions.
-	var mine = RcInsertionArray.create()
-	for ins in ctx.insertions 'collect'
-		if ins.blockRef == blockRef 'match'
-			mine.push(ins)
-		end 'match'
-	end 'collect'
+typealias RcInsertionBucketArray = Array with RcInsertionArray
+
+// Apply one block's queued insertions (`mine` — this block's bucket, in queue
+// order).
+function applyPlansForBlock(ctx RcContext, blockRef BlockRef, mine RcInsertionArray)
 	if mine.count() == 0 'none'
 		return
 	end 'none'

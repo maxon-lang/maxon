@@ -183,31 +183,47 @@ export type StdOpOperands
 	end 'clear'
 end 'StdOpOperands'
 
-// Per-op-position liveness within a single block. `liveAfterBody[i]` is the
-// set of values live immediately after body op `i` (0-based into
-// block.opRefs). `liveBeforeBody[i]` is the set live immediately before it.
-// `liveAfterBody[last]` is the block's liveOut minus the terminator's own
-// effect; `liveBeforeBody[0]` is liveIn. Built by `computeBlockLiveAfter`.
+// Per-op-position liveness within a single block, stored as ONE array of
+// opCount+1 BOUNDARY snapshots: `snapshots[i]` is the set live immediately
+// BEFORE body op `i` (0-based into block.opRefs), and `snapshots[opCount]` is
+// the set live after the last body op (the block's liveOut minus the
+// terminator's own effect). The before/after views the consumers query are two
+// offsets into the same array — live-AFTER op `i` IS live-BEFORE op `i+1`
+// (nothing executes between adjacent body ops), so the former separate
+// liveBeforeBody/liveAfterBody arrays duplicated every interior snapshot; the
+// single boundary array halves the per-op set allocations and copies.
+// `snapshots[0]` is liveIn. Built by `computeBlockLiveAfter`.
 export type StdLiveAfter
-	export var liveBeforeBody as StdLiveSetArray
-	export var liveAfterBody as StdLiveSetArray
+	export var snapshots as StdLiveSetArray
 	export var maxValueId as ValueId
 
-	export static function create(liveBeforeBody StdLiveSetArray, liveAfterBody StdLiveSetArray, maxValueId ValueId) returns StdLiveAfter
-		return Self{liveBeforeBody: liveBeforeBody, liveAfterBody: liveAfterBody, maxValueId: maxValueId}
+	export static function create(snapshots StdLiveSetArray, maxValueId ValueId) returns StdLiveAfter
+		return Self{snapshots: snapshots, maxValueId: maxValueId}
 	end 'create'
 
 	// Is `vid` live immediately AFTER the body op at `opPosition`? If a
 	// value's last use IS that op, it is live BEFORE but not AFTER — the
-	// inserter places the decref right after this op.
+	// inserter places the decref right after this op. The guard mirrors the
+	// former per-array bounds behavior: valid body positions are
+	// [0, opCount-1] (= snapshots.count() - 1 entries); anything past that
+	// answers false, exactly as the old liveAfterBody.get miss did.
 	export function isLiveAfterBodyOp(opPosition NodePos, vid ValueId) returns bool
-		let set = try self.liveAfterBody.get(opPosition) otherwise return false
+		if opPosition + 1 >= self.snapshots.count() 'outOfRange'
+			return false
+		end 'outOfRange'
+		let set = try self.snapshots.get(opPosition + 1) otherwise panic("StdLiveAfter.isLiveAfterBodyOp: snapshots.get({opPosition + 1}) failed despite bound check")
 		return set.contains(vid)
 	end 'isLiveAfterBodyOp'
 
-	// Is `vid` live immediately BEFORE the body op at `opPosition`?
+	// Is `vid` live immediately BEFORE the body op at `opPosition`? Same valid
+	// range as `isLiveAfterBodyOp`: the boundary entry at snapshots[opCount]
+	// is only reachable through the AFTER view (the old liveBeforeBody had no
+	// opCount entry, so a query at opCount answered false and still does).
 	export function isLiveBeforeBodyOp(opPosition NodePos, vid ValueId) returns bool
-		let set = try self.liveBeforeBody.get(opPosition) otherwise return false
+		if opPosition + 1 >= self.snapshots.count() 'outOfRange'
+			return false
+		end 'outOfRange'
+		let set = try self.snapshots.get(opPosition) otherwise panic("StdLiveAfter.isLiveBeforeBodyOp: snapshots.get({opPosition}) failed despite bound check")
 		return set.contains(vid)
 	end 'isLiveBeforeBodyOp'
 end 'StdLiveAfter'
@@ -371,7 +387,7 @@ function buildBorrowInfo(module StdModule, func IrFunction, maxVal ValueId, domI
 	return BorrowInfo.create(baseOf)
 end 'buildBorrowInfo'
 
-typealias FieldKey = int(i64.min to i64.max)
+export typealias FieldKey = int(i64.min to i64.max)
 
 // A `store_indirect` site: the field it targets (`key`) and its location (block +
 // intra-block position), so a snapshot load can test whether an overwrite of its
@@ -391,8 +407,9 @@ typealias StoreLocArray = Array with StoreLoc
 // Allocation-free identity key for a `(base SSA value, field offset)` load/store
 // target: the base id in the high 32 bits, the field offset in the low 32. Both
 // fit comfortably (SSA ids and field offsets are far under 2^32), so distinct
-// pairs never collide.
-function storedFieldKey(addrId ValueId, offset MachineWord) returns FieldKey
+// pairs never collide. Exported: the refcount inserter keys its per-function
+// field-load index (`storeIsFieldOverwrite`) with the same packing.
+export function storedFieldKey(addrId ValueId, offset MachineWord) returns FieldKey
 	return (addrId shl 32) or (offset and 0xFFFFFFFF)
 end 'storedFieldKey'
 
@@ -1768,11 +1785,15 @@ end 'valueIdArrayContains'
 
 // Compute per-op-position liveness inside one block by seeding the dataflow
 // at liveOut[block] and walking backward through the terminator and then the
-// body ops. For body op at index i:
-//   liveAfterBody[i]  = the live set entering this op from below
-//   liveBeforeBody[i] = liveAfterBody[i] minus this op's defs, plus its uses
+// body ops, snapshotting the running set at every op BOUNDARY:
+//   snapshots[opCount] = the set after the last body op (post-terminator seed)
+//   snapshots[i]       = the set immediately before body op i
+//                        (= snapshots[i+1] minus op i's defs, plus its uses)
 // The terminator's uses (branch args + condBr condition) are applied first so
-// they are already reflected by the time we reach the last body op.
+// they are already reflected by the time we reach the last body op. One
+// snapshot per boundary — the before/after views are adjacent entries of the
+// same array (see `StdLiveAfter`), so the walk copies the running set ONCE per
+// op instead of the former identical-twin before/after pair.
 export function computeBlockLiveAfter(module StdModule, block IrBlock, liveness StdLivenessInfo) returns StdLiveAfter
 	let maxVal = liveness.maxValueId
 
@@ -1793,42 +1814,43 @@ export function computeBlockLiveAfter(module StdModule, block IrBlock, liveness 
 	end 'hasTerm'
 
 	let opCount = block.opRefs.count()
-	var liveBefore = StdLiveSetArray.create()
-	var liveAfter = StdLiveSetArray.create()
+	var snapshots = StdLiveSetArray.create()
 
-	// Pre-size both arrays so we can fill them back-to-front by index.
+	// Pre-size (opCount + 1 boundaries) so the backward walk fills by index.
 	var fill = 0
-	while fill < opCount 'preSize'
-		liveBefore.push(StdLiveSet.create(maxVal))
-		liveAfter.push(StdLiveSet.create(maxVal))
+	while fill <= opCount 'preSize'
+		snapshots.push(StdLiveSet.create(maxVal))
 		fill = fill + 1
 	end 'preSize'
 
-	// Walk body ops from last to first. At each position, snapshot the
-	// after-set, apply the op backward, then snapshot the before-set.
+	// The bottom boundary: live after the last body op. Each snapshot is an
+	// independent copy of the running set (union into a fresh set), so later
+	// kill steps never mutate an already-taken snapshot.
+	var bottomSet = try snapshots.get(opCount) otherwise panic("computeBlockLiveAfter: snapshots.get({opCount}) failed despite pre-size")
+	_ = stdLiveSetUnionInto(bottomSet, from: running)
+
+	// Walk body ops from last to first: apply the op backward, then snapshot
+	// the boundary ABOVE it (live-before this op = live-after the previous).
 	var pos = opCount - 1
 	while pos >= 0 'eachOpBackward'
 		let opIdx = try block.opRefs.get(pos) otherwise panic("computeBlockLiveAfter: opRefs.get({pos}) failed despite pos < count")
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 
-		var afterSet = try liveAfter.get(pos) otherwise panic("computeBlockLiveAfter: liveAfter.get({pos}) failed despite pre-size")
-		_ = stdLiveSetUnionInto(afterSet, from: running)
-
 		applyOpBackwardInto(op, running: running, borrows: liveness.borrows, scratch: scratch)
 
-		var beforeSet = try liveBefore.get(pos) otherwise panic("computeBlockLiveAfter: liveBefore.get({pos}) failed despite pre-size")
-		_ = stdLiveSetUnionInto(beforeSet, from: running)
+		var boundarySet = try snapshots.get(pos) otherwise panic("computeBlockLiveAfter: snapshots.get({pos}) failed despite pre-size")
+		_ = stdLiveSetUnionInto(boundarySet, from: running)
 
 		pos = pos - 1
 	end 'eachOpBackward'
 
-	return StdLiveAfter.create(liveBefore, liveAfterBody: liveAfter, maxValueId: maxVal)
+	return StdLiveAfter.create(snapshots, maxValueId: maxVal)
 end 'computeBlockLiveAfter'
 
 // Backward transfer for one op on the running live set: a defined value is no
 // longer live above the op (remove), and each used value becomes live above
-// it (add). Removal is modelled by rebuilding the set without the defs, since
-// StdLiveSet is add-only. Reads are expanded with their interior-borrow bases so
+// it (add). Removal uses the kill step `removeFromLiveSet` (StdLiveSet is
+// otherwise add-only). Reads are expanded with their interior-borrow bases so
 // a base stays live above any op that reads a pointer borrowed out of it — the
 // UAF fix carried into the per-op-position liveness the inserter queries.
 //
@@ -1851,8 +1873,7 @@ function applyOpBackwardInto(op StdOp, running StdLiveSet, borrows BorrowInfo, s
 	extractStdOpOperandsInto(op, operands: scratch)
 
 	// Remove defs: a value defined here is dead above this op (its
-	// definition point). Rebuild `running.members` excluding the defs and
-	// clear their bits.
+	// definition point) — clear its bit and drop it from `running.members`.
 	for d in scratch.writeIds 'eachDef'
 		removeFromLiveSet(running, vid: d)
 	end 'eachDef'
@@ -1868,7 +1889,18 @@ end 'applyOpBackwardInto'
 // Remove a single value from a StdLiveSet (clear its bit and drop it from the
 // sparse member list). StdLiveSet is normally monotonic, but the within-block
 // backward scan needs a kill step at each def, so this local mutation is
-// confined to `computeBlockLiveAfter`.
+// confined to `computeBlockLiveAfter` (and the terminator-only
+// `applyOpBackward` callers, whose ops define nothing and so never reach it).
+//
+// The removal is an IN-PLACE left shift (find, shift the tail down one, pop)
+// rather than the former rebuild-into-a-fresh-array, which allocated and
+// copied the whole member list for EVERY def in the backward walk. The shift
+// deliberately preserves member ORDER, not just set membership: the planners
+// that iterate `members` for release EMISSION (`planTerminatorDeaths` /
+// `planEdgeDeaths`) only ever see sets this kill step never touches (the
+// fixpoint liveIn/liveOut sets and the terminator-seeded set are add-only),
+// but order-preservation makes that a non-dependency — the compiler's output
+// order cannot change regardless of which set a future caller iterates.
 function removeFromLiveSet(set StdLiveSet, vid ValueId)
 	let present = try set.bits.get(vid) otherwise false
 	if not present 'notPresent'
@@ -1877,13 +1909,29 @@ function removeFromLiveSet(set StdLiveSet, vid ValueId)
 
 	try set.bits.set(vid, value: false) otherwise panic("removeFromLiveSet: bits.set({vid}) OOB")
 
-	var rebuilt = ValueIdArray.create()
-	for m in set.members 'each'
-		if m != vid 'keep'
-			rebuilt.push(m)
-		end 'keep'
-	end 'each'
-	set.members = rebuilt
+	let memberCount = set.members.count()
+	var idx = 0
+	while idx < memberCount 'find'
+		let m = try set.members.get(idx) otherwise panic("removeFromLiveSet: members.get({idx}) OOB despite idx < count")
+		if m == vid 'hit'
+			break
+		end 'hit'
+		idx = idx + 1
+	end 'find'
+
+	if idx >= memberCount 'notInMembers'
+		// bits and members are updated in lockstep by `add`, so a set bit without
+		// a member entry is a broken invariant, never a benign miss.
+		panic("removeFromLiveSet: vid {vid} present in bits but missing from members")
+	end 'notInMembers'
+
+	while idx + 1 < memberCount 'shiftLeft'
+		let next = try set.members.get(idx + 1) otherwise panic("removeFromLiveSet: members.get({idx + 1}) OOB despite idx + 1 < count")
+		try set.members.set(idx, value: next) otherwise panic("removeFromLiveSet: members.set({idx}) OOB")
+		idx = idx + 1
+	end 'shiftLeft'
+
+	_ = try set.members.pop() otherwise panic("removeFromLiveSet: pop from non-empty members failed")
 end 'removeFromLiveSet'
 
 // ============================================================

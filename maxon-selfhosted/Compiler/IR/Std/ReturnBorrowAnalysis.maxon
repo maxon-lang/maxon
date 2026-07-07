@@ -1088,39 +1088,180 @@ end 'calleeReturnsBorrow'
 // wrapper-forwarded, transient-read-only) each have matching inserter handling
 // for the borrowed class.
 function reclassifyBorrowReturnResults(module StdModule, func IrFunction, project Project)
-	let returned = collectReturnedValues(module, func: func)
+	// Pass 1: collect every borrow-returning call result (defining-op index +
+	// result id). Functions with none — the common case — skip everything below.
+	var results = BorrowCallResultArray.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("reclassifyBorrowReturnResults: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("reclassifyBorrowReturnResults: opIdx not in module.ops")
 			let res = borrowReturningCallResult(op, project: project)
 			if res.present 'borrowResult'
-				// Only a MANAGED result can be a refcounted borrow; a non-managed
-				// (primitive) result ignores the class. A type-parameter result is
-				// managed-at-runtime via its layout, so it is reclassified too.
-				let managed = func.isValueManaged(res.value) or func.isValueTypeParam(res.value)
-				let consumed = resultConsumedByContainer(module, func: func, resultId: res.value, project: project)
-				let forwarded = opCallsBorrowFunction(op, project: project) and valueIdArrayContains(returned, vid: res.value)
-				// THIRD case: a borrow result used ONLY TRANSIENTLY — never stored
-				// (heap field / slot / closure capture), never consumed by a container
-				// mutator, never returned; all uses are plain reads (a compare, a
-				// print, a field load). The default `callReturnRc1` plants a last-use
-				// RELEASE for a +1 the borrow never owned, stripping the container's
-				// own reference off the element (the `Log.fired` scan-loop
-				// over-release: each non-inlined `ArrayIterator.current` read decref'd
-				// the live element to 0 under the still-live array). `borrowed` (no
-				// acquire, no release) is exactly right for a transient read; the
-				// borrow's validity across its uses is the borrow-liveness machinery's
-				// job either way. Stored/captured borrows stay untouched (the measured
-				// `ownership/closure-captures-borrow` regression of a blanket flip).
-				let transientOnly = not valueIdArrayContains(returned, vid: res.value) and not borrowResultIsStoredAnywhere(module, func: func, resultId: res.value)
-				if managed and (consumed or forwarded or transientOnly) 'reclassify'
-					func.setValueOwnership(res.value, cls: OwnershipClass.borrowed)
-				end 'reclassify'
+				results.push(BorrowCallResult.create(opIdx, resultId: res.value))
 			end 'borrowResult'
 		end 'eachOp'
 	end 'eachBlock'
+
+	if results.count() == 0 'noResults'
+		return
+	end 'noResults'
+
+	let returned = collectReturnedValues(module, func: func)
+	// Pass 2: ONE reverse use index over the collected results replaces the former
+	// per-result full-function walks (results x 2 x ops — the analyze-return-borrows
+	// hotspot): each result's consumed/stored probe now scans only the ops that READ
+	// that result. Both probes are pure existence checks (any-use booleans) over
+	// per-op predicates, so visiting a result's uses instead of every op in block
+	// order cannot change their answer — no first-match-site semantics are involved.
+	let useIndex = buildBorrowResultUseIndex(module, func: func, results: results)
+
+	for r in results 'eachResult'
+		let op = try module.ops.get(r.opIdx) otherwise panic("reclassifyBorrowReturnResults: result opIdx not in module.ops")
+		// Only a MANAGED result can be a refcounted borrow; a non-managed
+		// (primitive) result ignores the class. A type-parameter result is
+		// managed-at-runtime via its layout, so it is reclassified too.
+		let managed = func.isValueManaged(r.resultId) or func.isValueTypeParam(r.resultId)
+		let resultUses = useIndex.usesOf(r.resultId)
+		let consumed = resultConsumedByContainer(module, resultUses: resultUses, resultId: r.resultId, project: project)
+		let forwarded = opCallsBorrowFunction(op, project: project) and valueIdArrayContains(returned, vid: r.resultId)
+		// THIRD case: a borrow result used ONLY TRANSIENTLY — never stored
+		// (heap field / slot / closure capture), never consumed by a container
+		// mutator, never returned; all uses are plain reads (a compare, a
+		// print, a field load). The default `callReturnRc1` plants a last-use
+		// RELEASE for a +1 the borrow never owned, stripping the container's
+		// own reference off the element (the `Log.fired` scan-loop
+		// over-release: each non-inlined `ArrayIterator.current` read decref'd
+		// the live element to 0 under the still-live array). `borrowed` (no
+		// acquire, no release) is exactly right for a transient read; the
+		// borrow's validity across its uses is the borrow-liveness machinery's
+		// job either way. Stored/captured borrows stay untouched (the measured
+		// `ownership/closure-captures-borrow` regression of a blanket flip).
+		let transientOnly = not valueIdArrayContains(returned, vid: r.resultId) and not borrowResultIsStoredAnywhere(module, resultUses: resultUses, resultId: r.resultId)
+
+		if managed and (consumed or forwarded or transientOnly) 'reclassify'
+			func.setValueOwnership(r.resultId, cls: OwnershipClass.borrowed)
+		end 'reclassify'
+	end 'eachResult'
 end 'reclassifyBorrowReturnResults'
+
+// A borrow-returning call RESULT discovered in a function body: the defining call
+// op's index and the result's ValueId. Collected in one pass so the reclassification
+// loop revisits each result without re-probing every op, and so the use index is
+// built only for functions that actually have such results.
+type BorrowCallResult
+	export var opIdx as OpIndex
+	export var resultId as ValueId
+
+	export static function create(opIdx OpIndex, resultId ValueId) returns BorrowCallResult
+		return Self{opIdx: opIdx, resultId: resultId}
+	end 'create'
+end 'BorrowCallResult'
+
+typealias BorrowCallResultArray = Array with BorrowCallResult
+
+// 1-based reference into `BorrowResultUseIndex.usesBySlot`; 0 means "not a
+// registered result" (the `ValueDefMap` 0-sentinel idiom, so a zero-filled
+// slot table is the empty index).
+typealias UseSlotRef = int(0 to u64.max)
+typealias UseSlotRefArray = Array with UseSlotRef
+typealias ReadingOpsArray = Array with OpIndexArray
+
+// Reverse index from each registered borrow-returning call result to the body ops
+// that READ it. `slotOf` is flat-indexed by ValueId (dense per function) up to the
+// highest REGISTERED id, so the per-read membership test in the build pass is O(1)
+// and only registered results pay a use list — unregistered values (the vast
+// majority of a function's ids) cost one slot integer at most.
+type BorrowResultUseIndex
+	export var slotOf as UseSlotRefArray
+	export var usesBySlot as ReadingOpsArray
+
+	export static function create() returns BorrowResultUseIndex
+		return Self{slotOf: UseSlotRefArray.create(), usesBySlot: ReadingOpsArray.create()}
+	end 'create'
+
+	// Register `resultId` for use tracking. Idempotent: a duplicate registration
+	// keeps the first slot, so two call ops sharing a result id share one use list
+	// (each op's reclassify decision still evaluates independently).
+	export function register(resultId ValueId)
+		while self.slotOf.count() <= resultId 'grow'
+			self.slotOf.push(0)
+		end 'grow'
+
+		let existing = try self.slotOf.get(resultId) otherwise panic("BorrowResultUseIndex.register: slotOf.get OOB after grow")
+		if existing != 0 'already'
+			return
+		end 'already'
+
+		self.usesBySlot.push(OpIndexArray.create())
+		try self.slotOf.set(resultId, value: self.usesBySlot.count()) otherwise panic("BorrowResultUseIndex.register: slotOf.set OOB after grow")
+	end 'register'
+
+	// Append `opIdx` to `readId`'s use list when `readId` is a registered result;
+	// a no-op otherwise (the common case — most reads are of unregistered values).
+	export function recordRead(readId ValueId, opIdx OpIndex)
+		if readId >= self.slotOf.count() 'unregistered'
+			return
+		end 'unregistered'
+
+		let slot = try self.slotOf.get(readId) otherwise panic("BorrowResultUseIndex.recordRead: slotOf.get OOB despite bound check")
+		if slot == 0 'notResult'
+			return
+		end 'notResult'
+
+		// `usesBySlot.get` yields the slot's list by reference; `push` mutates it in
+		// place, so no write-back `set` is needed (mirrors ParamConsumeAnalysis's
+		// `recordConsumeUses`).
+		var list = try self.usesBySlot.get(slot - 1) otherwise panic("BorrowResultUseIndex.recordRead: usesBySlot.get OOB for live slot")
+		list.push(opIdx)
+	end 'recordRead'
+
+	// The op indices reading `resultId`, in body-walk (block, then op) order;
+	// empty for an unregistered or never-read id.
+	export function usesOf(resultId ValueId) returns OpIndexArray
+		if resultId >= self.slotOf.count() 'unregistered'
+			return OpIndexArray.create()
+		end 'unregistered'
+
+		let slot = try self.slotOf.get(resultId) otherwise panic("BorrowResultUseIndex.usesOf: slotOf.get OOB despite bound check")
+		if slot == 0 'notResult'
+			return OpIndexArray.create()
+		end 'notResult'
+
+		return try self.usesBySlot.get(slot - 1) otherwise panic("BorrowResultUseIndex.usesOf: usesBySlot.get OOB for live slot")
+	end 'usesOf'
+end 'BorrowResultUseIndex'
+
+// Build the use index for the collected results: one O(ops) pass reusing a single
+// `StdOpOperands` scratch (no per-op allocation). It walks exactly the ops the
+// replaced per-result scans visited — `block.opRefs` only. Terminator ops are NOT
+// in `opRefs` (`IrModule.setTerminator` records them solely in `block.terminator`),
+// and the former `resultConsumedByContainer` / `borrowResultIsStoredAnywhere` walks
+// never visited them, so indexing them would widen the scan surface; nothing is
+// missed either — a terminator (ret / branch / errorReturn) is never a store or a
+// direct container-mutator call.
+function buildBorrowResultUseIndex(module StdModule, func IrFunction, results BorrowCallResultArray) returns BorrowResultUseIndex
+	var index = BorrowResultUseIndex.create()
+
+	for r in results 'eachResult'
+		index.register(r.resultId)
+	end 'eachResult'
+
+	var scratch = StdOpOperands.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBorrowResultUseIndex: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildBorrowResultUseIndex: opIdx not in module.ops")
+			extractStdOpOperandsInto(op, operands: scratch)
+			for readId in scratch.readIds 'eachRead'
+				index.recordRead(readId, opIdx: opIdx)
+			end 'eachRead'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return index
+end 'buildBorrowResultUseIndex'
 
 // True iff `op` is a direct/try call to a borrow-returning stdlib FUNCTION (one with
 // a Maxon body, in `funcReturnsBorrow`) — NOT a bodyless borrow intrinsic. This is
@@ -1261,21 +1402,25 @@ function collectReturnedValues(module StdModule, func IrFunction) returns ValueI
 	return returned
 end 'collectReturnedValues'
 
-// True iff any op in `func` STORES `resultId` — into a heap field
-// (`storeIndirect` as the VALUE operand), a stack slot (`storeSlot`, including
-// closure-captured address-taken slots), or a global. A stored borrow escapes
-// into an owner whose teardown expects a real +1, so the transient-read
-// reclassification must not touch it.
-function borrowResultIsStoredAnywhere(module StdModule, func IrFunction, resultId ValueId) returns bool
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("borrowResultIsStoredAnywhere: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("borrowResultIsStoredAnywhere: opIdx not in module.ops")
-			if opStoresValue(op, vid: resultId) 'stored'
-				return true
-			end 'stored'
-		end 'eachOp'
-	end 'eachBlock'
+// True iff any op STORES `resultId` — into a heap field (`storeIndirect` as the
+// VALUE operand), a stack slot (`storeSlot`, including closure-captured
+// address-taken slots), or a global. A stored borrow escapes into an owner whose
+// teardown expects a real +1, so the transient-read reclassification must not
+// touch it.
+//
+// `resultUses` is the result's use list from the per-function
+// `BorrowResultUseIndex`; the store predicate keys exclusively on READ operand
+// positions (`storeSlot`'s value / `storeIndirect`'s value — both in
+// `extractStdOpOperandsInto`'s readIds), so scanning only the reading ops matches
+// every op the former full-function walk could match. Pure existence check —
+// use-visit order cannot affect the answer.
+function borrowResultIsStoredAnywhere(module StdModule, resultUses OpIndexArray, resultId ValueId) returns bool
+	for opIdx in resultUses 'eachUse'
+		let op = try module.ops.get(opIdx) otherwise panic("borrowResultIsStoredAnywhere: opIdx not in module.ops")
+		if opStoresValue(op, vid: resultId) 'stored'
+			return true
+		end 'stored'
+	end 'eachUse'
 	return false
 end 'borrowResultIsStoredAnywhere'
 
@@ -1312,28 +1457,32 @@ function sysOpStoresValue(s StdSystemOp, vid ValueId) returns bool
 	end 'check'
 end 'sysOpStoresValue'
 
-// True iff `resultId` is used anywhere in `func` as a non-self element argument to
-// a CONTAINER MUTATOR call (`Set.insert`/`Map.insert`/`Array.push`/…) — i.e. it is
-// MOVED into a container's element storage. A consumed borrow-returning result is
+// True iff `resultId` is used as a non-self element argument to a CONTAINER
+// MUTATOR call (`Set.insert`/`Map.insert`/`Array.push`/…) — i.e. it is MOVED into
+// a container's element storage. A consumed borrow-returning result is
 // reclassified `borrowed` so the inserter's `planBorrowedElementContainerRetains`
 // makes the container take its own ref.
-function resultConsumedByContainer(module StdModule, func IrFunction, resultId ValueId, project Project) returns bool
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("resultConsumedByContainer: blockRef not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("resultConsumedByContainer: opIdx not in module.ops")
-			// `callConsumesManagedElement` (the inserter's container-mutator consume
-			// recognizer) is the single source of truth for "is this op a container
-			// mutator consuming `resultId` as an element?" — shared here so the
-			// borrow-reclassification narrowing stays in lockstep with the inserter's
-			// `planBorrowedElementContainerRetains` consume set. Both read the same
-			// structural `project.funcParamConsumes` bits computed by
-			// `analyzeParamConsumes` (Concept C).
-			if callConsumesManagedElement(project.funcParamConsumes, op: op, argId: resultId) 'consumed'
-				return true
-			end 'consumed'
-		end 'eachOp'
-	end 'eachBlock'
+//
+// `resultUses` is the result's use list from the per-function
+// `BorrowResultUseIndex`; the consume predicate keys exclusively on `resultId`
+// appearing among a direct call's argIds (all READ operands in
+// `extractStdOpOperandsInto`), so scanning only the reading ops matches every op
+// the former full-function walk could match. Pure existence check — use-visit
+// order cannot affect the answer.
+function resultConsumedByContainer(module StdModule, resultUses OpIndexArray, resultId ValueId, project Project) returns bool
+	for opIdx in resultUses 'eachUse'
+		let op = try module.ops.get(opIdx) otherwise panic("resultConsumedByContainer: opIdx not in module.ops")
+		// `callConsumesManagedElement` (the inserter's container-mutator consume
+		// recognizer) is the single source of truth for "is this op a container
+		// mutator consuming `resultId` as an element?" — shared here so the
+		// borrow-reclassification narrowing stays in lockstep with the inserter's
+		// `planBorrowedElementContainerRetains` consume set. Both read the same
+		// structural `project.funcParamConsumes` bits computed by
+		// `analyzeParamConsumes` (Concept C).
+		if callConsumesManagedElement(project.funcParamConsumes, op: op, argId: resultId) 'consumed'
+			return true
+		end 'consumed'
+	end 'eachUse'
 	return false
 end 'resultConsumedByContainer'
 
