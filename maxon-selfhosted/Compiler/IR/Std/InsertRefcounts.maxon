@@ -482,19 +482,19 @@ function buildBodyScanCaches(ctx RcContext)
 	// later edge-split blocks are never queried by the pre-edit sweeps).
 	var consumePresent = BoolArray.create()
 	consumePresent.resize(ctx.numBlocks)
-	var consumeCache = UncondConsumeSiteTableArray.create()
+	var consumeCache = ConsumeCandidateTableArray.create()
 	var trySites = TryCallSiteTableArray.create()
 	var lac = 0
 	while lac < ctx.numBlocks 'presizeLiveAfter'
 		liveAfterCache.push(emptyStdLiveAfter(ctx.liveness.maxValueId))
-		consumeCache.push(UncondConsumeSiteArray.create())
+		consumeCache.push(ConsumeCandidatePositions.create())
 		trySites.push(TryCallSiteArray.create())
 		lac = lac + 1
 	end 'presizeLiveAfter'
 	ctx.blockLiveAfterCache = liveAfterCache
 	ctx.blockLiveAfterPresent = liveAfterPresent
-	ctx.uncondConsumeSiteCache = consumeCache
-	ctx.uncondConsumeSitePresent = consumePresent
+	ctx.consumeCandidateCache = consumeCache
+	ctx.consumeCandidatePresent = consumePresent
 	ctx.tryCallSitesByBlock = trySites
 
 	// Whole-function field-load index (see `RcContext.fieldLoadIndex`), filled
@@ -973,24 +973,21 @@ end 'RcEdgeRelease'
 
 typealias RcEdgeReleaseArray = Array with RcEdgeRelease
 
-// One first-unconditional-consume record for a block: the earliest body-op
-// position at which `vid`'s +1 was unconditionally consumed
-// (`opUnconditionallyConsumesOperand`). At most one entry per vid per block
-// (first-match-wins, exactly like the per-query prefix scan this replaces).
-type UncondConsumeSite
-	export var vid as ValueId
-	export var pos as NodeIndex
+// Per-block ascending body-op positions whose op COULD unconditionally consume
+// an operand — the ops `valueConsumedEarlierInBlock`'s prefix scan must
+// actually evaluate. Only `call` / `system` / `memory` ops can produce a
+// consuming `opTransferDisposition` (every true arm dispatches on those
+// categories; `arith`/`control` are unconditionally false), so the scan skips
+// the arith/control bulk of a block without evaluating the expensive
+// disposition (String-keyed consume-bit probes) per op. Recording POSITIONS
+// only — never pre-evaluating dispositions per (op, operand) pair — keeps the
+// build cheap even for blocks that are queried once or not at all (an earlier
+// pre-evaluating variant regressed the whole pass by ~7s on the self-build).
+typealias ConsumeCandidatePositions = Array with NodeIndex
 
-	export static function create(vid ValueId, pos NodeIndex) returns UncondConsumeSite
-		return Self{vid: vid, pos: pos}
-	end 'create'
-end 'UncondConsumeSite'
-
-typealias UncondConsumeSiteArray = Array with UncondConsumeSite
-
-// Per-block.id table of `UncondConsumeSiteArray`s (the cache behind
+// Per-block.id table of `ConsumeCandidatePositions` (the cache behind
 // `valueConsumedEarlierInBlock`), filled lazily like `blockLiveAfterCache`.
-typealias UncondConsumeSiteTableArray = Array with UncondConsumeSiteArray
+typealias ConsumeCandidateTableArray = Array with ConsumeCandidatePositions
 
 // One `tryCall`/`witnessTryCall` op of a block: its op index plus its two SSA
 // defs (result + error flag). Collected once per block so the per-(value,
@@ -1200,15 +1197,16 @@ type RcContext
 	// `blockLiveAfterPresent[block.id]` gates the cached slot (0 = not yet built).
 	export var blockLiveAfterCache as StdLiveAfterArray
 	export var blockLiveAfterPresent as BoolArray
-	// Per-block first-unconditional-consume tables backing
-	// `valueConsumedEarlierInBlock` (see `UncondConsumeSite`). Indexed by
-	// block.id, built lazily on first query (`uncondConsumeSitesFor`) — the
-	// former per-query scan re-ran `opUnconditionallyConsumesOperand` over the
-	// whole block prefix for EVERY managed death candidate. Like the liveAfter
-	// cache, the planning sweeps only query the read-only pre-edit IR, so one
-	// forward walk per block is authoritative.
-	export var uncondConsumeSiteCache as UncondConsumeSiteTableArray
-	export var uncondConsumeSitePresent as BoolArray
+	// Per-block consume-candidate position lists backing
+	// `valueConsumedEarlierInBlock` (see `ConsumeCandidatePositions`). Indexed
+	// by block.id, built lazily on first query (`consumeCandidatesFor`) — the
+	// former per-query scan ran `opUnconditionallyConsumesOperand` over every
+	// op of the block prefix for EVERY managed death candidate; the candidate
+	// list lets it skip the arith/control ops that can never consume. Like the
+	// liveAfter cache, the planning sweeps only query the read-only pre-edit
+	// IR, so one forward walk per block is authoritative.
+	export var consumeCandidateCache as ConsumeCandidateTableArray
+	export var consumeCandidatePresent as BoolArray
 	// Per-block tryCall site lists (result + error-flag SSA defs per
 	// `tryCall`/`witnessTryCall` op), indexed by block.id and filled by the
 	// `buildBodyScanCaches` walk. Backs the O(#tryCalls) error-flag lookups in
@@ -1275,8 +1273,8 @@ type RcContext
 			kindConstIds: ValueIdArray.create(),
 			blockLiveAfterCache: StdLiveAfterArray.create(),
 			blockLiveAfterPresent: BoolArray.create(),
-			uncondConsumeSiteCache: UncondConsumeSiteTableArray.create(),
-			uncondConsumeSitePresent: BoolArray.create(),
+			consumeCandidateCache: ConsumeCandidateTableArray.create(),
+			consumeCandidatePresent: BoolArray.create(),
 			tryCallSitesByBlock: TryCallSiteTableArray.create(),
 			fieldLoadIndex: FieldLoadIndexMap.create(),
 			totalDirectReadingOps: ValueIdArray.create(),
@@ -5249,90 +5247,85 @@ end 'isInBlockDeathPoint'
 // direct later read) handed the callee the minted +1 instead; the original is
 // still owed its death-point release, so it does not suppress.
 function valueConsumedEarlierInBlock(ctx RcContext, block IrBlock, liveAfter StdLiveAfter, beforePos NodeIndex, vid ValueId) returns bool
-	// The per-block table records each vid's FIRST unconditional consume over
-	// the WHOLE block; a recorded position at/after `beforePos` therefore means
-	// no consume exists in the [0, beforePos) prefix either — exactly the
-	// former prefix scan's miss. `consumedArgRetainedPastOp` stays evaluated
-	// lazily at query time, exactly as the scan evaluated it at its hit.
-	let sites = uncondConsumeSitesFor(ctx, block: block)
-	for site in sites 'eachSite'
-		if site.vid == vid 'hit'
-			if site.pos >= beforePos 'afterWindow'
-				return false
-			end 'afterWindow'
-			return not consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: block, pos: site.pos, argId: vid)
-		end 'hit'
-	end 'eachSite'
+	// The former scan visited every op in [0, beforePos); the candidate list
+	// (ascending positions) skips the arith/control ops that can never
+	// consume, and the disposition is evaluated for the QUERIED vid only —
+	// same first-match order and result as the full scan.
+	let candidates = consumeCandidatesFor(ctx, block: block)
+	for pos in candidates 'eachCandidate'
+		if pos >= beforePos 'pastWindow'
+			return false
+		end 'pastWindow'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("valueConsumedEarlierInBlock: candidate pos {pos} not in block.opRefs")
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("valueConsumedEarlierInBlock: opIdx not in module.ops")
+		if opUnconditionallyConsumesOperand(ctx, op: op, argId: vid) 'consumed'
+			return not consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: block, pos: pos, argId: vid)
+		end 'consumed'
+	end 'eachCandidate'
 	return false
 end 'valueConsumedEarlierInBlock'
 
-// The first-unconditional-consume table for `block` (see `UncondConsumeSite`),
-// computed once and cached by block.id — the same lazy pattern as
-// `blockLiveAfterFor`, and safe for the same reason (the planning sweeps all
-// query the read-only pre-edit IR). A block outside the pre-sized window falls
-// back to a direct build so correctness never depends on the cache.
-function uncondConsumeSitesFor(ctx RcContext, block IrBlock) returns UncondConsumeSiteArray
+// The consume-candidate position list for `block` (see
+// `ConsumeCandidatePositions`), computed once and cached by block.id — the
+// same lazy pattern as `blockLiveAfterFor`, and safe for the same reason (the
+// planning sweeps all query the read-only pre-edit IR). A block outside the
+// pre-sized window falls back to a direct build so correctness never depends
+// on the cache.
+function consumeCandidatesFor(ctx RcContext, block IrBlock) returns ConsumeCandidatePositions
 	let bid = block.id
-	if bid >= 0 and bid < ctx.uncondConsumeSitePresent.count() 'inRange'
-		let present = try ctx.uncondConsumeSitePresent.get(bid) otherwise false
+	if bid >= 0 and bid < ctx.consumeCandidatePresent.count() 'inRange'
+		let present = try ctx.consumeCandidatePresent.get(bid) otherwise false
 		if present 'cached'
-			return try ctx.uncondConsumeSiteCache.get(bid) otherwise panic("uncondConsumeSitesFor: present set but cache.get({bid}) OOB")
+			return try ctx.consumeCandidateCache.get(bid) otherwise panic("consumeCandidatesFor: present set but cache.get({bid}) OOB")
 		end 'cached'
-		let built = buildUncondConsumeSites(ctx, block: block)
-		try ctx.uncondConsumeSiteCache.set(bid, value: built) otherwise panic("uncondConsumeSitesFor: cache.set({bid}) OOB despite bound check")
-		try ctx.uncondConsumeSitePresent.set(bid, value: true) otherwise panic("uncondConsumeSitesFor: present.set({bid}) OOB despite bound check")
+		let built = buildConsumeCandidates(ctx, block: block)
+		try ctx.consumeCandidateCache.set(bid, value: built) otherwise panic("consumeCandidatesFor: cache.set({bid}) OOB despite bound check")
+		try ctx.consumeCandidatePresent.set(bid, value: true) otherwise panic("consumeCandidatesFor: present.set({bid}) OOB despite bound check")
 		return built
 	end 'inRange'
 
-	return buildUncondConsumeSites(ctx, block: block)
-end 'uncondConsumeSitesFor'
+	return buildConsumeCandidates(ctx, block: block)
+end 'consumeCandidatesFor'
 
-// One forward walk of `block` recording, per value, the FIRST body-op position
-// that unconditionally consumes it. Enumerating only each op's READ operands is
-// equivalent to the former scan's `opUnconditionallyConsumesOperand(op, vid)`
-// over every (op, vid) pair: all four unconditional dispositions
-// (container-mutator arg / intrinsic consumer / transparent wrap / type-param
-// sink) test `argId` against specific operand positions of the op — a call's
-// argIds, a `store_indirect`/`box_value`'s stored value — every one of which
-// `extractStdOpOperandsInto` reports as a read, so the predicate is false for
-// any vid that is not a read operand of the op.
-function buildUncondConsumeSites(ctx RcContext, block IrBlock) returns UncondConsumeSiteArray
-	var sites = UncondConsumeSiteArray.create()
-	var scratch = StdOpOperands.create()
+// One cheap forward walk of `block` recording the positions whose op category
+// can produce a consuming disposition at all. Category-only — deliberately NO
+// per-operand `opTransferDisposition` evaluation here (its String-keyed
+// consume-bit probes per (op, operand) pair are what the query path amortizes;
+// pre-evaluating them for every pair regressed the pass on query-sparse
+// blocks).
+function buildConsumeCandidates(ctx RcContext, block IrBlock) returns ConsumeCandidatePositions
+	var candidates = ConsumeCandidatePositions.create()
 
 	var pos = 0
 	for opIdx in block.opRefs 'eachOp'
-		let op = try ctx.module.ops.get(opIdx) otherwise panic("buildUncondConsumeSites: opIdx not in module.ops")
-		extractStdOpOperandsInto(op, operands: scratch)
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("buildConsumeCandidates: opIdx not in module.ops")
 
-		for readId in scratch.readIds 'eachRead'
-			// First-match-wins: a vid already recorded keeps its earlier position,
-			// exactly like the former forward prefix scan.
-			if uncondConsumeSiteRecorded(sites, vid: readId) 'alreadyRecorded'
-				continue
-			end 'alreadyRecorded'
-			if opUnconditionallyConsumesOperand(ctx, op: op, argId: readId) 'consumes'
-				sites.push(UncondConsumeSite.create(readId, pos: pos as NodeIndex))
-			end 'consumes'
-		end 'eachRead'
+		if opCanUnconditionallyConsume(op) 'candidate'
+			candidates.push(pos as NodeIndex)
+		end 'candidate'
 
 		pos = pos + 1
 	end 'eachOp'
 
-	return sites
-end 'buildUncondConsumeSites'
+	return candidates
+end 'buildConsumeCandidates'
 
-// True iff `vid` already has a recorded first-consume site. The site lists are
-// tiny (a handful of consuming ops per block), so a linear probe beats a
-// value-id-space table per block.
-function uncondConsumeSiteRecorded(sites UncondConsumeSiteArray, vid ValueId) returns bool
-	for site in sites 'each'
-		if site.vid == vid 'hit'
-			return true
-		end 'hit'
-	end 'each'
-	return false
-end 'uncondConsumeSiteRecorded'
+// Category pre-filter for `buildConsumeCandidates`: every TRUE arm of
+// `opTransferDisposition`'s unconditional-consume kinds dispatches on a
+// `call` (container mutator, intrinsic consumer, transparent wrap, type-param
+// value arg) or `system` (type-param retain/store) op; `memory` is included
+// conservatively so a future memory-categorized store shape cannot silently
+// escape the filter. `arith`/`control` ops are unconditionally non-consuming
+// in every disposition predicate.
+function opCanUnconditionallyConsume(op StdOp) returns bool
+	return match op 'category'
+		call gives true
+		system gives true
+		memory gives true
+		arith gives false
+		control gives false
+	end 'category'
+end 'opCanUnconditionallyConsume'
 
 // The UNCONDITIONAL subset of `opTransferDisposition`'s move kinds: ones whose
 // consume does not depend on the op being the value's last use.
