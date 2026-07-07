@@ -9195,18 +9195,24 @@ export type Parser
 	end 'buildMatchArmBlocks'
 
 	// Shared dispatch emission for any non-default arm. Routes to:
-	//   - `enumMatchArm` for enum-case patterns (TR fills the raw value)
-	//   - chained `emitMixedPatternDispatch` for any arm containing a
-	//     range pattern (handles `1 to 5 or 8 to 10` and friends)
-	//   - direct `cmp + condBr` for plain integer-literal patterns
+	//   - chained `emitMixedPatternDispatch` for enum-case arms (one
+	//     `enumMatchArm` per or-alternative — TR resolves each case's raw
+	//     value independently, so alternatives cannot be OR-folded the way
+	//     literals can) and for any arm containing a range pattern
+	//     (handles `1 to 5 or 8 to 10` and `caseA or caseC to caseD`)
+	//   - OR-folded `cmp + condBr` for plain integer-literal patterns
+	//   - OR-folded string equality for string-literal patterns
 	function emitArmDispatch(header MatchHeader, patterns MatchPatternList, armBodyId BlockId, nextArmId BlockId)
 		let firstPattern = patterns.first()
 		if patterns.isEnumCase() 'isEnum'
-			// Enum case names need TR to resolve the raw value. Reuse the
-			// existing enumMatchArm op. or-patterns of enum cases aren't
-			// reached today (no spec test exercises them) but the placeholder
-			// op family permits one arm = one case name.
-			module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: firstPattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyId, elseTarget: nextArmId, bindingNames: firstPattern.bindingNames, range: SourceRange.ofToken(firstPattern.token)))
+			// Enum case names need TR to resolve each raw value, so every
+			// alternative rides its own `enumMatchArm` op. A single-case arm
+			// emits one op into `currentBlock` (the legacy shape); an or-pattern
+			// arm (`a or b or c`, or a case chained with an enum range like
+			// `a or c to d`) chains one comparison block per alternative. Both
+			// route through `emitMixedPatternDispatch`, which now dispatches
+			// enum-case patterns as well as ranges and int literals.
+			emitMixedPatternDispatch(header, patterns: patterns, armBodyId: armBodyId, nextArmId: nextArmId)
 			return
 		end 'isEnum'
 		// String-literal arms compare the scrutinee against each pattern's
@@ -9335,10 +9341,14 @@ export type Parser
 		return false
 	end 'patternsContainRange'
 
-	// Emit a chain of one-pattern-per-block dispatchers for an arm whose
-	// pattern list contains at least one range. Each pattern's success
-	// branches to `armBodyId`; a miss flows to the next pattern's block.
-	// The final miss flows to `nextArmId` (the caller's "no match" target).
+	// Emit a chain of one-pattern-per-block dispatchers for a multi-alternative
+	// arm (`a or b or c`) or an arm whose pattern list contains a range. Handles
+	// enum-case, range, and int-literal patterns uniformly (see
+	// `emitOnePatternDispatch`), including arms that mix an enum case with an
+	// enum range (`a or c to d`). Each pattern's success branches to `armBodyId`;
+	// a miss flows to the next pattern's block. The final miss flows to
+	// `nextArmId` (the caller's "no match" target). A single-pattern arm emits
+	// one dispatcher into `currentBlock` with no extra blocks.
 	function emitMixedPatternDispatch(header MatchHeader, patterns MatchPatternList, armBodyId BlockId, nextArmId BlockId)
 		let count = patterns.patterns.count()
 		var cur = currentBlock
@@ -9359,15 +9369,17 @@ export type Parser
 
 	// Emit a single pattern's dispatch terminator into `block`. Bare int
 	// literals lower to `cmp + condBr`; range literals lower to a
-	// `rangeMatchArm` terminator. Enum / default never reach this helper —
-	// they take dedicated paths in `buildMatchArmBlocks`.
+	// `rangeMatchArm` terminator; enum cases lower to an `enumMatchArm`
+	// terminator (TR resolves the case name's raw value later). `default` never
+	// reaches this helper (handled in `buildMatchArmBlocks`); string literals
+	// take `emitArmDispatch`'s dedicated String-equality branch.
 	function emitOnePatternDispatch(header MatchHeader, cur IrBlock, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
 		let patRange = SourceRange.ofToken(pattern.token)
 		match pattern.kind 'kind'
 			rangeLiteral then emitRangePatternDispatch(header, cur: cur, pattern: pattern, thenId: thenId, elseId: elseId, patRange: patRange)
 			intLiteral then emitIntPatternCondBr(cur, scrutineeName: header.scrutineeName, pattern: pattern, thenId: thenId, elseId: elseId)
+			enumCase then module.setTerminator(cur, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: pattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: thenId, elseTarget: elseId, bindingNames: pattern.bindingNames, range: patRange))
 			defaultArm then panic("emitOnePatternDispatch: default arm should be handled by buildMatchArmBlocks")
-			enumCase then panic("emitOnePatternDispatch: enum-case arm should be handled by buildMatchArmBlocks")
 			stringLiteral then panic("emitOnePatternDispatch: string-literal arm should be handled by emitArmDispatch's string branch")
 		end 'kind'
 	end 'emitOnePatternDispatch'
@@ -21602,10 +21614,12 @@ export typealias MatchPatternSpecArray = Array with MatchPatternSpec
 // Bundle of patterns belonging to one arm. The arm is a `default` arm when
 // the first (only) entry is a default pattern; an enum-case arm when the
 // first entry is an enum-case pattern; an integer-literal arm otherwise.
-// Patterns within an arm share a kind by construction (the parser only
-// chains `or`-separated literals, never mixing literals with enum cases or
-// `default` — a mix would mean a single arm is matching a heterogeneous set
-// of values, which the language explicitly disallows).
+// Or-alternatives within an arm usually share a kind, but an enum arm may
+// legally MIX enum-case and enum-range alternatives over one scrutinee
+// (`caseA or caseC to caseD`) — dispatch handles the mix via
+// emitMixedPatternDispatch. `default` never mixes with anything, and
+// literal kinds (int/float/string/char) never mix with enum cases (a
+// heterogeneous VALUE set is disallowed by the language).
 type MatchPatternList
 	export var patterns as MatchPatternSpecArray
 

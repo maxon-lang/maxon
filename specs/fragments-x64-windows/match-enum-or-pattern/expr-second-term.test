@@ -1,0 +1,77 @@
+// Test: expr-second-term
+enum E
+	a
+	b
+	c
+	d
+end 'E'
+
+function pick(v E) returns ExitCode
+	return match v 'm'
+		a or b or c gives 7
+		d gives 9
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(E.b)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @pick(rcx: u8) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor r8d, r8d
+    x64.test rcx, rcx
+    x64.jne m_0.cmp1
+    x64.jmp m_0.case0
+  m_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  m_0.case0:
+    x64.mov r8d, 7
+    x64.jmp m_0.merge
+  m_0.next0:
+    x64.cmp rcx, 3
+    x64.jne m_0.merge
+    x64.jmp m_0.case1
+  m_0.cmp1:
+    x64.cmp rcx, 1
+    x64.jne m_0.cmp2
+    x64.jmp m_0.case0
+  m_0.cmp2:
+    x64.cmp rcx, 2
+    x64.jne m_0.next0
+    x64.jmp m_0.case0
+  m_0.case1:
+    x64.mov r8d, 9
+    x64.jmp m_0.merge
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_4b04b922c7babfaf]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov ecx, 1
+    x64.call pick
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_c85bcb88c24d9170]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

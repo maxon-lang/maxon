@@ -65,14 +65,14 @@ module {
     %15 = mir.cmp eq, %13, %2
     mir.cond_br %15 [then: haveRT_0(), else: haveRT_0.after(%36)]
   haveRT_0:
-    %46 = mir.call @stdlib.__mm_decref(%36)
+    %47 = mir.call @stdlib.__mm_decref(%36)
     %18 = mir.load %12, 0 width: qword
     %20 = mir.cmp eq, %18, %2
     mir.cond_br %20 [then: unwrap_0.case0(), else: unwrap_0.next0()]
   unwrap_0.merge(%30: i64):
     mir.br haveRT_0.after(%30)
   unwrap_0.case0:
-    %47 = mir.call @__mm_decref_maybenull_helper(%12)
+    %48 = mir.call @__mm_decref_maybenull_helper(%12)
     %38 = mir.mov_imm 16 : i64
     %39 = mir.mov_imm 0 : i64
     %40 = mir.mov_imm 1 : i64
@@ -89,16 +89,14 @@ module {
     mir.cond_br %25 [then: unwrap_0.case1(), else: __rc_edge_4_0()]
   unwrap_0.case1:
     %26 = mir.load %12, 8 width: qword
-    %45 = mir.call @__mm_decref_maybenull_helper(%12)
-    mir.br __rc_edge_5_0()
+    %45 = mir.call @stdlib.__mm_incref(%26)
+    %46 = mir.call @__mm_decref_maybenull_helper(%12)
+    mir.br unwrap_0.merge(%26)
   haveRT_0.after(%29: i64):
     mir.ret %29
   __rc_edge_4_0:
-    %48 = mir.call @__mm_decref_maybenull_helper(%12)
+    %49 = mir.call @__mm_decref_maybenull_helper(%12)
     mir.br unwrap_0.merge(%2)
-  __rc_edge_5_0:
-    %49 = mir.call @stdlib.__mm_incref(%26)
-    mir.br unwrap_0.merge(%26)
   }
   func @decode(local0: i64) -> u8 {
   entry:
