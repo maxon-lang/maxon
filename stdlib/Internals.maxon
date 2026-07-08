@@ -1129,12 +1129,15 @@ end '__slab_rounded_size'
 // (mem2reg only) — a rename-plus-wrapper would survive as an extra call hop in
 // default builds, breaking the sanitizer's byte-identical-when-off guarantee.
 function __slab_free(ptr MachineWord)
-	#if rcSanitize(true)
-		if __rc_quarantine_intercept(ptr) 'quarantined'
-			return
-		end 'quarantined'
-	#endif
-
+	// NOTE: the rc-sanitize quarantine is driven from `__mm_free` (the only caller
+	// that frees a slot carrying the 32-byte mm header + ledger word the quarantine
+	// reads/poisons), NOT here. RAW `__slab_alloc` buffers — the subprocess UTF-16
+	// cmdline/scratch, pipe-name buffers, etc. (see the `raw buffers use
+	// __slab_alloc/__slab_free` note in X64Backend) — have NO mm header: their
+	// offset-0 is user data, not a ledger pointer. Quarantining them here poisoned
+	// their header words and, on age-out, misread the user data at offset-0 as a
+	// ledger block (a corrupt-ledger / nil-deref crash). `__rc_quarantine_release`'s
+	// own final free also routes here and must NOT re-quarantine.
 	let span = __slab_arena_map_get(ptr)
 	if span == 0 'osDirect'
 		// OS-direct free mutates the shared OS-direct array — serialize it.
@@ -1564,6 +1567,10 @@ end '__slab_free'
 			panic("rc-sanitize: write to freed memory detected — quarantined slot 0x{slotBase:016x} (size {slotSize}) was modified after free (dtor=0x{dtorWord:016x} size=0x{sizeWord:016x} rc=0x{rcWord:016x})")
 		end 'tampered'
 
+		// The payload was pattern-filled at quarantine time; a changed first
+		// payload word means something WROTE through a dangling reference while
+		// the slot sat quarantined. One word is a cheap tripwire — full-payload
+		// verification would just re-walk what the poison loop wrote.
 		// The payload was pattern-filled at quarantine time; a changed first
 		// payload word means something WROTE through a dangling reference while
 		// the slot sat quarantined. One word is a cheap tripwire — full-payload
@@ -2138,6 +2145,15 @@ function __mm_free(ptr MachineWord)
 	end 'hasDtor'
 	__Internals.atomicDec(__Internals.mmAllocCountAddr())
 	// slot_base = ptr - 32 (the reserved word is the first header word).
+	// rc-sanitize: quarantine the mm slot here (NOT in `__slab_free`) so only slots
+	// carrying the mm header + ledger word are poisoned/held; raw `__slab_alloc`
+	// buffers that free via `__slab_free` directly are left alone. On age-out the
+	// quarantine re-enters `__slab_free` for the real reclaim.
+	#if rcSanitize(true)
+		if __rc_quarantine_intercept(ptr - 32) 'quarantined'
+			return
+		end 'quarantined'
+	#endif
 	__slab_free(ptr - 32)
 end '__mm_free'
 
@@ -2849,13 +2865,26 @@ function __managed_mem_set_byte(self MachineWord, i MachineWord, value MachineWo
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
-	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	// Byte writes are bounded by CAPACITY (the allocated region), NOT length —
+	// mirroring `__managed_mem_set` (the element setter, which gates on capacity).
+	// `create` leaves the record at length 0 / capacity = count, and the
+	// create-then-setByte-then-setLength idiom (`Character.fromCodepoint`, string
+	// building) writes into freshly-allocated slots BEFORE `setLength` publishes
+	// them; a length gate would reject every such write (0 >= length*elemSize).
+	// The C# runtime avoids this only because its `create` seeds length = count;
+	// the self-hosted model seeds length 0 and gates every setter on capacity, so
+	// this setter must too. A capacity < 0 buffer (rdata/slice) is detached to a
+	// writable ROOT copy first, exactly as `__managed_mem_set` does.
+	var capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	if capacity < 0 'cow'
+		_ = __managed_mem_cow_check(self)
+		capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	end 'cow'
 	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	let limit = length * elemSize
+	let limit = capacity * elemSize
 	if i >= limit 'hi'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'hi'
-	_ = __managed_mem_cow_check(self)
 	let buffer = __Internals.loadIndirect(self)
 	__Internals.storeByte(buffer, offset: i, value: value)
 	return 0

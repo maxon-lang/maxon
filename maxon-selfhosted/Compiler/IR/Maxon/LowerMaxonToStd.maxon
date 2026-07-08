@@ -9163,7 +9163,8 @@ type MaxonToStdLowering
 		//                   an int→bool implicit, which doesn't exist).
 		//   * byteLiteral → integer (byte and char-byte both lower to i64
 		//                   on the int channel).
-		//   * enumCase    → integer (the case's ordinal flows as an i64).
+		//   * enumCase    → integer (the case's RAW VALUE flows as an i64 —
+		//                   `lookupEnumCaseRawValue`, matching explicit args).
 		//   * floatLiteralBits → float (constF64 op; IEEE-754 bits land
 		//                   directly without a numeric conversion).
 		//   * helper      → zero-arg call to the parser-synthesized
@@ -9261,7 +9262,7 @@ type MaxonToStdLowering
 			end 'boxedUnion'
 		end 'resolved'
 
-		return self.emitParamDefaultConstI64(self.lookupEnumCaseOrdinal(typeName, caseName: caseName), fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+		return self.emitParamDefaultConstI64(self.lookupEnumCaseRawValue(typeName, caseName: caseName), fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
 	end 'emitParamDefaultEnumCase'
 
 	// Materialize a payload-free case of a HEAP-BOXED union as a default value.
@@ -9345,23 +9346,28 @@ type MaxonToStdLowering
 		return resultId
 	end 'emitBoxedUnionSkeleton'
 
-	// Resolve `EnumName.caseName` to the case's ordinal (the index of the
-	// case in its declaring enum's `cases` list). For ordinal-backed enums
-	// the ordinal equals the runtime value; for raw-value enums the parser
-	// records explicit values on each case which the lowering uses
-	// elsewhere — but `paramDefault.enumCase` always materializes the
-	// case's ORDINAL (matching how `EnumName.caseName` is constructed at
-	// runtime in other lowering paths).
-	function lookupEnumCaseOrdinal(typeName String, caseName String) returns ParsedInt
+	// Resolve `EnumName.caseName` to the case's RAW VALUE — the scalar an
+	// `EnumName.caseName` expression carries at runtime. `EnumCase.rawValue` holds
+	// exactly that for every backing: the explicit int for int-backed enums, the
+	// float bit-pattern for float-backed, and the auto-increment ORDINAL for
+	// string/char/function-backed and plain enums (the parser seeds `rawValue =
+	// nextOrdinal` for those, e.g. Parser.maxon string/char-lit arms). Mirrors how
+	// explicit `EnumName.caseName` ARGUMENTS lower and the C# oracle's
+	// `RawValue is long ? RawValue : Ordinal`. Using the ORDINAL here (the prior
+	// bug) mis-materialized an explicit-raw-value enum default — e.g. a
+	// `wrongKindCode ErrorCode = ErrorCode.parserExpectedToken` default emitted the
+	// case ORDINAL 9 instead of its rawValue 2010, so the self-compiled parser
+	// reported E0009 where the C#-built one reports E2010.
+	function lookupEnumCaseRawValue(typeName String, caseName String) returns ParsedInt
 		let enumType = try self.project.enumTypes.get(typeName) otherwise panic("paramDefault.enumCase: enum '{typeName}' not found in project.enumTypes — parser accepted a default referencing an undeclared enum")
 		for i in 0 upto enumType.cases.count() 'eachCase'
-			let c = try enumType.cases.get(i) otherwise panic("lookupEnumCaseOrdinal: cases.get OOB at {i}")
+			let c = try enumType.cases.get(i) otherwise panic("lookupEnumCaseRawValue: cases.get OOB at {i}")
 			if c.name == caseName 'hit'
-				return i as ParsedInt
+				return c.rawValue
 			end 'hit'
 		end 'eachCase'
 		panic("paramDefault.enumCase: enum '{typeName}' has no case '{caseName}'")
-	end 'lookupEnumCaseOrdinal'
+	end 'lookupEnumCaseRawValue'
 
 	// Emit `result = loadIndirect(addrId + offset)` typed i64 and return resultId.
 	// Used for pointer-shaped header words (managed-memory metadata, union tags,
