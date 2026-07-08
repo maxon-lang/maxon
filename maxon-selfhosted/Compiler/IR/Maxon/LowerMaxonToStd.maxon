@@ -561,6 +561,27 @@ function interfaceMethodThrows(project Project, interfaceName String, methodName
 	panic("interfaceMethodThrows: method '{methodName}' not found on interface '{interfaceName}'")
 end 'interfaceMethodThrows'
 
+// The resolved `throws E` error type of an interface method, or `unresolved`
+// for a non-throwing method (a bare integer error flag). Mirrors
+// `calleeThrowsErrorType` for the witness-dispatch throwing arm: a direct call
+// keys the throws clause off `project.funcThrowsTypes[qualifiedCallee]`, but a
+// witness dispatch has no such static callee — the error type is read from the
+// interface method signature here instead. Same lookup rules as
+// `interfaceMethodThrows`; missing names are an upstream bug.
+function interfaceMethodThrowsType(project Project, interfaceName String, methodName String) returns MaxonType
+	let iface = try project.interfaces.get(interfaceName) otherwise panic("interfaceMethodThrowsType: interface '{interfaceName}' not in project.interfaces")
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("interfaceMethodThrowsType: methods.get OOB at {i}")
+		if m.name == methodName 'hit'
+			return match m.throwsTypeName 'clause'
+				none gives MaxonType.unresolved
+				throwing(name) gives internMaxonType(project, name: name)
+			end 'clause'
+		end 'hit'
+	end 'scan'
+	panic("interfaceMethodThrowsType: method '{methodName}' not found on interface '{interfaceName}'")
+end 'interfaceMethodThrowsType'
+
 // Unwrap a MaxonReturnType to the bare interface name when it represents an
 // interface-typed return. Empty string means "not an interface return"
 // (void, primitive, struct, generic-instance, etc.). Used by the return-site
@@ -2455,20 +2476,15 @@ function memberAliasTargetIsTuple(project Project, t MaxonType) returns bool
 	end 'kind'
 end 'memberAliasTargetIsTuple'
 
-// Type-level counterpart of `structNameIsHeapManaged`: true when `t` names a
-// user struct (heap/refcount-managed). Non-struct scalars are by-value.
-//
-// A `genericInstance` (e.g. `Array with Integer`, `Map with (String, Box)`) is the
-// CONCRETE form a generic container takes at a call site — `Array.create()` returns
-// `genericInstance(Array_with_Integer)`, NOT `named(Array)`. It is just as heap-
-// managed as its base struct, so resolve the instance's base name and defer to
-// `structNameIsHeapManaged`. Without this, a container value returned from a NON-
-// inlined `*.create()` (whose result type is the generic instance) is misclassified
-// `notManaged` → never released → leak (the int-array push/get leak: `Array #1` and
-// its backing buffer never freed when `Array.create` is a real call, not inlined).
-// The (present, resultId, callee) triple of a direct call/tryCall op, for the
-// classification audit. Non-call ops and call shapes without a named static
-// callee (indirect/witness/param/returns) yield `(false, 0, "")`.
+// The (present, resultId, callee) triple of a call op, for the classification
+// audit. Direct `call`/`tryCall` carry a named static callee; the dynamic
+// `witnessCall`/`witnessTryCall` forms carry a result the audit must check but
+// no static callee (empty string) — auditing them makes an unclassified managed
+// witness return loud (ownership-audit gap #3(a)/#3(d)), the class the plain and
+// throwing arms of `emitWitnessDispatch` now classify. The remaining shapes
+// (`indirectCall` — a distinct function-value classification domain — plus
+// `funcRef`/`tailCall`/`param`/`ret`/`errorReturn`, which define no auditable
+// managed result) and every non-call op yield `(false, 0, "")`.
 function callResultOf(op StdOp) returns (bool, ValueId, String)
 	return match op 'dispatch'
 		call(c) gives callShapeResultOf(c)
@@ -2483,11 +2499,25 @@ function callShapeResultOf(c StdCallOp) returns (bool, ValueId, String)
 	return match c 'check'
 		call(resultId, callee, _) gives (true, resultId, callee)
 		tryCall(resultId, callee, _, _) gives (true, resultId, callee)
+		witnessCall(resultId, _, _, _, _) gives (true, resultId, "")
+		witnessTryCall(resultId, _, _, _, _, _) gives (true, resultId, "")
 		ret gives (false, 0, "")
-		indirectCall to errorReturn gives (false, 0, "")
+		indirectCall gives (false, 0, "")
+		funcRef to errorReturn gives (false, 0, "")
 	end 'check'
 end 'callShapeResultOf'
 
+// Type-level counterpart of `structNameIsHeapManaged`: true when `t` names a
+// user struct (heap/refcount-managed). Non-struct scalars are by-value.
+//
+// A `genericInstance` (e.g. `Array with Integer`, `Map with (String, Box)`) is the
+// CONCRETE form a generic container takes at a call site — `Array.create()` returns
+// `genericInstance(Array_with_Integer)`, NOT `named(Array)`. It is just as heap-
+// managed as its base struct, so resolve the instance's base name and defer to
+// `structNameIsHeapManaged`. Without this, a container value returned from a NON-
+// inlined `*.create()` (whose result type is the generic instance) is misclassified
+// `notManaged` → never released → leak (the int-array push/get leak: `Array #1` and
+// its backing buffer never freed when `Array.create` is a real call, not inlined).
 export function maxonTypeIsHeapManaged(project Project, t MaxonType) returns bool
 	return match t 'classify'
 		named(id) gives structNameIsHeapManaged(project, structName: project.typeNames.get(id))
@@ -3188,14 +3218,25 @@ type MaxonToStdLowering
 	// the error-path drop frees the box. A BARE-enum error (no payload) rides the
 	// register as a plain integer ordinal — keep it notManaged (the integer default).
 	function classifyTryCallErrorFlag(flagId ValueId, qualifiedCallee String)
-		let errorType = self.calleeThrowsErrorType(qualifiedCallee)
+		self.classifyErrorFlagForType(flagId, errorType: self.calleeThrowsErrorType(qualifiedCallee))
+	end 'classifyTryCallErrorFlag'
+
+	// Core error-flag classifier, keyed on the already-resolved `throws E` type.
+	// Shared by the direct-call path (`classifyTryCallErrorFlag`, which resolves
+	// the type from `qualifiedCallee` via `project.funcThrowsTypes`) and the
+	// witness-dispatch throwing arm (which has no `qualifiedCallee` to key on and
+	// resolves the type from the interface method signature instead). A HEAP-
+	// BOXED union error arrives owning the +1 the throw site transferred, so
+	// classify `callReturnRc1` for a null-guarded release at last use; a bare-enum
+	// ordinal rides the register as a plain integer and stays notManaged.
+	function classifyErrorFlagForType(flagId ValueId, errorType MaxonType)
 		if maxonTypeIsHeapManaged(self.project, t: errorType) 'boxedUnion'
 			self.setValueType(flagId, t: errorType)
 			self.classifyValue(flagId, cls: OwnershipClass.callReturnRc1, valueMaxonType: errorType)
 		end 'boxedUnion' else 'bareErrorFlag'
 			self.setValueType(flagId, t: MaxonType.integer)
 		end 'bareErrorFlag'
-	end 'classifyTryCallErrorFlag'
+	end 'classifyErrorFlagForType'
 
 	// The MaxonType of `qualifiedCallee`'s declared `throws E` clause, or `unresolved`
 	// when the callee is non-throwing / unknown (a builtin or inline-expanded method
@@ -9997,9 +10038,26 @@ type MaxonToStdLowering
 			// uses). A throwing method reached without `try` is rejected
 			// upstream (E3057), so the no-observer arm is defensive.
 			let flagId = allocValueId(self.funcIdRef)
-			self.setValueType(flagId, t: MaxonType.integer)
+			// The thrown error box crosses the witness dispatch owning its +1
+			// exactly like a direct `tryCall`'s error register — the concrete
+			// conformer's throw site transferred it (`markErrorReturnTransfers`).
+			// Classify it (boxed-union → `callReturnRc1`, null-guarded release at
+			// the catch's last use; bare-enum → integer) so a caught boxed-union
+			// error is released, not leaked. Mirrors the direct-call
+			// `classifyTryCallErrorFlag`; without it the caught box leaked
+			// (ownership-audit gap #3(d)). This also SETS the flag's value type,
+			// subsuming the former bare `setValueType(flagId, integer)`.
+			self.classifyErrorFlagForType(flagId, errorType: interfaceMethodThrowsType(self.project, interfaceName: interfaceName, methodName: methodName))
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessTryCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds, errorFlagId: flagId)))
 			self.emitFlagBind(errorBoundName, codeValueId: flagId)
+			// The SUCCESS-edge result owns a +1 like any managed return (a throwing
+			// interface method returns a struct/scalar, never a fat interface — see
+			// the `fatReturn` note below), so classify it just like the plain arm
+			// and the direct-call `recordCallResultType`. The inserter's
+			// `tryCallResultSuccessBlock` recognizes `witnessTryCall` and lands the
+			// def-acquire on the success block, so the throw edge (result register
+			// zeroed by the error ABI) never increfs a null result.
+			self.classifyPlainManagedWitnessResult(resultId, returnType: returnType)
 		end 'throwingMethod' else 'nonThrowingMethod'
 			// An interface-RETURNING (non-throwing) witness dispatch yields a fat
 			// pointer: payload in the primary register, witness in the secondary
@@ -10021,6 +10079,20 @@ type MaxonToStdLowering
 			end 'fatReturn' else 'plainReturn'
 				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, isVoid: isVoid, argIds: argIds)))
 				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				// A witness dispatch that returns a MANAGED struct (non-interface,
+				// non-throwing) hands back an owning +1 exactly like a direct call —
+				// but unlike `recordCallResultType`, nothing here classified the
+				// result, so the refcount inserter treated it as `notManaged` and
+				// skipped BOTH the store's incref-new and the last-use release. When
+				// such a chunk was stored into a long-lived memo AND pushed into a
+				// transient array, the array's single +1 was the only reference: its
+				// teardown freed the chunk out from under the persisted memo (the
+				// `emitFunctionChunk` chunk-cache UAF). Classify it `callReturnRc1`,
+				// mirroring the direct-call path (`recordCallResultType`) and the
+				// Stringable-interp witness precedent above, so the inserter mints the
+				// store's copy and balances the reference. Interface (fat) returns are
+				// handled by `fatReturn` above and intentionally stay borrowed.
+				self.classifyPlainManagedWitnessResult(resultId, returnType: returnType)
 			end 'plainReturn'
 		end 'nonThrowingMethod'
 		match returnType 'stamp'
@@ -10039,6 +10111,32 @@ type MaxonToStdLowering
 		// destroy slot) is tracked with the deferred managed-payload-release
 		// work; the witness PAIRING above is what the self-compile needs today.
 	end 'emitWitnessDispatch'
+
+	// Ownership-classify a plain (non-fat, non-throwing) witness-dispatch
+	// result. A witness call transfers a +1 to the caller just like a direct
+	// call, but `emitWitnessDispatch` never ran the classify machinery that
+	// `recordCallResultType` runs for direct calls, so a managed struct result
+	// defaulted to `notManaged` and leaked (or, when moved into a transient
+	// sink, dangled a persisted alias). Split from the match arm because Maxon
+	// match arms can't host an inline labelled-if.
+	function classifyPlainManagedWitnessResult(resultId ValueId, returnType MaxonReturnType)
+		match returnType 'kind'
+			void then break 'kind'
+			value(inner) then self.classifyManagedWitnessInner(resultId, inner: inner)
+		end 'kind'
+	end 'classifyPlainManagedWitnessResult'
+
+	// Classify a managed-struct witness result as owning its +1. Scalars and
+	// void returns carry no reference, so only heap-managed structs qualify;
+	// interface returns never reach here (they take the `fatReturn` arm and
+	// stay borrowed — there is no witness-based destruction for interface
+	// values, per the NOTE in `emitWitnessDispatch`).
+	function classifyManagedWitnessInner(resultId ValueId, inner MaxonType)
+		if not maxonTypeIsHeapManaged(self.project, t: inner) 'notManaged'
+			return
+		end 'notManaged'
+		self.classifyValue(resultId, cls: OwnershipClass.callReturnRc1, valueMaxonType: inner)
+	end 'classifyManagedWitnessInner'
 
 	// Build the `[receiver, args...]` ValueId list every witness-dispatch
 	// call site assembles before emitting indirectCall.

@@ -1,0 +1,196 @@
+// Test: repeated-persist-overwrites-decref-old
+typealias Payload = int(0 to u64.max)
+
+type Chunk
+	export var payload as Payload
+
+	static function create(payload Payload) returns Chunk
+		return Self{payload: payload}
+	end 'create'
+end 'Chunk'
+
+interface ChunkMaker
+	function makeChunk() returns Chunk
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let seed as Payload
+
+	static function create(seed Payload) returns Backend
+		return Self{seed: seed}
+	end 'create'
+
+	function makeChunk() returns Chunk
+		return Chunk.create(self.seed)
+	end 'makeChunk'
+end 'Backend'
+
+type Store
+	export var saved as Chunk
+
+	static function create() returns Store
+		return Self{saved: Chunk.create(0)}
+	end 'create'
+
+	function refresh(maker ChunkMaker)
+		self.saved = maker.makeChunk()
+	end 'refresh'
+
+	function readSaved() returns Payload
+		return self.saved.payload
+	end 'readSaved'
+end 'Store'
+
+function obtainMaker(seed Payload) returns ChunkMaker
+	return Backend.create(seed)
+end 'obtainMaker'
+
+function main() returns ExitCode
+	var store = Store.create()
+	let maker = obtainMaker(40)
+	var i = 1
+	while i <= 4 'loop'
+		store.refresh(maker)
+		i = i + 1
+	end 'loop'
+	print("{store.readSaved()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+40
+```
+---
+// CompiledIR
+module {
+  func @Backend.makeChunk(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.load %4, 0 width: qword
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%5, %6)
+    %8 = mir.call @stdlib.__mm_incref(%7)
+    mir.store %2, %7, 0 width: qword
+    mir.ret %7
+  }
+  func @Store.create() -> i64 {
+  entry:
+    %0 = mir.mov_imm 8 : i64
+    %2 = mir.func_addr @__destruct_Store
+    %1 = mir.call @stdlib.__mm_alloc(%0, %2)
+    %9 = mir.call @stdlib.__mm_incref(%1)
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %1, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    %10 = mir.call @stdlib.__mm_incref(%8)
+    mir.store %4, %8, 0 width: qword
+    mir.store %8, %1, 0 width: qword
+    mir.ret %1
+  }
+  func @Store.refresh(local0: i64, local1: i64, local2: i64) {
+  entry:
+    %8 = mir.param local0 : i64
+    %9 = mir.param local1 : i64
+    mir.store_slot slot_1, %9
+    %10 = mir.param local2 : i64
+    mir.store_slot slot_2, %10
+    %3 = mir.load_slot slot_1
+    %4 = mir.load_slot slot_2
+    %5 = mir.witness_call %4, [0](%3)
+    %11 = mir.load %8, 0 width: qword
+    mir.store %5, %8, 0 width: qword
+    %12 = mir.call @__mm_decref_maybenull_helper(%11)
+    mir.ret %7
+  }
+  func @Store.readSaved(local0: i64) -> u64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.load %4, 0 width: qword
+    %3 = mir.load %2, 0 width: qword
+    %5 = mir.mov_imm -1 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_98b0c3cdfc740aa5
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @Store.create()
+    %2 = mir.mov_imm 40 : i64
+    %49 = mir.mov_imm 8 : i64
+    %50 = mir.mov_imm 0 : i64
+    %51 = mir.call @stdlib.__mm_alloc(%49, %50)
+    mir.store %2, %51, 0 width: qword
+    %52 = mir.global_addr @__witness_Backend_ChunkMaker
+    mir.store_slot slot_1, %51
+    %58 = mir.call @mm_drop(%51)
+    mir.store_slot slot_3, %52
+    %5 = mir.mov_imm 1 : i64
+    mir.br loop_0.header(%5)
+  loop_0.header(%48: i64):
+    %7 = mir.mov_imm 4 : i64
+    %8 = mir.cmp le, %48, %7
+    mir.cond_br %8 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %10 = mir.load_slot slot_1
+    %11 = mir.load_slot slot_3
+    %12 = mir.call @Store.refresh(%1, %10, %11)
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %48, %14
+    mir.br loop_0.header(%15)
+  loop_0.exit:
+    %17 = mir.call @Store.readSaved(%1)
+    %18 = mir.global_addr @__istr_0
+    %20 = mir.mov_imm 21 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    %22 = mir.call @mrt_i64_to_string(%17, %21)
+    %59 = mir.call @__mm_decref_maybenull_helper(%1)
+    %23 = mir.global_addr @__istr_1
+    %24 = mir.mov_imm 1 : i64
+    %27 = mir.add.i64 %0, %22
+    %28 = mir.add.i64 %27, %24
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.add.i64 %28, %29
+    %31 = mir.call @mrt_alloc(%30)
+    mir.memcpy %31, %18, %0
+    %32 = mir.add.i64 %31, %0
+    mir.memcpy %32, %21, %22
+    %33 = mir.add.i64 %32, %22
+    mir.memcpy %33, %23, %24
+    %35 = mir.call @stdlib.__mm_decref(%21)
+    %36 = mir.mov_imm 48 : i64
+    %37 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %38 = mir.call @mrt_alloc_with_dtor(%36, %37)
+    mir.store %0, %38, 40 width: qword
+    mir.store %31, %38, 0 width: qword
+    mir.store %28, %38, 8 width: qword
+    mir.store %28, %38, 16 width: qword
+    %40 = mir.mov_imm 1 : i64
+    mir.store %40, %38, 24 width: qword
+    %41 = mir.mov_imm -1 : i64
+    mir.store %41, %38, 32 width: qword
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.func_addr @__destruct_String
+    %42 = mir.call @stdlib.__mm_alloc(%43, %44)
+    mir.store %38, %42, 0 width: qword
+    mir.store %0, %42, 8 width: qword
+    %53 = mir.load %42, 0 width: qword
+    %57 = mir.call @stdlib.__mm_incref(%53)
+    %54 = mir.load %53, 0 width: qword
+    %55 = mir.load %53, 8 width: qword
+    %56 = mir.call @mrt_write_stdout(%54, %55)
+    %61 = mir.call @mm_drop(%42)
+    %60 = mir.call @__mm_decref_maybenull_helper(%53)
+    mir.ret %0
+  }
+}
+---
