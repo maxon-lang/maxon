@@ -28,20 +28,23 @@ does on a monotonic clock, but the guard protects against bugs).
 ## Tests
 
 <!-- test: clock.now-monotonic -->
-A monotonic clock never moves backwards: a second reading is `>=` the first.
-The boot-relative instant is large, so the reading is also strictly positive.
+A monotonic clock never moves backwards: each successive reading is `>=` the
+previous one. The epoch is target-dependent (boot-relative on native targets,
+process-relative under WASI, where a fast-starting program's first reading can
+legitimately be 0), so only ordering is asserted, never a particular magnitude.
 
 ```maxon
 function main() returns ExitCode
 		let a = Clock.nowMs()
 		let b = Clock.nowMs()
+		let c = Clock.nowMs()
 		var score = 0
-		if a > 0 'positive'
+		if b >= a 'nondecreasing1'
 				score = score + 1
-		end 'positive'
-		if b >= a 'nondecreasing'
+		end 'nondecreasing1'
+		if c >= b 'nondecreasing2'
 				score = score + 1
-		end 'nondecreasing'
+		end 'nondecreasing2'
 		print("score={score}\n")
 		return 0
 end 'main'
