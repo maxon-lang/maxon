@@ -1672,12 +1672,52 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 
 	// Phase 7: target lowering + regalloc + prologue/epilogue + code emission
 	// Create the backend once with all state, then pass it through.
+	//
+	// The final `emitTargetCode` step is dispatched on the CONCRETE backend type
+	// (a direct call), NOT through the `TargetBackend` witness. `emitTargetCode`
+	// CONSUMES its `project` argument (it forwards `pipeline.project` into the
+	// chunk-concat / stdlib-link subtree, which moves it on). A witness call hides
+	// that consume from the refcount inserter (it can't see a dynamic callee's
+	// per-param consume facts), so the caller never acquires the `pipeline.project`
+	// field load — and `__destruct_PassPipeline` then decrefs the same reference the
+	// consumed forward already released, double-freeing the per-compile Project.
+	// A direct call exposes the consume, so the inserter's incomingOwner-acquire
+	// takes a fresh +1 for the forward and leaves the pipeline's field reference for
+	// its destructor (the same balance the mid pipeline's `MaxonToStdLowering` gets).
+	// `prepareTargetModule`'s remaining witness calls only BORROW their managed
+	// args, so they stay on the interface.
 	match target.cpu 'dispatchCpu'
-		x64 then return try emitBackendWith(pipeline, stdlibCache: stdlibCache, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
-		arm64 then return try emitBackendWith(pipeline, stdlibCache: stdlibCache, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
+		x64 then return try emitNativeCodeResultX64(pipeline, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions), stdlibCache: stdlibCache)
+		arm64 then return try emitNativeCodeResultArm64(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions), stdlibCache: stdlibCache)
 		wasm32 then panic("unreachable: WASM handled above")
 	end 'dispatchCpu'
 end 'emitBackend'
+
+// Whole-module native emit for x64: prepare the target module through the backend
+// interface, then emit code via a DIRECT call on the CONCRETE `X64Backend` so the
+// refcount inserter sees `emitTargetCode`'s `project` consume (see `emitBackend`).
+// The arm64 twin is separate for the same reason — a shared generic body would
+// route `emitTargetCode` back through the witness and re-hide the consume, which is
+// exactly the double-free this split avoids (C# gets the same shape for free by
+// monomorphizing into `emitBackendWith$X64Backend` / `$Arm64Backend`).
+function emitNativeCodeResultX64(pipeline PassPipeline, backend X64Backend, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
+	try prepareTargetModule(pipeline, backend: backend)
+	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache))
+end 'emitNativeCodeResultX64'
+
+// Whole-module native emit for arm64 — the concrete-backend twin of
+// `emitNativeCodeResultX64` (see its comment for why the two can't share a body).
+function emitNativeCodeResultArm64(pipeline PassPipeline, backend Arm64Backend, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
+	try prepareTargetModule(pipeline, backend: backend)
+	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache))
+end 'emitNativeCodeResultArm64'
+
+// Shared tail for the whole-module native emit: stamp the fully-lowered target
+// module onto the freshly-emitted `CodeResult`.
+function finalizeNativeCodeResult(pipeline PassPipeline, result CodeResult) returns CodeResult
+	result.targetModule = pipeline.targetModule
+	return result
+end 'finalizeNativeCodeResult'
 
 // Chunk-driven sibling of `emitBackend` (Phase 11.5 / Stage P Step 2). Native
 // targets here pull each function's `FunctionCodeChunk` from the per-function
@@ -1746,9 +1786,9 @@ function emitWasmCodeResult(pipeline PassPipeline, globalData GlobalDataTable) r
 end 'emitWasmCodeResult'
 
 // Run the target-lowering / regalloc / prologue-epilogue passes on a
-// freshly-built backend. Shared by `emitBackendWith` (whole-module emit) and
-// `emitBackendIncrementalWith` (chunk-driven emit) so the prepared
-// `pipeline.targetModule` is byte-identical between the two paths.
+// freshly-built backend. Shared by the whole-module native emit (the `x64`/`arm64`
+// arms of `emitBackend`) and `emitBackendIncrementalWith` (chunk-driven emit) so
+// the prepared `pipeline.targetModule` is byte-identical between the two paths.
 function prepareTargetModule(pipeline PassPipeline, backend TargetBackend) throws CompileError
 	logDebug(LogCategory.ir, message: function() gives "=== Running pass: lower-mir-to-target ===")
 	let lmtStart = passTimerStart()
@@ -1784,18 +1824,7 @@ function prepareTargetModule(pipeline PassPipeline, backend TargetBackend) throw
 	pipeline.targetModule.compactOps()
 end 'prepareTargetModule'
 
-function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
-	try prepareTargetModule(pipeline, backend: backend)
-
-	// Emit machine code from the fully-lowered target module
-	let emitStart = passTimerStart()
-	var result = backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache)
-	recordPassSince("__emitTargetCode", startMs: emitStart)
-	result.targetModule = pipeline.targetModule
-	return result
-end 'emitBackendWith'
-
-// Chunk-driven counterpart to `emitBackendWith`. After the shared
+// Chunk-driven counterpart to the whole-module native emit. After the shared
 // `prepareTargetModule` populates `pipeline.targetModule`, this loops over
 // the function list and assembles each function's `FunctionCodeChunk` from
 // `db.codePerFunc`. Concat then rebases every fixup and runs the same stdlib
