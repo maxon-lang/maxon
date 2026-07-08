@@ -4737,6 +4737,25 @@ end 'liveSetBeforeTerminator'
 // value its +1 so the returning arm has a reference to transfer; this release rule
 // just lets the OTHER arm reclaim it.
 function releaseKindAtLastUse(ctx RcContext, id ValueId) returns ReleaseKind
+	// A BORROW-RETURNING call result owns NO transferable +1: the callee handed back an
+	// interior borrow of one of its parameters' collections (an iterator `.current()` /
+	// `Array.get` element view). The lowering default classes it `callReturnRc1`
+	// (`arrivesOwning` below), but there is no +1 to release — the SOURCE container owns
+	// the element. A last-use release here STRIPS the container's own reference: the
+	// truncated-source `Parser.consume` EOF/throw path dropped `cursor.current()`'s
+	// borrowed token on the error edge while the token-stream array still owned it, so the
+	// teardown element-walk double-freed it. The RETURN-forward is balanced by the caller's
+	// own acquire (`funcReturnsBorrow` — consume forwards the borrow, the caller acquires),
+	// and the STORE-into-owner case is balanced by the durable owner's own store-incref
+	// (`transferValueAlreadyOwnsPlusOne` already denies the shortcut here) — so a death-
+	// decref would net −1 on the source (audit gap #18(a)). The container-consumed and
+	// transient uses were reclassified `borrowed` upstream (which also lands here as
+	// `none`). This is the release-side dual of the store-side no-+1 recognition and
+	// applies in BOTH the managed and type-param domains, so it precedes the type-param
+	// branch (a type-param `callReturnRc1` borrow view owns no generic resource either).
+	if ctx.isBorrowReturningCallResult(id) 'borrowResultNoRelease'
+		return ReleaseKind.none
+	end 'borrowResultNoRelease'
 	if ctx.isTypeParam(id) 'typeParam'
 		// A `sys.dropTypeParam` needs the function's implicit `__layout` descriptor
 		// to know HOW to drop the generic value. A function with NO layout param
