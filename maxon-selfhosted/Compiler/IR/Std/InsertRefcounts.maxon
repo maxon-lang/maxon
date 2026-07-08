@@ -5948,22 +5948,55 @@ function tryCallArgConsumedReachingSuccess(ctx RcContext, predBlock IrBlock, suc
 	// so probing the block's collected tryCall sites (in op order) finds the
 	// same first hit the former every-op scan did.
 	var foundConsumingTry = false
+	var consumePos = 0 as NodeIndex
 	let sites = tryCallSitesFor(ctx, block: predBlock)
 	for site in sites 'eachSite'
 		let op = try ctx.module.ops.get(site.opIdx) otherwise panic("tryCallArgConsumedReachingSuccess: site.opIdx not in module.ops")
 		if opIsTryCallTransferringArg(ctx, op: op, argId: vid) 'consumingTry'
 			foundConsumingTry = true
+			consumePos = opIdxToBlockPos(predBlock, opIdx: site.opIdx)
 			break
 		end 'consumingTry'
 	end 'eachSite'
 	if not foundConsumingTry 'noConsumingTry'
 		return false
 	end 'noConsumingTry'
+	// COPY-MINTED escape (mirrors the in-block guard `valueConsumedEarlierInBlock`,
+	// which already gates on `consumedArgRetainedPastOp`): when `vid` is LIVE past the
+	// consuming tryCall — a DIRECT later read in a dominated block or a loop re-consume —
+	// `planConsumedArgCopyIncrefs` mints a copy that carries the callee's +1 while the
+	// caller keeps its ORIGINAL +1. The move therefore left the caller's original in
+	// place, so suppressing its success-block release here would leak it. The canonical
+	// case is `queryAllMid`'s `pipeline`: `PassPipeline.run(pipeline)` consumes it, a
+	// copy is minted because `result = pipeline.stdModule` reads it on the success path,
+	// and the un-released `pipeline` held its `stdModule` / `project` / `globalData` live
+	// (the per-compile mid-module + code-result + data-section leak). Only a PURE MOVE
+	// (no later direct read — the transparent-wrapper factory shape this guard was built
+	// for) transfers the original and warrants suppression.
+	let liveAfter = blockLiveAfterFor(ctx, block: predBlock)
+	if consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: predBlock, pos: consumePos, argId: vid) 'copyMinted'
+		return false
+	end 'copyMinted'
 	// The tryCall's success target must be exactly `successBlockId`: the +1 transferred
 	// on the success edge only. Reuse the result-side success-block resolver keyed on
 	// the SAME tryCall (its result id), so the polarity handling stays in one place.
 	return tryCallTransferringArgSuccessBlock(ctx, block: predBlock, argId: vid) == successBlockId
 end 'tryCallArgConsumedReachingSuccess'
+
+// The position (index into `block.opRefs`) of `opIdx` within `block`. Used to locate a
+// tryCall site's slot so the copy-minted / liveness queries (`consumedArgRetainedPastOp`)
+// see the same `pos` the in-block sweeps compute. Panics if the op is not in the block —
+// a caller passing a foreign opIdx is a bug.
+function opIdxToBlockPos(block IrBlock, opIdx OpIndex) returns NodeIndex
+	var pos = 0 as NodeIndex
+	for ref in block.opRefs 'each'
+		if ref == opIdx 'found'
+			return pos
+		end 'found'
+		pos = pos + 1
+	end 'each'
+	panic("opIdxToBlockPos: opIdx {opIdx} not found in block {block.id}")
+end 'opIdxToBlockPos'
 
 // True iff `op` is a `tryCall` that TRANSFERS `argId` (a consumed argument — the
 // transparent-wrapper arg-0 or a non-self consumed element). Mirrors the op-level
