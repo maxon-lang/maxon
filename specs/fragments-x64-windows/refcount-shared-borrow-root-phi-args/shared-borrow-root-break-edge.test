@@ -1,0 +1,651 @@
+// Test: shared-borrow-root-break-edge
+typealias Count = int(0 to 1000)
+
+type Clause
+	export var paramName as String
+	export var traitName as String
+	export var typeName as String
+
+	static function create(paramName String, traitName String, typeName String) returns Self
+		return Self{paramName: paramName, traitName: traitName, typeName: typeName}
+	end 'create'
+end 'Clause'
+
+typealias ClauseArray = Array with Clause
+typealias ClauseMap = Map with (String, ClauseArray)
+
+function satisfied(traitName String) returns bool
+	return traitName == "Equatable"
+end 'satisfied'
+
+// Borrow a map-owned array, iterate it, and on the conditional break read three
+// fields of the borrowed element into outer vars — three interior borrows of the
+// same element on one edge.
+function firstFailing(m ClauseMap, key String) returns Count
+	var failedParam = ""
+	var failedTrait = ""
+	var failedType = ""
+	let clauses = try m.get(key) otherwise ClauseArray.create()
+	for i in 0 upto clauses.count() 'each'
+		let c = try clauses.get(i) otherwise panic("firstFailing: get OOB")
+		if not satisfied(c.traitName) 'fail'
+			failedParam = c.paramName
+			failedTrait = c.traitName
+			failedType = c.typeName
+			break
+		end 'fail'
+	end 'each'
+	return failedParam.count() + failedTrait.count() + failedType.count()
+end 'firstFailing'
+
+function main() returns ExitCode
+	var m = ClauseMap.create()
+	var arr = ClauseArray.create()
+	arr.push(Clause.create("Item", traitName: "Comparable", typeName: "NotComparable"))
+	try m.insert("MyHolder.isGreater", value: arr) otherwise return 1
+	// "Item"(4) + "Comparable"(10) + "NotComparable"(13) = 27
+	return firstFailing(m, key: "MyHolder.isGreater")
+end 'main'
+---
+ExitCode: 27
+---
+// CompiledIR
+module {
+  func @Clause.create(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.lea rdx, [rip+__destruct_Clause]
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r14+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+8], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r14+16], r8 (8b)
+    x64.mov [r14+0], rbx (8b)
+    x64.mov [r14+8], r12 (8b)
+    x64.mov [r14+16], r13 (8b)
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  }
+  func @firstFailing(rcx: i64, rdx: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=144
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.mov rdx, r8
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.mov rdx, r8
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-40], r8
+    x64.mov rcx, [rbp+-40]
+    x64.mov r14, [rbp+-40]
+    x64.mov r8, [rbp+-40]
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r13 (8b)
+    x64.mov r8, 1
+    x64.mov [r14+8], r8 (8b)
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.mov rdx, r8
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.mov rdx, r8
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-48], r8
+    x64.mov rcx, [rbp+-48]
+    x64.mov r14, [rbp+-48]
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r13 (8b)
+    x64.mov r8, 1
+    x64.mov [r14+8], r8 (8b)
+    x64.lea r8, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.mov rdx, r8
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_0]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea r8, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.mov rdx, r8
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-56], r8
+    x64.mov rcx, [rbp+-56]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-56]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rsi, [rip+__witness_String_Equatable]
+    x64.lea r9, [rip+__witness_String_Hashable]
+    x64.lea rax, [rip+__layout_Map_String_ClauseArray]
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call Map.get
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.lea rcx, [rip+__layout_Array_Clause]
+    x64.call Array.create
+  try_0.merge:
+    x64.mov [rbp+-80], r8
+    x64.lea rdx, [rip+__layout_Array_Clause]
+    x64.mov rcx, [rbp+-80]
+    x64.call Array.count
+    x64.mov [rbp+-64], r8
+    x64.mov rdx, 0
+    x64.mov rbx, rdx
+  each_0.header:
+    x64.cmp rbx, [rbp+-64]
+    x64.jge __rc_edge_4_0
+  inlined_Array.get_0_0:
+    x64.mov r8, [rbp+-80]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov rdx, rbx
+    x64.call stdlib.__managed_mem_get
+    x64.mov r12, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_firstFailing_0
+  inlined_Array.get_3_0:
+    x64.xor r13d, r13d
+    x64.jmp __rc_edge_16_0
+  inline_cont_firstFailing_0:
+    x64.mov [rbp+-88], r8
+    x64.test rdx, rdx
+    x64.je try_1.merge
+    x64.jmp try_1.otherwise
+  each_0.step:
+    x64.mov rcx, [rbp+-88]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rdx, rbx
+    x64.add rdx, 1
+    x64.mov rbx, rdx
+    x64.jmp each_0.header
+  each_0.exit:
+    x64.mov rcx, rbx
+    x64.call String.count
+    x64.mov r14, r8
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call String.count
+    x64.mov rbx, r8
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r13
+    x64.call String.count
+    x64.mov r12, r8
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.add r14, rbx
+    x64.mov r8, r14
+    x64.add r8, r12
+    x64.cmp r8, 1000
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  try_1.otherwise:
+    x64.mov rcx, [rbp+-56]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-48]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-40]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-80]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp+-88]
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rcx, [rip+__panic_msg_a532fc5e32721943]
+    x64.call mrt_panic
+    x64.mov r8, 0
+    x64.epilogue
+    x64.ret
+  try_1.merge:
+    x64.mov r8, [rbp+-88]
+    x64.mov r9, [r8+8] (8b)
+    x64.mov [rbp+-72], r9
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov [rbp+-96], r8
+    x64.xor r8d, r8d
+    x64.mov r9, [rbp+-96]
+    x64.mov [r9+40], r8 (8b)
+    x64.lea r8, [rip+__istr_1]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8d, 9
+    x64.mov [r9+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r9+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r9+24], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r9+32], r8 (8b)
+    x64.lea r12, [rip+__destruct_String]
+    x64.mov r8d, 16
+  inlined_stdlib.__mm_alloc_0_0:
+    x64.xor r9d, r9d
+    x64.cmp r8, 1
+    x64.jge inlined_stdlib.__mm_alloc_2_0
+  inlined_stdlib.__mm_alloc_1_0:
+    x64.mov r8d, 1
+  inlined_stdlib.__mm_alloc_2_0:
+    x64.mov [rbp+-104], r8
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r8]
+    x64.mov r13, [rbp+-104]
+    x64.add r13, 32
+  inlined_stdlib.__slab_alloc_0_0:
+    x64.xor r8d, r8d
+    x64.cmp r13, 32768
+    x64.jle inlined_stdlib.__slab_class_index_for_0_0
+  inlined_stdlib.__slab_alloc_1_0:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_os_direct_alloc
+    x64.mov r13, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_firstFailing_3
+  inlined_stdlib.__slab_class_index_for_0_0:
+    x64.xor r8d, r8d
+    x64.xor ecx, ecx
+    x64.mov r14, rcx
+    x64.mov r15, r8
+  inlined_stdlib.__slab_class_index_for_1_0:
+    x64.cmp r15, 18
+    x64.jge inlined_stdlib.__slab_class_index_for_4_0
+  inlined_stdlib.__slab_class_index_for_2_0:
+    x64.mov rcx, r14
+    x64.call stdlib.__slab_class_size
+    x64.cmp r8, r13
+    x64.jl inlined_stdlib.__slab_class_index_for_6_0
+    x64.mov r13, r14
+    x64.jmp inline_cont_firstFailing_1
+  inlined_stdlib.__slab_class_index_for_3_0:
+    x64.add r15, 1
+    x64.mov r14, rcx
+    x64.jmp inlined_stdlib.__slab_class_index_for_1_0
+  inlined_stdlib.__slab_class_index_for_4_0:
+    x64.mov r8d, 136
+    x64.xor r13d, r13d
+    x64.mov [rbp-8], r8
+    x64.call_import slot_0
+    x64.jmp inline_cont_firstFailing_1
+  inlined_stdlib.__slab_class_index_for_6_0:
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.jmp inlined_stdlib.__slab_class_index_for_3_0
+  inline_cont_firstFailing_1:
+    x64.mov r8, -1
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.jge inlined_stdlib.__slab_alloc_4_0
+  inlined_stdlib.__slab_proc_at_0_0:
+    x64.mov r8, 0
+    x64.test r8, r8
+    x64.jge inlined_stdlib.__slab_proc_at_2_0
+  inlined_stdlib.__slab_proc_at_1_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_firstFailing_2
+  inlined_stdlib.__slab_proc_at_2_0:
+    x64.lea r8, [rip+__sched_procs]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov [rbp+-24], r9
+    x64.mov r8, [rbp+-24]
+    x64.test r8, r8
+    x64.jne inlined_stdlib.__slab_proc_at_4_0
+  inlined_stdlib.__slab_proc_at_3_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_firstFailing_2
+  inlined_stdlib.__slab_proc_at_4_0:
+    x64.mov r8d, 3
+    x64.mov [rbp+-32], r8
+    x64.mov rcx, [rbp+-32]
+    x64.mov r8, 0
+    x64.shl r8, r8, rcx
+    x64.mov r9, [rbp+-24]
+    x64.mov [rbp+-32], r9
+    x64.mov r9, [rbp+-32]
+    x64.add r9, r8
+    x64.mov [rbp+-32], r9
+    x64.mov r8, [rbp+-32]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, r9
+  inline_cont_firstFailing_2:
+    x64.test r8, r8
+    x64.setne r8
+  inlined_stdlib.__slab_alloc_4_0:
+    x64.test r8, r8
+    x64.je inlined_stdlib.__slab_alloc_6_0
+  inlined_stdlib.__slab_alloc_5_0:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r13, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_firstFailing_3
+  inlined_stdlib.__slab_alloc_6_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r13, r8
+  inline_cont_firstFailing_3:
+    x64.mov r8, 0
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, r13
+    x64.add r8, 8
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r8, r13
+    x64.add r8, 16
+    x64.mov r9, [rbp+-104]
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r8, r13
+    x64.add r8, 24
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov r12, rcx
+  inline_cont_firstFailing_4:
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-96]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-72]
+    x64.call String.equals
+    x64.mov r13, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8, 1
+    x64.xor r13, r8
+    x64.je each_0.step
+  fail_0:
+    x64.mov rcx, [rbp+-56]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-48]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-40]
+    x64.call stdlib.__mm_decref
+    x64.mov rcx, [rbp+-80]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbp+-88]
+    x64.mov rbx, [r8+16] (8b)
+    x64.mov r12, [r8+8] (8b)
+    x64.mov r13, [r8+0] (8b)
+    x64.jmp __rc_edge_11_0
+  __rc_edge_4_0:
+    x64.mov rcx, [rbp+-80]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp+-40]
+    x64.mov r8, [rbp+-48]
+    x64.mov r9, [rbp+-56]
+    x64.mov rbx, rcx
+    x64.mov r12, r8
+    x64.mov r13, r9
+    x64.jmp each_0.exit
+  __rc_edge_16_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, r12
+    x64.mov rdx, r13
+    x64.jmp inline_cont_firstFailing_0
+  __rc_edge_11_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbp+-88]
+    x64.call __mm_decref_maybenull_helper
+    x64.xchg rbx, r13
+    x64.jmp each_0.exit
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_bccb8a97cce15e70]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea rax, [rip+__witness_String_Equatable]
+    x64.lea rdx, [rip+__witness_String_Hashable]
+    x64.lea rcx, [rip+__layout_Map_String_ClauseArray]
+    x64.call Map.create
+    x64.mov rbx, r8
+    x64.lea rcx, [rip+__layout_Array_Clause]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 4
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r13 (8b)
+    x64.mov r8, 1
+    x64.mov [r14+8], r8 (8b)
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_3]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 10
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov rcx, r8
+    x64.mov [rbp+-8], r8
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-8]
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9, 1
+    x64.mov [r8+8], r9 (8b)
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_4]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 13
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov rcx, r8
+    x64.mov r15, r8
+    x64.call stdlib.__mm_incref
+    x64.mov [r15+0], r13 (8b)
+    x64.mov r8, 1
+    x64.mov [r15+8], r8 (8b)
+    x64.mov rcx, r14
+    x64.mov rax, r15
+    x64.mov rdx, [rbp+-8]
+    x64.call Clause.create
+    x64.lea rax, [rip+__layout_Array_Clause]
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call Array.push
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r13, r8
+    x64.mov r8, 0
+    x64.mov [r13+40], r8 (8b)
+    x64.lea r8, [rip+__istr_5]
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 18
+    x64.mov [r13+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r13+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov [r14+0], r13 (8b)
+    x64.mov r8, 1
+    x64.mov [r14+8], r8 (8b)
+    x64.lea rdi, [rip+__witness_String_Equatable]
+    x64.lea rsi, [rip+__witness_String_Hashable]
+    x64.lea r9, [rip+__layout_Map_String_ClauseArray]
+    x64.mov rcx, rbx
+    x64.mov rdx, r14
+    x64.mov rax, r12
+    x64.call Map.insert
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, 1
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r12, r8
+    x64.mov r8, 0
+    x64.mov [r12+40], r8 (8b)
+    x64.lea r8, [rip+__istr_5]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 18
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r12+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r8, 1
+    x64.mov [r13+8], r8 (8b)
+    x64.mov rcx, rbx
+    x64.mov rdx, r13
+    x64.call firstFailing
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_cc8885c79706a501]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -6456,15 +6456,63 @@ end 'planPhiEdgeIncrefs'
 
 function planPhiEdgeIncrefsForBlock(ctx RcContext, block IrBlock)
 	let preds = try ctx.cfg.predecessors.get(block.id) otherwise return
+	// Pass 1: queue the phi-arg edge-increfs (the phi's own +1 along each path).
 	var argIdx = 0
-	while argIdx < block.blockArgs.count() 'eachArg'
+	while argIdx < block.blockArgs.count() 'eachArgIncref'
 		let arg = try block.blockArgs.get(argIdx) otherwise panic("planPhiEdgeIncrefsForBlock: blockArgs.get({argIdx}) OOB")
 		if ctx.isManaged(arg.valueId) 'managedPhi'
 			planPhiArgEdgeIncrefs(ctx, block: block, preds: preds, argIdx: argIdx)
 		end 'managedPhi'
 		argIdx = argIdx + 1
-	end 'eachArg'
+	end 'eachArgIncref'
+
+	// Pass 2: release each increfed phi-arg's borrow ROOT on its edge. Run as a
+	// SECOND pass — after every phi-arg incref for this block is queued — for two
+	// reasons that a single interleaved pass gets wrong:
+	//   (1) DEDUP: several block-args on ONE edge can be interior borrows of the
+	//       SAME root (`br exit(c.a, c.b, c.c)` — all three fields borrow element
+	//       `c`). The root holds exactly ONE deferred +1 (its suppressed term-drop),
+	//       so it must be released exactly ONCE, not once per borrowing block-arg
+	//       (`planBorrowRootEdgeRelease` dedups per (root, edge)). The interleaved
+	//       form released it N times — the `try map.get(k) otherwise T.create()`
+	//       borrow read into N outer vars on a `break` edge, freeing the map-owned
+	//       element N times (the conditional-extensions `WhereClause` teardown
+	//       over-release).
+	//   (2) ORDERING: the single root release must follow EVERY interior-borrow
+	//       incref on the edge, so all escaping fields are retained before the root
+	//       frees (the deferral invariant `planBorrowRootEdgeRelease` documents).
+	argIdx = 0
+	while argIdx < block.blockArgs.count() 'eachArgRelease'
+		let arg = try block.blockArgs.get(argIdx) otherwise panic("planPhiEdgeIncrefsForBlock: blockArgs.get({argIdx}) OOB (root-release pass)")
+		if ctx.isManaged(arg.valueId) 'managedPhi'
+			planPhiArgBorrowRootReleases(ctx, block: block, preds: preds, argIdx: argIdx)
+		end 'managedPhi'
+		argIdx = argIdx + 1
+	end 'eachArgRelease'
 end 'planPhiEdgeIncrefsForBlock'
+
+// The single edge-incref decision for phi-arg `argIdx` fed `incoming` from
+// `predBlock`: it either lacks a transferable +1 (`phiArgGetsEdgeIncref`) or is a
+// later CO-FED block-arg whose one moved +1 was already claimed by an earlier arg
+// on this edge. Shared by the incref pass (`planPhiArgEdgeIncrefs`) and the
+// borrow-root release pass (`planPhiArgBorrowRootReleases`) so the two never
+// disagree on which edges carry a deferral.
+//
+// An incoming value that already carries a +1 (the MOVE supplies it) or is a
+// constant-zero null sentinel must NOT be increfed — `phiArgGetsEdgeIncref` is the
+// single source of truth for that, shared with the term-drop suppression predicate
+// (`borrowRootDeferredOnEdge`) so the two can never drift.
+//
+// EXCEPTION — one value feeding SEVERAL block-args on the SAME edge (`br dst(%v, %v)`):
+// its single transferable +1 can MOVE into only the FIRST such phi. `phiArgGetsEdgeIncref`
+// decides per-phi in isolation, so it would let EVERY co-fed phi take that one move,
+// leaving the 2nd+ under-referenced — releasing one phi then frees the shared box while
+// another still holds it (the enum-const `named(T)` UAF: masked when the consuming
+// `MaxonOp.literal` constructor INLINES its store-incref-new, exposed when it stays
+// out-of-line under `--fast`). So a later co-fed managed phi takes its OWN edge-incref.
+function phiArgNeedsEdgeIncrefOnPred(ctx RcContext, block IrBlock, predBlock IrBlock, argIdx NodeIndex, phiValueId ValueId, incoming ValueId) returns bool
+	return phiArgGetsEdgeIncref(ctx, toBlockId: block.id, phiValueId: phiValueId, incoming: incoming) or (incoming != phiValueId and edgeValueCarriesPlusOne(ctx, vid: incoming) and moveClaimedByEarlierBlockArgOnEdge(ctx, block: block, predBlock: predBlock, toBlockId: block.id, argIdx: argIdx, incoming: incoming))
+end 'phiArgNeedsEdgeIncrefOnPred'
 
 function planPhiArgEdgeIncrefs(ctx RcContext, block IrBlock, preds BlockIdArray, argIdx NodeIndex)
 	let phiArg = try block.blockArgs.get(argIdx) otherwise panic("planPhiArgEdgeIncrefs: blockArgs.get({argIdx}) OOB")
@@ -6475,41 +6523,43 @@ function planPhiArgEdgeIncrefs(ctx RcContext, block IrBlock, preds BlockIdArray,
 		if incoming == REFCOUNT_NO_VALUE 'noArg'
 			continue
 		end 'noArg'
-		// An incoming value that already carries a +1 (the MOVE supplies it) or is a
-		// constant-zero null sentinel must NOT be increfed here — `phiArgGetsEdgeIncref`
-		// is the single source of truth for that decision, shared with the term-drop
-		// suppression predicate (`borrowRootDeferredOnEdge`) so the two can never drift.
-		//
-		// EXCEPTION — one value feeding SEVERAL block-args on the SAME edge (`br dst(%v, %v)`):
-		// its single transferable +1 can MOVE into only the FIRST such phi. `phiArgGetsEdgeIncref`
-		// decides per-phi in isolation, so it would let EVERY co-fed phi take that one move,
-		// leaving the 2nd+ under-referenced — releasing one phi then frees the shared box while
-		// another still holds it (the enum-const `named(T)` UAF: masked when the consuming
-		// `MaxonOp.literal` constructor INLINES its store-incref-new, exposed when it stays
-		// out-of-line under `--fast`). So a later co-fed managed phi takes its OWN edge-incref.
-		let needsEdgeIncref = phiArgGetsEdgeIncref(ctx, toBlockId: block.id, phiValueId: phiArg.valueId, incoming: incoming) or (incoming != phiArg.valueId and edgeValueCarriesPlusOne(ctx, vid: incoming) and moveClaimedByEarlierBlockArgOnEdge(ctx, block: block, predBlock: predBlock, toBlockId: block.id, argIdx: argIdx, incoming: incoming))
-		if not needsEdgeIncref 'noIncref'
+		if not phiArgNeedsEdgeIncrefOnPred(ctx, block: block, predBlock: predBlock, argIdx: argIdx, phiValueId: phiArg.valueId, incoming: incoming) 'noIncref'
 			continue
 		end 'noIncref'
 		// No +1 on this edge — incref the incoming value so the phi owns a
 		// clean reference along this path.
 		logTrace(LogCategory.ir, message: function() gives "RC-EDGE-INCREF func={ctx.func.name} val=%{incoming} edge=block_{predId}->block_{block.id} class={ownershipClassName(ctx.classOf(incoming))}")
 		ctx.edgeReleases.push(RcEdgeRelease.incref(predId, toBlockId: block.id, valueId: incoming))
-
-		// BORROW-BASE DEFERRAL: when the increfed phi-arg is an interior BORROW
-		// (`incoming` is `Array.get`'s element pointer, borrowing the array), the
-		// borrow's owning allocation (its ROOT — the array) must stay live until the
-		// incref above secures the phi's OWN +1. Pushing the root's release HERE —
-		// after the incref, on the SAME edge — orders it after the incref in the split
-		// edge block, so the array (and its element-walk) frees only AFTER the borrowed
-		// element has its independent +1. Without this the array's last-use term-drop
-		// in the predecessor frees the element before the incref, which then increfs a
-		// freed header (the `let ys = xs; let a = ys.get(0); a.value` garbage-tag UAF).
-		// The matching term-drop suppression is in `planTerminatorDeaths`
-		// (`borrowRootDeferredToPhiEdge`).
-		planBorrowRootEdgeRelease(ctx, predId: predId, toBlockId: block.id, borrowed: incoming)
 	end 'eachPred'
 end 'planPhiArgEdgeIncrefs'
+
+// BORROW-BASE DEFERRAL (release side). When an increfed phi-arg is an interior
+// BORROW (`incoming` is `Array.get`'s element pointer, borrowing the array), the
+// borrow's owning allocation (its ROOT — the array/element) must stay live until
+// the phi-arg incref (pass 1) has secured the phi's OWN +1. Releasing the root HERE
+// — in pass 2, after every incref on this edge — orders it after the increfs in the
+// split edge block, so the root (and its element-walk) frees only AFTER the borrowed
+// interiors have their independent +1. Without the deferral the root's last-use
+// term-drop in the predecessor frees the element before the incref, which then
+// increfs a freed header (the `let ys = xs; let a = ys.get(0); a.value` garbage-tag
+// UAF). `planBorrowRootEdgeRelease` dedups per (root, edge), so a root borrowed by
+// several block-args is released exactly once. The matching term-drop suppression is
+// in `planTerminatorDeaths` (`borrowRootDeferredToPhiEdge`).
+function planPhiArgBorrowRootReleases(ctx RcContext, block IrBlock, preds BlockIdArray, argIdx NodeIndex)
+	let phiArg = try block.blockArgs.get(argIdx) otherwise panic("planPhiArgBorrowRootReleases: blockArgs.get({argIdx}) OOB")
+
+	for predId in preds 'eachPred'
+		let predBlock = findBlockById(ctx, blockId: predId)
+		let incoming = incomingPhiArg(ctx, predBlock: predBlock, toBlockId: block.id, argIdx: argIdx)
+		if incoming == REFCOUNT_NO_VALUE 'noArg'
+			continue
+		end 'noArg'
+		if not phiArgNeedsEdgeIncrefOnPred(ctx, block: block, predBlock: predBlock, argIdx: argIdx, phiValueId: phiArg.valueId, incoming: incoming) 'noIncref'
+			continue
+		end 'noIncref'
+		planBorrowRootEdgeRelease(ctx, predId: predId, toBlockId: block.id, borrowed: incoming)
+	end 'eachPred'
+end 'planPhiArgBorrowRootReleases'
 
 // True iff a MANAGED block-arg at an index BEFORE `argIdx` on the SAME predecessor
 // edge is fed the SAME `incoming` value — so that earlier phi already claimed
@@ -6569,9 +6619,28 @@ function planBorrowRootEdgeRelease(ctx RcContext, predId BlockId, toBlockId Bloc
 	if ctx.liveness.liveOutContains(predId, vid: root) 'escapes'
 		return
 	end 'escapes'
+	// DEDUP: several phi-args on this SAME edge can borrow the SAME root (`br
+	// exit(c.a, c.b, c.c)`). The root holds ONE deferred +1 (its suppressed
+	// term-drop), so schedule its release exactly once — a second push here would
+	// over-release the root (freeing a still-referenced element).
+	if edgeReleaseAlreadyQueued(ctx, valueId: root, predId: predId, toBlockId: toBlockId) 'alreadyQueued'
+		return
+	end 'alreadyQueued'
 	logTrace(LogCategory.ir, message: function() gives "RC-BORROWROOT-EDGEDROP func={ctx.func.name} root=%{root} borrow=%{borrowed} edge=block_{predId}->block_{toBlockId}")
 	ctx.edgeReleases.push(RcEdgeRelease.release(predId, toBlockId: toBlockId, valueId: root))
 end 'planBorrowRootEdgeRelease'
+
+// True iff a RELEASE (not incref) of `valueId` on the `predId`->`toBlockId` edge is
+// already queued in `ctx.edgeReleases`. The dedup guard for
+// `planBorrowRootEdgeRelease` when several phi-args on one edge share a borrow root.
+function edgeReleaseAlreadyQueued(ctx RcContext, valueId ValueId, predId BlockId, toBlockId BlockId) returns bool
+	for er in ctx.edgeReleases 'each'
+		if not er.isIncref and er.valueId == valueId and er.fromBlockId == predId and er.toBlockId == toBlockId 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'edgeReleaseAlreadyQueued'
 
 // True iff `vid` is the borrow ROOT of some managed phi-arg that receives a
 // phi-edge incref on an out-edge of `block` — i.e. its release was DEFERRED to that
