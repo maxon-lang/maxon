@@ -276,3 +276,54 @@ end 'main'
 ```exitcode
 111
 ```
+
+<!-- test: not-over-bool-or-with-overloaded-callees -->
+When a bool `or`'s operands are calls whose return type can't be pinned at
+parse time (here `contains` is an overloaded method name shared by two types),
+the `or` lowers as a non-short-circuit bitwise op. The enclosing `not` must
+still treat the result as a bool (bit-flip), NOT an integer (bitwise
+complement) — otherwise `not (true or false)` would be `-2` and read as
+truthy in a condition. Each `if not (...)` below must branch on the correct
+bool result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+```
+```exitcode
+10
+```

@@ -53,24 +53,29 @@ module {
     x64.xor r12d, r12d
   inlined_Array.cursor_0_0:
     x64.mov rcx, [rbx+0] (8b)
+    x64.mov r8, rcx
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
     x64.call ArrayIterator.create
-    x64.test rdx, rdx
+    x64.mov r13, r8
+    x64.mov r14, rdx
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.test r14, r14
     x64.je inlined_Array.cursor_2_0
   inlined_Array.cursor_1_0:
     x64.xor ecx, ecx
-    x64.mov r13, rcx
+    x64.mov rbx, rcx
     x64.jmp inline_cont_main_0
   inlined_Array.cursor_2_0:
-    x64.xor r9d, r9d
-    x64.mov r13, r8
-    x64.mov rdx, r9
+    x64.xor r8d, r8d
+    x64.mov rbx, r13
+    x64.mov r14, r8
   inline_cont_main_0:
-    x64.test rdx, rdx
+    x64.test r14, r14
     x64.je try_0.merge
   try_0.otherwise:
     x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, r13
     x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 99
     x64.epilogue
@@ -82,7 +87,7 @@ module {
     x64.cmp r8, 3
     x64.jge inlined_ArrayIterator.advanceBy_3_0
   inlined_ArrayIterator.advance_0_0:
-    x64.mov r9, [r13+0] (8b)
+    x64.mov r9, [rbx+0] (8b)
     x64.mov rsi, [r9+8] (8b)
     x64.mov rdi, [r9+16] (8b)
     x64.mov rax, rsi
@@ -127,21 +132,19 @@ module {
     x64.jmp __rc_edge_5_0
   try_1.merge:
     x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, [r13+0] (8b)
+    x64.mov rcx, [rbx+0] (8b)
     x64.call stdlib.__managed_mem_cursor_current
     x64.mov r12, r8
     x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, r13
     x64.call __mm_decref_maybenull_helper
     x64.mov r8d, 4294967295
     x64.cmp r12, r8
     x64.jbe __range_ok_0
     x64.jmp __range_panic_0
   __rc_edge_5_0:
-    x64.mov rcx, r13
+    x64.mov rcx, rbx
     x64.call stdlib.__mm_incref
-    x64.mov rcx, r13
+    x64.mov rcx, rbx
     x64.jmp try_1.merge
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_19e563716adee09a]

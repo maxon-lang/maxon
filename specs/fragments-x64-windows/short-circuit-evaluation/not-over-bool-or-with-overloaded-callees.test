@@ -1,0 +1,132 @@
+// Test: not-over-bool-or-with-overloaded-callees
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov r8d, 5
+    x64.mov [rbx+0], r8 (8b)
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 9
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov r13d, 1
+    x64.cmp r8, 1
+    x64.sete r8
+    x64.cmp r9, 5
+    x64.sete r9
+    x64.or r9, r8
+    x64.xor r9, r13
+    x64.xor r8d, r8d
+    x64.test r9, r9
+    x64.je a_0.after
+  a_0:
+    x64.add r8, 1
+  a_0.after:
+    x64.mov r9, [r12+0] (8b)
+    x64.mov rsi, [rbx+0] (8b)
+    x64.cmp r9, 1
+    x64.sete r9
+    x64.cmp rsi, 1
+    x64.sete rsi
+    x64.or rsi, r9
+    x64.xor rsi, r13
+    x64.je __phi_trampoline_2_0
+  c_0:
+    x64.add r8, 10
+    x64.mov r14, r8
+  c_0.after:
+    x64.mov r15, [rbx+0] (8b)
+    x64.mov rcx, rbx
+    x64.call mm_drop
+    x64.mov rbx, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.cmp rbx, 9
+    x64.sete r8
+    x64.cmp r15, 1
+    x64.sete r9
+    x64.or r9, r8
+    x64.xor r9, r13
+    x64.je __phi_trampoline_4_0
+  d_0:
+    x64.add r14, 100
+    x64.mov r8, r14
+  d_0.after:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jle __cast_check_lo_0
+    x64.jmp __cast_panic_0
+  __cast_check_lo_0:
+    x64.test r8, r8
+    x64.jge __cast_ok_0
+  __cast_panic_0:
+    x64.lea rcx, [rip+__panic_msg_5e5c979ae7228ad9]
+    x64.call mrt_panic
+  __cast_ok_0:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_5e5c979ae7228ad9]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_2_0:
+    x64.mov r14, r8
+    x64.jmp c_0.after
+  __phi_trampoline_4_0:
+    x64.mov r8, r14
+    x64.jmp d_0.after
+  }
+}
+---

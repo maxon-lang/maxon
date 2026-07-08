@@ -24,22 +24,24 @@ module {
     mir.br inlined_Array.cursor_0_0()
   inlined_Array.cursor_0_0:
     %14 = mir.load %3, 0 width: qword
-    %15, %16 = mir.try_call @ArrayIterator.create(%14, %5)
-    %17 = mir.mov_imm 0 : i64
-    %18 = mir.cmp ne, %16, %17
-    mir.cond_br %18 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.sub.i64 %14, %24
+    mir.atomic_inc %25
+    %16, %17 = mir.try_call @ArrayIterator.create(%14, %5)
+    %26 = mir.call @__mm_decref_maybenull_helper(%3)
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %17, %18
+    mir.cond_br %19 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
   inlined_Array.cursor_1_0:
-    %25 = mir.call @__mm_decref_maybenull_helper(%3)
-    %19 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_0(%19, %16)
-  inlined_Array.cursor_2_0:
     %20 = mir.mov_imm 0 : i64
-    %23 = mir.call @__mm_decref_maybenull_helper(%3)
-    mir.br inline_cont_main_0(%15, %20)
-  inline_cont_main_0(%21: i64, %22: i64):
-    %24 = mir.call @__mm_decref_maybenull_helper(%21)
+    mir.br inline_cont_main_0(%20, %17)
+  inlined_Array.cursor_2_0:
+    %21 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%16, %21)
+  inline_cont_main_0(%22: i64, %23: i64):
+    %27 = mir.call @__mm_decref_maybenull_helper(%22)
     %8 = mir.mov_imm 0 : i64
-    %9 = mir.cmp ne, %22, %8
+    %9 = mir.cmp ne, %23, %8
     mir.cond_br %9 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
     %11 = mir.mov_imm 1 : i64

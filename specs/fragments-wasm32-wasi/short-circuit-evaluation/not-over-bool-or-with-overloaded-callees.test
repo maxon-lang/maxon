@@ -1,0 +1,118 @@
+// Test: not-over-bool-or-with-overloaded-callees
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 5 : i64
+    %53 = mir.mov_imm 8 : i64
+    %54 = mir.mov_imm 0 : i64
+    %55 = mir.call @stdlib.__mm_alloc(%53, %54)
+    mir.store %2, %55, 0 width: qword
+    %4 = mir.mov_imm 9 : i64
+    %56 = mir.mov_imm 8 : i64
+    %57 = mir.mov_imm 0 : i64
+    %58 = mir.call @stdlib.__mm_alloc(%56, %57)
+    mir.store %4, %58, 0 width: qword
+    %6 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 5 : i64
+    %59 = mir.load %55, 0 width: qword
+    %60 = mir.cmp eq, %59, %8
+    %11 = mir.mov_imm 1 : i64
+    %61 = mir.load %58, 0 width: qword
+    %62 = mir.cmp eq, %61, %11
+    %13 = mir.or.i64 %60, %62
+    %15 = mir.xor.i64 %13, %11
+    mir.cond_br %15 [then: a_0(), else: a_0.after(%6)]
+  a_0:
+    %18 = mir.add.i64 %6, %11
+    mir.br a_0.after(%18)
+  a_0.after(%52: i64):
+    %63 = mir.load %55, 0 width: qword
+    %64 = mir.cmp eq, %63, %11
+    %65 = mir.load %58, 0 width: qword
+    %66 = mir.cmp eq, %65, %11
+    %25 = mir.or.i64 %64, %66
+    %27 = mir.xor.i64 %25, %11
+    mir.cond_br %27 [then: c_0(), else: c_0.after(%52)]
+  c_0:
+    %29 = mir.mov_imm 10 : i64
+    %30 = mir.add.i64 %52, %29
+    mir.br c_0.after(%30)
+  c_0.after(%51: i64):
+    %67 = mir.load %55, 0 width: qword
+    %68 = mir.cmp eq, %67, %11
+    %71 = mir.call @mm_drop(%55)
+    %35 = mir.mov_imm 9 : i64
+    %69 = mir.load %58, 0 width: qword
+    %70 = mir.cmp eq, %69, %35
+    %72 = mir.call @mm_drop(%58)
+    %37 = mir.or.i64 %68, %70
+    %39 = mir.xor.i64 %37, %11
+    mir.cond_br %39 [then: d_0(), else: d_0.after(%51)]
+  d_0:
+    %41 = mir.mov_imm 100 : i64
+    %42 = mir.add.i64 %51, %41
+    mir.br d_0.after(%42)
+  d_0.after(%50: i64):
+    %44 = mir.mov_imm 255 : i64
+    %45 = mir.cmp gt, %50, %44
+    mir.cond_br %45 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %46 = mir.mov_imm 0 : i64
+    %47 = mir.cmp lt, %50, %46
+    mir.cond_br %47 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %48 = mir.global_addr @__panic_msg_5e5c979ae7228ad9
+    %49 = mir.call @mrt_panic(%48)
+  __cast_ok_0:
+    %73 = mir.mov_imm 255 : i64
+    %74 = mir.cmp ugt, %50, %73
+    mir.cond_br %74 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %75 = mir.global_addr @__panic_msg_5e5c979ae7228ad9
+    %76 = mir.call @mrt_panic(%75)
+  __range_ok_0:
+    mir.ret %50
+  }
+}
+---

@@ -3965,7 +3965,7 @@ type MaxonToStdLowering
 			globalLoad(result, name, slotType, _) then self.lowerGlobalLoad(result, name: name, slotType: slotType, dstBlock: dstBlock)
 			globalStore(name, value, slotType, _) then self.lowerGlobalStore(name, value: value, slotType: slotType, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
-			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
+			unop(result, operand, opKind, operandType, _) then self.lowerUnop(result, operand: operand, opKind: opKind, opOperandType: operandType, dstBlock: dstBlock)
 			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
 			cmp(result, left, right, predicate, _, _, operandType, _) then self.lowerCmp(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock)
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
@@ -5804,7 +5804,7 @@ type MaxonToStdLowering
 	// already-float operand from the value-type map and rewrite to a float
 	// subtract so targets that strictly check operand widths (wasm) accept
 	// the emitted body.
-	function lowerUnop(result ByteArray, operand ByteArray, opKind UnaryOpKind, dstBlock IrBlock)
+	function lowerUnop(result ByteArray, operand ByteArray, opKind UnaryOpKind, opOperandType MaxonType, dstBlock IrBlock)
 		let operandId = self.resolveName(operand)
 		let isFloatNeg = match opKind 'isFloatNeg'
 			neg gives self.getIsFloat(operandId)
@@ -5833,7 +5833,19 @@ type MaxonToStdLowering
 			bitNot gives false
 		end 'isLogNot'
 		if isLogicalNot 'logicalNot'
-			let operandType = self.getValueType(operandId)
+			// Prefer the op's TypeResolution-stamped operandType: it is the
+			// authoritative operand type. `getValueType` is NOT reliable for a
+			// binop result operand — `lowerBinop` doesn't stamp its result's
+			// value type, so a `not (boolA or boolB)` whose `or` was lowered
+			// bitwise (the parser couldn't confirm bool-ness at short-circuit-
+			// gate time, e.g. overloaded bool-returning callees like `contains`)
+			// would report a stale default type here and pick the `-1` int-
+			// complement mask instead of the `1` bool bit-flip — producing a
+			// non-zero `not(true)` that a `test`-based cond-br reads as true.
+			var operandType = opOperandType
+			if isUnresolvedType(operandType) 'noAnnotation'
+				operandType = self.getValueType(operandId)
+			end 'noAnnotation'
 			let operandIsBool = match operandType 'isBool'
 				boolean gives true
 				integer to function gives false

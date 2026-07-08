@@ -43,63 +43,65 @@ module {
     mir.br inlined_Array.cursor_0_0()
   inlined_Array.cursor_0_0:
     %60 = mir.load %4, 0 width: qword
-    %61, %62 = mir.try_call @ArrayIterator.create(%60, %18)
-    %63 = mir.mov_imm 0 : i64
-    %64 = mir.cmp ne, %62, %63
-    mir.cond_br %64 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+    %76 = mir.mov_imm 8 : i64
+    %77 = mir.sub.i64 %60, %76
+    mir.atomic_inc %77
+    %62, %63 = mir.try_call @ArrayIterator.create(%60, %18)
+    %78 = mir.call @__mm_decref_maybenull_helper(%4)
+    %64 = mir.mov_imm 0 : i64
+    %65 = mir.cmp ne, %63, %64
+    mir.cond_br %65 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
   inlined_Array.cursor_1_0:
-    %65 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_0(%65, %62)
-  inlined_Array.cursor_2_0:
     %66 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_0(%61, %66)
-  inline_cont_main_0(%67: i64, %68: i64):
-    %22 = mir.cmp ne, %68, %0
+    mir.br inline_cont_main_0(%66, %63)
+  inlined_Array.cursor_2_0:
+    %67 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%62, %67)
+  inline_cont_main_0(%68: i64, %69: i64):
+    %22 = mir.cmp ne, %69, %0
     mir.cond_br %22 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
-    %80 = mir.call @__mm_decref_maybenull_helper(%4)
-    %79 = mir.call @__mm_decref_maybenull_helper(%67)
+    %82 = mir.call @__mm_decref_maybenull_helper(%68)
     %24 = mir.mov_imm 99 : i64
     mir.ret %24
   try_0.merge:
-    %69 = mir.load %67, 0 width: qword
-    %70 = mir.call @stdlib.__managed_mem_cursor_current(%69)
+    %70 = mir.load %68, 0 width: qword
+    %71 = mir.call @stdlib.__managed_mem_cursor_current(%70)
     %30 = mir.global_addr @__layout_ArrayIterator_Byte
-    %31, %32 = mir.try_call @ArrayIterator.advance(%67, %30)
+    %31, %32 = mir.try_call @ArrayIterator.advance(%68, %30)
     %34 = mir.cmp ne, %32, %0
     mir.cond_br %34 [then: try_1.merge(%0), else: try_1.ok()]
   try_1.ok:
     mir.br __rc_edge_5_0()
   try_1.merge(%58: i64):
-    %77 = mir.call @__mm_decref_maybenull_helper(%58)
-    %71 = mir.load %67, 0 width: qword
-    %72 = mir.call @stdlib.__managed_mem_cursor_current(%71)
-    %42 = mir.add.i64 %70, %72
+    %80 = mir.call @__mm_decref_maybenull_helper(%58)
+    %72 = mir.load %68, 0 width: qword
+    %73 = mir.call @stdlib.__managed_mem_cursor_current(%72)
+    %42 = mir.add.i64 %71, %73
     %44 = mir.global_addr @__layout_ArrayIterator_Byte
-    %45, %46 = mir.try_call @ArrayIterator.advance(%67, %44)
+    %45, %46 = mir.try_call @ArrayIterator.advance(%68, %44)
     %48 = mir.cmp ne, %46, %0
     mir.cond_br %48 [then: try_2.merge(%0), else: try_2.ok()]
   try_2.ok:
     mir.br __rc_edge_8_0()
   try_2.merge(%59: i64):
-    %78 = mir.call @__mm_decref_maybenull_helper(%59)
-    %73 = mir.load %67, 0 width: qword
-    %74 = mir.call @stdlib.__managed_mem_cursor_current(%73)
-    %56 = mir.add.i64 %42, %74
-    %76 = mir.call @__mm_decref_maybenull_helper(%4)
-    %75 = mir.call @__mm_decref_maybenull_helper(%67)
-    %83 = mir.mov_imm 255 : i64
-    %84 = mir.cmp ugt, %56, %83
-    mir.cond_br %84 [then: __range_panic_0(), else: __range_ok_0()]
+    %81 = mir.call @__mm_decref_maybenull_helper(%59)
+    %74 = mir.load %68, 0 width: qword
+    %75 = mir.call @stdlib.__managed_mem_cursor_current(%74)
+    %56 = mir.add.i64 %42, %75
+    %79 = mir.call @__mm_decref_maybenull_helper(%68)
+    %85 = mir.mov_imm 255 : i64
+    %86 = mir.cmp ugt, %56, %85
+    mir.cond_br %86 [then: __range_panic_0(), else: __range_ok_0()]
   __rc_edge_5_0:
-    %81 = mir.call @stdlib.__mm_incref(%67)
-    mir.br try_1.merge(%67)
+    %83 = mir.call @stdlib.__mm_incref(%68)
+    mir.br try_1.merge(%68)
   __rc_edge_8_0:
-    %82 = mir.call @stdlib.__mm_incref(%67)
-    mir.br try_2.merge(%67)
+    %84 = mir.call @stdlib.__mm_incref(%68)
+    mir.br try_2.merge(%68)
   __range_panic_0:
-    %85 = mir.global_addr @__panic_msg_9d9c2791d5bfff18
-    %86 = mir.call @mrt_panic(%85)
+    %87 = mir.global_addr @__panic_msg_9d9c2791d5bfff18
+    %88 = mir.call @mrt_panic(%87)
   __range_ok_0:
     mir.ret %56
   }
