@@ -1379,14 +1379,34 @@ type RcContext
 	// (INCREF-of-freed). Treating the SLOT as the owner-of-record — move-on-store,
 	// borrow loads, one scope-exit drop — disposes the +1 once regardless of load count.
 	// A BORROWED interface param stays EXCLUDED (caller-owned; a scope-exit drop would
-	// over-release it). WASM is excluded by the shared gate.
+	// over-release it). WASM is excluded by the shared gate. The interface-fat shape is
+	// the only thing this adds over `isConsumedParamHomeSlot` — the param-role + consume
+	// bit resolution lives there.
 	export function isConsumedInterfaceParamSlot(slotId VarSlot) returns bool
-		if not self.func.isParamRegionScopeSlot(slotId) 'notParamSlot'
-			return false
-		end 'notParamSlot'
 		if not self.slotIsInterfaceFatValueHalf(slotId) 'notInterfaceFat'
 			return false
 		end 'notInterfaceFat'
+		return self.isConsumedParamHomeSlot(slotId)
+	end 'isConsumedInterfaceParamSlot'
+
+	// True iff `slotId` is the home slot of a parameter this function CONSUMES (per
+	// `funcParamConsumes`), of ANY type. A consumed param received the caller's
+	// transferred +1 (Concept C), so the CALLEE owns that reference and must dispose it
+	// exactly once at scope exit. When such a param's home slot is ADDRESS-TAKEN — its
+	// address escaped into a closure env, so mem2reg left the param memory-backed
+	// instead of promoting it to SSA (the `PassPipeline.run(self)` shape, whose `self`
+	// the per-pass `log` closures capture) — the slot is the owner-of-record and
+	// `planAddressTakenSlotDrops` releases its content at scope exit. The raw `func.param`
+	// seeding the slot carries no `valueManaged` flag (params default un-flagged), so the
+	// `isManaged`-gated store scan in `addressTakenSlotHoldsManaged` MISSES it and would
+	// skip the drop, leaking the moved-in +1 (the per-compile pipeline leak: pipeline /
+	// project / stdModule / globalData never reclaimed). Keying off the slot's param ROLE
+	// recovers it. `isConsumedInterfaceParamSlot` is the interface-fat specialization
+	// (adds the fat-value-half shape gate, which also excludes wasm).
+	export function isConsumedParamHomeSlot(slotId VarSlot) returns bool
+		if not self.func.isParamRegionScopeSlot(slotId) 'notParamSlot'
+			return false
+		end 'notParamSlot'
 		// Resolve the slot's ABI parameter index. The decoupling map is authoritative;
 		// when it is empty (synthesized / pre-decoupling functions) the scope slot id IS
 		// the ABI index for param-region slots (`isParamRegionScopeSlot`'s own fallback).
@@ -1396,7 +1416,7 @@ type RcContext
 		end 'noDecoupleMap'
 		let abi = try scopeMap.get(slotId) otherwise return false
 		return paramConsumeBit(self.funcParamConsumes, callee: self.func.name, argIndex: abi)
-	end 'isConsumedInterfaceParamSlot'
+	end 'isConsumedParamHomeSlot'
 
 	// True iff `slotId` is a by-reference R-VALUE SCRATCH slot — the caller-side backing
 	// `LowerMaxonToStd.byRefArgAddress` materializes when an r-value (literal / expression
@@ -4367,6 +4387,21 @@ function planAddressTakenSlotDrops(ctx RcContext)
 	if ctx.addressTakenSlots.count() > slotCount 'coverScratchSlots'
 		slotCount = ctx.addressTakenSlots.count()
 	end 'coverScratchSlots'
+	// The per-slot "holds a managed +1 needing a scope-exit drop" fact is INVARIANT
+	// across return blocks — it depends only on the slot and the function body, not the
+	// exit point. Compute it ONCE here instead of re-deriving it inside every
+	// (return block × slot) iteration: `addressTakenSlotHoldsManaged` walks the whole
+	// body (a store scan, plus a managed-load scan for consumed-param slots), so the
+	// former per-block recomputation was O(returnBlocks × slots × ops) — which dominates
+	// large functions, and rc-sanitize inflates the op count enough to push worker
+	// compiles past the spec-runner watchdog under parallel load.
+	var holdsManaged = BoolArray.create()
+	var precomputeSlot = 0
+	while precomputeSlot < slotCount 'precompute'
+		let hit = ctx.isAddressTakenSlot(precomputeSlot as VarSlot) and addressTakenSlotHoldsManaged(ctx, slotId: precomputeSlot as VarSlot)
+		holdsManaged.push(hit)
+		precomputeSlot = precomputeSlot + 1
+	end 'precompute'
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planAddressTakenSlotDrops: blockRef not in module.blocks")
 		if not block.hasTerminatorOp() 'noTerm'
@@ -4378,7 +4413,7 @@ function planAddressTakenSlotDrops(ctx RcContext)
 		let opCount = block.opRefs.count()
 		var slotId = 0
 		while slotId < slotCount 'eachSlot'
-			if ctx.isAddressTakenSlot(slotId as VarSlot) and addressTakenSlotHoldsManaged(ctx, slotId: slotId as VarSlot) 'managedCapture'
+			if (try holdsManaged.get(slotId) otherwise false) 'managedCapture'
 				// Insert `loadSlot` THEN `decref(loaded)` immediately before the
 				// terminator. Both queue at `pos = opCount` (same pos): `applyPlans`
 				// inserts same-pos ties in REVERSE plan-order, so queue the DECREF FIRST
@@ -4551,9 +4586,22 @@ function addressTakenSlotHoldsManaged(ctx RcContext, slotId VarSlot) returns boo
 	// (params default un-flagged), so the storeSlot scan below — which gates on
 	// `isManaged(storedValue)` — would MISS it and skip the scope-exit drop, leaking the
 	// moved-in +1. Key off the slot's role: its content needs the scope-exit decref.
-	if ctx.isConsumedInterfaceParamSlot(slotId) 'consumedParamSlot'
+	if ctx.isConsumedInterfaceParamSlot(slotId) 'consumedInterfaceParamSlot'
 		return true
-	end 'consumedParamSlot'
+	end 'consumedInterfaceParamSlot'
+	// A CONSUMED plain (non-interface) param whose home slot is ADDRESS-TAKEN — captured
+	// into a closure env, so mem2reg left it memory-backed instead of promoting it (the
+	// `PassPipeline.run(self)` shape: `self` captured by the per-pass `log` closures) —
+	// likewise holds the caller's moved-in +1 and needs the scope-exit drop. But ONLY
+	// when the param is MANAGED: a SCALAR param (a `bool`/`int` also captured into that
+	// same closure) has an address-taken param-region home slot too, and dropping its raw
+	// value would decref a non-pointer (the `registerUnresolvedTopLevelDecl(mutable bool)`
+	// closure-capture crash). The seeding `func.param` is un-flagged like the interface
+	// case, so confirm managed-ness off the slot's LOADS (which DO carry the value's real
+	// `valueManaged` classification) rather than the param.
+	if ctx.isConsumedParamHomeSlot(slotId) and slotHasManagedLoad(ctx, slotId: slotId) 'consumedManagedParamSlot'
+		return true
+	end 'consumedManagedParamSlot'
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("addressTakenSlotHoldsManaged: blockRef not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
@@ -4565,6 +4613,26 @@ function addressTakenSlotHoldsManaged(ctx RcContext, slotId VarSlot) returns boo
 	end 'eachBlock'
 	return false
 end 'addressTakenSlotHoldsManaged'
+
+// True iff some `loadSlot(result, slotId)` in the function produces a MANAGED value — the
+// authoritative signal that `slotId`'s content is a heap reference. Used to confirm a
+// consumed-param home slot actually holds a managed +1 before emitting its scope-exit
+// drop: the seeding `func.param` is un-flagged (params default un-flagged), but its
+// re-loads carry the value's real managed classification, so a scalar param (a `bool`/
+// `int` captured into a closure) is correctly excluded from the drop.
+function slotHasManagedLoad(ctx RcContext, slotId VarSlot) returns bool
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("slotHasManagedLoad: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("slotHasManagedLoad: opIdx not in module.ops")
+			let (isLoad, loadResult, loadSlotId) = loadSlotResultAndSlot(op)
+			if isLoad and loadSlotId == slotId and ctx.isManaged(loadResult) 'managedLoad'
+				return true
+			end 'managedLoad'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'slotHasManagedLoad'
 
 function opStoresManagedIntoSlot(ctx RcContext, op StdOp, slotId VarSlot) returns bool
 	return match op 'dispatch'
