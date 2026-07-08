@@ -9581,22 +9581,23 @@ type MaxonToStdLowering
 		let elementSize = self.emitLoadFieldI64(sourceId, offset: 24, dstBlock: dstBlock)
 
 		// Stamp the cursor fields. Position starts at 0; source_ptr@32 RETAINS the
-		// source record (incref) so it outlives the cursor — `__destruct___Managed-
-		// MemoryCursor` drops this ref when the cursor is torn down. The retain is
-		// emitted as a manual `__mm_incref` here (NOT via the field-store-incref path:
-		// the cursor's registered struct only knows buffer@0/position@8, so offset 32
-		// is invisible to the inserter's field-store accounting).
+		// source record so it outlives the cursor — `__destruct___ManagedMemoryCursor`
+		// drops this ref when the cursor is torn down. The retain is supplied by the
+		// refcount inserter: the `store cursor+32, source` of a MANAGED value is a
+		// heap-store that `planManagedHeapStore` covers with its INCREF-NEW (the
+		// container takes its own ref, even of a borrowed view), balanced 1:1 by the
+		// cursor destructor's decref. Emitting a SECOND manual `__mm_incref` here
+		// double-counted that retain: the source `__ManagedMemory` (and its element
+		// buffer) then ended at rc 1 after teardown and LEAKED — every `for x in
+		// <managed collection>` over a scope-local collection leaked its backing.
+		// (The buffer@0/length@16/element_size@24 stores are non-managed scalars, so
+		// the inserter leaves them alone; only the managed source@32 gets the retain.)
 		let zero = self.emitConstI64(0, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 0, valueId: buffer, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 8, valueId: zero, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 16, valueId: length, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 24, valueId: elementSize, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 32, valueId: sourceId, dstBlock: dstBlock)
-		var increfArgs = ValueIdArray.create()
-		increfArgs.push(sourceId)
-		let increfRetId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: increfArgs)))
-		self.setValueType(increfRetId, t: MaxonType.integer)
 
 		// length == 0 → set error flag to `emptySlot` (1). We compute the
 		// flag value as `(length == 0) * 1` (cmp returns 0 or 1) and alias
