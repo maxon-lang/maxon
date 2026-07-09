@@ -164,3 +164,90 @@ end 'main'
 ```exitcode
 1
 ```
+
+### Array `==` operator dispatches to content equality
+
+The `==` / `!=` operators on a generic instance whose element is `Equatable`
+(here `Array with Int`, a `genericInstance`, not a plain struct) must dispatch
+to `Array.equals` — a byte-by-byte content compare — exactly as the C# bootstrap
+does. A prior self-hosted gap left the operators as a POINTER (identity) compare,
+so two distinct-but-content-equal arrays wrongly reported `!=`. The two arrays
+below are separate allocations with identical contents; identity compare would
+return the wrong answer.
+
+<!-- test: array-eq-operator-same-content -->
+```maxon
+function main() returns ExitCode
+	let a = [1, 2, 3]
+	let b = [1, 2, 3]
+	if a == b 'eq'
+		return 0
+	end 'eq'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Array `==` operator with different content
+
+<!-- test: array-eq-operator-different-content -->
+```maxon
+function main() returns ExitCode
+	let a = [1, 2, 3]
+	let b = [1, 2, 4]
+	if a == b 'eq'
+		return 0
+	end 'eq'
+	return 1
+end 'main'
+```
+```exitcode
+1
+```
+
+### Array `!=` operator on distinct-but-equal arrays is false
+
+The `!=` rewrite (`not (a.equals(b))`) must return `false` when the contents
+match — the negation of the content compare, never of a pointer compare.
+
+<!-- test: array-ne-operator-equal-content -->
+```maxon
+function main() returns ExitCode
+	let a = [7, 8, 9]
+	let b = [7, 8, 9]
+	if a != b 'ne'
+		return 1
+	end 'ne'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Byte array `==` operator against a fresh literal decode
+
+Mirrors the compiler's own `methodName == "set".toByteArray()` predicate shape:
+a `ByteArray` value compared with `==` against a freshly decoded string literal.
+These are always distinct allocations, so only content equality answers correctly.
+
+<!-- test: byte-array-eq-operator-fresh-literal -->
+```maxon
+function main() returns ExitCode
+	let name = "set".toByteArray()
+	let probe = "set".toByteArray()
+	let other = "get".toByteArray()
+	if name != probe 'shouldMatch'
+		return 1
+	end 'shouldMatch'
+	if name == other 'shouldDiffer'
+		return 2
+	end 'shouldDiffer'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

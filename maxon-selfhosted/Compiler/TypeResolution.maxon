@@ -7758,6 +7758,47 @@ function maxonTypeIsUnion(project Project, t MaxonType) returns bool
 	return false
 end 'maxonTypeIsUnion'
 
+// True when a cmp operand's `==` / `!=` must dispatch to `.equals()` rather than
+// stay an integer/pointer compare. Two shapes qualify, mirroring the C# bootstrap
+// (which routes every struct-KIND value — user structs AND collection instances
+// like `Array with Byte` — to `.equals()`):
+//   1. A user struct (registered in `structTypes`). A non-Equatable struct still
+//      routes here so the follow-up method resolution reports E3004, matching the
+//      bootstrap's "requires Equatable" diagnostic.
+//   2. A generic instance (`Array with Byte`, `ByteArray`, …) that CONFORMS to
+//      Equatable. Unlike a user struct, a generic instance is not otherwise
+//      flagged reference-typed here, so it needs its own arm. The Equatable gate
+//      is deliberate: a non-conforming instance keeps the pointer-compare path
+//      instead of emitting an unresolvable `.equals()` call. Without this arm the
+//      self-hosted compiler left `ByteArray == ByteArray` as a pointer compare
+//      (identity), diverging from the C# bootstrap's content equality — the root
+//      of the array-literal rdata/element-size self-compile divergence.
+function cmpOperandDispatchesToEquals(project Project, t MaxonType) returns bool
+	if maxonTypeIsRef(project, t: t) 'userStruct'
+		return true
+	end 'userStruct'
+	if not maxonTypeResolvesToGenericInstance(project, t: t) 'notGeneric'
+		return false
+	end 'notGeneric'
+	return typeConformsTo(project, t: t, interfaceName: "Equatable")
+end 'cmpOperandDispatchesToEquals'
+
+// True when `t` is a generic instance (`Array with X`, `Map with K V`, …), either
+// directly or through a generic typealias (`typealias ByteArray = Array with
+// Byte`). Distinguishes collection/instance reference types — whose `==`
+// dispatches to `.equals()` — from primitive typealiases (`Integer = int(…)`),
+// which stay integer comparisons even though they conform to Equatable.
+function maxonTypeResolvesToGenericInstance(project Project, t MaxonType) returns bool
+	return match t 'k'
+		genericInstance gives true
+		named(id) gives project.genericTypealiases.contains(project.typeNames.get(id))
+		boolean to character gives false
+		function to unresolved gives false
+		typeParameter gives false
+		interface to cstring gives false
+	end 'k'
+end 'maxonTypeResolvesToGenericInstance'
+
 function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBlock, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange, filePath FilePath, isStdlib bool)
 	// E3066: `union` values are inspectable only via `match` — reject `==`/`!=`.
 	// Both payload-free (scalar-backed) and payload-bearing (boxed) unions reach
@@ -7769,10 +7810,10 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, block IrBl
 		reportCompileError(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{opStr}', use 'match' instead", line: range.line, column: range.column, filePath: filePath)
 		return
 	end 'unionCmp'
-	if not maxonTypeIsRef(project, t: leftType) 'leftPrim'
+	if not cmpOperandDispatchesToEquals(project, t: leftType) 'leftPrim'
 		return
 	end 'leftPrim'
-	if not maxonTypeIsRef(project, t: rightType) 'rightPrim'
+	if not cmpOperandDispatchesToEquals(project, t: rightType) 'rightPrim'
 		return
 	end 'rightPrim'
 	// Only `==` (eq) and `!=` (ne) dispatch to `.equals()`; ordering
