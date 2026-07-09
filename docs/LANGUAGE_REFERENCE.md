@@ -4818,6 +4818,15 @@ end 'equal'
 
 If a struct contains a field that doesn't implement `Equatable` (such as a function type), using `==` produces error E3069.
 
+Generic collection instances that conform to `Equatable` — such as `Array with Byte` (`ByteArray`) or any `Array` of `Equatable` elements — also compare by content: `==` and `!=` dispatch to their `equals()` method, so two distinct arrays holding the same elements compare equal.
+
+```maxon
+let a = "set".toByteArray()
+let b = "set".toByteArray()
+a == b                      // true -- content equality, despite distinct objects
+a is b                      // false -- different heap objects
+```
+
 To compare reference identity (whether two variables point to the same heap object), use the `is` operator:
 
 ```maxon

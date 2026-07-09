@@ -87,6 +87,7 @@ b"\xFF\x00"         // \xNN for raw bytes; chars above U+00FF are rejected (E100
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
 Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` skips the right side. Integer `and`/`or` always evaluate both.
 `==` on struct types requires the type to implement `Equatable` (error E3069 if not).
+`==`/`!=` on Equatable types — including generic collections like `Array`/`ByteArray` — compare by content (dispatch to `equals()`); two distinct arrays with equal elements are `==`.
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.
 
