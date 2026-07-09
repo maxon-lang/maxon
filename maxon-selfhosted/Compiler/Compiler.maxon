@@ -1,7 +1,7 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 // When `irDump.enabled()` is true, the project-wide query cache is bypassed
 // so the pipeline re-runs and the printer hooks observe fresh modules.
-export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false, outputPathOverride String = "", rcSanitize bool = false) returns FilePath throws CompileError
+export function compile(path FilePath, target Target, coverage bool = false, irDump IrDumpOptions = IrDumpOptions.disabled(), irOutputPath FilePath = FilePath from "", leakCheck bool = false, cacheStats bool = false, cacheRoot FilePath = FilePath from "", libraryDirs StringArray = StringArray.create(), fastRegalloc bool = false, outputPathOverride String = "", rcSanitize bool = false, leakReport bool = false) returns FilePath throws CompileError
 	// Persisting the lazily-grown stdlib cache back to disk is safe from ANY
 	// project (Phase 3.5 made the cache codec project-independent — it resolves
 	// through the cache's own snapshot tables, not the consumer's interner), so
@@ -22,6 +22,29 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 	// parse time and is byte-identical; the stdlib cache filename carries the bit
 	// so a sanitized and a normal stdlib coexist.
 	project.rcSanitizeEnabled = rcSanitize
+	// `--leak-report`: include the `#if leakReport(true)` per-destructor leak-census
+	// count-map in stdlib/Internals.maxon and inject the exit-time dump. Implies
+	// `--leak-check` (the dump prints just before the exit-101 gate), so force that
+	// bit on here too — a caller that passed leakReport but not leakCheck (or a
+	// future call site) still gets a coherent build. The parser's leakReport(...)
+	// predicate reads this bit; a default build (false) skips the regions at parse
+	// time and is byte-identical. The stdlib cache filename carries the bit
+	// (libraryOptionsToken) so a census stdlib and a normal one coexist.
+	project.leakReportEnabled = leakReport
+	if leakReport 'impliesLeakCheck'
+		project.leakCheckEnabled = true
+	end 'impliesLeakCheck'
+	// The census keys on native code addresses (destructor offset from mrt_start),
+	// which have no wasm analogue (wasm dtors are table indices, not linear
+	// addresses). Rather than reject the whole build, degrade gracefully: drop the
+	// census (so the `#if leakReport(true)` regions are never parsed for wasm and
+	// the wasm stdlib stays byte-identical) while KEEPING the implied leak gate
+	// (`mrt_leak_check` works on every target). Native x64/arm64 keep the full
+	// census.
+	if leakReport and project.target.cpu == CpuArch.wasm32 'wasmNoCensus'
+		project.leakReportEnabled = false
+		printError("warning: --leak-report is a no-op on wasm (the per-destructor census keys on native code addresses); the implied --leak-check exit gate is still active\n")
+	end 'wasmNoCensus'
 	// `--cache-stats` / `--cache-root=DIR` (internal, drives `maxon test-lib-cache`):
 	// print the post-build CACHE_STATS line and/or redirect the library cache to a
 	// throwaway temp dir. Both default off / empty, so a normal build is unchanged.

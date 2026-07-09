@@ -936,6 +936,20 @@ export type Project
 	// and a normal stdlib coexist.
 	export var rcSanitizeEnabled as bool
 
+	// When true (`maxon build --leak-report`, which implies `--leak-check`), the
+	// parser's `leakReport(...)` conditional-compilation predicate evaluates true,
+	// so the stdlib compile INCLUDES the `#if leakReport(true)` per-destructor
+	// leak-census count-map in stdlib/Internals.maxon: `__mm_alloc` bumps the
+	// allocation's destructor bucket, `__mm_free` (and the mm_realloc untrack patch)
+	// decrements it, and at process exit `__leak_report_dump` prints a per-destructor
+	// table (offset-from-mrt_start + count, sorted by count desc) to stderr before
+	// the exit-101 leak gate runs. Off by default: the regions are skipped at PARSE
+	// time, so a normal build is byte-identical (zero hot-path cost). The stdlib
+	// cache filename carries this bit (libraryOptionsToken) so a census stdlib and a
+	// normal one coexist. Self-hosted-only — the GC'd C# bootstrap treats the
+	// predicate as constant-false.
+	export var leakReportEnabled as bool
+
 	// True when `maxon build --cache-stats <file>` should print a `CACHE_STATS …`
 	// line after the build (per-function regalloc hits/misses, stdlib cache
 	// hit/miss, compiled-function count). Read by the `maxon test-lib-cache`
@@ -1242,6 +1256,7 @@ export type Project
 			leakCheckEnabled: false,
 			fastRegalloc: false,
 			rcSanitizeEnabled: false,
+			leakReportEnabled: false,
 			cacheStatsEnabled: false,
 			cacheRootOverride: FilePath from "",
 			outputPathOverride: "",

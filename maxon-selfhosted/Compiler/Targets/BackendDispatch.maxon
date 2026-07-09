@@ -538,6 +538,17 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 		none then break 'argvFree'
 		helper(name) then patchMrtStartFreeArgvCache(augmented, helper: name)
 	end 'argvFree'
+	// `--leak-report`: inject the exit-time per-destructor census dump into mrt_start
+	// (which is always a per-compile body, so the injection is reliable regardless of
+	// stdlib-cache state). Runs BEFORE the leak gate below so the dump call lands
+	// ahead of the injected `mrt_leak_check` (the table prints, then the gate returns
+	// 101). The companion mm_realloc census untrack is baked into mm_realloc's
+	// runtime.std source (a runtime body that may live in the cache, so it cannot be
+	// reliably IR-patched here). Gated on the project flag — a non-census build never
+	// injects the dump.
+	if project.leakReportEnabled 'leakReport'
+		patchMrtStartLeakReport(augmented)
+	end 'leakReport'
 	// Spec-test leak gate: wrap osExit(main()) in mrt_leak_check so a standalone
 	// program that exits with live allocations returns 101. Runs LAST so it sees
 	// the final osExit position after the gt/io/module-init patches above. Gated
@@ -733,6 +744,23 @@ function patchMrtStartLeakCheck(module StdModule)
 	let osExitOpIdx = try site.entryBlock.opRefs.get(site.osExitPos + 1) otherwise panic("patchMrtStartLeakCheck: osExit opRefs.get OOB after insert")
 	try module.ops.set(osExitOpIdx, value: StdOp.system(StdSystemOp.osExit(checkedId))) otherwise panic("patchMrtStartLeakCheck: ops.set OOB at {osExitOpIdx}")
 end 'patchMrtStartLeakCheck'
+
+// `--leak-report`: inject `std call __leak_report_dump` into mrt_start's entry
+// block immediately BEFORE the osExit op, so the per-destructor leak census prints
+// to stderr right before the exit-101 gate. Must run BEFORE patchMrtStartLeakCheck
+// so the dump call lands ahead of the injected `mrt_leak_check` (both insert at the
+// current osExit position). Takes no args, returns void — result id unused. Gated by
+// `project.leakReportEnabled` (`--leak-report`, which implies `--leak-check`), so a
+// non-census build never sees this call. The dump body is a stdlib function
+// (`#if leakReport(true)` in Internals.maxon), pulled in by this runtime→stdlib call
+// edge exactly like mrt_start's existing `call __slab_init`.
+function patchMrtStartLeakReport(module StdModule)
+	let site = locateMrtStartExit(module, who: "patchMrtStartLeakReport")
+	let resultId = allocValueId(site.valueIdRef)
+	let dumpOpIdx = module.ops.count()
+	module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: "__leak_report_dump", argIds: ValueIdArray.create())))
+	try site.entryBlock.opRefs.insert(site.osExitPos, value: dumpOpIdx) otherwise panic("patchMrtStartLeakReport: opRefs.insert failed")
+end 'patchMrtStartLeakReport'
 
 // True iff `op` is `std osExit <codeId>` (the mrt_start process-exit op).
 function isOsExitOp(op StdOp) returns bool

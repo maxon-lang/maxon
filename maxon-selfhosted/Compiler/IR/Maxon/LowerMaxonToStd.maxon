@@ -667,7 +667,7 @@ end 'zeroBytesOfSize'
 // runtime.std's lock acquire/release helpers are no-ops while the runtime is
 // single-threaded. When threading lands, register one 8-byte slot per class
 // here and wire the helpers in `__slab_refill_mcache` to a real CAS loop.
-function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false, rcSanitizeEnabled bool = false)
+function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyncTraceEnabled bool = false, rcSanitizeEnabled bool = false, leakReportEnabled bool = false)
 	// Slab bottom-layer state (step 6a.12).
 	addDataSectionEntry(globalData, name: "__slab_init_done", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_arena_list_head", initialBytes: zeroBytesOfSize(8))
@@ -733,6 +733,22 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	// NAME PREFIX in classifyGlobalLabel (an unrecognized prefix classifies as
 	// .rdata, which silently mis-resolves every load/store of this block — the
 	// original `__rc_`-prefixed name crashed exactly that way).
+	// Per-destructor leak-census control block (`--leak-report` only). Anchors the
+	// runtime-slab-allocated destructor count-map (see the LEAK CENSUS section in
+	// stdlib/Internals.maxon for the LEAK_CTL_* / bucket layout). Four i64 words
+	// (32 bytes): +0 table_base (bucket array ptr, 0 until lazily OS-allocated),
+	// +8 capacity (bucket count, stamped at lazy-alloc), +16 raw_live (atomic count
+	// of live dtor==0 raw buffers), +24 dumping (1 while __leak_report_dump prints,
+	// so its own String temporaries don't re-enter the count-map). Only the small
+	// ctl anchor is data-section; the bucket array itself is a runtime slab/OS-page
+	// allocation (keeping the static footprint far under the 4KB zero-init-.data
+	// ceiling that larger globals hit). Same `__mm_` name-prefix requirement as the
+	// rc-sanitize ctls (classifyGlobalLabel keys reloc class off the prefix), and
+	// same option-only registration so a default binary carries zero trace of it.
+	if leakReportEnabled 'leakReport'
+		addDataSectionEntry(globalData, name: "__mm_leak_ctl", initialBytes: zeroBytesOfSize(32))
+	end 'leakReport'
+
 	if rcSanitizeEnabled 'rcSanitize'
 		addDataSectionEntry(globalData, name: "__mm_rc_quarantine_ctl", initialBytes: zeroBytesOfSize(48))
 		// Refcount-LEDGER control block (`--rc-sanitize` only). Anchors the ring-
@@ -1318,6 +1334,11 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	// regions, so a default build never lowers it (and the global itself is only
 	// registered for sanitized builds).
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.rcLedgerCtlAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Address of the per-destructor leak-census control block (`__mm_leak_ctl`).
+	// Referenced only from Internals.maxon code inside `#if leakReport(true)`
+	// regions, so a default build never lowers it (and the global itself is only
+	// registered for `--leak-report` builds).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.leakCtlAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	// Indirect call (one-arg variants). `indirectCall1` calls an `(i64) -> i64`
 	// target (the destructor ABI: `__mm_free` → `__destruct_*`); `indirectCallVoid1`
 	// calls an `(i64) -> void` target (the managed-element walk → `&__mm_decref`).
@@ -3488,7 +3509,7 @@ type MaxonToStdLowering
 		// `globalAddr __slab_*` / `globalAddr __mm_*` resolve to distinct
 		// addresses. Without this every allocator-state global would alias to
 		// offset 0 the moment `mrt_start` calls `__slab_init`.
-		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled, rcSanitizeEnabled: self.project.rcSanitizeEnabled)
+		registerSlabAndMmGlobalsForDataSection(self.globalData, asyncTraceEnabled: self.project.asyncTraceEnabled, rcSanitizeEnabled: self.project.rcSanitizeEnabled, leakReportEnabled: self.project.leakReportEnabled)
 
 		// Pass-by-reference: compute the whole-module set of directly-reassigned
 		// parameters up front (transitively propagated). It drives both the
@@ -13736,6 +13757,9 @@ function lookupInternalsGlobalAddrTarget(methodName String) returns String throw
 	end 'a'
 	if methodName == "rcLedgerCtlAddr" 'a'
 		return "__mm_rc_ledger_ctl"
+	end 'a'
+	if methodName == "leakCtlAddr" 'a'
+		return "__mm_leak_ctl"
 	end 'a'
 	throw InternalsBridgeLookupError.notBridge
 end 'lookupInternalsGlobalAddrTarget'

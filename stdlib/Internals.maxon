@@ -2072,6 +2072,297 @@ end '__slab_free'
 	end '__mm_drop_tagged'
 #endif
 
+#if leakReport(true)
+
+	// =========================================================================
+	// Per-destructor LEAK CENSUS (`--leak-report`).
+	//
+	// A tiny per-DESTRUCTOR histogram of live allocations. `__mm_alloc` bumps the
+	// bucket for the allocation's destructor; `__mm_free` (and the mm_realloc
+	// old-buffer untrack patch) decrements it. At process exit `__leak_report_dump`
+	// walks the histogram and prints, for every destructor with a non-zero live
+	// count, one `LEAK-DTOR count=<c> off=0x<offset>` line — `offset` being the
+	// destructor's address minus mrt_start's, so the numbers are ASLR-invariant and
+	// symbolize offline via `llvm-nm` (see docs/leak-report.md). This is the
+	// PROVEN census recipe made permanent: the destructor is recorded at ALLOC
+	// time (when the object is unquestionably live) and tallied at EXIT from the
+	// side histogram — we NEVER read `[user_ptr-24]` of a possibly-freed object at
+	// walk time.
+	//
+	// STORAGE. An open-addressed (linear-probe) hash table keyed by destructor
+	// address, `LEAK_TABLE_BUCKETS` buckets of `LEAK_BUCKET_SIZE` bytes
+	// ({key, live-count}). The table is a single runtime slab/OS-page allocation
+	// (NOT the slab it instruments, and NOT `__mm_alloc` — it must not count
+	// itself), lazily allocated on the first non-raw record and never freed. Only a
+	// 32-byte `__mm_leak_ctl` anchor lives in .data (well under the 4KB zero-init
+	// ceiling larger globals hit). Distinct destructors number in the low
+	// thousands even for a full self-compile, so a 65536-bucket table stays far
+	// below the load factor where linear probing degrades.
+	//
+	// Raw buffers (`destructor == 0`, e.g. element-buffer allocations) share the
+	// empty-bucket sentinel (key 0), so they are counted separately in the ctl's
+	// `raw_live` word instead of the table.
+	//
+	// CONCURRENCY. Counts move via atomics; a destructor's bucket is claimed once
+	// via CAS (first sight). The one-time lazy table alloc is guarded by the slab
+	// lock. All of it is `#if leakReport(true)`-gated: a default build allocates no
+	// table, and `__mm_alloc`/`__mm_free` never reference these helpers, so the
+	// alloc/free hot path is byte-identical to a build where the census does not
+	// exist.
+	//
+	// `__mm_leak_ctl` field layout (registered in
+	// LowerMaxonToStd.registerSlabAndMmGlobalsForDataSection):
+	//   +0  table_base — bucket-array pointer, 0 until lazily OS-allocated
+	//   +8  capacity   — bucket count, stamped at lazy-alloc (0 = unallocated)
+	//   +16 raw_live   — atomic live count of destructor==0 (raw) buffers
+	//   +24 dumping    — 1 while __leak_report_dump prints, so its own String
+	//                    temporaries' allocs/frees don't re-enter the histogram
+	let LEAK_CTL_TABLE = 0
+	let LEAK_CTL_CAPACITY = 8
+	let LEAK_CTL_RAW_LIVE = 16
+	let LEAK_CTL_DUMPING = 24
+
+	// Bucket: {key: destructor address, count: live allocations, sampleRA: a
+	// representative __mm_alloc-site return address for this destructor — the code
+	// that allocated one leaking object of this type}. 24 bytes. sampleRA turns the
+	// per-type census into a per-SITE lead: symbolize it to name the function that
+	// created the leaking object (the first non-zero sample is kept, so it names one
+	// concrete allocation of that type — enough to localize a systematic leak).
+	let LEAK_BUCKET_SIZE = 24
+	let LEAK_BUCKET_KEY = 0
+	let LEAK_BUCKET_COUNT = 8
+	let LEAK_BUCKET_SAMPLE_RA = 16
+
+	// 65536 buckets × 24 bytes = 1.5 MiB, lazily OS-allocated (zero-filled). Power of
+	// two so the hash masks with `BUCKETS - 1`. Kept literals — top-level `let`
+	// accepts only a literal; update the two together.
+	let LEAK_TABLE_BUCKETS = 65536
+	let LEAK_TABLE_BYTES = 1572864
+
+	// Lazily OS-allocate the bucket array on the first non-raw record. Guarded by
+	// the slab lock (a one-time cost); `table_base` is published LAST so a racing
+	// recorder sees either 0 (and contends the lock) or a fully-initialized table.
+	// osAllocPages hands back zero-filled pages, so every bucket starts {key:0,
+	// count:0} and key==0 correctly reads as an empty slot.
+	function __leak_ctl_ensure()
+		let ctl = __Internals.leakCtlAddr()
+		if __Internals.loadIndirect(ctl + LEAK_CTL_TABLE) != 0 'ready'
+			return
+		end 'ready'
+		__Internals.osLockAcquire(__Internals.slabLockAddr())
+		if __Internals.loadIndirect(ctl + LEAK_CTL_TABLE) == 0 'stillUnset'
+			let table = __slab_assert_os_alloc(__Internals.osAllocPages(LEAK_TABLE_BYTES))
+			__Internals.storeIndirect(ctl + LEAK_CTL_CAPACITY, value: LEAK_TABLE_BUCKETS)
+			__Internals.storeIndirect(ctl + LEAK_CTL_TABLE, value: table)
+		end 'stillUnset'
+		__Internals.osLockRelease(__Internals.slabLockAddr())
+	end '__leak_ctl_ensure'
+
+	// Hash a destructor code address to a starting bucket index. Destructors are
+	// 16-byte-aligned .text pointers, so the low bits carry no entropy — fold two
+	// shifted copies and mask to the (power-of-two) table size.
+	function __leak_hash(dtor MachineWord) returns MachineWord
+		let mixed = (dtor shr 4) xor (dtor shr 17)
+		return mixed and (LEAK_TABLE_BUCKETS - 1)
+	end '__leak_hash'
+
+	// Find `dtor`'s bucket via linear probing. When `claim` is true an empty bucket
+	// is atomically claimed for `dtor` (first-sight insert); when false an empty
+	// bucket means "never recorded" and returns 0. Returns the bucket address, or 0
+	// on not-found. A full table (more than LEAK_TABLE_BUCKETS distinct
+	// destructors) would silently under-report, so it exits loudly instead.
+	function __leak_probe(dtor MachineWord, claim bool) returns MachineWord
+		let table = __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_TABLE)
+		if table == 0 'noTable'
+			return 0
+		end 'noTable'
+		var idx = __leak_hash(dtor)
+		var probes = 0
+		while probes < LEAK_TABLE_BUCKETS 'probe'
+			let bucket = table + idx * LEAK_BUCKET_SIZE
+			let key = __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY)
+			if key == dtor 'hit'
+				return bucket
+			end 'hit'
+			if key == 0 'empty'
+				if not claim 'noClaim'
+					return 0
+				end 'noClaim'
+				// Race-safe claim: CAS 0 -> dtor. On success we own the bucket; on
+				// failure another recorder claimed it — if it is now OUR dtor, use
+				// it, otherwise keep probing.
+				if __Internals.atomicCas(bucket + LEAK_BUCKET_KEY, old: 0, new: dtor) != 0 'claimed'
+					return bucket
+				end 'claimed'
+				if __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY) == dtor 'wonByOther'
+					return bucket
+				end 'wonByOther'
+			end 'empty'
+			idx = idx + 1
+			if idx == LEAK_TABLE_BUCKETS 'wrap'
+				idx = 0
+			end 'wrap'
+			probes = probes + 1
+		end 'probe'
+		// 138 = leak-census table full (raise LEAK_TABLE_BUCKETS).
+		__Internals.osExit(138)
+		return 0
+	end '__leak_probe'
+
+	// Record one live allocation of destructor `dtor` allocated at code address
+	// `allocRA` (the return address into __mm_alloc's caller). Raw buffers (dtor==0)
+	// are tallied in the ctl's raw_live word; everything else lands in its bucket,
+	// which also keeps the FIRST non-zero `allocRA` seen as a representative
+	// allocation site for that type. Called by __mm_alloc under `#if leakReport(true)`.
+	// No-op while the exit dump is printing (its String temporaries must not perturb
+	// the frozen histogram).
+	function __leak_count_inc(dtor MachineWord, allocRA MachineWord)
+		if __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_DUMPING) != 0 'dumping'
+			return
+		end 'dumping'
+		if dtor == 0 'raw'
+			__Internals.atomicInc(__Internals.leakCtlAddr() + LEAK_CTL_RAW_LIVE)
+			return
+		end 'raw'
+		__leak_ctl_ensure()
+		let bucket = __leak_probe(dtor, claim: true)
+		if bucket != 0 'have'
+			__Internals.atomicInc(bucket + LEAK_BUCKET_COUNT)
+			if __Internals.loadIndirect(bucket + LEAK_BUCKET_SAMPLE_RA) == 0 'sample'
+				__Internals.storeIndirect(bucket + LEAK_BUCKET_SAMPLE_RA, value: allocRA)
+			end 'sample'
+		end 'have'
+	end '__leak_count_inc'
+
+	// Swap two 24-byte buckets in place (selection-sort primitive; operates on the
+	// census's own OS-allocated array, so no allocation and no tracked memory).
+	function __leak_swap_buckets(a MachineWord, b MachineWord)
+		let ak = __Internals.loadIndirect(a + LEAK_BUCKET_KEY)
+		let ac = __Internals.loadIndirect(a + LEAK_BUCKET_COUNT)
+		let ar = __Internals.loadIndirect(a + LEAK_BUCKET_SAMPLE_RA)
+		__Internals.storeIndirect(a + LEAK_BUCKET_KEY, value: __Internals.loadIndirect(b + LEAK_BUCKET_KEY))
+		__Internals.storeIndirect(a + LEAK_BUCKET_COUNT, value: __Internals.loadIndirect(b + LEAK_BUCKET_COUNT))
+		__Internals.storeIndirect(a + LEAK_BUCKET_SAMPLE_RA, value: __Internals.loadIndirect(b + LEAK_BUCKET_SAMPLE_RA))
+		__Internals.storeIndirect(b + LEAK_BUCKET_KEY, value: ak)
+		__Internals.storeIndirect(b + LEAK_BUCKET_COUNT, value: ac)
+		__Internals.storeIndirect(b + LEAK_BUCKET_SAMPLE_RA, value: ar)
+	end '__leak_swap_buckets'
+
+	// Process-exit dump of the per-destructor census to stderr. Injected into
+	// mrt_start right before the `mrt_leak_check` gate by the leak-report backend
+	// patch (BackendDispatch.patchMrtStartLeakReport), so it runs after main +
+	// global cleanup + GT drain — `__mm_alloc_count` is then the true leak count.
+	//
+	// The `dumping` flag freezes the histogram: printing builds interpolated
+	// String temporaries that themselves allocate/free, and without the flag those
+	// (raw-buffer) allocations would perturb `raw_live` mid-report. `total`
+	// (`__mm_alloc_count`) is snapshotted up front for the same reason; it must
+	// still equal `raw_live + Σ bucket counts`, an invariant the offline census
+	// verifies.
+	//
+	// Non-empty buckets are compacted to the front of the array in place (write
+	// index never exceeds read index, so the pass is safe) and selection-sorted by
+	// count descending before printing — no heap allocation, so the walk never
+	// counts itself.
+	function __leak_report_dump()
+		let ctl = __Internals.leakCtlAddr()
+		__Internals.storeIndirect(ctl + LEAK_CTL_DUMPING, value: 1)
+
+		let total = __Internals.loadIndirect(__Internals.mmAllocCountAddr())
+		let rawLive = __Internals.loadIndirect(ctl + LEAK_CTL_RAW_LIVE)
+		let mrtStart = __Internals.mrtStartAddr()
+		let table = __Internals.loadIndirect(ctl + LEAK_CTL_TABLE)
+		let capacity = __Internals.loadIndirect(ctl + LEAK_CTL_CAPACITY)
+
+		// Compact every bucket with a non-zero live count to the front of the array.
+		var live = 0
+		if table != 0 'haveTable'
+			var read = 0
+			while read < capacity 'compact'
+				let src = table + read * LEAK_BUCKET_SIZE
+				let count = __Internals.loadIndirect(src + LEAK_BUCKET_COUNT)
+				if count != 0 'nonEmpty'
+					let dst = table + live * LEAK_BUCKET_SIZE
+					__Internals.storeIndirect(dst + LEAK_BUCKET_KEY, value: __Internals.loadIndirect(src + LEAK_BUCKET_KEY))
+					__Internals.storeIndirect(dst + LEAK_BUCKET_COUNT, value: count)
+					__Internals.storeIndirect(dst + LEAK_BUCKET_SAMPLE_RA, value: __Internals.loadIndirect(src + LEAK_BUCKET_SAMPLE_RA))
+					live = live + 1
+				end 'nonEmpty'
+				read = read + 1
+			end 'compact'
+
+			// Selection sort the [0, live) prefix by count descending.
+			var i = 0
+			while i < live 'selOuter'
+				var best = i
+				var j = i + 1
+				while j < live 'selInner'
+					let cj = __Internals.loadIndirect(table + j * LEAK_BUCKET_SIZE + LEAK_BUCKET_COUNT)
+					let cbest = __Internals.loadIndirect(table + best * LEAK_BUCKET_SIZE + LEAK_BUCKET_COUNT)
+					if cj > cbest 'newBest'
+						best = j
+					end 'newBest'
+					j = j + 1
+				end 'selInner'
+				if best != i 'swap'
+					__leak_swap_buckets(table + i * LEAK_BUCKET_SIZE, b: table + best * LEAK_BUCKET_SIZE)
+				end 'swap'
+				i = i + 1
+			end 'selOuter'
+		end 'haveTable'
+
+		printError("LEAK-REPORT-BEGIN total={total} distinct={live} raw={rawLive}\n")
+		var k = 0
+		while k < live 'emit'
+			let bucket = table + k * LEAK_BUCKET_SIZE
+			let dtor = __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY)
+			let count = __Internals.loadIndirect(bucket + LEAK_BUCKET_COUNT)
+			let sampleRA = __Internals.loadIndirect(bucket + LEAK_BUCKET_SAMPLE_RA)
+			let off = dtor - mrtStart
+			let allocOff = sampleRA - mrtStart
+			printError("LEAK-DTOR count={count} off=0x{off:x} alloc=0x{allocOff:x}\n")
+			k = k + 1
+		end 'emit'
+		if rawLive != 0 'hasRaw'
+			printError("LEAK-RAW count={rawLive}\n")
+		end 'hasRaw'
+		printError("LEAK-REPORT-END\n")
+
+		__Internals.storeIndirect(ctl + LEAK_CTL_DUMPING, value: 0)
+	end '__leak_report_dump'
+
+#endif
+
+// Untrack one freed allocation of destructor `dtor` from the per-destructor leak
+// census. Called by `__mm_free` (under `#if leakReport(true)`) AND unconditionally
+// by `mm_realloc` (runtime.std), which frees the old buffer DIRECTLY — bypassing
+// `__mm_free` — so its census entry would otherwise leak a permanent +1 skew per
+// realloc. Because mm_realloc's call is unconditional and mm_realloc's body may be
+// served from the stdlib cache (so it cannot be reliably IR-patched at link time),
+// this function must ALWAYS exist — hence it lives OUTSIDE the census `#if` block,
+// with its body gated internally: real work when the census is on, an empty no-op
+// (one `ret`) when off. `destructor` is always the value the caller already read
+// from the still-live object's mm header, so a freed header is never re-read.
+function __leak_count_dec(destructor MachineWord)
+	#if leakReport(true)
+		if __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_DUMPING) != 0 'dumping'
+			return
+		end 'dumping'
+		if destructor == 0 'raw'
+			__Internals.atomicDec(__Internals.leakCtlAddr() + LEAK_CTL_RAW_LIVE)
+			return
+		end 'raw'
+		let bucket = __leak_probe(destructor, claim: false)
+		if bucket != 0 'have'
+			__Internals.atomicDec(bucket + LEAK_BUCKET_COUNT)
+		end 'have'
+	#else
+		// Census disabled: no-op. Discard the (unused) destructor so a non-census
+		// build carries an empty untrack that mm_realloc can still call.
+		_ = destructor
+	#endif
+end '__leak_count_dec'
+
 // Allocate a tracked block of `size` bytes through the slab allocator.
 // Layout: 32-byte mm header followed by the user region. The first header
 // word sits at slot_base+0 so the destructor / size / refcount fields keep
@@ -2095,6 +2386,18 @@ function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWor
 		clampedSize = 1
 	end 'clamp'
 	__Internals.atomicInc(__Internals.mmAllocCountAddr())
+	// `--leak-report`: tally this allocation under its destructor in the
+	// per-destructor census (raw dtor==0 buffers go to the ctl's raw_live word).
+	// Kept adjacent to the __mm_alloc_count bump so the two stay in lockstep. The
+	// alloc-site sample is __mm_alloc's own return address (`[frame_ptr + 8]` on the
+	// rbp-based native ABI) — i.e. the direct caller of __mm_alloc, which localizes a
+	// systematic leak to its allocation site (a per-type constructor or the code that
+	// allocates the record directly). A single one-level read of __mm_alloc's OWN
+	// frame is safe; walking deeper is not (frame-pointer omission at depth). The hot
+	// path is byte-identical when the flag is off (region parsed away).
+	#if leakReport(true)
+		__leak_count_inc(destructor, allocRA: __Internals.loadIndirect(__Internals.loadFramePtr() + 8))
+	#endif
 	let slotBase = __slab_alloc(clampedSize + 32)
 	// The first header word is reserved (always 0). It is kept so the
 	// destructor / size / refcount offsets stay at their historical
@@ -2140,6 +2443,14 @@ function __mm_free(ptr MachineWord)
 		__Internals.indirectCall1(destructor, arg: ptr)
 	end 'hasDtor'
 	__Internals.atomicDec(__Internals.mmAllocCountAddr())
+	// `--leak-report`: untrack this allocation from the per-destructor census.
+	// `destructor` here is the value already read from the mm header of the (still
+	// live) object — we never re-read a freed header. Kept adjacent to the
+	// __mm_alloc_count decrement, and BEFORE the rc-sanitize quarantine early
+	// return below, so the census stays balanced on every free path.
+	#if leakReport(true)
+		__leak_count_dec(destructor)
+	#endif
 	// slot_base = ptr - 32 (the reserved word is the first header word).
 	// rc-sanitize: quarantine the mm slot here (NOT in `__slab_free`) so only slots
 	// carrying the mm header + ledger word are poisoned/held; raw `__slab_alloc`

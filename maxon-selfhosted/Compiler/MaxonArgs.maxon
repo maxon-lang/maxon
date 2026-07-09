@@ -77,6 +77,20 @@ export type MaxonArgs
 	// Diagnostic-only — production builds never enable it. For SPEC runs the
 	// same flag routes through setSpecRcSanitize instead (see SpecTestRunner).
 	export var rcSanitize as bool
+	// `maxon build --leak-report <file>` turns on the per-destructor leak census
+	// (and IMPLIES `--leak-check`). At process exit, in addition to the exit-101
+	// leak gate, a per-destructor table is dumped to stderr: for every allocation
+	// still live at exit, its allocation-site destructor is tallied, and the table
+	// prints one `LEAK-DTOR count=<c> off=0x<offset>` line per distinct destructor
+	// (offset = destructor address − mrt_start address, so it is ASLR-invariant),
+	// sorted by count descending, framed by `LEAK-REPORT-BEGIN`/`LEAK-REPORT-END`.
+	// Symbol names resolve offline: `llvm-nm --numeric-sort BIN`, then subtract
+	// mrt_start's VA from each symbol's VA to match the printed offsets (see
+	// docs/leak-report.md). Costs ZERO when off: the count-map lives inside
+	// `#if leakReport(true)` regions of stdlib/Internals.maxon, so a default build
+	// never parses it and the alloc/free hot path is byte-identical. Self-hosted
+	// only; a no-op on wasm (the census is x64/arm64-native).
+	export var leakReport as bool
 	// Print per-pass wall-clock timings at the end of the run. Useful for
 	// understanding where compile time is being spent during spec runs.
 	export var profilePasses as bool
@@ -170,6 +184,7 @@ export type MaxonArgs
 			coverage: false,
 			leakCheck: false,
 			rcSanitize: false,
+			leakReport: false,
 			profilePasses: false,
 			fastRegalloc: false,
 			cacheStats: false,
@@ -255,7 +270,15 @@ export type MaxonArgs
 				args.leakCheck = true
 			end 'isLeakCheck' else if arg == "--rc-sanitize" 'isRcSanitize'
 				args.rcSanitize = true
-			end 'isRcSanitize' else if arg == "--dump-stages" 'isDumpStages'
+			end 'isRcSanitize' else if arg == "--leak-report" 'isLeakReport'
+				// `--leak-report` IMPLIES `--leak-check`: the per-destructor census
+				// is dumped by `__leak_report_dump`, which the backend injects into
+				// mrt_start right before the `mrt_leak_check` gate — so the gate must
+				// be wired too. Setting leakCheck here keeps the two in lockstep no
+				// matter which order the flags appear on the command line.
+				args.leakReport = true
+				args.leakCheck = true
+			end 'isLeakReport' else if arg == "--dump-stages" 'isDumpStages'
 				args.dumpStages = true
 			end 'isDumpStages' else if arg.startsWith("--dump-stages=") 'isDumpStagesFiltered'
 				// Sentinel: an empty NAMES list means "dump every stage" — same

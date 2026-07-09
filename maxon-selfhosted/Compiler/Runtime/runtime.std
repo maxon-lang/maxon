@@ -4111,6 +4111,19 @@ func mm_realloc 2 i64
     v44 = std subI64 v43 v41
     std call mrt_memzero v42 v44
 
+    // --leak-report census untrack: the OLD buffer is about to be slab-freed
+    // directly (bypassing __mm_free), so its per-destructor census entry — bumped
+    // when it was originally __mm_alloc'd — would never be decremented, leaving a
+    // permanent +1 skew per realloc. Balance it here with the preserved destructor
+    // (slot 3, matching the destructor the new buffer's __mm_alloc counted). This
+    // is an UNCONDITIONAL call because runtime.std has no conditional compilation;
+    // `__leak_count_dec` is an empty no-op (one `ret`) in a non-census build, so
+    // this costs a single call off the container-regrow path when leak-report is
+    // off. Runs BEFORE __slab_free while the old header (and its destructor) is
+    // still valid — we never read a freed header.
+    v45 = std loadSlot 3
+    std call __leak_count_dec v45
+
     // Slab-free the old buffer directly (bypassing mm_free): the new buffer
     // has taken ownership of the contents, so the destructor must NOT run.
     // slot_base = old_ptr - 32 (32-byte header).

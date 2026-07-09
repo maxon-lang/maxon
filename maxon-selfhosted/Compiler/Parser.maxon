@@ -17813,7 +17813,7 @@ export type Parser
 			try expect(TokenKind.rightParen)
 			return inner
 		end 'isParen'
-		let funcToken = try consumeExpecting("conditional predicate ('os', 'arch', 'testing', or 'rcSanitize')")
+		let funcToken = try consumeExpecting("conditional predicate ('os', 'arch', 'testing', 'rcSanitize', or 'leakReport')")
 		try expect(TokenKind.leftParen)
 		let valueToken = cursor.current()
 		if valueToken.kind == TokenKind.true or valueToken.kind == TokenKind.false 'isBool'
@@ -17852,7 +17852,19 @@ export type Parser
 			end 'wantsOn'
 			return not project.rcSanitizeEnabled
 		end 'isRcSanitize'
-		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', or 'rcSanitize'.", line: funcToken.line, column: funcToken.column, filePath: filePath)
+		if funcName == "leakReport" 'isLeakReport'
+			// `leakReport` is true when this build runs with `--leak-report`
+			// (project.leakReportEnabled). Same PARSE-time gate rationale as
+			// `rcSanitize`: the per-destructor leak-census count-map in
+			// stdlib/Internals.maxon lives entirely inside `#if leakReport(true)`
+			// regions, so a default build is byte-identical to one where the
+			// census code does not exist — the alloc/free hot path pays nothing.
+			if equalsIgnoreCase(value, b: "true") 'wantsOn'
+				return project.leakReportEnabled
+			end 'wantsOn'
+			return not project.leakReportEnabled
+		end 'isLeakReport'
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'.", line: funcToken.line, column: funcToken.column, filePath: filePath)
 		throw ParserError.unhandledToken
 	end 'evaluateConditionalAtom'
 

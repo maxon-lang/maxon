@@ -20334,8 +20334,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // never sanitizes, so the predicate is constant-false here. Recognized so
       // both parsers accept the same conditional-compilation language.
       "rcSanitize" => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase),
+      // The leak-report per-destructor census (`--leak-report`) is likewise a
+      // self-hosted-only diagnostic: its count-map lives in the `#if leakReport(true)`
+      // regions of stdlib/Internals.maxon, and its exit-time dump / mm_realloc
+      // untrack are wired by the self-hosted BackendDispatch. This GC'd bootstrap
+      // never emits it, so the predicate is constant-false here — recognized only
+      // so both parsers accept the same conditional-compilation language and the
+      // shared Internals.maxon keeps parsing under the C# lane.
+      "leakReport" => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', or 'rcSanitize'.",
+        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'.",
         funcToken.Line, funcToken.Column),
     };
   }

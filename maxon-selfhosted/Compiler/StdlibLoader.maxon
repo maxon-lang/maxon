@@ -58,8 +58,18 @@ end 'libraryCacheDir'
 // The parameter is deliberately non-defaulted everywhere it is threaded: a
 // call site that forgot to pass it would silently mix sanitized and normal
 // caches.
-function libraryOptionsToken(rcSanitize bool) returns String
-	return "-rcsan" if rcSanitize else ""
+// `--leak-report` likewise changes the library's emitted bytes (the
+// `#if leakReport(true)` count-map regions in stdlib/Internals.maxon expand), so
+// it appends its own `-lkrpt` segment. The two options are independent bits, so
+// the tokens concatenate (a build that is both sanitized AND census'd — unusual
+// but legal — gets `-rcsan-lkrpt`), keeping every option combination on a
+// distinct, coexisting cache file.
+function libraryOptionsToken(rcSanitize bool, leakReport bool) returns String
+	var token = "-rcsan" if rcSanitize else ""
+	if leakReport 'census'
+		token = "{token}-lkrpt"
+	end 'census'
+	return token
 end 'libraryOptionsToken'
 
 // Phase 3: the PER-TARGET cache file (Tier C — linkable bytecode + globalData).
@@ -69,10 +79,10 @@ end 'libraryOptionsToken'
 // *Cache validity key*), plus the build-options token (`libraryOptionsToken`)
 // so byte-changing options coexist the same way.
 // Filename `<lib>-<target>-<fp>[<opts>].mxc`.
-function libraryCachePath(lib Library, target Target, rcSanitize bool, cacheRootOverride FilePath = FilePath from "") returns FilePath
+function libraryCachePath(lib Library, target Target, rcSanitize bool, leakReport bool, cacheRootOverride FilePath = FilePath from "") returns FilePath
 	let cacheDir = libraryCacheDir(lib, cacheRootOverride: cacheRootOverride)
 	let fp = compilerFingerprintToken()
-	return cacheDir.join("{lib.name}-{targetToString(target)}-{fp}{libraryOptionsToken(rcSanitize)}.mxc")
+	return cacheDir.join("{lib.name}-{targetToString(target)}-{fp}{libraryOptionsToken(rcSanitize, leakReport: leakReport)}.mxc")
 end 'libraryCachePath'
 
 // Phase 3: the META cache file (Tier A library metadata + Tier B inlinable Std
@@ -88,10 +98,10 @@ end 'libraryCachePath'
 // `<lib>-<target>-<fp>.mxc`; the Tier-C file stores this file's content hash so
 // the two stay paired. Carries the same build-options token as the Tier-C file
 // (the Tier-B inlinable Std IR embeds the sanitizer branches too).
-function libraryMetaCachePath(lib Library, target Target, rcSanitize bool, cacheRootOverride FilePath = FilePath from "") returns FilePath
+function libraryMetaCachePath(lib Library, target Target, rcSanitize bool, leakReport bool, cacheRootOverride FilePath = FilePath from "") returns FilePath
 	let cacheDir = libraryCacheDir(lib, cacheRootOverride: cacheRootOverride)
 	let fp = compilerFingerprintToken()
-	return cacheDir.join("{lib.name}-meta-{targetToString(target)}-{fp}{libraryOptionsToken(rcSanitize)}.mxc")
+	return cacheDir.join("{lib.name}-meta-{targetToString(target)}-{fp}{libraryOptionsToken(rcSanitize, leakReport: leakReport)}.mxc")
 end 'libraryMetaCachePath'
 
 // Delete the on-disk caches the project at `projectDir` uses (backs the
@@ -931,8 +941,8 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// coexistence. The path no longer depends on the user project, so the old
 	// per-project `.maxon/cache/` location, the single-file parent resolution,
 	// and the sticky `stdlibCacheProjectDirs` pin are all gone.
-	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
-	let cachePath = libraryCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
+	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
 	let checksumStart = passTimerStart()
 	let contentChecksum = currentStdlibChecksum(project.target)
 	recordPassSince("__stdlib-checksum", startMs: checksumStart)
@@ -1187,8 +1197,8 @@ export function registerExternalLibrary(project Project, rootDir FilePath, targe
 	// (both stdlib-only).
 	registerBuiltinTypeBootstrap(project)
 
-	let metaPath = libraryMetaCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
-	let cachePath = libraryCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
+	let metaPath = libraryMetaCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(try libraryRegistry.libs.get(libIndex) otherwise panic("registerExternalLibrary: index {libIndex} vanished"), target: target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
 	let contentChecksum = currentLibraryChecksum(rootDir)
 	let cacheResult = readStdlibCache(project, metaPath: metaPath, targetPath: cachePath, target: target, expectedChecksum: contentChecksum)
 
@@ -1763,8 +1773,8 @@ function loadCacheForTarget(project Project)
 	// per-target (Tier C) file; the shared meta (Tier A+B) file is
 	// target-independent, so a previous target's build already wrote it and this
 	// cross-compile reads + reuses it (case 2 of the cold/partial lifecycle).
-	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
-	let cachePath = libraryCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
+	let metaPath = libraryMetaCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(stdlibLib(), target: project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
 	let contentChecksum = currentStdlibChecksum(project.target)
 
 	let cacheResult = readStdlibCache(project, metaPath: metaPath, targetPath: cachePath, target: project.target, expectedChecksum: contentChecksum)
@@ -2271,7 +2281,7 @@ function persistGrownStdlibCache(project Project)
 	if lib.cacheDirRoot.isEmpty() 'noPath'
 		return
 	end 'noPath'
-	let cachePath = libraryCachePath(lib, target: project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride)
+	let cachePath = libraryCachePath(lib, target: project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride)
 	let contentChecksum = currentStdlibChecksum(project.target)
 	// Phase 3: lazy codegen fills ONLY name-keyed Tier-C bytecode
 	// (`cacheData.functions`) — it lowers already-resolved cached Std IR to machine
@@ -2297,7 +2307,7 @@ function persistGrownStdlibCache(project Project)
 	// the shared cache oscillates instead of accumulating the union every project
 	// needs. Re-read the on-disk Tier-C bytecode and adopt any real-code function
 	// we still hold only as a stub, so the file we write is the UNION.
-	mergeOnDiskGrownStdlibFunctions(project.target, rcSanitize: project.rcSanitizeEnabled, cacheRootOverride: project.cacheRootOverride, contentChecksum: contentChecksum, metaHash: metaHash)
+	mergeOnDiskGrownStdlibFunctions(project.target, rcSanitize: project.rcSanitizeEnabled, leakReport: project.leakReportEnabled, cacheRootOverride: project.cacheRootOverride, contentChecksum: contentChecksum, metaHash: metaHash)
 
 	writeLibraryTargetCache(cachePath, data: lib.cacheData, target: project.target, contentChecksum: contentChecksum, metaHash: metaHash)
 end 'persistGrownStdlibCache'
@@ -2466,9 +2476,9 @@ end 'preserveUnchangedWasm'
 // is byte-compatible by construction; filling EXISTING stub slots by name (no
 // reorder) preserves the stub-ordered `.text` layout and byte parity. A missing
 // / corrupt / key-mismatched file yields nothing → we write our own grown set.
-function mergeOnDiskGrownStdlibFunctions(target Target, rcSanitize bool, cacheRootOverride FilePath, contentChecksum CacheChecksum, metaHash MachineWord)
+function mergeOnDiskGrownStdlibFunctions(target Target, rcSanitize bool, leakReport bool, cacheRootOverride FilePath, contentChecksum CacheChecksum, metaHash MachineWord)
 	let lib = stdlibLib()
-	let cachePath = libraryCachePath(lib, target: target, rcSanitize: rcSanitize, cacheRootOverride: cacheRootOverride)
+	let cachePath = libraryCachePath(lib, target: target, rcSanitize: rcSanitize, leakReport: leakReport, cacheRootOverride: cacheRootOverride)
 	let disk = readOnDiskTargetTierC(cachePath, target: target, expectedChecksum: contentChecksum, expectedMetaHash: metaHash)
 	if disk.functions.count() == 0 'noOnDisk'
 		return

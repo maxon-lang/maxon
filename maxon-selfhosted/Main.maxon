@@ -128,6 +128,7 @@ function printUsage()
 	print("  --emit-ir                Write .ir file\n")
 	print("  --leak-check             Wire the process-exit leak gate: exit 101 if any allocation is live at exit (uses the stdlib cache)\n")
 	print("  --rc-sanitize            Refcount sanitizer: poison+quarantine freed objects so the first touch of a freed object panics immediately (diagnostic; zero cost when off)\n")
+	print("  --leak-report            Per-destructor leak census (implies --leak-check): at exit, dump a LEAK-DTOR table (offset-from-mrt_start + count, sorted desc) to stderr; symbolize offline via llvm-nm (see docs/leak-report.md). Zero cost when off; no-op on wasm\n")
 	print("  --dump-stages[=NAMES]    Write IR at each pipeline stage (user program only); NAMES = comma-separated pass-name substrings to dump only matching stages (e.g. =insert-refcounts)\n")
 	print("  --dump-stages-stdlib[=NAMES]  Like --dump-stages but include the full stdlib IR in each stage file\n")
 	print("  --dump-func=NAMES         Restrict --dump-stages output to functions whose name contains one of the comma-separated NAMES (e.g. =parsePostfix)\n")
@@ -178,7 +179,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'hasCacheRoot'
 
 	let startMs = Clock.nowMs()
-	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries, fastRegalloc: args.fastRegalloc, outputPathOverride: args.outputOverride, rcSanitize: args.rcSanitize) otherwise (e) 'err'
+	let outputPath = try compile(fp, target: args.target(), coverage: args.coverage, irDump: irDump, irOutputPath: irOutputPath, leakCheck: args.leakCheck, cacheStats: args.cacheStats, cacheRoot: cacheRoot, libraryDirs: args.libraries, fastRegalloc: args.fastRegalloc, outputPathOverride: args.outputOverride, rcSanitize: args.rcSanitize, leakReport: args.leakReport) otherwise (e) 'err'
 		match e 'report'
 			fileNotFound(p) then printError("error: file not found: {p}\n")
 			directoryNotFound(p) then printError("error: directory not found: {p}\n")
