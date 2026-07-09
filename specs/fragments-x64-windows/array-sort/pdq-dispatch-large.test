@@ -49,7 +49,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=96
+    x64.prologue stack_size=80
     x64.lea rcx, [rip+__layout_Array_Integer]
     x64.call Array.create
     x64.mov r12, r8
@@ -223,45 +223,46 @@ module {
     x64.mov r9, [r8+8] (8b)
     x64.mov [rbp+-32], r9
     x64.xor r8d, r8d
-    x64.mov [rbp+-40], r8
-    x64.lea r8, [rip+__layout_Array_Integer]
+    x64.lea r14, [rip+__layout_Array_Integer]
     x64.lea rdi, [rip+__fnref_ascending]
   inlined_Array.pdqsortRange_0_0:
     x64.mov rax, [rbp+-32]
     x64.sub rax, 0
-    x64.xor esi, esi
     x64.cmp rax, 32
-    x64.jg __phi_trampoline_23_0
+    x64.jg inlined_Array.pdqsortRange_2_0
   inlined_Array.pdqsortRange_1_0:
     x64.mov rcx, r12
+    x64.mov rdx, r8
     x64.mov r9, rdi
-    x64.mov rdx, [rbp+-40]
     x64.mov rax, [rbp+-32]
     x64.mov rsi, 0
-    x64.mov rdi, r8
+    x64.mov rdi, r14
     x64.call Array.smallSortRange
     x64.mov rcx, r12
     x64.call __mm_decref_maybenull_helper
     x64.jmp inline_cont_main_4
+  inlined_Array.pdqsortRange_2_0:
+    x64.xor r9d, r9d
   inlined_Array.pdqsortRange_3_0:
     x64.cmp rax, 1
     x64.jle inlined_Array.pdqsortRange_5_0
   inlined_Array.pdqsortRange_4_0:
-    x64.mov ecx, 2
+    x64.mov esi, 2
     x64.cqo
-    x64.idiv rcx
-    x64.mov rcx, rax
+    x64.idiv rsi
+    x64.mov rsi, rax
     x64.add r9, 1
-    x64.mov rax, rcx
+    x64.mov rax, rsi
     x64.jmp inlined_Array.pdqsortRange_3_0
   inlined_Array.pdqsortRange_5_0:
-    x64.mov eax, 2
-    x64.imul r9, rax
+    x64.mov esi, 2
+    x64.imul r9, rsi
+    x64.xor esi, esi
     x64.mov rcx, r12
-    x64.mov rdx, [rbp+-40]
+    x64.mov rdx, r8
     x64.mov rax, [rbp+-32]
     x64.mov rbx, 0
-    x64.mov [rsp+0], r8
+    x64.mov [rsp+0], r14
     x64.call Array.pdqsortRecurse
     x64.mov rcx, r12
     x64.call __mm_decref_maybenull_helper
@@ -500,9 +501,6 @@ module {
   __phi_trampoline_15_0:
     x64.mov rdx, r8
     x64.jmp inline_cont_main_1
-  __phi_trampoline_23_0:
-    x64.mov r9, rsi
-    x64.jmp inlined_Array.pdqsortRange_3_0
   }
 }
 ---
