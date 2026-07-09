@@ -2123,21 +2123,36 @@ end '__slab_free'
 	let LEAK_CTL_DUMPING = 24
 
 	// Bucket: {key: destructor address, count: live allocations, sampleRA: a
-	// representative __mm_alloc-site return address for this destructor — the code
-	// that allocated one leaking object of this type}. 24 bytes. sampleRA turns the
-	// per-type census into a per-SITE lead: symbolize it to name the function that
-	// created the leaking object (the first non-zero sample is kept, so it names one
-	// concrete allocation of that type — enough to localize a systematic leak).
-	let LEAK_BUCKET_SIZE = 24
+	// representative one-deep __mm_alloc-site return address, sampleRA2: the
+	// validated TWO-deep caller of that site (0 when unwalkable)}. 32 bytes.
+	// sampleRA turns the per-type census into a per-SITE lead — symbolize it to name
+	// the CONSTRUCTOR that allocated the leaking object (e.g. Array.init for the Array
+	// family). sampleRA2 climbs one frame further to name the constructor's OWN
+	// caller — for Array literals, the function that wrote `[...]` — turning "which
+	// type leaks" plus "who built it" into "who requested it". The pair is a coherent
+	// snapshot of ONE concrete allocation, resampled toward the bulk on power-of-two
+	// milestones (see __leak_count_inc) so it names the DOMINANT allocation site
+	// rather than the incidental first one.
+	let LEAK_BUCKET_SIZE = 32
 	let LEAK_BUCKET_KEY = 0
 	let LEAK_BUCKET_COUNT = 8
 	let LEAK_BUCKET_SAMPLE_RA = 16
+	let LEAK_BUCKET_SAMPLE_RA2 = 24
 
-	// 65536 buckets × 24 bytes = 1.5 MiB, lazily OS-allocated (zero-filled). Power of
+	// Upper bound on a single stack frame's span (rbp-to-caller-rbp distance) for the
+	// two-deep alloc-site walk (__leak_walk_2deep). A candidate caller frame pointer
+	// beyond this window above ours is treated as a corrupt/absent frame link and the
+	// walk falls back to 0 rather than dereferencing it. 1 MiB dwarfs any real single
+	// frame (even the compiler's largest spill-heavy frames stay well under it) while
+	// rejecting garbage — the same "bound the walk to a sane window" discipline
+	// mrt_panic_walk_frames applies to the fault-time backtrace (runtime.std).
+	let LEAK_STACK_WALK_WINDOW = 1048576
+
+	// 65536 buckets × 32 bytes = 2 MiB, lazily OS-allocated (zero-filled). Power of
 	// two so the hash masks with `BUCKETS - 1`. Kept literals — top-level `let`
 	// accepts only a literal; update the two together.
 	let LEAK_TABLE_BUCKETS = 65536
-	let LEAK_TABLE_BYTES = 1572864
+	let LEAK_TABLE_BYTES = 2097152
 
 	// Lazily OS-allocate the bucket array on the first non-raw record. Guarded by
 	// the slab lock (a one-time cost); `table_base` is published LAST so a racing
@@ -2209,14 +2224,76 @@ end '__slab_free'
 		return 0
 	end '__leak_probe'
 
+	// Frame-validated TWO-deep alloc-site walk. `allocFramePtr` is __mm_alloc's own
+	// rbp (read INLINE at the __mm_alloc call site, so it names __mm_alloc's frame,
+	// not this helper's). The one-deep sample already names the direct caller of
+	// __mm_alloc (the per-type constructor, e.g. Array.init); this climbs ONE frame
+	// further to name the constructor's caller — the code that requested the object.
+	//
+	// The single dereference this performs, `[callerFp + 8]`, is the risky one: a
+	// naive deeper walk faults if any intervening frame corrupts the saved-rbp link.
+	// Guard it exactly the way mrt_panic_walk_frames guards the fault-time backtrace
+	// (runtime.std): the candidate caller frame pointer must strictly ASCEND (a
+	// caller's frame sits at a higher address on the downward-growing stack), be
+	// 8-aligned, and lie within LEAK_STACK_WALK_WINDOW of our frame; the resulting
+	// return address must land inside .text. Any failed link returns 0 (unwalkable)
+	// rather than dereferencing garbage. Because every Maxon/runtime frame maintains
+	// a frame pointer (the x64/arm64 prologues emit an unconditional push rbp / stp
+	// x29), `callerFp` is in practice always a genuine, mapped caller frame — the
+	// guards degrade the rare corrupt/absent-link case to a missing sample. wasm has
+	// no frame-pointer chain (loadFramePtr yields 0) and returns 0 immediately.
+	function __leak_walk_2deep(allocFramePtr MachineWord) returns MachineWord
+		if allocFramePtr == 0 'noFp'
+			return 0
+		end 'noFp'
+
+		// callerFp = the direct caller's saved frame pointer, read from __mm_alloc's
+		// own saved-rbp slot (reliably stored by __mm_alloc's prologue).
+		let callerFp = __Internals.loadIndirect(allocFramePtr)
+		if callerFp <= allocFramePtr 'notAscending'
+			return 0
+		end 'notAscending'
+		if (callerFp and 7) != 0 'misaligned'
+			return 0
+		end 'misaligned'
+		if callerFp - allocFramePtr > LEAK_STACK_WALK_WINDOW 'tooFar'
+			return 0
+		end 'tooFar'
+
+		// Two-deep return address: into the constructor's caller. Validate it lands in
+		// .text (mirrors __rc_print_free_frame: textSize = symtable - mrt_start, since
+		// the symbol table is emitted immediately after the code region).
+		let ra2 = __Internals.loadIndirect(callerFp + 8)
+		let textBase = __Internals.mrtStartAddr()
+		let textOffset = ra2 - textBase
+		let textSize = __Internals.symtableAddr() - textBase
+		if textOffset >= 0 and textOffset < textSize 'inText'
+			return ra2
+		end 'inText'
+
+		return 0
+	end '__leak_walk_2deep'
+
 	// Record one live allocation of destructor `dtor` allocated at code address
-	// `allocRA` (the return address into __mm_alloc's caller). Raw buffers (dtor==0)
-	// are tallied in the ctl's raw_live word; everything else lands in its bucket,
-	// which also keeps the FIRST non-zero `allocRA` seen as a representative
-	// allocation site for that type. Called by __mm_alloc under `#if leakReport(true)`.
-	// No-op while the exit dump is printing (its String temporaries must not perturb
-	// the frozen histogram).
-	function __leak_count_inc(dtor MachineWord, allocRA MachineWord)
+	// `allocRA` (the one-deep return address into __mm_alloc's caller) with
+	// `allocRA2` the validated two-deep caller (0 when unwalkable). Raw buffers
+	// (dtor==0) are tallied in the ctl's raw_live word; everything else lands in its
+	// bucket, which keeps a representative `allocRA`/`allocRA2` sample PAIR for that
+	// type. Called by __mm_alloc under `#if leakReport(true)`. No-op while the exit
+	// dump is printing (its String temporaries must not perturb the frozen histogram).
+	//
+	// SAMPLE POLICY — power-of-two milestone resample (NOT first-seen). Keeping the
+	// FIRST allocation biases the sample toward whatever runs earliest, which for a
+	// destructor shared between (a) a lazily-run stdlib global initializer holding ONE
+	// process-lifetime object and (b) a SYSTEMATIC pipeline leaker allocating thousands
+	// is always the incidental global (a) — masking the leaker (b) the census exists to
+	// find. Instead the pair is overwritten whenever the post-increment live count is a
+	// power of two (1, 2, 4, …, 2048, …). The retained sample is therefore drawn from
+	// the highest power-of-two milestone ≤ count, i.e. deep in the bulk, so it names a
+	// representative allocation of the DOMINANT (most-allocated) site. Cheap: one
+	// power-of-two test, no RNG. Under-report of a rare site is acceptable — the census
+	// localizes the leak that dominates the count, which is the one worth fixing.
+	function __leak_count_inc(dtor MachineWord, allocRA MachineWord, allocRA2 MachineWord)
 		if __Internals.loadIndirect(__Internals.leakCtlAddr() + LEAK_CTL_DUMPING) != 0 'dumping'
 			return
 		end 'dumping'
@@ -2227,25 +2304,35 @@ end '__slab_free'
 		__leak_ctl_ensure()
 		let bucket = __leak_probe(dtor, claim: true)
 		if bucket != 0 'have'
-			__Internals.atomicInc(bucket + LEAK_BUCKET_COUNT)
-			if __Internals.loadIndirect(bucket + LEAK_BUCKET_SAMPLE_RA) == 0 'sample'
+			// atomicXadd returns the PRIOR count, so newCount is this allocation's
+			// 1-based position in the bucket.
+			let prior = __Internals.atomicXadd(bucket + LEAK_BUCKET_COUNT, value: 1)
+			let newCount = prior + 1
+			if (newCount and (newCount - 1)) == 0 'milestone'
+				// Store the two-deep partner FIRST, then the one-deep sample: the
+				// one-deep word is the gate the reader checks, so publishing it last
+				// keeps the pair coherent under a concurrent recorder.
+				__Internals.storeIndirect(bucket + LEAK_BUCKET_SAMPLE_RA2, value: allocRA2)
 				__Internals.storeIndirect(bucket + LEAK_BUCKET_SAMPLE_RA, value: allocRA)
-			end 'sample'
+			end 'milestone'
 		end 'have'
 	end '__leak_count_inc'
 
-	// Swap two 24-byte buckets in place (selection-sort primitive; operates on the
+	// Swap two 32-byte buckets in place (selection-sort primitive; operates on the
 	// census's own OS-allocated array, so no allocation and no tracked memory).
 	function __leak_swap_buckets(a MachineWord, b MachineWord)
 		let ak = __Internals.loadIndirect(a + LEAK_BUCKET_KEY)
 		let ac = __Internals.loadIndirect(a + LEAK_BUCKET_COUNT)
 		let ar = __Internals.loadIndirect(a + LEAK_BUCKET_SAMPLE_RA)
+		let ar2 = __Internals.loadIndirect(a + LEAK_BUCKET_SAMPLE_RA2)
 		__Internals.storeIndirect(a + LEAK_BUCKET_KEY, value: __Internals.loadIndirect(b + LEAK_BUCKET_KEY))
 		__Internals.storeIndirect(a + LEAK_BUCKET_COUNT, value: __Internals.loadIndirect(b + LEAK_BUCKET_COUNT))
 		__Internals.storeIndirect(a + LEAK_BUCKET_SAMPLE_RA, value: __Internals.loadIndirect(b + LEAK_BUCKET_SAMPLE_RA))
+		__Internals.storeIndirect(a + LEAK_BUCKET_SAMPLE_RA2, value: __Internals.loadIndirect(b + LEAK_BUCKET_SAMPLE_RA2))
 		__Internals.storeIndirect(b + LEAK_BUCKET_KEY, value: ak)
 		__Internals.storeIndirect(b + LEAK_BUCKET_COUNT, value: ac)
 		__Internals.storeIndirect(b + LEAK_BUCKET_SAMPLE_RA, value: ar)
+		__Internals.storeIndirect(b + LEAK_BUCKET_SAMPLE_RA2, value: ar2)
 	end '__leak_swap_buckets'
 
 	// Process-exit dump of the per-destructor census to stderr. Injected into
@@ -2286,6 +2373,7 @@ end '__slab_free'
 					__Internals.storeIndirect(dst + LEAK_BUCKET_KEY, value: __Internals.loadIndirect(src + LEAK_BUCKET_KEY))
 					__Internals.storeIndirect(dst + LEAK_BUCKET_COUNT, value: count)
 					__Internals.storeIndirect(dst + LEAK_BUCKET_SAMPLE_RA, value: __Internals.loadIndirect(src + LEAK_BUCKET_SAMPLE_RA))
+					__Internals.storeIndirect(dst + LEAK_BUCKET_SAMPLE_RA2, value: __Internals.loadIndirect(src + LEAK_BUCKET_SAMPLE_RA2))
 					live = live + 1
 				end 'nonEmpty'
 				read = read + 1
@@ -2318,9 +2406,18 @@ end '__slab_free'
 			let dtor = __Internals.loadIndirect(bucket + LEAK_BUCKET_KEY)
 			let count = __Internals.loadIndirect(bucket + LEAK_BUCKET_COUNT)
 			let sampleRA = __Internals.loadIndirect(bucket + LEAK_BUCKET_SAMPLE_RA)
+			let sampleRA2 = __Internals.loadIndirect(bucket + LEAK_BUCKET_SAMPLE_RA2)
 			let off = dtor - mrtStart
 			let allocOff = sampleRA - mrtStart
-			printError("LEAK-DTOR count={count} off=0x{off:x} alloc=0x{allocOff:x}\n")
+
+			// Two-deep sample is 0 when the walk was unwalkable — emit alloc2=0x0
+			// rather than a wrapped `0 - mrtStart` so the reader sees "no frame".
+			var alloc2Off = 0
+			if sampleRA2 != 0 'have2'
+				alloc2Off = sampleRA2 - mrtStart
+			end 'have2'
+
+			printError("LEAK-DTOR count={count} off=0x{off:x} alloc=0x{allocOff:x} alloc2=0x{alloc2Off:x}\n")
 			k = k + 1
 		end 'emit'
 		if rawLive != 0 'hasRaw'
@@ -2388,15 +2485,20 @@ function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWor
 	__Internals.atomicInc(__Internals.mmAllocCountAddr())
 	// `--leak-report`: tally this allocation under its destructor in the
 	// per-destructor census (raw dtor==0 buffers go to the ctl's raw_live word).
-	// Kept adjacent to the __mm_alloc_count bump so the two stay in lockstep. The
-	// alloc-site sample is __mm_alloc's own return address (`[frame_ptr + 8]` on the
-	// rbp-based native ABI) — i.e. the direct caller of __mm_alloc, which localizes a
-	// systematic leak to its allocation site (a per-type constructor or the code that
-	// allocates the record directly). A single one-level read of __mm_alloc's OWN
-	// frame is safe; walking deeper is not (frame-pointer omission at depth). The hot
-	// path is byte-identical when the flag is off (region parsed away).
+	// Kept adjacent to the __mm_alloc_count bump so the two stay in lockstep. Two
+	// alloc-site samples, both taken from __mm_alloc's OWN frame pointer (read inline
+	// here so `loadFramePtr` names __mm_alloc's frame):
+	//   allocRA  — `[frame_ptr + 8]`, the ONE-deep return address = the direct caller
+	//              of __mm_alloc (a per-type constructor, e.g. Array.init, or code
+	//              that allocates the record directly).
+	//   allocRA2 — the validated TWO-deep caller (__leak_walk_2deep), naming that
+	//              constructor's OWN caller — for the Array-literal family, the
+	//              function that wrote `[...]`. A bare deeper read would fault on a
+	//              corrupt/absent frame link, so the walk validates the link first
+	//              and yields 0 when unwalkable.
+	// The hot path is byte-identical when the flag is off (region parsed away).
 	#if leakReport(true)
-		__leak_count_inc(destructor, allocRA: __Internals.loadIndirect(__Internals.loadFramePtr() + 8))
+		__leak_count_inc(destructor, allocRA: __Internals.loadIndirect(__Internals.loadFramePtr() + 8), allocRA2: __leak_walk_2deep(__Internals.loadFramePtr()))
 	#endif
 	let slotBase = __slab_alloc(clampedSize + 32)
 	// The first header word is reserved (always 0). It is kept so the

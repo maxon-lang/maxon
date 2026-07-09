@@ -32,8 +32,8 @@ bootstrap is garbage-collected and never emits the census; its
 
 ```
 LEAK-REPORT-BEGIN total=<N> distinct=<D> raw=<R>
-LEAK-DTOR count=<c> off=0x<offset>
-LEAK-DTOR count=<c> off=0x<offset>
+LEAK-DTOR count=<c> off=0x<offset> alloc=0x<alloc-offset> alloc2=0x<alloc2-offset>
+LEAK-DTOR count=<c> off=0x<offset> alloc=0x<alloc-offset> alloc2=0x<alloc2-offset>
 ...
 LEAK-RAW count=<R>
 LEAK-REPORT-END
@@ -47,6 +47,20 @@ LEAK-REPORT-END
 - Each `LEAK-DTOR` line is one distinct destructor, **sorted by count descending**.
   `off` is the destructor's address **minus `mrt_start`'s address**, so it is
   ASLR-invariant and stable across runs of the same binary.
+  - `alloc` is the **one-deep** allocation-site sample: the return address (again as
+    an `mrt_start`-relative offset) of the code that called `__mm_alloc` for one
+    leaking object of this type — typically the per-type constructor (e.g.
+    `Array.init` for the Array family).
+  - `alloc2` is the **two-deep** sample: that constructor's *own* caller, walked one
+    validated frame further — for an Array literal, the function that wrote `[...]`.
+    It is `0x0` when the frame link was unwalkable (e.g. `wasm32-wasi`, which has no
+    frame-pointer chain, or a corrupt/absent saved-rbp link). The `alloc`/`alloc2`
+    pair is a coherent snapshot of **one** concrete allocation. It is **not** the
+    first allocation: the sample is resampled on power-of-two count milestones
+    (1, 2, 4, …), so the retained pair is drawn from deep in the bulk and names the
+    **dominant** allocation site for that destructor — a single, lazily-initialized
+    process-lifetime global that merely happens to allocate first will not mask the
+    systematic pipeline leaker that shares its destructor bucket.
 
 Invariant: `total == raw + Σ(LEAK-DTOR count)`. A clean program prints
 `total=0 distinct=0 raw=0` and just the `BEGIN`/`END` frame.
@@ -65,14 +79,19 @@ them offline with `llvm-nm`:
 3. For each `LEAK-DTOR ... off=0xOFF`, the destructor's VA is `V0 + OFF`. Look that
    VA up in `syms.txt` (exact match, or the nearest preceding symbol + offset).
    Destructor symbols are named `__destruct_<Type>` / `__layout_destroy_<Type_Args>`.
+   The same `V0 + OFF` lookup symbolizes the `alloc=` (one-deep constructor) and
+   `alloc2=` (two-deep caller) offsets — those resolve to ordinary function symbols
+   (the *nearest preceding* symbol + byte offset names the function containing the
+   call).
 
-`scratchpad/census.py` automates this: it runs `llvm-nm`, computes each offset from
-`mrt_start`, and aggregates the `LEAK-DTOR` lines into a symbolized table. Run the
+`scratchpad/census_lr.py` automates this: it runs `llvm-nm`, computes each offset
+from `mrt_start`, and aggregates the `LEAK-DTOR` lines into a symbolized table,
+resolving the destructor plus both `alloc`/`alloc2` samples per line. Run the
 instrumented compiler with stderr captured, then:
 
 ```
 <instrumented-compiler> build <program> 2> census.err
-python3 scratchpad/census.py census.err <instrumented-compiler>.exe
+python3 scratchpad/census_lr.py census.err <instrumented-compiler>.exe
 ```
 
 ## How it works (and why it costs nothing when off)
