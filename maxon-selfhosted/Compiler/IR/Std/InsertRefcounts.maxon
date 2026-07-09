@@ -3083,12 +3083,22 @@ function planManagedHeapStore(ctx RcContext, blockRef BlockRef, block IrBlock, l
 		queueInsertion(ctx, blockRef: blockRef, pos: pos, opIdx: incIdx)
 	end 'normalStore'
 
-	// (2) DECREF-OLD — only on a PROVABLE overwrite of an already-initialized
-	// managed field. The discriminator (`storeIsFieldOverwrite`) requires a
-	// dominating prior `load_indirect` of the SAME (addrId, offset), which proves
-	// the field held a real value; an initial store (no prior read) is left alone
-	// so we never decref slab garbage. See the safety argument above.
-	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos, contiguousDecrefOldCountsAsRelease: false) 'overwrite'
+	// (2) DECREF-OLD — release the slot's previous occupant so a reassignment does
+	// not leak the displaced value. Two provably-safe triggers:
+	//   - A HEAP FIELD: only on a PROVABLE overwrite (`storeIsFieldOverwrite`, a
+	//     dominating prior `load_indirect` of the SAME (addrId, offset)) proves the
+	//     field held a real value; an initial store (no prior read) is left alone so
+	//     we never decref slab garbage.
+	//   - A MODULE GLOBAL: UNCONDITIONALLY (null-guarded). This is the COPY-case
+	//     counterpart of the `globalTransfer` branch's decref-old: when the stored
+	//     value is LIVE-AFTER (`g = x; ...use(x)`) the transfer branch is skipped and
+	//     the store falls here, but the `.data` slot is still zero-initialized (so
+	//     the null-guard no-ops on the first store) and a reassignment must release
+	//     the prior occupant — otherwise the displaced value (a global's initial
+	//     `__module_init` allocation, whose init store is in a DIFFERENT function so
+	//     `storeIsFieldOverwrite` sees no dominating prior load) leaks. Mirrors the
+	//     C# golden's global-store load-old/decref-old protocol.
+	if storeIsFieldOverwrite(ctx, storeBlock: block, addrId: addrId, offset: offset, storePos: pos, contiguousDecrefOldCountsAsRelease: false) or storeTargetsModuleGlobal(ctx, addrId: addrId) 'overwrite'
 		planDecrefOldField(ctx, blockRef: blockRef, addrId: addrId, offset: offset, pos: pos)
 	end 'overwrite'
 end 'planManagedHeapStore'
