@@ -1,0 +1,413 @@
+// Test: forward-global-getter-borrow
+typealias Count = int(0 to 1000)
+
+type Item
+	export var v as String
+
+	export static function create(s String) returns Item
+		return Self{v: s}
+	end 'create'
+end 'Item'
+
+export type Box uses Elem
+	typealias ElemArray = Array with Elem
+
+	export var items as ElemArray = ElemArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(e Elem)
+		items.push(e)
+	end 'add'
+
+	export function size() returns Count
+		return items.count()
+	end 'size'
+end 'Box'
+
+typealias ItemBox = Box with Item
+
+var cachedBase = ItemBox.create()
+var baseLoaded = false
+var cachedMerged = ItemBox.create()
+var mergedDone = false
+
+// Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
+function loadBase() returns ItemBox
+	if baseLoaded 'hit'
+		return cachedBase
+	end 'hit'
+	var b = ItemBox.create()
+	b.add(Item.create("first base item"))
+	b.add(Item.create("second base item"))
+	b.add(Item.create("third base item"))
+	cachedBase = b
+	baseLoaded = true
+	return cachedBase
+end 'loadBase'
+
+// Mirrors buildRuntimeModuleForTarget: `let base = loadBase()` then a multi-path
+// return — the native arm forwards `base`, the merged arm returns a DIFFERENT global.
+function buildFor(wantMerged bool) returns ItemBox
+	let base = loadBase()
+	if not wantMerged 'native'
+		return base
+	end 'native'
+	if mergedDone 'cached'
+		return cachedMerged
+	end 'cached'
+	var merged = ItemBox.create()
+	merged.add(Item.create("merged item"))
+	cachedMerged = merged
+	mergedDone = true
+	return cachedMerged
+end 'buildFor'
+
+// Mirrors augmentWithRuntime: borrow the result, read it, never release.
+function augment(wantMerged bool) returns Count
+	let rt = buildFor(wantMerged)
+	return rt.size()
+end 'augment'
+
+function main() returns ExitCode
+	// native arm forwards the cachedBase global (3 items)
+	return augment(false)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @Box.size(rcx: i64, rdx: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov rcx, r8
+    x64.call Array.count
+    x64.cmp r8, 1000
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_64a2f59d62ad8393]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @loadBase() -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.lea r8, [rip+__data_baseLoaded]
+    x64.mov r9, [r8+0] (8b)
+    x64.xor r8d, r8d
+    x64.mov r8d, 1
+    x64.test r9, r9
+    x64.je hit_0.after
+  hit_0:
+    x64.lea r9, [rip+__data_cachedBase]
+    x64.mov r8, [r9+0] (8b)
+    x64.epilogue
+    x64.ret
+  hit_0.after:
+    x64.lea rdx, [rip+__destruct_Box]
+    x64.mov ecx, 8
+    x64.xor r8d, r8d
+    x64.lea rbx, [rip+__layout_Box_Item]
+    x64.lea r12, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov r8d, 48
+    x64.lea r13, [rip+__istr_0]
+    x64.mov r9d, 15
+    x64.mov rsi, -2
+    x64.lea r14, [rip+__destruct_String]
+    x64.mov edi, 16
+    x64.lea rdi, [rip+__destruct_Item]
+    x64.mov [rbp+-8], rdi
+    x64.mov edi, 8
+    x64.xor edi, edi
+    x64.mov [rbp+-16], r8
+    x64.mov [rbp+-24], r9
+    x64.mov r15, rsi
+    x64.call stdlib.__mm_alloc
+    x64.mov [rbp+-32], r8
+    x64.mov rcx, [rbp+-32]
+    x64.call stdlib.__mm_incref
+    x64.mov r8, [rbp+-32]
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rcx, rbx
+    x64.call Array.create
+    x64.mov r9, [rbp+-32]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-16]
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.mov r8, 0
+    x64.mov [rbx+40], r8 (8b)
+    x64.mov [rbx+0], r13 (8b)
+    x64.mov r8, [rbp+-24]
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov [rbx+16], r15 (8b)
+    x64.mov r8, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [rbx+32], r8 (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, r14
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.mov rcx, 8
+    x64.mov rdx, [rbp+-8]
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 0
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8, [rbp+-32]
+    x64.mov r12, [r8+0] (8b)
+    x64.lea r13, [rip+__layout_Box_Item]
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.mov rax, r13
+    x64.call Array.push
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.lea rbx, [rip+__istr_1]
+    x64.mov r8d, 16
+    x64.mov r12, -2
+    x64.lea r13, [rip+__destruct_String]
+    x64.mov r8d, 16
+    x64.lea r14, [rip+__destruct_Item]
+    x64.mov r8d, 8
+    x64.xor r8d, r8d
+    x64.call mrt_alloc_with_dtor
+    x64.mov r15, r8
+    x64.mov r8, 0
+    x64.mov [r15+40], r8 (8b)
+    x64.mov [r15+0], rbx (8b)
+    x64.mov r8, 16
+    x64.mov [r15+8], r8 (8b)
+    x64.mov [r15+16], r12 (8b)
+    x64.mov r8, 1
+    x64.mov [r15+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r15+32], r8 (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov [rbx+0], r15 (8b)
+    x64.mov r8, 1
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov rcx, 8
+    x64.mov rdx, r14
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 0
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, [rbp+-32]
+    x64.mov rbx, [r8+0] (8b)
+    x64.lea r13, [rip+__layout_Box_Item]
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.mov rax, r13
+    x64.call Array.push
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.mov r8, 0
+    x64.mov [rbx+40], r8 (8b)
+    x64.lea r8, [rip+__istr_2]
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov r8d, 15
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], rbx (8b)
+    x64.mov r8, 1
+    x64.mov [r12+8], r8 (8b)
+    x64.lea rdx, [rip+__destruct_Item]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov r8, [rbp+-32]
+    x64.mov r12, [r8+0] (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Box_Item]
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.call Array.push
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_cachedBase]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov r9, [rbp+-32]
+    x64.mov [r8+0], r9 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_baseLoaded]
+    x64.mov r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.lea r9, [rip+__data_cachedBase]
+    x64.mov r8, [r9+0] (8b)
+    x64.epilogue
+    x64.ret
+  }
+  func @buildFor(rcx: i1) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.call loadBase
+    x64.mov r9d, 1
+    x64.xor rbx, r9
+    x64.je native_0.after
+  native_0:
+    x64.epilogue
+    x64.ret
+  native_0.after:
+    x64.lea r8, [rip+__data_mergedDone]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.je cached_0.after
+  cached_0:
+    x64.lea r9, [rip+__data_cachedMerged]
+    x64.mov r8, [r9+0] (8b)
+    x64.epilogue
+    x64.ret
+  cached_0.after:
+    x64.lea rdx, [rip+__destruct_Box]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.lea rcx, [rip+__layout_Box_Item]
+    x64.call Array.create
+    x64.mov [rbx+0], r8 (8b)
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.mov [r12+40], r8 (8b)
+    x64.lea r8, [rip+__istr_3]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 11
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8d, 1
+    x64.mov [r12+24], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r8d, 1
+    x64.mov [r13+8], r8 (8b)
+    x64.lea rdx, [rip+__destruct_Item]
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+0], r13 (8b)
+    x64.mov r13, [rbx+0] (8b)
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Box_Item]
+    x64.mov rcx, r13
+    x64.mov rdx, r12
+    x64.call Array.push
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_cachedMerged]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov [r8+0], rbx (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.lea r8, [rip+__data_mergedDone]
+    x64.mov r9d, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.lea r9, [rip+__data_cachedMerged]
+    x64.mov r8, [r9+0] (8b)
+    x64.epilogue
+    x64.ret
+  }
+  func @augment(rcx: i1) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call buildFor
+    x64.lea rdx, [rip+__layout_Box_Item]
+    x64.mov rcx, r8
+    x64.call Box.size
+    x64.cmp r8, 1000
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_6b4b5c8b4cbf08db]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call augment
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_da1afe51d7523055]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

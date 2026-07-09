@@ -335,6 +335,20 @@ export type Project
 	// computed structurally from the callee, never by callee-name matching.
 	export var funcReturnsBorrow as FuncReturnsBorrowSet
 
+	// GLOBAL-BORROW return registry: the STRICT SUBSET of `funcReturnsBorrow` whose
+	// every return is rooted in a MODULE GLOBAL (a `__data_` slot read, or a forward
+	// of another `funcReturnsGlobalBorrow` call) — a cache getter like
+	// `loadRuntimeModule` whose returned occupant the `.data` slot OWNS and OUTLIVES
+	// the call (until the exit-time global-cleanup decref). `returnedBorrowNeedsRetainCtx`
+	// reads it to SUPPRESS the returned-borrow retain when a caller FORWARDS such a
+	// result: retaining a global's outliving occupant leaks it (the caller borrows the
+	// global, never releasing the extra +1). Distinct from a torn-down-local element
+	// forward (`optionValue`'s `parts.get(1)`), whose local source dies at return and so
+	// DOES need the retain. Not persisted in the stdlib cache: the leaking getters are
+	// user (compiler) functions computed fresh each build; a missing stdlib bit only
+	// keeps the (safe, pre-existing) retain, never over-releases.
+	export var funcReturnsGlobalBorrow as FuncReturnsBorrowSet
+
 	// RECEIVER-INTERIOR return registry (the liveness-only superset of
 	// `funcReturnsBorrow`). Function names whose return value structurally derives
 	// from the receiver's interior — a node/element pointer the receiver's
@@ -1140,6 +1154,7 @@ export type Project
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
+			funcReturnsGlobalBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),

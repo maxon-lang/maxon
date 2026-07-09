@@ -163,7 +163,30 @@ function visitBorrowScc(module StdModule, scc StringArray, cg CallGraph, funcByN
 	for name in scc 'eachInterior'
 		classifyReceiverInteriorForName(module, name: name, funcByName: funcByName, project: project)
 	end 'eachInterior'
+	// Global-borrow likewise after the borrow set settles (it is a borrow subset).
+	for name in scc 'eachGlobalBorrow'
+		classifyGlobalBorrowForName(module, name: name, funcByName: funcByName, project: project)
+	end 'eachGlobalBorrow'
 end 'visitBorrowScc'
+
+// Recursive-SCC global-borrow finalization for `name`, run after the SCC's borrow set
+// has settled. Mirrors `classifyReceiverInteriorForName` (a rare exotic case: a global
+// cache getter inside a recursive cycle); a forwarded in-cycle callee not yet marked
+// reads conservatively as non-global here, which is safe (keeps the pre-existing retain).
+function classifyGlobalBorrowForName(module StdModule, name String, funcByName BorrowFuncIndexByName, project Project)
+	let funcIdx = try funcByName.get(name) otherwise return
+	let func = try module.functions.get(funcIdx) otherwise panic("classifyGlobalBorrowForName: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return
+	end 'empty'
+	if project.funcReturnsGlobalBorrow.contains(func.name) 'already'
+		return
+	end 'already'
+	let defs = buildValueDefMap(module, func: func)
+	if functionReturnsGlobalBorrow(module, func: func, defs: defs, project: project) 'isGlobalBorrow'
+		project.funcReturnsGlobalBorrow.insert(func.name)
+	end 'isGlobalBorrow'
+end 'classifyGlobalBorrowForName'
 
 // Non-recursive singleton path: set the (local) element-loader bit, classify the
 // borrow status once, then the receiver-interior status — building the per-function
@@ -181,6 +204,14 @@ function classifyBorrowForName(module StdModule, name String, funcByName BorrowF
 			project.funcReturnsBorrow.insert(func.name)
 		end 'isBorrow'
 	end 'notSettled'
+	// GLOBAL-BORROW subset: classified AFTER the borrow bit (a global-rooted return is a
+	// borrow), reusing the shared `defs`. Callees-first SCC order settles any forwarded
+	// `funcReturnsGlobalBorrow` callee before this caller reads it.
+	if not project.funcReturnsGlobalBorrow.contains(func.name) 'notSettledGlobal'
+		if functionReturnsGlobalBorrow(module, func: func, defs: defs, project: project) 'isGlobalBorrow'
+			project.funcReturnsGlobalBorrow.insert(func.name)
+		end 'isGlobalBorrow'
+	end 'notSettledGlobal'
 	if not project.funcReturnsReceiverInterior.contains(func.name) 'notInterior'
 		if functionReturnsReceiverInterior(module, func: func, defs: defs, project: project) 'isInterior'
 			project.funcReturnsReceiverInterior.insert(func.name)
@@ -340,6 +371,73 @@ function functionReturnsBorrow(module StdModule, func IrFunction, defs ValueDefM
 	end 'eachBlock'
 	return sawReturn
 end 'functionReturnsBorrow'
+
+// True iff EVERY return of `func` is a MANAGED value rooted in a MODULE GLOBAL — a
+// `__data_` slot read (`loadIsModuleGlobalSlotRead`) or a forward of a
+// `funcReturnsGlobalBorrow` call. Such a cache-getter's returned occupant is OWNED by
+// the `.data` slot and OUTLIVES the call (until the exit-time global-cleanup decref),
+// so a caller forwarding this result must NOT retain it — the caller borrows the global
+// and never releases the extra +1 (the runtime-module leak: `loadRuntimeModule` forwarded
+// by `buildRuntimeModuleForTarget` retained the cached module once per compile, whose
+// single global-cleanup decref then left it — and its entire op/block working set — alive).
+// A STRICT SUBSET of `functionReturnsBorrow` (a global read owns no +1), so it is only
+// meaningful for functions already borrow-classified. Contrast a torn-down-local element
+// forward (`optionValue`'s `parts.get(1)`): its local source dies at return, so that
+// retain IS needed and this predicate is correctly false there.
+function functionReturnsGlobalBorrow(module StdModule, func IrFunction, defs ValueDefMap, project Project) returns bool
+	var sawReturn = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsGlobalBorrow: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("functionReturnsGlobalBorrow: terminatorIndex not in module.ops")
+		let retVal = returnValueOf(term)
+		if retVal.present 'isReturn'
+			sawReturn = true
+			if not returnedValueIsGlobalRooted(module, defs: defs, func: func, valueId: retVal.value, project: project) 'notGlobal'
+				return false
+			end 'notGlobal'
+		end 'isReturn'
+	end 'eachBlock'
+	return sawReturn
+end 'functionReturnsGlobalBorrow'
+
+// True iff returned MANAGED `valueId` derives from a module global: its def is a
+// `__data_` slot read, or a call to a `funcReturnsGlobalBorrow` function (the forward
+// chain). A non-op-def (block-arg phi) or any non-global source returns false —
+// conservative, since a false negative only keeps the pre-existing (safe) retain.
+function returnedValueIsGlobalRooted(module StdModule, defs ValueDefMap, func IrFunction, valueId ValueId, project Project) returns bool
+	if not func.isValueManaged(valueId) 'notManaged'
+		return false
+	end 'notManaged'
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	if loadIsModuleGlobalSlotRead(module, defs: defs, op: defOp) 'directGlobal'
+		return true
+	end 'directGlobal'
+	return opForwardsGlobalBorrowCall(defOp, project: project)
+end 'returnedValueIsGlobalRooted'
+
+// True iff `op` is a direct/try call to a `funcReturnsGlobalBorrow` callee.
+function opForwardsGlobalBorrowCall(op StdOp, project Project) returns bool
+	return match op 'dispatch'
+		call(c) gives callForwardsGlobalBorrow(c, project: project)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'opForwardsGlobalBorrowCall'
+
+function callForwardsGlobalBorrow(c StdCallOp, project Project) returns bool
+	return match c 'check'
+		call(_, callee, _) gives project.funcReturnsGlobalBorrow.contains(callee)
+		tryCall(_, callee, _, _) gives project.funcReturnsGlobalBorrow.contains(callee)
+		indirectCall to errorReturn gives false
+		ret gives false
+	end 'check'
+end 'callForwardsGlobalBorrow'
 
 // True iff lowering classified `valueId` with a class the inserter ACQUIRES
 // (`computeIncomingOwnerAcquire` rule (a) / the def-acquire classes) — a returned
