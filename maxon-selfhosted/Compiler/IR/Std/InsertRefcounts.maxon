@@ -6004,7 +6004,19 @@ function planEdgeDeathForValue(ctx RcContext, block IrBlock, succs BlockIdArray,
 		// moved +1. The error edge falls through to a real release (the throw path never
 		// consumed it). The live-out counterpart of the term-drop guard in
 		// `planTerminatorDeaths` (used when `vid` is live-out of the tryCall block).
-		if tryCallTransferringArgSuccessBlock(ctx, block: block, argId: vid) == succId 'consumedOnSuccessEdge'
+		// COPY-MINTED escape: route through `tryCallArgConsumedReachingSuccess` (NOT the
+		// bare `tryCallTransferringArgSuccessBlock` success-target test) so this guard
+		// respects the same copy-minted carve-out as the term-drop / into-block guards
+		// (`valueConsumedByTryCallOnSuccessEdgeInto`, landed 9a7e3d839). When `vid` is LIVE
+		// past the consuming tryCall — a `Map.get(key)` whose type-param `key` is consumed
+		// by convention, with `key` re-consumed by a later `Map.insert(key)` on the MISS
+		// edge — `planConsumedArgCopyIncrefs` mints a copy that carries the callee's +1
+		// while the caller keeps its ORIGINAL. On the SUCCESS (cache-HIT) edge the reused
+		// value dies without reaching the later consume, so its retained original still
+		// owes a release; suppressing it here leaks the key on every hit (the
+		// `qualifyCalleeCacheKey` get-then-insert String-family leak). Only a PURE MOVE
+		// (no copy minted) genuinely transferred the +1 and warrants suppression.
+		if tryCallArgConsumedReachingSuccess(ctx, predBlock: block, successBlockId: succId, vid: vid) 'consumedOnSuccessEdge'
 			logTrace(LogCategory.ir, message: function() gives "RC-EDGE-CONSUMED-SUPPRESS func={ctx.func.name} val=%{vid} edge=block_{block.id}->block_{succId} (consumed by tryCall on success edge, no release)")
 			continue
 		end 'consumedOnSuccessEdge'
