@@ -1702,19 +1702,26 @@ end 'emitBackend'
 // monomorphizing into `emitBackendWith$X64Backend` / `$Arm64Backend`).
 function emitNativeCodeResultX64(pipeline PassPipeline, backend X64Backend, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
 	try prepareTargetModule(pipeline, backend: backend)
-	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache))
+
+	let emitStart = passTimerStart()
+
+	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache), emitStart: emitStart)
 end 'emitNativeCodeResultX64'
 
 // Whole-module native emit for arm64 — the concrete-backend twin of
 // `emitNativeCodeResultX64` (see its comment for why the two can't share a body).
 function emitNativeCodeResultArm64(pipeline PassPipeline, backend Arm64Backend, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
 	try prepareTargetModule(pipeline, backend: backend)
-	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache))
+
+	let emitStart = passTimerStart()
+
+	return finalizeNativeCodeResult(pipeline, result: backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache), emitStart: emitStart)
 end 'emitNativeCodeResultArm64'
 
-// Shared tail for the whole-module native emit: stamp the fully-lowered target
-// module onto the freshly-emitted `CodeResult`.
-function finalizeNativeCodeResult(pipeline PassPipeline, result CodeResult) returns CodeResult
+// Shared tail for the whole-module native emit: record the emit pass timing and
+// stamp the fully-lowered target module onto the freshly-emitted `CodeResult`.
+function finalizeNativeCodeResult(pipeline PassPipeline, result CodeResult, emitStart PassMillis) returns CodeResult
+	recordPassSince("__emitTargetCode", startMs: emitStart)
 	result.targetModule = pipeline.targetModule
 	return result
 end 'finalizeNativeCodeResult'
