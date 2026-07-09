@@ -3341,6 +3341,7 @@ function emitX64SubprocessRuntime(code ByteArray, relocations RelocationArray, c
 	emitX64SubprocessResultStreamCopy(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, name: "maxon_subprocess_result_stdout", bufOff: SubpResOffStdoutPtr, lenOff: SubpResOffStdoutLen)
 	emitX64SubprocessResultStreamCopy(code, callFixups: callFixups, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap, name: "maxon_subprocess_result_stderr", bufOff: SubpResOffStderrPtr, lenOff: SubpResOffStderrLen)
 	emitX64SubprocessBuildCmdlineWide(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
+	emitX64SubprocessCwdToWide(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessOpenNulWide(code, relocations: relocations, rdataRelocs: rdataRelocs, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessManagedIsNull(code, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
 	emitX64SubprocessFeedThreadEntry(code, relocations: relocations, funcLabelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets, funcLabelOffsetMap: funcLabelOffsetMap)
@@ -3653,6 +3654,11 @@ function emitX64SubprocessSpawn(code ByteArray, relocations RelocationArray, cal
 	helperStoreSlot(code, slotIndex: 1, src: X64Register.rdx)  // argc
 	helperStoreSlot(code, slotIndex: 46, src: X64Register.rdi)  // stdinKind
 	helperStoreSlot(code, slotIndex: 47, src: X64Register.rbx)  // stdinData (cstring; bytes payload for kind=2)
+	// cwd (param2) arrives in rax per the internal register ABI; stash it now,
+	// before the rax=0 store + REP STOSQ below clobber it. It is converted to a
+	// wide lpCurrentDirectory right before CreateProcessW (an empty/NULL cwd
+	// yields NULL → the child inherits the parent's working directory).
+	helperStoreSlot(code, slotIndex: 48, src: X64Register.rax)  // cwd cstring (param2)
 	// Zero the stdin-bytes staging slots (49 parentWrite, 50 payloadCopy, 51
 	// payloadLen, 52 feedCtx). They sit outside the rep-stosq range below, so the
 	// post-spawn feed-thread launch would otherwise read stack garbage on the
@@ -3833,6 +3839,14 @@ function emitX64SubprocessSpawn(code ByteArray, relocations RelocationArray, cal
 	// dwCreationFlags = EXTENDED_STARTUPINFO_PRESENT (0x80000) ONLY when the inherit
 	// list is non-empty (slot 62 != 0); with an empty/NULL attribute list the flag is
 	// itself an ERROR_INVALID_PARAMETER, so we fall back to a classic STARTUPINFOW.
+	//
+	// Convert the requested working directory to a wide lpCurrentDirectory on the
+	// GT stack BEFORE the system-stack switch (0 = empty/NULL cwd → inherit the
+	// parent's). The result parks in slot 61 — an rbp-relative GT-stack slot that
+	// survives the RSP switch — and is loaded into the CreateProcessW arg below.
+	helperLoadSlot(code, slotIndex: 48, dest: X64Register.rcx)  // cwd cstring (param2)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__subp_cwd_to_wide")
+	helperStoreSlot(code, slotIndex: 61, src: X64Register.r8)  // wide cwd (0 if empty/NULL)
 	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x50)
 	helperMovRegImm(code, dest: X64Register.rax, value: 1)
 	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)  // bInheritHandles = TRUE
@@ -3845,7 +3859,8 @@ function emitX64SubprocessSpawn(code ByteArray, relocations RelocationArray, cal
 	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)  // dwCreationFlags
 	helperMovRegImm(code, dest: X64Register.rax, value: 0)
 	emitMovRspOffsetReg(code, offset: 48, srcReg: X64Register.rax)  // lpEnvironment = NULL
-	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)  // lpCurrentDirectory = NULL
+	helperLoadSlot(code, slotIndex: 61, dest: X64Register.rax)  // wide cwd (0 → inherit parent cwd)
+	emitMovRspOffsetReg(code, offset: 56, srcReg: X64Register.rax)  // lpCurrentDirectory
 	helperLeaStackSlot(code, slotIndex: 31, dest: X64Register.rax)
 	emitMovRspOffsetReg(code, offset: 64, srcReg: X64Register.rax)  // lpStartupInfo = &SI
 	helperLeaStackSlot(code, slotIndex: 56, dest: X64Register.rax)
@@ -5801,8 +5816,8 @@ end 'emitX64SubpReadLineWrapper'
 // 8=elemSize.
 function emitX64SubprocessBuildCmdlineWide(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_build_cmdline_wide", offset: code.count())
-	var state = Win32HelperState.create(8, outgoingBytes: 48, localBytes: 72)
-	helperPrologue(code, frameSize: 128)
+	var state = Win32HelperState.create(16, outgoingBytes: 48, localBytes: 104)
+	helperPrologue(code, frameSize: 160)
 	helperMarkBlock(state, code: code, blockId: 0)  // entry
 	// argv arrives as the __ManagedMemory STRUCT pointer (the self-hosted
 	// lowering does NOT unwrap managed args to their buffer like the C#
@@ -5820,45 +5835,123 @@ function emitX64SubprocessBuildCmdlineWide(code ByteArray, relocations Relocatio
 	helperMovRegImm(code, dest: X64Register.rcx, value: 4096)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz fail
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 14)  // jz fail
 	helperStoreSlot(code, slotIndex: 2, src: X64Register.r8)  // utf8buf
 	helperMovRegImm(code, dest: X64Register.rax, value: 0)
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.rax)  // len = 0
 	helperStoreSlot(code, slotIndex: 4, src: X64Register.rax)  // argIdx = 0
 	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // pos = 0
+	// Command-line construction mirrors the C# bootstrap's two-pass quoting
+	// (EmitMaxonSubprocessBuildCmdlineWide): pass 1 scans an argument for
+	// whitespace / '"' / emptiness to decide whether it needs `"..."` wrapping,
+	// pass 2 copies its bytes (backslash-escaping any embedded '"'). WITHOUT the
+	// quote wrapping, an empty argument contributes only its separator space, so
+	// the child's CommandLineToArgvW parse collapses it and the empty token
+	// vanishes — the bug this replaces. Args are read at the MM element stride
+	// (slot 8), low byte per element, exactly like the original single-pass copy.
+	//
+	// Slots (in addition to 0-8 set up above):
+	//   9  = argStart (arg's start position in the blob, for the pass-2 rewind)
+	//   10 = needsQuote (1 if this arg must be wrapped in quotes)
+	//   11 = sawAnyByte (0 = empty token → forces quotes)
+	//   12 = byteVal (current byte during the copy pass; survives append clobbers)
 	helperMarkBlock(state, code: code, blockId: 1)  // arg_loop
 	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rax)  // argIdx
 	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)  // argc
 	emitCmpRegRegOp(code, lhs: X64Register.rax, rhs: X64Register.rcx)
-	helperEmitCondJump(code, state: state, opcode: 0x8D, targetBlock: 4)  // jge args_done
-	// if argIdx > 0, append a space separator
+	helperEmitCondJump(code, state: state, opcode: 0x8D, targetBlock: 12)  // jge args_done
+	// if argIdx > 0, append a space separator before this arg
 	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz byte_loop (first arg)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz arg_setup (first arg, no leading space)
 	helperMovRegImm(code, dest: X64Register.rdx, value: 32)  // ' '
 	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
-	helperMarkBlock(state, code: code, blockId: 2)  // byte_loop: copy arg bytes until NUL
+	helperMarkBlock(state, code: code, blockId: 2)  // arg_setup: record start, reset per-arg flags
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rax)  // pos
+	helperStoreSlot(code, slotIndex: 9, src: X64Register.rax)  // argStart = pos
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	helperStoreSlot(code, slotIndex: 10, src: X64Register.rax)  // needsQuote = 0
+	helperStoreSlot(code, slotIndex: 11, src: X64Register.rax)  // sawAnyByte = 0
+	// Pass 1: scan the arg for whitespace / '"' to decide whether it needs quoting.
+	helperMarkBlock(state, code: code, blockId: 3)  // scan_loop
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // argvBuf
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // pos
 	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
 	helperLoadByte(code, dest: X64Register.rdx, base: X64Register.rax, disp: 0)  // byte = argvBuf[pos]
 	helperTestReg(code, reg: X64Register.rdx)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 3)  // jz byte_done
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz scan_done
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 11, src: X64Register.rax)  // sawAnyByte = 1
+	emitCmpRegImmOp(code, lhs: X64Register.rdx, value: 32)  // ' '
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)  // je scan_needquote
+	emitCmpRegImmOp(code, lhs: X64Register.rdx, value: 9)  // '\t'
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	emitCmpRegImmOp(code, lhs: X64Register.rdx, value: 34)  // '"'
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 4)
+	helperEmitJmp(code, state: state, targetBlock: 5)  // scan_continue
+	helperMarkBlock(state, code: code, blockId: 4)  // scan_needquote
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 10, src: X64Register.rax)  // needsQuote = 1
+	helperMarkBlock(state, code: code, blockId: 5)  // scan_continue: pos += elemSize
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rax)  // elemSize
+	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rcx)
+	helperEmitJmp(code, state: state, targetBlock: 3)  // scan_loop
+	helperMarkBlock(state, code: code, blockId: 6)  // scan_done: empty token forces quotes
+	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rax)  // sawAnyByte
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 7)  // jnz emit_open
+	helperMovRegImm(code, dest: X64Register.rax, value: 1)
+	helperStoreSlot(code, slotIndex: 10, src: X64Register.rax)  // needsQuote = 1 (empty token → `""`)
+	helperMarkBlock(state, code: code, blockId: 7)  // emit_open: rewind pos, optional opening quote
+	helperLoadSlot(code, slotIndex: 9, dest: X64Register.rax)  // argStart
+	helperStoreSlot(code, slotIndex: 5, src: X64Register.rax)  // pos = argStart (rewind for pass 2)
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rax)  // needsQuote
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 8)  // jz byte_loop (no opening quote)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 34)  // '"'
 	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
+	helperMarkBlock(state, code: code, blockId: 8)  // byte_loop: copy arg bytes until NUL
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rax)  // argvBuf
+	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // pos
+	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
+	helperLoadByte(code, dest: X64Register.rdx, base: X64Register.rax, disp: 0)  // byte = argvBuf[pos]
+	helperTestReg(code, reg: X64Register.rdx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 10)  // jz byte_done
+	helperStoreSlot(code, slotIndex: 12, src: X64Register.rdx)  // byteVal = byte
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)
 	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rax)  // elemSize
 	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)  // pos += elemSize
 	helperStoreSlot(code, slotIndex: 5, src: X64Register.rcx)
-	helperEmitJmp(code, state: state, targetBlock: 2)
-	helperMarkBlock(state, code: code, blockId: 3)  // byte_done: skip NUL element, next arg
+	// Inside a quoted arg, a literal '"' is backslash-escaped (`\"`).
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rax)  // needsQuote
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 9)  // jz copy_append (unquoted → verbatim)
+	helperLoadSlot(code, slotIndex: 12, dest: X64Register.rdx)  // byteVal
+	emitCmpRegImmOp(code, lhs: X64Register.rdx, value: 34)  // '"'
+	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 9)  // jne copy_append
+	helperMovRegImm(code, dest: X64Register.rdx, value: 92)  // '\\'
+	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
+	helperMarkBlock(state, code: code, blockId: 9)  // copy_append: emit the arg byte
+	helperLoadSlot(code, slotIndex: 12, dest: X64Register.rdx)  // byteVal
+	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
+	helperEmitJmp(code, state: state, targetBlock: 8)  // byte_loop
+	helperMarkBlock(state, code: code, blockId: 10)  // byte_done: skip NUL element, optional closing quote
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)
 	helperLoadSlot(code, slotIndex: 8, dest: X64Register.rax)  // elemSize
 	emitAddRegRegParam(code, dest: X64Register.rcx, src: X64Register.rax)  // pos += elemSize (skip NUL element)
 	helperStoreSlot(code, slotIndex: 5, src: X64Register.rcx)
+	helperLoadSlot(code, slotIndex: 10, dest: X64Register.rax)  // needsQuote
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 11)  // jz finish_arg (no closing quote)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 34)  // '"'
+	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
+	helperMarkBlock(state, code: code, blockId: 11)  // finish_arg: argIdx++, next arg
 	helperLoadSlot(code, slotIndex: 4, dest: X64Register.rcx)
 	emitAddRegImmParam(code, dest: X64Register.rcx, value: 1)  // argIdx++
 	helperStoreSlot(code, slotIndex: 4, src: X64Register.rcx)
-	helperEmitJmp(code, state: state, targetBlock: 1)
-	helperMarkBlock(state, code: code, blockId: 4)  // args_done: NUL-terminate utf8
+	helperEmitJmp(code, state: state, targetBlock: 1)  // arg_loop
+	helperMarkBlock(state, code: code, blockId: 12)  // args_done: NUL-terminate utf8
 	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
 	emitX64SubpCmdlineAppendByte(code, lenSlot: 3, bufSlot: 2, valReg: X64Register.rdx)
 	// wchars = MultiByteToWideChar(65001, 0, utf8buf, -1, NULL, 0). 6 args → the
@@ -5876,14 +5969,14 @@ function emitX64SubprocessBuildCmdlineWide(code ByteArray, relocations Relocatio
 	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar))
 	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
 	helperTestReg(code, reg: X64Register.rax)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz fail_free
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 13)  // jz fail_free
 	helperStoreSlot(code, slotIndex: 7, src: X64Register.rax)  // wchars
 	// wide = __slab_alloc(wchars * 2)
 	helperLoadSlot(code, slotIndex: 7, dest: X64Register.rcx)
 	helperShlRegImm(code, dest: X64Register.rcx, value: 1)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
-	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 5)  // jz fail_free
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 13)  // jz fail_free
 	helperStoreSlot(code, slotIndex: 6, src: X64Register.r8)  // wide
 	// MultiByteToWideChar(65001, 0, utf8buf, -1, wide, wchars). 6 args → Enter/Leave
 	// system-stack pair; the &wide buffer is an rbp-relative GT-stack slot read,
@@ -5903,15 +5996,15 @@ function emitX64SubprocessBuildCmdlineWide(code ByteArray, relocations Relocatio
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
 	helperLoadSlot(code, slotIndex: 6, dest: X64Register.r8)  // return wide
-	helperEmitJmp(code, state: state, targetBlock: 7)  // done
-	helperMarkBlock(state, code: code, blockId: 5)  // fail_free: free utf8buf, then fail
+	helperEmitJmp(code, state: state, targetBlock: 15)  // done
+	helperMarkBlock(state, code: code, blockId: 13)  // fail_free: free utf8buf, then fail
 	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rcx)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
-	helperMarkBlock(state, code: code, blockId: 6)  // fail
+	helperMarkBlock(state, code: code, blockId: 14)  // fail
 	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__subp_err_argv", rdataRelocs: rdataRelocs)
 	helperStoreGlobal(code, rdataRelocs: rdataRelocs, src: X64Register.rax, name: "__subp_last_error")
 	helperMovRegImm(code, dest: X64Register.r8, value: 0)
-	helperMarkBlock(state, code: code, blockId: 7)  // done (r8 holds wide ptr or 0)
+	helperMarkBlock(state, code: code, blockId: 15)  // done (r8 holds wide ptr or 0)
 	helperFinalize(state, code: code)
 	helperEpilogue(code)
 end 'emitX64SubprocessBuildCmdlineWide'
@@ -5929,6 +6022,74 @@ function emitX64SubpCmdlineAppendByte(code ByteArray, lenSlot VarSlot, bufSlot V
 	emitAddRegImmParam(code, dest: X64Register.rcx, value: 1)  // len + 1
 	helperStoreSlot(code, slotIndex: lenSlot, src: X64Register.rcx)
 end 'emitX64SubpCmdlineAppendByte'
+
+// __subp_cwd_to_wide(cstr=rcx) → a NUL-terminated UTF-16 copy of the NUL-
+// terminated UTF-8 working-directory path in `cstr`, allocated on the process-
+// lived slab, or 0 when `cstr` is NULL/empty (so the caller passes NULL to
+// CreateProcessW's lpCurrentDirectory = "inherit the parent's cwd"). Mirrors
+// the C# bootstrap's `__subp_managed_to_wide_or_null`; without it the spawn
+// hard-codes lpCurrentDirectory = NULL and silently ignores the requested
+// working directory — a bootstrap divergence that broke every wasm spec whose
+// runner cwd (projectRoot/temp) matters (e.g. `../bin` directory lookups).
+// Returns the wide pointer in r8 (the internal helper return register), so it
+// slots straight into the spawn's lpCurrentDirectory arg. MultiByteToWideChar
+// with cbMultiByte = -1 processes the terminating NUL too, so the returned
+// count already covers it and the wide buffer needs no manual re-termination.
+function emitX64SubprocessCwdToWide(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__subp_cwd_to_wide", offset: code.count())
+	// slot 0 = cstr, slot 1 = wchars, slot 2 = wide buffer.
+	var state = Win32HelperState.create(3, outgoingBytes: 48, localBytes: 24)
+	helperPrologue(code, frameSize: 96)
+	helperMarkBlock(state, code: code, blockId: 0)  // entry
+	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // cstr
+	helperTestReg(code, reg: X64Register.rcx)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz null (NULL cwd)
+	helperLoadByte(code, dest: X64Register.rax, base: X64Register.rcx, disp: 0)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz null (empty cwd)
+	// wchars = MultiByteToWideChar(65001, 0, cstr, -1, NULL, 0). 6 args → the
+	// Enter/Leave system-stack pair (heavy kernel call on the per-P stack).
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperMovRegImm(code, dest: X64Register.rax, value: 0)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)  // lpWideCharStr = NULL
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)  // cchWideChar = 0
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperTestReg(code, reg: X64Register.rax)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz null (conversion sizing failed)
+	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)  // wchars
+	// wide = __slab_alloc(wchars * 2)
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rcx)
+	helperShlRegImm(code, dest: X64Register.rcx, value: 1)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
+	helperTestReg(code, reg: X64Register.r8)
+	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz null (alloc failed)
+	helperStoreSlot(code, slotIndex: 2, src: X64Register.r8)  // wide
+	// MultiByteToWideChar(65001, 0, cstr, -1, wide, wchars). The &wide / wchars
+	// reads are rbp-relative GT-stack slots that stay valid across the RSP switch.
+	emitX64GtSystemStackEnter(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperMovRegImm(code, dest: X64Register.rcx, value: 65001)
+	helperMovRegImm(code, dest: X64Register.rdx, value: 0)
+	helperLoadSlot(code, slotIndex: 0, dest: X64Register.r8)
+	helperMovRegImm(code, dest: X64Register.r9, value: -1)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 32, srcReg: X64Register.rax)  // lpWideCharStr = wide
+	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rax)
+	emitMovRspOffsetReg(code, offset: 40, srcReg: X64Register.rax)  // cchWideChar = wchars
+	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar))
+	emitX64GtSystemStackLeave(code, rdataRelocs: rdataRelocs, frameSize: 0x30)
+	helperLoadSlot(code, slotIndex: 2, dest: X64Register.r8)  // return wide
+	helperEmitJmp(code, state: state, targetBlock: 2)  // done
+	helperMarkBlock(state, code: code, blockId: 1)  // null: NULL/empty cwd or a failure → inherit parent cwd
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)
+	helperMarkBlock(state, code: code, blockId: 2)  // done (r8 = wide ptr or 0)
+	helperFinalize(state, code: code)
+	helperEpilogue(code)
+end 'emitX64SubprocessCwdToWide'
 
 // __subp_open_nul_wide(access=rcx) → an inheritable HANDLE to the NUL device, or
 // 0 on failure. Used for stdin=none (GENERIC_READ) and discard stdout/stderr

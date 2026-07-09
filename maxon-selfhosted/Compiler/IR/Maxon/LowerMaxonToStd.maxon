@@ -10445,8 +10445,22 @@ type MaxonToStdLowering
 				// than passing the literal ValueId `0` — a bare 0 alias-collides
 				// with the local v0 in any function whose first SSA value
 				// isn't defined locally, breaking regalloc downstream.
-				let envId = try self.fnEnvVarNames.get(v) otherwise self.emitConstI64(0, dstBlock: dstBlock)
-				result.push(envId)
+				//
+				// The env-materializing `emitConstI64` MUST NOT live in an
+				// `otherwise` expression: the C# bootstrap evaluates a scalar
+				// `try X otherwise Yexpr` EAGERLY (running Yexpr's op-emission
+				// even when X succeeds), whereas the self-hosted compiler
+				// evaluates it lazily. A side-effecting `otherwise` therefore
+				// emits a stray dead `const 0` under the bootstrap-built compiler
+				// but not under a self-built one — a bootstrap-fixpoint divergence
+				// (the closure/fn-alias env has a real binding on the hit path, so
+				// the const is dead there). An explicit if/else keeps the
+				// emission on the miss path under BOTH evaluation orders.
+				if let foundEnv = try self.fnEnvVarNames.get(v) 'hasEnv'
+					result.push(foundEnv)
+				end 'hasEnv' else 'noEnv'
+					result.push(self.emitConstI64(0, dstBlock: dstBlock))
+				end 'noEnv'
 			end 'expandEnv'
 			// C1.d: an interface-typed param's ABI is (value, witness). The
 			// value half was just pushed; pair it with the witness here so
