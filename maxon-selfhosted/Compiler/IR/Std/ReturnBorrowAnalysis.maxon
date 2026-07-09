@@ -167,6 +167,10 @@ function visitBorrowScc(module StdModule, scc StringArray, cg CallGraph, funcByN
 	for name in scc 'eachGlobalBorrow'
 		classifyGlobalBorrowForName(module, name: name, funcByName: funcByName, project: project)
 	end 'eachGlobalBorrow'
+	// Param-borrow likewise after the borrow set settles (it is a borrow subset).
+	for name in scc 'eachParamBorrow'
+		classifyParamBorrowForName(module, name: name, funcByName: funcByName, project: project)
+	end 'eachParamBorrow'
 end 'visitBorrowScc'
 
 // Recursive-SCC global-borrow finalization for `name`, run after the SCC's borrow set
@@ -187,6 +191,27 @@ function classifyGlobalBorrowForName(module StdModule, name String, funcByName B
 		project.funcReturnsGlobalBorrow.insert(func.name)
 	end 'isGlobalBorrow'
 end 'classifyGlobalBorrowForName'
+
+// Recursive-SCC param-borrow finalization for `name`, run after the SCC's borrow set
+// has settled. Mirrors `classifyGlobalBorrowForName`. Gated on `funcReturnsBorrow`
+// membership so the set stays a strict subset (a non-borrow-returner never enters).
+function classifyParamBorrowForName(module StdModule, name String, funcByName BorrowFuncIndexByName, project Project)
+	let funcIdx = try funcByName.get(name) otherwise return
+	let func = try module.functions.get(funcIdx) otherwise panic("classifyParamBorrowForName: functions.get OOB at {funcIdx}")
+	if func.blockRefs.count() == 0 'empty'
+		return
+	end 'empty'
+	if not project.funcReturnsBorrow.contains(func.name) 'notBorrow'
+		return
+	end 'notBorrow'
+	if project.funcReturnsParamBorrow.contains(func.name) 'already'
+		return
+	end 'already'
+	let defs = buildValueDefMap(module, func: func)
+	if functionReturnsParamBorrow(module, func: func, defs: defs, project: project) 'isParamBorrow'
+		project.funcReturnsParamBorrow.insert(func.name)
+	end 'isParamBorrow'
+end 'classifyParamBorrowForName'
 
 // Non-recursive singleton path: set the (local) element-loader bit, classify the
 // borrow status once, then the receiver-interior status — building the per-function
@@ -212,6 +237,15 @@ function classifyBorrowForName(module StdModule, name String, funcByName BorrowF
 			project.funcReturnsGlobalBorrow.insert(func.name)
 		end 'isGlobalBorrow'
 	end 'notSettledGlobal'
+	// PARAM-BORROW subset: classified AFTER the borrow bit (a param-rooted return is a
+	// borrow), reusing the shared `defs`, and gated on borrow membership so it stays a
+	// strict subset. Callees-first SCC order settles a forwarded callee's `funcReturnsBorrow`
+	// bit before this caller's receiver-rooting check reads it.
+	if project.funcReturnsBorrow.contains(func.name) and not project.funcReturnsParamBorrow.contains(func.name) 'notSettledParam'
+		if functionReturnsParamBorrow(module, func: func, defs: defs, project: project) 'isParamBorrow'
+			project.funcReturnsParamBorrow.insert(func.name)
+		end 'isParamBorrow'
+	end 'notSettledParam'
 	if not project.funcReturnsReceiverInterior.contains(func.name) 'notInterior'
 		if functionReturnsReceiverInterior(module, func: func, defs: defs, project: project) 'isInterior'
 			project.funcReturnsReceiverInterior.insert(func.name)
@@ -438,6 +472,131 @@ function callForwardsGlobalBorrow(c StdCallOp, project Project) returns bool
 		ret gives false
 	end 'check'
 end 'callForwardsGlobalBorrow'
+
+// True iff EVERY return of `func` is a MANAGED value that is a borrow rooted in a
+// PARAMETER's interior — a load whose address roots in a param (`self.field`), or a
+// forward of a borrow-returning call whose RECEIVER (arg 0) roots in a param (the
+// `self`-method-call shape). Such a borrow's occupant is owned by a container the
+// CALLER passed in (the `self` parser's token array), which OUTLIVES the callee's
+// frame — so a caller forwarding this result must NOT retain it (the caller borrows
+// the param-owned container and never releases the extra +1: the `consumeExpecting`
+// token leak). The param-rooted sibling of `functionReturnsGlobalBorrow`, and a STRICT
+// SUBSET of `functionReturnsBorrow` (a param-interior borrow owns no +1). Contrast a
+// torn-down-LOCAL element forward (`optionValue`'s `parts.get(1)`): its receiver roots
+// in a local allocation, not a param, so the retain IS needed and this is false.
+function functionReturnsParamBorrow(module StdModule, func IrFunction, defs ValueDefMap, project Project) returns bool
+	// Only MANAGED returns can carry a `returnedBorrowRetain`; an UNMANAGED return (a
+	// throwing function's error-ordinal on its `errorReturn` edge) never does, so it is
+	// non-blocking here — exactly as `functionReturnsBorrow` treats it (its `valueOwnsPlusOne`
+	// reads false for an unmanaged value). Without this skip a throwing wrapper like
+	// `Parser.consumeExpecting` (managed token on the `ret` edge, unmanaged error on the
+	// `errorReturn` edge) would never classify param-borrow and the leak would persist.
+	var sawManagedReturn = false
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionReturnsParamBorrow: blockRef not in module.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("functionReturnsParamBorrow: terminatorIndex not in module.ops")
+		let retVal = returnValueOf(term)
+		if retVal.present 'isReturn'
+			if not func.isValueManaged(retVal.value) 'unmanaged'
+				continue
+			end 'unmanaged'
+			sawManagedReturn = true
+			if not returnedValueIsParamRooted(module, defs: defs, func: func, valueId: retVal.value, project: project) 'notParam'
+				return false
+			end 'notParam'
+		end 'isReturn'
+	end 'eachBlock'
+	return sawManagedReturn
+end 'functionReturnsParamBorrow'
+
+// True iff returned MANAGED `valueId` is a borrow rooted in a PARAMETER's interior:
+// its def is a load whose address roots in a param (`self.field` accessor / the inlined
+// element loader), or a call to a `funcReturnsBorrow` callee whose RECEIVER (arg 0)
+// roots in a param (the `self`-method forward). A non-op-def (block-arg phi), a local
+// allocation, or a non-param receiver returns false — conservative, since a false
+// negative only keeps the pre-existing (safe) retain.
+function returnedValueIsParamRooted(module StdModule, defs ValueDefMap, func IrFunction, valueId ValueId, project Project) returns bool
+	if not func.isValueManaged(valueId) 'notManaged'
+		return false
+	end 'notManaged'
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	if opIsLoad(defOp) 'directLoad'
+		var visited = ValueIdArray.create()
+		return loadAddressDerivesFromParam(module, defs: defs, op: defOp, visited: visited)
+	end 'directLoad'
+	return callForwardsParamRootedBorrow(module, defs: defs, op: defOp, project: project)
+end 'returnedValueIsParamRooted'
+
+// True iff `op` is a direct/try call to a `funcReturnsBorrow` callee whose RECEIVER
+// (arg 0) roots in a PARAMETER — the `self`-method borrow-forward whose result the
+// receiver's caller-owned container outlives.
+function callForwardsParamRootedBorrow(module StdModule, defs ValueDefMap, op StdOp, project Project) returns bool
+	return match op 'dispatch'
+		call(c) gives callForwardsParamRootedBorrowCall(c, module: module, defs: defs, project: project)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'dispatch'
+end 'callForwardsParamRootedBorrow'
+
+function callForwardsParamRootedBorrowCall(c StdCallOp, module StdModule, defs ValueDefMap, project Project) returns bool
+	return match c 'check'
+		call(_, callee, argIds) gives project.funcReturnsBorrow.contains(callee) and receiverArgRootsInParam(module, defs: defs, argIds: argIds)
+		tryCall(_, callee, argIds, _) gives project.funcReturnsBorrow.contains(callee) and receiverArgRootsInParam(module, defs: defs, argIds: argIds)
+		indirectCall to errorReturn gives false
+		ret gives false
+	end 'check'
+end 'callForwardsParamRootedBorrowCall'
+
+// True iff the RECEIVER (arg 0) of a call roots in a parameter. An empty arg list
+// (a nullary call) roots in nothing, so it is not param-rooted.
+function receiverArgRootsInParam(module StdModule, defs ValueDefMap, argIds ValueIdArray) returns bool
+	let receiverId = try argIds.get(0) otherwise return false
+	var visited = ValueIdArray.create()
+	return valueRootsInParam(module, defs: defs, valueId: receiverId, visited: visited)
+end 'receiverArgRootsInParam'
+
+// True iff `valueId` transitively roots in a `param` op, walking through loads (the
+// loaded value carries the param-ness of its address — a `self.field` read) and arith
+// (index computation). A `globalAddr` root, a call/allocation (fresh), or a block-arg
+// with no op def returns false — the value does not root in a caller-owned parameter.
+// The param-rooting dual of `valueRootsInGlobal`; `visited` bounds the walk.
+function valueRootsInParam(module StdModule, defs ValueDefMap, valueId ValueId, visited ValueIdArray) returns bool
+	if valueIdArrayContains(visited, vid: valueId) 'seen'
+		return false
+	end 'seen'
+	visited.push(valueId)
+	let defIdx = try defs.get(valueId) otherwise return false
+	let defOp = try module.ops.get(defIdx) otherwise return false
+	if opIsParam(defOp) 'param'
+		return true
+	end 'param'
+	if opIsGlobalAddr(defOp) 'global'
+		return false
+	end 'global'
+	if opIsLoad(defOp) 'load'
+		let addrId = loadAddressId(defOp)
+		if addrId == (i64.max) 'noAddr'
+			return false
+		end 'noAddr'
+		return valueRootsInParam(module, defs: defs, valueId: addrId, visited: visited)
+	end 'load'
+	if opIsArith(defOp) 'arith'
+		let operands = extractStdOpOperands(defOp)
+		for readId in operands.readIds 'eachOperand'
+			if valueRootsInParam(module, defs: defs, valueId: readId, visited: visited) 'roots'
+				return true
+			end 'roots'
+		end 'eachOperand'
+		return false
+	end 'arith'
+	return false
+end 'valueRootsInParam'
 
 // True iff lowering classified `valueId` with a class the inserter ACQUIRES
 // (`computeIncomingOwnerAcquire` rule (a) / the def-acquire classes) — a returned

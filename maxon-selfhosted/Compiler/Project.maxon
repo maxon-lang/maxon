@@ -349,6 +349,26 @@ export type Project
 	// keeps the (safe, pre-existing) retain, never over-releases.
 	export var funcReturnsGlobalBorrow as FuncReturnsBorrowSet
 
+	// PARAM-INTERIOR-BORROW return registry: the STRICT SUBSET of `funcReturnsBorrow`
+	// whose every return is a borrow rooted in a PARAMETER's interior — a load whose
+	// address roots in a param (`self.field`), or a forward of a borrow-returning call
+	// whose RECEIVER (arg 0) roots in a param. The param-rooted sibling of
+	// `funcReturnsGlobalBorrow`: the borrowed occupant is owned by a container the
+	// CALLER passed in (the `self` parser's token array), so it OUTLIVES the callee's
+	// frame exactly as a global outlives it — a `returnedBorrowRetain` here mints a +1
+	// no caller releases (the caller, forwarding a borrow-returner, also borrows). The
+	// leak: `Parser.consumeExpecting`'s `return try consume()` forwarded a borrow of the
+	// self-owned token array (via `cursor.current()`), retained it once per call, and
+	// every token leaked at rc>0 (~4.1k on a hello self-compile). `planReturnedBorrowRetains`
+	// reads it to SUPPRESS the retain for such a function. Distinct from a torn-down-LOCAL
+	// element forward (`CommandLine.optionValue`'s `parts.get(1)`, whose local `parts`
+	// dies at return and so DOES need the retain): the receiver there roots in a local
+	// allocation, not a param, so it stays OUT of this set. Not persisted in the stdlib
+	// cache (mirrors `funcReturnsGlobalBorrow`): the wrappers are user (compiler)
+	// functions computed fresh each build; a missing bit only keeps the safe pre-existing
+	// retain, never over-releases.
+	export var funcReturnsParamBorrow as FuncReturnsBorrowSet
+
 	// RECEIVER-INTERIOR return registry (the liveness-only superset of
 	// `funcReturnsBorrow`). Function names whose return value structurally derives
 	// from the receiver's interior — a node/element pointer the receiver's
@@ -1155,6 +1175,7 @@ export type Project
 			funcSignatures: FuncSignatureMap.create(),
 			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsGlobalBorrow: FuncReturnsBorrowSet.create(),
+			funcReturnsParamBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),

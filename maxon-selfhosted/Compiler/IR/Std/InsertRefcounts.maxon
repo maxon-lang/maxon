@@ -131,9 +131,9 @@ function releaseKindName(kind ReleaseKind) returns String
 	end 'name'
 end 'releaseKindName'
 
-export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsGlobalBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool, rcSanitize bool = false) returns StdModule
+export function insertRefcounts(module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsGlobalBorrow FuncReturnsBorrowSet, funcReturnsParamBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, asyncSpawnedFuncs FuncReturnsBorrowSet, isWasmTarget bool, rcSanitize bool = false) returns StdModule
 	for func in module.functions 'eachFunc'
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsGlobalBorrow: funcReturnsGlobalBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, funcMayReturnArg: funcMayReturnArg, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs, rcLedgerEmit: rcSanitize)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: funcParamConsumes, funcReturnsConsumedArg: funcReturnsConsumedArg, funcReturnsBorrow: funcReturnsBorrow, funcReturnsGlobalBorrow: funcReturnsGlobalBorrow, funcReturnsParamBorrow: funcReturnsParamBorrow, funcReturnsReceiverInterior: funcReturnsReceiverInterior, funcRetainsParam: funcRetainsParam, funcMayReturnArg: funcMayReturnArg, includeManaged: true, isWasmTarget: isWasmTarget, asyncSpawnedFuncs: asyncSpawnedFuncs, rcLedgerEmit: rcSanitize)
 	end 'eachFunc'
 
 	return module
@@ -153,6 +153,7 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 	let emptyReturnsConsumed = FuncReturnsBorrowSet.create()
 	let emptyReturnsBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsGlobalBorrow = FuncReturnsBorrowSet.create()
+	let emptyReturnsParamBorrow = FuncReturnsBorrowSet.create()
 	let emptyReturnsInterior = FuncReturnsBorrowSet.create()
 	let emptyRetains = FuncRetainsParamMap.create()
 	let emptyMayReturnArg = MayReturnArgMap.create()
@@ -161,7 +162,7 @@ function insertTypeParamDrops(module StdModule) returns StdModule
 		// The stdlib type-param sandbox runs the type-param-only domain (`includeManaged:
 		// false`), which never reaches the interface-value-slot machinery, so its
 		// `isWasmTarget` is inert — pass false.
-		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsGlobalBorrow: emptyReturnsGlobalBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, funcMayReturnArg: emptyMayReturnArg, includeManaged: false, isWasmTarget: false, asyncSpawnedFuncs: emptyAsyncSpawned)
+		insertRefcountsInFunction(func, module: module, funcParamConsumes: emptyConsumes, funcReturnsConsumedArg: emptyReturnsConsumed, funcReturnsBorrow: emptyReturnsBorrow, funcReturnsGlobalBorrow: emptyReturnsGlobalBorrow, funcReturnsParamBorrow: emptyReturnsParamBorrow, funcReturnsReceiverInterior: emptyReturnsInterior, funcRetainsParam: emptyRetains, funcMayReturnArg: emptyMayReturnArg, includeManaged: false, isWasmTarget: false, asyncSpawnedFuncs: emptyAsyncSpawned)
 	end 'eachFunc'
 
 	return module
@@ -171,7 +172,7 @@ end 'insertTypeParamDrops'
 // Per-function driver
 // ============================================================
 
-function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsGlobalBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet, rcLedgerEmit bool = false)
+function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamConsumes FuncParamConsumesMap, funcReturnsConsumedArg FuncReturnsBorrowSet, funcReturnsBorrow FuncReturnsBorrowSet, funcReturnsGlobalBorrow FuncReturnsBorrowSet, funcReturnsParamBorrow FuncReturnsBorrowSet, funcReturnsReceiverInterior FuncReturnsBorrowSet, funcRetainsParam FuncRetainsParamMap, funcMayReturnArg MayReturnArgMap, includeManaged bool, isWasmTarget bool, asyncSpawnedFuncs FuncReturnsBorrowSet, rcLedgerEmit bool = false)
 	if func.blockRefs.count() == 0 'empty'
 		return
 	end 'empty'
@@ -351,7 +352,7 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// emitted `decref parts; incref element` — increffing an already-freed element,
 	// a dangling +1 the caller then stored and later dereferenced (the `MaxonArgs.
 	// parse` two-`--filter=`/`--dump-stages=` store over-release / bootstrap crash).
-	planReturnedBorrowRetains(ctx, funcReturnsGlobalBorrow: funcReturnsGlobalBorrow)
+	planReturnedBorrowRetains(ctx, funcReturnsGlobalBorrow: funcReturnsGlobalBorrow, funcReturnsParamBorrow: funcReturnsParamBorrow)
 	planDeadDefDrops(ctx)
 	// ADDRESS-TAKEN SLOT scope-exit drops: a managed value stored into a closure-
 	// captured (address-taken) slot is owned by the SLOT; its SSA-store release was
@@ -4178,7 +4179,21 @@ end 'borrowedElementConsumedByContainer'
 // case. A `tryCall` result is NULL on the error edge, so the retain is placed at the
 // START of the SUCCESS block (where the result is provably non-null), mirroring
 // `planAcquireForOp`; a non-tryCall def is retained immediately after its def.
-function planReturnedBorrowRetains(ctx RcContext, funcReturnsGlobalBorrow FuncReturnsBorrowSet)
+function planReturnedBorrowRetains(ctx RcContext, funcReturnsGlobalBorrow FuncReturnsBorrowSet, funcReturnsParamBorrow FuncReturnsBorrowSet)
+	// A PARAM-INTERIOR-BORROW function (`funcReturnsParamBorrow` — `Parser.consumeExpecting`)
+	// returns a borrow whose occupant a container the CALLER passed in (the `self` parser's
+	// token array) owns and OUTLIVES this frame — the param-rooted dual of the module-global
+	// getter forward below. EVERY return is such a borrow (that is what the classification
+	// verified), and this function is itself in `funcReturnsBorrow`, so its callers BORROW
+	// the result and never release it: a `returnedBorrowRetain` here mints a +1 no one
+	// releases (every forwarded token leaked at rc>0). Suppress ALL returned-borrow retains
+	// for the whole function — none are needed. A stored result is still safe (a caller
+	// storing a `funcReturnsBorrow` result uses `storeIncrefNew`, supplying its own +1, not
+	// consuming this one). Contrast a torn-down-LOCAL forward (`optionValue`'s `parts.get(1)`),
+	// which is NOT in this set (receiver roots in a local) and keeps its needed retain.
+	if funcReturnsParamBorrow.contains(ctx.func.name) 'paramBorrowFunc'
+		return
+	end 'paramBorrowFunc'
 	var scratch = StdOpOperands.create()
 	for blockRef in ctx.func.blockRefs 'eachBlock'
 		let block = try ctx.module.blocks.get(blockRef) otherwise panic("planReturnedBorrowRetains: blockRef not in module.blocks")

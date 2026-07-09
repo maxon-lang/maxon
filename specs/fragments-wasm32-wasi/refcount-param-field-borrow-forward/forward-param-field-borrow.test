@@ -1,0 +1,444 @@
+// Test: forward-param-field-borrow
+enum IterErr implements Error
+	stop
+end 'IterErr'
+
+type Tok
+	export var line as i64
+
+	static function make(l i64) returns Tok
+		return Self{line: l}
+	end 'make'
+end 'Tok'
+
+typealias TokBuf = Array with Tok
+typealias TokCur = ArrayIterator with Tok
+
+type Lex
+	var toks as TokBuf
+	var cur as TokCur
+	var counter as i64
+
+	static function create() returns Self throws IterErr
+		var toks = TokBuf.create()
+		for i in 0 upto 200 'fill'
+			toks.push(Tok.make(i))
+		end 'fill'
+		let cur = try toks.cursor() otherwise throw IterErr.stop
+		return Self{toks: toks, cur: cur, counter: 0}
+	end 'create'
+
+	// Returns cur.current() (a borrow of the self-field-owned token array). The
+	// counter arithmetic keeps this over the inline budget so it stays a standalone
+	// borrow-returning function, mirroring the large real Parser.consume.
+	function consume() returns Tok throws IterErr
+		counter = counter + 1
+		counter = counter + 2
+		counter = counter + 3
+		counter = counter + 4
+		counter = counter + 5
+		counter = counter + 6
+		counter = counter + 7
+		counter = counter + 8
+		counter = counter + 9
+		counter = counter + 10
+		let t = cur.current()
+		try cur.advance() otherwise throw IterErr.stop
+		return t
+	end 'consume'
+
+	// Mirrors Parser.consumeExpecting: `return try consume()`. Bloated so it stays
+	// standalone and the returned-borrow retain would land in its own body.
+	function consumeExpecting(tag i64) returns Tok throws IterErr
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		return try consume()
+	end 'consumeExpecting'
+end 'Lex'
+
+function run() returns i64 throws IterErr
+	var lex = try Lex.create()
+	var sum = 0
+	for _ in 0 upto 40 'loop'
+		let a = try lex.consumeExpecting(1)
+		sum = sum + a.line
+	end 'loop'
+	let b = try lex.consumeExpecting(2)
+	let c = try lex.consumeExpecting(3)
+	let d = try lex.consumeExpecting(4)
+	sum = sum + b.line + c.line + d.line
+	return sum
+end 'run'
+
+function main() returns ExitCode
+	// The borrowed token fields sum to 903; the exit code checks the value
+	// AND, via the leak gate, that no forwarded token leaked (a leak would
+	// exit 101 instead of 903 mod 256 = 135).
+	let s = try run() otherwise 0
+	return s mod 256
+end 'main'
+---
+ExitCode: 135
+---
+// CompiledIR
+module {
+  func @Lex.create() -> i64 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Tok
+    %4 = mir.call @Array.create(%3)
+    %6 = mir.mov_imm 200 : i64
+    mir.br fill_0.header(%0)
+  fill_0.header(%37: i64):
+    %9 = mir.cmp lt, %37, %6
+    mir.cond_br %9 [then: fill_0(), else: fill_0.exit()]
+  fill_0:
+    %38 = mir.mov_imm 8 : i64
+    %39 = mir.mov_imm 0 : i64
+    mir.br inlined_stdlib.__mm_alloc_0_0()
+  inlined_stdlib.__mm_alloc_0_0:
+    %51 = mir.mov_imm 0 : i64
+    %52 = mir.mov_imm 1 : i64
+    %53 = mir.cmp lt, %38, %52
+    mir.cond_br %53 [then: inlined_stdlib.__mm_alloc_1_0(), else: inlined_stdlib.__mm_alloc_2_14(%38)]
+  inlined_stdlib.__mm_alloc_1_0:
+    %54 = mir.mov_imm 1 : i64
+    mir.br inlined_stdlib.__mm_alloc_2_14(%54)
+  inlined_stdlib.__mm_alloc_2_14(%55: i64):
+    %56 = mir.global_addr @__mm_alloc_count
+    mir.atomic_inc %56
+    %57 = mir.mov_imm 32 : i64
+    %58 = mir.add.i64 %55, %57
+    mir.br inlined_stdlib.__slab_alloc_0_0()
+  inlined_stdlib.__slab_alloc_0_0:
+    %71 = mir.mov_imm 0 : i64
+    %72 = mir.mov_imm 32768 : i64
+    %73 = mir.cmp gt, %58, %72
+    mir.cond_br %73 [then: inlined_stdlib.__slab_alloc_1_0(), else: inlined_stdlib.__slab_class_index_for_0_0()]
+  inlined_stdlib.__slab_alloc_1_0:
+    %74 = mir.global_addr @__slab_lock
+    mir.os_lock_acquire %74
+    %75 = mir.call @stdlib.__slab_os_direct_alloc(%58)
+    %76 = mir.global_addr @__slab_lock
+    mir.os_lock_release %76
+    mir.br inline_cont_Lex.create_14(%75)
+  inlined_stdlib.__slab_class_index_for_0_0:
+    %88 = mir.mov_imm 0 : i64
+    %89 = mir.mov_imm 0 : i64
+    %90 = mir.mov_imm 18 : i64
+    mir.br inlined_stdlib.__slab_class_index_for_1_25(%88, %89)
+  inlined_stdlib.__slab_class_index_for_1_25(%91: i64, %92: i64):
+    %93 = mir.cmp lt, %92, %90
+    mir.cond_br %93 [then: inlined_stdlib.__slab_class_index_for_2_0(), else: inlined_stdlib.__slab_class_index_for_4_0()]
+  inlined_stdlib.__slab_class_index_for_2_0:
+    %94 = mir.call @stdlib.__slab_class_size(%91)
+    %95 = mir.cmp ge, %94, %58
+    mir.cond_br %95 [then: inline_cont_Lex.create_18(%91), else: inlined_stdlib.__slab_class_index_for_6_0()]
+  inlined_stdlib.__slab_class_index_for_3_0:
+    %96 = mir.mov_imm 1 : i64
+    %97 = mir.add.i64 %92, %96
+    mir.br inlined_stdlib.__slab_class_index_for_1_25(%101, %97)
+  inlined_stdlib.__slab_class_index_for_4_0:
+    %98 = mir.mov_imm 136 : i64
+    mir.os_exit %98
+    %99 = mir.mov_imm 0 : i64
+    mir.br inline_cont_Lex.create_18(%99)
+  inlined_stdlib.__slab_class_index_for_6_0:
+    %100 = mir.mov_imm 1 : i64
+    %101 = mir.add.i64 %91, %100
+    mir.br inlined_stdlib.__slab_class_index_for_3_0()
+  inline_cont_Lex.create_18(%102: i64):
+    %116 = mir.mov_imm -1 : i64
+    %79 = mir.cmp lt, %116, %71
+    mir.cond_br %79 [then: inlined_stdlib.__slab_proc_at_0_0(), else: inlined_stdlib.__slab_alloc_4_20(%71)]
+  inlined_stdlib.__slab_proc_at_0_0:
+    %103 = mir.mov_imm 0 : i64
+    %104 = mir.cmp lt, %71, %103
+    mir.cond_br %104 [then: inlined_stdlib.__slab_proc_at_1_0(), else: inlined_stdlib.__slab_proc_at_2_0()]
+  inlined_stdlib.__slab_proc_at_1_0:
+    %105 = mir.mov_imm 0 : i64
+    mir.br inline_cont_Lex.create_19(%105)
+  inlined_stdlib.__slab_proc_at_2_0:
+    %106 = mir.global_addr @__sched_procs
+    %107 = mir.load %106, 0 width: qword
+    %108 = mir.mov_imm 0 : i64
+    %109 = mir.cmp eq, %107, %108
+    mir.cond_br %109 [then: inlined_stdlib.__slab_proc_at_3_0(), else: inlined_stdlib.__slab_proc_at_4_0()]
+  inlined_stdlib.__slab_proc_at_3_0:
+    %110 = mir.mov_imm 0 : i64
+    mir.br inline_cont_Lex.create_19(%110)
+  inlined_stdlib.__slab_proc_at_4_0:
+    %111 = mir.mov_imm 3 : i64
+    %112 = mir.shl.i64 %71, %111
+    %113 = mir.add.i64 %107, %112
+    %114 = mir.load %113, 0 width: qword
+    mir.br inline_cont_Lex.create_19(%114)
+  inline_cont_Lex.create_19(%115: i64):
+    %81 = mir.cmp ne, %115, %71
+    mir.br inlined_stdlib.__slab_alloc_4_20(%81)
+  inlined_stdlib.__slab_alloc_4_20(%82: i64):
+    mir.cond_br %82 [then: inlined_stdlib.__slab_alloc_5_0(), else: inlined_stdlib.__slab_alloc_6_0()]
+  inlined_stdlib.__slab_alloc_5_0:
+    %83 = mir.global_addr @__slab_lock
+    mir.os_lock_acquire %83
+    %84 = mir.call @stdlib.__slab_alloc_class(%102)
+    %85 = mir.global_addr @__slab_lock
+    mir.os_lock_release %85
+    mir.br inline_cont_Lex.create_14(%84)
+  inlined_stdlib.__slab_alloc_6_0:
+    %86 = mir.call @stdlib.__slab_alloc_class(%102)
+    mir.br inline_cont_Lex.create_14(%86)
+  inline_cont_Lex.create_14(%87: i64):
+    mir.store %51, %87, 0 width: qword
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.add.i64 %87, %60
+    mir.store %39, %61, 0 width: qword
+    %62 = mir.mov_imm 16 : i64
+    %63 = mir.add.i64 %87, %62
+    mir.store %55, %63, 0 width: qword
+    %64 = mir.mov_imm 24 : i64
+    %65 = mir.add.i64 %87, %64
+    mir.store %51, %65, 0 width: qword
+    %66 = mir.mov_imm 32 : i64
+    %67 = mir.add.i64 %87, %66
+    mir.br inline_cont_Lex.create_2(%67)
+  inline_cont_Lex.create_2(%68: i64):
+    %120 = mir.call @stdlib.__mm_incref(%67)
+    mir.store %37, %68, 0 width: qword
+    %13 = mir.global_addr @__layout_Array_Tok
+    %14 = mir.call @Array.push(%4, %68, %13)
+    mir.br fill_0.step()
+  fill_0.step:
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %37, %16
+    mir.br fill_0.header(%17)
+  fill_0.exit:
+    %19 = mir.global_addr @__layout_Array_Tok
+    mir.br inlined_Array.cursor_0_0()
+  inlined_Array.cursor_0_0:
+    %41 = mir.load %4, 0 width: qword
+    %69 = mir.mov_imm 8 : i64
+    %70 = mir.sub.i64 %41, %69
+    mir.atomic_inc %70
+    %43, %44 = mir.try_call @ArrayIterator.create(%41, %19)
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.cmp ne, %44, %45
+    mir.cond_br %46 [then: inlined_Array.cursor_1_0(), else: inlined_Array.cursor_2_0()]
+  inlined_Array.cursor_1_0:
+    %47 = mir.mov_imm 0 : i64
+    mir.br inline_cont_Lex.create_4(%47, %44)
+  inlined_Array.cursor_2_0:
+    %48 = mir.mov_imm 0 : i64
+    mir.br inline_cont_Lex.create_4(%43, %48)
+  inline_cont_Lex.create_4(%49: i64, %50: i64):
+    %23 = mir.cmp ne, %50, %0
+    mir.cond_br %23 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %119 = mir.call @__mm_decref_maybenull_helper(%49)
+    %118 = mir.call @__mm_decref_maybenull_helper(%4)
+    %26 = mir.mov_imm 1 : i64
+    mir.error_return %0, %26
+  try_0.merge:
+    %28 = mir.mov_imm 24 : i64
+    %30 = mir.func_addr @__destruct_Lex
+    %29 = mir.call @stdlib.__mm_alloc(%28, %30)
+    %117 = mir.call @stdlib.__mm_incref(%29)
+    mir.store %0, %29, 0 width: qword
+    mir.store %0, %29, 8 width: qword
+    mir.store %4, %29, 0 width: qword
+    mir.store %49, %29, 8 width: qword
+    mir.store %0, %29, 16 width: qword
+    mir.error_return %29, %0
+  }
+  func @Lex.consume(local0: i64) -> i64 {
+  entry:
+    %69 = mir.param local0 : i64
+    %2 = mir.load %69, 16 width: qword
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.add.i64 %2, %4
+    mir.store %5, %69, 16 width: qword
+    %7 = mir.load %69, 16 width: qword
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.add.i64 %7, %9
+    mir.store %10, %69, 16 width: qword
+    %12 = mir.load %69, 16 width: qword
+    %14 = mir.mov_imm 3 : i64
+    %15 = mir.add.i64 %12, %14
+    mir.store %15, %69, 16 width: qword
+    %17 = mir.load %69, 16 width: qword
+    %19 = mir.mov_imm 4 : i64
+    %20 = mir.add.i64 %17, %19
+    mir.store %20, %69, 16 width: qword
+    %22 = mir.load %69, 16 width: qword
+    %24 = mir.mov_imm 5 : i64
+    %25 = mir.add.i64 %22, %24
+    mir.store %25, %69, 16 width: qword
+    %27 = mir.load %69, 16 width: qword
+    %29 = mir.mov_imm 6 : i64
+    %30 = mir.add.i64 %27, %29
+    mir.store %30, %69, 16 width: qword
+    %32 = mir.load %69, 16 width: qword
+    %34 = mir.mov_imm 7 : i64
+    %35 = mir.add.i64 %32, %34
+    mir.store %35, %69, 16 width: qword
+    %37 = mir.load %69, 16 width: qword
+    %39 = mir.mov_imm 8 : i64
+    %40 = mir.add.i64 %37, %39
+    mir.store %40, %69, 16 width: qword
+    %42 = mir.load %69, 16 width: qword
+    %44 = mir.mov_imm 9 : i64
+    %45 = mir.add.i64 %42, %44
+    mir.store %45, %69, 16 width: qword
+    %47 = mir.load %69, 16 width: qword
+    %49 = mir.mov_imm 10 : i64
+    %50 = mir.add.i64 %47, %49
+    mir.store %50, %69, 16 width: qword
+    %52 = mir.load %69, 8 width: qword
+    %70 = mir.load %52, 0 width: qword
+    %71 = mir.call @stdlib.__managed_mem_cursor_current(%70)
+    %56 = mir.load %69, 8 width: qword
+    %58 = mir.global_addr @__layout_ArrayIterator_Tok
+    %59, %60 = mir.try_call @ArrayIterator.advance(%56, %58)
+    %61 = mir.mov_imm 0 : i64
+    %62 = mir.cmp ne, %60, %61
+    mir.cond_br %62 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %64 = mir.mov_imm 0 : i64
+    %65 = mir.mov_imm 1 : i64
+    mir.error_return %64, %65
+  try_0.merge:
+    %68 = mir.mov_imm 0 : i64
+    mir.error_return %71, %68
+  }
+  func @Lex.consumeExpecting(local0: i64, local1: i64) -> i64 {
+  entry:
+    %49 = mir.param local0 : i64
+    %50 = mir.param local1 : i64
+    %2 = mir.load %49, 16 width: qword
+    %5 = mir.add.i64 %2, %50
+    mir.store %5, %49, 16 width: qword
+    %7 = mir.load %49, 16 width: qword
+    %10 = mir.add.i64 %7, %50
+    mir.store %10, %49, 16 width: qword
+    %12 = mir.load %49, 16 width: qword
+    %15 = mir.add.i64 %12, %50
+    mir.store %15, %49, 16 width: qword
+    %17 = mir.load %49, 16 width: qword
+    %20 = mir.add.i64 %17, %50
+    mir.store %20, %49, 16 width: qword
+    %22 = mir.load %49, 16 width: qword
+    %25 = mir.add.i64 %22, %50
+    mir.store %25, %49, 16 width: qword
+    %27 = mir.load %49, 16 width: qword
+    %30 = mir.add.i64 %27, %50
+    mir.store %30, %49, 16 width: qword
+    %32 = mir.load %49, 16 width: qword
+    %35 = mir.add.i64 %32, %50
+    mir.store %35, %49, 16 width: qword
+    %37 = mir.load %49, 16 width: qword
+    %40 = mir.add.i64 %37, %50
+    mir.store %40, %49, 16 width: qword
+    %43, %44 = mir.try_call @Lex.consume(%49)
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.cmp ne, %44, %45
+    mir.cond_br %46 [then: try_0.err(), else: try_0.cont()]
+  try_0.err:
+    %47 = mir.mov_imm 0 : i64
+    mir.error_return %47, %44
+  try_0.cont:
+    %48 = mir.mov_imm 0 : i64
+    mir.error_return %43, %48
+  }
+  func @run() -> i64 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %5, %6 = mir.try_call @Lex.create()
+    %8 = mir.cmp ne, %6, %0
+    mir.cond_br %8 [then: try_0.err(), else: try_0.cont()]
+  try_0.err:
+    mir.error_return %0, %6
+  try_0.cont:
+    %12 = mir.mov_imm 40 : i64
+    mir.br loop_0.header(%0, %0)
+  loop_0.header(%63: i64, %64: i64):
+    %15 = mir.cmp lt, %64, %12
+    mir.cond_br %15 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %17 = mir.mov_imm 1 : i64
+    %18, %19 = mir.try_call @Lex.consumeExpecting(%5, %17)
+    %21 = mir.cmp ne, %19, %0
+    mir.cond_br %21 [then: try_1.err(), else: try_1.cont()]
+  loop_0.step:
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %64, %23
+    mir.br loop_0.header(%35, %24)
+  loop_0.exit:
+    %26 = mir.mov_imm 2 : i64
+    %27, %28 = mir.try_call @Lex.consumeExpecting(%5, %26)
+    %30 = mir.cmp ne, %28, %0
+    mir.cond_br %30 [then: try_2.err(), else: try_2.cont()]
+  try_1.err:
+    %66 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.error_return %0, %19
+  try_1.cont:
+    %34 = mir.load %18, 0 width: qword
+    %35 = mir.add.i64 %63, %34
+    mir.br loop_0.step()
+  try_2.err:
+    %67 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.error_return %0, %28
+  try_2.cont:
+    %38 = mir.mov_imm 3 : i64
+    %39, %40 = mir.try_call @Lex.consumeExpecting(%5, %38)
+    %42 = mir.cmp ne, %40, %0
+    mir.cond_br %42 [then: try_3.err(), else: try_3.cont()]
+  try_3.err:
+    %68 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.error_return %0, %40
+  try_3.cont:
+    %45 = mir.mov_imm 4 : i64
+    %46, %47 = mir.try_call @Lex.consumeExpecting(%5, %45)
+    %49 = mir.cmp ne, %47, %0
+    mir.cond_br %49 [then: try_4.err(), else: try_4.cont()]
+  try_4.err:
+    %69 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.error_return %0, %47
+  try_4.cont:
+    %53 = mir.load %27, 0 width: qword
+    %54 = mir.add.i64 %63, %53
+    %56 = mir.load %39, 0 width: qword
+    %57 = mir.add.i64 %54, %56
+    %59 = mir.load %46, 0 width: qword
+    %60 = mir.add.i64 %57, %59
+    %65 = mir.call @__mm_decref_maybenull_helper(%5)
+    mir.error_return %60, %0
+  }
+  func @main() -> u8 {
+  entry:
+    %0, %1 = mir.try_call @run()
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp ne, %1, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: try_0.merge(%0)]
+  try_0.otherwise:
+    %5 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%5)
+  try_0.merge(%10: i64):
+    %8 = mir.mov_imm 256 : i64
+    %9 = mir.rem.i64 %10, %8
+    %11 = mir.mov_imm 255 : i64
+    %12 = mir.cmp ugt, %9, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_132ad0c2abcc3d61
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

@@ -1,0 +1,514 @@
+// Test: forward-param-field-borrow
+enum IterErr implements Error
+	stop
+end 'IterErr'
+
+type Tok
+	export var line as i64
+
+	static function make(l i64) returns Tok
+		return Self{line: l}
+	end 'make'
+end 'Tok'
+
+typealias TokBuf = Array with Tok
+typealias TokCur = ArrayIterator with Tok
+
+type Lex
+	var toks as TokBuf
+	var cur as TokCur
+	var counter as i64
+
+	static function create() returns Self throws IterErr
+		var toks = TokBuf.create()
+		for i in 0 upto 200 'fill'
+			toks.push(Tok.make(i))
+		end 'fill'
+		let cur = try toks.cursor() otherwise throw IterErr.stop
+		return Self{toks: toks, cur: cur, counter: 0}
+	end 'create'
+
+	// Returns cur.current() (a borrow of the self-field-owned token array). The
+	// counter arithmetic keeps this over the inline budget so it stays a standalone
+	// borrow-returning function, mirroring the large real Parser.consume.
+	function consume() returns Tok throws IterErr
+		counter = counter + 1
+		counter = counter + 2
+		counter = counter + 3
+		counter = counter + 4
+		counter = counter + 5
+		counter = counter + 6
+		counter = counter + 7
+		counter = counter + 8
+		counter = counter + 9
+		counter = counter + 10
+		let t = cur.current()
+		try cur.advance() otherwise throw IterErr.stop
+		return t
+	end 'consume'
+
+	// Mirrors Parser.consumeExpecting: `return try consume()`. Bloated so it stays
+	// standalone and the returned-borrow retain would land in its own body.
+	function consumeExpecting(tag i64) returns Tok throws IterErr
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		return try consume()
+	end 'consumeExpecting'
+end 'Lex'
+
+function run() returns i64 throws IterErr
+	var lex = try Lex.create()
+	var sum = 0
+	for _ in 0 upto 40 'loop'
+		let a = try lex.consumeExpecting(1)
+		sum = sum + a.line
+	end 'loop'
+	let b = try lex.consumeExpecting(2)
+	let c = try lex.consumeExpecting(3)
+	let d = try lex.consumeExpecting(4)
+	sum = sum + b.line + c.line + d.line
+	return sum
+end 'run'
+
+function main() returns ExitCode
+	// The borrowed token fields sum to 903; the exit code checks the value
+	// AND, via the leak gate, that no forwarded token leaked (a leak would
+	// exit 101 instead of 903 mod 256 = 135).
+	let s = try run() otherwise 0
+	return s mod 256
+end 'main'
+---
+ExitCode: 135
+---
+// CompiledIR
+module {
+  func @Lex.create() -> i64 {
+  entry:
+    x64.prologue stack_size=64
+    x64.lea rcx, [rip+__layout_Array_Tok]
+    x64.call Array.create
+    x64.mov [rbp+-24], r8
+    x64.xor r8d, r8d
+    x64.mov r8, 0
+    x64.mov rbx, r8
+  fill_0.header:
+    x64.cmp rbx, 200
+    x64.jge fill_0.exit
+  fill_0:
+    x64.xor r8d, r8d
+    x64.mov r8d, 8
+  inlined_stdlib.__mm_alloc_0_0:
+    x64.xor r9d, r9d
+    x64.cmp r8, 1
+    x64.jge __phi_trampoline_12_0
+  inlined_stdlib.__mm_alloc_1_0:
+    x64.mov r8d, 1
+    x64.mov r12, r8
+  inlined_stdlib.__mm_alloc_2_0:
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r8]
+    x64.mov r13, r12
+    x64.add r13, 32
+  inlined_stdlib.__slab_alloc_0_0:
+    x64.xor r8d, r8d
+    x64.cmp r13, 32768
+    x64.jle inlined_stdlib.__slab_class_index_for_0_0
+  inlined_stdlib.__slab_alloc_1_0:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_os_direct_alloc
+    x64.mov r13, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_Lex.create_2
+  inlined_stdlib.__slab_class_index_for_0_0:
+    x64.xor r8d, r8d
+    x64.xor ecx, ecx
+    x64.mov r14, rcx
+    x64.mov r15, r8
+  inlined_stdlib.__slab_class_index_for_1_0:
+    x64.cmp r15, 18
+    x64.jge inlined_stdlib.__slab_class_index_for_4_0
+  inlined_stdlib.__slab_class_index_for_2_0:
+    x64.mov rcx, r14
+    x64.call stdlib.__slab_class_size
+    x64.cmp r8, r13
+    x64.jl inlined_stdlib.__slab_class_index_for_6_0
+    x64.mov r13, r14
+    x64.jmp inline_cont_Lex.create_0
+  inlined_stdlib.__slab_class_index_for_3_0:
+    x64.add r15, 1
+    x64.mov r14, rcx
+    x64.jmp inlined_stdlib.__slab_class_index_for_1_0
+  inlined_stdlib.__slab_class_index_for_4_0:
+    x64.mov r8d, 136
+    x64.xor r13d, r13d
+    x64.mov [rbp-8], r8
+    x64.call_import slot_0
+    x64.jmp inline_cont_Lex.create_0
+  inlined_stdlib.__slab_class_index_for_6_0:
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.jmp inlined_stdlib.__slab_class_index_for_3_0
+  inline_cont_Lex.create_0:
+    x64.mov r8, -1
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.jge inlined_stdlib.__slab_alloc_4_0
+  inlined_stdlib.__slab_proc_at_0_0:
+    x64.mov r8, 0
+    x64.test r8, r8
+    x64.jge inlined_stdlib.__slab_proc_at_2_0
+  inlined_stdlib.__slab_proc_at_1_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_Lex.create_1
+  inlined_stdlib.__slab_proc_at_2_0:
+    x64.lea r8, [rip+__sched_procs]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne inlined_stdlib.__slab_proc_at_4_0
+  inlined_stdlib.__slab_proc_at_3_0:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_Lex.create_1
+  inlined_stdlib.__slab_proc_at_4_0:
+    x64.mov ecx, 3
+    x64.mov r8, 0
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
+    x64.mov r8, [r9+0] (8b)
+  inline_cont_Lex.create_1:
+    x64.test r8, r8
+    x64.setne r8
+  inlined_stdlib.__slab_alloc_4_0:
+    x64.test r8, r8
+    x64.je inlined_stdlib.__slab_alloc_6_0
+  inlined_stdlib.__slab_alloc_5_0:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r13, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_Lex.create_2
+  inlined_stdlib.__slab_alloc_6_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r13, r8
+  inline_cont_Lex.create_2:
+    x64.mov r8, 0
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8, r13
+    x64.add r8, 8
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r8, r13
+    x64.add r8, 16
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r8, r13
+    x64.add r8, 24
+    x64.mov r9, 0
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rcx, r13
+    x64.add rcx, 32
+    x64.mov r12, rcx
+  inline_cont_Lex.create_3:
+    x64.call stdlib.__mm_incref
+    x64.mov [r12+0], rbx (8b)
+    x64.lea rax, [rip+__layout_Array_Tok]
+    x64.mov rdx, r12
+    x64.mov rcx, [rbp+-24]
+    x64.call Array.push
+  fill_0.step:
+    x64.add rbx, 1
+    x64.jmp fill_0.header
+  fill_0.exit:
+    x64.lea rdx, [rip+__layout_Array_Tok]
+  inlined_Array.cursor_0_0:
+    x64.mov r8, [rbp+-24]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov r8, rcx
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.cursor_2_0
+  inlined_Array.cursor_1_0:
+    x64.xor ecx, ecx
+    x64.mov rbx, rcx
+    x64.jmp inline_cont_Lex.create_4
+  inlined_Array.cursor_2_0:
+    x64.xor r9d, r9d
+    x64.mov rbx, r8
+    x64.mov rdx, r9
+  inline_cont_Lex.create_4:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, [rbp+-24]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.mov r8, 0
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.lea rdx, [rip+__destruct_Lex]
+    x64.mov ecx, 24
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8, 0
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8, 0
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [rbp+-24]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+8], rbx (8b)
+    x64.mov r8, 0
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8, r12
+    x64.mov rdx, 0
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_12_0:
+    x64.mov r12, r8
+    x64.jmp inlined_stdlib.__mm_alloc_2_0
+  }
+  func @Lex.consume(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 1
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 2
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 3
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 4
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 5
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 6
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 7
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 8
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 9
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.add r8, 10
+    x64.mov [rbx+16], r8 (8b)
+    x64.mov r8, [rbx+8] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_cursor_current
+    x64.mov r12, r8
+    x64.mov rcx, [rbx+8] (8b)
+    x64.lea rdx, [rip+__layout_ArrayIterator_Tok]
+    x64.call ArrayIterator.advance
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.xor edx, edx
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @Lex.consumeExpecting(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, rdx
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.mov r9, [rcx+16] (8b)
+    x64.add r9, r8
+    x64.mov [rcx+16], r9 (8b)
+    x64.call Lex.consume
+    x64.mov r9, r8
+    x64.test rdx, rdx
+    x64.je try_0.cont
+  try_0.err:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.xor edx, edx
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @run() -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call Lex.create
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.test rdx, rdx
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov r8, 0
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r8, 0
+    x64.mov r12, r8
+    x64.mov r13, r8
+  loop_0.header:
+    x64.cmp r13, 40
+    x64.jge loop_0.exit
+  loop_0:
+    x64.mov edx, 1
+    x64.mov rcx, rbx
+    x64.call Lex.consumeExpecting
+    x64.mov r14, r8
+    x64.mov r15, rdx
+    x64.test r15, r15
+    x64.je try_1.cont
+    x64.jmp try_1.err
+  loop_0.step:
+    x64.add r13, 1
+    x64.jmp loop_0.header
+  loop_0.exit:
+    x64.mov edx, 2
+    x64.mov rcx, rbx
+    x64.call Lex.consumeExpecting
+    x64.mov r13, r8
+    x64.mov r14, rdx
+    x64.test r14, r14
+    x64.je try_2.cont
+    x64.jmp try_2.err
+  try_1.err:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, 0
+    x64.mov rdx, r15
+    x64.epilogue
+    x64.ret
+  try_1.cont:
+    x64.mov r8, [r14+0] (8b)
+    x64.add r12, r8
+    x64.jmp loop_0.step
+  try_2.err:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, 0
+    x64.mov rdx, r14
+    x64.epilogue
+    x64.ret
+  try_2.cont:
+    x64.mov edx, 3
+    x64.mov rcx, rbx
+    x64.call Lex.consumeExpecting
+    x64.mov r14, r8
+    x64.mov r15, rdx
+    x64.test r15, r15
+    x64.je try_3.cont
+  try_3.err:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, 0
+    x64.mov rdx, r15
+    x64.epilogue
+    x64.ret
+  try_3.cont:
+    x64.mov edx, 4
+    x64.mov rcx, rbx
+    x64.call Lex.consumeExpecting
+    x64.mov [rbp+-8], r8
+    x64.mov r15, rdx
+    x64.test r15, r15
+    x64.je try_4.cont
+  try_4.err:
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, 0
+    x64.mov rdx, r15
+    x64.epilogue
+    x64.ret
+  try_4.cont:
+    x64.mov r8, [rbp+-8]
+    x64.mov r15, [r8+0] (8b)
+    x64.mov r8, [r14+0] (8b)
+    x64.mov [rbp+-8], r8
+    x64.mov r14, [r13+0] (8b)
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.add r12, r14
+    x64.add r12, [rbp+-8]
+    x64.mov r8, r12
+    x64.add r8, r15
+    x64.mov rdx, 0
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call run
+    x64.test rdx, rdx
+    x64.je __phi_trampoline_0_0
+  try_0.otherwise:
+    x64.xor eax, eax
+  try_0.merge:
+    x64.mov r8d, 256
+    x64.cqo
+    x64.idiv r8
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_132ad0c2abcc3d61]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_0_0:
+    x64.mov rax, r8
+    x64.jmp try_0.merge
+  }
+}
+---
