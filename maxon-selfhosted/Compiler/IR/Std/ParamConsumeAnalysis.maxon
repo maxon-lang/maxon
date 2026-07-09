@@ -121,8 +121,21 @@ export function analyzeParamConsumes(module StdModule, project Project) returns 
 	let cg = buildCallGraphIncludingTryCalls(module)
 	let sccs = computeSccs(cg)
 	let funcByName = buildConsumeFuncIndexByName(module)
+
+	// Functions reached through a WITNESS-TABLE slot (interface-method
+	// implementations). Their callers dispatch via `witnessCall`, which the
+	// refcount inserter treats as a BORROW at every argument position (it has no
+	// static callee to read a consume bit from). So a witness-dispatched impl must
+	// NOT be recorded as CONSUMING a param it merely STORES into a field — the
+	// borrowing caller supplies no transferable `+1`, and a sink-based consume bit
+	// would make the impl move-store the borrow (no copy-incref), over-releasing it
+	// (the `X64Backend.retargetModule` `self.module = newModule` over-release: the
+	// witness caller keeps ownership of `pipeline.mirModule`, so the setter must
+	// COPY, not consume). See `updateFuncConsumeBits`.
+	let witnessImplNames = collectWitnessImplNames(project)
+
 	for scc in sccs 'eachScc'
-		visitConsumeScc(module, scc: scc, cg: cg, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg)
+		visitConsumeScc(module, scc: scc, cg: cg, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg, witnessImplNames: witnessImplNames)
 	end 'eachScc'
 
 	logTrace(LogCategory.ir, message: function() gives "RC-PCA-DONE funcs={module.functions.count()} consumingCallees={project.funcParamConsumes.count()} wrappers={project.funcReturnsConsumedArg.count()}")
@@ -138,6 +151,35 @@ export function analyzeParamConsumes(module StdModule, project Project) returns 
 
 	return module
 end 'analyzeParamConsumes'
+
+// Collect every function name that occupies a WITNESS-TABLE method slot — the
+// interface-method implementations (non-generic conformances' direct impls in
+// `entries`, generic conformances' forwarding thunks in `gidEntries`). These are
+// the functions reachable through `witnessCall`, whose callers borrow every
+// argument; the consume analysis must not mark such an impl as consuming a
+// stored-into-field param (see `updateFuncConsumeBits`'s witness-impl gate).
+function collectWitnessImplNames(project Project) returns FuncReturnsBorrowSet
+	var names = FuncReturnsBorrowSet.create()
+
+	for tableIdx in 0 upto project.witnessTables.count() 'eachEntry'
+		let table = project.witnessTables.get(tableIdx)
+		insertImplNames(names, implNames: table.methodImplNames)
+	end 'eachEntry'
+
+	for gidIdx in 0 upto project.witnessTables.gidCount() 'eachGidEntry'
+		let gidTable = project.witnessTables.getGid(gidIdx)
+		insertImplNames(names, implNames: gidTable.methodImplNames)
+	end 'eachGidEntry'
+
+	return names
+end 'collectWitnessImplNames'
+
+// Add every name in `implNames` to `names` (a witness table's method-slot impls).
+function insertImplNames(names FuncReturnsBorrowSet, implNames StringArray)
+	for implName in implNames 'eachImpl'
+		names.insert(implName)
+	end 'eachImpl'
+end 'insertImplNames'
 
 // Per-name map from a function name to its index in `module.functions`, so the
 // SCC-ordered walk (whose members are function NAMES) reaches each member's
@@ -159,19 +201,19 @@ end 'buildConsumeFuncIndexByName'
 // SCC (size > 1, or a singleton with a self-edge) runs a LOCAL while-changed over
 // only its members until no bit flips — the members' mutual forwarding needs the
 // fixpoint, but confined to the cycle it is O(cycleSize x rounds), not module-wide.
-function visitConsumeScc(module StdModule, scc StringArray, cg CallGraph, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap)
+function visitConsumeScc(module StdModule, scc StringArray, cg CallGraph, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap, witnessImplNames FuncReturnsBorrowSet)
 	if not sccIsRecursive(scc, cg: cg) 'singlePass'
 		let only = try scc.get(0) otherwise panic("visitConsumeScc: empty SCC")
 		// A non-recursive singleton's callees are already settled, so its bits are
 		// final after one pass — the flip result is irrelevant (no local fixpoint).
-		_ = updateConsumeBitsForName(module, name: only, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg)
+		_ = updateConsumeBitsForName(module, name: only, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg, witnessImplNames: witnessImplNames)
 		return
 	end 'singlePass'
 	var changed = true
 	while changed 'localFixpoint'
 		changed = false
 		for name in scc 'eachMember'
-			if updateConsumeBitsForName(module, name: name, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg) 'flipped'
+			if updateConsumeBitsForName(module, name: name, funcByName: funcByName, project: project, mayReturnArg: mayReturnArg, witnessImplNames: witnessImplNames) 'flipped'
 				changed = true
 			end 'flipped'
 		end 'eachMember'
@@ -182,13 +224,13 @@ end 'visitConsumeScc'
 // whether a bit flipped. A name with no in-module body (a signature-only stub, or
 // a call-graph node for a bodyless intrinsic) has nothing to analyze — its bits, if
 // any, were seeded / cache-restored — so it flips nothing.
-function updateConsumeBitsForName(module StdModule, name String, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap) returns bool
+function updateConsumeBitsForName(module StdModule, name String, funcByName ConsumeFuncIndexByName, project Project, mayReturnArg MayReturnArgMap, witnessImplNames FuncReturnsBorrowSet) returns bool
 	let funcIdx = try funcByName.get(name) otherwise return false
 	let func = try module.functions.get(funcIdx) otherwise panic("updateConsumeBitsForName: functions.get OOB at {funcIdx}")
 	if func.blockRefs.count() == 0 'empty'
 		return false
 	end 'empty'
-	return updateFuncConsumeBits(module, func: func, project: project, mayReturnArg: mayReturnArg)
+	return updateFuncConsumeBits(module, func: func, project: project, mayReturnArg: mayReturnArg, isWitnessImpl: witnessImplNames.contains(func.name))
 end 'updateConsumeBitsForName'
 
 // Rewrite each `__gt_spawn(funcRef F, count, buf)` site's managed_mask store
@@ -409,8 +451,13 @@ end 'arithConstValueOf'
 
 // Recompute `func`'s consume bits this round; return true iff any bit newly flipped
 // to true (drives the fixpoint). Reads callees' CURRENT bits for forwarding.
-function updateFuncConsumeBits(module StdModule, func IrFunction, project Project, mayReturnArg MayReturnArgMap) returns bool
+function updateFuncConsumeBits(module StdModule, func IrFunction, project Project, mayReturnArg MayReturnArgMap, isWitnessImpl bool) returns bool
 	let paramValues = collectParamValues(module, func: func)
+
+	// SSA values of this function's parameters, for the witness-impl receiver-mutation
+	// test: a consume sink that stores into one of these bases is a `self.field = arg`
+	// mutation the COPY protocol handles from a borrowed arg (see `opIsConsumeSinkFor`).
+	let paramValueIds = collectParamValueIds(paramValues, paramCount: func.paramCount)
 	// Per-function value-use index, built ONCE (one O(ops) pass) and shared across
 	// every param's incref-gate and consume-sink walk this visit. The alias-expansion
 	// and sink detection below become worklist pops over each value's use list instead
@@ -484,10 +531,34 @@ function updateFuncConsumeBits(module StdModule, func IrFunction, project Projec
 				continue
 			end 'genericParam'
 		end 'hasDeclaredType'
-		if paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, slotRelay: slotRelay, valueId: paramVal, project: project, mayReturnArg: mayReturnArg) 'consumed'
-			setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
-			logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex}")
-			flipped = true
+		if paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, slotRelay: slotRelay, valueId: paramVal, project: project, mayReturnArg: mayReturnArg, disqualifyingOnly: false, paramValueIds: paramValueIds) 'consumed'
+			// A WITNESS-DISPATCHED interface-method impl whose param is consumed ONLY
+			// by a RECEIVER MUTATION (a `store_indirect` into the `self` param's
+			// object, `X64Backend.retargetModule`'s `self.module = newModule`) must
+			// NOT record a consume: its `witnessCall` callers borrow every argument
+			// (no static callee to read this bit), so a consume bit would make the
+			// setter move-store a borrowed argument without a copy-incref,
+			// over-releasing it once the caller releases its own still-held reference.
+			// The inserter's COPY protocol (incref-new + decref-old) handles the
+			// borrowed arg for a param-base store regardless of caller, so suppressing
+			// is safe.
+			//
+			// It STAYS a consume when the param reaches any DISQUALIFYING sink — a
+			// forwarding consume-call (`Array.push` → `__managed_mem_set`) or a store
+			// into a fresh-alloc base (`String.init`'s transparent-wrapper
+			// `Self{managed: arg}`) — because those genuinely transfer the arg's `+1`
+			// and need it to arrive owning; suppressing them would leave the reference
+			// unbacked (the `MaxonArgs.parse` argv-String over-release). The type-param
+			// convention bit above likewise stays intact.
+			let borrowSafeReceiverMutation = isWitnessImpl and not paramValueReachesConsumeSink(module, func: func, usesIndex: usesIndex, slotRelay: slotRelay, valueId: paramVal, project: project, mayReturnArg: mayReturnArg, disqualifyingOnly: true, paramValueIds: paramValueIds)
+
+			if not borrowSafeReceiverMutation 'recordConsume'
+				setConsumeBit(project, funcName: func.name, paramIndex: paramIndex, paramCount: func.paramCount)
+				logTrace(LogCategory.ir, message: function() gives "RC-PCA-SET func={func.name} pos={paramIndex}")
+				flipped = true
+			end 'recordConsume' else 'witnessBorrowSuppressed'
+				logTrace(LogCategory.ir, message: function() gives "RC-PCA-WITNESS-BORROW func={func.name} pos={paramIndex} (receiver-mutation sink suppressed for witness impl)")
+			end 'witnessBorrowSuppressed'
 		end 'consumed'
 	end 'eachParam'
 
@@ -759,7 +830,7 @@ let CONSUME_NO_VALUE = (-1) as ValueId
 // ops that READ the param (via `usesIndex`) is exact. A param re-passed to a consuming
 // callee is caught as the call-sink (the forwarding edge); a param stored into a
 // field/element/wrapper is caught as the store-sink.
-function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, slotRelay SlotRelayInfo, valueId ValueId, project Project, mayReturnArg MayReturnArgMap) returns bool
+function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesIndex ConsumeUsesIndex, slotRelay SlotRelayInfo, valueId ValueId, project Project, mayReturnArg MayReturnArgMap, disqualifyingOnly bool, paramValueIds ValueIdArray) returns bool
 	// Single WORKLIST over the per-function value-use index. Each popped alias is
 	// examined by walking ONLY the ops that READ it (`usesIndex.usesOf`), never the
 	// whole body: an op that reaches a store/box/consume-call sink of the alias returns
@@ -781,7 +852,7 @@ function paramValueReachesConsumeSink(module StdModule, func IrFunction, usesInd
 		let useOps = usesIndex.usesOf(aliasId)
 		for opIdx in useOps 'eachUse'
 			let op = try module.ops.get(opIdx) otherwise panic("paramValueReachesConsumeSink: opIdx not in module.ops")
-			if opIsConsumeSinkFor(op, valueId: aliasId, project: project) 'sunk'
+			if opIsConsumeSinkFor(op, valueId: aliasId, project: project, disqualifyingOnly: disqualifyingOnly, paramValueIds: paramValueIds) 'sunk'
 				return true
 			end 'sunk'
 			let aliasedResult = callPassesThroughAlias(op, aliases: aliases, mayReturnArg: mayReturnArg)
@@ -892,12 +963,65 @@ end 'calleeIsIncref'
 //     heap storage), OR
 //   - a call that CONSUMES `valueId` at its argument position (an intrinsic leaf or a
 //     module function whose consume bit for that position is already set).
-function opIsConsumeSinkFor(op StdOp, valueId ValueId, project Project) returns bool
+//
+// `disqualifyingOnly` restricts the sink test to the sinks that DISQUALIFY a
+// witness-impl param from consume-bit suppression — i.e. every consume sink EXCEPT
+// a receiver mutation (a `store_indirect` whose base is one of `paramValueIds`).
+//
+//   - A FORWARDING consume sink (the value passed at a position a callee consumes,
+//     `Array.push` → `__managed_mem_set`) MOVES the value's `+1` into the callee's
+//     container, so the parameter must arrive OWNING it — not borrow-safe.
+//   - A store into a NON-param base (`String.init`'s `return Self{managed: arg}`
+//     stores into a fresh `mm_alloc`, a transparent wrapper whose result inherits
+//     the arg's `+1`) also requires the arg to arrive owning — not borrow-safe.
+//   - A store into a PARAM base (`X64Backend.retargetModule`'s `self.module =
+//     newModule`) is a receiver mutation the inserter's COPY protocol (incref-new +
+//     decref-old) handles from a borrowed arg — borrow-safe, so it does NOT count
+//     as a disqualifying sink.
+//
+// With `disqualifyingOnly` false the test is the plain "reaches ANY consume sink".
+function opIsConsumeSinkFor(op StdOp, valueId ValueId, project Project, disqualifyingOnly bool, paramValueIds ValueIdArray) returns bool
 	if opStoresValueIntoHeap(op, valueId: valueId) 'store'
-		return true
+		if not disqualifyingOnly 'anyStore'
+			return true
+		end 'anyStore'
+
+		return not storeBaseIsParam(op, valueId: valueId, paramValueIds: paramValueIds)
 	end 'store'
 	return callConsumesArgValue(op, valueId: valueId, project: project)
 end 'opIsConsumeSinkFor'
+
+// True iff `op` is a `store_indirect` of `valueId` whose ADDRESS operand (the base
+// the field lives in) is one of `paramValueIds` — a store into a parameter's object
+// (a receiver mutation like `self.module = newModule`). `box_value` has no param
+// base (it always allocates a fresh box), so it is never a receiver mutation.
+// Conservative: an unrecognized base (an interface fat-pointer `self` re-derived
+// through an unpromoted slot, say) returns false, keeping the consume bit — safe.
+function storeBaseIsParam(op StdOp, valueId ValueId, paramValueIds ValueIdArray) returns bool
+	return match op 'dispatch'
+		system(s) gives storeBaseIsParamSys(s, valueId: valueId, paramValueIds: paramValueIds)
+		arith gives false
+		control gives false
+		call gives false
+		memory gives false
+	end 'dispatch'
+end 'storeBaseIsParam'
+
+function storeBaseIsParamSys(s StdSystemOp, valueId ValueId, paramValueIds ValueIdArray) returns bool
+	return match s 'check'
+		storeIndirect(addrId, _, storedId, _, _) gives storedId == valueId and valueIdArrayContains(paramValueIds, vid: addrId)
+		boxValue gives false
+		globalAddr to loadByte gives false
+		osExit to loadFramePtr gives false
+		loadIndirect gives false
+		funcAddr gives false
+		drop gives false
+		osAllocPages to osDirMkdir gives false
+		atomicInc to osLockRelease gives false
+		unboxValue gives false
+		loadLayoutDescriptor to dropTypeParam gives false
+	end 'check'
+end 'storeBaseIsParamSys'
 
 // True iff `op` stores `valueId` AS THE STORED VALUE into heap memory
 // (`store_indirect`'s value operand or `box_value`'s value operand). Storing it as
@@ -1239,6 +1363,22 @@ end 'recordParamCall'
 function paramValueForIndex(pv ParamValueMap, paramIndex NodeIndex) returns ValueId
 	return try pv.get(paramIndex) otherwise CONSUME_NO_VALUE
 end 'paramValueForIndex'
+
+// The SSA value ids of a function's parameters (those with a `param` op), collected
+// into a flat array for O(params) membership tests. Params without a recorded SSA
+// value (none in practice for a well-formed body) are simply absent.
+function collectParamValueIds(pv ParamValueMap, paramCount NodeIndex) returns ValueIdArray
+	var ids = ValueIdArray.create()
+
+	for paramIndex in 0 upto paramCount 'eachParam'
+		let pvId = paramValueForIndex(pv, paramIndex: paramIndex)
+		if pvId != CONSUME_NO_VALUE 'hasValue'
+			ids.push(pvId)
+		end 'hasValue'
+	end 'eachParam'
+
+	return ids
+end 'collectParamValueIds'
 
 // ============================================================
 // Per-function value-use index
