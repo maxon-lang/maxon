@@ -1,0 +1,712 @@
+// Test: consumed-arg-scalar-borrow-survives-throwing-call
+typealias Num = int(0 to u64.max)
+
+enum ParseErr implements Error
+	bad
+end 'ParseErr'
+
+type Blk
+	export var id as Num
+
+	static function create(i Num) returns Blk
+		return Blk{id: i}
+	end 'create'
+
+	function bump()
+		id = id + 1
+	end 'bump'
+end 'Blk'
+
+typealias BlkArray = Array with Blk
+
+type Module
+	var blocks as BlkArray
+
+	static function create() returns Module
+		return Module{blocks: BlkArray.create()}
+	end 'create'
+
+	function addBlock(i Num) returns Blk
+		let b = Blk.create(i)
+		blocks.push(b)
+		return b
+	end 'addBlock'
+
+	function sumIds() returns Num
+		var sum = 0
+		for b in blocks 'each'
+			sum = sum + b.id
+		end 'each'
+		return sum
+	end 'sumIds'
+end 'Module'
+
+type Parser
+	var currentBlock as Blk
+	var module as Module
+
+	static function create(m Module, entry Blk) returns Parser
+		return Parser{currentBlock: entry, module: m}
+	end 'create'
+
+	function parseIdentifierExpr(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		var acc = block.id
+		if hasCall 'callArgs'
+			let args = try parseCallArgsRaw(block)
+			acc = acc + args
+		end 'callArgs'
+		return acc + block.id
+	end 'parseIdentifierExpr'
+
+	function parseCallArgsRaw(block Blk) returns Num throws ParseErr
+		currentBlock = block
+		let arg = try parseExpressionBP(block, opCount: 0, hasCall: false)
+		return arg + block.id
+	end 'parseCallArgsRaw'
+
+	function parsePrimary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parseIdentifierExpr(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parsePrimary'
+
+	function parseUnary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parsePrimary(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parseUnary'
+
+	function parseExpressionBP(block Blk, opCount Num, hasCall bool) returns Num throws ParseErr
+		var blk = block
+		currentBlock = blk
+		var left = try parseUnary(blk, hasCall: hasCall)
+		blk = currentBlock
+		var remaining = opCount
+		while remaining > 0 'prattLoop'
+			let merge = try emitShortCircuit(blk)
+			blk = currentBlock
+			left = left + merge
+			remaining = remaining - 1
+		end 'prattLoop'
+		return left
+	end 'parseExpressionBP'
+
+	function emitShortCircuit(entryBlock Blk) returns Num throws ParseErr
+		let entryId = entryBlock.id
+		let rhsBlock = module.addBlock(101)
+		let rhsId = rhsBlock.id
+		currentBlock = rhsBlock
+		let rhsResult = try parseExpressionBP(rhsBlock, opCount: 0, hasCall: true)
+		var mergeBlock = module.addBlock(102)
+		mergeBlock.bump()
+		let cond = rhsId + entryId
+		currentBlock = mergeBlock
+		return rhsResult + cond
+	end 'emitShortCircuit'
+end 'Parser'
+
+function main() returns ExitCode
+	var m = Module.create()
+	let entry = m.addBlock(1)
+	var p = Parser.create(m, entry: entry)
+	let r = try p.parseExpressionBP(entry, opCount: 1, hasCall: true) otherwise return 3
+	let sum = m.sumIds()
+	if sum != 205 'corrupt'
+		return 1
+	end 'corrupt'
+	if r == 0 'noResult'
+		return 2
+	end 'noResult'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Module.sumIds(rcx: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov r8, [rcx+0] (8b)
+    x64.lea rdx, [rip+__layout_Array_Blk]
+    x64.xor ebx, ebx
+  inlined_Array.createIterator_0_0:
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov r8, rcx
+    x64.sub r8, 8
+    x64.lock inc qword ptr [r8]
+    x64.call ArrayIterator.create
+    x64.test rdx, rdx
+    x64.je inlined_Array.createIterator_2_0
+  inlined_Array.createIterator_1_0:
+    x64.xor ecx, ecx
+    x64.mov r12, rcx
+    x64.jmp inline_cont_Module.sumIds_0
+  inlined_Array.createIterator_2_0:
+    x64.xor r9d, r9d
+    x64.mov r12, r8
+    x64.mov rdx, r9
+  inline_cont_Module.sumIds_0:
+    x64.test rdx, rdx
+    x64.je each_0
+    x64.jmp __rc_edge_8_0
+  inlined_ArrayIterator.advance_0_0:
+    x64.mov r8, [r12+0] (8b)
+    x64.mov r9, [r8+8] (8b)
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, r9
+    x64.add rdi, 1
+    x64.mov rax, rdi
+    x64.sub rax, r9
+    x64.cmp rdi, rsi
+    x64.setl rsi
+    x64.mov rdi, rsi
+    x64.imul rdi, rax
+    x64.mov eax, 1
+    x64.mov ecx, 1
+    x64.sub rax, rsi
+    x64.imul rax, rcx
+    x64.add r9, rdi
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r8d, r8d
+    x64.test rax, rax
+    x64.je __phi_trampoline_9_0
+  inlined_ArrayIterator.advance_1_0:
+    x64.mov edx, 1
+  inline_cont_Module.sumIds_1:
+    x64.test rdx, rdx
+    x64.je each_0
+    x64.jmp __rc_edge_12_0
+  each_0:
+    x64.mov r8, [r12+0] (8b)
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r9, r8
+    x64.add r9, 8
+    x64.mov rdi, [r9+0] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.test rsi, rsi
+    x64.jge inlined_stdlib.__managed_mem_cursor_current_2_0
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    x64.xor ecx, ecx
+    x64.mov r8, rcx
+    x64.sub r8, rsi
+    x64.imul rdi, r8
+    x64.mov ecx, 3
+    x64.mov rsi, rdi
+    x64.shr rsi, rsi, rcx
+    x64.xor eax, eax
+    x64.add r9, rsi
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rax
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r9, [rbp-24]
+    x64.mov esi, 1
+    x64.mov eax, 7
+    x64.mov rcx, r8
+    x64.shl rsi, rsi, rcx
+    x64.mov r8, rdi
+    x64.and r8, rax
+    x64.sub rsi, 1
+    x64.mov rcx, r8
+    x64.shr r9, r9, rcx
+    x64.mov r13, r9
+    x64.and r13, rsi
+    x64.jmp __rc_edge_14_0
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    x64.imul rdi, rsi
+    x64.add r9, rdi
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    x64.cmp rsi, 1
+    x64.jne inlined_stdlib.__managed_mem_load_sized_2_0
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rcx, [rbp-24]
+    x64.mov r13, rcx
+    x64.jmp inline_cont_Module.sumIds_2
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    x64.cmp rsi, 2
+    x64.jne inlined_stdlib.__managed_mem_load_sized_4_0
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    x64.movzx rcx, [r9+0] (2b)
+    x64.mov r13, rcx
+    x64.jmp inline_cont_Module.sumIds_2
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    x64.cmp rsi, 4
+    x64.jne inlined_stdlib.__managed_mem_load_sized_6_0
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    x64.mov rcx, [r9+0] (4b)
+    x64.mov r13, rcx
+    x64.jmp inline_cont_Module.sumIds_2
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    x64.mov rcx, [r9+0] (8b)
+    x64.mov r13, rcx
+  inline_cont_Module.sumIds_2:
+    x64.jmp __rc_edge_24_0
+  inline_cont_Module.sumIds_3:
+    x64.mov r13, [rcx+0] (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.add rbx, r13
+    x64.jmp inlined_ArrayIterator.advance_0_0
+  each_0.exit:
+    x64.mov r9, -1
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  __rc_edge_8_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
+    x64.jmp each_0.exit
+  __rc_edge_12_0:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, rbx
+    x64.jmp each_0.exit
+  __rc_edge_14_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r13
+    x64.jmp inline_cont_Module.sumIds_3
+  __rc_edge_24_0:
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r13
+    x64.jmp inline_cont_Module.sumIds_3
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_1e7bc503ac4616d0]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_9_0:
+    x64.mov rdx, r8
+    x64.jmp inline_cont_Module.sumIds_1
+  }
+  func @Parser.create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.lea rdx, [rip+__destruct_Parser]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [r13+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [r13+8], r8 (8b)
+    x64.mov [r13+0], r12 (8b)
+    x64.mov [r13+8], rbx (8b)
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+  func @Parser.parseIdentifierExpr(rcx: i64, rdx: i64, rax: i1) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r14, [r12+0] (8b)
+    x64.test r13, r13
+    x64.je callArgs_0.after
+  callArgs_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call Parser.parseCallArgsRaw
+    x64.mov rbx, r8
+    x64.mov r13, rdx
+    x64.test r13, r13
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.mov rdx, r13
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.add r14, rbx
+  callArgs_0.after:
+    x64.mov rbx, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r14
+    x64.add r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Parser.parseCallArgsRaw(rcx: i64, rdx: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.xor r9d, r9d
+    x64.xor eax, eax
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call Parser.parseExpressionBP
+    x64.mov rbx, r8
+    x64.mov r13, rdx
+    x64.test r13, r13
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.mov rdx, r13
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r13, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r13
+    x64.add r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Parser.parsePrimary(rcx: i64, rdx: i64, rax: i1) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r14, [rbx+0] (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.mov rax, r13
+    x64.call Parser.parseIdentifierExpr
+    x64.mov rbx, r8
+    x64.mov r13, rdx
+    x64.test r13, r13
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.mov rdx, r13
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r13, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r13
+    x64.add r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Parser.parseUnary(rcx: i64, rdx: i64, rax: i1) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r14, [rbx+0] (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.mov rax, r13
+    x64.call Parser.parsePrimary
+    x64.mov rbx, r8
+    x64.mov r13, rdx
+    x64.test r13, r13
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r8d, r8d
+    x64.mov rdx, r13
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r13, [r12+0] (8b)
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r13
+    x64.add r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Parser.parseExpressionBP(rcx: i64, rdx: i64, rax: u64, r9: i1) -> u64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.mov r14, r9
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r12 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.mov rax, r14
+    x64.call Parser.parseUnary
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.test rdx, rdx
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov r8, 0
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r14, [rbx+0] (8b)
+    x64.jmp __rc_edge_2_0
+  prattLoop_0.header:
+    x64.test r14, r14
+    x64.jle prattLoop_0.exit
+  prattLoop_0:
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call Parser.emitShortCircuit
+    x64.mov [rbp+-8], r8
+    x64.mov r15, rdx
+    x64.mov rcx, r12
+    x64.mov r8, [rbp+-8]
+    x64.mov r8, [rbp+-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.test r15, r15
+    x64.je try_1.cont
+    x64.jmp try_1.err
+  prattLoop_0.exit:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, r13
+    x64.mov rdx, 0
+    x64.epilogue
+    x64.ret
+  try_1.err:
+    x64.mov r8, 0
+    x64.mov rdx, r15
+    x64.epilogue
+    x64.ret
+  try_1.cont:
+    x64.mov r12, [rbx+0] (8b)
+    x64.sub r14, 1
+    x64.add r13, [rbp+-8]
+    x64.jmp __rc_edge_7_0
+  __rc_edge_2_0:
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r11, r12
+    x64.mov r12, r14
+    x64.mov r14, r13
+    x64.mov r13, r11
+    x64.jmp prattLoop_0.header
+  __rc_edge_7_0:
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.jmp prattLoop_0.header
+  }
+  func @Parser.emitShortCircuit(rcx: i64, rdx: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r8, rdx
+    x64.mov r12, [rbx+8] (8b)
+    x64.mov r13, [r8+0] (8b)
+    x64.xor r8d, r8d
+    x64.mov ecx, 8
+    x64.mov rdx, r8
+    x64.call stdlib.__mm_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 101
+    x64.mov [r14+0], r8 (8b)
+    x64.mov r15, [r12+0] (8b)
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Array_Blk]
+    x64.mov rcx, r15
+    x64.mov rdx, r14
+    x64.call Array.push
+    x64.mov r12, [r14+0] (8b)
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r14 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r9d, 1
+    x64.xor r8d, r8d
+    x64.mov rcx, rbx
+    x64.mov rdx, r14
+    x64.mov rax, 0
+    x64.call Parser.parseExpressionBP
+    x64.mov r15, r8
+    x64.mov [rbp+-8], rdx
+    x64.mov r8, [rbp+-8]
+    x64.test r8, r8
+    x64.je try_0.cont
+  try_0.err:
+    x64.mov rcx, r14
+    x64.call stdlib.__mm_decref
+    x64.mov r8, 0
+    x64.mov rdx, [rbp+-8]
+    x64.epilogue
+    x64.ret
+  try_0.cont:
+    x64.mov r14, [rbx+8] (8b)
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rcx, r8
+    x64.mov [rbp+-8], r8
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 102
+    x64.mov r9, [rbp+-8]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [r14+0] (8b)
+    x64.mov rcx, [rbp+-8]
+    x64.mov r14, r8
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Array_Blk]
+    x64.mov rcx, r14
+    x64.mov rdx, [rbp+-8]
+    x64.call Array.push
+    x64.mov r8, [rbp+-8]
+    x64.mov r9, [r8+0] (8b)
+    x64.add r9, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r8 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.add r12, r13
+    x64.mov r8, r12
+    x64.add r8, r15
+    x64.mov rdx, 0
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea rdx, [rip+__destruct_Module]
+    x64.mov ecx, 8
+    x64.xor ebx, ebx
+    x64.lea r12, [rip+__layout_Array_Blk]
+    x64.xor r13d, r13d
+    x64.mov r8d, 8
+    x64.mov r14d, 1
+    x64.call stdlib.__mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.mov [r15+0], rbx (8b)
+    x64.mov rcx, r12
+    x64.call Array.create
+    x64.mov [r15+0], r8 (8b)
+    x64.mov rcx, 8
+    x64.mov rdx, r13
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov [rbx+0], r14 (8b)
+    x64.mov r12, [r15+0] (8b)
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Array_Blk]
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.call Array.push
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov rcx, r15
+    x64.mov rdx, rbx
+    x64.call Parser.create
+    x64.mov r12, r8
+    x64.mov r9d, 1
+    x64.mov eax, 1
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.call Parser.parseExpressionBP
+    x64.mov rbx, r8
+    x64.mov r13, rdx
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor r12d, r12d
+    x64.test r13, r13
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_decref
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  try_0.merge:
+    x64.mov rcx, r15
+    x64.call Module.sumIds
+    x64.mov r13, r8
+    x64.mov rcx, r15
+    x64.call stdlib.__mm_decref
+    x64.cmp r13, 205
+    x64.je corrupt_0.after
+  corrupt_0:
+    x64.mov r8d, 1
+    x64.epilogue
+    x64.ret
+  corrupt_0.after:
+    x64.test rbx, rbx
+    x64.jne noResult_0.after
+  noResult_0:
+    x64.mov r8d, 2
+    x64.epilogue
+    x64.ret
+  noResult_0.after:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

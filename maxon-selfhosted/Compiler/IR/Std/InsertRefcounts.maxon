@@ -4409,6 +4409,14 @@ function planTerminatorDeaths(ctx RcContext, blockRef BlockRef, block IrBlock)
 			logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP-CONSUMED-SUPPRESS func={ctx.func.name} val=%{vid} block_{block.id} (unconditional move earlier in block)")
 			continue
 		end 'consumedEarlier'
+		// CROSS-BLOCK companion of the guard above (mirrors `isInBlockDeathPoint`): the
+		// borrow-extension can push a consumed value's death onto a terminator in a block
+		// DOMINATED by the consume. Suppress here too — the +1 is already gone on every
+		// path that reaches this terminator.
+		if valueConsumedInDominatingBlock(ctx, deathBlock: block, vid: vid) 'consumedDominating'
+			logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP-CONSUMED-SUPPRESS-XBLOCK func={ctx.func.name} val=%{vid} block_{block.id} (unconditional move in a dominating block)")
+			continue
+		end 'consumedDominating'
 		logTrace(LogCategory.ir, message: function() gives "RC-TERMDROP func={ctx.func.name} val=%{vid} block_{block.id} class={ownershipClassName(ctx.classOf(vid))} kind={releaseKindName(releaseKindAtLastUse(ctx, id: vid))}")
 		let relIdx = buildReleaseOp(ctx, id: vid, kind: RcOpKind.terminatorDecref)
 		queueInsertion(ctx, blockRef: blockRef, pos: opCount, opIdx: relIdx)
@@ -5375,6 +5383,22 @@ function isInBlockDeathPoint(ctx RcContext, block IrBlock, liveAfter StdLiveAfte
 		logTrace(LogCategory.ir, message: function() gives "RC-LASTUSE-CONSUMED-SUPPRESS func={ctx.func.name} val=%{useId} atpos={pos} (unconditional move earlier in block)")
 		return false
 	end 'consumedEarlier'
+	// CROSS-BLOCK CONSUMED guard: the same conservative borrow extension that pushes
+	// V's death past an in-block consume (the guard above) can push it into a LATER
+	// block entirely — V is unconditionally MOVED (no copy) in a block that DOMINATES
+	// this one, but an interior SCALAR field load of V (an integer `.id`/length read,
+	// indistinguishable from an interior pointer — see `recordPointerLoadBorrow`)
+	// stays live and drags V's SSA death into this dominated block. V's +1 is the
+	// callee's now (transferred on the consume's success edge; released by the
+	// caller's try-error cleanup on a throwing edge), so releasing here over-releases.
+	// The block-local guard misses it because the consume and the death are in
+	// different blocks (the short-circuit `emitShortCircuit` rhsBlock free: rhsBlock
+	// is consumed by `parseExpressionBP`, yet `rhsBlock.id` — loaded before the call,
+	// fed into the cond_br built several blocks later — keeps rhsBlock live to there).
+	if valueConsumedInDominatingBlock(ctx, deathBlock: block, vid: useId) 'consumedDominating'
+		logTrace(LogCategory.ir, message: function() gives "RC-LASTUSE-CONSUMED-SUPPRESS-XBLOCK func={ctx.func.name} val=%{useId} atpos={pos} (unconditional move in a dominating block)")
+		return false
+	end 'consumedDominating'
 	return true
 end 'isInBlockDeathPoint'
 
@@ -5404,6 +5428,72 @@ function valueConsumedEarlierInBlock(ctx RcContext, block IrBlock, liveAfter Std
 	end 'eachCandidate'
 	return false
 end 'valueConsumedEarlierInBlock'
+
+// The CROSS-BLOCK companion of `valueConsumedEarlierInBlock`: true iff `vid`'s +1
+// was UNCONDITIONALLY moved away (a consume with no copy-incref minted) in a block
+// that STRICTLY DOMINATES `deathBlock`. The in-block guard only sees a consume in
+// the death's OWN block; the conservative interior-borrow extension
+// (`recordPointerLoadBorrow` treats every pointer-width field load — including a
+// scalar `.id`/length read — as an interior pointer of its base) can extend `vid`'s
+// SSA liveness across the consume and into a LATER block, where the release planner
+// lands a last-use decref. Because the consume DOMINATES the death, `vid`'s own
+// reference is gone on EVERY path that reaches `deathBlock` (moved into the callee
+// on a success edge, or released by the caller's try-error cleanup on a throwing
+// edge), so that decref would over-release. Walking the dominator chain — a bounded
+// number of blocks, each with a cached consume-candidate list — recovers the same
+// suppression the in-block guard gives, one control-flow join later.
+function valueConsumedInDominatingBlock(ctx RcContext, deathBlock IrBlock, vid ValueId) returns bool
+	// Only a value LIVE-IN to `deathBlock` (defined in a dominator) can have been
+	// consumed by a dominating block; a value defined within `deathBlock` cannot.
+	if not ctx.liveness.liveInContains(deathBlock.id, vid: vid) 'notLiveIn'
+		return false
+	end 'notLiveIn'
+	var domId = try ctx.domInfo.idom.get(deathBlock.id) otherwise return false
+	// Walk the strict-dominator chain up to the entry block (`idom[entry] == entry`).
+	while domId != BLOCK_NONE and domId != deathBlock.id 'chain'
+		let domBlock = findBlockById(ctx, blockId: domId)
+		if dominatingBlockMovesValueReaching(ctx, consumeBlock: domBlock, deathBlock: deathBlock, vid: vid) 'moved'
+			return true
+		end 'moved'
+		let parent = try ctx.domInfo.idom.get(domId) otherwise BLOCK_NONE
+		if parent == domId 'entryReached'
+			break
+		end 'entryReached'
+		domId = parent
+	end 'chain'
+	return false
+end 'valueConsumedInDominatingBlock'
+
+// True iff `consumeBlock` (a strict dominator of `deathBlock`) UNCONDITIONALLY
+// consumes `vid` with no copy-incref minted, in a way that reaches `deathBlock` on
+// every path. A plain (non-`tryCall`) consume executes whenever `consumeBlock` runs
+// — which dominates `deathBlock` — so it needs no edge check. A `tryCall` consume
+// transfers the +1 only on its SUCCESS edge; require that edge's target to dominate
+// `deathBlock`, so the move happens on every path to it (should the error edge reach
+// `deathBlock` at all, it already released `vid` in its cleanup — but the success-
+// dominance test is the tighter, self-contained proof).
+function dominatingBlockMovesValueReaching(ctx RcContext, consumeBlock IrBlock, deathBlock IrBlock, vid ValueId) returns bool
+	let liveAfter = blockLiveAfterFor(ctx, block: consumeBlock)
+	let candidates = consumeCandidatesFor(ctx, block: consumeBlock)
+	for pos in candidates 'eachCandidate'
+		let opIdx = try consumeBlock.opRefs.get(pos) otherwise panic("dominatingBlockMovesValueReaching: candidate pos {pos} not in block.opRefs")
+		let op = try ctx.module.ops.get(opIdx) otherwise panic("dominatingBlockMovesValueReaching: opIdx not in module.ops")
+		if not opUnconditionallyConsumesOperand(ctx, op: op, argId: vid) 'notConsume'
+			continue
+		end 'notConsume'
+		if consumedArgRetainedPastOp(ctx, liveAfter: liveAfter, block: consumeBlock, pos: pos, argId: vid) 'copyMinted'
+			continue
+		end 'copyMinted'
+		let successBlock = tryCallTransferringArgSuccessBlock(ctx, block: consumeBlock, argId: vid)
+		if successBlock == REFCOUNT_NO_VALUE 'plainConsume'
+			return true
+		end 'plainConsume'
+		if dominates(successBlock, b: deathBlock.id, domInfo: ctx.domInfo) 'successDominates'
+			return true
+		end 'successDominates'
+	end 'eachCandidate'
+	return false
+end 'dominatingBlockMovesValueReaching'
 
 // The consume-candidate position list for `block` (see
 // `ConsumeCandidatePositions`), computed once and cached by block.id — the
