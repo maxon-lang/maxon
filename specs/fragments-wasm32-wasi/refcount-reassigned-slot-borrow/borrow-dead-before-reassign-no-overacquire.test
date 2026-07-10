@@ -1,0 +1,78 @@
+// Test: borrow-dead-before-reassign-no-overacquire
+typealias Int = int(0 to 1000000)
+
+type Node
+	export var tag as Int
+
+	static function create(t Int) returns Self
+		return Self{tag: t}
+	end 'create'
+end 'Node'
+
+function swap(n Node) returns Int
+	let old = n
+	let t = old.tag
+	n = Node.create(99)
+	return t
+end 'swap'
+
+function main() returns ExitCode
+	var owned = Node.create(4)
+	return swap(owned)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @swap(local0: i64) -> u32 {
+  entry:
+    %12 = mir.param local0 : i64
+    %2 = mir.load %12, 0 width: qword
+    %5 = mir.load %2, 0 width: word
+    %6 = mir.mov_imm 99 : i64
+    %13 = mir.mov_imm 8 : i64
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.call @stdlib.__mm_alloc(%13, %14)
+    %16 = mir.call @stdlib.__mm_incref(%15)
+    mir.store %6, %15, 0 width: word
+    %9 = mir.load %12, 0 width: qword
+    mir.store %15, %12, 0 width: qword
+    %10 = mir.call @__mm_decref_maybenull_helper(%9)
+    %17 = mir.mov_imm 1000000 : i64
+    %18 = mir.cmp ugt, %5, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_131e1de0abb859c3
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.mov_imm 4 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %7)
+    %9 = mir.call @stdlib.__mm_incref(%8)
+    mir.store %1, %8, 0 width: word
+    %10 = mir.load_slot slot_0
+    %11 = mir.call @__mm_decref_maybenull_helper(%10)
+    mir.store_slot slot_0, %8
+    %4 = mir.stack_slot_addr slot_0
+    %5 = mir.call @swap(%4)
+    %12 = mir.load_slot slot_0
+    %13 = mir.call @__mm_decref_maybenull_helper(%12)
+    %14 = mir.mov_imm 255 : i64
+    %15 = mir.cmp ugt, %5, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_44cca5850c52f754
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

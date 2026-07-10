@@ -1,0 +1,54 @@
+// Test: unrelated-global-reassign-keeps-borrow
+typealias Int = int(0 to 1000000)
+
+type Box
+	export var n as Int
+
+	static function create(v Int) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Box'
+
+var ga = Box.create(3)
+var gb = Box.create(9)
+
+function main() returns ExitCode
+	let a = ga
+	gb = Box.create(2)
+	return a.n
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__data_ga]
+    x64.mov rbx, [r8+0] (8b)
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 2
+    x64.mov [r12+0], r8 (4b)
+    x64.lea r8, [rip+__data_gb]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov [r8+0], r12 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8, [rbx+0] (4b)
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_8980f35f0b6e07e0]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

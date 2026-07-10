@@ -302,6 +302,17 @@ function insertRefcountsInFunction(func IrFunction, module StdModule, funcParamC
 	// domain only — type-param-only stdlib mode never increfs.
 	if ctx.includeManaged 'computeAcquire'
 		computeIncomingOwnerAcquire(ctx)
+		// Reassigned-slot borrow promotion (audit gaps #9 by-ref param + #7b module
+		// global): a borrow loaded from a by-reference managed param (`*P`) or a module
+		// global is `borrowed` (no acquire), so a reassignment of that slot/global while
+		// the borrow is still live frees the displaced occupant out from under the read
+		// (UAF). The exact-SSA case-(c) snapshot proof misses it (the deref is not an
+		// `incomingOwner` field load; a global mints a fresh `globalAddr` per access), so
+		// pair read <-> reassign by the STABLE base identity (pointer param / slot id /
+		// global symbol) and grant the case-(c) acquire. Must follow
+		// `computeIncomingOwnerAcquire` (whose per-value bits it extends) and precede the
+		// acquire/release sweeps below.
+		promoteReassignedSlotBorrows(ctx)
 	end 'computeAcquire'
 
 	// Order matters only in that all sweeps read the ORIGINAL op positions via
@@ -2434,6 +2445,217 @@ function incomingOwnerSourceRoot(ctx RcContext, id ValueId) returns ValueId
 	end 'noBase'
 	return ctx.liveness.borrows.rootOf(id)
 end 'incomingOwnerSourceRoot'
+
+// ============================================================
+// Reassigned-slot borrow promotion (audit gaps #9 by-ref param + #7b module global)
+// ============================================================
+//
+// A managed value LOADED as a BORROW (no acquire) from a slot that can be
+// REASSIGNED — a by-reference managed param (`*P`, mem2reg-promoted to a `load_indirect`
+// off the pointer PARAM), or a module GLOBAL (`[globalAddr @__data_name]`) — dangles
+// when the reassignment's decref-old releases the displaced occupant while the borrow
+// is still live:
+//
+//     let old = n          // by-ref deref  (or: let old = gbox)
+//     n = Node.create(99)  // reassign      (decref-olds the caller's occupant)
+//     return old.tag       // old dangles -> UAF (reads poisoned/reused memory)
+//
+// This is the borrow-class analogue of the `incomingOwner` case-(c) field snapshot
+// (`incomingOwnerSourceFieldOverwritten`): a value loaded from a slot that is
+// overwritten while it is live must own its own +1. Case (c) handles it for
+// `incomingOwner` FIELD loads by EXACT `(addrId, offset)` SSA pairing, but these two
+// shapes escape it: the by-ref deref is `borrowed` (case (c) only considers
+// `incomingOwner`), and a module global mints a FRESH `globalAddr` SSA per access, so
+// the read's and the write's `addrId`s differ. Pair read <-> reassign by the STABLE
+// base identity (the pointer PARAM value, the `loadSlot` slot id, or the global
+// SYMBOL), and — when the borrow is live past a reassignment of that base —
+// reclassify it to `incomingOwner` and grant the case-(c) acquire (own +1 at the load,
+// released at last use). Mirrors the C# oracle, whose by-ref bindings incref and whose
+// global loads incref into owned temps. A borrow whose base is NEVER reassigned in the
+// function (a plain read, a static global getter forward) matches nothing and is left
+// untouched — the `funcReturnsGlobalBorrow` getter contract is preserved. Runs AFTER
+// `computeIncomingOwnerAcquire` (whose per-value bits it extends) and BEFORE the
+// acquire/release sweeps.
+
+// The (block, body position) of a `store_indirect` that reassigns a base.
+type StoreSite
+	export var blockRef as BlockRef
+	export var pos as NodeIndex
+
+	export static function create(blockRef BlockRef, pos NodeIndex) returns StoreSite
+		return Self{blockRef: blockRef, pos: pos}
+	end 'create'
+end 'StoreSite'
+
+typealias StoreSiteArray = Array with StoreSite
+typealias ReassignBaseStoreMap = Map with (String, StoreSiteArray)
+
+// A reassignable base, canonicalized to a STABLE per-function identity string so a
+// read and its reassignment pair even when their `addrId` SSA values differ. `""`
+// (empty) means `addrId` is not a tracked reassignable base — a plain heap field,
+// whose snapshot the exact-SSA case-(c) already covers. The `offset` is folded into
+// the key so a store at one offset never protects a borrow read at another.
+function reassignBaseKey(ctx RcContext, addrId ValueId, offset MachineWord, slotOfValue ParsedIntArray, globalNameOfValue ValueGlobalNameMap) returns String
+	if let name = try globalNameOfValue.get(addrId) 'global'
+		return "g:{name}:{offset}"
+	end 'global'
+	let slotId = try slotOfValue.get(addrId) otherwise -1
+	if slotId >= 0 'slot'
+		return "s:{slotId}:{offset}"
+	end 'slot'
+	// A by-reference managed param is mem2reg-promoted to its pointer PARAM value, so
+	// the deref reads/writes through the param directly (a STABLE SSA base). Only a
+	// PARAM base qualifies here — a plain heap field over a fresh alloc / prior load is
+	// a stable SSA the exact-SSA case-(c) already pairs, and recording every such store
+	// would broaden the scan needlessly.
+	if ctx.isParam(addrId) 'param'
+		return "p:{addrId}:{offset}"
+	end 'param'
+	return ""
+end 'reassignBaseKey'
+
+typealias ValueGlobalNameMap = Map with (ValueId, String)
+
+// Reclassify every `borrowed` managed value loaded from a reassignable base (a
+// by-reference managed param deref, or a module-global load) that is REASSIGNED while
+// the borrow is still live to `incomingOwner`, and grant it the case-(c) acquire.
+function promoteReassignedSlotBorrows(ctx RcContext)
+	let (slotOfValue, globalNameOfValue) = buildReassignBaseMaps(ctx)
+	let reassigns = collectReassignBaseStores(ctx, slotOfValue: slotOfValue, globalNameOfValue: globalNameOfValue)
+	if reassigns.count() == 0 'noReassigns'
+		return
+	end 'noReassigns'
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("promoteReassignedSlotBorrows: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("promoteReassignedSlotBorrows: opIdx not in module.ops")
+			maybePromoteReassignedSlotBorrowLoad(ctx, op: op, slotOfValue: slotOfValue, globalNameOfValue: globalNameOfValue, reassigns: reassigns)
+		end 'eachOp'
+	end 'eachBlock'
+end 'promoteReassignedSlotBorrows'
+
+// Build both base maps in ONE op scan: `value -> slot id` for every `loadSlot`
+// result (-1 for others), and `value -> symbol` for every `globalAddr @__data_*`
+// result. `reassignBaseKey` canonicalizes a load/store `addrId` by looking it up
+// here (a param base needs no map — `ctx.isParam` answers directly).
+function buildReassignBaseMaps(ctx RcContext) returns (ParsedIntArray, ValueGlobalNameMap)
+	var slotOfValue = ParsedIntArray.create()
+	var vid = 0
+	while vid <= ctx.liveness.maxValueId 'init'
+		slotOfValue.push(-1)
+		vid = vid + 1
+	end 'init'
+	var globalNameOfValue = ValueGlobalNameMap.create()
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("buildReassignBaseMaps: blockRef not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("buildReassignBaseMaps: opIdx not in module.ops")
+			let (isLoad, loadResult, loadSlotId) = loadSlotResultAndSlot(op)
+			if isLoad and loadResult <= ctx.liveness.maxValueId 'slotResult'
+				try slotOfValue.set(loadResult, value: loadSlotId as ParsedInt) otherwise panic("buildReassignBaseMaps: slotOfValue.set OOB")
+			end 'slotResult'
+			let (isGlobalAddr, gaResult, gaName) = globalDataAddrResultAndName(op)
+			if isGlobalAddr 'globalResult'
+				globalNameOfValue.upsert(gaResult, value: gaName)
+			end 'globalResult'
+		end 'eachOp'
+	end 'eachBlock'
+	return (slotOfValue, globalNameOfValue)
+end 'buildReassignBaseMaps'
+
+// Index every managed `store_indirect` through a reassignable base by its base key ->
+// the store body positions. The decref-old that releases the displaced occupant is
+// emitted at lowering for a by-ref managed param and planned by `planManagedHeapStore`'s
+// `storeTargetsModuleGlobal` branch for a global; either way the store overwrites the
+// base, so a live borrow of it must own its own +1.
+function collectReassignBaseStores(ctx RcContext, slotOfValue ParsedIntArray, globalNameOfValue ValueGlobalNameMap) returns ReassignBaseStoreMap
+	var reassigns = ReassignBaseStoreMap.create()
+	for blockRef in ctx.func.blockRefs 'eachBlock'
+		let block = try ctx.module.blocks.get(blockRef) otherwise panic("collectReassignBaseStores: blockRef not in module.blocks")
+		var pos = 0
+		for opIdx in block.opRefs 'eachOp'
+			let op = try ctx.module.ops.get(opIdx) otherwise panic("collectReassignBaseStores: opIdx not in module.ops")
+			let store = storeIndirectFieldOf(op)
+			if store.found and ctx.isManaged(store.valueId) 'managedStore'
+				let key = reassignBaseKey(ctx, addrId: store.addrId, offset: store.offset, slotOfValue: slotOfValue, globalNameOfValue: globalNameOfValue)
+				if key != "" 'tracked'
+					recordReassignStore(reassigns, key: key, site: StoreSite.create(blockRef, pos: pos as NodeIndex))
+				end 'tracked'
+			end 'managedStore'
+			pos = pos + 1
+		end 'eachOp'
+	end 'eachBlock'
+	return reassigns
+end 'collectReassignBaseStores'
+
+// Append a store site to the base key's bucket.
+function recordReassignStore(reassigns ReassignBaseStoreMap, key String, site StoreSite)
+	if var existing = try reassigns.get(key) 'have'
+		existing.push(site)
+		return
+	end 'have'
+	var fresh = StoreSiteArray.create()
+	fresh.push(site)
+	reassigns.upsert(key, value: fresh)
+end 'recordReassignStore'
+
+// If `op` defines a `borrowed` managed value V by loading from a reassignable base
+// that is REASSIGNED while V is still live, reclassify V to `incomingOwner` and set
+// its case-(c) acquire bit. Non-borrowed, non-managed, or param loads are skipped.
+function maybePromoteReassignedSlotBorrowLoad(ctx RcContext, op StdOp, slotOfValue ParsedIntArray, globalNameOfValue ValueGlobalNameMap, reassigns ReassignBaseStoreMap)
+	let load = loadIndirectFieldOf(op)
+	if not load.found 'notLoad'
+		return
+	end 'notLoad'
+	let vid = load.valueId
+	if not ctx.isManaged(vid) or ctx.isParam(vid) or not classIsBorrowed(ctx, id: vid) 'notBorrowManaged'
+		return
+	end 'notBorrowManaged'
+	let key = reassignBaseKey(ctx, addrId: load.addrId, offset: load.offset, slotOfValue: slotOfValue, globalNameOfValue: globalNameOfValue)
+	if key == "" 'stableField'
+		return
+	end 'stableField'
+	if let stores = try reassigns.get(key) 'haveStores'
+		for site in stores 'eachStore'
+			if valueLiveAfterStore(ctx, id: vid, blockRef: site.blockRef, pos: site.pos) 'liveAcross'
+				logTrace(LogCategory.ir, message: function() gives "RC-SLOT-BORROW-ACQUIRE func={ctx.func.name} val=%{vid} base={key}")
+				ctx.func.setValueOwnership(vid, cls: OwnershipClass.incomingOwner)
+				setBoolAt(ctx.incomingOwnerAcquire, id: vid, value: true)
+				return
+			end 'liveAcross'
+		end 'eachStore'
+	end 'haveStores'
+end 'maybePromoteReassignedSlotBorrowLoad'
+
+// (found, resultId, symbolName) of a `sys.global_addr @__data_*` op, else
+// (false, 0, ""). Only module-global DATA symbols qualify (the prefix test mirrors
+// `markIfDataGlobal`); a code/runtime global address is not a reassignable slot.
+function globalDataAddrResultAndName(op StdOp) returns (bool, ValueId, String)
+	return match op 'dispatch'
+		system(s) gives globalDataAddrResultAndNameSys(s)
+		arith gives (false, 0, "")
+		control gives (false, 0, "")
+		call gives (false, 0, "")
+		memory gives (false, 0, "")
+	end 'dispatch'
+end 'globalDataAddrResultAndName'
+
+function globalDataAddrResultAndNameSys(s StdSystemOp) returns (bool, ValueId, String)
+	return match s 'check'
+		globalAddr(resultId, name) gives (name.startsWith(MODULE_GLOBAL_DATA_PREFIX), resultId, name)
+		memcpy to loadByte gives (false, 0, "")
+		osExit to osWrite gives (false, 0, "")
+		free gives (false, 0, "")
+		osWriteErr to loadFramePtr gives (false, 0, "")
+		loadIndirect gives (false, 0, "")
+		funcAddr gives (false, 0, "")
+		storeIndirect gives (false, 0, "")
+		drop gives (false, 0, "")
+		osAllocPages to osDirMkdir gives (false, 0, "")
+		atomicInc to osLockRelease gives (false, 0, "")
+		boxValue to dropTypeParam gives (false, 0, "")
+	end 'check'
+end 'globalDataAddrResultAndNameSys'
 
 // Collect (keyed by ValueId) every value whose OWNERSHIP is transferred away from
 // the local scope: it is RETURNED, or its last syntactic use MOVES/CONSUMES it

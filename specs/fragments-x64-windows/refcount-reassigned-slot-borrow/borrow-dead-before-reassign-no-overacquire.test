@@ -1,0 +1,89 @@
+// Test: borrow-dead-before-reassign-no-overacquire
+typealias Int = int(0 to 1000000)
+
+type Node
+	export var tag as Int
+
+	static function create(t Int) returns Self
+		return Self{tag: t}
+	end 'create'
+end 'Node'
+
+function swap(n Node) returns Int
+	let old = n
+	let t = old.tag
+	n = Node.create(99)
+	return t
+end 'swap'
+
+function main() returns ExitCode
+	var owned = Node.create(4)
+	return swap(owned)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @swap(rcx: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov r12, [r9+0] (4b)
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 99
+    x64.mov [r13+0], r8 (4b)
+    x64.mov rcx, [rbx+0] (8b)
+    x64.mov [rbx+0], r13 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.cmp r12, 1000000
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_131e1de0abb859c3]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r8
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 4
+    x64.mov [rbx+0], r8 (4b)
+    x64.mov rcx, [rbp-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov [rbp-8], rbx
+    x64.lea rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.call swap
+    x64.mov rbx, r8
+    x64.mov rcx, [rbp-8]
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp rbx, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_44cca5850c52f754]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,58 @@
+// Test: module-global-reassign-then-read-borrow
+typealias Int = int(0 to 1000000)
+
+type Box
+	export var n as Int
+
+	static function create(v Int) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Box'
+
+var gbox = Box.create(1)
+
+function main() returns ExitCode
+	let old = gbox
+	gbox = Box.create(2)
+	return old.n
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__data_gbox]
+    x64.mov rbx, [r8+0] (8b)
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 2
+    x64.mov [r12+0], r8 (4b)
+    x64.lea r8, [rip+__data_gbox]
+    x64.mov rcx, [r8+0] (8b)
+    x64.mov [r8+0], r12 (8b)
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r12, [rbx+0] (4b)
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_cabca1a5b17bfe0a]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

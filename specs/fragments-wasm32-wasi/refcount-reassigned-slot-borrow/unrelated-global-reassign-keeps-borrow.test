@@ -1,0 +1,50 @@
+// Test: unrelated-global-reassign-keeps-borrow
+typealias Int = int(0 to 1000000)
+
+type Box
+	export var n as Int
+
+	static function create(v Int) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Box'
+
+var ga = Box.create(3)
+var gb = Box.create(9)
+
+function main() returns ExitCode
+	let a = ga
+	gb = Box.create(2)
+	return a.n
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.global_addr @__data_ga
+    %2 = mir.load %1, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @stdlib.__mm_alloc(%8, %9)
+    %11 = mir.call @stdlib.__mm_incref(%10)
+    mir.store %3, %10, 0 width: word
+    %5 = mir.global_addr @__data_gb
+    %12 = mir.load %5, 0 width: qword
+    mir.store %10, %5, 0 width: qword
+    %13 = mir.call @__mm_decref_maybenull_helper(%12)
+    %7 = mir.load %2, 0 width: word
+    %14 = mir.mov_imm 255 : i64
+    %15 = mir.cmp ugt, %7, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_8980f35f0b6e07e0
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---
