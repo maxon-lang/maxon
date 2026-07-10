@@ -563,6 +563,30 @@ function namedArgHasHeapRefs(project Project, name String) returns bool
 	return false
 end 'namedArgHasHeapRefs'
 
+// Resolve a STRUCT FIELD's type through the enclosing type's MEMBER (inner)
+// aliases before the heap-ref test — mirrors `resolveFieldTypeForClassify` /
+// `fieldTypeIsDropTracked` on the classify/destructor side. A field declared via
+// an inner alias (`var keys as KeyArray` where `Map` declares `typealias KeyArray
+// = Array with Key`) arrives here as `named("KeyArray")`: NOT a registered struct
+// and NOT a TOP-LEVEL `genericTypealias`, so `argTypeHasHeapRefs`/`namedArgHasHeapRefs`
+// (which only chase top-level generic aliases) read it as non-heap. The copy/destroy
+// thunk field walks then treat every such field as a plain scalar — the destroy thunk
+// drops NOTHING and the copy thunk shallow-copies WITHOUT an incref — while the
+// refcount inserter (which DOES chase member aliases via `fieldTypeIsDropTracked`)
+// increfs the field on store: the +1 is never released (the `Map`/`MapIterator`
+// keys/values/states leak). Chase the member alias to its backing struct name
+// (`KeyArray` -> `Array`) so the heap test fires. Concrete `named`/`genericInstance`
+// field types pass through unchanged; primitives (no base name) fall through to the
+// caller's non-heap answer.
+function resolveFieldTypeThroughMemberAliases(project Project, t MaxonType, enclosingTypeName String) returns MaxonType
+	let directBase = try baseNameOfMaxonType(project, t: t) otherwise return t
+	if project.structTypes.contains(directBase) or project.enumTypes.contains(directBase) 'alreadyConcrete'
+		return t
+	end 'alreadyConcrete'
+	let resolvedName = try chaseTypealiasNameToStruct(project, name: directBase, enclosingType: enclosingTypeName) otherwise return t
+	return MaxonType.named(project.typeNames.intern(resolvedName))
+end 'resolveFieldTypeThroughMemberAliases'
+
 // True iff any element references an unbound type-parameter. Used to
 // gate per-call-site materialization in Phase 11.4: layout descriptors
 // (for generic-instance args) and witness tables (for `withArgs` of
@@ -935,7 +959,8 @@ function synthesizeCopyThunk(project Project, maxonModule MaxonModule, gid Gener
 				panic("synthesizeCopyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			let isHeap = argTypeHasHeapRefs(project, t: concrete)
+			let resolved = resolveFieldTypeThroughMemberAliases(project, t: concrete, enclosingTypeName: baseName)
+			let isHeap = argTypeHasHeapRefs(project, t: resolved)
 			emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: field.offset, fieldHasHeapRef: isHeap, tag: "f{i}")
 		end 'eachField'
 	end 'isStruct' else 'singleWord'
@@ -983,7 +1008,8 @@ function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid Ge
 				panic("synthesizeDestroyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			if argTypeHasHeapRefs(project, t: concrete) 'isHeap'
+			let resolved = resolveFieldTypeThroughMemberAliases(project, t: concrete, enclosingTypeName: baseName)
+			if argTypeHasHeapRefs(project, t: resolved) 'isHeap'
 				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, tag: "f{i}")
 			end 'isHeap'
 		end 'eachField'
