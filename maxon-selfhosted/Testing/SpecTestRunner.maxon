@@ -273,8 +273,15 @@ let whitelist = ["basics",
 	"per-instance-typealias",
 	"generic-type-inner-alias-multifile",
 	"generic-type-nested-array-typealias",
-	// "generic-module-merge-pattern" — HANGS the runner (worker never returns).
-	// "generic-module-merge-crash" — HANGS the runner (worker never returns).
+	// The prior "HANGS the runner" note was a mis-diagnosis: the monomorphized
+	// extension body actually PANICKED in LowerMaxonToStd (lookupSlotMaxonType
+	// OOB), which killed the parallel worker and looked like a hang. Fixed in
+	// MonomorphizeExtensions: block-scoped locals (loop indices, in-loop `let`s)
+	// were dropped from the clone's slot space because scope.allVars() no longer
+	// reports them after popScope. The clone now carries every source slot over
+	// 1:1 (the source's full slot space is gap-free), dropping the compaction.
+	"generic-module-merge-pattern",
+	"generic-module-merge-crash",
 	"monomorphization-recursive-type",
 	"slice-memory",
 	"managed-memory-methods",

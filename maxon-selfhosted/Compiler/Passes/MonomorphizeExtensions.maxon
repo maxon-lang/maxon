@@ -192,15 +192,6 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	// `specializeClosureName`'s in-queue dedup.
 	var closureQueue = ClosureSpecArray.create()
 
-	// Build the slot-id remap. The source function may have hidden
-	// `__witness_<param>` slots that the parser pre-allocated for
-	// interface-typed params (the parser's ABI expansion). After
-	// substitution those interfaces vanish, so we drop the witness slots
-	// and renumber every remaining slot consecutively. Cloned ops walk
-	// through `remapSlot` so every `varDecl` / `varLoad` / `varStore` /
-	// `forInIterable.iterSlot` references the new dense slot space.
-	let slotRemap = buildSlotRemap(srcFunc)
-
 	// Substituted user-arity paramTypes (drives `FuncSignature` registration)
 	// and the ABI-expanded shape that lands on `IrFunction.maxonParamTypes`.
 	// The signature keeps the source-level shape so default-insertion +
@@ -218,8 +209,8 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	// here, in lockstep with the ABI vector. The clone runs AFTER the
 	// module-wide buildAbiParamMaps pass, so it must produce these itself.
 	// Source scope slots come from the source's paramReservations (1:1 with
-	// srcSig.paramTypes, __self included); resolve them through slotRemap into
-	// the clone's dense slot space. The companion KIND is decided from the
+	// srcSig.paramTypes, __self included); the clone keeps them 1:1 (the source
+	// slot space is already dense). The companion KIND is decided from the
 	// SUBSTITUTED type (an interface param may fold to a plain type -> no
 	// companion), matching the ABI-vector decision below exactly.
 	var newReservations = ParamReservationArray.create()
@@ -242,10 +233,10 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 		var companionCloneSlot = 0 as VarSlot
 		if haveSrcReservations 'haveRes'
 			let srcRes = try srcFunc.paramReservations.get(i) otherwise panic("cloneAndAppendMonomorph: paramReservations.get OOB at {i}")
-			paramCloneSlot = slotRemap.resolve(srcRes.paramSlot)
+			paramCloneSlot = srcRes.paramSlot
 			hasCompanion = srcRes.hasCompanion
 			if srcRes.hasCompanion 'resolveCompanion'
-				companionCloneSlot = slotRemap.resolve(srcRes.companionSlot)
+				companionCloneSlot = srcRes.companionSlot
 			end 'resolveCompanion'
 		end 'haveRes'
 
@@ -299,20 +290,19 @@ function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModu
 	newFunc.scopeSlotToAbiParamIndex = slotToAbi
 	newFunc.abiParamIndexToScopeSlot = abiToSlot
 
-	// Rebuild Scope with substituted varTypes. Slot ids are remapped
-	// through `slotRemap` so the cloned scope's slots are dense (no
-	// witness gaps) and every op that references a slotId in the cloned
-	// body still resolves correctly. Self-field aliases are re-declared
-	// against the receiver type's field offsets recovered from
+	// Rebuild Scope with substituted varTypes. Slot ids carry over 1:1 (the
+	// source slot space is already dense) so every op that references a slotId
+	// in the cloned body still resolves correctly. Self-field aliases are
+	// re-declared against the receiver type's field offsets recovered from
 	// `project.structTypes`.
-	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, slotRemap: slotRemap)
+	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName)
 	newFunc.scope = newScope
 
 	// Clone blocks + ops onto `dstModule` and register them on `newFunc`.
 	// The parent-body clone discards the (srcOpIdx, newOpIdx) call-op
 	// pairing — only closure-body clones need it for downstream
 	// resolvedCallees rewriting.
-	_ = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: closureQueue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+	_ = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, queue: closureQueue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 
 	// Register the new function's signature so resolver / lowering /
 	// inliner can look it up via the same path a parser-declared method
@@ -373,14 +363,6 @@ end 'drainClosureSpecQueue'
 // already in the user-facing shape. The hidden `__env i64` trailing param
 // flows through verbatim.
 function emitSpecializedClosure(project Project, dstModule MaxonModule, srcModule MaxonModule, srcFunc IrFunction, specName String, queue ClosureSpecArray, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String, ifaceName String)
-	// Build the slot remap for the closure body. Closures don't have
-	// `__witness___self` slots (they're not interface-extension method
-	// bodies in their own right), but `buildSlotRemap` still produces
-	// a dense renumbering — for a closure that's effectively an
-	// identity map. Reusing the helper keeps slot-id handling
-	// consistent across all monomorphized bodies.
-	let slotRemap = buildSlotRemap(srcFunc)
-
 	// Substitute the return type. Closures lifted from generic extensions
 	// can return a type-parameter-typed value (e.g. `function() gives
 	// self.something()` with a Self-typed receiver); the substitution
@@ -409,13 +391,13 @@ function emitSpecializedClosure(project Project, dstModule MaxonModule, srcModul
 	// Rebuild the closure body's Scope with substituted varTypes. Closure
 	// bodies don't have self-field aliases, so the receiverTypeName +
 	// receiverStruct lookup at `cloneScopeWithSubst` is a no-op for them
-	// — but the rest of the helper (slot remap, payload bindings, regular
+	// — but the rest of the helper (slot carry-over, payload bindings, regular
 	// vars) applies identically. Pass the receiver type name even though
 	// it won't be consulted for closure scopes; the helper handles missing
 	// struct entries by dropping the alias, which is the desired behavior
 	// for closure bodies that happen to have a self-field-shaped binding
 	// from a captured outer scope (none in practice today).
-	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, slotRemap: slotRemap)
+	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName)
 	newFunc.scope = newScope
 
 	// Walk blocks/ops the same way `cloneAndAppendMonomorph` does, capturing
@@ -428,7 +410,7 @@ function emitSpecializedClosure(project Project, dstModule MaxonModule, srcModul
 	// entry and either panics (`lowerCall` invariant) or — worse — finds a
 	// stale entry from the source op's opIdx that resolves to whichever
 	// concrete receiver the original closure was first resolved against.
-	let clonedCallOps = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+	let clonedCallOps = cloneBlocksWithSubst(project, srcModule: srcModule, srcFunc: srcFunc, dstModule: dstModule, newFunc: newFunc, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 	rewriteClonedResolvedCallees(project, dstModule: dstModule, pairs: clonedCallOps, ifaceName: ifaceName, receiverTypeName: receiverTypeName)
 
 	// Register the specialized closure's signature. The source closure has
@@ -463,7 +445,7 @@ end 'emitSpecializedClosure'
 // `opNeedsResolvedCalleeRewrite`) so callers that need to translate
 // `project.resolvedCallees` can do so afterwards. Parent-body callers that
 // don't care about the pairing discard the return value.
-function cloneBlocksWithSubst(project Project, srcModule MaxonModule, srcFunc IrFunction, dstModule MaxonModule, newFunc IrFunction, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns OpIndexPairArray
+function cloneBlocksWithSubst(project Project, srcModule MaxonModule, srcFunc IrFunction, dstModule MaxonModule, newFunc IrFunction, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns OpIndexPairArray
 	var clonedCallOps = OpIndexPairArray.create()
 	for blockRefIdx in 0 upto srcFunc.blockRefs.count() 'eachBlockRef'
 		let srcBlockIdx = try srcFunc.blockRefs.get(blockRefIdx) otherwise panic("cloneBlocksWithSubst: blockRefs.get OOB at {blockRefIdx}")
@@ -471,7 +453,7 @@ function cloneBlocksWithSubst(project Project, srcModule MaxonModule, srcFunc Ir
 		var newBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 		for srcOpIdx in srcBlock.opRefs 'eachOp'
 			let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("cloneBlocksWithSubst: ops.get OOB at {srcOpIdx}")
-			let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+			let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 			let newOpIdx = dstModule.ops.count()
 			dstModule.ops.push(clonedOp)
 			newBlock.opRefs.append(newOpIdx)
@@ -483,7 +465,7 @@ function cloneBlocksWithSubst(project Project, srcModule MaxonModule, srcFunc Ir
 			unset gives Terminator.unset
 			dead gives Terminator.dead
 			fallthrough gives Terminator.fallthrough
-			opIndex gives relocateTerminator(project, srcModule: srcModule, dstModule: dstModule, srcOpIdx: srcBlock.terminatorIndex(), subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+			opIndex gives relocateTerminator(project, srcModule: srcModule, dstModule: dstModule, srcOpIdx: srcBlock.terminatorIndex(), subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, queue: queue, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 		end 'relocate'
 		let newBlockIdx = dstModule.blocks.count()
 		dstModule.blocks.push(newBlock)
@@ -498,7 +480,7 @@ end 'cloneBlocksWithSubst'
 // the regular `eachOp` loop above. Returns the relocated Terminator.
 // The src terminator's op was already pushed into module.ops during the
 // op walk; this helper just computes the new op-index for that position.
-function relocateTerminator(project Project, srcModule MaxonModule, dstModule MaxonModule, srcOpIdx OpIndex, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns Terminator
+function relocateTerminator(project Project, srcModule MaxonModule, dstModule MaxonModule, srcOpIdx OpIndex, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, queue ClosureSpecArray, receiverTypeName String, ifaceName String) returns Terminator
 	// The block's terminator op index points at a position in `srcModule.ops`
 	// that we already processed in the op walk: each op gets a brand-new
 	// trailing entry in `dstModule.ops`. Clone+append the terminator op afresh
@@ -506,102 +488,13 @@ function relocateTerminator(project Project, srcModule MaxonModule, dstModule Ma
 	// terminator referent inside the destination's op-table even when the
 	// source body came from `stdlibParsedModule`.
 	let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("relocateTerminator: ops.get OOB at {srcOpIdx}")
-	let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
+	let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, queue: queue, parentSrcModule: srcModule, dstModule: dstModule, receiverTypeName: receiverTypeName, ifaceName: ifaceName)
 	let newOpIdx = dstModule.ops.count()
 	dstModule.ops.push(clonedOp)
 	return Terminator.opIndex(newOpIdx)
 end 'relocateTerminator'
 
-// Map from source-function slot id → cloned-function slot id. The clone
-// drops every `__witness_<param>` slot the parser pre-allocated for
-// interface-typed params, so consecutive slots above the witness
-// renumber down by the count of witness slots dropped to their left.
-// Implemented as a parallel-array since per-function slot counts are
-// small.
-type SlotRemap
-	export var srcIds as VarSlotArray
-	export var dstIds as VarSlotArray
-
-	export static function create() returns SlotRemap
-		return Self{srcIds: VarSlotArray.create(), dstIds: VarSlotArray.create()}
-	end 'create'
-
-	export function add(srcId VarSlot, dstId VarSlot)
-		srcIds.push(srcId)
-		dstIds.push(dstId)
-	end 'add'
-
-	export function isDropped(srcId VarSlot) returns bool
-		for i in 0 upto srcIds.count() 'scan'
-			let s = try srcIds.get(i) otherwise panic("SlotRemap.isDropped: srcIds.get OOB at {i}")
-			if s == srcId 'hit'
-				return false
-			end 'hit'
-		end 'scan'
-		return true
-	end 'isDropped'
-
-	// Resolve a source slot to the cloned slot. Returns the source id
-	// unchanged when no mapping is registered — most slots don't need
-	// remapping (the witness drop only shifts ids past the witness).
-	// This sentinel-passthrough behaviour is safe because cloned ops
-	// never see a dropped slot directly (they reference user-declared
-	// names, not the parser's hidden witness companion).
-	export function resolve(srcId VarSlot) returns VarSlot
-		for i in 0 upto srcIds.count() 'scan'
-			let s = try srcIds.get(i) otherwise panic("SlotRemap.resolve: srcIds.get OOB at {i}")
-			if s == srcId 'hit'
-				return try dstIds.get(i) otherwise panic("SlotRemap.resolve: dstIds desync at {i}")
-			end 'hit'
-		end 'scan'
-		return srcId
-	end 'resolve'
-end 'SlotRemap'
-
 export typealias VarSlotArray = Array with VarSlot
-
-// Walk srcFunc.scope.allVars() in slot-id order, dropping any
-// `__witness_<param>` synthetic slot, and assign each surviving slot
-// a fresh dense slot id starting at 0. The resulting map drives every
-// op-clone's slot renumber and the rebuilt scope's `nextSlot`.
-function buildSlotRemap(srcFunc IrFunction) returns SlotRemap
-	var remap = SlotRemap.create()
-	let total = srcFunc.scope.nextSlot
-	if total == 0 'empty'
-		return remap
-	end 'empty'
-	let allVars = srcFunc.scope.allVars()
-	// Mark which slot ids are occupied in one pass over the scope vars, then
-	// walk 0..total in slot order. The Maxon Map iterator doesn't guarantee
-	// insertion order, so iterating `allVars` directly could shuffle slot ids;
-	// the occupied-bit array keeps the renumber deterministic while replacing
-	// the former per-slot full-map scan (O(slots × vars)) with O(slots + vars).
-	var slotOccupied = BoolArray.create()
-	slotOccupied.resize(total)
-	for (_, info) in allVars 'markOccupied'
-		if info.slot < total 'inRange'
-			try slotOccupied.set(info.slot, value: true) otherwise panic("buildSlotRemap: slotOccupied.set OOB despite info.slot < total")
-		end 'inRange'
-	end 'markOccupied'
-
-	var dstSlot = 0 as VarSlot
-	for srcSlot in 0 upto total 'eachSlot'
-		if not (try slotOccupied.get(srcSlot) otherwise false) 'unmapped'
-			continue
-		end 'unmapped'
-		// slot<->abi decoupling: the parser reserves ONE `__companion_<param>`
-		// scope slot per named-alias param (env OR witness, decided later).
-		// KEEP these in the remap so the clone scope retains the param+companion
-		// structure that lowering's fnEnvVarNames / interfaceWitnessSlots load
-		// via the rebuilt slot<->abi maps (see the map-build loop below). The
-		// companion may turn out unused after substitution (param folds to a
-		// plain type) — an unused remapped scope slot is harmless (no body op
-		// and no map entry reference it).
-		remap.add(srcSlot, dstId: dstSlot)
-		dstSlot = dstSlot + 1
-	end 'eachSlot'
-	return remap
-end 'buildSlotRemap'
 
 // Apply substitution + interface→named folding to a MaxonType. Centralized
 // so every call site rewrites types through a single helper.
@@ -637,18 +530,15 @@ end 'substituteReturnType'
 // through fieldLoad with the offset stored on the VarInfo) resolves
 // against the receiver's struct layout rather than the extension's
 // abstract Self.
-function cloneScopeWithSubst(project Project, srcScope Scope, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String, slotRemap SlotRemap) returns Scope
+function cloneScopeWithSubst(project Project, srcScope Scope, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String) returns Scope
 	var dst = Scope.create()
 	let srcVars = srcScope.allVars()
-	var maxDstSlot = 0 as VarSlot
 	for (name, info) in srcVars 'eachVar'
-		if slotRemap.isDropped(info.slot) 'skipDropped'
-			continue
-		end 'skipDropped'
-		let dstSlot = slotRemap.resolve(info.slot)
-		if dstSlot >= maxDstSlot 'updateMax'
-			maxDstSlot = dstSlot + 1
-		end 'updateMax'
+		// Every surviving VarInfo keeps its source slot id 1:1. Slot ids are
+		// allocated strictly sequentially and never recycled: Scope.nextSlot only
+		// increases, and popScope removes a block-scoped name from `vars` but leaves
+		// its slot id permanently reserved (Scope.maxon). So the source slot space is
+		// already fully dense — there are no gaps to compact and nothing to renumber.
 		var newType = substituteWithIfaceFold(project, t: info.varType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
 		if info.isSelfField 'selfField'
 			// Self-field aliases need the receiver type's field offset, not the
@@ -662,19 +552,28 @@ function cloneScopeWithSubst(project Project, srcScope Scope, subst TypeSubstitu
 			if let receiverStruct = try project.structTypes.get(receiverTypeName) 'haveStruct'
 				if let resolvedField = try findFieldOnStruct(receiverStruct, fieldName: name) 'haveField'
 					newType = substituteWithIfaceFold(project, t: resolvedField.fieldType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
-					dst.installVerbatim(VarInfo.createSelfField(name, varType: newType, slot: dstSlot, offset: resolvedField.offset))
+					dst.installVerbatim(VarInfo.createSelfField(name, varType: newType, slot: info.slot, offset: resolvedField.offset))
 				end 'haveField'
 				continue
 			end 'haveStruct'
 			continue
 		end 'selfField'
 		if info.isPayloadBinding 'payload'
-			dst.installVerbatim(VarInfo.createPayloadBinding(name, varType: newType, mutable: info.mutable, slot: dstSlot, scrutineeName: info.payloadScrutineeName, fieldIndex: info.payloadFieldIndex, caseName: info.payloadCaseName))
+			dst.installVerbatim(VarInfo.createPayloadBinding(name, varType: newType, mutable: info.mutable, slot: info.slot, scrutineeName: info.payloadScrutineeName, fieldIndex: info.payloadFieldIndex, caseName: info.payloadCaseName))
 			continue
 		end 'payload'
-		dst.installVerbatim(VarInfo.create(name, varType: newType, mutable: info.mutable, slot: dstSlot))
+		dst.installVerbatim(VarInfo.create(name, varType: newType, mutable: info.mutable, slot: info.slot))
 	end 'eachVar'
-	dst.setNextSlot(maxDstSlot)
+	// Cover the source's full slot space, not just the slots still reported by
+	// allVars(): block-scoped locals (loop indices, in-loop `let`s) were popped
+	// from the source scope but keep their reserved slot ids, which cloned ops
+	// still reference. Lowering reads those slots' types from the ops directly
+	// (exactly as it does for a normally-parsed function), so they need no VarInfo
+	// here — only a `nextSlot` high enough to include them. Dropping any of those
+	// reserved ids (the old allVars()-occupancy compaction did) renumbered cloned
+	// ops past the shrunken nextSlot, so lowering's `lookupSlotMaxonType` read out
+	// of bounds and panicked on any monomorphized extension body containing a loop.
+	dst.setNextSlot(srcScope.nextSlot)
 	return dst
 end 'cloneScopeWithSubst'
 
@@ -987,16 +886,16 @@ end 'rewriteClosureCreateOnMonomorph'
 // fallback when the closure body isn't in `dstModule`). `dstModule` is the
 // user module where the specialized clone will be emitted. `receiverTypeName`
 // is the concrete type's name, used as the per-receiver suffix.
-function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, receiverTypeName String, ifaceName String) returns MaxonOp
+function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, queue ClosureSpecArray, parentSrcModule MaxonModule, dstModule MaxonModule, receiverTypeName String, ifaceName String) returns MaxonOp
 	return match op 'k'
 		literal(result, value, valueType, range) gives MaxonOp.literal(result, value: value, valueType: substituteWithIfaceFold(project, t: valueType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		stringConst gives op
 		charLiteral gives op
 		byteStringLiteral gives op
 		stringInterp gives op
-		varDecl(slotId, value, slotType, range) gives MaxonOp.varDecl(slotRemap.resolve(slotId), value: value, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
-		varLoad(result, slotId, slotType, range) gives MaxonOp.varLoad(result, slotId: slotRemap.resolve(slotId), slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
-		varStore(slotId, value, range) gives MaxonOp.varStore(slotRemap.resolve(slotId), value: value, range: range)
+		varDecl(slotId, value, slotType, range) gives MaxonOp.varDecl(slotId, value: value, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		varLoad(result, slotId, slotType, range) gives MaxonOp.varLoad(result, slotId: slotId, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		varStore(slotId, value, range) gives MaxonOp.varStore(slotId, value: value, range: range)
 		globalLoad(result, name, slotType, range) gives MaxonOp.globalLoad(result, name: name, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		globalStore(name, value, slotType, range) gives MaxonOp.globalStore(name, value: value, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		binop(result, left, right, opKind, operandType, range) gives MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: substituteWithIfaceFold(project, t: operandType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
@@ -1034,7 +933,7 @@ function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, iface
 		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, capturedOuterSlots, range) gives rewriteClosureCreateOnMonomorph(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), capturedOuterSlots: capturedOuterSlots, range: range, receiverTypeName: receiverTypeName, queue: queue, parentSrcModule: parentSrcModule, dstModule: dstModule, project: project)
 		closureEnvLoad(result, captureIndex, captureName, captureType, range) gives MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: substituteWithIfaceFold(project, t: captureType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) gives MaxonOp.indirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
-		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: slotRemap.resolve(iterSlot), iterType: substituteWithIfaceFold(project, t: iterType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), sourceValue: sourceValue, sourceType: substituteWithIfaceFold(project, t: sourceType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)
+		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: iterSlot, iterType: substituteWithIfaceFold(project, t: iterType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), sourceValue: sourceValue, sourceType: substituteWithIfaceFold(project, t: sourceType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)
 		asyncCall(result, callee, callContext, args, argLabels, argTypes, argRanges, innerType, calleeThrows, callSourceText, range) gives MaxonOp.asyncCall(result, callee: substituteCalleeBytes(project, callee: callee, ifaceName: ifaceName, receiverTypeName: receiverTypeName), callContext: substituteCallContext(callContext, ifaceName: ifaceName, receiverTypeName: receiverTypeName), args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, innerType: substituteWithIfaceFold(project, t: innerType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), calleeThrows: calleeThrows, callSourceText: callSourceText, range: range)
 		awaitPromise(result, promise, innerType, promiseType, range) gives MaxonOp.awaitPromise(result, promise: promise, innerType: substituteWithIfaceFold(project, t: innerType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), promiseType: substituteWithIfaceFold(project, t: promiseType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
 		tryAwait(result, promise, innerType, promiseType, errorBoundName, range) gives MaxonOp.tryAwait(result, promise: promise, innerType: substituteWithIfaceFold(project, t: innerType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), promiseType: substituteWithIfaceFold(project, t: promiseType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), errorBoundName: errorBoundName, range: range)

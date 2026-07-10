@@ -1,0 +1,534 @@
+// Test: dual-specialize-inner-array
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type GenContainer uses Op
+	typealias OpArray = Array with Op
+
+	export var ops as OpArray
+
+	export static function create() returns Self
+		return Self{ops: OpArray.create()}
+	end 'create'
+
+	export function push(op Op)
+		self.ops.push(op)
+	end 'push'
+
+	export function count() returns Count
+		return self.ops.count()
+	end 'count'
+end 'GenContainer'
+
+typealias IntContainer = GenContainer with Integer
+typealias StringContainer = GenContainer with String
+
+function main() returns ExitCode
+	var ic = IntContainer.create()
+	ic.push(10)
+	ic.push(20)
+	ic.push(30)
+
+	var sc = StringContainer.create()
+	sc.push("hello")
+	sc.push("world")
+
+	var intSum = 0
+	for val in ic.ops 'intLoop'
+		intSum = intSum + val
+	end 'intLoop'
+
+	var strCount = 0
+	for val in sc.ops 'strLoop'
+		strCount = strCount + 1
+	end 'strLoop'
+
+	print("ints={ic.count()} sum={intSum}\n")
+	print("strings={sc.count()} count={strCount}\n")
+
+	if ic.count() == 3 and intSum == 60 and sc.count() == 2 and strCount == 2 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+ints=3 sum=60
+strings=2 count=2
+```
+---
+// CompiledIR
+module {
+  func @GenContainer.count(local0: i64, local1: i64) -> u64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %1 = mir.param local1 : i64
+    %3 = mir.load %5, 0 width: qword
+    %4 = mir.call @Array.count(%3, %1)
+    %6 = mir.mov_imm -1 : i64
+    %7 = mir.cmp ugt, %4, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_96f2978533f7a008
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %5 = mir.global_addr @__layout_GenContainer_Integer
+    %210 = mir.mov_imm 8 : i64
+    %211 = mir.func_addr @__destruct_GenContainer
+    %212 = mir.call @stdlib.__mm_alloc(%210, %211)
+    %213 = mir.mov_imm 0 : i64
+    mir.store %213, %212, 0 width: qword
+    %214 = mir.call @Array.create(%5)
+    mir.store %214, %212, 0 width: qword
+    %8 = mir.mov_imm 10 : i64
+    %9 = mir.global_addr @__layout_GenContainer_Integer
+    %215 = mir.load %212, 0 width: qword
+    %216 = mir.call @Array.push(%215, %8, %9)
+    %12 = mir.mov_imm 20 : i64
+    %13 = mir.global_addr @__layout_GenContainer_Integer
+    %217 = mir.load %212, 0 width: qword
+    %218 = mir.call @Array.push(%217, %12, %13)
+    %16 = mir.mov_imm 30 : i64
+    %17 = mir.global_addr @__layout_GenContainer_Integer
+    %219 = mir.load %212, 0 width: qword
+    %220 = mir.call @Array.push(%219, %16, %17)
+    %19 = mir.global_addr @__layout_GenContainer_String
+    %221 = mir.mov_imm 8 : i64
+    %222 = mir.func_addr @__destruct_GenContainer
+    %223 = mir.call @stdlib.__mm_alloc(%221, %222)
+    %224 = mir.mov_imm 0 : i64
+    mir.store %224, %223, 0 width: qword
+    %225 = mir.call @Array.create(%19)
+    mir.store %225, %223, 0 width: qword
+    %22 = mir.global_addr @__istr_0
+    %23 = mir.mov_imm 48 : i64
+    %24 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %25 = mir.call @mrt_alloc_with_dtor(%23, %24)
+    mir.store %0, %25, 40 width: qword
+    mir.store %22, %25, 0 width: qword
+    %27 = mir.mov_imm 5 : i64
+    mir.store %27, %25, 8 width: qword
+    %28 = mir.mov_imm -2 : i64
+    mir.store %28, %25, 16 width: qword
+    %29 = mir.mov_imm 1 : i64
+    mir.store %29, %25, 24 width: qword
+    mir.store %0, %25, 32 width: qword
+    %32 = mir.mov_imm 16 : i64
+    %33 = mir.func_addr @__destruct_String
+    %31 = mir.call @stdlib.__mm_alloc(%32, %33)
+    %390 = mir.call @stdlib.__mm_incref(%31)
+    mir.store %25, %31, 0 width: qword
+    mir.store %29, %31, 8 width: qword
+    %35 = mir.global_addr @__layout_GenContainer_String
+    %226 = mir.load %223, 0 width: qword
+    %227 = mir.call @Array.push(%226, %31, %35)
+    %38 = mir.global_addr @__istr_1
+    %39 = mir.mov_imm 48 : i64
+    %40 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %41 = mir.call @mrt_alloc_with_dtor(%39, %40)
+    mir.store %0, %41, 40 width: qword
+    mir.store %38, %41, 0 width: qword
+    %43 = mir.mov_imm 5 : i64
+    mir.store %43, %41, 8 width: qword
+    %44 = mir.mov_imm -2 : i64
+    mir.store %44, %41, 16 width: qword
+    mir.store %29, %41, 24 width: qword
+    mir.store %0, %41, 32 width: qword
+    %48 = mir.mov_imm 16 : i64
+    %49 = mir.func_addr @__destruct_String
+    %47 = mir.call @stdlib.__mm_alloc(%48, %49)
+    %391 = mir.call @stdlib.__mm_incref(%47)
+    mir.store %41, %47, 0 width: qword
+    mir.store %29, %47, 8 width: qword
+    %51 = mir.global_addr @__layout_GenContainer_String
+    %228 = mir.load %223, 0 width: qword
+    %229 = mir.call @Array.push(%228, %47, %51)
+    %55 = mir.load %212, 0 width: qword
+    %56 = mir.global_addr @__layout_Array_Integer
+    mir.br inlined_Array.createIterator_0_0()
+  inlined_Array.createIterator_0_0:
+    %230 = mir.load %55, 0 width: qword
+    %298 = mir.mov_imm 8 : i64
+    %299 = mir.sub.i64 %230, %298
+    mir.atomic_inc %299
+    %232, %233 = mir.try_call @ArrayIterator.create(%230, %56)
+    %234 = mir.mov_imm 0 : i64
+    %235 = mir.cmp ne, %233, %234
+    mir.cond_br %235 [then: inlined_Array.createIterator_1_0(), else: inlined_Array.createIterator_2_0()]
+  inlined_Array.createIterator_1_0:
+    %236 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%236, %233)
+  inlined_Array.createIterator_2_0:
+    %237 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%232, %237)
+  inline_cont_main_0(%238: i64, %239: i64):
+    %60 = mir.cmp ne, %239, %0
+    mir.cond_br %60 [then: __rc_edge_20_0(), else: intLoop_0(%0)]
+  inlined_ArrayIterator.advance_0_0:
+    %240 = mir.load %238, 0 width: qword
+    %241 = mir.load %240, 8 width: qword
+    %242 = mir.load %240, 16 width: qword
+    %243 = mir.mov_imm 1 : i64
+    %244 = mir.add.i64 %241, %243
+    %245 = mir.cmp lt, %244, %242
+    %246 = mir.sub.i64 %244, %241
+    %247 = mir.mul.i64 %245, %246
+    %248 = mir.add.i64 %241, %247
+    mir.store %248, %240, 8 width: qword
+    %249 = mir.mov_imm 1 : i64
+    %250 = mir.sub.i64 %249, %245
+    %251 = mir.mov_imm 1 : i64
+    %252 = mir.mul.i64 %250, %251
+    %253 = mir.mov_imm 0 : i64
+    %254 = mir.cmp ne, %252, %253
+    mir.cond_br %254 [then: inlined_ArrayIterator.advance_1_0(), else: inline_cont_main_2(%253, %253)]
+  inlined_ArrayIterator.advance_1_0:
+    %255 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%253, %255)
+  inline_cont_main_2(%256: i64, %257: i64):
+    %66 = mir.cmp ne, %257, %0
+    mir.cond_br %66 [then: __rc_edge_24_0(), else: intLoop_0(%72)]
+  intLoop_0(%203: i64):
+    %258 = mir.load %238, 0 width: qword
+    mir.br inlined_stdlib.__managed_mem_cursor_current_0_0()
+  inlined_stdlib.__managed_mem_cursor_current_0_0:
+    %300 = mir.load %258, 0 width: qword
+    %301 = mir.mov_imm 8 : i64
+    %302 = mir.add.i64 %258, %301
+    %303 = mir.load %302, 0 width: qword
+    %304 = mir.mov_imm 24 : i64
+    %305 = mir.add.i64 %258, %304
+    %306 = mir.load %305, 0 width: qword
+    %328 = mir.mov_imm 0 : i64
+    %329 = mir.cmp lt, %306, %328
+    mir.cond_br %329 [then: inlined_stdlib.__managed_mem_cursor_current_1_0(), else: inlined_stdlib.__managed_mem_cursor_current_2_0()]
+  inlined_stdlib.__managed_mem_cursor_current_1_0:
+    %386 = mir.mov_imm 0 : i64
+    %387 = mir.sub.i64 %386, %306
+    %331 = mir.mul.i64 %303, %387
+    %332 = mir.mov_imm 3 : i64
+    %333 = mir.shr.i64 %331, %332
+    %334 = mir.add.i64 %300, %333
+    %335 = mir.mov_imm 0 : i64
+    %336 = mir.load_byte %334, %335
+    %337 = mir.mov_imm 1 : i64
+    %338 = mir.shl.i64 %337, %387
+    %339 = mir.mov_imm 1 : i64
+    %340 = mir.sub.i64 %338, %339
+    %341 = mir.mov_imm 7 : i64
+    %342 = mir.and.i64 %331, %341
+    %343 = mir.shr.i64 %336, %342
+    %344 = mir.and.i64 %343, %340
+    mir.br inline_cont_main_3(%344)
+  inlined_stdlib.__managed_mem_cursor_current_2_0:
+    %309 = mir.mul.i64 %303, %306
+    %310 = mir.add.i64 %300, %309
+    mir.br inlined_stdlib.__managed_mem_load_sized_0_0()
+  inlined_stdlib.__managed_mem_load_sized_0_0:
+    %345 = mir.mov_imm 1 : i64
+    %346 = mir.cmp eq, %306, %345
+    mir.cond_br %346 [then: inlined_stdlib.__managed_mem_load_sized_1_0(), else: inlined_stdlib.__managed_mem_load_sized_2_0()]
+  inlined_stdlib.__managed_mem_load_sized_1_0:
+    %347 = mir.mov_imm 0 : i64
+    %348 = mir.load_byte %310, %347
+    mir.br inline_cont_main_35(%348)
+  inlined_stdlib.__managed_mem_load_sized_2_0:
+    %349 = mir.mov_imm 2 : i64
+    %350 = mir.cmp eq, %306, %349
+    mir.cond_br %350 [then: inlined_stdlib.__managed_mem_load_sized_3_0(), else: inlined_stdlib.__managed_mem_load_sized_4_0()]
+  inlined_stdlib.__managed_mem_load_sized_3_0:
+    %351 = mir.load %310, 0 width: halfword
+    mir.br inline_cont_main_35(%351)
+  inlined_stdlib.__managed_mem_load_sized_4_0:
+    %352 = mir.mov_imm 4 : i64
+    %353 = mir.cmp eq, %306, %352
+    mir.cond_br %353 [then: inlined_stdlib.__managed_mem_load_sized_5_0(), else: inlined_stdlib.__managed_mem_load_sized_6_0()]
+  inlined_stdlib.__managed_mem_load_sized_5_0:
+    %354 = mir.load %310, 0 width: word
+    mir.br inline_cont_main_35(%354)
+  inlined_stdlib.__managed_mem_load_sized_6_0:
+    %355 = mir.load %310, 0 width: qword
+    mir.br inline_cont_main_35(%355)
+  inline_cont_main_35(%356: i64):
+    mir.br inline_cont_main_3(%356)
+  inline_cont_main_3(%312: i64):
+    %72 = mir.add.i64 %203, %312
+    mir.br inlined_ArrayIterator.advance_0_0()
+  intLoop_0.exit(%204: i64):
+    %75 = mir.load %223, 0 width: qword
+    %76 = mir.global_addr @__layout_Array_String
+    mir.br inlined_Array.createIterator_0_1()
+  inlined_Array.createIterator_0_1:
+    %260 = mir.load %75, 0 width: qword
+    %313 = mir.mov_imm 8 : i64
+    %314 = mir.sub.i64 %260, %313
+    mir.atomic_inc %314
+    %262, %263 = mir.try_call @ArrayIterator.create(%260, %76)
+    %264 = mir.mov_imm 0 : i64
+    %265 = mir.cmp ne, %263, %264
+    mir.cond_br %265 [then: inlined_Array.createIterator_1_1(), else: inlined_Array.createIterator_2_1()]
+  inlined_Array.createIterator_1_1:
+    %266 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_4(%266, %263)
+  inlined_Array.createIterator_2_1:
+    %267 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_4(%262, %267)
+  inline_cont_main_4(%268: i64, %269: i64):
+    %80 = mir.cmp ne, %269, %0
+    mir.cond_br %80 [then: __rc_edge_28_0(), else: strLoop_4(%0)]
+  inlined_ArrayIterator.advance_0_1:
+    %270 = mir.load %268, 0 width: qword
+    %271 = mir.load %270, 8 width: qword
+    %272 = mir.load %270, 16 width: qword
+    %273 = mir.mov_imm 1 : i64
+    %274 = mir.add.i64 %271, %273
+    %275 = mir.cmp lt, %274, %272
+    %276 = mir.sub.i64 %274, %271
+    %277 = mir.mul.i64 %275, %276
+    %278 = mir.add.i64 %271, %277
+    mir.store %278, %270, 8 width: qword
+    %279 = mir.mov_imm 1 : i64
+    %280 = mir.sub.i64 %279, %275
+    %281 = mir.mov_imm 1 : i64
+    %282 = mir.mul.i64 %280, %281
+    %283 = mir.mov_imm 0 : i64
+    %284 = mir.cmp ne, %282, %283
+    mir.cond_br %284 [then: inlined_ArrayIterator.advance_1_1(), else: inline_cont_main_6(%283, %283)]
+  inlined_ArrayIterator.advance_1_1:
+    %285 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_6(%283, %285)
+  inline_cont_main_6(%286: i64, %287: i64):
+    %86 = mir.cmp ne, %287, %0
+    mir.cond_br %86 [then: __rc_edge_32_0(), else: strLoop_4(%92)]
+  strLoop_4(%205: i64):
+    %288 = mir.load %268, 0 width: qword
+    mir.br inlined_stdlib.__managed_mem_cursor_current_0_1()
+  inlined_stdlib.__managed_mem_cursor_current_0_1:
+    %315 = mir.load %288, 0 width: qword
+    %316 = mir.mov_imm 8 : i64
+    %317 = mir.add.i64 %288, %316
+    %318 = mir.load %317, 0 width: qword
+    %319 = mir.mov_imm 24 : i64
+    %320 = mir.add.i64 %288, %319
+    %321 = mir.load %320, 0 width: qword
+    %357 = mir.mov_imm 0 : i64
+    %358 = mir.cmp lt, %321, %357
+    mir.cond_br %358 [then: inlined_stdlib.__managed_mem_cursor_current_1_1(), else: inlined_stdlib.__managed_mem_cursor_current_2_1()]
+  inlined_stdlib.__managed_mem_cursor_current_1_1:
+    %388 = mir.mov_imm 0 : i64
+    %389 = mir.sub.i64 %388, %321
+    %360 = mir.mul.i64 %318, %389
+    %361 = mir.mov_imm 3 : i64
+    %362 = mir.shr.i64 %360, %361
+    %363 = mir.add.i64 %315, %362
+    %364 = mir.mov_imm 0 : i64
+    %365 = mir.load_byte %363, %364
+    %366 = mir.mov_imm 1 : i64
+    %367 = mir.shl.i64 %366, %389
+    %368 = mir.mov_imm 1 : i64
+    %369 = mir.sub.i64 %367, %368
+    %370 = mir.mov_imm 7 : i64
+    %371 = mir.and.i64 %360, %370
+    %372 = mir.shr.i64 %365, %371
+    %373 = mir.and.i64 %372, %369
+    mir.br __rc_edge_38_0()
+  inlined_stdlib.__managed_mem_cursor_current_2_1:
+    %324 = mir.mul.i64 %318, %321
+    %325 = mir.add.i64 %315, %324
+    mir.br inlined_stdlib.__managed_mem_load_sized_0_1()
+  inlined_stdlib.__managed_mem_load_sized_0_1:
+    %374 = mir.mov_imm 1 : i64
+    %375 = mir.cmp eq, %321, %374
+    mir.cond_br %375 [then: inlined_stdlib.__managed_mem_load_sized_1_1(), else: inlined_stdlib.__managed_mem_load_sized_2_1()]
+  inlined_stdlib.__managed_mem_load_sized_1_1:
+    %376 = mir.mov_imm 0 : i64
+    %377 = mir.load_byte %325, %376
+    mir.br inline_cont_main_39(%377)
+  inlined_stdlib.__managed_mem_load_sized_2_1:
+    %378 = mir.mov_imm 2 : i64
+    %379 = mir.cmp eq, %321, %378
+    mir.cond_br %379 [then: inlined_stdlib.__managed_mem_load_sized_3_1(), else: inlined_stdlib.__managed_mem_load_sized_4_1()]
+  inlined_stdlib.__managed_mem_load_sized_3_1:
+    %380 = mir.load %325, 0 width: halfword
+    mir.br inline_cont_main_39(%380)
+  inlined_stdlib.__managed_mem_load_sized_4_1:
+    %381 = mir.mov_imm 4 : i64
+    %382 = mir.cmp eq, %321, %381
+    mir.cond_br %382 [then: inlined_stdlib.__managed_mem_load_sized_5_1(), else: inlined_stdlib.__managed_mem_load_sized_6_1()]
+  inlined_stdlib.__managed_mem_load_sized_5_1:
+    %383 = mir.load %325, 0 width: word
+    mir.br inline_cont_main_39(%383)
+  inlined_stdlib.__managed_mem_load_sized_6_1:
+    %384 = mir.load %325, 0 width: qword
+    mir.br inline_cont_main_39(%384)
+  inline_cont_main_39(%385: i64):
+    mir.br __rc_edge_56_0()
+  inline_cont_main_7(%327: i64):
+    %396 = mir.call @__mm_decref_maybenull_helper(%327)
+    %92 = mir.add.i64 %205, %29
+    mir.br inlined_ArrayIterator.advance_0_1()
+  strLoop_4.exit(%206: i64):
+    %94 = mir.global_addr @__layout_GenContainer_Integer
+    %95 = mir.call @GenContainer.count(%212, %94)
+    %97 = mir.global_addr @__istr_2
+    %98 = mir.mov_imm 5 : i64
+    %99 = mir.mov_imm 21 : i64
+    %100 = mir.call @mrt_alloc(%99)
+    %101 = mir.call @mrt_i64_to_string(%95, %100)
+    %102 = mir.global_addr @__istr_3
+    %103 = mir.mov_imm 5 : i64
+    %104 = mir.mov_imm 21 : i64
+    %105 = mir.call @mrt_alloc(%104)
+    %106 = mir.call @mrt_i64_to_string(%204, %105)
+    %107 = mir.global_addr @__istr_4
+    %110 = mir.mov_imm 5 : i64
+    %111 = mir.add.i64 %110, %101
+    %112 = mir.add.i64 %111, %103
+    %113 = mir.add.i64 %112, %106
+    %114 = mir.add.i64 %113, %29
+    %116 = mir.add.i64 %114, %29
+    %117 = mir.call @mrt_alloc(%116)
+    mir.memcpy %117, %97, %98
+    %118 = mir.add.i64 %117, %98
+    mir.memcpy %118, %100, %101
+    %119 = mir.add.i64 %118, %101
+    mir.memcpy %119, %102, %103
+    %120 = mir.add.i64 %119, %103
+    mir.memcpy %120, %105, %106
+    %121 = mir.add.i64 %120, %106
+    mir.memcpy %121, %107, %29
+    %123 = mir.call @stdlib.__mm_decref(%100)
+    %124 = mir.call @stdlib.__mm_decref(%105)
+    %125 = mir.mov_imm 48 : i64
+    %126 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %127 = mir.call @mrt_alloc_with_dtor(%125, %126)
+    mir.store %0, %127, 40 width: qword
+    mir.store %117, %127, 0 width: qword
+    mir.store %114, %127, 8 width: qword
+    mir.store %114, %127, 16 width: qword
+    mir.store %29, %127, 24 width: qword
+    %130 = mir.mov_imm -1 : i64
+    mir.store %130, %127, 32 width: qword
+    %132 = mir.mov_imm 16 : i64
+    %133 = mir.func_addr @__destruct_String
+    %131 = mir.call @stdlib.__mm_alloc(%132, %133)
+    mir.store %127, %131, 0 width: qword
+    mir.store %0, %131, 8 width: qword
+    %290 = mir.load %131, 0 width: qword
+    %291 = mir.load %290, 0 width: qword
+    %292 = mir.load %290, 8 width: qword
+    %293 = mir.call @mrt_write_stdout(%291, %292)
+    %392 = mir.call @mm_drop(%131)
+    %137 = mir.global_addr @__layout_GenContainer_String
+    %138 = mir.call @GenContainer.count(%223, %137)
+    %140 = mir.global_addr @__istr_5
+    %141 = mir.mov_imm 8 : i64
+    %142 = mir.mov_imm 21 : i64
+    %143 = mir.call @mrt_alloc(%142)
+    %144 = mir.call @mrt_i64_to_string(%138, %143)
+    %145 = mir.global_addr @__istr_6
+    %146 = mir.mov_imm 7 : i64
+    %147 = mir.mov_imm 21 : i64
+    %148 = mir.call @mrt_alloc(%147)
+    %149 = mir.call @mrt_i64_to_string(%206, %148)
+    %150 = mir.global_addr @__istr_4
+    %153 = mir.mov_imm 8 : i64
+    %154 = mir.add.i64 %153, %144
+    %155 = mir.add.i64 %154, %146
+    %156 = mir.add.i64 %155, %149
+    %157 = mir.add.i64 %156, %29
+    %159 = mir.add.i64 %157, %29
+    %160 = mir.call @mrt_alloc(%159)
+    mir.memcpy %160, %140, %141
+    %161 = mir.add.i64 %160, %141
+    mir.memcpy %161, %143, %144
+    %162 = mir.add.i64 %161, %144
+    mir.memcpy %162, %145, %146
+    %163 = mir.add.i64 %162, %146
+    mir.memcpy %163, %148, %149
+    %164 = mir.add.i64 %163, %149
+    mir.memcpy %164, %150, %29
+    %166 = mir.call @stdlib.__mm_decref(%143)
+    %167 = mir.call @stdlib.__mm_decref(%148)
+    %168 = mir.mov_imm 48 : i64
+    %169 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %170 = mir.call @mrt_alloc_with_dtor(%168, %169)
+    mir.store %0, %170, 40 width: qword
+    mir.store %160, %170, 0 width: qword
+    mir.store %157, %170, 8 width: qword
+    mir.store %157, %170, 16 width: qword
+    mir.store %29, %170, 24 width: qword
+    %173 = mir.mov_imm -1 : i64
+    mir.store %173, %170, 32 width: qword
+    %175 = mir.mov_imm 16 : i64
+    %176 = mir.func_addr @__destruct_String
+    %174 = mir.call @stdlib.__mm_alloc(%175, %176)
+    mir.store %170, %174, 0 width: qword
+    mir.store %0, %174, 8 width: qword
+    %294 = mir.load %174, 0 width: qword
+    %295 = mir.load %294, 0 width: qword
+    %296 = mir.load %294, 8 width: qword
+    %297 = mir.call @mrt_write_stdout(%295, %296)
+    %393 = mir.call @mm_drop(%174)
+    %180 = mir.global_addr @__layout_GenContainer_Integer
+    %181 = mir.call @GenContainer.count(%212, %180)
+    %182 = mir.mov_imm 3 : i64
+    %183 = mir.cmp eq, %181, %182
+    %394 = mir.call @mm_drop(%212)
+    mir.cond_br %183 [then: shortAnd.rhs(), else: shortAnd.merge(%0)]
+  shortAnd.rhs:
+    %186 = mir.mov_imm 60 : i64
+    %187 = mir.cmp eq, %204, %186
+    mir.br shortAnd.merge(%187)
+  shortAnd.merge(%207: i64):
+    mir.cond_br %207 [then: shortAnd.rhs(), else: __rc_edge_10_0()]
+  shortAnd.rhs:
+    %191 = mir.global_addr @__layout_GenContainer_String
+    %192 = mir.call @GenContainer.count(%223, %191)
+    %193 = mir.mov_imm 2 : i64
+    %194 = mir.cmp eq, %192, %193
+    %395 = mir.call @mm_drop(%223)
+    mir.br shortAnd.merge(%194)
+  shortAnd.merge(%208: i64):
+    mir.cond_br %208 [then: shortAnd.rhs(), else: shortAnd.merge(%0)]
+  shortAnd.rhs:
+    %198 = mir.mov_imm 2 : i64
+    %199 = mir.cmp eq, %206, %198
+    mir.br shortAnd.merge(%199)
+  shortAnd.merge(%209: i64):
+    mir.cond_br %209 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    mir.ret %0
+  ok_0.after:
+    mir.ret %29
+  __rc_edge_20_0:
+    %397 = mir.call @__mm_decref_maybenull_helper(%238)
+    mir.br intLoop_0.exit(%0)
+  __rc_edge_24_0:
+    %398 = mir.call @__mm_decref_maybenull_helper(%238)
+    mir.br intLoop_0.exit(%72)
+  __rc_edge_28_0:
+    %399 = mir.call @__mm_decref_maybenull_helper(%268)
+    mir.br strLoop_4.exit(%0)
+  __rc_edge_32_0:
+    %400 = mir.call @__mm_decref_maybenull_helper(%268)
+    mir.br strLoop_4.exit(%92)
+  __rc_edge_10_0:
+    %401 = mir.call @mm_drop(%223)
+    mir.br shortAnd.merge(%0)
+  __rc_edge_38_0:
+    %402 = mir.call @stdlib.__mm_incref(%373)
+    mir.br inline_cont_main_7(%373)
+  __rc_edge_56_0:
+    %403 = mir.call @stdlib.__mm_incref(%385)
+    mir.br inline_cont_main_7(%385)
+  }
+}
+---
