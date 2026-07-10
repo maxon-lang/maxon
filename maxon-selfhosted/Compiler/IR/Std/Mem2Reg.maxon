@@ -241,15 +241,7 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 	end 'scanBlocks'
 
 	// Mark param slots as float from the function's param type info
-	var pti = 0
-	while pti < paramCount and pti < func.paramTypes.count() 'markParamFloat'
-		let pt = try func.paramTypes.get(pti) otherwise panic("unreachable: param index out of bounds")
-		if stdTypeIsFloat(pt) 'isFloat'
-			growSlotInfo(pti, info: info)
-			try info.slotIsFloat.set(pti, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB")
-		end 'isFloat'
-		pti = pti + 1
-	end 'markParamFloat'
+	markParamFloatSlots(func, paramCount: paramCount, info: info)
 
 	// Detect float local slots by checking if load results are used as float
 	// operands AND by walking forward/backward through stores to slots whose
@@ -376,6 +368,39 @@ function recordSlotLoad(func IrFunction, resultId ValueId, slotId VarSlot, info 
 		try info.slotOwnership.set(slotId, value: func.ownershipOfValue(resultId)) otherwise panic("invariant: info.slotOwnership.set OOB after growSlotInfo (type-param)")
 	end 'typeParamLoad'
 end 'recordSlotLoad'
+
+// Float detection: seed each float-class ABI param's slot. A by-reference float
+// param is NOT seeded here — its ABI type was overridden to i64 (it holds the
+// incoming pointer, not the float), so `stdTypeIsFloat` is false for it.
+function markParamFloatSlots(func IrFunction, paramCount ParamCount, info SlotInfo)
+	var pti = 0
+	while pti < paramCount and pti < func.paramTypes.count() 'markParamFloat'
+		let pt = try func.paramTypes.get(pti) otherwise panic("unreachable: param index out of bounds")
+		if stdTypeIsFloat(pt) 'isFloat'
+			growSlotInfo(pti, info: info)
+			try info.slotIsFloat.set(pti, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB")
+		end 'isFloat'
+		pti = pti + 1
+	end 'markParamFloat'
+end 'markParamFloatSlots'
+
+// Compute the per-slot "holds an f64 value" flags for `func` FRESH from its
+// current IR — the same usage/store-based analysis `analyzeSlots` runs, but
+// standalone so a later pass (LowerStdToMir) can recompute it AFTER inlining
+// has remapped slots. Persisting mem2reg's flags onto the function would go
+// stale across inlining: an inlined managed slot could inherit a slot id a
+// caller float slot held, and a stale flag would then mis-lower that managed
+// slot's move through an XMM register. Recomputing on the post-inline IR keeps
+// the mapping exact. A non-promoted float slot's `storeSlot`/`loadSlot` mark it
+// float; a by-reference float PARAM slot correctly stays non-float (it is loaded
+// only as an address operand and its ABI type is i64).
+export function computeSlotFloatFlags(func IrFunction, module StdModule) returns BoolArray
+	var info = createSlotInfo()
+	markParamFloatSlots(func, paramCount: func.paramCount, info: info)
+	markFloatSlotsFromUsage(func, module: module, info: info)
+	markFloatSlotsFromStores(func, module: module, info: info)
+	return info.slotIsFloat
+end 'computeSlotFloatFlags'
 
 // Float detection: check if load results are used as float operands
 function markFloatSlotsFromUsage(func IrFunction, module StdModule, info SlotInfo)
@@ -732,7 +757,7 @@ end 'anyParamSlotIsInterfaceFatPointer'
 // real slot 5. Instead map trailing synthetics to fresh scope slots beyond the
 // max mapped slot, preserving the invariant that distinct abi params get
 // distinct scope slots.
-function paramAbiToScopeSlot(func IrFunction, abiIdx VarSlot) returns VarSlot
+export function paramAbiToScopeSlot(func IrFunction, abiIdx VarSlot) returns VarSlot
 	let mapCount = func.abiParamIndexToScopeSlot.count()
 	if mapCount == 0 'noMap'
 		// Synthesized / pre-decoupling functions: slot==abi identity holds.

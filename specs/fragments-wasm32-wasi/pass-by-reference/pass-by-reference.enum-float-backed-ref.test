@@ -1,0 +1,46 @@
+// Test: pass-by-reference.enum-float-backed-ref
+
+enum Ratio
+	half = 0.5
+	quarter = 0.25
+end 'Ratio'
+
+function switchRatio(r Ratio)
+	r = Ratio.quarter
+end 'switchRatio'
+
+function main() returns ExitCode
+	var r = Ratio.half
+	switchRatio(r)
+	if r == Ratio.quarter 'changed'
+		return 1
+	end 'changed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %10 = mir.stack_slot_addr slot_0
+    mir.store %0, %10, 0 width: qword : f64
+    %2 = mir.stack_slot_addr slot_0
+    %9 = mir.mov_imm 4598175219545276416 : f64
+    mir.store %9, %2, 0 width: qword : f64
+    %11 = mir.stack_slot_addr slot_0
+    %4 = mir.load %11, 0 width: qword : f64
+    %5 = mir.mov_imm 4598175219545276416 : f64
+    %6 = mir.cmp feq, %4, %5
+    mir.cond_br %6 [then: changed_0(), else: changed_0.after()]
+  changed_0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  changed_0.after:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  }
+}
+---

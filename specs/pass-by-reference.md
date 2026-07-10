@@ -57,7 +57,11 @@ Closures capture variables by reference. Changes to the original variable are vi
 
 ### Reassigning Reference-Typed Parameters
 
-A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is a borrow from a container, a freshly created value, or another local — no reference leaks and no value is released twice.
+A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is a borrow from a container, a freshly created value, or another local — no reference leaks and no value is released twice. This holds for a user `type` struct and for `String`.
+
+### Reassigning Scalar Parameter Types
+
+Write-back on reassignment is independent of a scalar parameter's representation. A `float` (or a `Float`-aliased ranged type), a float-backed enum, an integer-backed enum, a payload-free union, `bool`, and byte all propagate their reassignment to the caller, exactly as an integer does. The caller always observes the reassigned value.
 
 ## Tests
 
@@ -826,3 +830,91 @@ end 'main'
 ```exitcode
 99
 ```
+
+<!-- test: pass-by-reference.mutate-float-ref -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function setTo99(x Float)
+	x = 99.0
+end 'setTo99'
+
+function main() returns ExitCode
+	var n = 0.0
+	setTo99(n)
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99.0
+```
+
+<!-- test: pass-by-reference.reassign-float-rvalue-and-variable -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function reassignReturn(x Float) returns Float
+	x = x + 1.0
+	return x
+end 'reassignReturn'
+
+function makeThirty() returns Float
+	return 30.0
+end 'makeThirty'
+
+function reassignVoid(x Float)
+	x = x + 50.0
+end 'reassignVoid'
+
+function main() returns ExitCode
+	let fromLiteral = reassignReturn(5.0)
+	let fromCall = reassignReturn(makeThirty())
+	var v = 100.0
+	reassignVoid(v)
+	print("{fromLiteral}\n")
+	print("{fromCall}\n")
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6.0
+31.0
+150.0
+
+```
+
+<!-- test: pass-by-reference.enum-float-backed-ref -->
+```maxon
+
+enum Ratio
+	half = 0.5
+	quarter = 0.25
+end 'Ratio'
+
+function switchRatio(r Ratio)
+	r = Ratio.quarter
+end 'switchRatio'
+
+function main() returns ExitCode
+	var r = Ratio.half
+	switchRatio(r)
+	if r == Ratio.quarter 'changed'
+		return 1
+	end 'changed'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+

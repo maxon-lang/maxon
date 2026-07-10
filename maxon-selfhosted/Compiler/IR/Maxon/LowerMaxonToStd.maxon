@@ -235,25 +235,30 @@ function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule, project
 	for _ in 0 upto nextSlot 'fill'
 		result.push(MaxonType.integer)
 	end 'fill'
-	// C1.d: seed interface-typed parameter slots from `maxonParamTypes`
-	// so `function f(g Greeter)`'s slot 0 is recognized as a fat-pointer
-	// by `extendSlotsForInterfaceWitnesses`. Without this, parameter
-	// slots fall through to the integer filler and the witness-companion
-	// slot is never allocated — a downstream varLoad of `g` would then
-	// hit the no-companion panic. Restricted to interface arms only so
-	// no existing pass (InjectDrops keys off `typeParameter`) inherits a
-	// new behavior for non-interface params.
+	// C1.d: seed interface- and float-typed parameter slots from `maxonParamTypes`.
+	// Interface params must have their slot recognized as a fat-pointer by
+	// `extendSlotsForInterfaceWitnesses` (otherwise the witness-companion slot is
+	// never allocated and a downstream varLoad hits the no-companion panic).
+	// Float-class params (`float`, a `Float` typealias, a float-backed enum) must
+	// have their slot recorded as the real float type so the by-reference
+	// write-back (`emitByRefParamStore`) stores THROUGH the incoming pointer with
+	// the correct f64 register class and an int-literal assignment widens int->float
+	// — the default integer filler would emit a GP store of an XMM value and skip
+	// the siToFp widening. `upgradeSlotTypeIfDropTracked` (varLoad) already records
+	// heap-managed param slots, and integer-class params match the filler, so those
+	// need no explicit seeding here. typeParameter params are DELIBERATELY left as
+	// the filler so InjectDrops does not treat the slot as generic.
 	// slot<->abi decoupling: maxonParamTypes is the ABI vector indexed by ABI
-	// index, but `result` is indexed by SCOPE slot id. Translate each interface
-	// param's ABI index to its scope slot via abiParamIndexToScopeSlot before
-	// seeding. Functions with empty maps (closures / synthesized) fall through
-	// the count guard.
+	// index, but `result` is indexed by SCOPE slot id. Translate each param's ABI
+	// index to its scope slot via abiParamIndexToScopeSlot before seeding.
+	// Functions with empty maps (closures / synthesized) fall through the count guard.
 	let paramSlotCount = func.maxonParamTypes.count()
 	for pIdx in 0 upto paramSlotCount 'eachParam'
 		let pType = try func.maxonParamTypes.get(pIdx) otherwise continue
-		if not interfaceTypeIsFat(pType) 'notInterface'
+		let seedSlotType = interfaceTypeIsFat(pType) or stdTypeIsFloat(maxonTypeToStdType(project, ref: pType))
+		if not seedSlotType 'notSeeded'
 			continue
-		end 'notInterface'
+		end 'notSeeded'
 		if pIdx >= func.abiParamIndexToScopeSlot.count() 'noMapEntry'
 			continue
 		end 'noMapEntry'
@@ -2561,24 +2566,26 @@ function maxonTypeIsManagedOrInterface(project Project, t MaxonType) returns boo
 	return maxonTypeIsHeapManaged(project, t: t) or interfaceTypeIsFat(t)
 end 'maxonTypeIsManagedOrInterface'
 
-// Pass-by-reference eligibility: true when a value of type `t` is a plain,
-// non-refcounted scalar with an i64 (GP-register) ABI representation — a
-// `bool` / `integer` / byte, or an int-backed enum or payload-free union (a
-// bare i64 tag), or a numeric ranged typealias. These are the types a
-// reassigned parameter can pass by-reference through the simple redirect
-// (caller passes the slot's address; callee dereferences it), because there
-// is no reference count to maintain across the write-back and the pointer's
-// GP-register ABI matches the callee's param class. Deliberately EXCLUDES:
-//   - managed refs (structs, boxed unions, `string`, `character`) — the
-//     write-back would need refcount integration (deferred);
-//   - `float` and float-backed enums — the callee param would be an f64/XMM
-//     class while the pointer arrives in a GP register (an ABI mismatch that
-//     needs a per-param GP override; deferred);
+// Pass-by-reference eligibility (SCALAR half): true when a value of type `t` is
+// a plain, non-refcounted scalar — a `bool` / `integer` / byte, a `float`, an
+// int- OR float-backed enum, a payload-free union (a bare i64 tag), or a numeric
+// ranged typealias. These are the types a reassigned parameter can pass by-
+// reference through the simple redirect (caller passes the slot's address;
+// callee dereferences it), because there is no reference count to maintain
+// across the write-back. Both i64-class and float-class scalars qualify: a
+// by-reference param always arrives as a POINTER in a GP register regardless of
+// its declared value type, so a float / float-backed param's f64/XMM value ABI
+// is overridden to i64/GP at the callee (see `byRefParamNeedsGpAbiOverride`) —
+// the deref then loads/stores the float through the pointer (`isFloat` on the
+// indirect load/store). Deliberately EXCLUDES:
+//   - managed refs (structs, `String`) — handled by the MANAGED half
+//     (`maxonTypeIsByRefManagedStruct`), which adds the write-back refcount
+//     maintenance;
 //   - fat pointers (interfaces), function values (fn+env pair), and opaque
 //     type parameters — multi-slot / possibly-managed.
-// A reassigned parameter that falls outside this set keeps the existing
-// by-value ABI on BOTH the callee and every call site — consistent, just not
-// propagated to the caller.
+// A reassigned parameter that falls outside eligibility entirely keeps the
+// existing by-value ABI on BOTH the callee and every call site — consistent,
+// just not propagated to the caller.
 function maxonTypeIsByRefScalar(project Project, t MaxonType) returns bool
 	if maxonTypeIsHeapManaged(project, t: t) or maxonTypeIsManagedRef(project, t: t) 'managed'
 		return false
@@ -2586,25 +2593,39 @@ function maxonTypeIsByRefScalar(project Project, t MaxonType) returns bool
 	if interfaceTypeIsFat(t) or isFunctionMaxonType(chaseTypealiasToFunctionType(project, t: t)) 'multiSlot'
 		return false
 	end 'multiSlot'
+	// Every kind reaching here is a non-managed, non-interface, non-function
+	// scalar: `bool`/`integer`/`float`, or a `named` enum / ranged typealias
+	// (int- or float-backed). All are single-value, unmanaged, and by-reference
+	// eligible — float-class ones ride the GP-ABI override at the callee.
 	return match t 'classify'
 		boolean gives true
 		integer gives true
-		float gives false
+		float gives true
 		string gives false
 		character gives false
-		named gives not stdTypeIsFloat(maxonTypeToStdType(project, ref: t))
+		named gives true
 		function to unresolved gives false
 		typeParameter to cstring gives false
 	end 'classify'
 end 'maxonTypeIsByRefScalar'
 
-// Pass-by-reference eligibility for a MANAGED (refcounted) parameter: a plain
-// user-defined heap struct (`type Foo`). Reassigning such a parameter through
-// the by-reference redirect needs manual refcount maintenance on the write-back
-// (release the caller's outgoing struct, retain the incoming one). Restricted
-// to bare `named(id)` struct types — generic instances (Array/Map/... backing a
-// collection), `string`/`character`, boxed unions, and interfaces are excluded
-// (their by-reference reassignment is not yet supported).
+// Pass-by-reference eligibility (MANAGED half): a plain user-defined heap struct
+// (`type Foo`) — including builtin struct types like `String`. Reassigning such a
+// parameter through the by-reference redirect needs refcount maintenance on the
+// write-back (release the caller's OUTGOING struct, take ownership of the INCOMING
+// one — see `emitByRefManagedParamStore`). Restricted to bare `named(id)` struct
+// types registered in `structTypes`.
+//
+// Generic-instance collections (`Array`/`Map`/`Set`/... with ...) and boxed
+// (payload-bearing) unions are DELIBERATELY excluded. They ARE single-pointer
+// refcounted references and their reassignment is a valid ABI shape, but enabling
+// by-reference for them exposes the still-OPEN by-reference-managed-param refcount
+// gaps (ownership audit gap #9 / reconciliation O1: the by-ref deref is classified
+// `borrowed` with no acquire while the write-back's `byRefParamDecrefOld`
+// unconditionally releases the caller slot). The compiler's own collection/union
+// reassignments hit those gaps, regressing the self-hosting fixpoint. Re-enable
+// once #9/O1 lands. Structs stay eligible because the baseline fixpoint is green
+// with them.
 function maxonTypeIsByRefManagedStruct(project Project, t MaxonType) returns bool
 	return match t 'classify'
 		named(id) gives project.structTypes.contains(project.typeNames.get(id))
@@ -2613,8 +2634,27 @@ function maxonTypeIsByRefManagedStruct(project Project, t MaxonType) returns boo
 	end 'classify'
 end 'maxonTypeIsByRefManagedStruct'
 
-// Pass-by-reference eligibility overall: either a plain i64 scalar (simple
-// redirect, no refcount) or a managed heap struct (redirect + manual refcount).
+// Pass-by-reference: true when the by-reference param at ABI index `abiIdx`
+// must have its callee ABI class overridden from its declared float (f64/XMM)
+// representation to i64 (GP). A by-reference param ALWAYS arrives as a POINTER
+// in a GP register — the caller passes a `stackAddr` — so a float / float-backed
+// param whose value ABI would place it in an XMM register would mismatch the GP
+// address the caller hands it. i64-class scalars and managed single-pointer refs
+// already occupy a GP register, so only float-class by-reference params need the
+// rewrite. `byRefScopeSlots` is the function's set of by-reference param scope
+// slots; `abiIdx` is mapped to a scope slot via the function's ABI→scope map so
+// the check stays correct even when interface/function companions shift the ABI
+// vector away from declaration order.
+function byRefParamNeedsGpAbiOverride(func IrFunction, abiIdx VarSlot, declaredStd StdType, byRefScopeSlots ByRefParamSlotSet) returns bool
+	if not stdTypeIsFloat(declaredStd) 'notFloat'
+		return false
+	end 'notFloat'
+	return byRefScopeSlots.contains(paramAbiToScopeSlot(func, abiIdx: abiIdx))
+end 'byRefParamNeedsGpAbiOverride'
+
+// Pass-by-reference eligibility overall: either a plain scalar (simple redirect,
+// no refcount — includes float via the callee GP-ABI override) or a managed heap
+// struct (redirect + write-back refcount maintenance).
 function maxonTypeIsByRefEligible(project Project, t MaxonType) returns bool
 	return maxonTypeIsByRefScalar(project, t: t) or maxonTypeIsByRefManagedStruct(project, t: t)
 end 'maxonTypeIsByRefEligible'
@@ -3101,9 +3141,10 @@ type MaxonToStdLowering
 	// Pass-by-reference: whole-module `"funcName::paramIndex"` set of parameters
 	// that actually use the by-reference ABI — the subset of `reassignedParams`
 	// whose parameter is by-reference ELIGIBLE (`maxonTypeIsByRefEligible`): either
-	// an i64 scalar (`maxonTypeIsByRefScalar` — simple pointer redirect, no refcount)
-	// OR a managed heap struct (`maxonTypeIsByRefManagedStruct` — pointer redirect
-	// plus manual decref-old / incref-new on the write-back). Keyed on the CALLEE's
+	// a scalar (`maxonTypeIsByRefScalar` — simple pointer redirect, no refcount;
+	// float-class scalars ride the callee GP-ABI override) OR a managed heap struct
+	// (`maxonTypeIsByRefManagedStruct` — pointer redirect plus manual decref-old /
+	// incref-new on the write-back). Keyed on the CALLEE's
 	// own slot type (a single source of truth so the callee-side redirect and the
 	// caller-side address passing can never disagree about a parameter's ABI). `self`
 	// is excluded. Computed once at the top of `lower()`; never reset.
@@ -3550,9 +3591,21 @@ type MaxonToStdLowering
 				witnessConstraints = collectFunctionWitnessConstraints(self.project, func: func, maxonModule: self.maxonModule)
 				constructLayoutGids = collectFunctionConstructLayoutGids(self.project, func: func, maxonModule: self.maxonModule)
 			end 'collectConstraints'
+			// Pass-by-reference: a by-reference param arrives as a GP-register
+			// pointer, so a float-class by-reference param's callee ABI is
+			// overridden f64 -> i64 (see `byRefParamNeedsGpAbiOverride`). The
+			// by-reference scope-slot set is derived from the same whole-module
+			// `byRefParamKeys` the caller-side address passing consults, so both
+			// sides agree on which params are pointers.
+			let byRefScopeSlots = self.buildByRefParamSlots(func)
 			var stdParams = StdTypeArray.create()
-			for paramType in func.maxonParamTypes 'eachParam'
-				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
+			for abiIdx in 0 upto func.maxonParamTypes.count() 'eachParam'
+				let paramType = try func.maxonParamTypes.get(abiIdx) otherwise MaxonType.integer
+				var stdType = maxonTypeToStdType(self.project, ref: paramType)
+				if byRefParamNeedsGpAbiOverride(func, abiIdx: abiIdx, declaredStd: stdType, byRefScopeSlots: byRefScopeSlots) 'gpAbiOverride'
+					stdType = StdType.i64
+				end 'gpAbiOverride'
+				stdParams.push(stdType)
 			end 'eachParam'
 			// Phase 11.4 closure-inheritance: lifted closures (`_$closure_N`)
 			// that inherit implicit args from a generic enclosing extension
@@ -3761,7 +3814,14 @@ type MaxonToStdLowering
 			end 'stampLayout'
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
-				self.setValueType(pIdx, t: pType)
+				// Pass-by-reference: a float-class by-reference param's SSA value is
+				// the incoming GP pointer (its callee ABI was overridden f64 -> i64),
+				// so seed it as `integer` — otherwise the deref's address operand would
+				// be typed float and mis-allocated to an XMM register. Managed-ref and
+				// i64-scalar by-reference params already carry an i64 value type.
+				let seedIsGpPointer = byRefParamNeedsGpAbiOverride(srcFunc, abiIdx: pIdx, declaredStd: maxonTypeToStdType(self.project, ref: pType), byRefScopeSlots: self.byRefParamSlots)
+				let seedType = MaxonType.integer if seedIsGpPointer else pType
+				self.setValueType(pIdx, t: seedType)
 				// Param companion pairing. After buildAbiParamMaps, maxonParamTypes is the
 				// ABI vector with each companion inserted immediately after its param, so
 				// pIdx / pIdx+1 here are ABI indices (== ValueIds, since ValueIds restart
@@ -5425,10 +5485,11 @@ type MaxonToStdLowering
 		// incoming pointer (the promoted param slot permanently holds it) so the
 		// reassignment is visible to the caller. The slot is never overwritten
 		// with the value — it stays the pointer — so every read and write
-		// dereferences it. A managed struct additionally needs the caller's
-		// OUTGOING struct released (see emitByRefManagedParamStore); the INCOMING
-		// struct's caller-slot reference is supplied by the late refcount inserter,
-		// which drives the storeIndirect of a managed value as a managed field store.
+		// dereferences it. A managed struct (including `String`) additionally needs
+		// the caller's OUTGOING value released (see emitByRefManagedParamStore); the
+		// INCOMING value's caller-slot reference is supplied by the late refcount
+		// inserter, which drives the storeIndirect of a managed value as a managed
+		// field store.
 		if self.byRefParamSlots.contains(slotId) 'byRefStore'
 			if maxonTypeIsByRefManagedStruct(self.project, t: slotType) 'managedByRef'
 				self.emitByRefManagedParamStore(slotId, newValueId: widenedValueId, dstBlock: dstBlock)
@@ -5647,11 +5708,12 @@ type MaxonToStdLowering
 		// Pass-by-reference (read side): a by-reference param's slot permanently
 		// holds the incoming pointer P, so the loaded value is `*P`. Dereference
 		// through a `loadIndirect` rather than reading the slot (which would
-		// yield P itself). Scalars carry no interface/closure companion, so the
-		// pairing logic below does not apply — return early. A managed struct
-		// dereference is a BORROW of the caller's value (owned by the caller's
-		// slot), so classify it borrowed to keep the refcount inserter from
-		// dropping it.
+		// yield P itself). A float-class scalar reads back through the same pointer
+		// with the `isFloat` flag set. Scalars carry no interface/closure companion,
+		// so the pairing logic below does not apply — return early. A managed struct
+		// (including `String`) dereference is a BORROW of the caller's value (owned by
+		// the caller's slot), so classify it borrowed to keep the refcount inserter
+		// from dropping it.
 		if self.byRefParamSlots.contains(slotId) 'byRefLoad'
 			let ptrId = self.emitLoadByRefParamPointer(slotId, dstBlock: dstBlock)
 			let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
@@ -10260,15 +10322,22 @@ type MaxonToStdLowering
 	//   - Otherwise the argument is an r-value (literal, expression, call
 	//     result, field load) with no backing slot: materialize a fresh
 	//     scratch slot below so the callee still receives a valid address.
+	// Pass-by-reference: emit `stackAddr slotId` into a fresh i64 SSA value naming
+	// the scope slot's address, which a by-reference argument passes so the callee
+	// writes into the caller's storage. Pins the slot in the stack frame.
+	function emitSlotStackAddr(slotId VarSlot, dstBlock IrBlock) returns ValueId
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: slotId)))
+		self.setValueType(addrId, t: MaxonType.integer)
+		return addrId
+	end 'emitSlotStackAddr'
+
 	function byRefArgAddress(arg ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
 		if let sourceSlot = try self.argNameToSourceSlot.get(String.from(arg)) 'haveSlot'
 			if self.byRefParamSlots.contains(sourceSlot) 'forwardPtr'
 				return self.emitLoadByRefParamPointer(sourceSlot, dstBlock: dstBlock)
 			end 'forwardPtr'
-			let addrId = allocValueId(self.funcIdRef)
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: sourceSlot)))
-			self.setValueType(addrId, t: MaxonType.integer)
-			return addrId
+			return self.emitSlotStackAddr(sourceSlot, dstBlock: dstBlock)
 		end 'haveSlot'
 		// R-value argument (literal, arithmetic/comparison expression, call
 		// result, field load — anything without a caller-visible backing slot)
@@ -10290,11 +10359,22 @@ type MaxonToStdLowering
 		// not zero-init'd — see `allocByRefScratchSlot`).
 		let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: range, dstBlock: dstBlock)
 		let scratchSlot = self.allocByRefScratchSlot()
+		// A float-class r-value spills through the indirect XMM store (through the
+		// scratch slot's address) rather than a GP `storeSlot`. The scratch slot is
+		// unnamed (not in `slotMaxonTypes`) and — for a call-result r-value — its
+		// float-ness is NOT locally inferable by mem2reg (the callee's return type
+		// lives in another compilation chunk), so the `slotIsFloat`-driven slot-op
+		// rewrite cannot see it. Storing through the address with `isFloat` keeps the
+		// f64 in an XMM register regardless. Non-float scalars and managed refs keep
+		// the plain `storeSlot` (the managed case relies on it for the scratch slot's
+		// scope-exit drop tracking — see the ownership note above).
+		if stdTypeIsFloat(maxonTypeToStdType(self.project, ref: paramType)) 'floatRvalue'
+			let floatAddrId = self.emitSlotStackAddr(scratchSlot, dstBlock: dstBlock)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(floatAddrId, offset: 0, valueId: coercedId, width: StoreWidth.qword, isFloat: true)))
+			return floatAddrId
+		end 'floatRvalue'
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(scratchSlot, valueId: coercedId)))
-		let addrId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: scratchSlot)))
-		self.setValueType(addrId, t: MaxonType.integer)
-		return addrId
+		return self.emitSlotStackAddr(scratchSlot, dstBlock: dstBlock)
 	end 'byRefArgAddress'
 
 	// Pass-by-reference: reserve a fresh scope slot to back an r-value

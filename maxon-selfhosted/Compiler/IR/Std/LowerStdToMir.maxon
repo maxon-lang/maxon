@@ -69,9 +69,16 @@ export type StdToMirLowering
 	// that need to mint extra ValueIds for the descriptorField/indirectCall
 	// pair.
 	var nextValueIdRef as ValueIdRef
+	// Pass-by-reference / float codegen: the current function's per-slot float
+	// classification, recomputed FRESH from the post-inline IR at the top of every
+	// `lowerFunction()` (see `computeSlotFloatFlags`). A NON-promoted (address-
+	// taken) float slot's `memref` load/store is lowered through the indirect XMM
+	// path so the f64 value keeps its register class — the GP-only `movSlot`/
+	// `loadSlot` ops would store an XMM value via a GP register.
+	var currentSlotIsFloat as BoolArray
 
 	export static function create(stdModule StdModule) returns StdToMirLowering
-		return Self{stdModule: stdModule, mirModule: MirModule.create(), nextValueIdRef: ValueIdRef.create(0)}
+		return Self{stdModule: stdModule, mirModule: MirModule.create(), nextValueIdRef: ValueIdRef.create(0), currentSlotIsFloat: BoolArray.create()}
 	end 'create'
 
 	// Whole-module setup phase. Clones every StdModule block 1:1 into
@@ -108,6 +115,13 @@ export type StdToMirLowering
 		// colliding with the existing op definitions.
 		let maxFuncId = scanMaxValueId(srcFunc, module: self.stdModule)
 		self.nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
+
+		// Pass-by-reference / float codegen: recompute this function's per-slot
+		// float classification from its CURRENT (post-inline) IR so
+		// `convertStdMemoryOp` can route a non-promoted float slot's load/store
+		// through the indirect XMM path. Recomputed here rather than persisted from
+		// mem2reg because inlining remaps slots and would stale a persisted map.
+		self.currentSlotIsFloat = computeSlotFloatFlags(srcFunc, module: self.stdModule)
 
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in stdModule.blocks")
@@ -251,10 +265,46 @@ export type StdToMirLowering
 
 	function convertStdMemoryOp(memOp StdMemoryOp, dstBlock IrBlock)
 		match memOp 'dispatch'
-			storeSlot(slotId, valueId) then self.mirModule.appendOp(dstBlock, op: MirOp.storeSlot(slotId, valueId: valueId))
-			loadSlot(resultId, slotId) then self.mirModule.appendOp(dstBlock, op: MirOp.loadSlot(resultId, slotId: slotId))
+			storeSlot(slotId, valueId) then self.convertStoreSlot(slotId, valueId: valueId, dstBlock: dstBlock)
+			loadSlot(resultId, slotId) then self.convertLoadSlot(resultId, slotId: slotId, dstBlock: dstBlock)
 		end 'dispatch'
 	end 'convertStdMemoryOp'
+
+	// True when scope slot `slotId` holds an f64 value, per `currentSlotIsFloat`
+	// (recomputed fresh for this function by `computeSlotFloatFlags`). An
+	// out-of-range id reports false, preserving the plain GP slot path.
+	function slotHoldsFloat(slotId VarSlot) returns bool
+		if slotId >= self.currentSlotIsFloat.count() 'oob'
+			return false
+		end 'oob'
+		return try self.currentSlotIsFloat.get(slotId) otherwise false
+	end 'slotHoldsFloat'
+
+	// Lower `memref.storeSlot`. A GP slot uses the direct `movSlot`; a float slot
+	// is routed through the indirect XMM store (`stackSlotAddr` + `store` with
+	// `isFloat`) so the f64 value keeps its XMM register class — the GP-only
+	// `movSlot` would otherwise store an XMM value through a GP register.
+	function convertStoreSlot(slotId VarSlot, valueId ValueId, dstBlock IrBlock)
+		if not self.slotHoldsFloat(slotId) 'gpSlot'
+			self.mirModule.appendOp(dstBlock, op: MirOp.storeSlot(slotId, valueId: valueId))
+			return
+		end 'gpSlot'
+		let addrId = allocValueId(self.nextValueIdRef)
+		self.mirModule.appendOp(dstBlock, op: MirOp.stackSlotAddr(addrId, slotId: slotId))
+		self.mirModule.appendOp(dstBlock, op: MirOp.store(valueId, baseId: addrId, offset: 0, width: StoreWidth.qword, isFloat: true))
+	end 'convertStoreSlot'
+
+	// Lower `memref.loadSlot`, mirroring `convertStoreSlot`: a float slot reads
+	// back through the indirect XMM load so the result lands in an XMM register.
+	function convertLoadSlot(resultId ValueId, slotId VarSlot, dstBlock IrBlock)
+		if not self.slotHoldsFloat(slotId) 'gpSlot'
+			self.mirModule.appendOp(dstBlock, op: MirOp.loadSlot(resultId, slotId: slotId))
+			return
+		end 'gpSlot'
+		let addrId = allocValueId(self.nextValueIdRef)
+		self.mirModule.appendOp(dstBlock, op: MirOp.stackSlotAddr(addrId, slotId: slotId))
+		self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: true))
+	end 'convertLoadSlot'
 
 	// ============================================================
 	// StdSystemOp conversion
