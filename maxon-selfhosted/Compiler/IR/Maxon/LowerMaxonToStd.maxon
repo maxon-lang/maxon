@@ -11980,10 +11980,15 @@ type MaxonToStdLowering
 		// default-constructed array). The emitted load feeds the same
 		// `loadFeedsOnlyDecrefOldHelper` exclusion below, so the inserter's
 		// own overwrite proofs stand down for this store.
-		let reassignsManagedField = not isInit and (maxonTypeIsHeapManaged(self.project, t: resolvedFieldType) or self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName))
+		// `fieldReassignReleasesManagedOccupant` resolves the field type through any
+		// member/per-instance typealias (e.g. `args as Blk.NumArray` where `NumArray =
+		// Array with Num` is a member typealias) before the heap-managed classification —
+		// the raw alias name is not in `structTypes`, so a bare `maxonTypeIsHeapManaged`
+		// misses it and the managed-container field skips its decref-old on reassign,
+		// orphaning the overwritten occupant (the member-typealias field-reassign leak).
+		let reassignsManagedField = not isInit and self.fieldReassignReleasesManagedOccupant(resolvedFieldType, enclosingStructName: hit.structName)
 		if reassignsManagedField or (isInit and self.maxonTypeResolvesToManagedBacking(hit.fieldType, enclosingStructName: hit.structName)) 'synthOverwrite'
-			let oldId = self.emitLoadFieldI64(receiverId, offset: hit.offset, dstBlock: dstBlock)
-			self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock, kind: RcOpKind.fieldOverwriteDecrefOld)
+			self.emitFieldOverwriteDecrefOld(receiverId, offset: hit.offset, dstBlock: dstBlock)
 		end 'synthOverwrite'
 		// Refcount-insertion: lowering no longer emits the field's RAII maintenance
 		// (incref-new / load-old + decref-old). A managed field store survives
@@ -12019,6 +12024,30 @@ type MaxonToStdLowering
 		let baseName = self.fieldBackingBaseName(fieldType, enclosingStructName: enclosingStructName)
 		return baseName == "__ManagedMemory" or baseName == "__ManagedList"
 	end 'maxonTypeResolvesToManagedBacking'
+
+	// True iff reassigning this field (a plain `obj.field = v` / `self.field = v`,
+	// NOT a struct-literal initializer) releases an owned managed occupant, so the
+	// lowering must emit a load-old + decref-old before the store. Resolves the field
+	// type through any member/per-instance typealias first (the raw alias name is not
+	// in `structTypes`, so a bare `maxonTypeIsHeapManaged` misses an alias-declared
+	// managed field and the reassign orphans the overwritten occupant); the managed-
+	// backing chase catches `__ManagedMemory`/`__ManagedList` fields declared via an
+	// inner alias. Shared by `lowerFieldStore` and `lowerSelfFieldStore` so the two
+	// paths make the identical decision.
+	function fieldReassignReleasesManagedOccupant(fieldType MaxonType, enclosingStructName String) returns bool
+		let classifyFieldType = resolveFieldTypeForClassify(self.project, fieldType: fieldType, enclosingTypeName: enclosingStructName)
+		return maxonTypeIsHeapManaged(self.project, t: classifyFieldType) or self.maxonTypeResolvesToManagedBacking(fieldType, enclosingStructName: enclosingStructName)
+	end 'fieldReassignReleasesManagedOccupant'
+
+	// Emit the load-old + decref-old that releases a managed field's prior occupant
+	// before an overwriting store. The emitted load feeds DIRECTLY into the decref
+	// helper so the inserter's `loadFeedsOnlyDecrefOldHelper` recognizes the shape and
+	// stands its own overwrite decref-old down (no double-release). Shared by both
+	// field-store lowerers.
+	function emitFieldOverwriteDecrefOld(receiverId ValueId, offset FieldOffset, dstBlock IrBlock)
+		let oldId = self.emitLoadFieldI64(receiverId, offset: offset, dstBlock: dstBlock)
+		self.emitMmRefcountCall(oldId, callee: "__mm_decref_maybenull_helper", dstBlock: dstBlock, kind: RcOpKind.fieldOverwriteDecrefOld)
+	end 'emitFieldOverwriteDecrefOld'
 
 	// Emit a fat-pointer store into an interface-typed struct field. The
 	// data half goes at `offset`, the witness half at `offset + 8`. When
@@ -12111,6 +12140,15 @@ type MaxonToStdLowering
 		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
 		let fieldWidth = storeWidthOfStdType(fieldStdType)
 		let isFloat = stdTypeIsFloat(fieldStdType)
+		// A `self.field = v` store writes a field of an already-constructed object, so
+		// the slot holds a real prior occupant the object owns. Mirror `lowerFieldStore`'s
+		// non-init reassign path: release the overwritten managed occupant here, where the
+		// field's DECLARED type is known — otherwise the prior value leaks (the
+		// self-field-reassign analogue of the `obj.field = v` leak). A self-field store is
+		// never a struct-literal initializer, so there is no `isInit` case to guard.
+		if self.fieldReassignReleasesManagedOccupant(hit.fieldType, enclosingStructName: hit.structName) 'managedReassign'
+			self.emitFieldOverwriteDecrefOld(selfId, offset: hit.offset, dstBlock: dstBlock)
+		end 'managedReassign'
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: hit.offset, valueId: self.resolveName(value), width: fieldWidth, isFloat: isFloat)))
 	end 'lowerSelfFieldStore'
 
