@@ -3318,6 +3318,14 @@ let SubpResOffStderrLen = 0x28
 let SubpResOffDurationMs = 0x30
 let SubpResultStructSize = 0x40
 
+// I/O buffer sizes for the streaming pipe path. The CreateNamedPipeW in/out
+// kernel buffers are 64 KB; the per-read drain chunk (both the __slab_alloc and
+// the overlapped-ReadFile length) is 4 KB, and those two MUST match — the chunk
+// is allocated at SubpReadChunkSize and every overlapped read requests exactly
+// that many bytes into it.
+let SubpPipeBufferSize = 0x10000  // CreateNamedPipeW nInBufferSize/nOutBufferSize (64 KB)
+let SubpReadChunkSize = 4096  // per-iteration drain chunk: __slab_alloc size + overlapped-read length
+
 // Top-level driver: emit every hand-rolled `maxon_subprocess_*` runtime function.
 // Added incrementally — the synchronous collect path first, then async, then the
 // streaming API. Functions not yet emitted here fall through to their runtime.std
@@ -5311,7 +5319,7 @@ function emitX64SubprocessCreateOverlappedPipe(code ByteArray, relocations Reloc
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rdx)  // openMode
 	code.append(b"\x4d\x31\xc0")  // xor r8, r8 (pipeMode = 0)
 	helperMovRegImm(code, dest: X64Register.r9, value: 1)  // nMaxInstances
-	helperMovRegImm(code, dest: X64Register.rax, value: 0x10000)
+	helperMovRegImm(code, dest: X64Register.rax, value: SubpPipeBufferSize)
 	emitMovRspOffsetReg(code, offset: 0x20, srcReg: X64Register.rax)  // nOutBufferSize
 	emitMovRspOffsetReg(code, offset: 0x28, srcReg: X64Register.rax)  // nInBufferSize
 	helperMovRegImm(code, dest: X64Register.rax, value: 0)
@@ -5546,8 +5554,8 @@ function emitX64SubprocessReadLineInner(code ByteArray, callFixups CallFixupArra
 	helperMovRegImm(code, dest: X64Register.rax, value: 0)
 	helperStoreSlot(code, slotIndex: 10, src: X64Register.rax)  // len
 	helperStoreSlot(code, slotIndex: 13, src: X64Register.rax)  // chunk buf = 0 (so an oom before the chunk alloc lands doesn't __slab_free garbage)
-	// chunk buf = __slab_alloc(4096).
-	helperMovRegImm(code, dest: X64Register.rcx, value: 4096)
+	// chunk buf = __slab_alloc(SubpReadChunkSize).
+	helperMovRegImm(code, dest: X64Register.rcx, value: SubpReadChunkSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 12)  // jz oom
@@ -5624,13 +5632,13 @@ function emitX64SubprocessReadLineInner(code ByteArray, callFixups CallFixupArra
 	emitCmpRegRegOp(code, lhs: X64Register.rcx, rhs: X64Register.rax)  // cmp len, maxBytes
 	helperEmitCondJump(code, state: state, opcode: 0x83, targetBlock: 10)  // jae finish (len >= maxBytes)
 	helperMarkBlock(state, code: code, blockId: 13)  // rf_read
-	// nRead = maxon_pipe_overlapped_read(hRead, chunkBuf, 4096). Overlapped ReadFile
+	// nRead = maxon_pipe_overlapped_read(hRead, chunkBuf, SubpReadChunkSize). Overlapped ReadFile
 	// that YIELDS the green thread on ERROR_IO_PENDING instead of blocking the
 	// scheduler M — the streaming-drain deadlock fix. Returns bytesRead (>0), 0 on
 	// clean EOF, or -1 on error; both non-positive results terminate the read loop.
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)  // hRead
 	helperLoadSlot(code, slotIndex: 13, dest: X64Register.rdx)  // chunk buf
-	helperMovRegImm(code, dest: X64Register.rax, value: 4096)
+	helperMovRegImm(code, dest: X64Register.rax, value: SubpReadChunkSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "maxon_pipe_overlapped_read")  // r8 = bytesRead
 	emitMovRegRegOp(code, dest: X64Register.rax, src: X64Register.r8)
 	helperStoreSlot(code, slotIndex: 14, src: X64Register.rax)  // nRead
@@ -7472,14 +7480,6 @@ function emitX64RtOsLockRelease(code ByteArray, relocations RelocationArray, rda
 	helperEpilogue(code)
 end 'emitX64RtOsLockRelease'
 
-// __gt_process_pending_waiter(): handle a waiter a just-completed GT deferred into
-// `P.pendingWaiter`. A completing GT can't context-switch directly to its waiter —
-// the waiter may be suspended on a *different* OS thread, and a cross-thread RSP/RBP
-// swap corrupts both stacks. Instead the trampoline stashes the waiter and switches
-// to its own P's mainThread; the scheduler then calls this from each resume point.
-// Regular-GT waiters are marked ready and re-enqueued (so they MIGRATE to whichever
-// worker dequeues them); a parked main-thread waiter (stackBase==0) is left for its
-// own spin-recheck (Step B.4 adds a SetEvent wake). Internal ABI; no args/result.
 // __gt_is_complete(promise=rcx) -> (r8) 1 if the promise's GT reached completed
 // status (GtStatusCompleted), else 0. Non-blocking status peek the parallel spec
 // dispatcher's poll loop uses to find the first-ready drain among N concurrent
@@ -7494,7 +7494,7 @@ function emitX64GtIsComplete(code ByteArray, funcLabelNames StringArray, funcLab
 	var state = Win32HelperState.create(3, outgoingBytes: 0, localBytes: 0)
 	helperPrologue(code, frameSize: 0)
 	helperMarkBlock(state, code: code, blockId: 0)
-	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // r8 = 0 (default: not complete). NOT `code.append(b"M1À")`: that exact 3-byte constant hits a self-hosted rdata dedup bug (the trailing 0xC0 gets UTF-8-re-encoded to 0xC3 0x80 when this backend is compiled by an earlier self-hosted stage), corrupting emitted `xor r8,r8`. Building the mov via helperMovRegImm sidesteps the literal.
+	helperMovRegImm(code, dest: X64Register.r8, value: 0)  // r8 = 0 (default: not complete). NOT `code.append(b"M1À")`: an earlier self-hosted stage miscompiled that byte-string literal in the Parser — decodeStringEscapes iterated the token's UTF-8 bytes, so the trailing 0xC0 was re-encoded as the UTF-8 pair 0xC3 0x80, corrupting the emitted `xor r8,r8`. The Parser root cause is fixed (e27211f88, byte-string Latin-1 decode); this helperMovRegImm form is retained for stage-robustness until that fix propagates through the fixpoint.
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.rcx, disp: GtOffStatus)
 	helperCmpRegImm(code, reg: X64Register.rax, value: GtStatusCompleted)
 	helperEmitCondJump(code, state: state, opcode: 0x85, targetBlock: 2)  // jne done -> r8 stays 0
@@ -7505,6 +7505,14 @@ function emitX64GtIsComplete(code ByteArray, funcLabelNames StringArray, funcLab
 	helperEpilogue(code)
 end 'emitX64GtIsComplete'
 
+// __gt_process_pending_waiter(): handle a waiter a just-completed GT deferred into
+// `P.pendingWaiter`. A completing GT can't context-switch directly to its waiter —
+// the waiter may be suspended on a *different* OS thread, and a cross-thread RSP/RBP
+// swap corrupts both stacks. Instead the trampoline stashes the waiter and switches
+// to its own P's mainThread; the scheduler then calls this from each resume point.
+// Regular-GT waiters are marked ready and re-enqueued (so they MIGRATE to whichever
+// worker dequeues them); a parked main-thread waiter (stackBase==0) is left for its
+// own spin-recheck (Step B.4 adds a SetEvent wake). Internal ABI; no args/result.
 function emitX64GtProcessPendingWaiter(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_process_pending_waiter", offset: code.count())
 	// localBytes 16 → slot 0 holds `w` across the ioYielded spin + the __gt_enqueue BL.
@@ -8259,6 +8267,12 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	// field stores below still overwrite the ones that need concrete values.
 	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rdi)  // gt
 	code.append(b"\x48\x31\xc0")  // xor rax, rax
+	if GtStructSize mod 8 != 0 'sizeGuard'
+		// rep stosq zeroes GtStructSize/8 whole qwords; a non-8-multiple size would
+		// truncate the count and leave a dirty tail — the exact latent-garbage class
+		// this zeroing exists to kill. Fail loudly at emit time instead.
+		panic("emitX64GtSpawn: GtStructSize must be a multiple of 8 for rep stosq whole-struct zeroing")
+	end 'sizeGuard'
 	helperMovRegImm(code, dest: X64Register.rcx, value: GtStructSize / 8)  // qword count
 	code.append(b"\xf3\x48\xab")  // rep stosq
 

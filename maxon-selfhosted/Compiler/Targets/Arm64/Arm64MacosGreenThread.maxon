@@ -2343,13 +2343,15 @@ end 'arm64GtSemaWakeup'
 function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixups Arm64CallFixupArray, rdataRelocs RdataRelocationArray, adrFixups Arm64AdrFixupArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
 	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_spawn", offset: code.count())
 	let frameSize = 0x50
-	var state = Arm64MacosGtState.create(4)
+	var state = Arm64MacosGtState.create(6)
 	arm64GtPrologue(code, frameSize: frameSize, argCount: 3)
 
 	let allocNew = 0
 	let haveGt = 1
 	let zeroLoop = 2
 	let zeroDone = 3
+	let structZeroLoop = 4
+	let structZeroDone = 5
 
 	// Lazy one-time scheduler init.
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_init")
@@ -2373,6 +2375,32 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtMarkBlock(state, code: code, blockId: haveGt)
 	arm64GtStore(code, disp: 0x28, src: 0)  // gt
 
+	// Zero the whole GreenThread struct (parity with x64 c9dac82f6 / emitX64GtSpawn).
+	// Both allocation paths leave it dirty: a fresh __slab_alloc region is
+	// uninitialized (unlike C#'s HEAP_ZERO_MEMORY alloc) and a recycled free-list slot
+	// carries its previous tenant's fields. Clearing the whole struct — not just
+	// status/result/waiter/next/threw/cancel below — also zeroes cancel_flag (0x78),
+	// the io_* result/handle words, and the fault-redirect fields, killing the latent
+	// garbage class that made pipe reads spuriously abort. The concrete field stores
+	// below overwrite the ones that need real values. UNTESTED ON TARGET (no arm64 host
+	// available); byte-for-byte mirrors the x64 whole-struct clear.
+	if GtGtStructSize mod 8 != 0 'sizeGuard'
+		// The str/add-8 loop clears whole qwords; a non-8-multiple size would leave a
+		// dirty tail or overrun. Fail loudly at emit time.
+		panic("emitArm64GtSpawn: GtGtStructSize must be a multiple of 8 for the qword-loop whole-struct zeroing")
+	end 'sizeGuard'
+	// x12 = cursor (gt), x13 = gt + GtGtStructSize (end).
+	arm64GtLoad(code, dest: 12, disp: 0x28)  // gt
+	arm64EmitMovImm(code, rd: 13, value: GtGtStructSize)
+	arm64GtAlu(code, opcode: GtAluAdd, rd: 13, rn: 12, rm: 13)  // end = gt + size
+	arm64GtMarkBlock(state, code: code, blockId: structZeroLoop)
+	arm64EmitCmp(code, rn: 12, rm: 13)
+	arm64GtCondBranch(code, state: state, cond: GtCondHs, targetBlock: structZeroDone)
+	arm64EmitStrRegOffset(code, rt: GtRegXzr, baseReg: 12, offset: 0)
+	arm64EmitAddImm(code, rd: 12, rn: 12, imm12: 8)
+	arm64GtBranch(code, state: state, targetBlock: structZeroLoop)
+	arm64GtMarkBlock(state, code: code, blockId: structZeroDone)
+
 	// stack_base = mmap(NULL, GtStackSize, RW, ANON|PRIVATE, -1, 0).
 	arm64GtMmapAnon(code, relocations: relocations, length: GtStackSize)
 	arm64GtStore(code, disp: 0x30, src: 0)  // stack_base
@@ -2388,13 +2416,8 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffFuncPtr, src: 0)
 	arm64GtReloadArg(code, dest: 0, argIndex: 2)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffArgBuf, src: 0)
-	// status=ready(0), result=0, waiter=0, next=0, threw=0, cancel=0.
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffStatus, src: GtRegXzr)
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffResult, src: GtRegXzr)
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffWaiter, src: GtRegXzr)
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffNext, src: GtRegXzr)
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffThrew, src: GtRegXzr)
-	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffCancelFlag, src: GtRegXzr)
+	// status(ready=0), result, waiter, next, threw and cancel_flag are already zero
+	// from the whole-struct clear above; only ioYielded needs a concrete non-zero value.
 	// ioYielded = 1 (safe to enqueue — no pending switch on a new GT).
 	arm64EmitMovImm(code, rd: 0, value: 1)
 	arm64GtStoreField(code, baseReg: 9, disp: GtGtOffIoYielded, src: 0)

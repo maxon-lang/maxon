@@ -10897,9 +10897,11 @@ type MaxonToStdLowering
 						self.lowerStructBackedEnumRawValue(result, receiverId: accessorReceiverId, enumType: enumType, backingStructName: structBackingName, dstBlock: dstBlock)
 						return
 					end 'isStructBacked'
-					// int / float / ordinal backings: `accessorReceiverId` already
-					// carries the raw ordinal bits (direct for a plain enum, or the
-					// tag loaded from the box for a boxed union).
+					// int / float / ordinal backings: the receiver's SSA value already
+					// IS the rawValue — the case's backing int/float bit pattern for an
+					// explicitly-backed enum, the ordinal for a plain enum (where
+					// rawValue == ordinal), or the tag loaded from the box for a boxed
+					// union — so `.rawValue` is a pure value-level no-op (alias).
 					self.aliasName(result, toId: accessorReceiverId)
 					return
 				end 'isRaw'

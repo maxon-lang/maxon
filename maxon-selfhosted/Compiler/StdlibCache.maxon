@@ -1408,43 +1408,20 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 		end 'eachParamDefault'
 	end 'eachSig'
 
-	// Cache v70 (Concept C): per-function argument-consume bits. name → BoolArray
-	// (a length-prefixed run of bool bytes). No type-interner ids, so no codec helper
-	// beyond string + bool-byte. Followed by the transparent-wrapper name set.
-	writeDword(buf, value: data.funcParamConsumes.count())
-	for (name, bits) in data.funcParamConsumes 'eachConsume'
-		try writeString(buf, s: name)
-		writeDword(buf, value: bits.count())
-		for b in bits 'eachConsumeBit'
-			writeBoolByte(buf, b: b)
-		end 'eachConsumeBit'
-	end 'eachConsume'
+	// Cache v70 (Concept C): per-function argument-consume bits (see encodeNameBitsMap),
+	// followed by the transparent-wrapper name set.
+	try encodeNameBitsMap(buf, map: data.funcParamConsumes)
 	writeDword(buf, value: data.funcReturnsConsumedArg.count())
 	for wrapperName in data.funcReturnsConsumedArg 'eachWrapper'
 		try writeString(buf, s: wrapperName)
 	end 'eachWrapper'
 
-	// Cache v87 (bug #7): per-function argument-RETAIN bits (same name → BoolArray shape
-	// as the consume bits above).
-	writeDword(buf, value: data.funcRetainsParam.count())
-	for (name, bits) in data.funcRetainsParam 'eachRetain'
-		try writeString(buf, s: name)
-		writeDword(buf, value: bits.count())
-		for b in bits 'eachRetainBit'
-			writeBoolByte(buf, b: b)
-		end 'eachRetainBit'
-	end 'eachRetain'
+	// Cache v87 (bug #7): per-function argument-RETAIN bits (same shape as the consume
+	// bits above).
+	try encodeNameBitsMap(buf, map: data.funcRetainsParam)
 
-	// May-return-arg bits: same name+per-position-bit shape as the consume/retain
-	// blocks above.
-	writeDword(buf, value: data.funcMayReturnArg.count())
-	for (name, bits) in data.funcMayReturnArg 'eachMayReturn'
-		try writeString(buf, s: name)
-		writeDword(buf, value: bits.count())
-		for b in bits 'eachMayReturnBit'
-			writeBoolByte(buf, b: b)
-		end 'eachMayReturnBit'
-	end 'eachMayReturn'
+	// May-return-arg bits (same shape as the consume/retain blocks above).
+	try encodeNameBitsMap(buf, map: data.funcMayReturnArg)
 
 	// Cache v72: return-borrow function-name set (same shape as the wrapper set above).
 	writeDword(buf, value: data.funcReturnsBorrow.count())
@@ -2146,21 +2123,7 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 
 	// Cache v70 (Concept C): argument-consume bits, then the transparent-wrapper
 	// name set. Read in the exact order written above.
-	let consumeCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-	pos = pos + 4
-	for _ in 0 upto consumeCount 'eachConsume'
-		let (consumeName, pC0) = try readString(buf, offset: pos)
-		pos = pC0
-		let bitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-		pos = pos + 4
-		var bits = BoolArray.create()
-		for _ in 0 upto bitCount 'eachConsumeBit'
-			let (b, pC1) = try readBoolByte(buf, offset: pos)
-			pos = pC1
-			bits.push(b)
-		end 'eachConsumeBit'
-		data.funcParamConsumes.upsert(consumeName, value: bits)
-	end 'eachConsume'
+	pos = try decodeNameBitsMap(buf, offset: pos, dest: data.funcParamConsumes)
 	let wrapperCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
 	pos = pos + 4
 	for _ in 0 upto wrapperCount 'eachWrapper'
@@ -2170,38 +2133,10 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 	end 'eachWrapper'
 
 	// Cache v87 (bug #7): argument-RETAIN bits, read in the exact order written above.
-	let retainCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-	pos = pos + 4
-	for _ in 0 upto retainCount 'eachRetain'
-		let (retainName, pR0) = try readString(buf, offset: pos)
-		pos = pR0
-		let retainBitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-		pos = pos + 4
-		var retainBits = BoolArray.create()
-		for _ in 0 upto retainBitCount 'eachRetainBit'
-			let (b, pR1) = try readBoolByte(buf, offset: pos)
-			pos = pR1
-			retainBits.push(b)
-		end 'eachRetainBit'
-		data.funcRetainsParam.upsert(retainName, value: retainBits)
-	end 'eachRetain'
+	pos = try decodeNameBitsMap(buf, offset: pos, dest: data.funcRetainsParam)
 
 	// May-return-arg bits, read in the exact order written above.
-	let mayReturnCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-	pos = pos + 4
-	for _ in 0 upto mayReturnCount 'eachMayReturn'
-		let (mayReturnName, pM0) = try readString(buf, offset: pos)
-		pos = pM0
-		let mayReturnBitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
-		pos = pos + 4
-		var mayReturnBits = BoolArray.create()
-		for _ in 0 upto mayReturnBitCount 'eachMayReturnBit'
-			let (b, pM1) = try readBoolByte(buf, offset: pos)
-			pos = pM1
-			mayReturnBits.push(b)
-		end 'eachMayReturnBit'
-		data.funcMayReturnArg.upsert(mayReturnName, value: mayReturnBits)
-	end 'eachMayReturn'
+	pos = try decodeNameBitsMap(buf, offset: pos, dest: data.funcMayReturnArg)
 
 	// Cache v72: return-borrow function-name set (read in write order).
 	let borrowCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
@@ -2930,38 +2865,19 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 
 	// Cache v70 (Concept C): snapshot the stdlib argument-consume facts so a cached
 	// user build reads the structural per-parameter consume bits (the inserter's
-	// name-free consume signal). Copy each BoolArray by value so the cache owns it.
-	for (name, bits) in project.funcParamConsumes 'copyConsumes'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		data.funcParamConsumes.upsert(name, value: bitsCopy)
-	end 'copyConsumes'
+	// name-free consume signal). copyNameBitsMap clones each BoolArray so the cache owns it.
+	copyNameBitsMap(project.funcParamConsumes, dest: data.funcParamConsumes)
 	for wrapperName in project.funcReturnsConsumedArg 'copyWrappers'
 		data.funcReturnsConsumedArg.insert(wrapperName)
 	end 'copyWrappers'
 
 	// Cache v87 (bug #7): snapshot the stdlib argument-RETAIN facts so a cached user build
 	// sees a retaining stdlib callee's bits (its body is a signature-only stub there).
-	// Copy each BoolArray by value so the cache owns it.
-	for (name, bits) in project.funcRetainsParam 'copyRetains'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		data.funcRetainsParam.upsert(name, value: bitsCopy)
-	end 'copyRetains'
+	copyNameBitsMap(project.funcRetainsParam, dest: data.funcRetainsParam)
 
 	// Snapshot the stdlib may-return-arg facts so a cached user build sees a
 	// passthrough stdlib callee's bits (its body is a signature-only stub there).
-	for (name, bits) in project.funcMayReturnArg 'copyMayReturn'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		data.funcMayReturnArg.upsert(name, value: bitsCopy)
-	end 'copyMayReturn'
+	copyNameBitsMap(project.funcMayReturnArg, dest: data.funcMayReturnArg)
 
 	// Cache v72: snapshot the stdlib's structural return-borrow facts so the user
 	// build restores them (notably the element-loader intrinsics, classified from
@@ -3232,37 +3148,19 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// captured-id translation — names are strings and the payload is a BoolArray of
 	// per-parameter consume bits. The user-pipeline `analyzeParamConsumes` forwards
 	// from these for user functions; the inserter reads them for non-inlined
-	// consuming stdlib callees.
-	for (name, bits) in data.funcParamConsumes 'restoreConsumes'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		project.funcParamConsumes.upsert(name, value: bitsCopy)
-	end 'restoreConsumes'
+	// consuming stdlib callees. copyNameBitsMap clones each BoolArray by value.
+	copyNameBitsMap(data.funcParamConsumes, dest: project.funcParamConsumes)
 	for wrapperName in data.funcReturnsConsumedArg 'restoreWrappers'
 		project.funcReturnsConsumedArg.insert(wrapperName)
 	end 'restoreWrappers'
 
 	// Cache v87 (bug #7): replay the stdlib argument-RETAIN facts so the inserter's
 	// caller-side acquire-and-keep fires for a non-inlined retaining stdlib callee.
-	for (name, bits) in data.funcRetainsParam 'restoreRetains'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		project.funcRetainsParam.upsert(name, value: bitsCopy)
-	end 'restoreRetains'
+	copyNameBitsMap(data.funcRetainsParam, dest: project.funcRetainsParam)
 
 	// Replay the stdlib may-return-arg facts so the inserter's acquire analysis
 	// launders transfers backward through a non-inlined passthrough stdlib callee.
-	for (name, bits) in data.funcMayReturnArg 'restoreMayReturn'
-		var bitsCopy = BoolArray.create()
-		for b in bits 'eachBit'
-			bitsCopy.push(b)
-		end 'eachBit'
-		project.funcMayReturnArg.upsert(name, value: bitsCopy)
-	end 'restoreMayReturn'
+	copyNameBitsMap(data.funcMayReturnArg, dest: project.funcMayReturnArg)
 
 	// Cache v72: replay the stdlib's structural return-borrow facts into the user
 	// project so `analyzeReturnBorrows` / the inserter see a stdlib callee's
@@ -4552,6 +4450,62 @@ function readBoolByte(buf ByteArray, offset ByteOffset) returns (bool, ByteOffse
 	let b = try buf.get(offset) otherwise throw CacheCorruption.invalidEncoding
 	return (b != 0, offset + 1)
 end 'readBoolByte'
+
+// --- name -> BoolArray fact maps ---
+//
+// The persisted `name -> per-ABI-position bits` shape shared by the consume,
+// retain, and may-return-arg fact maps. All three are `Map with (String, BoolArray)`
+// (FuncParamConsumesMap / FuncRetainsParamMap / MayReturnArgMap) and intern to one
+// giid, so a single encode/decode/copy triple serves every one of them. The on-disk
+// form is a dword count followed by per entry: a string name, a dword bit-count, and
+// that many bool bytes.
+typealias NameBitsMap = Map with (String, BoolArray)
+
+function encodeNameBitsMap(buf ByteArray, map NameBitsMap) throws CacheCorruption
+	writeDword(buf, value: map.count())
+	for (name, bits) in map 'eachEntry'
+		try writeString(buf, s: name)
+		writeDword(buf, value: bits.count())
+		for b in bits 'eachBit'
+			writeBoolByte(buf, b: b)
+		end 'eachBit'
+	end 'eachEntry'
+end 'encodeNameBitsMap'
+
+// Decode a map written by encodeNameBitsMap into `dest`, returning the buffer position
+// after it. `dest.upsert` overwrites any prior entry for a name.
+function decodeNameBitsMap(buf ByteArray, offset ByteOffset, dest NameBitsMap) returns ByteOffset throws CacheCorruption
+	var pos = offset
+	let count = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto count 'eachEntry'
+		let (name, pName) = try readString(buf, offset: pos)
+		pos = pName
+		let bitCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+		pos = pos + 4
+		var bits = BoolArray.create()
+		for _ in 0 upto bitCount 'eachBit'
+			let (b, pBit) = try readBoolByte(buf, offset: pos)
+			pos = pBit
+			bits.push(b)
+		end 'eachBit'
+		dest.upsert(name, value: bits)
+	end 'eachEntry'
+	return pos
+end 'decodeNameBitsMap'
+
+// Deep-copy a name -> BoolArray fact map, cloning each BoolArray by value so `dest`
+// owns its bits. Used both to snapshot project facts into the cache and to replay
+// cached facts back into a consumer project. `dest.upsert` overwrites prior entries.
+function copyNameBitsMap(src NameBitsMap, dest NameBitsMap)
+	for (name, bits) in src 'eachEntry'
+		var bitsCopy = BoolArray.create()
+		for b in bits 'eachBit'
+			bitsCopy.push(b)
+		end 'eachBit'
+		dest.upsert(name, value: bitsCopy)
+	end 'eachEntry'
+end 'copyNameBitsMap'
 
 // --- ValueIdArray ---
 

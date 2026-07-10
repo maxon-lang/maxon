@@ -1636,10 +1636,18 @@ func mrt_panic_walk_frames 3 void
     std condBr v27 walk_done compute_offset
 
   block compute_offset:
-    // Compute text_offset = return_addr - text_base
+    // Symbolize return_addr - 1: a return address points to the instruction AFTER
+    // the call, so when that call is a function's final instruction (e.g. a noreturn
+    // panic/throw call) the raw return address lands at the START of the next
+    // function. Biasing by 1 resolves the frame to the calling function. Frame 0 —
+    // the faulting instruction itself — is symbolized WITHOUT this bias by
+    // mrt_fault_backtrace. Mirrors the C# mrt_panic / mrt_fault_backtrace bias.
+    // text_offset = (return_addr - 1) - text_base
     v28 = std loadSlot 6
+    v51 = std constI64 1
+    v52 = std subI64 v28 v51
     v29 = std loadSlot 1
-    v30 = std subI64 v28 v29
+    v30 = std subI64 v52 v29
     std storeSlot 5 v30
 
     // Check if outside .text (negative or beyond code end)

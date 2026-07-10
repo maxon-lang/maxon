@@ -20,6 +20,10 @@
 typealias VisitedSet = Set with GenericInstanceId
 typealias AsciiByte = int(0 to u8.max)
 
+// Bits in a byte — names the round-up divisor when converting a sub-byte-packed
+// element's total bit count to whole bytes (see `elementBufferByteLen`).
+let BitsPerByte = 8
+
 export function buildLayoutDescriptors(project Project, maxonModule MaxonModule, globalData GlobalDataTable)
 	// Pre-intern `Interface with [confArgs]` gids for every conformance
 	// that carries `with` args. The conformance binding implicitly creates
@@ -480,7 +484,8 @@ end 'elementStorageSize'
 export function elementBufferByteLen(count ParsedInt, elementSize ParsedInt) returns ParsedInt
 	if elementSize < 0 'packed'
 		let bits = count * (0 - elementSize)
-		return (bits + 7) shr 3
+		// ceil(bits / 8): round the packed bit count up to whole bytes.
+		return (bits + BitsPerByte - 1) / BitsPerByte
 	end 'packed'
 	return count * elementSize
 end 'elementBufferByteLen'

@@ -589,6 +589,16 @@ function __slab_build_freelist(pageBase MachineWord, slotSize MachineWord, total
 	end 'linkLoop'
 end '__slab_build_freelist'
 
+// Chunk-aligned physical footprint of a span's slot data: ceil(slotSize *
+// totalSlots / 8192) * 8192, matching how __slab_refill_mcache sized the span's
+// chunk run (numChunks = ceil(dataSize / 8192), each chunk 8 KiB). Shared by the
+// scavenger's decommit and the re-back-on-reuse path so the two always agree on
+// exactly how many bytes to hand back / re-commit. `shr 13 / shl 13` is the
+// page-align form (8192 == 1 << 13).
+function __slab_span_footprint(slotSize MachineWord, totalSlots MachineWord) returns MachineWord
+	return ((slotSize * totalSlots + 8191) shr 13) shl 13
+end '__slab_span_footprint'
+
 // Reset a just-reclaimed span's scavenge grace state to ACTIVE and, if the
 // scavenger actually handed its pages back to the OS (DECOMMITTED), re-back and
 // re-zero them and rebuild the intrusive free list before the owning P allocates
@@ -600,7 +610,7 @@ function __slab_reback_span(span MachineWord)
 	if __Internals.loadIndirect(span + 0x48) == SPAN_SCAV_DECOMMITTED 'wasDecommitted'
 		let slotSize = __Internals.loadIndirect(span + 0x08)
 		let totalSlots = __Internals.loadIndirect(span + 0x30)
-		let footprint = ((slotSize * totalSlots + 8191) shr 13) shl 13
+		let footprint = __slab_span_footprint(slotSize, totalSlots: totalSlots)
 		let base = __Internals.loadIndirect(span)
 		__Internals.osRecommitPages(base, size: footprint)
 		__slab_memzero(base, size: footprint)
@@ -851,9 +861,7 @@ function __slab_scavenge()
 				// back to the OS and mark it decommitted until a reuse re-backs it.
 				let slotSize = __Internals.loadIndirect(span + 0x08)
 				let totalSlots = __Internals.loadIndirect(span + 0x30)
-				// Chunk-aligned footprint = ceil(slotSize * totalSlots / 8192) * 8192,
-				// matching how __slab_refill_mcache sized the span's chunk run.
-				let footprint = ((slotSize * totalSlots + 8191) shr 13) shl 13
+				let footprint = __slab_span_footprint(slotSize, totalSlots: totalSlots)
 				let base = __Internals.loadIndirect(span)
 				__Internals.osDecommitPages(base, size: footprint)
 				__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_DECOMMITTED)
@@ -2427,7 +2435,6 @@ end '__slab_free'
 
 		__Internals.storeIndirect(ctl + LEAK_CTL_DUMPING, value: 0)
 	end '__leak_report_dump'
-
 #endif
 
 // Untrack one freed allocation of destructor `dtor` from the per-destructor leak

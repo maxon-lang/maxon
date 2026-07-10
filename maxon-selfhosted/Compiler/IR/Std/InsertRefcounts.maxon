@@ -2604,9 +2604,21 @@ end 'propagateTransferThroughPhiEdges'
 function propagateTransferForPhiEdge(ctx RcContext, cf StdControlOp, transferred BoolArray) returns bool
 	return match cf 'c'
 		br(target, argIds) gives propagatePhiEdgeArgs(ctx, target: target, argIds: argIds, transferred: transferred)
-		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives propagatePhiEdgeArgs(ctx, target: thenTarget, argIds: thenArgIds, transferred: transferred) or propagatePhiEdgeArgs(ctx, target: elseTarget, argIds: elseArgIds, transferred: transferred)
+		condBr(_, thenTarget, thenArgIds, elseTarget, elseArgIds) gives propagateBothPhiEdges(ctx, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, transferred: transferred)
 	end 'c'
 end 'propagateTransferForPhiEdge'
+
+// Propagate transfer BACKWARD across BOTH of a condBr's out-edges. `propagatePhiEdgeArgs`
+// MUTATES `transferred` (it flips bits via `setBoolAt`), so a short-circuiting `or` in
+// the `condBr` arm would skip the else-edge whenever the then-edge flipped a bit in the
+// same pass — correctness then leaned on the outer fixpoint re-running to catch the
+// missed else-edge. Binding both results first propagates BOTH edges every pass (still
+// returns true iff either flipped, to drive that fixpoint).
+function propagateBothPhiEdges(ctx RcContext, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, transferred BoolArray) returns bool
+	let thenFlipped = propagatePhiEdgeArgs(ctx, target: thenTarget, argIds: thenArgIds, transferred: transferred)
+	let elseFlipped = propagatePhiEdgeArgs(ctx, target: elseTarget, argIds: elseArgIds, transferred: transferred)
+	return thenFlipped or elseFlipped
+end 'propagateBothPhiEdges'
 
 // The Nth edge arg feeds the Nth successor block-arg. If that block-arg is
 // transferred, mark the Nth edge arg transferred. Returns true iff a bit newly
