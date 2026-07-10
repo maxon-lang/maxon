@@ -9170,13 +9170,11 @@ function validateDeferredMatchExhaustiveness(project Project, check PendingMatch
 	// (anchored at the arm) instead of reporting a misleading E2026. Mirrors
 	// the inline `validateEnumExhaustiveness` guard.
 	for unknownCheckArm in check.arms 'checkUnknownArm'
-		if not unknownCheckArm.isRange 'isBare'
-			for armCaseName in unknownCheckArm.caseNames 'eachName'
-				if not caseByName.contains(armCaseName) 'unknownCase'
-					return
-				end 'unknownCase'
-			end 'eachName'
-		end 'isBare'
+		for armCaseName in unknownCheckArm.caseNames 'eachName'
+			if not caseByName.contains(armCaseName) 'unknownCase'
+				return
+			end 'unknownCase'
+		end 'eachName'
 	end 'checkUnknownArm'
 	// Build the union of all arm coverage from the ordered `arms` list (the
 	// single source of truth) and report every uncovered case.
@@ -9238,30 +9236,36 @@ function detectDeferredMatchOverlaps(project Project, check PendingMatchExhausti
 end 'detectDeferredMatchOverlaps'
 
 // Insert every case name covered by one replay `arm` into `covered`, expanded
-// against THIS enum's case positions. A bare arm contributes each of its case
-// names that the enum actually declares; a range arm (`loCaseName to|upto
-// hiCaseName`) contributes the ordinal span between its endpoints (`to`
-// inclusive on both ends, `upto` exclusive on the upper; a `max` sentinel runs
-// to the last case). Endpoints / names that don't belong to this enum are
+// against THIS enum's case positions. Every or-alternative the arm listed is
+// applied: each bare case name it declares (that the enum actually has), PLUS
+// each range alternative. Endpoints / names that don't belong to this enum are
 // skipped — `resolveEnumMatchArms` surfaces the canonical unknown-case
 // diagnostic. Shared by the E2026 union build and the per-arm E2027 replay.
 function expandArmCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, arm PendingMatchArm, covered ReferencedNameSet)
-	if not arm.isRange 'isBare'
-		for caseName in arm.caseNames 'eachName'
-			if caseByName.contains(caseName) 'isKnown'
-				covered.insert(caseName)
-			end 'isKnown'
-		end 'eachName'
-		return
-	end 'isBare'
-	let loOrdinalRaw = try caseByName.get(arm.loCaseName) otherwise return
+	for caseName in arm.caseNames 'eachName'
+		if caseByName.contains(caseName) 'isKnown'
+			covered.insert(caseName)
+		end 'isKnown'
+	end 'eachName'
+	for range in arm.ranges 'eachRange'
+		expandRangeArmCoverage(enumCases, caseByName: caseByName, range: range, covered: covered)
+	end 'eachRange'
+end 'expandArmCoverage'
+
+// Insert every case name covered by one range alternative (`loCaseName to|upto
+// hiCaseName`) into `covered`, expanded against THIS enum's case positions
+// (`to` inclusive on both ends, `upto` exclusive on the upper; a `max` sentinel
+// runs to the last case). Endpoints that don't name a case of this enum are
+// skipped.
+function expandRangeArmCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, range PendingMatchRangeArm, covered ReferencedNameSet)
+	let loOrdinalRaw = try caseByName.get(range.loCaseName) otherwise return
 	let loOrdinal = loOrdinalRaw
 	var hiOrdinal = (enumCases.count() - 1) as ParsedInt
-	if not arm.hasMaxSentinel 'lookupHi'
-		let hiOrdinalRaw = try caseByName.get(arm.hiCaseName) otherwise return
+	if not range.hasMaxSentinel 'lookupHi'
+		let hiOrdinalRaw = try caseByName.get(range.hiCaseName) otherwise return
 		hiOrdinal = hiOrdinalRaw
 	end 'lookupHi'
-	let upperInclusive = hiOrdinal if not arm.isUpto else (hiOrdinal - 1)
+	let upperInclusive = hiOrdinal if not range.isUpto else (hiOrdinal - 1)
 	let caseCount = enumCases.count() as ParsedInt
 	var i = loOrdinal
 	while i <= upperInclusive 'each'
@@ -9272,7 +9276,7 @@ function expandArmCoverage(enumCases EnumCaseArray, caseByName CaseIndexMap, arm
 		end 'inBounds'
 		i = i + 1
 	end 'each'
-end 'expandArmCoverage'
+end 'expandRangeArmCoverage'
 
 // `unresolvedAssign` placeholders to their concrete forms, (2) fill any
 // `MaxonType.unresolved` operands left by the parser using a

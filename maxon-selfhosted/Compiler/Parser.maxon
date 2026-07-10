@@ -8792,13 +8792,20 @@ export type Parser
 	// missing-case computation.
 	function collectDeferredArmCoverage(patterns MatchPatternList, coveredCaseNames StringArray, rangeArms PendingMatchRangeArmArray, arms PendingMatchArmArray)
 		let firstPattern = patterns.first()
-		if firstPattern.isEnumRange 'isRange'
-			rangeArms.push(PendingMatchRangeArm.create(firstPattern.loCaseName, hiCaseName: firstPattern.hiCaseName, isUpto: firstPattern.isUpto, hasMaxSentinel: firstPattern.hasMaxSentinel))
-			arms.push(PendingMatchArm.range(firstPattern.loCaseName, hiCaseName: firstPattern.hiCaseName, isUpto: firstPattern.isUpto, hasMaxSentinel: firstPattern.hasMaxSentinel, line: firstPattern.token.line, column: firstPattern.token.column))
-			return
-		end 'isRange'
+		// Walk EVERY or-alternative — a mixed arm (`a or c to d`) contributes both
+		// a bare case and a range, and either can appear in any position. Reading
+		// only the first alternative dropped the rest, corrupting both the E2026
+		// missing-case union (`coveredCaseNames` / `rangeArms`) and the ordered
+		// E2027 replay (`arms`).
 		var armCaseNames = StringArray.create()
+		var armRanges = PendingMatchRangeArmArray.create()
 		for pattern in patterns.patterns 'eachPattern'
+			if pattern.isEnumRange 'isEnumRange'
+				let range = PendingMatchRangeArm.create(pattern.loCaseName, hiCaseName: pattern.hiCaseName, isUpto: pattern.isUpto, hasMaxSentinel: pattern.hasMaxSentinel)
+				rangeArms.push(range)
+				armRanges.push(range)
+				continue
+			end 'isEnumRange'
 			let isEnumCasePattern = match pattern.kind 'k'
 				defaultArm gives false
 				intLiteral gives false
@@ -8811,9 +8818,9 @@ export type Parser
 				armCaseNames.push(pattern.caseName)
 			end 'isEnumCase'
 		end 'eachPattern'
-		if armCaseNames.count() > 0 'hasBareCases'
-			arms.push(PendingMatchArm.bareCases(armCaseNames, line: firstPattern.token.line, column: firstPattern.token.column))
-		end 'hasBareCases'
+		if armCaseNames.count() > 0 or armRanges.count() > 0 'hasCoverage'
+			arms.push(PendingMatchArm.create(armCaseNames, ranges: armRanges, line: firstPattern.token.line, column: firstPattern.token.column))
+		end 'hasCoverage'
 	end 'collectDeferredArmCoverage'
 
 	// Return the scrutinee's enum name when its MaxonType resolves to a
@@ -8904,6 +8911,41 @@ export type Parser
 			i = i + 1
 		end 'each'
 	end 'markEnumRangeCases'
+
+	// Scan EVERY or-alternative of one arm for enum-case ranges. On the inline
+	// path (scrutinee enum known at parse time — `willDefer` false) each range
+	// alternative's covered cases are seeded into `seenKeys` via
+	// `markEnumRangeCases`, which reports E2027 on a case a prior arm/alternative
+	// already covered. This must visit non-first ranges too: `a or c to d` (range
+	// second) and `c to d or e to f` (two ranges) both contribute overlap
+	// coverage that a first-only scan dropped. Bare-case alternatives are already
+	// seeded by `parseMatchArmPatterns`, so only ranges are handled here. Returns
+	// whether any range alternative was seen (so the caller marks the arm as an
+	// enum arm) plus the last range's owning-case name for the E2046 diagnostic
+	// (empty when no range resolved).
+	function scanAndMarkEnumRangeArms(patterns MatchPatternList, seenKeys ReferencedVarSet, willDefer bool, scrutineeEnumName String) returns EnumRangeArmScan
+		var hasRange = false
+		var lastCaseName = ""
+		for pattern in patterns.patterns 'eachAlternative'
+			if not pattern.isEnumRange 'notRange'
+				continue
+			end 'notRange'
+			hasRange = true
+			// Use any case from the range to identify the owning enum for
+			// diagnostics; skip when the ordinal doesn't resolve (TR surfaces
+			// the canonical diagnostic).
+			if let rangeCaseName = try enumCaseNameAtOrdinal(pattern.enumOwnerName, ordinal: pattern.loValue) 'updateLast'
+				lastCaseName = rangeCaseName
+			end 'updateLast'
+			// INLINE PATH ONLY: on the deferred path the range's ordinals may be
+			// misrouted to a same-case-name enum (the E2027 bug), so overlap +
+			// coverage are computed in TR's arm-replay instead.
+			if not willDefer 'inlineRangeMark'
+				markEnumRangeCases(seenKeys, pattern: pattern, scrutineeEnumName: scrutineeEnumName)
+			end 'inlineRangeMark'
+		end 'eachAlternative'
+		return EnumRangeArmScan.create(hasRange, lastCaseName: lastCaseName)
+	end 'scanAndMarkEnumRangeArms'
 
 	// Emit pattern-comparison ops into `block` and return the boolean SSA name
 	// holding the combined OR of all comparisons. Caller passes a list of
@@ -9247,23 +9289,42 @@ export type Parser
 		module.setTerminator(currentBlock, op: MaxonOp.condBr(combinedCmp, thenTarget: armBodyId, elseTarget: nextArmId, range: SourceRange.ofToken(firstPattern.token)))
 	end 'emitArmDispatch'
 
-	// Phase 9 Stage 3: declare scope variables and emit payload-read +
-	// varStore ops at the head of the parser's `currentBlock` for each
-	// non-discard binding in an enum-case arm whose scrutinee is a union.
-	// Bindings become regular locals so user code like
+	// Phase 9 Stage 3: emit payload-binding reads for EVERY or-alternative of an
+	// enum-case arm whose scrutinee is a union. Mirrors the C# oracle's
+	// `EmitEnumCaseBindings`, which `foreach`es all patterns — a binding
+	// introduced only by a NON-FIRST alternative (`stay or walk(dir) gives dir`,
+	// or `a(x) or b(x)`) must still be declared; reading `patterns.first()` alone
+	// left it undefined (E2004). A union's cases share one payload offset, so the
+	// alternative's own `caseName`-keyed `enumPayloadRead` lands on the matched
+	// case's bytes at runtime regardless of which alternative fired; when several
+	// alternatives bind the same name, the later declaration wins (as in C#).
+	// Returns true when any binding was emitted.
+	function emitUnionArmBindings(scrutineeName ByteArray, patterns MatchPatternList, scrutineeMutable bool) returns bool
+		var emittedAny = false
+		for pattern in patterns.patterns 'eachAlternative'
+			if emitOneAlternativePayloadBindings(scrutineeName, pattern: pattern, scrutineeMutable: scrutineeMutable) 'emitted'
+				emittedAny = true
+			end 'emitted'
+		end 'eachAlternative'
+		return emittedAny
+	end 'emitUnionArmBindings'
+
+	// Declare scope variables and emit payload-read + varDecl ops at the head of
+	// the parser's `currentBlock` for each non-discard binding of ONE enum-case
+	// alternative. Bindings become regular locals so user code like
 	// `value(n) then return n` reaches `n` via the standard varLoad path.
-	// Discard (`_`) bindings produce no slot and no read. Bare-enum
-	// (non-union) scrutinees and arms without bindings skip silently.
-	// The payload field's MaxonType is resolved later by TR — the parser
-	// can't see cross-file union declarations, and the case's payload
-	// arity / field types live in registries TR drains. The caller must
-	// position `currentBlock` on the arm body block before invoking.
-	function emitUnionArmBindings(scrutineeName ByteArray, pattern MatchPatternSpec, scrutineeMutable bool) returns bool
+	// Discard (`_`) bindings produce no slot and no read. Bare-case alternatives
+	// (no bindings) skip silently and return false. The payload field's MaxonType
+	// is resolved later by TR — the parser can't see cross-file union
+	// declarations, and the case's payload arity / field types live in registries
+	// TR drains. The caller must position `currentBlock` on the arm body block
+	// before invoking.
+	function emitOneAlternativePayloadBindings(scrutineeName ByteArray, pattern MatchPatternSpec, scrutineeMutable bool) returns bool
 		if pattern.bindings.count() == 0 'noBindings'
 			return false
 		end 'noBindings'
 		for i in 0 upto pattern.bindings.count() 'eachBinding'
-			let binding = try pattern.bindings.get(i) otherwise panic("emitUnionArmBindings: bindings.get OOB at {i}")
+			let binding = try pattern.bindings.get(i) otherwise panic("emitOneAlternativePayloadBindings: bindings.get OOB at {i}")
 			if binding.isDiscard 'discardBinding'
 				continue
 			end 'discardBinding'
@@ -9282,12 +9343,15 @@ export type Parser
 			// arm body; if it's never referenced, the user wrote
 			// `case(n)` where `case` would have done — that's E3012.
 			localVarLocations.push(ParamLocation.create(binding.name, line: binding.line, column: binding.column))
-			let readName = "__match_payload_{binding.name}_{i}".toByteArray()
+			// Key the read temp on the alternative's own case name so two
+			// alternatives binding the same name+field (`a(x) or b(x)`) can't
+			// collide on one SSA result name.
+			let readName = "__match_payload_{pattern.caseName}_{binding.name}_{i}".toByteArray()
 			module.appendOp(currentBlock, op: MaxonOp.enumPayloadRead(readName, enumValName: scrutineeName, caseName: pattern.caseName, fieldIndex: i as IntConstant, fieldType: MaxonType.unresolved, range: SourceRange.none()))
 			module.appendOp(currentBlock, op: MaxonOp.varDecl(bindingSlot, value: readName, slotType: MaxonType.unresolved, range: SourceRange.none()))
 		end 'eachBinding'
 		return true
-	end 'emitUnionArmBindings'
+	end 'emitOneAlternativePayloadBindings'
 
 	// Emit the body of a `default panic(...)` or `default throws Err.case`
 	// arm into `armBodyBlock`. The arm body terminates the block directly:
@@ -9523,26 +9587,16 @@ export type Parser
 				hasEnumArm = true
 				lastEnumCaseName = patterns.first().caseName
 			end 'recordEnum'
-			// An enum-case range arm (`red to blue`) counts as an enum
-			// arm for exhaustiveness / E2046 purposes even though the
-			// pattern kind is `rangeLiteral`.
-			if patterns.first().isEnumRange 'recordEnumRange'
+			// An enum-case range arm (`red to blue`) counts as an enum arm for
+			// exhaustiveness / E2046 purposes even though the pattern kind is
+			// `rangeLiteral`. Scan every range alternative — a non-first range
+			// (`a or c to d`) must still seed the inline E2027 overlap check.
+			let rangeScan = scanAndMarkEnumRangeArms(patterns, seenKeys: seenKeys, willDefer: willDeferMatchExhaustiveness, scrutineeEnumName: scrutineeEnumNamePreLoop)
+			if rangeScan.hasRange 'recordEnumRange'
 				hasEnumArm = true
-				// Use any case from the range to identify the owning
-				// enum for diagnostics. The first ordinal's case name is
-				// recovered via the enum registry; if missing we skip
-				// (TR will surface the canonical diagnostic).
-				if let rangeCaseName = try enumCaseNameAtOrdinal(patterns.first().enumOwnerName, ordinal: patterns.first().loValue) 'updateLast'
-					lastEnumCaseName = rangeCaseName
+				if not rangeScan.lastCaseName.isEmpty() 'updateLast'
+					lastEnumCaseName = rangeScan.lastCaseName
 				end 'updateLast'
-				// Mark every covered ordinal's case name in seenKeys so
-				// enum exhaustiveness sees the range's contribution. INLINE PATH
-				// ONLY: on the deferred path the range's ordinals may be misrouted
-				// to a same-case-name enum (the E2027 bug), so the overlap +
-				// coverage are computed in TR's arm-replay instead.
-				if not willDeferMatchExhaustiveness 'inlineRangeMark'
-					markEnumRangeCases(seenKeys, pattern: patterns.first(), scrutineeEnumName: scrutineeEnumNamePreLoop)
-				end 'inlineRangeMark'
 			end 'recordEnumRange'
 			// Accumulate source-level coverage for the deferred E2026/E2027 checks.
 			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, arms: deferredArms)
@@ -9585,7 +9639,7 @@ export type Parser
 			// pointer (avoiding the `let arm = …` immutability friction).
 			scope.pushScope()
 			currentBlock = arm.body
-			_ = emitUnionArmBindings(header.scrutineeName, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
+			_ = emitUnionArmBindings(header.scrutineeName, patterns: patterns, scrutineeMutable: header.scrutineeMutable)
 			let bodyExit = try parseMatchStatementArmBody(arm.body)
 			scope.popScope()
 			let armHasFallthrough = checkAndConsumeFallthrough(bodyExit.hadReturn)
@@ -9801,26 +9855,16 @@ export type Parser
 				hasEnumArm = true
 				lastEnumCaseName = patterns.first().caseName
 			end 'recordEnum'
-			// An enum-case range arm (`red to blue`) counts as an enum
-			// arm for exhaustiveness / E2046 purposes even though the
-			// pattern kind is `rangeLiteral`.
-			if patterns.first().isEnumRange 'recordEnumRange'
+			// An enum-case range arm (`red to blue`) counts as an enum arm for
+			// exhaustiveness / E2046 purposes even though the pattern kind is
+			// `rangeLiteral`. Scan every range alternative — a non-first range
+			// (`a or c to d`) must still seed the inline E2027 overlap check.
+			let rangeScan = scanAndMarkEnumRangeArms(patterns, seenKeys: seenKeys, willDefer: willDeferMatchExhaustiveness, scrutineeEnumName: scrutineeEnumNamePreLoop)
+			if rangeScan.hasRange 'recordEnumRange'
 				hasEnumArm = true
-				// Use any case from the range to identify the owning
-				// enum for diagnostics. The first ordinal's case name is
-				// recovered via the enum registry; if missing we skip
-				// (TR will surface the canonical diagnostic).
-				if let rangeCaseName = try enumCaseNameAtOrdinal(patterns.first().enumOwnerName, ordinal: patterns.first().loValue) 'updateLast'
-					lastEnumCaseName = rangeCaseName
+				if not rangeScan.lastCaseName.isEmpty() 'updateLast'
+					lastEnumCaseName = rangeScan.lastCaseName
 				end 'updateLast'
-				// Mark every covered ordinal's case name in seenKeys so
-				// enum exhaustiveness sees the range's contribution. INLINE PATH
-				// ONLY: on the deferred path the range's ordinals may be misrouted
-				// to a same-case-name enum (the E2027 bug), so the overlap +
-				// coverage are computed in TR's arm-replay instead.
-				if not willDeferMatchExhaustiveness 'inlineRangeMark'
-					markEnumRangeCases(seenKeys, pattern: patterns.first(), scrutineeEnumName: scrutineeEnumNamePreLoop)
-				end 'inlineRangeMark'
 			end 'recordEnumRange'
 			// Accumulate source-level coverage for the deferred E2026/E2027 checks.
 			collectDeferredArmCoverage(patterns, coveredCaseNames: deferredCoveredCaseNames, rangeArms: deferredRangeArms, arms: deferredArms)
@@ -9857,7 +9901,7 @@ export type Parser
 			// via the parser's mutable block pointer.
 			scope.pushScope()
 			currentBlock = arm.body
-			_ = emitUnionArmBindings(header.scrutineeName, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
+			_ = emitUnionArmBindings(header.scrutineeName, patterns: patterns, scrutineeMutable: header.scrutineeMutable)
 			let armResult = try parseMatchExpressionArmBody(arm.body)
 			scope.popScope()
 			rejectFallthroughInMatchExpression()
@@ -13130,7 +13174,7 @@ export type Parser
 		let memberType = internMaxonType(project, name: memberEnumName)
 		let boxVal = freshSynthName()
 		module.appendOp(currentBlock, op: MaxonOp.varLoad(boxVal, slotId: ctx.boxSlot, slotType: memberType, range: range))
-		_ = emitUnionArmBindings(boxVal, pattern: pattern, scrutineeMutable: false)
+		_ = emitOneAlternativePayloadBindings(boxVal, pattern: pattern, scrutineeMutable: false)
 	end 'emitErrorUnionAssocBinding'
 
 	// True when a routed throwing call's clause names a heap-boxed union (its
@@ -21661,6 +21705,19 @@ type MatchPatternList
 		return self.first().isRange()
 	end 'isRange'
 end 'MatchPatternList'
+
+// Result of `scanAndMarkEnumRangeArms`: whether the arm listed any enum-case
+// range alternative (`hasRange`), plus one covered case name from the last such
+// range (`lastCaseName`, empty when none resolved) used to anchor the E2046
+// default-on-enum diagnostic.
+type EnumRangeArmScan
+	export let hasRange as bool
+	export let lastCaseName as String
+
+	export static function create(hasRange bool, lastCaseName String) returns EnumRangeArmScan
+		return Self{hasRange: hasRange, lastCaseName: lastCaseName}
+	end 'create'
+end 'EnumRangeArmScan'
 
 // Outcome of parsing one match-statement arm body: the block control flow
 // landed on after the body statement plus a flag indicating whether the
