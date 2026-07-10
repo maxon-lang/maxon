@@ -72,6 +72,10 @@ end 'Payload'
 type Desc implements Payload
 	export var v as Integer
 
+	export static function create(x Integer) returns Desc
+		return Self{v: x}
+	end 'create'
+
 	export function tag() returns Integer
 		return self.v
 	end 'tag'
@@ -121,7 +125,7 @@ function withTarget(items ItemArray, p Payload) returns Integer
 end 'withTarget'
 
 function withX64(items ItemArray) returns Integer
-	let p = Desc{v: 5}
+	let p = Desc.create(5)
 	return withTarget(items, p: p)
 end 'withX64'
 
@@ -152,6 +156,10 @@ end 'Payload'
 type Desc implements Payload
 	export var v as Integer
 
+	export static function create(x Integer) returns Desc
+		return Self{v: x}
+	end 'create'
+
 	export function tag() returns Integer
 		return self.v
 	end 'tag'
@@ -178,7 +186,7 @@ function twice(item Integer, p Payload) returns Integer
 end 'twice'
 
 function driver() returns Integer
-	let p = Desc{v: 9}
+	let p = Desc.create(9)
 	return twice(4, p: p)
 end 'driver'
 

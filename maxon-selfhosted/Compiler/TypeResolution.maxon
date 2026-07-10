@@ -3199,6 +3199,20 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 			if info.isUnion and info.payloadArity != bindingNames.count() 'arityMismatch'
 				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "wrong binding count: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
 			end 'arityMismatch'
+			// E4006: reject binding an interface-typed union payload. The
+			// union stores only the value half of the interface fat pointer,
+			// so the binding carries no witness — any method/field access on
+			// it is unresolvable (and lowering would panic pairing a witness
+			// that was never stored). The C# bootstrap surfaces this as E4006
+			// at the dispatch site; reject at the binding here for the same
+			// code and message.
+			for bindingIdx in 0 upto bindingNames.count() 'eachBinding'
+				let payloadType = lookupUnionCasePayloadField(project, unionName: enumName, caseName: caseName, fieldIndex: bindingIdx as IntConstant)
+				if payloadFieldTypeIsInterface(project, t: payloadType) 'interfacePayload'
+					let bindingName = String.from(try bindingNames.get(bindingIdx) otherwise panic("resolveOneEnumMatchArm: bindingNames.get OOB at {bindingIdx}"))
+					reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Variable '{bindingName}' is not a struct or enum type", line: range.line, column: range.column, filePath: filePath)
+				end 'interfacePayload'
+			end 'eachBinding'
 		end 'haveBindings'
 		try setOpCounted(module, opIdx: opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
@@ -6958,6 +6972,21 @@ function lookupUnionCasePayloadField(project Project, unionName String, caseName
 	end 'haveUnresolved'
 	return MaxonType.unresolved
 end 'lookupUnionCasePayloadField'
+
+// True iff a union case payload field type `t` refers to an interface — either
+// the resolved `interface(_)` fat-pointer form or a `named(_)`/forward-declared
+// name that resolves to a declared interface. A union stores only the value
+// half of an interface fat pointer, so the witness needed to dispatch a method
+// on an extracted binding is unavailable. `resolveOneEnumMatchArm` rejects such
+// a binding with E4006 to match the C# bootstrap, which rejects the equivalent
+// program at the dispatch site.
+function payloadFieldTypeIsInterface(project Project, t MaxonType) returns bool
+	let name = t.nameOrEmpty(project)
+	if name.isEmpty() 'noName'
+		return false
+	end 'noName'
+	return isInterfaceTypeName(project, name: name)
+end 'payloadFieldTypeIsInterface'
 
 // Resolve a payload field type from `unresolved` to its concrete type,
 // returning `MaxonType.unresolved` when the existing `fieldType` is

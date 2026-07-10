@@ -1,0 +1,64 @@
+// Test: construct-inside-factory
+typealias Val = int(0 to 100)
+
+type Box
+	export var v as Val
+
+	static function create(x Val) returns Box
+		return Self{v: x}
+	end 'create'
+
+	function get() returns Val
+		return self.v
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(5)
+	return b.get()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Box.get(rcx: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx r8, [rcx+0] (1b)
+    x64.cmp r8, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_72e5d8ef6a4b6f80]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov r8d, 5
+    x64.mov [rbx+0], r8 (1b)
+    x64.mov rcx, rbx
+    x64.call Box.get
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp r12, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_800168f44bb13ed7]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+}
+---

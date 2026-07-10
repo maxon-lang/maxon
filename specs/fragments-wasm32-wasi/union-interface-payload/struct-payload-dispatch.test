@@ -1,0 +1,88 @@
+// Test: struct-payload-dispatch
+typealias Val = int(0 to 1000)
+
+type Wrapped
+	export var n as Val
+
+	static function create(x Val) returns Wrapped
+		return Self{n: x}
+	end 'create'
+end 'Wrapped'
+
+union Holder
+	full(w Wrapped)
+	empty
+end 'Holder'
+
+function get(h Holder) returns Val
+	return match h 'm'
+		full(w) gives w.n
+		empty gives 0
+	end 'm'
+end 'get'
+
+function main() returns ExitCode
+	return get(Holder.full(Wrapped.create(7)))
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @get(local0: i64) -> u16 {
+  entry:
+    %16 = mir.param local0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.load %16, 0 width: qword
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: m_0.case0(), else: m_0.next0()]
+  m_0.merge(%15: i64):
+    %17 = mir.mov_imm 1000 : i64
+    %18 = mir.cmp ugt, %15, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  m_0.case0:
+    %8 = mir.load %16, 8 width: qword
+    %10 = mir.load %8, 0 width: halfword
+    mir.br m_0.merge(%10)
+  m_0.next0:
+    %11 = mir.load %16, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.cmp eq, %11, %12
+    mir.cond_br %13 [then: m_0.case1(), else: m_0.merge(%3)]
+  m_0.case1:
+    %14 = mir.mov_imm 0 : i64
+    mir.br m_0.merge(%14)
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_4b8f86c7feb33925
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %15
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.call @stdlib.__mm_alloc(%4, %5)
+    %11 = mir.call @stdlib.__mm_incref(%6)
+    mir.store %0, %6, 0 width: halfword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.func_addr @__destruct_Holder
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @stdlib.__mm_alloc(%7, %8)
+    mir.store %9, %10, 0 width: qword
+    mir.store %6, %10, 8 width: qword
+    %3 = mir.call @get(%10)
+    %12 = mir.call @mm_drop(%10)
+    %13 = mir.mov_imm 255 : i64
+    %14 = mir.cmp ugt, %3, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_61aeb0b1e7edf292
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

@@ -15808,6 +15808,28 @@ export type Parser
 		return typeName == "__ManagedMemory" or typeName == "__ManagedMemoryCursor" or typeName == "__ManagedFile" or typeName == "__ManagedDirectory" or typeName == "__ManagedSocket" or typeName == "__ManagedList" or typeName == "__ManagedListNode"
 	end 'isBuiltinManagedTypeName'
 
+	// True iff a `typeName{...}` struct literal is permitted at the current parse
+	// position under the E3076 construction restriction. Construction is allowed
+	// when building the type's own value (`typeName == currentTypeName`, which
+	// also covers `Self{...}` — the Self path passes `currentTypeName` as
+	// `typeName`), or when `typeName` is a typealias visible here: an inner alias
+	// of the type/extension body being parsed (`currentInnerAliases`, e.g. Map's
+	// `KeyArray = Array with Key`) or a top-level alias in any registry. The
+	// alias exemption applies only inside a type body (`currentTypeName`
+	// non-empty). This is a lenient superset of the C# bootstrap's
+	// `_localTypeAliases` / `_typeAliasOwners` exemptions — every construction
+	// the C# lane accepts is accepted here, so the shared stdlib and compiler
+	// sources (already E3076-clean under the C# rule) never mis-reject.
+	function structLiteralConstructionAllowed(typeName String) returns bool
+		if currentTypeName == typeName 'ownType'
+			return true
+		end 'ownType'
+		if currentTypeName.isEmpty() 'topLevel'
+			return false
+		end 'topLevel'
+		return currentInnerAliases.contains(typeName) or project.unresolvedTypealiases.contains(typeName) or project.typealiases.contains(typeName) or project.genericTypealiases.contains(typeName)
+	end 'structLiteralConstructionAllowed'
+
 	function parseStructLiteral(block IrBlock, typeName String, typeToken Token, typeNameConsumed bool = false) returns ExprResult throws ParserError
 		if not typeNameConsumed 'consumeTypeName'
 			try eat(TokenKind.identifier)
@@ -15823,7 +15845,19 @@ export type Parser
 		// `isBuiltinManagedTypeName`.
 		if isBuiltinManagedTypeName(typeName) 'builtinConstruction'
 			reportCompileError(project, code: ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: typeToken.line, column: typeToken.column, filePath: filePath)
-		end 'builtinConstruction'
+		end 'builtinConstruction' else 'notBuiltin'
+			// E3076: struct-literal construction is restricted to the type's own
+			// methods (and static factories) so a type's invariants are enforced
+			// at a single construction point; external callers use a static
+			// factory (`Type.create(...)`). `Self{...}` / `Type{...}` inside the
+			// type's body and construction through a visible typealias are exempt
+			// (see `structLiteralConstructionAllowed`). Builtin managed types are
+			// handled by the E3072 branch above and skip this check, matching the
+			// C# bootstrap where the builtin case returns before reaching E3076.
+			if not structLiteralConstructionAllowed(typeName) 'constructorRestriction'
+				reportCompileError(project, code: ErrorCode.semanticConstructorRestriction, message: "type '{typeName}' can only be constructed from within its own methods; use a static factory method instead", line: typeToken.line, column: typeToken.column, filePath: filePath)
+			end 'constructorRestriction'
+		end 'notBuiltin'
 
 		// Per-field expressions may shift `currentBlock` to a fresh merge
 		// block — e.g. when a field value is `try f() otherwise panic(...)`,

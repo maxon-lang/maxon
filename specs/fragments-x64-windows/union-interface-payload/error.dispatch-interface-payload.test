@@ -1,0 +1,40 @@
+// Test: error.dispatch-interface-payload
+typealias Vol = int(0 to 1000)
+
+interface Speaker
+	function volume() returns Vol
+end 'Speaker'
+
+type Quiet implements Speaker
+	export var tag as Vol
+
+	static function create() returns Quiet
+		return Self{tag: 0}
+	end 'create'
+
+	function volume() returns Vol
+		return 3
+	end 'volume'
+end 'Quiet'
+
+union Sound
+	live(who Speaker)
+	silent
+end 'Sound'
+
+function speak(s Sound) returns Vol
+	return match s 'm'
+		live(who) gives who.volume()
+		silent gives 0
+	end 'm'
+end 'speak'
+
+function main() returns ExitCode
+	return speak(Sound.live(Quiet.create()))
+end 'main'
+---
+MaxoncStderr: ```
+error E4006: specs/fragments/union-interface-payload/error.dispatch-interface-payload.test:27:19: Variable 'who' is not a struct or enum type
+```
+---
+---

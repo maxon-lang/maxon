@@ -237,6 +237,15 @@ export enum ErrorCode
 	// rejected at compile time. Guard the call with `#if not os(Wasi)` to
 	// exclude it from the wasm build. Emitted by the subprocess-reachability check.
 	semanticSubprocessUnsupportedTarget = 3074
+	// E3076: a struct literal (`Type{...}`) is written outside the type's own
+	// methods. Construction is restricted to the type's own methods / static
+	// factories so invariants can be enforced at the single construction point;
+	// external callers must go through a `static function create(...)`. Exempt:
+	// `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction
+	// through a typealias visible at the site (inner alias of the current
+	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+	// Mirrors the C# bootstrap's `SemanticConstructorRestriction`.
+	semanticConstructorRestriction = 3076
 	// E3077: a local declared with `var` is never reassigned, so it should
 	// be a `let`. Detected after type resolution by
 	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the

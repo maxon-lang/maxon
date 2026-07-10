@@ -1,0 +1,101 @@
+// Test: struct-payload-dispatch
+typealias Val = int(0 to 1000)
+
+type Wrapped
+	export var n as Val
+
+	static function create(x Val) returns Wrapped
+		return Self{n: x}
+	end 'create'
+end 'Wrapped'
+
+union Holder
+	full(w Wrapped)
+	empty
+end 'Holder'
+
+function get(h Holder) returns Val
+	return match h 'm'
+		full(w) gives w.n
+		empty gives 0
+	end 'm'
+end 'get'
+
+function main() returns ExitCode
+	return get(Holder.full(Wrapped.create(7)))
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @get(rcx: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, [rcx+0] (8b)
+    x64.xor r9d, r9d
+    x64.test r8, r8
+    x64.jne m_0.next0
+    x64.jmp m_0.case0
+  m_0.merge:
+    x64.cmp r8, 1000
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  m_0.case0:
+    x64.mov r8, [rcx+8] (8b)
+    x64.movzx r9, [r8+0] (2b)
+    x64.mov r8, r9
+    x64.jmp m_0.merge
+  m_0.next0:
+    x64.mov r8, [rcx+0] (8b)
+    x64.cmp r8, 1
+    x64.jne __phi_trampoline_3_0
+  m_0.case1:
+    x64.xor r8d, r8d
+    x64.jmp m_0.merge
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_4b8f86c7feb33925]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_3_0:
+    x64.mov r8, r9
+    x64.jmp m_0.merge
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc
+    x64.mov rbx, r8
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov r8d, 7
+    x64.mov [rbx+0], r8 (2b)
+    x64.lea rdx, [rip+__destruct_Holder]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.mov [r12+0], r8 (8b)
+    x64.mov [r12+8], rbx (8b)
+    x64.mov rcx, r12
+    x64.call get
+    x64.mov rbx, r8
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.mov r8d, 4294967295
+    x64.cmp rbx, r8
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_61aeb0b1e7edf292]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

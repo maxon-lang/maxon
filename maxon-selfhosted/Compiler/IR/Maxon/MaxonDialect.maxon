@@ -906,11 +906,22 @@ export function internMaxonType(project Project, name String) returns MaxonType
 	// scan (`preRegisterInterfaceNames`) recorded it so the use-site type is
 	// still born as `interface(_)` — without it the fat-pointer/witness
 	// dispatch machinery, which keys off the `interface(_)` arm, never fires.
-	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) or project.prescannedInterfaceNames.contains(name) 'isInterface'
+	if isInterfaceTypeName(project, name: name) 'isInterface'
 		return MaxonType.interface(project.interfaceRegistry.intern(name))
 	end 'isInterface'
 	return MaxonType.named(project.typeNames.intern(name))
 end 'internMaxonType'
+
+// True iff `name` refers to a declared interface — resolved
+// (`project.interfaces`), forward-declared (`unresolvedInterfaces`), or
+// recorded by the pre-parse name scan (`prescannedInterfaceNames`). Shared by
+// `internMaxonType` (which births an `interface(_)` type for such a name) and
+// by union-payload validation: a union case payload typed as an interface is
+// rejected (E4006 parity with the C# bootstrap) because the union stores only
+// the value half of an interface fat pointer, leaving no witness to dispatch.
+export function isInterfaceTypeName(project Project, name String) returns bool
+	return project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) or project.prescannedInterfaceNames.contains(name)
+end 'isInterfaceTypeName'
 
 // --- MaxonReturnType: function return type slot ---
 // A function either returns nothing (void) or a value of some MaxonType.

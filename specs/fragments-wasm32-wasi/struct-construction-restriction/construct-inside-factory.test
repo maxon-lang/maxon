@@ -1,0 +1,57 @@
+// Test: construct-inside-factory
+typealias Val = int(0 to 100)
+
+type Box
+	export var v as Val
+
+	static function create(x Val) returns Box
+		return Self{v: x}
+	end 'create'
+
+	function get() returns Val
+		return self.v
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(5)
+	return b.get()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Box.get(local0: i64) -> u8 {
+  entry:
+    %3 = mir.param local0 : i64
+    %2 = mir.load %3, 0 width: byte
+    %4 = mir.mov_imm 100 : i64
+    %5 = mir.cmp ugt, %2, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_72e5d8ef6a4b6f80
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 5 : i64
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%5, %6)
+    mir.store %1, %7, 0 width: byte
+    %4 = mir.call @Box.get(%7)
+    %8 = mir.call @mm_drop(%7)
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %4, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_800168f44bb13ed7
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---
