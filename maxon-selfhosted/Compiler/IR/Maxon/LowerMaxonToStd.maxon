@@ -12841,7 +12841,17 @@ type MaxonToStdLowering
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds, isVoid: false, isThrowing: false, errorFlagId: 0)))
 		let returnType = functionTypeIdReturnType(self.project, id: fnTypeId)
-		self.setValueType(resultId, t: indirectCallResultType(self.project, returnType: returnType))
+		let resultType = indirectCallResultType(self.project, returnType: returnType)
+		self.setValueType(resultId, t: resultType)
+		// A MANAGED indirect-call (closure / function-value) result arrives +1: the
+		// callee transferred its reference into the result register, exactly like a
+		// direct call. Classify it `callReturnRc1` so the SSA inserter releases it at
+		// last use — UNCLASSIFIED, every closure-returned String/struct leaked (the
+		// `logInfo`/`logDebug`/`logTrace` `function() gives "..."` message thunks that
+		// dominate the cold stdlib-compile leak; mirrors the identical `lowerAwaitReal`
+		// fix for awaited managed results). `classifyValue` forces `notManaged` for a
+		// non-managed result, so this is a no-op for a closure returning a scalar.
+		self.classifyValue(resultId, cls: OwnershipClass.callReturnRc1, valueMaxonType: resultType)
 	end 'lowerIndirectCall'
 
 	// Allocates a heap struct by calling mrt_alloc with the byte size.
