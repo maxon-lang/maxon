@@ -1,0 +1,144 @@
+// Shared types for code emission results, used across all backends.
+//
+// THIN for maxon-shv2 M1. This file's reason to exist is the `CodeResult`
+// struct — the format-neutral backend↔writer boundary (backend emits it, the
+// PE/ELF/Mach-O writers consume it). But `CodeResult` (and the per-function
+// `FunctionCodeChunk`) reference `TargetModule` (= `IrModule with TargetOp`, i.e.
+// the ENTIRE x64/arm64 Target dialect), `GlobalDataTable`, `MirModule`, and the
+// arm64 ADR fixup arrays — all Chunk B backend concerns that cannot be thinned
+// without pulling the backend into the M1 type layer (which would defeat the
+// rewrite). So the two boundary STRUCTS are deferred to Chunk B, when the Target
+// dialect exists; what lives here now is the reusable, Target-independent
+// relocation / symbol / label-classification value types they are built from.
+// The cache codec (writeRdataRelocKind/read…) + the debug-symbol / funcAbs64
+// link-time helper functions are likewise deferred (serialization is Chunk C;
+// the link helpers are backend, Chunk B).
+
+typealias RelocSlotIndex = int(0 to u64.max)
+
+// A relocation records a code location that needs patching after section layout.
+// Used for IAT entries (Windows PE) and GOT entries (Linux ELF).
+export type Relocation
+	export var codeOffset as CodeOffset
+	export var slotIndex as RelocSlotIndex
+
+	export static function create(codeOffset CodeOffset, slotIndex RelocSlotIndex) returns Relocation
+		return Self{codeOffset: codeOffset, slotIndex: slotIndex}
+	end 'create'
+end 'Relocation'
+
+export typealias RelocationArray = Array with Relocation
+
+// An intra-module call fixup: a code offset that needs patching to the final
+// placement of `targetName`'s `.text` chunk. The offset's space (whole-module
+// vs chunk-local) depends on the array it lives in; consumers must know which.
+export type CallFixup
+	export var codeOffset as CodeOffset
+	export var targetName as String
+
+	export static function create(codeOffset CodeOffset, targetName String) returns CallFixup
+		return Self{codeOffset: codeOffset, targetName: targetName}
+	end 'create'
+end 'CallFixup'
+
+export typealias CallFixupArray = Array with CallFixup
+
+// A DebugSymbol pairs a function name with its byte offset in `.text`.
+// Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
+export type DebugSymbol
+	export var name as String
+	export var codeOffset as CodeOffset
+
+	export static function create(name String, codeOffset CodeOffset) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset}
+	end 'create'
+end 'DebugSymbol'
+
+export typealias DebugSymbolArray = Array with DebugSymbol
+export typealias DebugSymbolIndexMap = Map with (String, CodeOffset)
+
+// Relocation kind for code-to-rdata references. `funcAbs64InRdata` is the
+// outlier: it patches an 8-byte slot INSIDE rdata (a layout descriptor's
+// function-pointer slot) with the absolute VA of a `.text` function; every other
+// arm patches a slot inside code with a reference into rdata/symdata/data/covdata.
+export union RdataRelocKind
+	ripRelDisp32
+	symdataRipRelDisp32
+	dataSectionRipRelDisp32
+	covdataRipRelDisp32
+	arm64Adr
+	arm64LdrLiteral
+	symdataArm64Adr
+	dataSectionArm64Adr
+	covdataArm64Adr
+	arm64Adrp
+	arm64PageOff
+	dataSectionArm64Adrp
+	dataSectionArm64PageOff
+	covdataArm64Adrp
+	covdataArm64PageOff
+	funcAbs64InRdata(funcName String, rdataLabel String, offsetInLabel ByteOffset)
+end 'RdataRelocKind'
+
+// Output-section class of a global label, by name prefix. SHARED by every
+// backend's reloc-kind selection so the writable-.data / heap-global set lives
+// in exactly one place.
+export union GlobalLabelClass
+	covData
+	dataSection
+	rdata
+end 'GlobalLabelClass'
+
+// Classify a global label into its output section by name prefix. Data-section
+// (writable) globals are the runtime's mutable state: user globals + static
+// fields (`__data_`), the slab/MM allocator, the argv cache, and the
+// green-thread / scheduler / async runtime. `__data_cov_` coverage counters get
+// their own .covdata section and MUST be checked first (their prefix is a
+// superset of `__data_`). Everything else is read-only .rdata.
+export function classifyGlobalLabel(label String) returns GlobalLabelClass
+	if label.startsWith("__data_cov_") 'cov'
+		return GlobalLabelClass.covData
+	end 'cov'
+	if label.startsWith("__data_") 'data'
+		return GlobalLabelClass.dataSection
+	end 'data'
+	if isRuntimeMutableGlobalLabel(label) 'mutable'
+		return GlobalLabelClass.dataSection
+	end 'mutable'
+	return GlobalLabelClass.rdata
+end 'classifyGlobalLabel'
+
+// True for the runtime's writable mutable-state global prefixes.
+function isRuntimeMutableGlobalLabel(label String) returns bool
+	return label.startsWith("__slab_") or label.startsWith("__mm_") or label.startsWith("__mrt_") or label.startsWith("__gt_") or label.startsWith("__sched_") or label.startsWith("__at_") or label.startsWith("__subp_") or label.startsWith("__io_")
+end 'isRuntimeMutableGlobalLabel'
+
+// A relocation from code to a data section (.rdata / .symtab / .data / .covdata).
+// `rdataLabel` names the global data entry; `rdataOffset` is resolved during
+// serialization.
+export type RdataRelocation
+	export var codeOffset as CodeOffset
+	export var rdataLabel as String
+	export var rdataOffset as CodeOffset
+	export var kind as RdataRelocKind
+
+	export static function create(codeOffset CodeOffset, rdataLabel String, kind RdataRelocKind) returns RdataRelocation
+		return Self{codeOffset: codeOffset, rdataLabel: rdataLabel, rdataOffset: 0, kind: kind}
+	end 'create'
+end 'RdataRelocation'
+
+export typealias RdataRelocationArray = Array with RdataRelocation
+
+// A funcAbs64InRdata reloc resolved to the three fields the seed/patch/rebase
+// passes need. Collecting once keeps the reloc-walk in one place.
+export type FuncAbs64Slot
+	export let funcName as String
+	export let rdataOffset as CodeOffset
+	export let offsetInLabel as ByteOffset
+
+	export static function create(funcName String, rdataOffset CodeOffset, offsetInLabel ByteOffset) returns Self
+		return Self{funcName: funcName, rdataOffset: rdataOffset, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'FuncAbs64Slot'
+
+export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot

@@ -132,10 +132,52 @@ Read these before starting Foundation 1. Detailed maps live in the recon set
 ## Subsystem sections
 
 ### Frontend (lexer, parser, parse-staging)
-_stub — filled in at M1._
+
+**Type layer landed (M1 Chunk A).** `Compiler/Lexer.maxon` is copied verbatim
+(`tokenize(source) -> TokenArray throws LexerError`, table-driven DFA) with its
+two non-stdlib deps brought along: a trimmed `Compiler/Logger.maxon`
+(LogLevel/LogCategory + emit) and the `ByteOffset` typealias in
+`Targets/Shared/BinaryHelpers.maxon`. `NumberParsing.maxon` (parseInt) copied +
+one root-cause fix (a byte-element-type mismatch in `b"…"` vs `.toByteArray()`
+comparison, latent in v1, masked there by the compile cache). IR containers are
+in: `IR/IrValueId.maxon` (zero-dep typealiases), `IR/IrBlock.maxon`,
+`IR/IrModule.maxon` (generic `uses Op`; `MaxonModule = IrModule with MaxonOp`),
+`IR/IrFunction.maxon` (deliberately **thinned** — dropped v1's per-ValueId
+refcount side-tables + 6-way `OwnershipClass` + generics/ABI cone, which the
+static Own tier and later milestones supersede), `IR/Maxon/SourceRange.maxon`,
+`IR/Maxon/Scope.maxon`. The **parser, ParseStaging, and query spine are Chunk C**
+(not yet built). `Compiler/Project.maxon` exists only as a THIN foundation
+(homes `VarInfo`/`Visibility`/`FieldOffset`/`StringArray`/etc.); Chunk C must
+**grow** it (add the struct + ~28 registries + `createProject`), not redefine it.
+
+**Scope ownership scaffold:** `Scope.ownedStack` runs parallel to `frameStack`,
+pushed/popped in lockstep by `pushScope`/`popScope` (panic on unmatched pop —
+they must stay parallel). All 4 `declare*` paths funnel through
+`recordInCurrentFrame`, which records into `ownedStack` **only when the binding
+is non-trivial** — inert at M1 (all bindings trivial), drained at M6 to emit
+`own.drop`/`own.release`.
 
 ### Maxon dialect
-_stub — filled in at M1._
+
+**Landed (M1 Chunk A), thin + growable.** `IR/Maxon/MaxonDialect.maxon`:
+- `MaxonOp` union — `literal(result, value, valueType, range)` + `ret(retVal,
+  range)` only, each tagged `= MaxonOpMeta{category}` (v1's invariant: a new op
+  cannot be added without declaring its `OpCategory`). Values are **name slices**
+  (`ByteArray` over the lexer buffer / synthetic `$tN`), not SSA ids — SSA
+  numbering is assigned only at the Maxon→Std boundary.
+- `MaxonType` union — `boolean/integer/float/named(TypeNameId)/unresolved`
+  (enough to type `int` + `ExitCode`); width/signedness lives in the typealias
+  registry, not here. `unresolved` is the parser's placeholder; TypeResolution
+  (Chunk C) must eliminate it before lowering. Void is not a MaxonType —
+  `MaxonReturnType{void, value}` carries return slots.
+- **`OwnershipKind` lattice** — `trivial | owned | borrow | shared`, the plan's
+  first-class Maxon-tier ownership. Three homes, zero sidetables: (1) the
+  attribute (`VarInfo.ownership`, defaulted `trivial`), (2) signature modes in
+  the function type (M5/M6), (3) explicit `own.*` ops (M6). `isTrivialOwnership`
+  is the shared classifier. Present-but-inert at M1; M6 activates it.
+
+Later milestones GROW `MaxonType` (string/char/function/generic/interface arms),
+`MaxonOp` (var/arith/call/control-flow), and the signature ownership modes.
 
 ### Own tier (ownership infer / check / escape / drops)
 _stub — filled in at M6._

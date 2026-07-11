@@ -1,0 +1,40 @@
+// Coverage plumbing types.
+//
+// THIN for maxon-shv2 M1: carries only `BlockSourceInfo`, the per-block
+// source-footprint record that `IrModule` writes at every block-creation site
+// and preserves through Maxon→Std lowering. The coverage-instrumentation pass
+// and its site table (which consume `blockSourceInfo`) are a later deliverable
+// that GROWS this file.
+
+export typealias LineNumberArray = Array with LineNumber
+
+// Source-location metadata for a single basic block. `firstLine` is the line of
+// the token that opened the block (used for display); `lines` is the
+// deduped-in-order sequence of starting lines of the statements appended to the
+// block. An empty `lines` means the block carries no statements of its own
+// (e.g. an if/else merge block that is only a branch target).
+export type BlockSourceInfo
+	export var filePath as String
+	export var firstLine as LineNumber
+	export var lines as LineNumberArray
+
+	// Create a populated entry for a newly-opened block.
+	export static function create(filePath String, firstLine LineNumber) returns BlockSourceInfo
+		return Self{filePath: filePath, firstLine: firstLine, lines: LineNumberArray.create()}
+	end 'create'
+
+	// Sentinel for blocks the parser never saw (detached blocks, blocks
+	// materialized by later passes). Callers detect it via an empty filePath.
+	export static function empty() returns BlockSourceInfo
+		return Self{filePath: "", firstLine: 0, lines: LineNumberArray.create()}
+	end 'empty'
+
+	// True when this entry carries no usable source location.
+	export function isEmpty() returns bool
+		return self.filePath.isEmpty()
+	end 'isEmpty'
+end 'BlockSourceInfo'
+
+// Dense parallel array indexed by flat block reference (position in the owning
+// IrModule's `blocks` array). Unfilled slots hold BlockSourceInfo.empty().
+export typealias BlockSourceInfoArray = Array with BlockSourceInfo

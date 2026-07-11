@@ -1,0 +1,146 @@
+// Maxon Dialect — high-level IR, closest to source. The parser emits these ops
+// directly; lowerMaxonToStd (Chunk B) lowers them to Std ops.
+//
+// The Maxon dialect owns MaxonType — a source-level type union with no concept
+// of width unification. Width/signedness collapse happens only in
+// lowerMaxonToStd.
+//
+// THIN for maxon-shv2 M1: this carries exactly the shapes the `return 42` slice
+// needs — the `literal` and `ret` ops, and a MaxonType with the primitive +
+// named + unresolved arms (enough to type `int` and `ExitCode`). Later
+// milestones GROW MaxonType (string/character/function/generic/interface arms),
+// MaxonOp (variables, arithmetic, calls, control flow, …), and the ownership
+// signature modes. v1's proven `MaxonOpMeta{category}` per-variant tagging is
+// preserved so a new op cannot be added without declaring its category.
+
+// --- Ownership lattice (the M1 ownership scaffold) ---
+//
+// The 4-value ownership lattice, born at the Maxon tier (per PLAN.md: ownership
+// is a first-class Maxon-dialect concept, resolved before lowerMaxonToStd). It
+// has three first-class homes and ZERO sidetables:
+//   1. an OwnershipKind attribute on every binding/value (this enum) — carried
+//      on `VarInfo.ownership` today; on Std/Own-tier values from M6;
+//   2. signature ownership modes in the function type (param consume/borrow/copy,
+//      return owned/borrow) — added at M5/M6;
+//   3. explicit `own.*` ops in the block stream (the Own dialect) — added at M6.
+//
+// Kinds:
+//   - trivial — scalar / no destructor; never dropped, never refcounted.
+//   - owned   — unique heap value; dropped exactly once unless moved.
+//   - borrow  — non-owning view; never dropped; carries a lifetime (M7).
+//   - shared  — escape-promoted to runtime refcounting (the ONLY place
+//               refcounts survive — emitted solely for `shared`, M8).
+//
+// PRESENT-BUT-INERT AT M1: every binding/value is `trivial`; the Own tier
+// (OwnershipInfer / OwnershipCheck / EscapeAnalysis / InsertDrops) that reads
+// and mutates this is stubbed until M6. This is what "designed in from the
+// first commit" means — M6 activates the scaffold, it is not retrofitted.
+export enum OwnershipKind
+	trivial
+	owned
+	borrow
+	shared
+end 'OwnershipKind'
+
+// True for the M1 default kind (no drop, no refcount). Lifted out so the Own
+// tier and Scope's per-frame owned-values gate share one classifier instead of
+// re-spelling the `== OwnershipKind.trivial` compare at each site.
+export function isTrivialOwnership(kind OwnershipKind) returns bool
+	return kind == OwnershipKind.trivial
+end 'isTrivialOwnership'
+
+// Identifier for a named type reference interned in the project's type-name
+// interner (Chunk C) so identical named references share one backing String and
+// structural identity is a single integer compare. Wide range: the interner is
+// unbounded (one entry per distinct named reference seen in source).
+export typealias TypeNameId = int(0 to u64.max)
+
+export typealias ValueIdArray = Array with ValueId
+
+// Array of name slices — used by call ops (added later) to pass positional
+// argument names. Each element is a `ByteArray` slice, typically a zero-copy
+// view over the lexer's source buffer or a per-function synthetic name.
+export typealias ByteArrayArray = Array with ByteArray
+
+// --- MaxonType: source-level type system ---
+//
+// bool is the only standalone primitive a user writes directly; `integer` /
+// `float` are unconstrained numeric literals without a named context; `named`
+// covers every user-defined or stdlib alias (ExitCode, Character, …) that
+// resolves to a concrete width via the typealias registry at Std lowering time.
+// Width/signedness lives in that registry, NOT on MaxonType.
+//
+// `unresolved` is the placeholder the parser emits where it cannot fill a type
+// without a cross-declaration lookup; TypeResolution (Chunk C) replaces every
+// `unresolved` with a concrete type. Lowering must never see it.
+//
+// Void is NOT a MaxonType — a non-value can't be a value-type. Function return
+// types use MaxonReturnType (below).
+export union MaxonType
+	boolean
+	integer
+	float
+	named(id TypeNameId)
+	unresolved
+end 'MaxonType'
+
+export typealias MaxonTypeArray = Array with MaxonType
+
+// --- MaxonReturnType: function return type slot ---
+// A function either returns nothing (void) or a value of some MaxonType. The
+// parser produces this for every function's return type; lowerMaxonToStd maps
+// it to the corresponding StdReturnType.
+export union MaxonReturnType
+	void
+	value(inner MaxonType)
+end 'MaxonReturnType'
+
+export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
+	return match ref 'check'
+		void gives true
+		value gives false
+	end 'check'
+end 'maxonReturnTypeIsVoid'
+
+// --- MaxonOp ---
+//
+// Value operands are NAMES, not SSA ids: every result/operand is a `ByteArray`
+// — a zero-copy slice over the lexer's source buffer for user-written names, or
+// a per-function synthetic name (`$t0`, `$t1`, …) for intermediates. SSA
+// numbering is assigned only at the Maxon→Std lowering boundary, so the Maxon
+// dialect stays source-proximate and LSP-queryable.
+//
+// Every variant carries a trailing `range SourceRange` (source span for
+// diagnostics/LSP; synthetic ops pass `SourceRange.none()`) and is tagged with a
+// static `MaxonOpMeta{category}` — a struct-backed enum-payload pattern used for
+// coarse membership tests ("is this any kind of call?") without a new `match`
+// arm at every site. The struct backing is REQUIRED, so a new MaxonOp variant
+// cannot be added without declaring its category here.
+
+// Coarse category an op belongs to, for membership tests spanning several
+// variants. Grows as call/panic/var/await/closure ops land.
+export enum OpCategory
+	callFree
+	callMethod
+	panicking
+	varAccess
+	awaiting
+	closureProducer
+	plain  // everything else (the op stands alone; matched by variant)
+end 'OpCategory'
+
+// Per-variant static metadata backing for MaxonOp (read via `op.rawValue`).
+export type MaxonOpMeta
+	export let category as OpCategory
+end 'MaxonOpMeta'
+
+export union MaxonOp
+	// Integer literal materialization. `value` is the already-parsed i64 (the
+	// parser converts the raw token text via NumberParsing.parseInt at emit
+	// time). `valueType` is the literal's source-level type (integer, or a
+	// named ranged alias). Result is a fresh synthetic name.
+	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	// Return terminator. Always placed as a block terminator via setTerminator,
+	// never as a regular body op. `retVal` names the SSA value to return.
+	ret(retVal ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+end 'MaxonOp'

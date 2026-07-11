@@ -1,0 +1,220 @@
+// IrFunction: a named function shared across all IR phases (Maxon, Std, MIR,
+// Target). Carries both Maxon-phase types (populated by the parser) and
+// Std-phase types (populated by LowerMaxonToStd); phase-specific backend fields
+// (varSlotCount, spillSize, …) are zero-initialized and filled by the relevant
+// pass.
+//
+// THIN for maxon-shv2 M1 — deliberately NOT a verbatim copy of v1's field-richest
+// type. Two field families from v1 are intentionally omitted here because shv2's
+// architecture supersedes them; each grows back at its milestone:
+//
+//   • The per-ValueId refcount side-tables (valueOwnership/valueManaged/
+//     valueTypeParam/relaySlot/borrowSlot/valueInlinedArg/…) and v1's 6-way
+//     `OwnershipClass` enum are NOT ported. They are exactly the late,
+//     liveness-driven refcount machinery shv2 replaces with the static Own tier
+//     (M6): ownership lives on values/bindings/signatures + explicit `own.*` ops
+//     (see OwnershipKind in MaxonDialect.maxon), NOT in per-function sidetables.
+//   • The generics / ABI-companion fields (implicitWitnessConstraints →
+//     WhereClause, paramReservations, scopeSlotToAbiParamIndex, closure counters,
+//     contentHash, slotMaxonTypes, calleeSaved regs) are omitted until their
+//     milestones (M5 ABI, M13 closures, M14 generics, backend/query chunks) add
+//     them. Keeping them out now avoids dragging the whole generics/backend cone
+//     into the M1 type layer.
+//
+// What remains is the stable cross-phase container the `return 42` slice needs:
+// identity + signature (Maxon + Std shapes) + the per-function `Scope` + the
+// backend frame-size scalars.
+
+// Sum-typed encoding of an optional `throws E` clause. `none` = non-throwing;
+// `throwing(name)` carries the bare error-enum name. Replaces a `""`-sentinel
+// String field so the absent state is structurally distinct.
+export union ThrowsClause
+	none
+	throwing(name String)
+end 'ThrowsClause'
+
+// Raised by `throwsClauseName` when the clause is `none`.
+export enum ThrowsClauseNameError implements Error
+	noThrowsClause
+end 'ThrowsClauseNameError'
+
+// Extract the throws-type name; throws for `none` so callers that only need the
+// name avoid repeating the match/break boilerplate.
+export function throwsClauseName(clause ThrowsClause) returns String throws ThrowsClauseNameError
+	match clause 'k'
+		none then throw ThrowsClauseNameError.noThrowsClause
+		throwing(name) then return name
+	end 'k'
+end 'throwsClauseName'
+
+// True when the clause carries an error type. One shared classifier for the
+// throws/non-throws decision across the semantic + lowering layers.
+export function throwsClauseIsThrowing(clause ThrowsClause) returns bool
+	return match clause 'k'
+		none gives false
+		throwing gives true
+	end 'k'
+end 'throwsClauseIsThrowing'
+
+export typealias ThrowsClauseArray = Array with ThrowsClause
+
+export type IrFunction
+	// --- Common fields (all phases) ---
+	export var name as String
+	// Source-file namespace this function was parsed in (e.g. "stdlib",
+	// "Compiler.Parser"). Consumed by LowerMaxonToStd to resolve bare callees —
+	// `name` can be bare for entrypoints like `main`, so it is not reliable.
+	export var namespace as String
+	// Visibility tier from the declaring source. Stamped by the parser.
+	export var visibility as Visibility
+	// Absolute / virtual path of the declaring file — the visibility anchor for
+	// cross-file callers. Empty for synthesized functions.
+	export var sourceFilePath as FilePath
+	export var paramCount as ParamCount
+	export var blockRefs as BlockRefList
+	export var nextBlockId as BlockId
+	export var returnLine as LineNumber
+	// Line and column of the function-name token; zero for synthesized functions.
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+
+	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
+	export var maxonReturnType as MaxonReturnType
+	export var maxonParamTypes as MaxonTypeArray
+	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
+	export var throwsTypeName as ThrowsClause
+	// Persistent per-function symbol table, handed off by the parser. Std-phase
+	// functions leave this empty.
+	export var scope as Scope
+
+	// --- Std/MIR/Target-phase types (populated by LowerMaxonToStd) ---
+	export var returnType as StdReturnType
+	export var paramTypes as StdTypeArray
+
+	// --- Backend frame-size scalars (zero until the relevant pass runs) ---
+	// Total number of slot-addressed variables used by ISel; spill slots sit
+	// below the variable area.
+	export var varSlotCount as VarSlot
+	// Spill area size in bytes, computed by the register allocator.
+	export var spillSize as StackSize
+	// Running tally of bytes the function needs on the stack (locals + spills +
+	// callee-save area); the prologue/epilogue pass aligns and emits `sub rsp, N`.
+	export var stackSize as StackSize
+	// Bytes reserved at the bottom of the frame for outgoing call args that
+	// overflow the register file.
+	export var outgoingArgSize as StackSize
+
+	// Function purity (no side effects / global or param mutation, transitively
+	// pure call graph). Computed by SemanticCheck; read by the discarded-result
+	// lint. Defaults true; the analysis lowers it on impure constructs.
+	export var isPure as bool
+
+	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
+	// populated; Std-phase fields default. Visibility defaults to `file` so the
+	// parser must positively widen it — synthesized functions stay file-private.
+	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+		return Self{
+			name: name,
+			namespace: "",
+			visibility: Visibility.file,
+			sourceFilePath: FilePath from "",
+			paramCount: paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			nameLine: 0,
+			nameColumn: 0,
+			maxonReturnType: maxonReturnType,
+			maxonParamTypes: maxonParamTypes,
+			throwsTypeName: throwsTypeName,
+			scope: Scope.create(),
+			returnType: StdReturnType.void,
+			paramTypes: StdTypeArray.create(),
+			varSlotCount: 0,
+			spillSize: 0,
+			stackSize: 0,
+			outgoingArgSize: 0,
+			isPure: true
+		}
+	end 'create'
+
+	// Create an IrFunction at the Std phase or later. Std-phase type fields are
+	// populated; Maxon-phase fields default. Used by stdlib-cache restore and by
+	// passes that synthesize helpers; both want the function callable from
+	// anywhere, so visibility defaults to `global`.
+	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+		return Self{
+			name: name,
+			namespace: "",
+			visibility: Visibility.global,
+			sourceFilePath: FilePath from "",
+			paramCount: paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: 0,
+			returnLine: returnLine,
+			nameLine: 0,
+			nameColumn: 0,
+			maxonReturnType: MaxonReturnType.void,
+			maxonParamTypes: MaxonTypeArray.create(),
+			throwsTypeName: throwsTypeName,
+			scope: Scope.create(),
+			returnType: returnType,
+			paramTypes: paramTypes,
+			varSlotCount: 0,
+			spillSize: 0,
+			stackSize: 0,
+			outgoingArgSize: 0,
+			isPure: true
+		}
+	end 'createFromStd'
+
+	// Copies signature + type info with a fresh-empty `blockRefs`. Callers that
+	// need the source's block references must copy them explicitly (the
+	// empty-list contract is what IrModule.cloneFunc and the backends rely on).
+	// See `cloneWithBlockRefs` for callers that want them preserved.
+	export static function clone(src IrFunction) returns IrFunction
+		return Self{
+			name: src.name,
+			namespace: src.namespace,
+			visibility: src.visibility,
+			sourceFilePath: src.sourceFilePath,
+			paramCount: src.paramCount,
+			blockRefs: BlockRefList.create(),
+			nextBlockId: src.nextBlockId,
+			returnLine: src.returnLine,
+			nameLine: src.nameLine,
+			nameColumn: src.nameColumn,
+			maxonReturnType: src.maxonReturnType,
+			maxonParamTypes: src.maxonParamTypes,
+			throwsTypeName: src.throwsTypeName,
+			scope: src.scope,
+			returnType: src.returnType,
+			paramTypes: src.paramTypes,
+			varSlotCount: src.varSlotCount,
+			spillSize: src.spillSize,
+			stackSize: src.stackSize,
+			outgoingArgSize: src.outgoingArgSize,
+			isPure: src.isPure
+		}
+	end 'clone'
+
+	// Copies signature, type info, AND the source's `blockRefs` verbatim. Used
+	// where a cloned function must keep pointing at the source's body blocks.
+	export static function cloneWithBlockRefs(src IrFunction) returns IrFunction
+		var copy = IrFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlock'
+			copy.blockRefs.append(blockRef)
+		end 'eachBlock'
+		return copy
+	end 'cloneWithBlockRefs'
+
+	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
+	// per-slot data it needs. No Std/MIR/backend pass reads `scope`, so resetting
+	// it frees the internal `vars` map + frame stacks while leaving a valid
+	// (empty) Scope in place.
+	export function releaseScope()
+		self.scope.reset()
+	end 'releaseScope'
+end 'IrFunction'
+
+export typealias IrFunctionArray = Array with IrFunction

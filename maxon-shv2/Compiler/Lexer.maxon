@@ -1,0 +1,1426 @@
+// Table-driven DFA lexer for Maxon source code.
+// Accepts a String source, converts to ByteArray internally for efficient byte-level scanning,
+// and produces tokens with String values sliced from the original source.
+
+export typealias LineNumber = int(0 to u64.max)
+export typealias ColumnNumber = int(0 to u64.max)
+export typealias CharOffset = int(0 to u64.max)
+
+typealias ByteCursor = ArrayIterator with Byte
+
+export union LexerError implements Error
+	unexpectedEof(line LineNumber, column ColumnNumber)
+	unterminatedString(line LineNumber, column ColumnNumber)
+	unterminatedBlockComment(line LineNumber, column ColumnNumber)
+	// An opening `{` inside a double-quoted string didn't close before the
+	// string did. The (line, column) point at the offending `{` so the
+	// diagnostic underlines the brace itself rather than the EOF position.
+	// Use `\{` to embed a literal `{` in a string literal.
+	unescapedBrace(line LineNumber, column ColumnNumber)
+	// A `#`-prefixed directive whose name is not one of the recognized
+	// directive keywords (`if`, `else`, `endif`). Carries the bare name so
+	// the surfacing diagnostic can quote the offending text.
+	unknownDirective(name String, line LineNumber, column ColumnNumber)
+end 'LexerError'
+
+// --- Character classes ---
+enum CharClass
+	other
+	space
+	tab
+	cr
+	lf
+	lParen
+	rParen
+	lBrace
+	rBrace
+	lBracket
+	rBracket
+	equals
+	bang
+	less
+	greater
+	plus
+	minus
+	star
+	colon
+	slash
+	squote
+	dquote
+	backslash
+	dot
+	digit
+	alpha
+	eof
+	comma
+	COUNT
+end 'CharClass'
+
+// --- DFA states ---
+enum DfaState
+	// Live states (need more input)
+	start
+	sawEq
+	sawBang
+	sawLt
+	sawGt
+	sawSlash
+	// Terminal states
+	skipWs
+	skipCr
+	newline
+	lParen
+	rParen
+	lBrace
+	rBrace
+	plus
+	minus
+	star
+	colon
+	eq
+	eqEq
+	bangEq
+	lt
+	ltEq
+	gt
+	gtEq
+	bang
+	enterSquote
+	enterDquote
+	enterDigit
+	enterAlpha
+	enterComment
+	enterBlockComment
+	slash
+	skipOther
+	dot
+	lBracket
+	rBracket
+	emitBackslash
+	comma
+	COUNT
+end 'DfaState'
+
+// --- Action codes ---
+// Start at 1 so 0 is never a valid action (catches uninitialized table entries)
+enum Action
+	skip = 1
+	skipCr
+	newline
+	emit
+	emit2
+	enterStrSq
+	enterStrDq
+	enterNumber
+	enterIdent
+	enterComment
+	enterBlockComment
+end 'Action'
+
+// --- Token kind enum ---
+// String-backed: each variant carries its diagnostic display text as
+// `.rawValue`, so error messages can stringify a kind directly without
+// needing a separate display lookup. Comparisons remain ordinal-based.
+// Backing strings carry no surrounding quotes — callers that want the
+// quoted form (e.g. `'function'` in expected-token diagnostics) wrap
+// the value at the use site.
+export enum TokenKind
+	// Top level
+	function = "function"
+	let = "let"
+	typealias = "typealias"
+	export = "export"
+	// Control flow
+	if = "if"
+	else = "else"
+	while = "while"
+	for = "for"
+	in = "in"
+	break = "break"
+	continue = "continue"
+	return = "return"
+	panic = "panic"
+	end = "end"
+	match = "match"
+	then = "then"
+	fallthrough = "fallthrough"
+	default = "default"
+	upto = "upto"
+	gives = "gives"
+	try = "try"
+	otherwise = "otherwise"
+	throw = "throw"
+	ignore = "ignore"
+	// Cooperative concurrency: `async f()` spawns a green thread returning a
+	// promise; `await p` suspends until it completes. See specs/async-await.md.
+	async = "async"
+	await = "await"
+	// Declarations
+	returns = "returns"
+	var = "var"
+	type = "type"
+	union = "union"
+	enum = "enum"
+	static = "static"
+	interface = "interface"
+	extension = "extension"
+	extends = "extends"
+	implements = "implements"
+	uses = "uses"
+	with = "with"
+	where = "where"
+	self = "self"
+	selfType = "Self"
+	throws = "throws"
+	from = "from"
+	to = "to"
+	mod = "mod"
+	// Logical / bitwise operators
+	and = "and"
+	or = "or"
+	not = "not"
+	xor = "xor"
+	shl = "shl"
+	shr = "shr"
+	as = "as"
+	is = "is"
+	// Literals
+	true = "true"
+	false = "false"
+	// Primitive types
+	int = "int"
+	float = "float"
+	bool = "bool"
+	cstring = "cstring"
+	// Other
+	array = "array"
+	of = "of"
+	// Literals
+	intLiteral = "integer literal"
+	floatLiteral = "float literal"
+	charLiteral = "character literal"
+	stringLiteral = "string literal"
+	byteStringLiteral = "byte string literal"
+	// Delimiters for pre-lexed interpolation expressions. A double-quoted
+	// string containing `{...}` interpolations emits as:
+	//   stringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
+	//   stringLiteral("fragment1") stringInterpStart <expr tokens> stringInterpEnd
+	//   ...
+	//   stringLiteral("fragmentN")
+	// Strings without interpolations emit a single stringLiteral as
+	// before. This lets the parser consume interpolated expressions inline
+	// from the main token stream instead of re-lexing the expression bytes
+	// through a sub-parser for every `{...}` segment.
+	stringInterpStart = "interpolation start"
+	stringInterpEnd = "interpolation end"
+	// Identifiers
+	identifier = "identifier"
+	// Punctuation
+	leftParen = "("
+	rightParen = ")"
+	leftBrace = "\{"
+	rightBrace = "}"
+	leftBracket = "["
+	rightBracket = "]"
+	equals = "="
+	equalsEquals = "=="
+	bangEquals = "!="
+	lessThan = "<"
+	lessEquals = "<="
+	greaterThan = ">"
+	greaterEquals = ">="
+	plus = "+"
+	minus = "-"
+	star = "*"
+	slash = "/"
+	dot = "."
+	colon = ":"
+	comma = ","
+	// `@` prefixes a compiler annotation (currently only `@heap`). Emitted as a
+	// standalone token; the parser consumes it together with the following
+	// annotation identifier (e.g. `heap`) and the `var`/`let` it decorates.
+	at = "@"
+	// Conditional-compilation directives. Emitted as standalone tokens by the
+	// lexer; the parser consults the build target to decide which branch to
+	// keep and skips the others at the token-stream level.
+	hashIf = "#if"
+	hashElse = "#else"
+	hashEndif = "#endif"
+	newline = "newline"
+	eof = "end of file"
+end 'TokenKind'
+
+export type Token
+	export let kind as TokenKind
+	// Human-readable identifier text, kept as `String` for the many existing
+	// parser sites that compare against string literals ("if", "return", ...)
+	// and that route through diagnostic formatting. Future work will migrate
+	// those sites to byte-slice comparisons, at which point this field can be
+	// retired in favor of `valueBytes`.
+	export let value as String
+	// Zero-copy byte slice of the original source span for this token. Future
+	// Maxon-IR ops (after Commit D) reference names as `ByteArray` slices; the
+	// parser plumbs `token.valueBytes` into those fields directly, avoiding
+	// a String-from-bytes round trip on the hot path.
+	//
+	// Note: EOF and synthetic tokens carry an empty `ByteArray`.
+	export let valueBytes as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	// Byte offsets into the source buffer bracketing this token's span, used
+	// by the parser to compute op source ranges and by the LSP to map cursor
+	// positions back to ops. Both fields are 0 on EOF and synthetic tokens.
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
+
+	export static function create(kind TokenKind, value String, line LineNumber, column ColumnNumber, valueBytes ByteArray = ByteArray.create(), startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
+		return Self{kind: kind, value: value, valueBytes: valueBytes, line: line, column: column, startByte: startByte, endByte: endByte}
+	end 'create'
+
+	export static function eof() returns Token
+		return Self{kind: TokenKind.eof, value: "", valueBytes: ByteArray.create(), line: 0, column: 0, startByte: 0, endByte: 0}
+	end 'eof'
+end 'Token'
+
+export typealias TokenArray = Array with Token
+
+// --- Table variables ---
+// Static lookup: byte value -> character class (256 entries, O(1) index)
+let charClassTable = [
+	// 0-15:                                                                       \t                \n                      \r
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.tab, CharClass.lf, CharClass.other, CharClass.other, CharClass.cr, CharClass.other, CharClass.other,
+	// 16-31
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	// 32-47:  sp              !               "               #               $               %               &               '               (               )               *               +               ,               -               .               /
+	CharClass.space, CharClass.bang, CharClass.dquote, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.squote, CharClass.lParen, CharClass.rParen, CharClass.star, CharClass.plus, CharClass.comma, CharClass.minus, CharClass.dot, CharClass.slash,
+	// 48-63:  0-9                                                                                                           :               ;               <               =               >               ?
+	CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.colon, CharClass.other, CharClass.less, CharClass.equals, CharClass.greater, CharClass.other,
+	// 64-79:  @               A-O
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 80-95:  P-Z                                                                             [               \               ]               ^               _
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBracket, CharClass.backslash, CharClass.rBracket, CharClass.other, CharClass.alpha,
+	// 96-111: `               a-o
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 112-127: p-z                                                                             {               |               }               ~               DEL
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBrace, CharClass.other, CharClass.rBrace, CharClass.other, CharClass.other,
+	// 128-255: extended ASCII (all other)
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other
+]
+
+// transitionTable: 36 states x 28 char classes = 1008 entries
+// Index as: state * CharClass.COUNT + charClass
+// Columns: other space tab  cr   lf   (    )    {    }    [    ]    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof  ,
+let transitionTable = [
+	// start: dispatch on first character
+	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.emitBackslash, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther, DfaState.comma,
+	// sawEq: '=' seen, looking for '='
+	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
+	// sawBang: '!' seen, looking for '='
+	DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bangEq, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang, DfaState.bang,
+	// sawLt: '<' seen, looking for '='
+	DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
+	// sawGt: '>' seen, looking for '='
+	DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
+	// sawSlash: '/' seen, looking for '/' or '*'
+	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterBlockComment, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
+	// Terminal states (rows 6-32) — never transitioned from
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// dot (terminal, never transitioned from)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// lBracket (terminal)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// rBracket (terminal)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// emitBackslash (terminal — emits a synthetic identifier holding the
+	// `\` byte so downstream "Expected function declaration, got '\\'"
+	// diagnostics carry a real token to point at)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// comma (terminal, emits a Comma token)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
+]
+
+// actionTable: 36 entries indexed by state -> action to perform
+//              start           sawEq          sawBang        sawLt          sawGt          sawSlash       skipWs         skipCr
+let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skipCr,
+	//              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
+	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
+	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
+	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
+	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot         lBracket    rBracket    emitBackslash   comma
+	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit
+]
+
+// Single dispatch point for all fixed-text tokens (operators, punctuation).
+typealias DfaStateIndex = int(0 to 64)
+
+function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
+	// State indices correspond to DfaState enum raw values (int match can't use enum names).
+	match stateIndex 'dispatch'
+		9 then tokens.push(Token.create(TokenKind.leftParen, value: "(", line: line, column: column))
+		10 then tokens.push(Token.create(TokenKind.rightParen, value: ")", line: line, column: column))
+		11 then tokens.push(Token.create(TokenKind.leftBrace, value: "\{", line: line, column: column))
+		12 then tokens.push(Token.create(TokenKind.rightBrace, value: "\}", line: line, column: column))
+		13 then tokens.push(Token.create(TokenKind.plus, value: "+", line: line, column: column))
+		14 then tokens.push(Token.create(TokenKind.minus, value: "-", line: line, column: column))
+		15 then tokens.push(Token.create(TokenKind.star, value: "*", line: line, column: column))
+		16 then tokens.push(Token.create(TokenKind.colon, value: ":", line: line, column: column))
+		17 then tokens.push(Token.create(TokenKind.equals, value: "=", line: line, column: column))
+		18 then tokens.push(Token.create(TokenKind.equalsEquals, value: "==", line: line, column: column))
+		19 then tokens.push(Token.create(TokenKind.bangEquals, value: "!=", line: line, column: column))
+		20 then tokens.push(Token.create(TokenKind.lessThan, value: "<", line: line, column: column))
+		21 then tokens.push(Token.create(TokenKind.lessEquals, value: "<=", line: line, column: column))
+		22 then tokens.push(Token.create(TokenKind.greaterThan, value: ">", line: line, column: column))
+		23 then tokens.push(Token.create(TokenKind.greaterEquals, value: ">=", line: line, column: column))
+		24 then tokens.push(Token.create(TokenKind.identifier, value: "!", line: line, column: column))
+		31 then tokens.push(Token.create(TokenKind.slash, value: "/", line: line, column: column))
+		33 then tokens.push(Token.create(TokenKind.dot, value: ".", line: line, column: column))
+		34 then tokens.push(Token.create(TokenKind.leftBracket, value: "[", line: line, column: column))
+		35 then tokens.push(Token.create(TokenKind.rightBracket, value: "]", line: line, column: column))
+		// Backslash is illegal at the source level outside of strings; emit a
+		// synthetic identifier carrying the literal `\` so the parser surfaces
+		// `Expected function declaration, got '\\'` (which the spec runner's
+		// path normalization renders as `'/'`) instead of silently dropping
+		// the byte.
+		36 then tokens.push(Token.create(TokenKind.identifier, value: "\\", line: line, column: column))
+		37 then tokens.push(Token.create(TokenKind.comma, value: ",", line: line, column: column))
+		default panic("emitFixedToken: unhandled state index {stateIndex}")
+	end 'dispatch'
+end 'emitFixedToken'
+
+// --- Lexer type ---
+
+type Lexer
+	var source as String
+	var bytes as ByteArray
+	var cursor as ByteCursor
+	export var tokens as TokenArray
+	var len as CharOffset
+	export var line as LineNumber
+	export var column as ColumnNumber
+	// Pending lexer error stashed by scanners that hit an unrecoverable
+	// state but still need to emit a partial token before unwinding via the
+	// shared CursorError path. Read by run() after CursorError surfaces;
+	// when set, run() throws the stashed LexerError instead of the generic
+	// unexpectedEof.
+	var pendingError as LexerError
+	var hasPendingError as bool
+	// Set by sub-scanners that complete a token whose final byte happens to
+	// be the last byte of the source (no trailing newline). They unwind via
+	// CursorError because that's the shared "done" channel; the flag lets
+	// run() distinguish "clean completion at EOF" from a truncated token.
+	var emittedAtEof as bool
+
+	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false}
+	end 'create'
+
+	// --- Navigation helpers ---
+
+	function advance() throws CursorError
+		try cursor.advance() otherwise throw CursorError.exhausted
+		column = column + 1
+	end 'advance'
+
+	function retreat() throws CursorError
+		try cursor.retreat() otherwise throw CursorError.atStart
+		column = column - 1
+	end 'retreat'
+
+	// Non-throwing advance. Returns true if advanced, false if at end of source.
+	// Use in loops where reaching EOF is normal (numbers, identifiers, comments).
+	function tryAdvance() returns bool
+		try cursor.advance() otherwise return false
+		column = column + 1
+		return true
+	end 'tryAdvance'
+
+	// Non-throwing advanceRaw. Returns true if advanced, false if at end of source.
+	function tryAdvanceRaw() returns bool
+		try cursor.advance() otherwise return false
+		return true
+	end 'tryAdvanceRaw'
+
+	function emit(kind TokenKind, value String, startLine LineNumber, startCol ColumnNumber)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol))
+	end 'emit'
+
+	// Variable-content emit: captures both the `String` value (for legacy
+	// parser sites) and the raw `ByteArray` slice plus source byte range (for
+	// the LSP / future name-slice MaxonOp fields). Used by identifier, number,
+	// and string-literal scanners.
+	function emitWithSource(kind TokenKind, value String, valueBytes ByteArray, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: startByte, endByte: endByte))
+	end 'emitWithSource'
+
+	// Slice the original source from startPos up to (not including) cursor position.
+	// Since Maxon source is ASCII, byte offsets work directly. Cursor invariants
+	// ensure the slice bounds are always valid; the panic branch is unreachable.
+	function slice(startPos CharOffset) returns String
+		return String.from(try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.slice: invariant violated"))
+	end 'slice'
+
+	// Raw byte slice over the same span as `slice()`. Zero-copy view into the
+	// source buffer for callers that plan to embed the slice in IR ops.
+	function sliceBytes(startPos CharOffset) returns ByteArray
+		return try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceBytes: invariant violated")
+	end 'sliceBytes'
+
+	// Slice a number or identifier token. If tryAdvance() returned false at EOF,
+	// cursor is still on the last byte — include it.
+	function sliceNumber(startPos CharOffset) returns String
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return String.from(try bytes.slice(startPos, endIndex: cursor.index() + 1) otherwise panic("Lexer.sliceNumber: invariant violated"))
+		end 'includeLastByte'
+		return String.from(try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceNumber: invariant violated"))
+	end 'sliceNumber'
+
+	// Byte-slice equivalent of `sliceNumber()` with the same inclusive/exclusive
+	// end-byte behavior. Returns the raw ByteArray view (zero-copy).
+	function sliceNumberBytes(startPos CharOffset) returns ByteArray
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return try bytes.slice(startPos, endIndex: cursor.index() + 1) otherwise panic("Lexer.sliceNumberBytes: invariant violated")
+		end 'includeLastByte'
+		return try bytes.slice(startPos, endIndex: cursor.index()) otherwise panic("Lexer.sliceNumberBytes: invariant violated")
+	end 'sliceNumberBytes'
+
+	// End byte offset corresponding to the `sliceNumber()`/`sliceNumberBytes()`
+	// inclusive-last-byte decision.
+	function sliceNumberEndByte() returns ByteOffset
+		let b = cursor.current()
+		if isDigit(b) or isAlpha(b) or b == Ascii.underscore or b == Ascii.dot 'includeLastByte'
+			return cursor.index() + 1
+		end 'includeLastByte'
+		return cursor.index()
+	end 'sliceNumberEndByte'
+
+	// Emit a number-shaped token (intLiteral/floatLiteral) capturing source byte
+	// range and raw-byte slice alongside the String value. The end-byte decision
+	// follows the same inclusive-last-byte rule as `sliceNumber()`.
+	function emitNumber(kind TokenKind, numStart CharOffset, startLine LineNumber, startCol ColumnNumber)
+		let endByte = sliceNumberEndByte()
+		let valueBytes = try bytes.slice(numStart, endIndex: endByte) otherwise panic("Lexer.emitNumber: invariant violated")
+		let value = String.from(valueBytes)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: numStart, endByte: endByte))
+	end 'emitNumber'
+
+	// Emit a string-literal-shaped token (charLiteral/stringLiteral)
+	// capturing source byte range and raw-byte slice alongside the String value.
+	function emitStringLit(kind TokenKind, strStart CharOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
+		let valueBytes = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
+		let value = String.from(valueBytes)
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: strStart, endByte: endByte))
+	end 'emitStringLit'
+
+	function newline(startLine LineNumber, startCol ColumnNumber)
+		tokens.push(Token.create(TokenKind.newline, value: "", line: startLine, column: startCol))
+		line = line + 1
+		column = 1
+	end 'newline'
+
+	// Sub-scanners signal "token completed cleanly on the source's final byte"
+	// by setting `emittedAtEof` and unwinding via CursorError. Centralized here
+	// so the contract — flag must be set before the throw, never after — lives
+	// in one place.
+	function finishAtEof() throws CursorError
+		emittedAtEof = true
+		throw CursorError.exhausted
+	end 'finishAtEof'
+
+	// --- Action dispatch helpers ---
+
+	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+		try advance() otherwise 'eof'
+			// Two-char token completed at the source's last byte — clean
+			// completion, not a truncated token.
+			try finishAtEof()
+		end 'eof'
+	end 'handleEmit2'
+
+	function handleEnterComment() throws CursorError
+		try advance()
+		try scanComment()
+	end 'handleEnterComment'
+
+	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try advance()
+		try scanBlockComment(startLine, startCol: startCol)
+	end 'handleEnterBlockComment'
+
+	// Walk one DFA step starting from the current cursor byte: read the byte's
+	// character class, consume it, follow the two-step transition (start state →
+	// live state → terminal), then dispatch the resulting action. Sets `atEnd`
+	// to true when the consumed byte was the final byte of input. Used by both
+	// the top-level run() loop and scanInterp() so the two share one driver.
+	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let ch = cursor.current()
+		// `#` opens a compiler directive (e.g. `#if`, `#else`, `#endif`). It
+		// sits outside the table-driven DFA because the directive name is a
+		// run of letters following the `#`, and we want to emit a dedicated
+		// TokenKind based on the name rather than two separate tokens.
+		if ch == Ascii.hash 'isDirective'
+			return try scanDirective(startLine, startCol: startCol)
+		end 'isDirective'
+		// `@` opens a compiler annotation (e.g. `@heap`). Like `#`, it sits
+		// outside the table-driven DFA: emit a standalone `at` token and let the
+		// table-driven scanner pick up the following annotation identifier on the
+		// next step. The byte at 64 (`@`) classifies as `other` in the DFA table,
+		// so without this special case it would be silently skipped.
+		if ch == Ascii.at 'isAt'
+			emit(TokenKind.at, value: "@", startLine: startLine, startCol: startCol)
+			var atEof = false
+			try advance() otherwise 'atEofAfter'
+				atEof = true
+			end 'atEofAfter'
+			return atEof
+		end 'isAt'
+		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
+		var atEnd = false
+		try advance() otherwise 'lastChar'
+			atEnd = true
+		end 'lastChar'
+		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
+			var nextClass = CharClass.eof
+			if not atEnd 'hasNext'
+				let nextCh = cursor.current()
+				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+			end 'hasNext'
+			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
+		end 'live'
+		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: atEnd)
+		return atEnd
+	end 'stepDfa'
+
+	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, lastChar bool) throws CursorError
+		match action 'dispatch'
+			skip then return
+			skipCr then column = column - 1
+			newline then newline(startLine, startCol: startCol)
+			emit then emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+			emit2 then try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
+			enterStrSq then try scanSingleQuoteString(startLine, startCol: startCol)
+			enterStrDq then try scanDoubleQuoteString(startLine, startCol: startCol)
+			enterNumber then try scanNumberFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
+			enterComment then try handleEnterComment()
+			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol)
+			default panic("Lexer: unhandled action {action}")
+		end 'dispatch'
+	end 'dispatchAction'
+
+	// On enterNumber/enterIdent the DFA has already consumed the token's first
+	// character; retreat so the dedicated scanner re-reads it from the start —
+	// unless it was the final char of input, where there is nothing to back over.
+	function retreatUnlessLast(lastChar bool) throws CursorError
+		if not lastChar 'retreat'
+			try retreat()
+		end 'retreat'
+	end 'retreatUnlessLast'
+
+	function scanNumberFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanNumber(startLine, startCol: startCol)
+	end 'scanNumberFromDfa'
+
+	function scanIdentifierFromDfa(lastChar bool, startLine LineNumber, startCol ColumnNumber) throws CursorError
+		try retreatUnlessLast(lastChar)
+		try scanIdentifier(startLine, startCol: startCol)
+	end 'scanIdentifierFromDfa'
+
+	// --- Sub-scanners ---
+
+	// Opening quote already consumed by main loop.
+	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursor.index()
+		while cursor.index() < len 'strBody'
+			let sc = cursor.current()
+			if sc == Ascii.quote 'endStr'
+				emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'squoteEof'
+					try finishAtEof()
+				end 'squoteEof'
+				return
+			end 'endStr'
+			// Raw escape bytes stay in the fragment; the parser decodes them
+			// on emit. Skip the byte following `\` so `\'` doesn't close the
+			// literal and `\\` doesn't swallow the next byte as escape lead.
+			if sc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'strBody'
+		// Unterminated string at EOF — stash an unterminatedString lexer
+		// error and unwind via CursorError. run() reads the stashed
+		// LexerError and surfaces it to the caller.
+		emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanSingleQuoteString'
+
+	// Opening double-quote already consumed by main loop. Scans body bytes,
+	// emitting a stringLiteral for each fragment bounded by `{` / `}`
+	// interpolations. Within `{...}` the main DFA is re-driven (via scanInterp)
+	// so interpolation expressions are lexed once, inline, into the main token
+	// stream — the parser consumes them as ordinary tokens bracketed by
+	// stringInterpStart / stringInterpEnd, with no sub-parser needed.
+	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		var fragStart = cursor.index()
+		var fragLine = startLine
+		var fragCol = startCol
+		while cursor.index() < len 'dstrBody'
+			let dc = cursor.current()
+			if dc == Ascii.dquote 'endDstr'
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				if not tryAdvance() 'dquoteEof'
+					try finishAtEof()
+				end 'dquoteEof'
+				return
+			end 'endDstr'
+			if dc == Ascii.lf 'newlineInDstr'
+				// Stop at newline (matches C# ScanStringLiteral) — emit a
+				// partial fragment then stash the unterminated-string error
+				// so the lexer surfaces a diagnostic instead of silently
+				// accepting a string that never had a closing quote.
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				hasPendingError = true
+				pendingError = LexerError.unterminatedString(startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'newlineInDstr'
+			if dc == Ascii.backslash 'esc'
+				// Raw escape bytes stay in the fragment; the parser decodes them
+				// on emit. Skip the escape's following byte so a backslash-lbrace
+				// `\{` doesn't open an interpolation.
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if dc == '{' 'openInterp'
+				// Emit the literal fragment accumulated before the `{`.
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				let interpLine = line
+				let interpCol = column
+				tokens.push(Token.create(TokenKind.stringInterpStart, value: "\{", line: interpLine, column: interpCol))
+				// Consume the `{`; scanInterp runs the DFA until matching `}`.
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				try scanInterp(interpLine, openCol: interpCol)
+				// scanInterp returns with cursor AT `}`; advance past it to start
+				// the next fragment.
+				let closeLine = line
+				let closeCol = column
+				tokens.push(Token.create(TokenKind.stringInterpEnd, value: "\}", line: closeLine, column: closeCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				fragStart = cursor.index()
+				fragLine = line
+				fragCol = column
+				continue
+			end 'openInterp'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'dstrBody'
+		// Unterminated string at EOF — emit a partial fragment so downstream
+		// tooling has something to attach error info to, then stash the
+		// lexer error and unwind via CursorError. run() reads the stashed
+		// LexerError and surfaces it to the caller so queryTokens can route
+		// it through the project's diagnostic sink.
+		emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index() + 1, startLine: fragLine, startCol: fragCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanDoubleQuoteString'
+
+	// Phase 7 step 7: byte-string literal body scanner. Caller has consumed
+	// the opening `b` and `"`. Scans bytes until the closing `"`, treating
+	// `\` as a one-byte escape skip (decoded by the parser) and explicitly
+	// rejecting `{` interpolation markers — byte strings are byte-exact.
+	function scanByteStringLiteralBody(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursor.index()
+		while cursor.index() < len 'bstrBody'
+			let bc = cursor.current()
+			if bc == Ascii.dquote 'endBstr'
+				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'closeEof'
+					try finishAtEof()
+				end 'closeEof'
+				return
+			end 'endBstr'
+			if bc == Ascii.lf 'newlineInBstr'
+				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				hasPendingError = true
+				pendingError = LexerError.unterminatedString(startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'newlineInBstr'
+			if bc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'bstrBody'
+		emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanByteStringLiteralBody'
+
+	// Drive the main DFA over an interpolation body `{...}`. Cursor enters AT
+	// the first byte after `{`; returns with cursor AT the matching `}`. Tracks
+	// nested braces so struct literals inside an interpolation don't terminate
+	// it early. Delegates each byte to stepDfa so every token kind (identifiers,
+	// calls, operators, nested strings) is lexed correctly.
+	//
+	// `openLine`/`openCol` point at the `{` that opened this interpolation so
+	// failures can blame the offending brace (mirrors C# `firstBraceColumn`).
+	// On EOF without a matching `}` we distinguish two flavours, mirroring the
+	// C# `recoveredFromUnbalancedBrace` heuristic at Lexer.cs:598:
+	//   * If we ever encountered a `"` inside the interp body, that `"` was
+	//     almost certainly the outer string's intended closer and the `{` was
+	//     a literal brace the user meant to escape — emit unescapedBrace.
+	//   * Otherwise the source genuinely ran out before the interp closed —
+	//     emit unterminatedString.
+	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
+		var depth = 1
+		// Cursor position right after the opening `{` — used on failure to
+		// scan the consumed body for `"`. We can't track this via a flag set
+		// in scanInterp's outer loop because sub-scanners like the char-literal
+		// scanner gobble bytes (including `"`) without surfacing them back.
+		let bodyStart = cursor.index()
+		while cursor.index() < len 'interp'
+			let ch = cursor.current()
+			if ch == '}' 'closeBrace'
+				depth = depth - 1
+				if depth == 0 'atClose'
+					return
+				end 'atClose'
+				// Nested close brace — emit as a token and advance.
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.rightBrace, value: "\}", line: braceLine, column: braceCol))
+				if not tryAdvance() 'rBraceEof'
+					throw CursorError.exhausted
+				end 'rBraceEof'
+				continue
+			end 'closeBrace'
+			if ch == '{' 'openBrace'
+				depth = depth + 1
+				let braceLine = line
+				let braceCol = column
+				tokens.push(Token.create(TokenKind.leftBrace, value: "\{", line: braceLine, column: braceCol))
+				if not tryAdvance() 'lBraceEof'
+					throw CursorError.exhausted
+				end 'lBraceEof'
+				continue
+			end 'openBrace'
+
+			let atEnd = try stepDfa(line, startCol: column) otherwise 'subEof'
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+			end 'subEof'
+			if atEnd 'interpEof'
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+			end 'interpEof'
+		end 'interp'
+		// Loop guard `cursor.index() < len` failed without a matching `}`.
+		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+	end 'scanInterp'
+
+	// Stash the right LexerError for a scanInterp that ran out of input
+	// without finding `}`. Looks at the bytes consumed since the opening
+	// `{` for a `"` — its presence means the interp gobbled past the outer
+	// string's closing quote, so the `{` was meant as a literal brace.
+	// Mirrors the C# `recoveredFromUnbalancedBrace` flag at Lexer.cs:598.
+	function failInterp(openLine LineNumber, openCol ColumnNumber, bodyStart CharOffset) throws CursorError
+		hasPendingError = true
+		if interpBodyContainsDquote(bodyStart) 'sawDquote'
+			pendingError = LexerError.unescapedBrace(openLine, column: openCol)
+		end 'sawDquote' else 'genuineEof'
+			pendingError = LexerError.unterminatedString(openLine, column: openCol)
+		end 'genuineEof'
+		throw CursorError.exhausted
+	end 'failInterp'
+
+	// Walk the bytes from `bodyStart` up to the cursor's current position
+	// looking for `"`. A hit means the interp's body chewed through the
+	// outer string's intended closing quote.
+	function interpBodyContainsDquote(bodyStart CharOffset) returns bool
+		var i = bodyStart
+		let stop = cursor.index()
+		while i < stop 'scan'
+			let b = try bytes.get(i) otherwise return false
+			if b == Ascii.dquote 'hit'
+				return true
+			end 'hit'
+			i = i + 1
+		end 'scan'
+		return false
+	end 'interpBodyContainsDquote'
+
+	// Cursor points to the first digit (not yet consumed by this scanner).
+	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let numStart = cursor.index()
+		let firstByte = cursor.current()
+
+		// Check for 0x, 0b, 0o prefixes
+		// Sentinel: peek(1) throws past EOF, which legitimately happens when
+		// scanNumber is invoked from a sub-parser (e.g. string interpolation)
+		// over a substring that ends on a digit. 0 is safe — treated as "no prefix".
+		let prefixByte = try cursor.peek(1) otherwise 0
+		if firstByte == Ascii.zero and prefixByte != 0 'checkPrefix'
+			// Hex literal: 0x or 0X
+			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
+				_ = tryAdvance()
+				if not tryAdvance() 'hexPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'hexPrefixEof'
+				while cursor.index() < len 'hexDigits'
+					let hc = cursor.current()
+					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+						break
+					end 'endHex'
+					if not tryAdvance() 'hexEof'
+						break
+					end 'hexEof'
+				end 'hexDigits'
+				let hexVal = sliceNumber(numStart)
+				emit(TokenKind.intLiteral, value: hexVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+				// Binary literal: 0b or 0B
+				_ = tryAdvance()
+				if not tryAdvance() 'binPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'binPrefixEof'
+				while cursor.index() < len 'binDigits'
+					let bc = cursor.current()
+					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
+						break
+					end 'endBin'
+					if not tryAdvance() 'binEof'
+						break
+					end 'binEof'
+				end 'binDigits'
+				let binVal = sliceNumber(numStart)
+				emit(TokenKind.intLiteral, value: binVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+				_ = tryAdvance()
+				if not tryAdvance() 'octPrefixEof'
+					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					try finishAtEof()
+				end 'octPrefixEof'
+				while cursor.index() < len 'octDigits'
+					let oc = cursor.current()
+					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
+						break
+					end 'endOct'
+					if not tryAdvance() 'octEof'
+						break
+					end 'octEof'
+				end 'octDigits'
+				let octVal = sliceNumber(numStart)
+				emit(TokenKind.intLiteral, value: octVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isOct'
+		end 'checkPrefix'
+
+		// Decimal digits (with underscore separators)
+		while cursor.index() < len 'digits'
+			let dc = cursor.current()
+			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
+				break
+			end 'endNum'
+			if not tryAdvance() 'digitsEof'
+				break
+			end 'digitsEof'
+		end 'digits'
+
+		// Check for decimal point (float literal)
+		var isFloat = false
+		if cursor.index() < len 'checkDot'
+			let dotCh = cursor.current()
+			if dotCh == Ascii.dot 'hasDot'
+				isFloat = true
+				if not tryAdvance() 'dotEof'
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					return
+				end 'dotEof'
+				while cursor.index() < len 'fracDigits'
+					let fc = cursor.current()
+					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
+						break
+					end 'endFrac'
+					if not tryAdvance() 'fracEof'
+						break
+					end 'fracEof'
+				end 'fracDigits'
+			end 'hasDot'
+		end 'checkDot'
+
+		// Check for scientific notation exponent (e/E) — only after a decimal point
+		if isFloat and cursor.index() < len 'checkExp'
+			let expCh = cursor.current()
+			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
+				isFloat = true
+				if not tryAdvance() 'expEof'
+					emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+					return
+				end 'expEof'
+				// Optional sign
+				if cursor.index() < len 'checkSign'
+					let signCh = cursor.current()
+					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
+						if not tryAdvance() 'signEof'
+							emitNumber(TokenKind.floatLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
+							return
+						end 'signEof'
+					end 'hasSign'
+				end 'checkSign'
+				// Exponent digits
+				while cursor.index() < len 'expDigits'
+					let ec = cursor.current()
+					if not isDigit(ec) 'endExp'
+						break
+					end 'endExp'
+					if not tryAdvance() 'expDigitsEof'
+						break
+					end 'expDigitsEof'
+				end 'expDigits'
+			end 'hasExp'
+		end 'checkExp'
+
+		// For decimal/float numbers, only include current byte if it's a digit or underscore
+		// (not alpha like 'e' which should start a separate identifier token)
+		let cb = cursor.current()
+		var atEof = false
+		var endOfs = cursor.index()
+		if isDigit(cb) or cb == Ascii.underscore or cb == Ascii.dot 'includeDecLast'
+			endOfs = cursor.index() + 1
+			atEof = true
+		end 'includeDecLast'
+		let numBytes = try bytes.slice(numStart, endIndex: endOfs) otherwise panic("Lexer: number-slice invariant violated")
+		let numVal = String.from(numBytes)
+		if isFloat 'emitFloat'
+			emitWithSource(TokenKind.floatLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
+		end 'emitFloat' else 'emitInt'
+			emitWithSource(TokenKind.intLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
+		end 'emitInt'
+		if atEof 'numDone'
+			try finishAtEof()
+		end 'numDone'
+	end 'scanNumber'
+
+	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
+	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let startPos = cursor.index()
+		// Phase 7 step 7: byte-string literal prefix. A bare `b` immediately
+		// followed by `"` (no intervening alphanumeric) opens a byte-string
+		// literal. Use peek(1) to look one byte ahead without committing —
+		// peek throws past EOF, so guard via `otherwise 0` (0 cannot match
+		// dquote, so the fall-through naturally drops back to identifier
+		// scanning at the source's last byte).
+		if cursor.current() == Ascii.lowerB 'maybeByteStr'
+			let nextByte = try cursor.peek(1) otherwise 0
+			if nextByte == Ascii.dquote 'isByteStr'
+				// Consume the `b` and the opening `"`, then scan the body
+				// exactly like a non-interpolating double-quoted string —
+				// byte-strings explicitly disallow `{...}` interpolation, so
+				// we can't reuse scanDoubleQuoteString as-is.
+				if not tryAdvance() 'bEof'
+					try finishAtEof()
+				end 'bEof'
+				if not tryAdvance() 'qEof'
+					try finishAtEof()
+				end 'qEof'
+				try scanByteStringLiteralBody(startLine, startCol: startCol)
+				return
+			end 'isByteStr'
+		end 'maybeByteStr'
+		while cursor.index() < len 'identBody'
+			let ic = cursor.current()
+			if not isAlphaNum(ic) 'endIdent'
+				break
+			end 'endIdent'
+			if not tryAdvance() 'identEof'
+				break
+			end 'identEof'
+		end 'identBody'
+		// If tryAdvance() returned false at EOF, cursor is still on the last
+		// identifier byte — include it. Otherwise cursor is past the identifier.
+		var atEof = false
+		var identEnd = cursor.index()
+		if isAlphaNum(cursor.current()) 'includeLastByte'
+			identEnd = identEnd + 1
+			atEof = true
+		end 'includeLastByte'
+		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
+		let identVal = String.from(identBytes)
+		let kind = classifyIdentifier(identVal)
+		emitWithSource(kind, value: identVal, valueBytes: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
+		if atEof 'identDone'
+			try finishAtEof()
+		end 'identDone'
+	end 'scanIdentifier'
+
+	// Consume a `#`-prefixed compiler directive starting at the current cursor
+	// position (which is AT the `#`). Reads the directive name (a run of
+	// lowercase letters following `#`) and emits the matching hashIf / hashElse
+	// / hashEndif token. A bare `#` at EOF stashes unexpectedEof; an
+	// unrecognized name stashes `unknownDirective` so the surfacing diagnostic
+	// can name the offending text instead of misreporting an EOF. Returns
+	// true if the directive consumed the source's final byte.
+	function scanDirective(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let hashStart = cursor.index()
+		// Consume the `#`.
+		try advance() otherwise 'eofAtHash'
+			// `#` at EOF with no name following — treat as malformed directive.
+			hasPendingError = true
+			pendingError = LexerError.unexpectedEof(startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'eofAtHash'
+		let nameStart = cursor.index()
+		var atEof = false
+		while cursor.index() < len 'directiveBody'
+			let dc = cursor.current()
+			if not isAlpha(dc) 'endName'
+				break
+			end 'endName'
+			if not tryAdvance() 'eofInName'
+				atEof = true
+				break
+			end 'eofInName'
+		end 'directiveBody'
+		var nameEnd = cursor.index()
+		if atEof and isAlpha(cursor.current()) 'includeLastByte'
+			nameEnd = nameEnd + 1
+		end 'includeLastByte'
+		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: invariant violated")
+		let name = String.from(nameBytes)
+		let kind = classifyDirective(name)
+		if kind == TokenKind.identifier 'unknown'
+			// Unknown directive name — stash a distinct lexer error so the
+			// diagnostic can quote the offending name; run()'s caller maps
+			// this to ErrorCode.lexerUnexpectedCharacter.
+			hasPendingError = true
+			pendingError = LexerError.unknownDirective(name, line: startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'unknown'
+		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		let fullSpan = String.from(fullSpanBytes)
+		emitWithSource(kind, value: fullSpan, valueBytes: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
+		if atEof 'directiveDone'
+			try finishAtEof()
+		end 'directiveDone'
+		return false
+	end 'scanDirective'
+
+	// Both '/' characters already consumed. Advances to (but not past) the newline.
+	// Only increments cursor position, not column — column will be reset by the newline handler.
+	function scanComment() throws CursorError
+		while cursor.index() < len 'skipComment'
+			let cc = cursor.current()
+			if cc == Ascii.lf 'endComment'
+				break
+			end 'endComment'
+			if not tryAdvanceRaw() 'commentEof'
+				// Comment runs to end of file — that's a complete comment, not a
+				// truncated token.
+				try finishAtEof()
+			end 'commentEof'
+		end 'skipComment'
+	end 'scanComment'
+
+	// Both '/' and '*' already consumed. Scans until '*/' is found.
+	// Tracks line/column across newlines within the comment.
+	function scanBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		while cursor.index() < len 'skipBlockComment'
+			let cc = cursor.current()
+			if cc == Ascii.star 'checkEnd'
+				// Sentinel: 0 = EOF; safely treated as not the comment closer.
+				let next = try cursor.peek(1) otherwise 0
+				if next == Ascii.slash 'foundEnd'
+					_ = tryAdvance()
+					if not tryAdvance() 'endSlashEof'
+						// `*/` was the last two bytes — comment closed cleanly,
+						// just at EOF. Mark clean completion so run() doesn't
+						// surface this as truncated input.
+						try finishAtEof()
+					end 'endSlashEof'
+					return
+				end 'foundEnd'
+			end 'checkEnd'
+			if cc == Ascii.lf 'newlineInBlock'
+				line = line + 1
+				column = 1
+				if not tryAdvanceRaw() 'blockEof1'
+					hasPendingError = true
+					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+					throw CursorError.exhausted
+				end 'blockEof1'
+			end 'newlineInBlock' else 'advanceInBlock'
+				if not tryAdvance() 'blockEof2'
+					hasPendingError = true
+					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+					throw CursorError.exhausted
+				end 'blockEof2'
+			end 'advanceInBlock'
+		end 'skipBlockComment'
+		// Loop exit without finding `*/` — unterminated.
+		hasPendingError = true
+		pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanBlockComment'
+
+	// --- Main DFA loop ---
+
+	function run() returns TokenArray throws LexerError
+		logDebug(LogCategory.lexer, message: function() gives "Starting lexer")
+
+		// Drive the DFA until either stepDfa returns true (consumed everything
+		// cleanly) or a scanner unwinds via CursorError. CursorError with
+		// `emittedAtEof` set means a complete token landed on the last byte
+		// (clean completion); otherwise it's truly truncated input.
+		var done = false
+		while not done 'scan'
+			let startLine = line
+			let startCol = column
+			done = try stepOnce(startLine, startCol: startCol)
+		end 'scan'
+
+		// Emit a final EOF sentinel token so the parser can rely on cursor.current()
+		// returning a valid Token even after the last user-visible token was
+		// consumed. Position points one column past the last lexed character on
+		// the same line, matching the C# bootstrap's EOF token.
+		tokens.push(Token.create(TokenKind.eof, value: "", line: line, column: column))
+		return tokens
+	end 'run'
+
+	// One iteration of the DFA loop. Returns true when the lexer is done — either
+	// stepDfa hit the source's last byte cleanly, or a sub-scanner emitted its
+	// final token and signalled `emittedAtEof`. Throws LexerError on a stashed
+	// scanner error or a truly-truncated token.
+	function stepOnce(startLine LineNumber, startCol ColumnNumber) returns bool throws LexerError
+		return try stepDfa(startLine, startCol: startCol) otherwise 'cursorErr'
+			if hasPendingError 'hasErr'
+				throw pendingError
+			end 'hasErr'
+			if not emittedAtEof 'truncated'
+				throw LexerError.unexpectedEof(startLine, column: startCol)
+			end 'truncated'
+			return true
+		end 'cursorErr'
+	end 'stepOnce'
+end 'Lexer'
+
+// --- Public API wrapper ---
+
+// Lex `source` into a token stream. Throws LexerError for fatal scan errors
+// (e.g. unterminated string literal) so queryTokens can route them through
+// the project's diagnostic sink and stop the pipeline before parsing runs
+// on partial tokens.
+export function tokenize(source String) returns TokenArray throws LexerError
+	let bytes = source.toByteArray()
+	let cursor = try bytes.cursor() otherwise 'emptySource'
+		// Empty or whitespace-only source yields an empty token stream.
+		return TokenArray.create()
+	end 'emptySource'
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
+	return try lexer.run()
+end 'tokenize'
+
+// --- Pure helpers ---
+
+function isDigit(b Byte) returns bool
+	return b >= '0' and b <= '9'
+end 'isDigit'
+
+// Valid identifier start: letter (A-Z, a-z) or underscore
+function isAlpha(b Byte) returns bool
+	return (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z') or b == '_'
+end 'isAlpha'
+
+// Valid identifier continuation: letter, digit, or underscore
+function isAlphaNum(b Byte) returns bool
+	return isAlpha(b) or isDigit(b)
+end 'isAlphaNum'
+
+type KeywordInfo
+	export var kind as TokenKind
+	export var helpText as String
+	export var canHaveBlockLabel as bool
+
+	export static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}
+	end 'create'
+end 'KeywordInfo'
+
+var keywordMap = [
+	"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
+	"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
+	"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
+	"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
+	"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
+	"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
+	"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
+	"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
+	"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
+	"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
+	"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
+	"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
+	"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
+	"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
+	"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
+	"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
+	"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
+	"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
+	"async": KeywordInfo.create(TokenKind.async, helpText: "Spawns a green thread to run a function call concurrently, returning a promise.", canHaveBlockLabel: false),
+	"await": KeywordInfo.create(TokenKind.await, helpText: "Suspends the current green thread until a promise completes, yielding its result.", canHaveBlockLabel: false),
+	"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
+	"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
+	"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
+	"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
+	"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
+	"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
+	"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
+	"union": KeywordInfo.create(TokenKind.union, helpText: "Declares a union type with named cases, optional associated values, and methods.", canHaveBlockLabel: false),
+	"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
+	"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
+	"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+	"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
+	"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
+	"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
+	"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
+	"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
+	"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
+	"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
+	"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
+	"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
+	"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
+	"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
+	"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
+	"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
+	"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
+	"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
+	"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
+	"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
+	"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
+	"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
+	"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
+	"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
+	"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
+	"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
+	"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
+	"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
+	"cstring": KeywordInfo.create(TokenKind.cstring, helpText: "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", canHaveBlockLabel: false),
+	"array": KeywordInfo.create(TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
+	"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false)
+]
+
+function classifyIdentifier(name String) returns TokenKind
+	let info = try keywordMap.get(name) otherwise return TokenKind.identifier
+	return info.kind
+end 'classifyIdentifier'
+
+// Map a directive name (the text following `#`) to its TokenKind. Returns
+// TokenKind.identifier for unrecognized names so the lexer caller can
+// distinguish "valid directive" from "junk after `#`" without a separate
+// channel.
+function classifyDirective(name String) returns TokenKind
+	if name == "if" 'isIf'
+		return TokenKind.hashIf
+	end 'isIf'
+	if name == "else" 'isElse'
+		return TokenKind.hashElse
+	end 'isElse'
+	if name == "endif" 'isEndif'
+		return TokenKind.hashEndif
+	end 'isEndif'
+	return TokenKind.identifier
+end 'classifyDirective'
+
+// ASCII byte enum
+enum Ascii
+	lf = 10
+	dquote = 34
+	hash = 35
+	quote = 39
+	star = 42
+	plus = 43
+	minus = 45
+	dot = 46
+	slash = 47
+	zero = 48
+	at = 64
+	upperB = 66
+	upperE = 69
+	upperO = 79
+	upperX = 88
+	backslash = 92
+	underscore = 95
+	lowerB = 98
+	lowerE = 101
+	lowerO = 111
+	lowerX = 120
+end 'Ascii'
+
+function isHexDigit(b Byte) returns bool
+	return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'F') or (b >= 'a' and b <= 'f')
+end 'isHexDigit'
+
+function isBinaryDigit(b Byte) returns bool
+	return b == '0' or b == '1'
+end 'isBinaryDigit'
+
+function isOctalDigit(b Byte) returns bool
+	return b >= '0' and b <= '7'
+end 'isOctalDigit'

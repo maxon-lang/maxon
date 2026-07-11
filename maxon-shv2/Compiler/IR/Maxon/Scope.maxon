@@ -1,0 +1,233 @@
+// Scope: persistent per-function symbol table.
+//
+// The parser builds this as it emits ops; when a function finishes parsing the
+// final `Scope` is handed to the `IrFunction` for downstream consumers (the
+// Maxon→Std lowerer and the future LSP name-resolution query).
+//
+// Scope exposes a flat declare/lookup API today — the nested block-scope tree
+// described in the plan is a later iteration. An O(1)-push / O(decls)-pop frame
+// stack overlays lexical scoping: pushScope opens a frame, every declare appends
+// the name to the top frame, and popScope drains that frame's names out of
+// `vars` — O(names-in-this-scope), not O(total vars).
+//
+// OWNERSHIP SCAFFOLD (M1, inert): parallel to `frameStack`, an `ownedStack`
+// records the names of NON-trivial (owned/borrow/shared) bindings declared in
+// the current frame. At M1 every binding is `trivial`, so nothing is ever
+// recorded and popScope drains an empty list. From M6 the Own tier drains this
+// on popScope to place `own.drop`/`own.release` at scope exit — the deterministic
+// static-drop mechanism that replaces v1's late liveness-driven refcount
+// reclamation. The recording funnels through the single `recordInCurrentFrame`
+// helper that all four declare* paths already call, so the scaffold is wired
+// once and stays inert until ownership kinds start being non-trivial.
+
+export union ScopeLookupError implements Error
+	notFound(name String)
+end 'ScopeLookupError'
+
+// Raised by `declare` / `declarePayloadBinding` when the name being bound would
+// overwrite a self-field alias registered at instance-method entry (E3006).
+// Scope is the only layer that sees both the alias and the colliding
+// declaration, so detection lives here.
+export union ScopeError implements Error
+	shadowsSelfField(name String)
+end 'ScopeError'
+
+// Each scope frame tracks the names declared since the last pushScope so
+// popScope can remove them in O(decls). pushScope is O(1).
+typealias ScopeFrameNames = Array with String
+typealias ScopeFrameStack = Array with ScopeFrameNames
+
+// Parallel to the frame stack: names of owned/borrow/shared bindings in the
+// current frame, drained at scope exit to emit drops/releases (M6). Empty at M1.
+typealias ScopeOwnedNames = Array with String
+typealias ScopeOwnedStack = Array with ScopeOwnedNames
+
+export type Scope
+	var vars as VarInfoMap
+	// Top of `frameStack` collects names declared in the current pushScope.
+	// An empty stack means function scope — declarations there live for the
+	// whole function and need no frame.
+	var frameStack as ScopeFrameStack
+	// Parallel to `frameStack`: the owned-values list for the current frame.
+	var ownedStack as ScopeOwnedStack
+	export var nextSlot as VarSlot
+
+	export static function create() returns Scope
+		return Self{vars: VarInfoMap.create(), frameStack: ScopeFrameStack.create(), ownedStack: ScopeOwnedStack.create(), nextSlot: 0}
+	end 'create'
+
+	// Reset the scope for a new function parse.
+	export function reset()
+		vars = VarInfoMap.create()
+		frameStack = ScopeFrameStack.create()
+		ownedStack = ScopeOwnedStack.create()
+		nextSlot = 0
+	end 'reset'
+
+	// Declare a variable and return its slot. Throws
+	// `ScopeError.shadowsSelfField` when `name` currently maps to a self-field
+	// alias (binding a local of the same name would overwrite it — E3006).
+	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
+		if self.wouldShadowSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'shadow'
+		return self.declareShadowing(name, varType: varType, mutable: mutable)
+	end 'declare'
+
+	// True when `name` currently resolves to a self-field alias.
+	function wouldShadowSelfField(name String) returns bool
+		let info = try vars.get(name) otherwise return false
+		return info.isSelfField
+	end 'wouldShadowSelfField'
+
+	// Allocate a slot for `name` without the self-field-shadow guard. The
+	// error-recovery path after a caller reported E3006, and the shared
+	// slot-allocating core for `declare`.
+	export function declareShadowing(name String, varType MaxonType, mutable bool) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(info)
+		return slot
+	end 'declareShadowing'
+
+	// Bind `name` to an ALREADY-ALLOCATED slot (no new slot). Aliases a user
+	// binding onto a shared compiler slot so a single scope-exit release frees
+	// it (a separate slot would double-free).
+	export function bindExistingSlot(name String, slot VarSlot, varType MaxonType, mutable bool)
+		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(info)
+	end 'bindExistingSlot'
+
+	// Declare a self-field alias. No local backing slot is materialized — reads
+	// and writes lower to fieldLoad/fieldStore through __self. Throws
+	// `ScopeError.shadowsSelfField` when `name` is already bound (a parameter
+	// shadows this field — the symmetric case to a body local shadowing it).
+	export function declareSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot throws ScopeError
+		if vars.contains(name) 'paramShadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'paramShadow'
+		return self.installSelfField(name, varType: varType, offset: offset)
+	end 'declareSelfField'
+
+	// Register a self-field alias unconditionally (no param-shadow guard).
+	// Shared core for `declareSelfField`; also the E3006 recovery path.
+	export function installSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(info)
+		return slot
+	end 'installSelfField'
+
+	// Declare a match-arm payload binding. Reads work like a normal local;
+	// writes go through a payload store against the scrutinee + field index.
+	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot throws ScopeError
+		if self.wouldShadowSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(name)
+		end 'shadow'
+		return self.declarePayloadBindingShadowing(name, varType: varType, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
+	end 'declarePayloadBinding'
+
+	// Non-guarded payload-binding declaration: the E3006 recovery path and the
+	// shared core for `declarePayloadBinding`.
+	export function declarePayloadBindingShadowing(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(info)
+		return slot
+	end 'declarePayloadBindingShadowing'
+
+	// Single funnel for all four declare* paths: record the just-declared
+	// binding in the current frame for O(decls) teardown at popScope, and — the
+	// M1 ownership scaffold — record its name in the parallel owned-values list
+	// when the binding is non-trivial (owned/borrow/shared). At M1 every binding
+	// is trivial, so the owned branch never fires; from M6 popScope drains the
+	// owned list to emit scope-exit drops/releases.
+	function recordInCurrentFrame(info VarInfo)
+		let depth = frameStack.count()
+		if depth == 0 'noFrame'
+			return
+		end 'noFrame'
+		var top = try frameStack.get(depth - 1) otherwise panic("Scope.recordInCurrentFrame: frameStack.get OOB at {depth - 1} (count={frameStack.count()})")
+		top.push(info.name)
+
+		if not isTrivialOwnership(info.ownership) 'ownedBinding'
+			var owned = try ownedStack.get(depth - 1) otherwise panic("Scope.recordInCurrentFrame: ownedStack.get OOB at {depth - 1} (count={ownedStack.count()})")
+			owned.push(info.name)
+		end 'ownedBinding'
+	end 'recordInCurrentFrame'
+
+	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
+	export function lookup(name String) returns VarSlot throws ScopeLookupError
+		let info = try vars.get(name) otherwise throw ScopeLookupError.notFound(name)
+		return info.slot
+	end 'lookup'
+
+	// Get the VarInfo for a variable, or panic if not found.
+	export function getInfo(name String) returns VarInfo
+		return try vars.get(name) otherwise panic("Scope: undefined variable '{name}'")
+	end 'getInfo'
+
+	// Check if a variable is defined.
+	export function contains(name String) returns bool
+		return vars.contains(name)
+	end 'contains'
+
+	// Read-only iteration over the per-function symbol table. Returned map is
+	// the live backing store — callers MUST treat it as read-only.
+	export function allVars() returns VarInfoMap
+		return vars
+	end 'allVars'
+
+	// True when `name` is a self-field alias inside an instance method. Returns
+	// false for unknown names so callers can probe without checking contains().
+	export function isSelfField(name String) returns bool
+		let info = try vars.get(name) otherwise return false
+		return info.isSelfField
+	end 'isSelfField'
+
+	// Get the declared MaxonType for a variable. Callers check `contains(name)`
+	// first, so a missing entry is an invariant violation.
+	export function getType(name String) returns MaxonType
+		let info = try vars.get(name) otherwise panic("Scope.getType: name '{name}' not in scope — callers must check `contains` first")
+		return info.varType
+	end 'getType'
+
+	// Clone hook: install a VarInfo verbatim, preserving its slot id. Does NOT
+	// bump `nextSlot` — the caller sets it explicitly via `setNextSlot`.
+	export function installVerbatim(info VarInfo)
+		vars.upsert(info.name, value: info)
+	end 'installVerbatim'
+
+	// Clone hook: pin `nextSlot` to a chosen value.
+	export function setNextSlot(slot VarSlot)
+		nextSlot = slot
+	end 'setNextSlot'
+
+	// Open a fresh scope frame. O(1): pushes an empty name list onto the frame
+	// stack and a parallel empty owned-values list.
+	export function pushScope()
+		frameStack.push(ScopeFrameNames.create())
+		ownedStack.push(ScopeOwnedNames.create())
+	end 'pushScope'
+
+	// Pop the current scope frame and remove its declarations from vars.
+	// O(declarations-in-this-frame). Drains the parallel owned-values list in
+	// lockstep — at M1 it is always empty; from M6 the Own tier emits a
+	// scope-exit drop/release per owned name here.
+	export function popScope()
+		let frameNames = try frameStack.pop() otherwise panic("Scope.popScope: frameStack is empty (unmatched popScope)")
+		for i in 0 upto frameNames.count() 'remove'
+			let key = try frameNames.get(i) otherwise panic("Scope.popScope: frameNames.get(i) failed with i in [0, count())")
+			_ = vars.remove(key)
+		end 'remove'
+
+		_ = try ownedStack.pop() otherwise panic("Scope.popScope: ownedStack is empty (unmatched popScope) — frameStack and ownedStack must stay parallel")
+	end 'popScope'
+end 'Scope'

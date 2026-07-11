@@ -1,0 +1,50 @@
+// Shared IR identifier types used across all dialect phases.
+//
+// ValueId: unique identifier for an SSA value produced by an IR op in the Std
+// dialect and later phases. Every op with a result in those phases is assigned
+// a fresh, function-local ValueId. The Maxon dialect does not use ValueIds —
+// it identifies values by name slices (`ByteArray`), and numbering is
+// assigned per function when lowering to Std.
+// VarSlot: unique identifier for a local variable slot (stack slot) within a function.
+// BlockId: stable identifier for a basic block within a function; preserved
+// across phase lowerings so terminators can name the same target block.
+// ParamCount: the number of parameters a function takes.
+// StdTypeArray: array of StdType (function parameter/return type lists).
+
+export typealias ValueId = int(0 to u64.max)
+export typealias VarSlot = int(0 to u64.max)
+export typealias BlockId = int(0 to u64.max)
+export typealias BlockIdArray = Array with BlockId
+
+// BlockRefList: a list of indices into a module's flat blocks array.
+// Functions use this to record their ordered set of blocks.
+export typealias BlockRef = int(0 to u64.max)
+export typealias BlockRefList = List with BlockRef
+export typealias BlockRefArray = Array with BlockRef
+export typealias ParamCount = int(0 to u64.max)
+export typealias StdTypeArray = Array with StdType
+
+// ValueIdRef: a mutable per-function counter for allocating Std-level ValueIds.
+//
+// Every pass that creates new Std (or MIR / Target) ops builds a fresh ref
+// seeded from `scanMaxValueId(func) + 1`. Allocation is function-local —
+// ValueIds 0..paramCount-1 are reserved for parameters by Std-ABI convention,
+// and each function's numbering is independent of every other.
+export type ValueIdRef
+	export var nextId as ValueId
+
+	export static function create(startId ValueId) returns ValueIdRef
+		return Self{nextId: startId}
+	end 'create'
+end 'ValueIdRef'
+
+export function allocValueId(ref ValueIdRef) returns ValueId
+	let id = ref.nextId
+	ref.nextId = ref.nextId + 1
+	return id
+end 'allocValueId'
+
+// OpIndex: a plain integer index into a module's flat ops array.
+// Shared across all IR phases (Maxon, Std, MIR, Target).
+export typealias OpIndex = int(0 to u64.max)
+export typealias OpIndexList = List with OpIndex

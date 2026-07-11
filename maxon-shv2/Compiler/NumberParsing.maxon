@@ -1,0 +1,396 @@
+// Pure number parsing functions for the compiler.
+// Converts string representations of integer and float literals to numeric values.
+
+export typealias ParsedInt = int(i64.min to i64.max)
+
+export union ParserError
+	unhandledToken
+	typeError
+	overflow
+	unexpectedEof
+end 'ParserError'
+
+// Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
+// Throws ParserError.overflow if the value exceeds float64 range.
+//
+// Accumulator strategy: keep all significant digits in `intPart` (regardless of
+// where the decimal point falls), and track the implicit decimal exponent
+// separately in `decExp` (≤0 for fractional shifts, ≥0 for trailing-zero
+// shifts). After parsing, the literal's value is `intPart * 10^decExp` times
+// the user-supplied scientific exponent. This keeps the int64 cells from
+// overflowing on long literals like `3.14159265358979323846` (21 sig digits)
+// and `0.0000000000000000001` (1e-19) — significant digits past the 18-digit
+// budget are silently dropped exactly like strtod, but their position is
+// preserved so the magnitude stays correct.
+export function parseFloatBits(s String) returns ParsedInt throws ParserError
+	let DIGIT_BUDGET = 18
+	let bytes = s.toByteArray()
+	var intPart = 0  // accumulated significant digits (capped at budget)
+	var decExp = 0  // implicit decimal exponent for intPart
+	var pastDot = false
+	var sciExp = 0
+	var sciExpNeg = false
+	var inExponent = false
+	var hasNonZeroDigit = false
+	var sigDigits = 0
+	var leadingFracZeros = 0  // count of fractional zeros before the first non-zero significant digit
+
+	var pi = 0
+	while pi < bytes.count() 'parse'
+		let b = try bytes.get(pi) otherwise panic("parseFloatBits: pi < bytes.count() by loop guard but get({pi}) failed")
+
+		if b == '_' 'skipUnderscore'
+			pi = pi + 1
+			continue
+		end 'skipUnderscore'
+
+		if inExponent 'expPart'
+			if b >= '0' and b <= '9' 'expDigit'
+				sciExp = sciExp * 10 + (b - '0')
+				if sciExp > 100000 'capExp'
+					sciExp = 100000
+				end 'capExp'
+			end 'expDigit'
+		end 'expPart' else 'mantissaPart'
+			if b == 'e' or b == 'E' 'startExp'
+				inExponent = true
+				if pi + 1 < bytes.count() 'peekSign'
+					let signByte = try bytes.get(pi + 1) otherwise panic("parseFloatBits.peekSign: pi+1 < bytes.count() just checked but get({pi + 1}) failed")
+					if signByte == '-' 'negSign'
+						sciExpNeg = true
+						pi = pi + 1
+					end 'negSign' else if signByte == '+' 'posSign'
+						pi = pi + 1
+					end 'posSign'
+				end 'peekSign'
+			end 'startExp' else 'notExp'
+				if b == '.' 'isDot'
+					pastDot = true
+				end 'isDot' else 'notDot'
+					if b >= '0' and b <= '9' 'isDigit'
+						let digitVal = b - '0'
+						if not hasNonZeroDigit and digitVal == 0 'leading'
+							// Leading zeros: skip mantissa accumulation entirely;
+							// just count them so we know how much to shift the
+							// decimal exponent later for fractional leading-zero
+							// runs (e.g. "0.0001" → leadingFracZeros=3).
+							if pastDot 'leadFrac'
+								leadingFracZeros = leadingFracZeros + 1
+							end 'leadFrac'
+						end 'leading' else 'normalDigit'
+							hasNonZeroDigit = true
+							if sigDigits < DIGIT_BUDGET 'inBudget'
+								intPart = intPart * 10 + digitVal
+								sigDigits = sigDigits + 1
+								if pastDot 'fracSig'
+									decExp = decExp - 1
+								end 'fracSig'
+							end 'inBudget' else 'overBudget'
+								// Drop digits past the budget. Integer-part
+								// excess bumps the decimal exponent; fractional
+								// excess just gets dropped (its scale is
+								// already encoded in decExp from prior digits).
+								if not pastDot 'intExcess'
+									decExp = decExp + 1
+								end 'intExcess'
+							end 'overBudget'
+						end 'normalDigit'
+					end 'isDigit'
+				end 'notDot'
+			end 'notExp'
+		end 'mantissaPart'
+		pi = pi + 1
+	end 'parse'
+
+	// Fold the leading-zero fractional run into decExp now (was kept separate
+	// to avoid mixing magnitude-tracking with mantissa accumulation above).
+	decExp = decExp - leadingFracZeros
+
+	// Combine the user-supplied scientific exponent with the implicit decimal
+	// exponent we accumulated. totalExp is the signed power of 10 by which
+	// intPart must be scaled to recover the literal's value.
+	var signedSciExp = sciExp
+	if sciExpNeg 'negSci'
+		signedSciExp = -signedSciExp
+	end 'negSci'
+	let totalExp = decExp + signedSciExp
+
+	// float64 range: max ~1.8e308. Approximate magnitude exponent = (sigDigits-1) + totalExp.
+	if hasNonZeroDigit 'checkOverflow'
+		let effectiveExp = sigDigits - 1 + totalExp
+		if effectiveExp > 308 'overflow'
+			throw ParserError.overflow
+		end 'overflow'
+	end 'checkOverflow'
+
+	var numerator = intPart
+	var denominator = 1
+
+	// Apply totalExp by scaling numerator (positive exp) or denominator (negative).
+	if totalExp > 0 'positiveExp'
+		var i = 0
+		while i < totalExp 'mulLoop'
+			numerator = numerator * 10
+			i = i + 1
+		end 'mulLoop'
+	end 'positiveExp' else if totalExp < 0 'negativeExp'
+		var i = 0
+		while i < -totalExp 'divLoop'
+			denominator = denominator * 10
+			i = i + 1
+		end 'divLoop'
+	end 'negativeExp'
+
+	if numerator == 0 'isZero'
+		return 0
+	end 'isZero'
+
+	// Normalize so numerator / denominator falls in [1, 2). i64 gives only
+	// ~63 bits of headroom: once a side passes HALF_MAX, doubling it would
+	// wrap to negative, so we halve the *other* side instead — each step
+	// still bumps `exponent` by the same amount and preserves the ratio.
+	// The loop condition is `denominator <= halfNum` rather than the
+	// natural `numerator >= 2 * denominator` because the latter computes
+	// `2 * denominator` first and overflows on the very last step (e.g.
+	// for `9223372036854775807.0`, the exact i64.max-magnitude case).
+	// The mantissa-extraction loop further down doubles `numerator` once
+	// per iteration, so after normalizing we scale both sides down enough
+	// that the loop's doublings stay in-range.
+	let HALF_MAX = 4611686018427387904  // i64.max / 2 + 1, the largest value safe to double
+	var exponent = 0
+	var halfNum = numerator / 2
+	while denominator <= halfNum 'shiftDown'
+		if denominator >= HALF_MAX 'denomNearMax'
+			numerator = numerator / 2
+			halfNum = numerator / 2
+		end 'denomNearMax' else 'safeDoubleDenom'
+			denominator = denominator * 2
+		end 'safeDoubleDenom'
+		exponent = exponent + 1
+	end 'shiftDown'
+	while numerator < denominator 'shiftUp'
+		if numerator < HALF_MAX 'numSafeToDouble'
+			numerator = numerator * 2
+		end 'numSafeToDouble' else 'shrinkDenom'
+			denominator = denominator / 2
+		end 'shrinkDenom'
+		exponent = exponent - 1
+	end 'shiftUp'
+	// Headroom for the mantissa loop below — it doubles numerator each iter
+	// and `numerator < denominator` already holds, so we need denominator
+	// <= HALF_MAX for the doubling to stay in-range. Scaling both sides
+	// down by the same power of 2 preserves the ratio that drives the
+	// mantissa-bit extraction.
+	while denominator >= HALF_MAX 'mantissaHeadroom'
+		numerator = numerator / 2
+		denominator = denominator / 2
+	end 'mantissaHeadroom'
+
+	numerator = numerator - denominator
+	var mantissa = 0
+	var bit = 51
+	while bit >= 0 'mantissaBits'
+		numerator = numerator * 2
+		if numerator >= denominator 'hasBit'
+			mantissa = mantissa + (1 shl bit)
+			numerator = numerator - denominator
+		end 'hasBit'
+		bit = bit - 1
+	end 'mantissaBits'
+
+	// Round-to-nearest-even: produce one more bit and use it (plus the
+	// remaining residue) to decide whether to round up. Without this the
+	// truncation drops up to half a ULP — e.g. 3.14 ended up at 0x...851E
+	// (3.1399999999999997) instead of the correctly-rounded 0x...851F.
+	numerator = numerator * 2
+	let roundBit = 1 if numerator >= denominator else 0
+	if roundBit == 1 'maybeRoundUp'
+		numerator = numerator - denominator
+	end 'maybeRoundUp'
+	let hasRemainder = numerator > 0
+	if roundBit == 1 'doRound'
+		// Round up when the discarded tail exceeds half a ULP, or it is
+		// exactly half a ULP and the kept mantissa LSB is odd (round-half-
+		// to-even). On overflow into the implicit leading 1, bumping the
+		// mantissa carries into the exponent automatically because the
+		// IEEE 754 layout puts mantissa adjacent to the exponent field.
+		let mantissaOdd = (mantissa and 1) == 1
+		if hasRemainder or mantissaOdd 'roundUp'
+			mantissa = mantissa + 1
+		end 'roundUp'
+	end 'doRound'
+
+	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
+	let biasedExp = exponent + 1023
+	return (biasedExp shl 52) + mantissa
+end 'parseFloatBits'
+
+// Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
+// Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
+export function parseInt(s String) returns ParsedInt throws ParserError
+	let bytes = s.toByteArray()
+	let sLen = bytes.count()
+
+	if sLen < 1 'empty'
+		return 0
+	end 'empty'
+
+	if sLen >= 2 'checkPrefix'
+		let first = try bytes.get(0) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(0) failed")
+		let second = try bytes.get(1) otherwise panic("parseInt.checkPrefix: sLen >= 2 just checked but get(1) failed")
+
+		if first == '0' and (second == 'x' or second == 'X') 'isHex'
+			return try parseHexInt(bytes, startIndex: 2)
+		end 'isHex' else if first == '0' and (second == 'b' or second == 'B') 'isBin'
+			return try parseBinaryInt(bytes, startIndex: 2)
+		end 'isBin' else if first == '0' and (second == 'o' or second == 'O') 'isOct'
+			return try parseOctalInt(bytes, startIndex: 2)
+		end 'isOct'
+	end 'checkPrefix'
+
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in 0 upto sLen 'digits'
+		let b = try bytes.get(pi) otherwise panic("parseInt.digits: pi < sLen = bytes.count() but get({pi}) failed")
+		if b >= '0' and b <= '9' 'digit'
+			result = result * 10 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
+		end 'digit'
+	end 'digits'
+
+	// >19 significant digits always overflows i64
+	if digitCount > 19 'tooMany'
+		throw ParserError.overflow
+	end 'tooMany'
+
+	// Exactly 19 digits: compare digit-by-digit against "9223372036854775807"
+	if digitCount == 19 'checkMax'
+		// Derive the max-magnitude digits from the SAME byte source as `bytes`
+		// (String.toByteArray) so both operands of the `b > maxByte` compare
+		// below carry the same element type. A `b"..."` byte-string literal
+		// lowers through a different byte-typed path whose element type the
+		// checker won't compare against a toByteArray() byte (E3005).
+		let maxStr = "9223372036854775807".toByteArray()
+		var mi = 0
+		var pastLeading = false
+		for pi in 0 upto sLen 'cmp'
+			let b = try bytes.get(pi) otherwise panic("parseInt.cmp: pi < sLen but get({pi}) failed")
+			if b == '_' 'skipUs'
+				continue
+			end 'skipUs'
+			if not pastLeading and b == '0' 'skipLz'
+				continue
+			end 'skipLz'
+			if b >= '0' and b <= '9' 'cmpDigit'
+				pastLeading = true
+				let maxByte = try maxStr.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = maxStr.count() but get({mi}) failed")
+				if b > maxByte 'bigger'
+					throw ParserError.overflow
+				end 'bigger' else if b < maxByte 'smaller'
+					return result
+				end 'smaller'
+				mi = mi + 1
+			end 'cmpDigit'
+		end 'cmp'
+	end 'checkMax'
+
+	return result
+end 'parseInt'
+
+// Parse a NEGATED integer literal magnitude `s` (the digits after a leading
+// unary `-`). The magnitude `9223372036854775808` (= i64.max + 1) overflows a
+// positive i64 but `-9223372036854775808` is exactly i64.min, so it is accepted
+// here and returned as i64.min — mirroring the C# bootstrap's
+// `ParseNegatedIntegerLiteral`. Every other magnitude parses through `parseInt`
+// (which throws on a true overflow) and is negated. The caller must apply this
+// ONLY when a `-` immediately precedes the literal.
+export function parseNegatedInt(s String) returns ParsedInt throws ParserError
+	if s.replace("_", with: "") == "9223372036854775808" 'isI64Min'
+		return i64.min
+	end 'isI64Min'
+	return 0 - (try parseInt(s))
+end 'parseNegatedInt'
+
+// Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
+function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in startIndex upto s.count() 'hexDigits'
+		let b = try s.get(pi) otherwise panic("parseHexInt.hexDigits: pi < s.count() but get({pi}) failed")
+		if b >= '0' and b <= '9' 'decDigit'
+			result = result * 16 + (b - '0')
+			if not leadingZeros or b != '0' 'sigDec'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'sigDec'
+		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
+			result = result * 16 + (b - 'a' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
+			result = result * 16 + (b - 'A' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'upperHex'
+	end 'hexDigits'
+	if digitCount > 16 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseHexInt'
+
+// Throws ParserError.overflow if more than 64 significant binary digits.
+function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	for pi in startIndex upto s.count() 'binDigits'
+		let b = try s.get(pi) otherwise panic("parseBinaryInt.binDigits: pi < s.count() but get({pi}) failed")
+		if b == '0' 'zeroBit'
+			result = result * 2
+			if not leadingZeros 'sigZero'
+				digitCount = digitCount + 1
+			end 'sigZero'
+		end 'zeroBit' else if b == '1' 'oneBit'
+			result = result * 2 + 1
+			leadingZeros = false
+			digitCount = digitCount + 1
+		end 'oneBit'
+	end 'binDigits'
+	if digitCount > 64 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseBinaryInt'
+
+// Throws ParserError.overflow if more than 21 significant octal digits,
+// or exactly 21 with a leading digit > 1 (exceeds 64 bits).
+function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
+	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	var firstSignificantDigit = 0
+	for pi in startIndex upto s.count() 'octDigits'
+		let b = try s.get(pi) otherwise panic("parseOctalInt.octDigits: pi < s.count() but get({pi}) failed")
+		if b >= '0' and b <= '7' 'octDigit'
+			result = result * 8 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				if leadingZeros 'firstSig'
+					firstSignificantDigit = b - '0'
+				end 'firstSig'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
+		end 'octDigit'
+	end 'octDigits'
+	// 64 bits = 21 octal digits max, but first digit can be at most 1 (0o1777...7)
+	if digitCount > 21 or (digitCount == 21 and firstSignificantDigit > 1) 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
+	return result
+end 'parseOctalInt'

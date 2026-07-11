@@ -1,0 +1,574 @@
+// IrModule: generic top-level container for all pre-target IR phases.
+// Parameterized by the op type (MaxonOp, StdOp, MirOp) so that the
+// type checker enforces phase separation while the implementation is
+// written once.
+//
+// Each phase instantiates this as a typealias:
+//   typealias MaxonModule = IrModule with MaxonOp
+//   typealias StdModule   = IrModule with StdOp
+//   typealias MirModule   = IrModule with MirOp
+
+export typealias OpCount = int(0 to u64.max)
+export typealias BlockCount = int(0 to u64.max)
+typealias FuncCount = int(0 to u64.max)
+export typealias BlockIndex = int(0 to u64.max)
+export typealias FuncIndex = int(0 to u64.max)
+export typealias BlockRefIndex = int(0 to u64.max)
+
+typealias DroppedNameSet = Set with String
+
+// Thrown by IrModule.findBlockRef when the given block isn't registered in
+// the function's block list — used by the parser's statement-line recorder
+// to silently skip detached sink blocks produced by newDetachedBlock.
+export enum BlockRefLookupError implements Error
+	notInFunction
+end 'BlockRefLookupError'
+
+export type IrModule uses Op
+	typealias OpArray = Array with Op
+
+	export var functions as IrFunctionArray = IrFunctionArray.create()
+	export var blocks as IrBlockArray = IrBlockArray.create()
+	export var ops as OpArray = OpArray.create()
+	// Parallel to `blocks`: entry at index i describes the source footprint
+	// of blocks[i]. Populated by the parser at every block-creation site,
+	// preserved through lowerMaxonToStd, and consumed by the coverage
+	// instrumentation pass to map each block to the source lines it covers.
+	// Blocks created outside the parser (e.g. by later passes) keep the
+	// BlockSourceInfo.empty() sentinel.
+	export var blockSourceInfo as BlockSourceInfoArray = BlockSourceInfoArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function opCount() returns OpCount
+		return self.ops.count()
+	end 'opCount'
+
+	// Count ops that are still reachable from any block — i.e., the size
+	// of the `block.opRefs` union plus one per block that has a terminator
+	// op. This differs from `opCount` (which is just the underlying array
+	// size) because passes like mem2reg rebuild blocks by clearing
+	// `opRefs` and appending fresh ops to `module.ops`, leaving the
+	// previous entries as orphans. The orphans never reach codegen but
+	// inflate `opCount` and make the per-pass IR-summary log line read
+	// like ops doubled when in fact the live set shrank.
+	//
+	// Cold path — only called from `summarizeForPass` when the IR trace
+	// log is enabled or `--dump-stages` is on. The walk is O(blocks +
+	// total opRefs entries) per call, dwarfed by anything diagnostic
+	// modes already pay.
+	export function liveOpCount() returns OpCount
+		return countLiveOps(self.functions, blocks: self.blocks)
+	end 'liveOpCount'
+
+	// Reclaim orphaned ops from `self.ops` in place.
+	//
+	// Every block-rebuilding pass (mem2reg, canonicalize, CSE, DCE, LICM,
+	// insertRefcounts, lowerStdToMir, the MIR passes, …) clears each block's
+	// `opRefs` and re-appends fresh ops via `appendOp`, which only ever pushes
+	// onto `self.ops` and never removes the now-unreferenced predecessors. Those
+	// orphans accumulate across passes — during the backend phase they bloat
+	// `self.ops` to many times its live size, exhausting the commit limit on a
+	// large compile (e.g. the compiler compiling itself) even though the working
+	// set stays small. `liveOpCount` already documents and measures the gap.
+	//
+	// Compaction is done strictly IN PLACE: the live ops are moved leftward
+	// within the existing backing array and the tail is truncated, so no second
+	// ops-sized array is ever allocated (a transient old+new coexistence would
+	// double the peak right at the commit limit). The only extra allocation is
+	// the forwarding map, sized `ops.count()` — ~1/8 of one ops array.
+	//
+	// The live ops keep their original relative order, so block `opRefs` /
+	// terminators still reference the same ops; only their indices are renumbered.
+	// Codegen output is therefore byte-identical — this drops unreachable orphans
+	// and renumbers indices, nothing more.
+	export function compactOps()
+		let oldCount = self.ops.count()
+		let plan = computeOpCompaction(self.functions, blocks: self.blocks, opCount: oldCount)
+		if plan.liveCount == oldCount 'noOrphans'
+			// Every op is still reachable — no move, no truncation, no rewrite.
+			// The common case for passes that don't orphan; bail before touching
+			// the array so a clean module pays only the O(blocks + opRefs) walk.
+			return
+		end 'noOrphans'
+
+		// Move each live op leftward into its compacted slot by SWAPPING (never
+		// `set`): a swap moves ownership between the two slots with refcounts
+		// unchanged, whereas `set` would decref the slot's prior occupant —
+		// which, for a managed-payload op (String/array operands), is an op that
+		// was already relocated and now shares those payloads, so the decref
+		// would free memory the relocated op still references (a UAF). `forward`
+		// assigns live ops dense ascending slots, so `forward[old] <= old`: the
+		// op currently at `old` is always still the original op `old` (no earlier
+		// swap targets an index this large), and the displaced occupant is parked
+		// at `old` to be truncated or swapped again later.
+		for oldIdx in 0 upto oldCount 'move'
+			let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactOps: forward.get OOB at {oldIdx}")
+			if newIdx == plan.deadMarker 'orphan'
+				continue
+			end 'orphan'
+			if newIdx != oldIdx 'needsSwap'
+				self.ops.swap(newIdx, j: oldIdx)
+			end 'needsSwap'
+		end 'move'
+
+		// After the swaps every orphan sits in the contiguous tail
+		// `[liveCount, oldCount)`. Pop each off and DROP it (the discarded `pop`
+		// result releases the op's +1, freeing its managed payload — String /
+		// ValueId-array operands). A bare `setLength`/`resize` would NOT free those
+		// payloads (it only rewrites the length word), so the orphans would leak
+		// what the whole-array teardown used to reclaim. Popping the LAST element
+		// is O(1) (no tail shift), so the loop is O(orphan count).
+		for _ in plan.liveCount upto oldCount 'dropOrphan'
+			_ = try self.ops.pop() otherwise panic("compactOps: ops.pop on non-empty tail failed")
+		end 'dropOrphan'
+
+		rewriteBlockOpRefs(self.functions, blocks: self.blocks, plan: plan)
+	end 'compactOps'
+
+	// Reclaim orphaned blocks from `self.blocks` (and the parallel
+	// `self.blockSourceInfo`) in place.
+	//
+	// Dead-code elimination prunes unreachable blocks by rebuilding
+	// `func.blockRefs` without their flat indices (see
+	// `DeadCodeElimination.pruneUnreachableBlocks`), but the pruned blocks stay
+	// resident in the shared `self.blocks` array — they are simply no longer
+	// referenced by any function. Like the orphan ops `compactOps` reclaims,
+	// these accumulate across the per-function pass loop and inflate the
+	// committed-but-live block storage during the long backend phase of a large
+	// compile (the compiler compiling itself). This compactor drops them.
+	//
+	// In-place, mirroring `compactOps`: live blocks are swapped leftward within
+	// the existing `self.blocks` / `self.blockSourceInfo` arrays and the tails
+	// truncated, so no second blocks-sized array is ever allocated. The only
+	// extra allocations are the two `blockCount`-sized maps (live flags +
+	// forwarding).
+	//
+	// Block renumbering is byte-identical to a no-op for codegen: `func.blockRefs`
+	// holds FLAT `self.blocks[]` indices (rewritten here), while every other
+	// block reference — branch terminators, CFG edges — keys off the function-
+	// local `BlockId` (stored inside the op / the block), which this never
+	// touches. Only the flat-index layer is renumbered; the live blocks keep
+	// their relative order, so even the flat order is preserved modulo the
+	// dropped orphans.
+	export function compactBlocks()
+		let oldCount = self.blocks.count()
+		let plan = computeBlockCompaction(self.functions, blockCount: oldCount)
+		if plan.liveCount == oldCount 'noOrphans'
+			// No function dropped a block since the last compaction — skip the
+			// move/truncate/rewrite and pay only the O(total blockRefs) walk.
+			return
+		end 'noOrphans'
+
+		// `blockSourceInfo` is parallel to `blocks` only while the parser-built
+		// table is still live (the Maxon and Std tiers): the Std→MIR skeleton
+		// clone (`StdToMirLowering.prepareSkeleton`) rebuilds `blocks` 1:1 but
+		// leaves `blockSourceInfo` empty, since coverage instrumentation — its
+		// only consumer — already ran in the Std tier. Compact the source-info
+		// table in lockstep only when it is actually parallel; in the MIR tier it
+		// is empty and there is nothing (and nobody) to compact.
+		let compactSourceInfo = self.blockSourceInfo.count() == oldCount
+
+		// Swap each live block (and its parallel source-info entry, when present)
+		// leftward into its compacted slot. `forward[old] <= old` (dense ascending
+		// assignment), so the slot at `old` still holds original block `old` when
+		// we reach it — the same clobber-free property `compactOps` relies on. Swap
+		// (not set) so the displaced orphan is parked at `old` for truncation
+		// rather than being dropped here (its teardown happens in the pop loop).
+		for oldIdx in 0 upto oldCount 'move'
+			let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactBlocks: forward.get OOB at {oldIdx}")
+			if newIdx == plan.deadMarker 'orphan'
+				continue
+			end 'orphan'
+			if newIdx != oldIdx 'needsSwap'
+				self.blocks.swap(newIdx, j: oldIdx)
+				if compactSourceInfo 'swapInfo'
+					self.blockSourceInfo.swap(newIdx, j: oldIdx)
+				end 'swapInfo'
+			end 'needsSwap'
+		end 'move'
+
+		// Every orphan now sits in the contiguous tail `[liveCount, oldCount)`.
+		// Pop each off `blocks` (and `blockSourceInfo` when parallel) and drop it
+		// (releasing the orphan block's `opRefs`/`blockArgs`/`branchEdges` array
+		// payloads).
+		for _ in plan.liveCount upto oldCount 'dropOrphan'
+			_ = try self.blocks.pop() otherwise panic("compactBlocks: blocks.pop on non-empty tail failed")
+			if compactSourceInfo 'popInfo'
+				_ = try self.blockSourceInfo.pop() otherwise panic("compactBlocks: blockSourceInfo.pop on non-empty tail failed")
+			end 'popInfo'
+		end 'dropOrphan'
+
+		rewriteFuncBlockRefs(self.functions, plan: plan)
+	end 'compactBlocks'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function blockCount() returns BlockCount
+		return self.blocks.count()
+	end 'blockCount'
+
+	export function getBlock(index BlockIndex) returns IrBlock
+		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
+	end 'getBlock'
+
+	export function pushBlock(block IrBlock)
+		self.blocks.push(block)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+	end 'pushBlock'
+
+	export function funcCount() returns FuncCount
+		return self.functions.count()
+	end 'funcCount'
+
+	export function getFunc(index FuncIndex) returns IrFunction
+		return try self.functions.get(index) otherwise panic("getFunc: index out of bounds")
+	end 'getFunc'
+
+	export function pushFunc(func IrFunction)
+		self.functions.push(func)
+	end 'pushFunc'
+
+	export function cloneFunc(src IrFunction, blockOffset BlockIndex) returns IrFunction
+		var func = IrFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlockRef'
+			func.blockRefs.append(blockRef + blockOffset)
+		end 'eachBlockRef'
+		return func
+	end 'cloneFunc'
+
+	export function appendOp(block IrBlock, op Op)
+		let idx = self.ops.count()
+		self.ops.push(op)
+		block.opRefs.append(idx)
+	end 'appendOp'
+
+	export function setTerminator(block IrBlock, op Op)
+		let idx = self.ops.count()
+		self.ops.push(op)
+		block.terminator = Terminator.opIndex(idx)
+	end 'setTerminator'
+
+	export function addBlock(func IrFunction, label String) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+		return block
+	end 'addBlock'
+
+	// (M1: v1's `addBlockAtPosition` — the Maxon-level block-split helper that
+	// inserts a continuation block's ref mid-list — is omitted here; it depends
+	// on the `NodeIndex` list-position type the parser rebuild (Chunk C) brings.
+	// It grows back with the block-splitting passes that need it.)
+
+	// Parser-facing variant of addBlock that records the block's source
+	// footprint (file path + opening line) in the parallel blockSourceInfo
+	// table. `firstLine` is the line of the token that triggered the block's
+	// creation — the condition/while keyword, the entry token of a function
+	// body, etc.
+	export function addBlockAt(func IrFunction, label String, filePath String, firstLine LineNumber) returns IrBlock
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
+		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
+		return block
+	end 'addBlockAt'
+
+	// Create a new IrBlock, append it to the blocks array, and register its
+	// index in the function's blockRefs. The caller must bump func.nextBlockId
+	// after calling this (the function returns the allocated id via the block).
+	function createAndRegisterBlock(blockRefs BlockRefList, id BlockId, label String) returns IrBlock
+		let blockIdx = blocks.count()
+		let block = IrBlock.create(id, label: label)
+		blocks.push(block)
+		blockRefs.append(blockIdx)
+		return block
+	end 'createAndRegisterBlock'
+
+	// Re-fetch a block alias by its (function-local) id, scanning the
+	// function's block set. Use this instead of holding an IrBlock struct
+	// alias across other block-creating / block-mutating calls: those calls
+	// can leave a previously-captured alias stale. Mirrors how the if/else
+	// finalizer threads BlockIds rather than struct aliases.
+	export function getBlockByIdIn(func IrFunction, id BlockId) returns IrBlock throws BlockRefLookupError
+		for blockRef in func.blockRefs 'each'
+			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
+			if candidate.id == id 'match'
+				return candidate
+			end 'match'
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'getBlockByIdIn'
+
+	// Locate the flat blocks[] index of `block` within `func`'s block set.
+	// Used by the parser's statement-line recorder. BlockId is only unique
+	// within a single function, so restricting the scan to func.blockRefs
+	// disambiguates even when multiple functions share the same id space.
+	// Throws when the block isn't registered in `func` — that happens only
+	// for detached sink blocks (the dead block produced by newDetachedBlock),
+	// which carry no source info and must not be recorded against.
+	export function findBlockRef(func IrFunction, block IrBlock) returns BlockRefIndex throws BlockRefLookupError
+		for blockRef in func.blockRefs 'each'
+			let candidate = try self.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in self.blocks")
+			if candidate.id == block.id 'match'
+				return blockRef
+			end 'match'
+		end 'each'
+		throw BlockRefLookupError.notInFunction
+	end 'findBlockRef'
+
+	// Enforce the invariant that every block in the module has committed to a
+	// terminator (real op, dead, or fallthrough). Parser ops emit ops into
+	// blocks starting with Terminator.unset — any block still in that state
+	// after parsing is a bug in the parser, not a user error. Callers invoke
+	// this on success paths only; error paths may legitimately leave blocks
+	// unfinished (e.g. missing-return aborts emission).
+	export function assertAllBlocksTerminated()
+		for block in self.blocks 'eachBlock'
+			block.assertTerminated()
+		end 'eachBlock'
+	end 'assertAllBlocksTerminated'
+
+	// Phase 11.6 cross-module inlining: drop every function whose name
+	// appears in `names` from `self.functions`. Used after the inliner
+	// merges the stdlib snapshot in: any stdlib function whose body got
+	// spliced has no remaining callers in the user module, but the
+	// snapshot's other (non-spliced) stdlib functions would force the
+	// backend to re-emit symbols that the linker-side stdlib cache
+	// already provides. The dropped functions' blocks/ops stay in
+	// `self.blocks` / `self.ops` as orphans because the backend walks
+	// `self.functions[].blockRefs[]`, never the global blocks array.
+	export function dropFunctionsByName(names StringArray)
+		// Intern the drop list into a set (O(1) membership) and rebuild
+		// `self.functions` in one pass, keeping survivors. The old form did a
+		// linear `names` scan per function AND an O(count) `remove(i)` per drop,
+		// so dropping the stdlib snapshot (functions in the thousands) was
+		// O(F² + F·N); this is O(F + N).
+		var dropSet = DroppedNameSet.create()
+		for n in names 'eachName'
+			dropSet.insert(n)
+		end 'eachName'
+
+		var kept = IrFunctionArray.create()
+		for f in self.functions 'eachFunc'
+			if dropSet.contains(f.name) 'drop'
+				continue
+			end 'drop'
+			kept.push(f)
+		end 'eachFunc'
+		self.functions = kept
+	end 'dropFunctionsByName'
+
+	// Merge all data from a source module into this module.
+	// Adjusts block indices in functions and op indices in blocks to account
+	// for the existing entries in the destination arrays. Block source info
+	// entries are carried across 1:1 so coverage/debug metadata survives the
+	// runtime-merge step.
+	export function merge(source Self)
+		let opOffset = self.ops.count()
+		let blockOffset = self.blocks.count()
+
+		self.ops.append(source.ops)
+
+		for i in 0 upto source.blocks.count() 'eachBlock'
+			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
+			self.blocks.push(cloneIrBlock(srcBlock, opOffset: opOffset))
+			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+			self.blockSourceInfo.push(srcInfo)
+		end 'eachBlock'
+
+		for srcFunc in source.functions 'eachFunc'
+			self.functions.push(self.cloneFunc(srcFunc, blockOffset: blockOffset))
+		end 'eachFunc'
+	end 'merge'
+end 'IrModule'
+
+// Block-reachable op counter shared by IrModule.liveOpCount and
+// TargetModule.liveOpCount. Sums every block's `opRefs.count()` across
+// every function plus one per block that has a terminator op. Lives
+// outside the generic IrModule type so the concrete TargetModule (which
+// is not an IrModule instantiation) can reuse the same walk.
+module function countLiveOps(functions IrFunctionArray, blocks IrBlockArray) returns OpCount
+	var count = 0 as OpCount
+	for func in functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try blocks.get(blockRef) otherwise panic("countLiveOps: blockRef from func.blockRefs not in blocks")
+			count = count + (block.opRefs.count())
+			if block.hasTerminatorOp() 'hasTerm'
+				count = count + 1
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+	return count
+end 'countLiveOps'
+
+// Forwarding plan for an in-place array compaction. `forward[oldIndex]` holds the
+// compacted destination index of the entry that lived at `oldIndex`, or
+// `deadMarker` when that entry is an orphan (nothing references it). `liveCount`
+// is the number of survivors — the new array length after compaction.
+// `deadMarker` is the old count (one past every valid new index), so a live
+// entry can never collide with it. Despite the `Op` in the name, the plan is
+// index-type-agnostic and drives three compactors: `IrModule.compactOps` /
+// `TargetModule.compactOps` (the ops arrays) and `IrModule.compactBlocks` (the
+// blocks array). The array move + reference rewrite are entry-typed and stay on
+// the respective module; the index arithmetic is shared here.
+module type OpCompactionPlan
+	export var forward as OpIndexArray
+	export var liveCount as OpCount
+	export var deadMarker as OpIndex
+
+	export static function create(forward OpIndexArray, liveCount OpCount, deadMarker OpIndex) returns OpCompactionPlan
+		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}
+	end 'create'
+end 'OpCompactionPlan'
+
+export typealias OpIndexArray = Array with OpIndex
+
+// Turn a liveness bitmap into a compaction forwarding map. Shared by the op and
+// block compaction planners, which differ only in how they MARK liveness — the
+// slot-assignment arithmetic is identical for both.
+//
+// Assigns compacted slots in ASCENDING old-index order: scanning ascending
+// guarantees `forward[old] <= old` for every live entry (at most `old + 1` slots
+// are consumed by the time index `old` is reached), which is what makes the
+// leftward in-place move in `compactOps`/`compactBlocks` clobber-free. Orphans
+// (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
+function assignCompactionSlots(live BoolArray, count OpCount) returns OpCompactionPlan
+	let deadMarker = count
+	var forward = OpIndexArray.create()
+	forward.resize(count)
+	var nextSlot = 0 as OpIndex
+	for oldIdx in 0 upto count 'assign'
+		let isLive = try live.get(oldIdx) otherwise panic("assignCompactionSlots: live.get OOB at {oldIdx}")
+		if isLive 'assignLive'
+			try forward.set(oldIdx, value: nextSlot) otherwise panic("assignCompactionSlots: forward.set OOB at {oldIdx}")
+			nextSlot = nextSlot + 1
+		end 'assignLive' else 'assignDead'
+			try forward.set(oldIdx, value: deadMarker) otherwise panic("assignCompactionSlots: forward.set OOB at {oldIdx}")
+		end 'assignDead'
+	end 'assign'
+
+	return OpCompactionPlan.create(forward, liveCount: nextSlot, deadMarker: deadMarker)
+end 'assignCompactionSlots'
+
+// Compute the in-place compaction forwarding map for a module's ops array.
+// Marks every op index reachable from a block (`opRefs` entry or `opIndex`
+// terminator) as live, then hands the bitmap to `assignCompactionSlots`. The
+// walk is O(blocks + total opRefs); the two `opCount`-sized arrays (live flags +
+// forwarding) are the only allocations and are dwarfed by the orphan bytes
+// reclaimed.
+module function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount OpCount) returns OpCompactionPlan
+	var live = BoolArray.create()
+	live.resize(opCount)
+
+	for func in functions 'markFunc'
+		for blockRef in func.blockRefs 'markBlock'
+			let block = try blocks.get(blockRef) otherwise panic("computeOpCompaction: blockRef from func.blockRefs not in blocks")
+			for opIdx in block.opRefs 'markOpRef'
+				try live.set(opIdx, value: true) otherwise panic("computeOpCompaction: live.set OOB at opRef {opIdx} (opCount={opCount})")
+			end 'markOpRef'
+			if block.hasTerminatorOp() 'markTerm'
+				let termIdx = block.terminatorIndex()
+				try live.set(termIdx, value: true) otherwise panic("computeOpCompaction: live.set OOB at terminator {termIdx} (opCount={opCount})")
+			end 'markTerm'
+		end 'markBlock'
+	end 'markFunc'
+
+	return assignCompactionSlots(live, count: opCount)
+end 'computeOpCompaction'
+
+// Rewrite every block's `opRefs` entries and `opIndex` terminator through a
+// compaction plan's forwarding map. `OpIndexList` is a linked list with no
+// in-place `set`, so each block's `opRefs` is rebuilt as a fresh list of
+// forwarded indices (cheap — proportional to the live op count). Shared by both
+// module compactors. Must run AFTER the op-array move + truncate so the
+// renumbered indices line up with the relocated ops.
+module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
+	for func in functions 'rewriteFunc'
+		for blockRef in func.blockRefs 'rewriteBlock'
+			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
+			var newRefs = OpIndexList.create()
+			for oldIdx in block.opRefs 'eachRef'
+				let newIdx = try plan.forward.get(oldIdx) otherwise panic("rewriteBlockOpRefs: forward.get OOB at opRef {oldIdx}")
+				if newIdx == plan.deadMarker 'orphanRef'
+					panic("rewriteBlockOpRefs: block '{block.label}' references orphaned op {oldIdx} — live op marked dead")
+				end 'orphanRef'
+				newRefs.append(newIdx)
+			end 'eachRef'
+			block.opRefs = newRefs
+			if block.hasTerminatorOp() 'rewriteTerm'
+				let oldTerm = block.terminatorIndex()
+				let newTerm = try plan.forward.get(oldTerm) otherwise panic("rewriteBlockOpRefs: forward.get OOB at terminator {oldTerm}")
+				if newTerm == plan.deadMarker 'orphanTerm'
+					panic("rewriteBlockOpRefs: block '{block.label}' terminator references orphaned op {oldTerm}")
+				end 'orphanTerm'
+				block.terminator = Terminator.opIndex(newTerm)
+			end 'rewriteTerm'
+		end 'rewriteBlock'
+	end 'rewriteFunc'
+end 'rewriteBlockOpRefs'
+
+// Compute the in-place compaction forwarding map for a module's `blocks` array.
+// Mirrors `computeOpCompaction` but keys liveness off `func.blockRefs` (the flat
+// `blocks[]` indices each function still references) instead of `block.opRefs`:
+// every flat block index appearing in any `func.blockRefs` is live; DCE-pruned
+// blocks appear in no function's refs and stay unmarked. The bitmap then goes to
+// the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
+// sized arrays (live flags + forwarding) are the only allocations.
+function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount) returns OpCompactionPlan
+	var live = BoolArray.create()
+	live.resize(blockCount)
+
+	for func in functions 'markFunc'
+		for blockRef in func.blockRefs 'markRef'
+			try live.set(blockRef, value: true) otherwise panic("computeBlockCompaction: live.set OOB at blockRef {blockRef} (blockCount={blockCount})")
+		end 'markRef'
+	end 'markFunc'
+
+	return assignCompactionSlots(live, count: blockCount)
+end 'computeBlockCompaction'
+
+// Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
+// compaction plan's forwarding map. `BlockRefList` is a linked list with no
+// in-place `set`, so each function's `blockRefs` is rebuilt as a fresh list of
+// forwarded indices. Must run AFTER the blocks-array move + truncate so the
+// renumbered indices line up with the relocated blocks.
+function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
+	for funcIdx in 0 upto functions.count() 'rewriteFunc'
+		var func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
+		var newRefs = BlockRefList.create()
+		for oldRef in func.blockRefs 'eachRef'
+			let newRef = try plan.forward.get(oldRef) otherwise panic("rewriteFuncBlockRefs: forward.get OOB at blockRef {oldRef}")
+			if newRef == plan.deadMarker 'orphanRef'
+				panic("rewriteFuncBlockRefs: func '{func.name}' references orphaned block {oldRef} — live block marked dead")
+			end 'orphanRef'
+			newRefs.append(newRef)
+		end 'eachRef'
+		func.blockRefs = newRefs
+	end 'rewriteFunc'
+end 'rewriteFuncBlockRefs'
+
+// Clone a block, adjusting op indices by the given offset.
+// Used by MergeableModule.merge to relocate blocks into a destination module.
+function cloneIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
+	var block = IrBlock.create(src.id, label: src.label)
+	block.blockArgs = src.blockArgs
+	block.branchEdges = src.branchEdges
+	for opIdx in src.opRefs 'eachOp'
+		block.opRefs.append(opIdx + opOffset)
+	end 'eachOp'
+	block.terminator = match src.terminator 'relocate'
+		unset gives Terminator.unset
+		dead gives Terminator.dead
+		fallthrough gives Terminator.fallthrough
+		opIndex(index) gives Terminator.opIndex(index + opOffset)
+	end 'relocate'
+	return block
+end 'cloneIrBlock'
+
+export typealias MaxonModule = IrModule with MaxonOp

@@ -1,0 +1,118 @@
+// Logging system for the compiler.
+//
+// Trimmed for maxon-shv2 M1: carries the category/level machinery the Lexer
+// needs (`logDebug(LogCategory.lexer, ...)`) plus the log-option parser the
+// driver will wire up. v1's error/trace CAPTURE machinery (used by the spec
+// harness) is intentionally left out until the harness is ported — it grows
+// back in when a consumer needs it.
+
+// Simple enums, not unions: every case is payload-free and the types are used
+// purely as value tables (`.rawValue` for severity ordering / the textual label,
+// `.ordinal` for the per-category override slot, `.name`, `fromName`) — never via
+// `match`. `.rawValue`, `fromName`, etc. are enum features.
+export enum LogLevel
+	NONE
+	ERROR
+	INFO
+	DEBUG
+	TRACE
+end 'LogLevel'
+
+// String-backed: each case's `.rawValue` is its 3-char log prefix.
+export enum LogCategory
+	compiler = "CMP"
+	lexer = "LEX"
+	parser = "PAR"
+	semantic = "SEM"
+	ir = "IR "
+	codegen = "GEN"
+	binary = "BIN"
+	testing = "TST"
+end 'LogCategory'
+
+var globalLogLevel = 2
+
+typealias LazyMessage = function() returns String
+
+// Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
+// Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
+typealias StoredLevel = int(0 to u64.max)
+typealias CategoryLevelArray = Array with StoredLevel
+
+var categoryLogLevels = CategoryLevelArray.create()
+var categoryLevelsInitialized = false
+
+function ensureCategoryLevels()
+	if categoryLevelsInitialized 'alreadyDone'
+		return
+	end 'alreadyDone'
+	categoryLevelsInitialized = true
+	// One override slot per LogCategory case, indexed by `category.ordinal`.
+	for _ in 0 upto LogCategory.allCases.count() 'fill'
+		categoryLogLevels.push(0)
+	end 'fill'
+end 'ensureCategoryLevels'
+
+function effectiveLogLevel(category LogCategory) returns StoredLevel
+	if categoryLevelsInitialized 'hasLevels'
+		// Sentinel: 0 = "no category-specific override"; caller falls through to globalLogLevel.
+		let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
+		if stored > 0 'hasOverride'
+			return stored - 1
+		end 'hasOverride'
+	end 'hasLevels'
+	return globalLogLevel
+end 'effectiveLogLevel'
+
+export function logError(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.ERROR, message: message)
+end 'logError'
+
+export function logInfo(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.INFO, message: message)
+end 'logInfo'
+
+export function logDebug(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.DEBUG, message: message)
+end 'logDebug'
+
+export function logTrace(category LogCategory, message LazyMessage)
+	log(category, level: LogLevel.TRACE, message: message)
+end 'logTrace'
+
+export function setLogLevel(level LogLevel)
+	globalLogLevel = level.rawValue
+end 'setLogLevel'
+
+export function setCategoryLogLevel(category LogCategory, level LogLevel)
+	ensureCategoryLevels()
+	try categoryLogLevels.set(category.ordinal, value: level.rawValue + 1) otherwise panic("invariant: categoryLogLevels.set OOB")
+end 'setCategoryLogLevel'
+
+// Parses a log option string like "debug" or "lexer:trace".
+export function parseLogOption(option String) returns bool
+	let parts = option.split(":")
+	if parts.count() == 1 'noColon'
+		let level = try LogLevel.fromName(option.toUpper()) otherwise return false
+		setLogLevel(level)
+		return true
+	end 'noColon'
+
+	let categoryStr = try parts.get(0) otherwise return false
+	var levelStr = try parts.get(1) otherwise return false
+
+	let category = try LogCategory.fromName(categoryStr) otherwise return false
+
+	let level = try LogLevel.fromName(levelStr.toUpper()) otherwise return false
+
+	setCategoryLogLevel(category, level: level)
+	return true
+end 'parseLogOption'
+
+function log(category LogCategory, level LogLevel, message LazyMessage)
+	let effectiveLevel = effectiveLogLevel(category)
+	if level.rawValue <= effectiveLevel 'check'
+		let msg = message()
+		printError("[{category.rawValue}] {level.name}: {msg}\n")
+	end 'check'
+end 'log'

@@ -1,0 +1,205 @@
+// IrBlock: a basic block shared across all IR phases (Maxon, Std, MIR, Target).
+//
+// Stores op indices into the owning module's flat ops array, exactly one
+// terminator, block arguments (phi nodes), and outgoing branch edges.
+//
+// At the Maxon phase blockArgs and branchEdges are always empty. blockArgs
+// are populated by mem2reg during the Std phase and carried through MIR.
+// branchEdges are populated by lowerMirToTarget for register allocation.
+
+// Role tag for an IrBlockArg, used by the inliner to record that a
+// continuation-block arg stands in for what would otherwise be a value
+// captured from a multi-value-return register. The backend's coalescer
+// reads this and seeds a physical-register hint on the arg, replacing
+// the hint anchor the post-call capture mov used to provide before the
+// callee was inlined.
+//
+//   none           — normal phi (mem2reg, branch-arg, etc.). Default.
+//   primaryReturn  — primary return value: R8 (x64) / X0 (arm64).
+//   errorFlag      — multi-value-return error flag: RDX / X1.
+export enum BlockArgReturnRole
+	none
+	primaryReturn
+	errorFlag
+end 'BlockArgReturnRole'
+
+// A block argument (phi node): a value defined at block entry, bound by
+// the branch op that transfers control to this block. Introduced by
+// mem2reg at the Std phase and carried through MIR and Target phases.
+export type IrBlockArg
+	export var valueId as ValueId
+	export var argType as StdType
+	// Set to a non-`none` value only by the inliner on the continuation
+	// block it synthesizes for a multi-block splice. Every other producer
+	// of blockArgs (mem2reg, parser, MIR/target lowering) leaves it as
+	// `none`. Consumed by each backend's `coalesceRanges` to seed a
+	// physical-register hint via `setPhysHint`.
+	export var returnRole as BlockArgReturnRole
+
+	export static function create(valueId ValueId, argType StdType, returnRole BlockArgReturnRole = BlockArgReturnRole.none) returns IrBlockArg
+		return Self{valueId: valueId, argType: argType, returnRole: returnRole}
+	end 'create'
+
+	// Clone an arg from another block (e.g. when copying blocks during
+	// target lowering). Preserves the source arg's returnRole so the
+	// backend coalescer can still seed an ABI-role hint after lowering.
+	export static function cloneOf(srcArg IrBlockArg) returns IrBlockArg
+		return Self{valueId: srcArg.valueId, argType: srcArg.argType, returnRole: srcArg.returnRole}
+	end 'cloneOf'
+end 'IrBlockArg'
+
+export typealias IrBlockArgArray = Array with IrBlockArg
+
+// An outgoing branch arg list paired with its successor block id.
+// Populated by lowerMirToTarget for each branch terminator and consumed
+// by CopyResolution in the register allocator to insert parallel moves
+// at CFG edges. The target-phase physical terminators (x64 jmp, arm64
+// branch) carry only the target block id, so this metadata lives on the
+// predecessor's IrBlock instead.
+export type BranchEdge
+	export var targetBlockId as BlockId
+	export var argIds as ValueIdArray
+
+	export static function create(targetBlockId BlockId, argIds ValueIdArray) returns BranchEdge
+		return Self{targetBlockId: targetBlockId, argIds: argIds}
+	end 'create'
+end 'BranchEdge'
+
+export typealias BranchEdgeArray = Array with BranchEdge
+
+// A block's terminator status.
+//   unset — no terminator op is currently attached. The parser starts
+//     every block here and assertTerminated forbids any block from
+//     leaving the parsing phase still in this state. Target-phase
+//     passes (ApplyColoring identity-move elimination, X64 prologue/
+//     epilogue rewriting) may transiently re-enter this state when
+//     they remove or relocate a terminator op before re-attaching one.
+//   dead — block is unreachable (produced by parser for code after a
+//     fully-terminated if/else); treated as implicitly terminated.
+//   fallthrough — terminator was deliberately elided at the target phase
+//     because the block falls straight through to the next block in
+//     layout order. branchEdges still carry parallel-copy info for the
+//     fallthrough edge.
+//   opIndex(index) — a terminator op lives at this index in the
+//     module's ops array.
+export union Terminator
+	unset
+	dead
+	fallthrough
+	opIndex(index OpIndex)
+end 'Terminator'
+
+export type IrBlock
+	export var id as BlockId
+	export var label as String
+	export var opRefs as OpIndexList
+	export var terminator as Terminator
+	export var blockArgs as IrBlockArgArray
+	// Outgoing branch-argument lists, one per successor of this block.
+	// Empty for blocks whose terminator is a return or has no arguments.
+	// Populated only at the Target phase by lowerMirToTarget.
+	export var branchEdges as BranchEdgeArray
+
+	export static function create(id BlockId, label String) returns IrBlock
+		return Self{
+			id: id,
+			label: label,
+			opRefs: OpIndexList.create(),
+			terminator: Terminator.unset,
+			blockArgs: IrBlockArgArray.create(),
+			branchEdges: BranchEdgeArray.create()
+		}
+	end 'create'
+
+	// Deep-clone a block: a fresh IrBlock with independent copies of opRefs,
+	// terminator, blockArgs, and branchEdges. The op indices in opRefs/terminator
+	// are copied by value (the underlying module ops are immutable and shared by
+	// index), so the clone references the same pristine ops while owning its own
+	// lists. Used by the register allocator's spill-everywhere fallback to snapshot
+	// a function's pre-regalloc MIR so a failed SSA-coloring attempt can be undone
+	// (register allocation only appends new ops and rewrites block.opRefs in place;
+	// restoring the cloned block contents recovers the original MIR exactly).
+	export static function clone(src IrBlock) returns IrBlock
+		var dst = Self.create(src.id, label: src.label)
+		dst.opRefs = src.opRefs.clone()
+		dst.terminator = src.terminator
+		for arg in src.blockArgs 'eachArg'
+			dst.blockArgs.push(IrBlockArg.cloneOf(arg))
+		end 'eachArg'
+		for edge in src.branchEdges 'eachEdge'
+			dst.branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
+		end 'eachEdge'
+		return dst
+	end 'clone'
+
+	// True when the block has a real terminator op (returns / branches).
+	// Dead and fallthrough blocks return false — they have no op to
+	// reference even though they are effectively terminated.
+	export function hasTerminatorOp() returns bool
+		return match self.terminator 'check'
+			unset gives false
+			dead gives false
+			fallthrough gives false
+			opIndex gives true
+		end 'check'
+	end 'hasTerminatorOp'
+
+	// True when control cannot flow off the end of this block — it has a
+	// terminator op, is dead (unreachable), or intentionally falls through
+	// to the next block in layout order. Passes that only care whether to
+	// append an implicit branch/return use this.
+	export function isTerminated() returns bool
+		return match self.terminator 'check'
+			unset gives false
+			dead gives true
+			fallthrough gives true
+			opIndex gives true
+		end 'check'
+	end 'isTerminated'
+
+	// Returns the op index of the block's terminator. Panics if the
+	// terminator is not opIndex(_); callers must guard with hasTerminatorOp.
+	export function terminatorIndex() returns OpIndex
+		match self.terminator 'unwrap'
+			opIndex(index) then return index
+			default panic("terminatorIndex: block '{self.label}' has no terminator op")
+		end 'unwrap'
+	end 'terminatorIndex'
+
+	// Panic if the block was never given a terminator. Called at the end
+	// of the parsing phase to enforce the invariant that every IR block
+	// commits to one of: dead (unreachable), fallthrough (target phase
+	// only), or a concrete terminator op.
+	export function assertTerminated()
+		match self.terminator 'check'
+			unset then panic("IrBlock '{self.label}' (id={self.id}) has no terminator — parser left it in Terminator.unset")
+			dead then break 'check'
+			fallthrough then break 'check'
+			opIndex then break 'check'
+		end 'check'
+	end 'assertTerminated'
+end 'IrBlock'
+
+export typealias IrBlockArray = Array with IrBlock
+
+// Resolve a block's label by its BlockId. Used by IR printers across
+// all phases to display branch targets by name rather than raw IDs.
+export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns String
+	for block in blocks 'search'
+		if block.id == blockId 'found'
+			return block.label
+		end 'found'
+	end 'search'
+	return "block_{blockId}"
+end 'resolveBlockLabel'
+
+// Collect the IrBlocks referenced by a function's blockRefs list.
+// Used by IR printers across all phases to iterate a function's blocks.
+module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefList) returns IrBlockArray
+	var result = IrBlockArray.create()
+	for blockRef in blockRefs 'each'
+		let block = try blocks.get(blockRef) otherwise panic("invariant: blockRef from blockRefs not in blocks")
+		result.push(block)
+	end 'each'
+	return result
+end 'resolveFuncBlocks'

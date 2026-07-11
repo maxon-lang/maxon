@@ -1,0 +1,127 @@
+// Std Dialect — mid-level IR. The width/ABI-resolved tier between the
+// source-proximate Maxon dialect and the machine-level MIR dialect. All
+// mid-level optimization passes (mem2reg, canonicalize, cse, licm, dce, …) run
+// here (Chunk B).
+//
+// THIN for maxon-shv2 M1: carries the shapes the `return 42` slice lowers to —
+// the full `StdType` classification (needed everywhere: block-arg types,
+// function signatures), plus the `arith.const(constI64)` and `call.ret` op
+// shapes. `StdOp` is the outer union with only the `arith` and `call` category
+// arms it needs today; later milestones GROW it with the `control` / `memory` /
+// `system` arms (and their inner unions) as features land, and GROW `StdArithOp`
+// (unary/binary) and `StdCallOp` (call/tryCall/param/…). v1's five-category
+// outer-union shape and per-variant metadata backings are preserved so growth is
+// purely additive.
+
+// --- CastCategory: coarse type family for cast validation ---
+// Kept whole (int/float/bool/string/cstring) even though M1 only produces
+// int/bool — the StdType backing values below reference every family, and the
+// call-site type checker (Chunk B) needs the full set to reject mismatches.
+export enum CastCategory
+	int
+	float
+	bool
+	string
+	cstring
+end 'CastCategory'
+
+// --- StdTypeInfo: metadata carried by each StdType case ---
+export type StdTypeInfo
+	export let isFloat as bool
+	export let castCategory as CastCategory
+end 'StdTypeInfo'
+
+// --- StdType: ABI/width-level type classification ---
+// Each case carries a StdTypeInfo backing value encoding whether the type lives
+// in a floating-point register and which cast family it belongs to.
+export enum StdType
+	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool}
+	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
+	f32 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
+	f64 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
+end 'StdType'
+
+export function stdTypeIsFloat(t StdType) returns bool
+	return t.rawValue.isFloat
+end 'stdTypeIsFloat'
+
+// --- StdReturnType: function return type (either void or a concrete StdType) ---
+// Void-returning functions are `void`; value-returning functions carry the
+// concrete StdType in `value`. Consumers dispatch on this union rather than
+// using a sentinel StdType to mean "no return".
+export union StdReturnType
+	void
+	value(inner StdType)
+end 'StdReturnType'
+
+export typealias StdReturnTypeArray = Array with StdReturnType
+
+export function stdReturnTypeIsVoid(rt StdReturnType) returns bool
+	return match rt 'check'
+		void gives true
+		value gives false
+	end 'check'
+end 'stdReturnTypeIsVoid'
+
+export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
+	return match rt 'check'
+		void gives false
+		value(inner) gives stdTypeIsFloat(inner)
+	end 'check'
+end 'stdReturnTypeIsFloat'
+
+// --- StdArithOp ---
+// Only the `const` arm today; `unary` / `binary` arms grow in at M3 (arithmetic).
+export union StdArithOp
+	const(op StdArithConst)
+end 'StdArithOp'
+
+export union StdArithConstOpcode
+	constI64
+	constF64
+end 'StdArithConstOpcode'
+
+export type StdArithConst
+	export let opcode as StdArithConstOpcode
+	export let resultId as ValueId
+	export let value as ParsedInt
+
+	export static function create(opcode StdArithConstOpcode, resultId ValueId, value ParsedInt) returns StdArithConst
+		return Self{opcode: opcode, resultId: resultId, value: value}
+	end 'create'
+end 'StdArithConst'
+
+// --- StdCallOp ---
+// Only the `ret` terminator today. The single-variant metadata flags below are
+// the v1 shape (read as `op.rawValue.isRet`, etc.) kept whole so the call /
+// tryCall / param / … arms grow in at M4/M5 without a metadata refactor.
+export type StdCallOpMeta
+	export let isRet as bool
+	export let isErrorReturn as bool
+	export let isParam as bool
+	// Inliner policy: this op may be folded away during a splice.
+	export let isPureForInlining as bool
+	// Inliner policy: this op cannot appear inside an inlined callee body.
+	export let isUnsupportedInInlineBody as bool
+end 'StdCallOpMeta'
+
+export union StdCallOp
+	ret(retValId ValueId) = StdCallOpMeta{isRet: true, isErrorReturn: false, isParam: false, isPureForInlining: true, isUnsupportedInInlineBody: false}
+end 'StdCallOp'
+
+// --- StdOp: outer union wrapping the op categories ---
+// Two category arms today; `control` / `memory` / `system` grow in with their
+// inner unions as features land.
+export union StdOp
+	arith(op StdArithOp)
+	call(op StdCallOp)
+end 'StdOp'
+
+export typealias StdOpArray = Array with StdOp

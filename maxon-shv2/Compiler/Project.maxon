@@ -1,0 +1,91 @@
+// Project.maxon — foundational compiler-wide types.
+//
+// THIN for maxon-shv2 M1. In v1 (`maxon-selfhosted`) this file also holds the
+// ~90-field `Project` struct and its ~28 parser-written registries. shv2 splits
+// that shared state into a per-file `FileParseArtifact` (see PLAN.md — parse
+// staging), so the big `Project` struct + registries + `createProject` are a
+// Chunk C deliverable that GROWS this file. What lives here now is the small set
+// of foundational, cross-cutting types the type layer depends on that v1 happens
+// to home in Project.maxon: the primitive-array aliases, the declaration
+// `Visibility` tier, and the parser's `VarInfo` symbol-table record.
+//
+// GROWTH CONTRACT: Chunk C must ADD the `Project` struct and registries here —
+// it must NOT redefine the symbols already defined below.
+
+// Array aliases over primitives / String. Cross-cutting; used by the IR
+// containers (StringArray for name lists, BoolArray for the compaction
+// liveness bitmaps). v1 scatters these between Project.maxon and Parser.maxon;
+// shv2 homes both here so the parser rebuild (Chunk C) doesn't re-declare them.
+export typealias StringArray = Array with String
+export typealias BoolArray = Array with bool
+
+// Visibility tier of a top-level declaration. Stamped by the parser at
+// declaration time; consumed by cross-file name resolution and the unused-export
+// check. `file` is the default (positively widened to `module`/`global`).
+export enum Visibility
+	file
+	module
+	global
+end 'Visibility'
+
+// Byte offset of a field within a struct's heap layout. Bounded by the max
+// struct size the layout descriptor can address. Used by `VarInfo` for the
+// self-field-alias fast path (reads/writes lower to fieldLoad/fieldStore
+// through `__self` + this offset rather than a materialized local slot).
+export typealias FieldOffset = int(0 to 65520)
+
+// Ordinal of a union case (and, for a payload binding, the field index within
+// that case's payload). Bounded by the max cases a union may declare.
+export typealias CaseOrdinal = int(0 to 65535)
+
+// VarInfo — one entry in a function's `Scope` symbol table.
+//
+// The parser tracks every local by its source-level `MaxonType`; that type is
+// carried to lowerMaxonToStd, which resolves the concrete `StdType` (int vs
+// float, width) through the typealias registry after resolution. The parser
+// never branches on int-vs-float.
+//
+// `isSelfField` / `isPayloadBinding` mark the two non-slot binding shapes
+// (self-field alias inside an instance method; match-arm payload binding on a
+// union). Both are inert at M1 (no structs, no enums yet) but the record shape
+// is kept whole so M9/M12 activate them without a struct migration.
+export type VarInfo
+	export var name as String
+	export var varType as MaxonType
+	export var mutable as bool
+	export var slot as VarSlot
+	// Ownership lattice kind for this binding — the M1 ownership scaffold's
+	// per-binding attribute (see OwnershipKind in MaxonDialect.maxon). ALWAYS
+	// `trivial` at M1 (all bindings are scalars); the Own tier (M6) sets it to
+	// `owned`/`borrow`/`shared` during OwnershipInfer/EscapeAnalysis, and Scope's
+	// per-frame owned-values list keys off it to place drops at scope exit.
+	// Present-but-inert: designed in from the first commit, not retrofitted.
+	export var ownership as OwnershipKind
+	// True when this name is a self-field alias inside an instance method.
+	// Reads emit fieldLoad via __self + fieldOffset; writes emit fieldStore.
+	export var isSelfField as bool
+	export var fieldOffset as FieldOffset
+	// True when this name was introduced as a match-arm binding on a union
+	// payload. Reads go through the local slot; writes are rewritten to a
+	// payload store against the scrutinee + field index.
+	export var isPayloadBinding as bool
+	export var payloadScrutineeName as String
+	export var payloadFieldIndex as CaseOrdinal
+	// The union case this binding belongs to — different cases of the same
+	// union have independent payload field types, so the case name is required.
+	export var payloadCaseName as String
+
+	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
+	end 'create'
+
+	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
+		return Self{name: name, varType: varType, mutable: true, slot: slot, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
+	end 'createSelfField'
+
+	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
+	end 'createPayloadBinding'
+end 'VarInfo'
+
+export typealias VarInfoMap = Map with (String, VarInfo)

@@ -1,0 +1,40 @@
+// MIR (Machine IR) Dialect — target-independent machine instruction
+// representation. Sits between the Std dialect and the target-specific dialects
+// (x64/arm64, Chunk B). Uses infinite virtual registers (ValueId) in SSA form.
+//
+// THIN for maxon-shv2 M1: carries the two ops the `return 42` slice lowers to —
+// `movImm` (materialize a constant into a virtual register) and `ret`. Later
+// milestones GROW `MirOp` with the ALU / compare-branch / call / memory / system
+// ops (and the `MirBinOpcode` / `MirUnaryOpcode` / `MirCmpPredicate` opcode
+// unions) as features land. v1's per-variant `MirOpMeta` scheduling metadata is
+// preserved so new ops declare their memory/store/call/flags semantics inline.
+
+// Per-variant static metadata backing for MirOp (read via `op.rawValue`),
+// consumed by the instruction scheduler and the backends' use counting.
+export type MirOpMeta
+	// True for ops that access memory or have side effects the scheduler must
+	// treat as a memory barrier (loads, stores, calls, syscalls, atomics, locks).
+	export let isMemory as bool
+	// True for ops that write memory or have externally-observable side effects
+	// (must order with subsequent loads). Pure loads are memory but not stores.
+	export let isStore as bool
+	// True for ops with full call-barrier semantics (clobber caller-saved regs,
+	// may observe/modify arbitrary memory). Also true for `param`.
+	export let isCall as bool
+	// True if the op may clobber x64 EFLAGS / ARM64 NZCV when lowered. `movImm`
+	// is covered because the zero case lowers to `xor reg, reg` which sets flags.
+	export let clobbersFlags as bool
+	// Single-variant tag checks kept as metadata for uniformity.
+	export let isParam as bool
+	export let isCmp as bool
+end 'MirOpMeta'
+
+export union MirOp
+	// Materialize a constant into a virtual register. `isFloat` selects a GP
+	// mov-immediate vs an XMM load at the backend.
+	movImm(resultId ValueId, value ParsedInt, isFloat bool) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	// Return terminator. `retValId` names the value moved into the return register.
+	ret(retValId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+end 'MirOp'
+
+export typealias MirOpArray = Array with MirOp
