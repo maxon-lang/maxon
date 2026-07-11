@@ -1,0 +1,36 @@
+// GlobalDataTable — the backend's .rdata/.rodata table: maps names to byte
+// payloads for the read-only data section. LowerMaxonToStd registers string /
+// byte-string literals here; the PE/ELF writers serialize `names`/`values` into
+// the .rdata section and resolve code→rdata relocations against them.
+//
+// THIN for maxon-shv2 M1: the `return 42` slice registers NO rdata (no strings,
+// no arrays, no layout descriptors), so the table exists only as the empty
+// container the backend/writer boundary (`CodeResult`, `FunctionCodeChunk`)
+// requires. It carries the core name→payload arrays plus the O(1) dedup indexes
+// (kept from v1, where per-entry linear scans drove a quadratic build cost) so
+// the append/lookup helpers B2 GROWS in stay O(1) from the start.
+//
+// v1's coverage-counter entries, .data-section globals, and rdata-internal
+// pending relocations (CovDataEntry / DataSectionEntry / pendingRdataRelocs)
+// are OMITTED until their milestones (coverage, top-level mutable globals,
+// layout descriptors) need them — they grow back as additional fields here.
+
+// `nameIndex`: registered global name → its index in `names`/`values` (O(1)
+// membership + lookup). `valueDedup`: a previously-registered byte payload →
+// its synthetic name, so a repeat registration of identical content returns the
+// existing entry in O(1) instead of scanning every prior value.
+export typealias GlobalNameIndexMap = Map with (String, MachineWord)
+export typealias GlobalDedupMap = Map with (ByteArray, String)
+
+export type GlobalDataTable
+	export var names as StringArray
+	export var values as ByteArrayArray
+	// Monotonic id for minting synthetic `__str_<id>` names for ad-hoc payloads.
+	export var nextStringId as MachineWord
+	export var nameIndex as GlobalNameIndexMap
+	export var valueDedup as GlobalDedupMap
+
+	export static function create() returns GlobalDataTable
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create()}
+	end 'create'
+end 'GlobalDataTable'

@@ -169,9 +169,10 @@ export type IrFunction
 	end 'createFromStd'
 
 	// Copies signature + type info with a fresh-empty `blockRefs`. Callers that
-	// need the source's block references must copy them explicitly (the
-	// empty-list contract is what IrModule.cloneFunc and the backends rely on).
-	// See `cloneWithBlockRefs` for callers that want them preserved.
+	// need the source's block references must copy them explicitly — that
+	// empty-list contract is what `cloneWithBlockRefs` (and the backends that
+	// rebuild `blockRefs` themselves) rely on. See `cloneWithBlockRefs` for the
+	// variant that preserves them, optionally shifted by a block offset.
 	export static function clone(src IrFunction) returns IrFunction
 		return Self{
 			name: src.name,
@@ -198,12 +199,17 @@ export type IrFunction
 		}
 	end 'clone'
 
-	// Copies signature, type info, AND the source's `blockRefs` verbatim. Used
-	// where a cloned function must keep pointing at the source's body blocks.
-	export static function cloneWithBlockRefs(src IrFunction) returns IrFunction
+	// Copies signature, type info, AND the source's `blockRefs`, shifting each
+	// ref by `blockOffset` (0 = verbatim). Used where a cloned function must keep
+	// pointing at the source's body blocks: in place (offset 0) for the backends
+	// that clone a function whole, or offset by the destination's prior block
+	// count when `IrModule.merge` relocates a source module's blocks into this
+	// one. Subsumes the former `IrModule.cloneFunc` (which was this same
+	// clone-then-carry-refs walk, always with an offset).
+	export static function cloneWithBlockRefs(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
 		var copy = IrFunction.clone(src)
 		for blockRef in src.blockRefs 'eachBlock'
-			copy.blockRefs.append(blockRef)
+			copy.blockRefs.append(blockRef + blockOffset)
 		end 'eachBlock'
 		return copy
 	end 'cloneWithBlockRefs'

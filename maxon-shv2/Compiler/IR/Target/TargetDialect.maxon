@@ -1,0 +1,101 @@
+// Target Dialect — target-specific (x64) machine instructions, the lowest IR
+// tier before machine-code emission. B2's MIR→Target lowering emits these ops;
+// B2's register allocator colors their virtual registers into physical GPRs.
+//
+// THIN for maxon-shv2 M1: carries exactly the x64 ops the `return 42` slice
+// needs — materialize a constant into a register (movRegImm / movRegImm32),
+// move a value between registers (movRegReg, for the R8 return move + regalloc
+// copies), and the frame/return control ops (prologue / epilogue / ret). Later
+// milestones GROW `TargetOp` with the ALU / compare-branch / call / memory / FP
+// (XMM) ops as features land, and GROW the register representation with the XMM
+// register file. arm64 support arrives at its own milestone; M1 is x64-windows
+// only, so `TargetModule` currently carries only x64 ops.
+//
+// v1 returns the primary value in R8 (NOT RAX) under its self-designed calling
+// convention; the physical GPR enum here includes R8 so B2's regalloc + return
+// move can target it. v1's per-variant `X64OpMeta` scheduling/regalloc metadata
+// is preserved in thinned form (`TargetOpMeta`) so a new op cannot be added
+// without declaring its memory/store/call/flags semantics; B2 GROWS it with the
+// register-allocator `OpPattern` + implicit-register masks when it ports the
+// allocator (deferred here because they drag in the whole regalloc scaffold).
+
+// The 16 general-purpose registers of x86-64, in encoding order (0=rax .. 15=r15).
+// B2's register allocator colors virtual registers into this set; the return
+// value lands in R8 per Maxon's internal calling convention.
+export enum X64Register
+	rax
+	rcx
+	rdx
+	rbx
+	rsp
+	rbp
+	rsi
+	rdi
+	r8
+	r9
+	r10
+	r11
+	r12
+	r13
+	r14
+	r15
+end 'X64Register'
+
+// A machine register operand: either a concrete physical GPR or a virtual
+// register identified by the SSA ValueId that defined it. Every `movImm`
+// result arrives as a `virtual`; B2's register allocator rewrites each into a
+// `physical` during coloring.
+export union X64VReg
+	physical(reg X64Register)
+	virtual(id ValueId)
+end 'X64VReg'
+
+// Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
+// consumed by B2's instruction scheduler + register allocator. THIN for M1:
+// only the semantic flags that do not require the regalloc `OpPattern` /
+// register-mask machinery. B2 GROWS this with the coloring `pattern` and the
+// implicit-GPR read/def masks (e.g. epilogue reads R8, a call clobbers the
+// caller-saved set) when it ports the allocator.
+export type TargetOpMeta
+	// Accesses memory / has a side effect the scheduler must order as a barrier.
+	export let isMemory as bool
+	// Writes memory / has an externally-observable side effect (pure loads are
+	// memory but not stores).
+	export let isStore as bool
+	// Full call-barrier semantics (clobbers caller-saved registers).
+	export let isCall as bool
+	// May clobber x64 EFLAGS when lowered.
+	export let setsFlags as bool
+end 'TargetOpMeta'
+
+export union TargetOp
+	// Frame setup: reserve `stackSize` bytes of stack. Inserted by B2's
+	// prologue/epilogue pass at a function's entry block.
+	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Frame teardown (restore rsp / callee-saved registers). Placed just before
+	// `ret`; reads the primary-return register (R8) implicitly at the exit site.
+	epilogue = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// `ret` instruction — return control to the caller.
+	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Materialize a 64-bit immediate into `dest` (`mov reg, imm64`).
+	movRegImm(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Materialize a 32-bit immediate into `dest` (`mov reg32, imm32`, which
+	// zero-extends to the full 64-bit register). B2 picks this over movRegImm
+	// for values that fit 32 bits (e.g. the literal 42) — the encoding is shorter.
+	movRegImm32(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Register-to-register move (`mov dest, src`). B2 emits this for the
+	// primary-return move (value → R8) and for register-allocation copies.
+	movRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+end 'TargetOp'
+
+export typealias TargetOpArray = Array with TargetOp
+
+// TargetModule — the Target-dialect instantiation of the generic IrModule
+// container; holds a whole program's Target-tier ops/blocks/functions. Unlike
+// v1's bespoke TargetModule struct (which carried BOTH an x64 and an arm64 op
+// array behind a `cpu` discriminator), shv2 makes the Target tier a plain
+// `IrModule with TargetOp` — consistent with MaxonModule/StdModule/MirModule —
+// so the shared IrModule machinery (appendOp/setTerminator/compactOps) is
+// reused with no bespoke duplicate. arm64 grows as additional `TargetOp` arms
+// (or its own dialect) at the arm64 milestone.
+export typealias TargetModule = IrModule with TargetOp

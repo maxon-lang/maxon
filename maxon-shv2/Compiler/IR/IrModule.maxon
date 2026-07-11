@@ -233,14 +233,6 @@ export type IrModule uses Op
 		self.functions.push(func)
 	end 'pushFunc'
 
-	export function cloneFunc(src IrFunction, blockOffset BlockIndex) returns IrFunction
-		var func = IrFunction.clone(src)
-		for blockRef in src.blockRefs 'eachBlockRef'
-			func.blockRefs.append(blockRef + blockOffset)
-		end 'eachBlockRef'
-		return func
-	end 'cloneFunc'
-
 	export function appendOp(block IrBlock, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)
@@ -383,16 +375,18 @@ export type IrModule uses Op
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'
-			self.functions.push(self.cloneFunc(srcFunc, blockOffset: blockOffset))
+			self.functions.push(IrFunction.cloneWithBlockRefs(srcFunc, blockOffset: blockOffset))
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
 
-// Block-reachable op counter shared by IrModule.liveOpCount and
-// TargetModule.liveOpCount. Sums every block's `opRefs.count()` across
-// every function plus one per block that has a terminator op. Lives
-// outside the generic IrModule type so the concrete TargetModule (which
-// is not an IrModule instantiation) can reuse the same walk.
+// Block-reachable op counter backing `IrModule.liveOpCount`. Sums every block's
+// `opRefs.count()` across every function plus one per block that has a
+// terminator op. Kept as a free `module function` — a peer of the compaction
+// planners below — so the block-reachability walk lives in one place. Every
+// tier reaches it through the single inherited `liveOpCount`: `TargetModule` is
+// now just `IrModule with TargetOp` (see TargetDialect.maxon), not a bespoke
+// struct, so there is no second counter to keep in sync.
 module function countLiveOps(functions IrFunctionArray, blocks IrBlockArray) returns OpCount
 	var count = 0 as OpCount
 	for func in functions 'eachFunc'
@@ -413,10 +407,11 @@ end 'countLiveOps'
 // is the number of survivors — the new array length after compaction.
 // `deadMarker` is the old count (one past every valid new index), so a live
 // entry can never collide with it. Despite the `Op` in the name, the plan is
-// index-type-agnostic and drives three compactors: `IrModule.compactOps` /
-// `TargetModule.compactOps` (the ops arrays) and `IrModule.compactBlocks` (the
-// blocks array). The array move + reference rewrite are entry-typed and stay on
-// the respective module; the index arithmetic is shared here.
+// index-type-agnostic and drives both of `IrModule`'s in-place compactors:
+// `compactOps` (the ops array) and `compactBlocks` (the blocks array). Every
+// tier — including `TargetModule`, now just `IrModule with TargetOp` — shares
+// those two inherited methods. The array move + reference rewrite are
+// entry-typed and stay on the module; the index arithmetic is shared here.
 module type OpCompactionPlan
 	export var forward as OpIndexArray
 	export var liveCount as OpCount

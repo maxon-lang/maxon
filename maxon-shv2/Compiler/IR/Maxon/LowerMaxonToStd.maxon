@@ -1,0 +1,196 @@
+// LowerMaxonToStd — Maxon → Std lowering. Takes a MaxonModule and produces a
+// fresh StdModule.
+//
+// **SSA is born here.** Maxon IR ops identify values by `ByteArray` names
+// (zero-copy slices over the lexer's source buffer for user-written names, or
+// per-function synthetic `$tN` names for intermediates). This pass is the first
+// place those names are assigned dense, function-local `ValueId`s: each function
+// gets a fresh `nameToId` map and a `funcIdRef` starting at `paramCount` (the
+// parameters implicitly occupy ValueIds 0..paramCount-1 by the Std-ABI
+// convention). Width/signedness collapse also happens here — MaxonType fields
+// are translated to StdType via `maxonTypeToStdType`.
+//
+// THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
+//   maxon.literal -> std.arith.const(constI64/constF64)
+//   maxon.ret     -> std.call.ret
+// Later milestones GROW `lowerOp`/`lowerTerminator` with the var / arith / call
+// / control-flow arms (and the throwing / fat-interface return arms of
+// `emitRetOrErrorReturn`) as the Maxon and Std dialects grow. v1's per-function
+// reset structure (nameToId + funcIdRef reset at each function) is preserved so
+// the per-function fan-out driver (M5) can wrap one function at a time.
+
+// Per-function map from a Maxon value NAME (`ByteArray` slice) to the dense SSA
+// `ValueId` this pass assigns it. Byte-sequence equality keyed.
+export typealias NameToValueIdMap = Map with (ByteArray, ValueId)
+
+// Collapse a source-level MaxonType to its width/ABI-resolved StdType. M1
+// handles only the primitive arms. `named` and `unresolved` are a
+// TypeResolution (Chunk C) responsibility: that pass replaces every
+// `named(alias)` with the primitive it resolves to (consulting the typealias
+// registry for its width) and eliminates every `unresolved` BEFORE lowering
+// runs. Seeing either arm here is a pipeline-ordering bug (TypeResolution did
+// not run, or left a residue) — not a user error — so it panics loudly rather
+// than silently guessing a width. GROWS at Chunk C to resolve `named` widths
+// through the registry once that registry exists.
+export function maxonTypeToStdType(ref MaxonType) returns StdType
+	match ref 'collapse'
+		boolean then return StdType.i1
+		integer then return StdType.i64
+		float then return StdType.f64
+		named then panic("maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering (TypeResolution did not run)")
+		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
+	end 'collapse'
+end 'maxonTypeToStdType'
+
+// Collapse a function's MaxonReturnType to its StdReturnType. `void` maps
+// straight across; a value return collapses its inner type via maxonTypeToStdType.
+export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdReturnType
+	match ref 'collapse'
+		void then return StdReturnType.void
+		value(inner) then return StdReturnType.value(maxonTypeToStdType(inner))
+	end 'collapse'
+end 'maxonReturnTypeToStdReturnType'
+
+// Public entry: lower a whole MaxonModule to a fresh StdModule. Instantiates the
+// per-run lowering worker (which owns the name→id state) and runs it.
+export function lowerMaxonToStd(maxonModule MaxonModule) returns StdModule
+	return MaxonToStdLowering.create(maxonModule).lower()
+end 'lowerMaxonToStd'
+
+type MaxonToStdLowering
+	var maxonModule as MaxonModule
+	var stdModule as StdModule
+	// Per-function name→id map — reset at the top of each function's lowering.
+	var nameToId as NameToValueIdMap
+	// Per-function ValueId allocator — re-seeded at `paramCount` per function so
+	// parameter ids 0..paramCount-1 stay reserved by the Std-ABI convention.
+	var funcIdRef as ValueIdRef
+	// Qualified name of the function currently lowering — for diagnostics only.
+	var currentFuncName as String
+
+	static function create(maxonModule MaxonModule) returns MaxonToStdLowering
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), nameToId: NameToValueIdMap.create(), funcIdRef: ValueIdRef.create(0), currentFuncName: ""}
+	end 'create'
+
+	function lower() returns StdModule
+		// Clone blocks 1:1 first so blockRef indices stay aligned between the
+		// source MaxonModule and the dest StdModule; each dest block starts empty
+		// and its ops are appended during the per-function walk below. The
+		// per-block source footprint is copied in lock-step so it survives to the
+		// coverage-instrumentation pass (a later-milestone consumer).
+		for i in 0 upto self.maxonModule.blocks.count() 'cloneBlocks'
+			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: maxonModule.blocks.get OOB at {i}")
+			self.stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
+			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+			self.stdModule.blockSourceInfo.push(srcInfo)
+		end 'cloneBlocks'
+
+		// Transfer each function, collapsing its Maxon-phase types (return type +
+		// param types) to the Std-phase types. blockRefs stay valid because block
+		// indices were kept 1:1 above.
+		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
+			var func = try self.maxonModule.functions.get(i) otherwise panic("lowerMaxonToStd: maxonModule.functions.get OOB at {i}")
+			var stdParams = StdTypeArray.create()
+			for paramType in func.maxonParamTypes 'eachParam'
+				stdParams.push(maxonTypeToStdType(paramType))
+			end 'eachParam'
+			func.returnType = maxonReturnTypeToStdReturnType(func.maxonReturnType)
+			func.paramTypes = stdParams
+			self.stdModule.functions.push(func)
+		end 'transferFuncs'
+
+		// Walk each function's blocks and lower their body ops + terminator. SSA
+		// value ids restart at paramCount per function, so reset the per-function
+		// state before each walk.
+		for srcFunc in self.stdModule.functions 'eachFunc'
+			self.nameToId = NameToValueIdMap.create()
+			self.funcIdRef = ValueIdRef.create(srcFunc.paramCount)
+			self.currentFuncName = srcFunc.name
+
+			for blockRef in srcFunc.blockRefs 'eachBlock'
+				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
+				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
+
+				for opIdx in srcBlock.opRefs 'eachOp'
+					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("lowerMaxonToStd: opIdx from srcBlock.opRefs not in maxonModule.ops")
+					self.lowerOp(hlOp, dstBlock: dstBlock)
+				end 'eachOp'
+
+				if srcBlock.hasTerminatorOp() 'hasTerm'
+					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerMaxonToStd: terminatorIndex not in maxonModule.ops")
+					self.lowerTerminator(termOp, dstBlock: dstBlock)
+				end 'hasTerm'
+			end 'eachBlock'
+		end 'eachFunc'
+
+		return self.stdModule
+	end 'lower'
+
+	// Lower a regular (non-terminator) Maxon body op. M1's MaxonOp has only
+	// `literal` and `ret`; a `ret` reaching here (mid-block) is the rare
+	// body-op form (v1 hits it for partially-terminated closure bodies) and
+	// lowers the same way as the terminator, just appended rather than set.
+	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'lower'
+			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
+			ret(retVal, _) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
+		end 'lower'
+	end 'lowerOp'
+
+	// Lower a block terminator. The parser only ever produces `ret` as a
+	// terminator in M1; a `literal` here is a parser bug (a literal is never a
+	// block terminator).
+	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'lower'
+			ret(retVal, _) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
+			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
+		end 'lower'
+	end 'lowerTerminator'
+
+	// Lower an integer/float literal to `std.arith.const`. The opcode's
+	// float-ness is derived from the collapsed StdType so downstream MIR picks a
+	// GP mov-immediate vs an XMM load.
+	function lowerLiteral(result ByteArray, value ParsedInt, litType MaxonType, dstBlock IrBlock)
+		let stdType = maxonTypeToStdType(litType)
+		var opcode = StdArithConstOpcode.constI64
+		if stdTypeIsFloat(stdType) 'asFloat'
+			opcode = StdArithConstOpcode.constF64
+		end 'asFloat'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
+	end 'lowerLiteral'
+
+	// Emit the function-return terminator (or, for a mid-block ret, a body op).
+	// M1 has only the PLAIN-ret arm: a non-throwing, non-interface-returning
+	// function hands its single value back via `StdCallOp.ret`. The throwing
+	// (errorReturn + zero flag) and fat-interface (errorReturn + witness) arms
+	// GROW in at M15 / M6 — once the Std dialect gains `errorReturn` and
+	// functions can throw or return interface types. `asTerminator` toggles
+	// setTerminator (block-final) vs appendOp (the rare mid-block ret).
+	function emitRetOrErrorReturn(retVal ByteArray, dstBlock IrBlock, asTerminator bool)
+		let retValId = self.resolveName(retVal)
+		let plainOp = StdOp.call(StdCallOp.ret(retValId))
+		if asTerminator 'asTerm'
+			self.stdModule.setTerminator(dstBlock, op: plainOp)
+		end 'asTerm' else 'asBody'
+			self.stdModule.appendOp(dstBlock, op: plainOp)
+		end 'asBody'
+	end 'emitRetOrErrorReturn'
+
+	// Allocate a fresh ValueId for a Maxon op's result name and record the
+	// mapping so later operand reads of the same name resolve to it. Not
+	// idempotent — each call mints a fresh id.
+	function defineName(name ByteArray) returns ValueId
+		let id = allocValueId(self.funcIdRef)
+		self.nameToId.upsert(name, value: id)
+		return id
+	end 'defineName'
+
+	// Resolve an operand name to the ValueId that defined it. A miss means the
+	// referring op names a value the parser never bound — a compiler bug, so it
+	// fails loudly rather than fabricating a placeholder (Chunk C, which brings
+	// the parser + diagnostics, may soften this to a reported error).
+	function resolveName(name ByteArray) returns ValueId
+		return try self.nameToId.get(name) otherwise panic("lowerMaxonToStd: unresolved value name '{String.from(name)}' in func '{self.currentFuncName}' — the parser did not bind this name (compiler bug)")
+	end 'resolveName'
+end 'MaxonToStdLowering'

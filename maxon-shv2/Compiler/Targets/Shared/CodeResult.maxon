@@ -2,17 +2,22 @@
 //
 // THIN for maxon-shv2 M1. This file's reason to exist is the `CodeResult`
 // struct — the format-neutral backend↔writer boundary (backend emits it, the
-// PE/ELF/Mach-O writers consume it). But `CodeResult` (and the per-function
-// `FunctionCodeChunk`) reference `TargetModule` (= `IrModule with TargetOp`, i.e.
-// the ENTIRE x64/arm64 Target dialect), `GlobalDataTable`, `MirModule`, and the
-// arm64 ADR fixup arrays — all Chunk B backend concerns that cannot be thinned
-// without pulling the backend into the M1 type layer (which would defeat the
-// rewrite). So the two boundary STRUCTS are deferred to Chunk B, when the Target
-// dialect exists; what lives here now is the reusable, Target-independent
-// relocation / symbol / label-classification value types they are built from.
-// The cache codec (writeRdataRelocKind/read…) + the debug-symbol / funcAbs64
-// link-time helper functions are likewise deferred (serialization is Chunk C;
-// the link helpers are backend, Chunk B).
+// PE/ELF/Mach-O writers consume it). It (and the per-function
+// `FunctionCodeChunk`) reference `TargetModule` (= `IrModule with TargetOp`),
+// `GlobalDataTable`, and `MirModule`; all three now exist (Chunk B1 landed the
+// Target dialect + the rdata table), so both boundary structs are defined at the
+// bottom of this file. The reusable, Target-independent relocation / symbol /
+// label-classification value types they are built from live above.
+//
+// STILL THIN: the arm64 ADR-fixup arrays that v1's structs carry are OMITTED —
+// M1 is x64-windows only, so `FunctionCodeChunk` and `CodeResult` grow those
+// fields back at the arm64 milestone (nothing on x64 references them). The cache
+// codec (writeRdataRelocKind/read…) + the debug-symbol / funcAbs64 link-time
+// helper functions remain deferred (serialization is Chunk C; the link helpers
+// are backend, Chunk B2).
+//
+// GROWTH CONTRACT: the value types above this line are Chunk-A content — GROW,
+// never redefine them. The two structs below are B1 additions.
 
 typealias RelocSlotIndex = int(0 to u64.max)
 
@@ -142,3 +147,85 @@ export type FuncAbs64Slot
 end 'FuncAbs64Slot'
 
 export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
+
+// Per-function code chunk. B2's incremental backend emits one chunk per
+// function, then a module-level fixup pass concatenates them into the final
+// `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
+// always 0 — kept as a field for clarity and future flexibility); the concat
+// pass shifts every fixup by the chunk's start offset before writing the final
+// CodeResult.
+//
+// `code` holds the raw machine bytes for one function (prologue + body +
+// epilogue). `callFixups` records intra-module call sites to patch once every
+// chunk's placement is known. `rdataRelocs` records code→rdata references
+// (chunk-local `codeOffset`, shifted at concat time). `iatRelocs` mirrors that
+// for Windows IAT entries. `rdataConstants` captures the rdata constants this
+// chunk's code registered lazily during emission (float/mask constants), so a
+// cache HIT that skips op emission still re-registers them; empty for the
+// `return 42` slice.
+export type FunctionCodeChunk
+	export var funcName as String
+	export var code as ByteArray
+	export var entryOffset as CodeOffset
+	export var callFixups as CallFixupArray
+	export var rdataRelocs as RdataRelocationArray
+	export var iatRelocs as RelocationArray
+	export var rdataConstants as GlobalDataTable
+
+	export static function create(funcName String) returns FunctionCodeChunk
+		return Self{
+			funcName: funcName,
+			code: ByteArray.create(),
+			entryOffset: 0,
+			callFixups: CallFixupArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rdataConstants: GlobalDataTable.create()
+		}
+	end 'create'
+end 'FunctionCodeChunk'
+
+export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
+
+// CodeResult bundles the emitted machine code with the data needed to finish
+// writing an executable and the IR module(s) that produced it. This is the
+// format-neutral seam the PE/ELF/Mach-O writers consume unchanged.
+//
+// `targetModule` holds the final TargetModule (x64 ops for M1) used by the IR
+// printer / diagnostics consumer. `mirModule` carries the MIR-level module (the
+// WASM backend consumes it directly; x64/PE ignore it). `dataPrelude` holds the
+// initial `.data` bytes for top-level / static globals (empty for `return 42`).
+// `covDataSectionBytes` is the .covdata section image (empty unless coverage is
+// enabled — the writer then omits the section entirely). `debugSymbols` pairs
+// function names with `.text` offsets for symbol-table emission.
+export type CodeResult
+	export var code as ByteArray
+	export var mainCallFixupOffset as CodeOffset
+	export var relocations as RelocationArray
+	export var globalData as GlobalDataTable
+	export var targetModule as TargetModule
+	export var mirModule as MirModule
+	export var rdata as ByteArray
+	export var rdataRelocations as RdataRelocationArray
+	export var symdata as ByteArray
+	export var covDataSectionBytes as ByteArray
+	export var dataPrelude as ByteArray
+	export var debugSymbols as DebugSymbolArray
+
+	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
+		return Self{
+			code: code,
+			mainCallFixupOffset: mainCallFixupOffset,
+			relocations: relocations,
+			globalData: globalData,
+			targetModule: targetModule,
+			mirModule: mirModule,
+			rdata: rdata,
+			rdataRelocations: rdataRelocations,
+			symdata: symdata,
+			covDataSectionBytes: covDataSectionBytes,
+			dataPrelude: ByteArray.create(),
+			debugSymbols: DebugSymbolArray.create()
+		}
+	end 'create'
+end 'CodeResult'

@@ -1,0 +1,119 @@
+// LowerStdToMir — Std → MIR conversion. Takes a StdModule and produces a fresh
+// MirModule. Every StdOp is lowered to its MIR equivalent; there are no
+// pass-through ops. After this pass the MirModule contains only MirOps.
+//
+// THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
+//   std.arith.const(constI64/constF64) -> mir.movImm
+//   std.call.ret                       -> mir.ret
+// Later milestones GROW the dispatch with the arith-unary/binary, control-flow,
+// memory, and call arms as the Std and MIR dialects grow. v1's shape is
+// preserved: a whole-module skeleton build (blocks cloned 1:1 + functions
+// transferred) followed by a per-function op-walk, so the per-function fan-out
+// driver (M5) can interleave lowering with later MIR-tier work.
+//
+// convertStdCallOp (body) and convertStdCallTerminator (terminator) are kept as
+// separate dispatchers — NOT accidental duplication: as the StdCallOp union
+// grows, body-vs-terminator placement diverges per arm (a `ret` sets the
+// terminator but is appended mid-block; a `param` is always appended even in
+// terminator position). Keeping them split now mirrors v1 and lets each arm
+// grow its own placement without re-splitting.
+
+export function lowerStdToMir(stdModule StdModule) returns MirModule
+	var lowering = StdToMirLowering.create(stdModule)
+	lowering.prepareSkeleton()
+	for srcFunc in stdModule.functions 'eachFunc'
+		lowering.lowerFunction(srcFunc)
+	end 'eachFunc'
+	return lowering.mirModule
+end 'lowerStdToMir'
+
+type StdToMirLowering
+	var stdModule as StdModule
+	// Exported so the free-function entry can read the finished module after
+	// driving the per-function loop (mirrors v1; M5's fan-out driver reads it too).
+	export var mirModule as MirModule
+
+	static function create(stdModule StdModule) returns StdToMirLowering
+		return Self{stdModule: stdModule, mirModule: MirModule.create()}
+	end 'create'
+
+	// Whole-module setup: clone every StdModule block 1:1 into `mirModule.blocks`
+	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
+	// transfer every function. Must run before any lowerFunction call.
+	function prepareSkeleton()
+		for srcBlock in self.stdModule.blocks 'cloneBlocks'
+			var mirBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
+			for srcArg in srcBlock.blockArgs 'eachArg'
+				mirBlock.blockArgs.push(IrBlockArg.cloneOf(srcArg))
+			end 'eachArg'
+			self.mirModule.blocks.push(mirBlock)
+		end 'cloneBlocks'
+
+		// StdReturnType / paramTypes carry across unchanged into the MIR phase.
+		for srcFunc in self.stdModule.functions 'transferFuncs'
+			self.mirModule.functions.push(srcFunc)
+		end 'transferFuncs'
+	end 'prepareSkeleton'
+
+	// Per-function lowering: walk the function's blocks and lower each op into
+	// the matching mirModule block (indexed by the same blockRef the function's
+	// blockRefs carries).
+	function lowerFunction(srcFunc IrFunction)
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToMir: blockRef from srcFunc.blockRefs not in stdModule.blocks")
+			var dstBlock = try self.mirModule.blocks.get(blockRef) otherwise panic("lowerStdToMir: mirModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
+
+			for opIdx in srcBlock.opRefs 'eachOp'
+				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToMir: opIdx from srcBlock.opRefs not in stdModule.ops")
+				self.convertStdOp(stdOp, dstBlock: dstBlock)
+			end 'eachOp'
+
+			if srcBlock.hasTerminatorOp() 'hasTerm'
+				let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerStdToMir: terminatorIndex not in stdModule.ops")
+				self.convertStdTerminator(termOp, dstBlock: dstBlock)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'lowerFunction'
+
+	function convertStdOp(stdOp StdOp, dstBlock IrBlock)
+		match stdOp 'outer'
+			arith(op) then self.convertStdArithOp(op, dstBlock: dstBlock)
+			call(op) then self.convertStdCallOp(op, dstBlock: dstBlock)
+		end 'outer'
+	end 'convertStdOp'
+
+	function convertStdTerminator(stdOp StdOp, dstBlock IrBlock)
+		match stdOp 'outer'
+			arith(op) then self.convertStdArithOp(op, dstBlock: dstBlock)
+			call(op) then self.convertStdCallTerminator(op, dstBlock: dstBlock)
+		end 'outer'
+	end 'convertStdTerminator'
+
+	function convertStdArithOp(arithOp StdArithOp, dstBlock IrBlock)
+		match arithOp 'dispatch'
+			const(c) then self.convertStdArithConst(c, dstBlock: dstBlock)
+		end 'dispatch'
+	end 'convertStdArithOp'
+
+	// A Std arith const lowers to a MIR movImm; the opcode's float-ness selects a
+	// GP mov-immediate vs an XMM load at the backend.
+	function convertStdArithConst(c StdArithConst, dstBlock IrBlock)
+		let isFloat = match c.opcode 'checkFloat'
+			constI64 gives false
+			constF64 gives true
+		end 'checkFloat'
+		self.mirModule.appendOp(dstBlock, op: MirOp.movImm(c.resultId, value: c.value, isFloat: isFloat))
+	end 'convertStdArithConst'
+
+	function convertStdCallOp(funcOp StdCallOp, dstBlock IrBlock)
+		match funcOp 'dispatch'
+			ret(retValId) then self.mirModule.appendOp(dstBlock, op: MirOp.ret(retValId))
+		end 'dispatch'
+	end 'convertStdCallOp'
+
+	function convertStdCallTerminator(funcOp StdCallOp, dstBlock IrBlock)
+		match funcOp 'dispatch'
+			ret(retValId) then self.mirModule.setTerminator(dstBlock, op: MirOp.ret(retValId))
+		end 'dispatch'
+	end 'convertStdCallTerminator'
+end 'StdToMirLowering'
