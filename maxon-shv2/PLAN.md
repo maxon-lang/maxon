@@ -10,7 +10,7 @@ We are starting fresh as **`maxon-shv2/`**, keeping what is sound (lexer, the ti
 2. **Parallel incremental compilation** — using the existing green-thread runtime, with the multi-core prerequisites proven *before* the first compiler milestone.
 3. **A binary event-log/tracing system** — DebugStream-style binary events written to shared memory (near-zero overhead when off), consumed by `maxon-sharp` as the runner; it powers `mm-trace` for ownership/memory debugging.
 
-Development is **spec-driven**: copy a spec from `specs/` (or author one) into a new **`specs-shv2/`**, implement until it passes, move on. A **living document** (`maxon-shv2/DEVLOG.md`) documents each part of the compiler as it is built, for future agents.
+Development is **spec-driven**: copy a spec from `specs/` (or author one) into a new **`specs-shv2/`**, implement until it passes, move on. A **living document** (`maxon-shv2/ARCHITECTURE.md`) documents each part of the compiler as it is built, for future agents; `maxon-shv2/DEVLOG.md` tracks milestones and dated findings alongside it.
 
 **Target / final acceptance:** `maxon-shv2.exe` compiling *itself* in **≤30 s**, **≤1.7 GB RAM**, **>90% CPU** across all cores. (v1 reference: `maxon.exe` compiles v1 in ~30 s / 1.7 GB — this is the bar.)
 
@@ -35,7 +35,8 @@ Development is **spec-driven**: copy a spec from `specs/` (or author one) into a
 **COPY near-verbatim** (clean boundaries, stdlib-only deps):
 - `Compiler/Lexer.maxon` (1,426-line DFA; `tokenize(source) -> TokenArray`, `Token`/`TokenKind`, `LexerError`) + `Compiler/NumberParsing.maxon`.
 - IR containers: `Compiler/IR/IrModule.maxon`, `IrBlock.maxon`, `IrValueId.maxon`, `IrFunction.maxon`, `IrPrinter.maxon`; `Compiler/IR/Maxon/SourceRange.maxon`, `Scope.maxon` (Scope gains a per-scope owned-values list).
-- Truly self-contained backend pieces: `Targets/Windows/PeWriter.maxon`, `Targets/Linux/ElfWriter.maxon`, `Targets/Shared/RegisterAllocator*` (operate on generic structures).
+- Truly self-contained backend pieces: `Targets/Windows/PeWriter.maxon`, `Targets/Linux/ElfWriter.maxon`.
+- ~~`Targets/Shared/RegisterAllocator*` (operate on generic structures)~~ — **AMENDED at M1-B2: false on both counts.** v1's allocator is welded to its bespoke `TargetModule` + `TargetOpQuery`/`OpPattern`/register-mask machinery (not generic), and copying it would import the wrong design regardless: regalloc is **~74% of v1's self-compile wall time** against shv2's ≤30 s whole-compile budget. shv2 REBUILDS it — a no-liveness placeholder at M1, the real allocator at M3/M5. See ARCHITECTURE.md's Register allocator section.
 - Spec harness: `Testing/SpecParser.maxon`, `Testing/SpecTestRunner.maxon` (trimmed to the block types specs-shv2 uses, plus the new mm-trace block).
 
 **PORT incrementally, structure preserved** (cannot copy verbatim — they consume the dialects we're rebuilding thin):
@@ -53,7 +54,7 @@ Development is **spec-driven**: copy a spec from `specs/` (or author one) into a
 - `Compiler/IR/Own/InsertDrops.maxon` — static `own.drop` + escape-driven `own.retain/release` (replaces the 7,755-line `InsertRefcounts.maxon`).
 - `Compiler/ParseStaging.maxon` — `FileParseArtifact` + deterministic merge (generalizes v1's `ParseDelta.maxon`, which already enumerates the ~25 registries the parser touches).
 - `Compiler/ParallelDriver.maxon` — green-thread fan-out over per-file parse + per-function passes.
-- `specs-shv2/`, `DEVLOG.md`.
+- `specs-shv2/`, `ARCHITECTURE.md`, `DEVLOG.md`.
 
 ### IR tiers with static ownership as a first-class citizen
 
@@ -135,14 +136,14 @@ Built in `maxon-sharp` on a synthetic multi-function program, before shv2 exists
 ---
 
 ## Step 0 — Materialize this plan in the repo
-Create `C:\Users\Eric\dev\maxon\maxon-shv2\` and write this plan (this document, verbatim) to `maxon-shv2\PLAN.md` as the first commit alongside an initial `DEVLOG.md` stub. The plan in-repo is the working reference; milestones check off against it as they land.
+Create `C:\Users\Eric\dev\maxon\maxon-shv2\` and write this plan (this document, verbatim) to `maxon-shv2\PLAN.md` as the first commit alongside initial `ARCHITECTURE.md` / `DEVLOG.md` stubs. The plan in-repo is the working reference; milestones check off against it as they land.
 
 ## Milestone sequence (each = spec(s) into `specs-shv2/` + capability to pass)
 
 Correctness-only gate through Phase E; **budget gate becomes hard at Phase F.**
 
 **Phase A — Walking skeleton (thin end-to-end slice, x64-windows)**
-- **M1 basics** — compile & run `examples/basic.maxon`; spec `basics.md`. Copy Lexer; thin Parser (function decl, `return`, int literal); thin `MaxonOp` (`literal`, `ret`); minimal lower chain + PE. Ownership scaffolding present but trivial-only. Parser writes to `FileParseArtifact` (staged, single-threaded). **Skeletal query spine from day one** (content-hash-keyed `queryTokens`/`queryParseOps` + dependency recording). Start `DEVLOG.md`.
+- **M1 basics** — compile & run `examples/basic.maxon`; spec `basics.md`. Copy Lexer; thin Parser (function decl, `return`, int literal); thin `MaxonOp` (`literal`, `ret`); minimal lower chain + PE. Ownership scaffolding present but trivial-only. Parser writes to `FileParseArtifact` (staged, single-threaded). **Skeletal query spine from day one** (content-hash-keyed `queryTokens`/`queryParseOps` + dependency recording). Start `ARCHITECTURE.md`.
 - **M2 variables** (`variables.md`) — `let`/`var`, block scope, `Scope`. Warm-rebuild assertion joins the gate (unchanged input → cache hit → byte-identical output). **M3 arithmetic** (`arithmetic.md`, `comparison-operators.md`, `unary-operators.md`) — full Pratt precedence.
 
 **Phase B — Control flow & functions**
@@ -164,8 +165,10 @@ Correctness-only gate through Phase E; **budget gate becomes hard at Phase F.**
 
 ---
 
-## Living document
-`maxon-shv2/DEVLOG.md`, committed alongside code, one section per compiler part added as it's built (frontend, Maxon dialect, Own tier, pipeline, parallel driver, backend, event log). It records **operation and invariants** (e.g. the rdata deterministic-merge invariant, the ownership-kind lattice, the parse-staging registry set), not a changelog — so future agents onboard without re-deriving the design.
+## Living documents
+Two, both committed alongside code:
+- **`maxon-shv2/ARCHITECTURE.md`** — the onboarding document. One section per compiler part, added as it's built (frontend, Maxon dialect, Std dialect, Own tier, pipeline, query spine, parallel driver, backend, event log). It records **operation and invariants** (e.g. the rdata deterministic-merge invariant, the ownership-kind lattice, the parse-staging registry set) — so future agents onboard without re-deriving the design from the code.
+- **`maxon-shv2/DEVLOG.md`** — the dated log: the milestone ledger and the recon findings that corrected this plan's premises. Progress and history, not design.
 
 ---
 
