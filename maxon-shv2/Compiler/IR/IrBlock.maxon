@@ -1,11 +1,11 @@
-// IrBlock: a basic block shared across all IR phases (Maxon, Std, MIR, Target).
+// IrBlock: a basic block shared across all IR phases (Maxon, Std, Target).
 //
 // Stores op indices into the owning module's flat ops array, exactly one
 // terminator, block arguments (phi nodes), and outgoing branch edges.
 //
 // At the Maxon phase blockArgs and branchEdges are always empty. blockArgs
-// are populated by mem2reg during the Std phase and carried through MIR.
-// branchEdges are populated by lowerMirToTarget for register allocation.
+// are populated by mem2reg during the Std phase and carried into the Target
+// phase. branchEdges are populated by lowerStdToX64 for register allocation.
 
 // Role tag for an IrBlockArg, used by the inliner to record that a
 // continuation-block arg stands in for what would otherwise be a value
@@ -25,13 +25,13 @@ end 'BlockArgReturnRole'
 
 // A block argument (phi node): a value defined at block entry, bound by
 // the branch op that transfers control to this block. Introduced by
-// mem2reg at the Std phase and carried through MIR and Target phases.
+// mem2reg at the Std phase and carried into the Target phase.
 export type IrBlockArg
 	export var valueId as ValueId
 	export var argType as StdType
 	// Set to a non-`none` value only by the inliner on the continuation
 	// block it synthesizes for a multi-block splice. Every other producer
-	// of blockArgs (mem2reg, parser, MIR/target lowering) leaves it as
+	// of blockArgs (mem2reg, parser, target lowering) leaves it as
 	// `none`. Consumed by each backend's `coalesceRanges` to seed a
 	// physical-register hint via `setPhysHint`.
 	export var returnRole as BlockArgReturnRole
@@ -51,7 +51,7 @@ end 'IrBlockArg'
 export typealias IrBlockArgArray = Array with IrBlockArg
 
 // An outgoing branch arg list paired with its successor block id.
-// Populated by lowerMirToTarget for each branch terminator and consumed
+// Populated by lowerStdToX64 for each branch terminator and consumed
 // by CopyResolution in the register allocator to insert parallel moves
 // at CFG edges. The target-phase physical terminators (x64 jmp, arm64
 // branch) carry only the target block id, so this metadata lives on the
@@ -97,7 +97,7 @@ export type IrBlock
 	export var blockArgs as IrBlockArgArray
 	// Outgoing branch-argument lists, one per successor of this block.
 	// Empty for blocks whose terminator is a return or has no arguments.
-	// Populated only at the Target phase by lowerMirToTarget.
+	// Populated only at the Target phase by lowerStdToX64.
 	export var branchEdges as BranchEdgeArray
 
 	export static function create(id BlockId, label String) returns IrBlock
@@ -116,9 +116,9 @@ export type IrBlock
 	// are copied by value (the underlying module ops are immutable and shared by
 	// index), so the clone references the same pristine ops while owning its own
 	// lists. Used by the register allocator's spill-everywhere fallback to snapshot
-	// a function's pre-regalloc MIR so a failed SSA-coloring attempt can be undone
-	// (register allocation only appends new ops and rewrites block.opRefs in place;
-	// restoring the cloned block contents recovers the original MIR exactly).
+	// a function's pre-regalloc target IR so a failed SSA-coloring attempt can be
+	// undone (register allocation only appends new ops and rewrites block.opRefs in
+	// place; restoring the cloned block contents recovers the original ops exactly).
 	export static function clone(src IrBlock) returns IrBlock
 		var dst = Self.create(src.id, label: src.label)
 		dst.opRefs = src.opRefs.clone()

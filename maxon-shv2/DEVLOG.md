@@ -40,6 +40,28 @@ slow and memory-hungry (5–6 GB). shv2 designs these in from the first commit:
 These are the load-bearing invariants the plan calls out. Each is documented in
 full in its subsystem section once built; listed here as an index.
 
+- **Three tiers, flat op unions** — `Maxon → Std → Target`; NO MIR tier (v1's
+  added no value model — Std's `ValueId`s already are the virtual registers).
+  Every dialect's op union is FLAT with a required `*OpMeta` struct backing, never
+  nested: Maxon boxes each payload-carrying union case, so nesting costs a heap
+  object per level on the compiler's most numerous object. *(→ Std dialect section)*
+- **Band-append invariant** — `StdOp` variants sit in category-contiguous bands so
+  passes can cover a category with one `match` range arm. **A new variant is
+  appended at the END of its band, never inserted into the middle** — a range arm
+  silently swallows anything inserted between its endpoints, with no missing-case
+  error. This is the ONE place "no silent unhandled cases" has no compiler
+  backstop; reviewers enforce it. *(→ Std dialect section)*
+- **No sugar reaches the backend** — `sugar`-category `StdOp`s are eliminated by
+  the Std→Std `lowerToMachineForm` pass. Guarded by `assertNoSugarOps` in
+  `buildBackend` (the target-neutral entry, so every backend inherits it) + an
+  explicit `panic` arm per sugar variant (never a bare `default`). Replaces the
+  type-level guarantee v1 got from its MIR boundary; spec tests are the real
+  guarantee. *(→ Std dialect section)*
+- **Live ops ≠ `module.ops`** — `IrModule.ops` is append-only; block-rebuilding
+  passes leave the ops they replaced behind as orphans. Any pass asking "what ops
+  are actually here?" must go through `IrModule.liveOpIndices(func)`, the single
+  home of the blockRefs → opRefs+terminator walk. Scanning the flat array sees dead
+  ops from every prior pass. *(→ Std dialect section)*
 - **Ownership-kind lattice** — `trivial` · `owned` · `borrow` · `shared`.
   Born at the Maxon tier, fully resolved before `lowerMaxonToStd`. Three
   first-class homes, zero sidetables: (1) `OwnershipKind` attribute on every
@@ -216,6 +238,90 @@ is non-trivial** — inert at M1 (all bindings trivial), drained at M6 to emit
 Later milestones GROW `MaxonType` (string/char/function/generic/interface arms),
 `MaxonOp` (var/arith/call/control-flow), and the signature ownership modes.
 
+### Std dialect
+
+**Landed M1 Chunk A; restructured post-M1 (flat + 3-tier).** `IR/Std/StdDialect.maxon`
+is the mid-level tier — and, since the MIR tier was dropped, also the
+**machine-level** tier. Two invariants define its shape, and both are load-bearing:
+
+**1. There is NO MIR tier.** Tiers are `Maxon → Std → Target`. v1's `lowerStdToMir`
+was ~90% a mechanical 1:1 rename: Std's `ValueId`s **already are** the infinite
+virtual registers MIR claimed to introduce, so the tier bought no new value model —
+only a whole extra module copy in RSS and a wall that hid dead code (v1's
+`MirOp.movReg` has zero construction sites yet still forces match arms in five
+places). Everything v1 ran *on* MIR (`commuteForCoalescing`, `scheduleInstructions`)
+is a Std-tier pass here, and MIR's one piece of real content — desugaring — becomes
+a **Std→Std** pass, `lowerToMachineForm`.
+
+**2. `StdOp` is FLAT** — one union, no `StdOp.arith(StdArithOp.const(StdArithConst))`
+nesting. Maxon heap-boxes and refcounts every payload-carrying union case, so each
+nesting level is another heap object: nested = **3 boxes per op**, flat = **1**, on
+the most numerous object in the whole compiler. (v1's own StdDialect header admits
+the nesting was a migration artifact kept "so existing pass code that matches on
+these variants keeps working," not a design.) Coarse membership — "is this any kind
+of call?" — is recovered without nesting from the `StdOpMeta` struct backing every
+variant is REQUIRED to carry: `category` (`StdOpCategory`), `role` (`OpRole`:
+plain/ret/errorReturn/param), the two inliner axes (`isPure`,
+`isUnsupportedInInlineBody`), and the scheduler facts (`isMemory`/`isStore`/
+`isCall`/`clobbersFlags`/`isCmp`). A new variant cannot be added without declaring
+all of it.
+
+**Purity is declared PER VARIANT, and that is the flat union's real payoff.** v1
+could only answer "is this op side-effect-free?" by CATEGORY, at the match site:
+`Inliner.isPureOp` reads `arith gives true; control gives true; call(c) gives
+c.rawValue.isPureForInlining; memory/system give false`. A category blanket has no
+way to say a *trapping* op is impure — v1's `arith gives true` calls an integer
+`div` pure even though it faults on divide-by-zero. With per-variant metadata, M3's
+`div` simply declares `isPure: false` and nothing else changes. (`clobbersFlags` is
+a lowering artifact, not a side effect: a flag-clobbering op is still `isPure`.)
+
+**Bands, and the one rule that has no compiler backstop.** Variants are declared in
+**category-contiguous bands** in `StdOpCategory` order (arith · control · call ·
+memory · system · sugar), so a pass that treats a whole category uniformly covers it
+with ONE `match` range arm instead of one arm per variant. The cost: a range arm
+names its endpoints, so it **silently swallows anything inserted between them** — no
+missing-case error, and the new op is misclassified at every range-arm site at once.
+
+> **INVARIANT: append a new variant at the END of its band. Never insert into the
+> middle of one.** This is the single place the project's "no silent unhandled cases"
+> rule is a convention rather than a compiler-enforced property. Reviewers must
+> enforce it by hand.
+
+**The sugar band.** v1 enforced "no sugar reaches the backend" with a *type*: sugar
+ops lived in `StdOp` and had no `MirOp` counterpart, so the tier boundary made them
+unrepresentable downstream. Collapsing the tier gives that up; the replacement is
+deliberate, not accidental — (1) `assertNoSugarOps(module)`, a whole-module gate
+run by **`buildBackend`**, the single target-neutral backend entry (NOT inside the
+x64 lowering — sugar is a property of the Std tier, not of x64, so putting it at the
+one shared entry means arm64/wasm inherit it instead of each having to remember to
+re-add it), and (2) an explicit `panic("… must be desugared by lowerToMachineForm")`
+match arm per sugar variant (never a bare `default`, which is exactly what would
+swallow a new case). **Spec tests are the real guarantee.** Both guards are vacuous
+at M1 — no sugar variants exist yet — so `lowerToMachineForm` itself is NOT written;
+it arrives with the first sugar op (M6 `drop`/`free`, M14 descriptors/witness
+tables).
+
+`assertNoSugarOps` walks **live** ops via `IrModule.liveOpIndices(func)`, never the
+flat `module.ops` array. That array is append-only: block-rebuilding passes clear a
+block's `opRefs` and re-append fresh ops, leaving the replaced ops behind as orphans.
+`lowerToMachineForm` is exactly such a pass, so the sugar ops it desugars *survive in
+`module.ops`* — scanning the flat array would panic on dead entries and report a
+desugaring failure that never happened. `liveOpIndices` is now the single home of the
+funcs → blockRefs → blocks → opRefs+terminator descent (`liveOpCount` goes through it
+too).
+
+Flat does **not** mean one variant per opcode: a family sharing an operand shape
+(`add`/`sub`/`mul`) stays one variant with an opcode field, but a member needing
+*different metadata* (a compare sets `isCmp`) splits out, because the `StdOpMeta`
+backing attaches per variant and cannot reach an opcode buried in a field. M3 lands
+`binOp(… opcode StdBinOpcode)` + a separate `cmp(…)` for exactly that reason.
+
+Today the union holds `const(resultId, value, valueType)` and `ret(retValId)`.
+`const` carries a `StdType` rather than v1's `constI64`/`constF64` opcode pair — it
+subsumes MIR's `isFloat` bool and makes i32/u8/f32 representable without new
+opcodes. `StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged from
+Chunk A.
+
 ### Own tier (ownership infer / check / escape / drops)
 _stub — filled in at M6._
 
@@ -234,20 +340,29 @@ and **E3002** (`main` does not return ExitCode; the M1-exercised case is a void
 
 ### Pass pipeline
 
-**Landed (M1 Chunk C).** `PassPipeline` owns the four tier modules + a `project`
-handle + the scheduled `PassKind` list. `dispatch` wires each pass to its free
-function: `resolveTypes`/`semanticCheck` (read the Maxon module + project),
-`lowerMaxonToStd`/`lowerStdToMir` (produce the next tier). `run()` gained the
-**error gate**: after each pass, `projectHasErrors → throw CompileError` — so a
-program that fails semanticCheck (e.g. has no `main` for the backend entry stub to
-call) never reaches lowering/backend. The driver (`Compiler.compile`) builds the
-pipeline with `buildDefaultPipeline()`, runs it, then goes backend-direct
-(`buildBackend` → `writeExecutable`; a CodeResult is not an IR module). Std-tier
-opt passes / Own-tier passes / `augmentWithRuntime` / MIR passes grow in at their
-milestones. Diagnostics are printed by `compile` on the failure path and the
-error is re-signaled as a FRESH `compileError` (re-throwing the *caught* error
-NULL-increfs under the C#-emitted refcount runtime; a fresh throw of the same arm
-is clean — a driver-shape gotcha worth remembering).
+**Landed (M1 Chunk C); MIR pass removed post-M1.** `PassPipeline` owns the two tier
+modules it actually drives (`maxonModule` → `stdModule`) + a `project` handle + the
+scheduled `PassKind` list. It owns NO target module — the pipeline's last tier is
+Std, and the backend is backend-direct — so the write-once-read-never `targetModule`
+field (and the `PipelinePhase` enum, which had no callers) went out with `mirModule`
+as the same vestigial-tier residue. `dispatch` wires each pass to its free function:
+`resolveTypes`/`semanticCheck` (read the Maxon module + project), `lowerMaxonToStd`
+(produces the next tier). `run()` gained the **error gate**: after each pass,
+`projectHasErrors → throw CompileError` — so a program that fails semanticCheck
+(e.g. has no `main` for the backend entry stub to call) never reaches
+lowering/backend. The driver (`Compiler.compile`) builds the pipeline with
+`buildDefaultPipeline()`, runs it, then goes backend-direct (`buildBackend` →
+`writeExecutable`; a CodeResult is not an IR module).
+
+**The pipeline ends at `StdModule`** — there is no second "backend pipeline" over a
+machine tier, because there is no machine tier (see Std dialect). Everything that
+would have gone there grows in HERE, appended after `lowerMaxonToStd`: the Std opt
+passes (M3+), the Own-tier passes (M6), and `lowerToMachineForm` (M6).
+
+Diagnostics are printed by `compile` on the failure path and the error is
+re-signaled as a FRESH `compileError` (re-throwing the *caught* error NULL-increfs
+under the C#-emitted refcount runtime; a fresh throw of the same arm is clean — a
+driver-shape gotcha worth remembering).
 
 ### Query spine (incremental)
 
@@ -300,17 +415,32 @@ invariant (below) is shv2's own future backend concern, not yet exercised here.
 
 _Per-function fan-out enabled at M5._
 
-### Backend (Std → MIR → Target, runtime emitters)
+### Backend (Std → Target, runtime emitters)
 _Thin mov/ret slice landed at M1 (Chunk B2); MM runtime + DebugStream producer at
 M6; GT scheduler at Phase F._ The M1 driver (`Compiler.compile`) feeds the parsed,
-resolved, lowered `MirModule` straight into `buildBackend(mir, target,
-globalData)` → `writeExecutable`. The driver CLI is `maxon-shv2 build
-<file|directory> [-o <output>]`; a single-file build writes next to the source
-(`basic.maxon` → `basic.exe`). **End-to-end proven:** `maxon-shv2.exe build
-examples/basic.maxon` produces a PE that exits **42**; a program with no `main`
-prints exactly `error E3001: No 'main' function found` (exit 1); a void-returning
-`main` prints exactly `error E3002: Function 'main' must return ExitCode`
-(exit 1).
+resolved, lowered `StdModule` straight into `buildBackend(stdModule, target,
+globalData)` → `writeExecutable`.
+
+`Std → Target` is the **only** tier boundary below Std (there is no MIR — see Std
+dialect). `lowerStdToX64` (`Targets/X64/StdToX64Conversion.maxon`) asserts
+`assertNoSugarOps` on entry, clones the block skeleton 1:1, then walks each function
+lowering `StdOp`s to `TargetOp`s with still-virtual registers; `allocateRegisters` →
+`insertPrologueEpilogue` → `augmentWithRuntime` → `emitFunctionChunk` →
+`concatX64FunctionChunks` finish the job. The virtual registers the allocator colors
+are Std's own `ValueId`s, unchanged since `lowerMaxonToStd` minted them.
+
+`CodeResult.stdModule` (v1: `mirModule`) carries the mid-level module the backend
+lowered FROM. v1 kept its MIR module here because the **wasm** backend consumes the
+machine-level IR directly instead of going through a target dialect; with the tier
+gone, Std *is* that machine-level IR, so wasm (M17) reads this field. x64/PE ignore
+it.
+
+The driver CLI is `maxon-shv2 build <file|directory> [-o <output>]`; a single-file
+build writes next to the source (`basic.maxon` → `basic.exe`). **End-to-end
+proven:** `maxon-shv2.exe build examples/basic.maxon` produces a PE that exits
+**42**; a program with no `main` prints exactly `error E3001: No 'main' function
+found` (exit 1); a void-returning `main` prints exactly `error E3002: Function
+'main' must return ExitCode` (exit 1).
 
 ### Event log & mm-trace harness
 
@@ -367,6 +497,16 @@ Phase E; budget gate (≤30 s / ≤1.7 GB / >90% CPU) becomes hard at Phase F.
   literal), `resolveTypes` (ExitCode→u32 builtin), `semanticCheck` (E3001/E3002),
   `Compiler`/`Main` driver. `maxon-shv2 build examples/basic.maxon` → exit 42;
   E3001/E3002 error paths verified. Spec `specs-shv2/basics.md`.
+- [x] **M1 post / structural** — **3-tier collapse**: `StdOp` flattened
+  (`StdOpMeta` backing: category/role/inlinePolicy + scheduler facts, declared in
+  category-contiguous bands) and the **MIR tier deleted** (`IR/MIR/*`,
+  `LowerStdToMir.maxon` gone; `MirToX64Conversion` → `StdToX64Conversion`,
+  `lowerMirToX64` → `lowerStdToX64`; `CodeResult.mirModule` → `stdModule`).
+  Amends PLAN.md's original "tiers stay Maxon → Std → MIR → Target" decision —
+  see the Std dialect section for the full rationale (MIR added no value model;
+  nesting cost 3 heap boxes per op instead of 1). Done at M1 because the same
+  merge costs ~160 lines now and ~1,500 in v1. All three M1 gates re-verified
+  (exit 42 byte-identical at 28 bytes of `.text`; E3001; E3002).
 - [ ] **M2** variables · [ ] **M3** arithmetic
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount

@@ -1,12 +1,12 @@
-// IrModule: generic top-level container for all pre-target IR phases.
-// Parameterized by the op type (MaxonOp, StdOp, MirOp) so that the
+// IrModule: generic top-level container for every IR phase.
+// Parameterized by the op type (MaxonOp, StdOp, TargetOp) so that the
 // type checker enforces phase separation while the implementation is
 // written once.
 //
 // Each phase instantiates this as a typealias:
-//   typealias MaxonModule = IrModule with MaxonOp
-//   typealias StdModule   = IrModule with StdOp
-//   typealias MirModule   = IrModule with MirOp
+//   typealias MaxonModule  = IrModule with MaxonOp
+//   typealias StdModule    = IrModule with StdOp
+//   typealias TargetModule = IrModule with TargetOp
 
 export typealias OpCount = int(0 to u64.max)
 export typealias BlockCount = int(0 to u64.max)
@@ -60,13 +60,45 @@ export type IrModule uses Op
 	// total opRefs entries) per call, dwarfed by anything diagnostic
 	// modes already pay.
 	export function liveOpCount() returns OpCount
-		return countLiveOps(self.functions, blocks: self.blocks)
+		var count = 0 as OpCount
+		for func in self.functions 'eachFunc'
+			count = count + self.liveOpIndices(func).count()
+		end 'eachFunc'
+		return count
 	end 'liveOpCount'
+
+	// THE block-reachability walk: every op index reachable from `func`, in
+	// execution order (each block's `opRefs`, then its terminator). Every consumer
+	// that needs "the ops that are actually live" goes through here rather than
+	// hand-rolling the funcs → blockRefs → blocks → opRefs+terminator descent —
+	// `liveOpCount` above and the backend's `assertNoSugarOps` gate both do.
+	//
+	// This is NOT interchangeable with iterating `self.ops`. That flat array is
+	// append-only: every block-rebuilding pass clears a block's `opRefs` and
+	// re-appends fresh ops, leaving the ops it replaced behind as orphans (see
+	// `compactOps`). A consumer that scans `self.ops` therefore sees dead ops from
+	// every prior pass — which is a false positive for anything asking "did this
+	// pass leave a forbidden op behind?".
+	export function liveOpIndices(func IrFunction) returns OpIndexList
+		var indices = OpIndexList.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.blocks.get(blockRef) otherwise panic("liveOpIndices: blockRef from func.blockRefs not in blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				indices.append(opIdx)
+			end 'eachOp'
+
+			if block.hasTerminatorOp() 'hasTerm'
+				indices.append(block.terminatorIndex())
+			end 'hasTerm'
+		end 'eachBlock'
+		return indices
+	end 'liveOpIndices'
 
 	// Reclaim orphaned ops from `self.ops` in place.
 	//
 	// Every block-rebuilding pass (mem2reg, canonicalize, CSE, DCE, LICM,
-	// insertRefcounts, lowerStdToMir, the MIR passes, …) clears each block's
+	// insertDrops, lowerToMachineForm, …) clears each block's
 	// `opRefs` and re-appends fresh ops via `appendOp`, which only ever pushes
 	// onto `self.ops` and never removes the now-unreferenced predecessors. Those
 	// orphans accumulate across passes — during the backend phase they bloat
@@ -163,12 +195,12 @@ export type IrModule uses Op
 		end 'noOrphans'
 
 		// `blockSourceInfo` is parallel to `blocks` only while the parser-built
-		// table is still live (the Maxon and Std tiers): the Std→MIR skeleton
-		// clone (`StdToMirLowering.prepareSkeleton`) rebuilds `blocks` 1:1 but
+		// table is still live (the Maxon and Std tiers): the Std→Target skeleton
+		// clone (`StdToX64Lowering.prepareSkeleton`) rebuilds `blocks` 1:1 but
 		// leaves `blockSourceInfo` empty, since coverage instrumentation — its
 		// only consumer — already ran in the Std tier. Compact the source-info
-		// table in lockstep only when it is actually parallel; in the MIR tier it
-		// is empty and there is nothing (and nobody) to compact.
+		// table in lockstep only when it is actually parallel; in the Target tier
+		// it is empty and there is nothing (and nobody) to compact.
 		let compactSourceInfo = self.blockSourceInfo.count() == oldCount
 
 		// Swap each live block (and its parallel source-info entry, when present)
@@ -379,27 +411,6 @@ export type IrModule uses Op
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
-
-// Block-reachable op counter backing `IrModule.liveOpCount`. Sums every block's
-// `opRefs.count()` across every function plus one per block that has a
-// terminator op. Kept as a free `module function` — a peer of the compaction
-// planners below — so the block-reachability walk lives in one place. Every
-// tier reaches it through the single inherited `liveOpCount`: `TargetModule` is
-// now just `IrModule with TargetOp` (see TargetDialect.maxon), not a bespoke
-// struct, so there is no second counter to keep in sync.
-module function countLiveOps(functions IrFunctionArray, blocks IrBlockArray) returns OpCount
-	var count = 0 as OpCount
-	for func in functions 'eachFunc'
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try blocks.get(blockRef) otherwise panic("countLiveOps: blockRef from func.blockRefs not in blocks")
-			count = count + (block.opRefs.count())
-			if block.hasTerminatorOp() 'hasTerm'
-				count = count + 1
-			end 'hasTerm'
-		end 'eachBlock'
-	end 'eachFunc'
-	return count
-end 'countLiveOps'
 
 // Forwarding plan for an in-place array compaction. `forward[oldIndex]` holds the
 // compacted destination index of the entry that lived at `oldIndex`, or

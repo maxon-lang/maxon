@@ -1,17 +1,38 @@
 // Std Dialect — mid-level IR. The width/ABI-resolved tier between the
-// source-proximate Maxon dialect and the machine-level MIR dialect. All
-// mid-level optimization passes (mem2reg, canonicalize, cse, licm, dce, …) run
-// here (Chunk B).
+// source-proximate Maxon dialect and the target-specific dialects (x64/arm64).
+// All mid-level optimization passes (mem2reg, canonicalize, cse, licm, dce, …)
+// run here, and so do the machine-level passes (instruction scheduling,
+// coalescing) that v1 ran on a separate MIR tier.
+//
+// **DELIBERATE DIVERGENCE FROM v1: there is no MIR tier.** v1 ran
+// Maxon → Std → MIR → Target; shv2 runs Maxon → Std → Target. v1's `lowerStdToMir`
+// was ~90% a mechanical 1:1 rename — Std's `ValueId`s ALREADY ARE the infinite
+// virtual registers MIR claimed to introduce, so the tier bought no new value
+// model. Its only real content was desugaring a handful of Std-only ops, which
+// is a Std→Std rewrite (`lowerToMachineForm`, see the `sugar` band below), not a
+// tier. Deleting the tier drops a whole module copy from peak RSS and removes a
+// boundary that had already started hiding drift in v1 (`MirOp.movReg` survived
+// with zero construction sites because the tier wall made it invisible).
+//
+// **`StdOp` IS FLAT.** v1 nested it as `StdOp.arith(StdArithOp.const(StdArithConst))`
+// — an artifact of a migration that did not want to touch every pass, not a
+// design (v1's own StdDialect header says so). Nesting is expensive here: Maxon
+// heap-boxes and refcounts every payload-carrying union case, so each nesting
+// level is another heap object. That 3-boxes-per-op shape, on the most numerous
+// object in the compiler, is a first-order cost — roughly half of v1's
+// self-compile cycles go to memory-management churn. Flat = ONE box per op.
+//
+// Coarse membership ("is this any kind of call?") is recovered WITHOUT nesting by
+// the `StdOpMeta` struct backing every variant carries — the same idiom
+// MaxonDialect already uses and justifies. The backing is REQUIRED by the
+// language, so a new variant cannot be added without declaring its category,
+// role, and inline policy here.
 //
 // THIN for maxon-shv2 M1: carries the shapes the `return 42` slice lowers to —
-// the full `StdType` classification (needed everywhere: block-arg types,
-// function signatures), plus the `arith.const(constI64)` and `call.ret` op
-// shapes. `StdOp` is the outer union with only the `arith` and `call` category
-// arms it needs today; later milestones GROW it with the `control` / `memory` /
-// `system` arms (and their inner unions) as features land, and GROW `StdArithOp`
-// (unary/binary) and `StdCallOp` (call/tryCall/param/…). v1's five-category
-// outer-union shape and per-variant metadata backings are preserved so growth is
-// purely additive.
+// the full `StdType` classification (needed everywhere: block-arg types, function
+// signatures) plus the `const` and `ret` ops. Later milestones GROW `StdOp` with
+// the arith-unary/binary (M3), control-flow (M4), call/param (M5), and memory
+// (M6) variants.
 
 // --- CastCategory: coarse type family for cast validation ---
 // Kept whole (int/float/bool/string/cstring) even though M1 only produces
@@ -77,51 +98,149 @@ export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
 	end 'check'
 end 'stdReturnTypeIsFloat'
 
-// --- StdArithOp ---
-// Only the `const` arm today; `unary` / `binary` arms grow in at M3 (arithmetic).
-export union StdArithOp
-	const(op StdArithConst)
-end 'StdArithOp'
+// --- StdOpCategory: coarse op family, recovered without nesting ---
+// Replaces v1's outer-union arms (`StdOp.arith(...)`, `StdOp.call(...)`, …) with
+// a metadata field, so membership tests stay cheap while `StdOp` stays flat.
+// Declared whole even though M1 only produces `arith` and `call` — the same
+// growth-is-additive convention MaxonDialect's `OpCategory` follows.
+//
+// `sugar` is the load-bearing one: it names the Std-only ops that exist purely to
+// be rewritten away (v1's descriptorField / witnessMethod / unboxValue / drop /
+// free / …). They are eliminated by a Std→Std `lowerToMachineForm` pass before the
+// backend runs — see the "sugar band" contract below.
+export enum StdOpCategory
+	arith
+	control
+	call
+	memory
+	system
+	sugar
+end 'StdOpCategory'
 
-export union StdArithConstOpcode
-	constI64
-	constF64
-end 'StdArithConstOpcode'
+// The structural role an op plays in a function, where that role is a property of
+// the OP rather than of its category. Replaces v1's three single-variant tag
+// bools (`isRet` / `isErrorReturn` / `isParam`), which existed only so passes
+// could ask "is this the return?" without a match.
+export enum OpRole
+	plain
+	ret
+	errorReturn
+	param
+end 'OpRole'
 
-export type StdArithConst
-	export let opcode as StdArithConstOpcode
-	export let resultId as ValueId
-	export let value as ParsedInt
-
-	export static function create(opcode StdArithConstOpcode, resultId ValueId, value ParsedInt) returns StdArithConst
-		return Self{opcode: opcode, resultId: resultId, value: value}
-	end 'create'
-end 'StdArithConst'
-
-// --- StdCallOp ---
-// Only the `ret` terminator today. The single-variant metadata flags below are
-// the v1 shape (read as `op.rawValue.isRet`, etc.) kept whole so the call /
-// tryCall / param / … arms grow in at M4/M5 without a metadata refactor.
-export type StdCallOpMeta
-	export let isRet as bool
-	export let isErrorReturn as bool
-	export let isParam as bool
-	// Inliner policy: this op may be folded away during a splice.
-	export let isPureForInlining as bool
-	// Inliner policy: this op cannot appear inside an inlined callee body.
+// Per-variant static metadata backing for StdOp (read via `op.rawValue`). Carries
+// what passes need to classify an op WITHOUT matching on it: the category (see
+// above), the structural role, the two inliner axes, and the scheduling facts the
+// instruction scheduler and the backends' use counting consume.
+export type StdOpMeta
+	export let category as StdOpCategory
+	export let role as OpRole
+	// Side-effect-free: the op can be duplicated, reordered, or dropped when its
+	// result is unused. The inliner's callee-body purity gate reads this (v1:
+	// `Inliner.isPureOp`), and DCE/CSE/LICM will too.
+	//
+	// Declared PER VARIANT, which is the flat union's payoff: v1 could only answer
+	// this by CATEGORY at the match site (`arith gives true; control gives true;
+	// call(c) gives c.rawValue.isPureForInlining; memory/system give false`), a
+	// blanket that has no way to say a trapping op is impure — v1's own `arith`
+	// band would call an integer `div` (which faults on divide-by-zero) pure. Here
+	// M3's `div` simply declares `isPure: false` and nothing else changes.
+	export let isPure as bool
+	// The op cannot appear inside a callee body that the multi-block splice is asked
+	// to inline — it escapes the inliner's static-callee model (v1: `indirectCall`,
+	// `witnessCall`, `tailCall`, `errorReturn`). ORTHOGONAL to `isPure`: purity says
+	// whether the op may be moved, this says whether it may be spliced at all.
 	export let isUnsupportedInInlineBody as bool
-end 'StdCallOpMeta'
+	// True for ops that access memory or have side effects the scheduler must
+	// treat as a barrier (loads, stores, calls, syscalls, atomics, locks).
+	export let isMemory as bool
+	// True for ops that write memory or have externally-observable side effects
+	// (must order with subsequent loads). Pure loads are memory but not stores.
+	export let isStore as bool
+	// True for ops with full call-barrier semantics (clobber caller-saved regs,
+	// may observe/modify arbitrary memory). Also true for `param`.
+	export let isCall as bool
+	// True if the op may clobber x64 EFLAGS / ARM64 NZCV once lowered. `const` is
+	// covered because its zero case lowers to the `xor reg, reg` idiom (which sets
+	// flags); that idiom itself arrives at M3. Note this is a LOWERING artifact, not
+	// a side effect — a flag-clobbering op is still `isPure`.
+	export let clobbersFlags as bool
+	// A compare feeding a branch — the backends pair the two, so the classification
+	// must survive as metadata rather than being re-derived per target.
+	export let isCmp as bool
+end 'StdOpMeta'
 
-export union StdCallOp
-	ret(retValId ValueId) = StdCallOpMeta{isRet: true, isErrorReturn: false, isParam: false, isPureForInlining: true, isUnsupportedInInlineBody: false}
-end 'StdCallOp'
-
-// --- StdOp: outer union wrapping the op categories ---
-// Two category arms today; `control` / `memory` / `system` grow in with their
-// inner unions as features land.
+// --- StdOp: the flat op union ---
+//
+// Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `StdOpCategory` order:
+// arith · control · call · memory · system · sugar. The banding is what makes a
+// flat union as ergonomic as the nested one it replaces: a pass that treats a
+// whole category uniformly covers it with ONE `match` range arm
+// (`firstArith to lastArith then …`) instead of one arm per variant.
+//
+// INVARIANT — **a new variant is APPENDED AT THE END OF ITS BAND, never inserted
+// into the middle of one.** A range arm names its endpoints, so it silently
+// swallows anything inserted between them: the compiler reports no missing-case
+// error, and the new op is misclassified at every range-arm site at once. This is
+// the one place the project's "no silent unhandled cases" rule has no compiler
+// backstop, so it is a convention the reviewer must enforce. Appending at a band's
+// end is always safe (the range's endpoint moves with it, deliberately).
+//
+// Flat does NOT mean one variant per opcode. Where a family shares an operand
+// shape and differs only in the operation (`add`/`sub`/`mul`/…), it stays ONE
+// variant with an opcode field — but a member needing DIFFERENT metadata (a
+// compare sets `isCmp`; a division traps) splits out as its own variant, because
+// the `StdOpMeta` backing attaches per variant and cannot reach an opcode buried
+// inside a field. M3's arithmetic lands as `binOp(… opcode StdBinOpcode)` +
+// a separate `cmp(…)` for exactly that reason.
 export union StdOp
-	arith(op StdArithOp)
-	call(op StdCallOp)
+	// --- band: arith ---
+	// Materialize a constant into a virtual register (`resultId`). `valueType`
+	// carries the width AND the float-ness the backend needs to pick a GP
+	// mov-immediate vs an XMM load — replacing v1's `constI64`/`constF64` opcode
+	// pair, which could not express i32/u8/f32 without new opcodes.
+	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// --- band: call ---
+	// Return terminator. `retValId` names the value moved into the return register.
+	ret(retValId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
+
+// --- The sugar band contract ---
+//
+// v1 enforced "no sugar reaches the backend" with a TYPE: sugar ops existed in
+// `StdOp` and simply had no `MirOp` counterpart, so the Std→MIR lowering could not
+// represent them past the boundary. Collapsing the tier gives that up, and the
+// replacement is deliberate rather than accidental — two independent guards:
+//
+//   1. Each sugar variant gets an explicit `panic("… must be desugared by
+//      lowerToMachineForm")` arm in the backend's `match` — NOT a bare `default`,
+//      which the project forbids precisely because it swallows new cases.
+//   2. `assertNoSugarOps` below, a whole-module gate. It catches an op the
+//      per-variant arms would miss — one reachable only through a `match` range arm,
+//      or sitting in a block the backend's own walk happens not to visit.
+//
+// Both are vacuous at M1 (no sugar variants exist yet), so `lowerToMachineForm`
+// itself is NOT written now. It arrives with the first sugar op (M6's `drop`/`free`,
+// M14's descriptor/witness ops), as a Std→Std pass.
+//
+// The gate is run by `buildBackend` — the single TARGET-NEUTRAL backend entry — not
+// inside `lowerStdToX64`. Sugar is a property of the Std tier, not of x64, so every
+// future backend (arm64, wasm) inherits the check instead of having to remember to
+// re-install it.
+//
+// It walks LIVE ops via `IrModule.liveOpIndices`, NOT the flat `module.ops` array:
+// `lowerToMachineForm` is a block-rebuilding pass, so the sugar ops it desugars
+// survive in `module.ops` as orphans. Scanning the flat array would panic on those
+// dead entries and report a desugaring failure that never happened.
+export function assertNoSugarOps(module StdModule)
+	for func in module.functions 'eachFunc'
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("assertNoSugarOps: live op index {opIdx} not in module.ops")
+			if op.rawValue.category == StdOpCategory.sugar 'isSugar'
+				panic("Std→Target: a `sugar`-category StdOp survived into the backend in function '{func.name}' — lowerToMachineForm did not run, or does not handle this op")
+			end 'isSugar'
+		end 'eachOp'
+	end 'eachFunc'
+end 'assertNoSugarOps'

@@ -1,6 +1,7 @@
 // Target Dialect — target-specific (x64) machine instructions, the lowest IR
-// tier before machine-code emission. B2's MIR→Target lowering emits these ops;
-// B2's register allocator colors their virtual registers into physical GPRs.
+// tier before machine-code emission. The Std→Target lowering (StdToX64Conversion)
+// emits these ops; the register allocator colors their virtual registers into
+// physical GPRs.
 //
 // THIN for maxon-shv2 M1: carries exactly the x64 ops the `return 42` slice
 // needs — materialize a constant into a register (movRegImm / movRegImm32),
@@ -117,7 +118,7 @@ export typealias TargetOpArray = Array with TargetOp
 // container; holds a whole program's Target-tier ops/blocks/functions. Unlike
 // v1's bespoke TargetModule struct (which carried BOTH an x64 and an arm64 op
 // array behind a `cpu` discriminator), shv2 makes the Target tier a plain
-// `IrModule with TargetOp` — consistent with MaxonModule/StdModule/MirModule —
+// `IrModule with TargetOp` — consistent with MaxonModule/StdModule —
 // so the shared IrModule machinery (appendOp/setTerminator/compactOps) is
 // reused with no bespoke duplicate. arm64 grows as additional `TargetOp` arms
 // (or its own dialect) at the arm64 milestone.

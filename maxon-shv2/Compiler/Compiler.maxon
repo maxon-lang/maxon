@@ -1,12 +1,14 @@
 // Compiler — the build driver. Wires source loading → the query spine → the
-// mid pipeline (resolveTypes, semanticCheck) → the lowering pipeline
-// (lowerMaxonToStd, lowerStdToMir) → the backend (buildBackend, writeExecutable).
+// pipeline (resolveTypes, semanticCheck, lowerMaxonToStd) → the backend
+// (buildBackend, writeExecutable).
 //
 // The mid + lowering passes run through `PassPipeline` (which owns the error
-// gate); the backend runs backend-direct (a CodeResult is not an IR module, so
-// it does not fit the pass-dispatch model — mirrors v1's Phase-7 shape). On any
-// failure the accumulated diagnostics are printed to stderr, so the exact
-// `error EXXXX: ...` lines the spec compares against reach the user.
+// gate) and end at a StdModule — shv2's last IR tier before the target dialect
+// (see StdDialect: there is no MIR tier). The backend runs backend-direct (a
+// CodeResult is not an IR module, so it does not fit the pass-dispatch model —
+// mirrors v1's Phase-7 shape). On any failure the accumulated diagnostics are
+// printed to stderr, so the exact `error EXXXX: ...` lines the spec compares
+// against reach the user.
 
 // Compile the file or directory `inputPath` for `target`, returning the path of
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
@@ -35,7 +37,7 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 		throw CompileError.compileError
 	end 'pipelineFailed'
 
-	let codeResult = buildBackend(pipeline.mirModule, target: project.target, globalData: project.globalData)
+	let codeResult = buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)

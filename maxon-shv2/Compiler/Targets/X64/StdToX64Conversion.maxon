@@ -1,15 +1,21 @@
-// MirToX64Conversion — MIR → Target (x64) lowering. Takes a MirModule and
-// produces a fresh TargetModule of x64 `TargetOp`s. Each MirOp is lowered to its
+// StdToX64Conversion — Std → Target (x64) lowering. Takes a StdModule and
+// produces a fresh TargetModule of x64 `TargetOp`s. Each StdOp is lowered to its
 // x64 op sequence; the result still uses VIRTUAL registers (X64VReg.virtual),
 // which the register allocator colors to physical GPRs afterward.
 //
+// This is the ONLY tier boundary below Std — shv2 has no MIR tier (see
+// StdDialect's header for why v1's was dropped). The virtual registers this pass
+// consumes are Std's own `ValueId`s, which have BEEN SSA virtual registers since
+// the Maxon→Std lowering minted them; v1's MIR tier never added a value model,
+// only a copy of one.
+//
 // THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
-//   mir.movImm(id, v, isFloat:false) -> appendIntImmToReg  (movRegImm32 / movRegImm)
-//   mir.ret(id)  terminator          -> mov R8, <retval>   + ret
+//   StdOp.const(id, v, valueType) -> appendIntImmToReg  (movRegImm32 / movRegImm)
+//   StdOp.ret(id)  terminator     -> mov R8, <retval>   + ret
 // The primary return value goes to **R8**, not RAX — Maxon's self-designed
 // calling convention (v1 does the same). Later milestones GROW the dispatch with
 // the ALU / compare-branch / general-call / memory arms + the float (XMM) return
-// path as the MIR dialect grows. v1's per-function lowering structure (a skeleton
+// path as the Std dialect grows. v1's per-function lowering structure (a skeleton
 // clone of the block graph, then a per-function op walk) is preserved so the
 // per-function fan-out driver (M5) can wrap one function at a time.
 //
@@ -36,31 +42,31 @@ export function appendIntImmToReg(module TargetModule, dstBlock IrBlock, dest X6
 	end 'wide'
 end 'appendIntImmToReg'
 
-export function lowerMirToX64(mirModule MirModule) returns TargetModule
-	var lowering = MirToX64Lowering.create(mirModule)
+export function lowerStdToX64(stdModule StdModule) returns TargetModule
+	var lowering = StdToX64Lowering.create(stdModule)
 	lowering.prepareSkeleton()
-	for srcFunc in mirModule.functions 'eachFunc'
+	for srcFunc in stdModule.functions 'eachFunc'
 		lowering.lowerFunction(srcFunc)
 	end 'eachFunc'
 	return lowering.targetModule
-end 'lowerMirToX64'
+end 'lowerStdToX64'
 
-type MirToX64Lowering
-	var mirModule as MirModule
+type StdToX64Lowering
+	var stdModule as StdModule
 	// Exported so the free-function entry can read the finished module after
-	// driving the per-function loop (mirrors LowerStdToMir; M5's fan-out reads it).
+	// driving the per-function loop (M5's fan-out driver reads it too).
 	export var targetModule as TargetModule
 
-	static function create(mirModule MirModule) returns MirToX64Lowering
-		return Self{mirModule: mirModule, targetModule: TargetModule.create()}
+	static function create(stdModule StdModule) returns StdToX64Lowering
+		return Self{stdModule: stdModule, targetModule: TargetModule.create()}
 	end 'create'
 
-	// Whole-module setup: clone every MirModule block 1:1 into `targetModule.blocks`
+	// Whole-module setup: clone every StdModule block 1:1 into `targetModule.blocks`
 	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
 	// transfer every function (its StdReturnType / paramTypes carry across
 	// unchanged). Must run before any lowerFunction call.
 	function prepareSkeleton()
-		for srcBlock in self.mirModule.blocks 'cloneBlocks'
+		for srcBlock in self.stdModule.blocks 'cloneBlocks'
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			for srcArg in srcBlock.blockArgs 'eachArg'
 				dstBlock.blockArgs.push(IrBlockArg.cloneOf(srcArg))
@@ -68,7 +74,7 @@ type MirToX64Lowering
 			self.targetModule.blocks.push(dstBlock)
 		end 'cloneBlocks'
 
-		for srcFunc in self.mirModule.functions 'transferFuncs'
+		for srcFunc in self.stdModule.functions 'transferFuncs'
 			self.targetModule.functions.push(srcFunc)
 		end 'transferFuncs'
 	end 'prepareSkeleton'
@@ -78,46 +84,49 @@ type MirToX64Lowering
 	// The function's StdReturnType drives whether the return materializes an R8 move.
 	function lowerFunction(srcFunc IrFunction)
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			let srcBlock = try self.mirModule.blocks.get(blockRef) otherwise panic("lowerMirToX64: blockRef from srcFunc.blockRefs not in mirModule.blocks")
-			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("lowerMirToX64: targetModule.blocks 1:1 with mirModule.blocks but get({blockRef}) failed")
+			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
+			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
 			for opIdx in srcBlock.opRefs 'eachOp'
-				let mirOp = try self.mirModule.ops.get(opIdx) otherwise panic("lowerMirToX64: opIdx from srcBlock.opRefs not in mirModule.ops")
-				self.lowerBodyOp(mirOp, dstBlock: dstBlock, returnType: srcFunc.returnType)
+				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToX64: opIdx from srcBlock.opRefs not in stdModule.ops")
+				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType)
 			end 'eachOp'
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
-				let termOp = try self.mirModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerMirToX64: terminatorIndex not in mirModule.ops")
+				let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerStdToX64: terminatorIndex not in stdModule.ops")
 				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'lowerFunction'
 
-	// Lower a regular (non-terminator) MIR op. `ret` reaching here is the rare
-	// mid-block form (LowerStdToMir emits it as a body op for a partially-
+	// Lower a regular (non-terminator) Std op. `ret` reaching here is the rare
+	// mid-block form (LowerMaxonToStd emits it as a body op for a partially-
 	// terminated block); it lowers the same as the terminator form, just appended.
-	function lowerBodyOp(op MirOp, dstBlock IrBlock, returnType StdReturnType)
+	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
-			movImm(resultId, value, isFloat) then self.lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
+			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 		end 'lower'
 	end 'lowerBodyOp'
 
-	// Lower a block terminator. The only MIR terminator in the M1 slice is `ret`;
-	// a `movImm` terminator is a lowering bug (a const is never a terminator).
-	function lowerTerminatorOp(op MirOp, dstBlock IrBlock, returnType StdReturnType)
+	// Lower a block terminator. The only Std terminator in the M1 slice is `ret`;
+	// a `const` terminator is a lowering bug (a constant is never a terminator).
+	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
-			movImm then panic("lowerMirToX64: a `movImm` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
+			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
-	function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock IrBlock)
-		if isFloat 'float'
-			panic("lowerMirToX64: float constants (XMM materialization) are not supported until M3 — the `return 42` slice is integer-only")
+	// Materialize a constant into its virtual register. The op's own StdType picks
+	// the register file (GP vs XMM) — this is what v1 encoded as a `constI64` /
+	// `constF64` opcode pair and then re-encoded as MIR's `isFloat` bool.
+	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
+		if stdTypeIsFloat(valueType) 'float'
+			panic("lowerStdToX64: float constants (XMM materialization) are not supported until M3 — the `return 42` slice is integer-only")
 		end 'float'
 		appendIntImmToReg(self.targetModule, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
-	end 'lowerMovImm'
+	end 'lowerConst'
 
 	// Return: move the value into the primary-return register (R8) then emit `ret`.
 	// Void returns skip the move (callers never read the register). Frame teardown
@@ -139,8 +148,8 @@ type MirToX64Lowering
 			return
 		end 'void'
 		if stdReturnTypeIsFloat(returnType) 'float'
-			panic("lowerMirToX64: float return values (XMM0) are not supported until M3 — the `return 42` slice is integer-only")
+			panic("lowerStdToX64: float return values (XMM0) are not supported until M3 — the `return 42` slice is integer-only")
 		end 'float'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.r8), srcReg: X64VReg.virtual(retValId)))
 	end 'emitPrimaryReturnMove'
-end 'MirToX64Lowering'
+end 'StdToX64Lowering'

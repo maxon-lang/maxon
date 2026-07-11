@@ -11,8 +11,8 @@
 // are translated to StdType via `maxonTypeToStdType`.
 //
 // THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
-//   maxon.literal -> std.arith.const(constI64/constF64)
-//   maxon.ret     -> std.call.ret
+//   maxon.literal -> StdOp.const
+//   maxon.ret     -> StdOp.ret
 // Later milestones GROW `lowerOp`/`lowerTerminator` with the var / arith / call
 // / control-flow arms (and the throwing / fat-interface return arms of
 // `emitRetOrErrorReturn`) as the Maxon and Std dialects grow. v1's per-function
@@ -151,29 +151,26 @@ type MaxonToStdLowering
 		end 'lower'
 	end 'lowerTerminator'
 
-	// Lower an integer/float literal to `std.arith.const`. The opcode's
-	// float-ness is derived from the collapsed StdType so downstream MIR picks a
-	// GP mov-immediate vs an XMM load.
+	// Lower an integer/float literal to `StdOp.const`. The literal's collapsed
+	// StdType rides along on the op: it carries both the width and the float-ness
+	// the backend needs to pick a GP mov-immediate vs an XMM load, so no separate
+	// opcode (v1's constI64/constF64) is required.
 	function lowerLiteral(result ByteArray, value ParsedInt, litType MaxonType, dstBlock IrBlock)
 		let stdType = maxonTypeToStdType(litType)
-		var opcode = StdArithConstOpcode.constI64
-		if stdTypeIsFloat(stdType) 'asFloat'
-			opcode = StdArithConstOpcode.constF64
-		end 'asFloat'
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(resultId, value: value, valueType: stdType))
 	end 'lowerLiteral'
 
 	// Emit the function-return terminator (or, for a mid-block ret, a body op).
 	// M1 has only the PLAIN-ret arm: a non-throwing, non-interface-returning
-	// function hands its single value back via `StdCallOp.ret`. The throwing
+	// function hands its single value back via `StdOp.ret`. The throwing
 	// (errorReturn + zero flag) and fat-interface (errorReturn + witness) arms
 	// GROW in at M15 / M6 — once the Std dialect gains `errorReturn` and
 	// functions can throw or return interface types. `asTerminator` toggles
 	// setTerminator (block-final) vs appendOp (the rare mid-block ret).
 	function emitRetOrErrorReturn(retVal ByteArray, dstBlock IrBlock, asTerminator bool)
 		let retValId = self.resolveName(retVal)
-		let plainOp = StdOp.call(StdCallOp.ret(retValId))
+		let plainOp = StdOp.ret(retValId)
 		if asTerminator 'asTerm'
 			self.stdModule.setTerminator(dstBlock, op: plainOp)
 		end 'asTerm' else 'asBody'

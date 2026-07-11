@@ -1,10 +1,14 @@
-// BackendDispatch — the Phase-7 backend driver: it takes a lowered MirModule to
-// a runnable executable. `buildBackend` runs the fixed MIR→Target→CodeResult
+// BackendDispatch — the Phase-7 backend driver: it takes a lowered StdModule to
+// a runnable executable. `buildBackend` runs the fixed Std→Target→CodeResult
 // sequence; `augmentWithRuntime` supplies the OS entry point; `writeExecutable`
 // dispatches the CodeResult to the per-OS object writer.
 //
+// Std, not MIR: shv2 has no MIR tier (see StdDialect's header). The backend's
+// input is the Std module the pipeline produced, and `lowerStdToX64` asserts on
+// entry that no Std-only `sugar` op survived to reach it.
+//
 // These stages are driven as ordered function calls rather than PassKind entries
-// (the mid pipeline in PassPipeline stops at MirModule): the backend produces a
+// (the pipeline in PassPipeline stops at StdModule): the backend produces a
 // CodeResult, which is not an IR module, so it does not fit the module-field
 // dispatch model. This mirrors v1, where Phase 7 is backend-direct.
 //
@@ -26,10 +30,16 @@ export let UserEntryName = "main"
 // with rsp ≡ 8 (mod 16), as if via `call`; `sub rsp, 0x28` restores 16-alignment).
 let EntryStubFrameBytes = 0x28
 
-// Run the full backend: MIR → Target → register allocation → prologue/epilogue →
+// Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
-export function buildBackend(mirModule MirModule, target Target, globalData GlobalDataTable) returns CodeResult
-	var targetModule = lowerMirToX64(mirModule)
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable) returns CodeResult
+	// The sugar gate lives HERE, not in the per-target lowering: it is a property of
+	// the Std tier, not of x64, so installing it at the one target-neutral entry
+	// means arm64/wasm inherit it instead of each having to re-add it. See
+	// StdDialect's sugar-band contract.
+	assertNoSugarOps(stdModule)
+
+	var targetModule = lowerStdToX64(stdModule)
 	allocateRegisters(targetModule, target: target)
 	insertPrologueEpilogue(targetModule, target: target)
 	augmentWithRuntime(targetModule, target: target)
@@ -39,7 +49,7 @@ export function buildBackend(mirModule MirModule, target Target, globalData Glob
 		chunks.push(emitFunctionChunk(targetModule, func: func))
 	end 'eachFunc'
 
-	return concatX64FunctionChunks(targetModule, mirModule: mirModule, chunks: chunks, globalData: globalData)
+	return concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
 end 'buildBackend'
 
 // Install the OS entry point. M1 = "prepend the `mrt_start` entry stub + register

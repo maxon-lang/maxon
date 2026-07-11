@@ -1,24 +1,28 @@
-// PassPipeline — the stateful driver for a compilation. It owns the four
-// evolving IR modules (one per tier), the scheduled pass list, and a `dispatch`
-// that runs each pass by reading one module field and writing the next. Callers
-// build a PassPipeline, push the passes they want via `addPass`/`addPasses`, and
-// call `run()`.
+// PassPipeline — the stateful driver for a compilation. It owns the evolving IR
+// modules (one per tier), the scheduled pass list, and a `dispatch` that runs each
+// pass by reading one module field and writing the next. Callers build a
+// PassPipeline, push the passes they want via `addPass`/`addPasses`, and call
+// `run()`.
 //
-// Pipeline phases (4-level IR: Maxon → Std → MIR → Target):
-//   Phase 2  Maxon-level : resolveTypes, semanticCheck  (operate on maxonModule)
-//   Phase 3  Maxon → Std : lowerMaxonToStd              (maxonModule → stdModule)
-//   Phase 5  Std → MIR   : lowerStdToMir                (stdModule → mirModule)
-//   Phase 7  MIR → Target: handled directly by B2's backend (not pipeline passes)
+// Pipeline phases (3-level IR: Maxon → Std → Target):
+//   Phase 2  Maxon-level  : resolveTypes, semanticCheck  (operate on maxonModule)
+//   Phase 3  Maxon → Std  : lowerMaxonToStd              (maxonModule → stdModule)
+//   Phase 7  Std → Target : handled directly by the backend (not pipeline passes)
+//
+// There is NO MIR tier — see StdDialect's header. v1's `lowerStdToMir` pass and
+// `mirModule` field are gone, and everything v1 ran ON the MIR tier (instruction
+// scheduling, coalescing, and the desugaring that becomes `lowerToMachineForm`)
+// becomes a Std-tier pass scheduled here.
 //
 // THIN for maxon-shv2 M1: only the passes the `return 42` slice needs are
-// scheduled, and only the two lowerings (lowerMaxonToStd, lowerStdToMir) do real
-// work. resolveTypes / semanticCheck are SCHEDULED PLACEHOLDERS whose bodies are
-// a Chunk C deliverable (TypeResolution + SemanticCheck) — present now so the
-// pipeline SHAPE is stable and Chunk C fills in bodies rather than rewiring the
-// pipeline. The Std-tier optimization passes (mem2reg/canonicalize/cse/…), the
-// Own-tier passes, `augmentWithRuntime`, and the MIR-tier passes GROW in at
-// their milestones (B2 / M3+ / M6). Error gating (`hasErrors` → throw) and
-// per-pass IR-compaction/dump grow in with the Project + diagnostics (Chunk C).
+// scheduled, and only `lowerMaxonToStd` does real work. resolveTypes /
+// semanticCheck are SCHEDULED PLACEHOLDERS whose bodies are a Chunk C deliverable
+// (TypeResolution + SemanticCheck) — present now so the pipeline SHAPE is stable
+// and Chunk C fills in bodies rather than rewiring the pipeline. The Std-tier
+// optimization passes (mem2reg/canonicalize/cse/…), the Own-tier passes, and
+// `lowerToMachineForm` GROW in at their milestones (M3+ / M6). Error gating
+// (`hasErrors` → throw) and per-pass IR-compaction/dump grow in with the Project +
+// diagnostics (Chunk C).
 
 // One arm per scheduled pass. Payload-free today; kept a `union` (not an enum)
 // to match v1 and leave room for passes that carry configuration payloads.
@@ -28,31 +32,9 @@ export union PassKind
 	semanticCheck
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
-	// Phase 5: Std → MIR.
-	lowerStdToMir
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
-
-export enum PipelinePhase
-	maxon
-	std
-	mir
-	target
-end 'PipelinePhase'
-
-// The tier a pass reads/writes. `lowerMaxonToStd` and `lowerStdToMir` are the
-// boundary passes — classified by the module they PRODUCE (std / mir), so a
-// post-pass summary reflects the freshly-populated module. Grows one arm per
-// pass added.
-export function classifyPhase(pass PassKind) returns PipelinePhase
-	return match pass 'phase'
-		resolveTypes gives PipelinePhase.maxon
-		semanticCheck gives PipelinePhase.maxon
-		lowerMaxonToStd gives PipelinePhase.std
-		lowerStdToMir gives PipelinePhase.mir
-	end 'phase'
-end 'classifyPhase'
 
 // Whether a pass runs over the whole module at once or can fan out per function.
 // `perFunction` passes are intra-function only (no pass reaches into another
@@ -64,8 +46,8 @@ export enum PassClassification
 end 'PassClassification'
 
 // Map a pass to its fan-out classification. resolveTypes / semanticCheck are
-// whole-module (they need the full declaration set); the two lowerings are
-// intra-function and become the first fan-out targets at M5. NOTE: M1's `run()`
+// whole-module (they need the full declaration set); the lowering is
+// intra-function and becomes the first fan-out target at M5. NOTE: M1's `run()`
 // runs EVERY pass whole-module regardless — this classification is recorded for
 // the M5 fan-out driver, not yet acted on (per PLAN.md: classification present
 // but trivial at M1).
@@ -74,7 +56,6 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
-		lowerStdToMir gives PassClassification.perFunction
 	end 'classify'
 end 'classifyPass'
 
@@ -84,54 +65,46 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
-		lowerStdToMir gives "lowerStdToMir"
 	end 'name'
 end 'passKindToString'
 
-// The mid-level pipeline (phases 2-3): the Maxon-level passes plus the
-// Maxon→Std lowering. Grows the Std-tier optimization + Own-tier passes as they
-// land. (v1 threads `project` here for `coverageEnabled`; M1 has no Project yet.)
-export function buildMidPipeline() returns PassKindArray
+// The full pipeline (phases 2-3): the Maxon-level passes plus the Maxon→Std
+// lowering. This is the schedule the driver runs to take a parsed MaxonModule
+// down to a StdModule, which it then hands to the backend.
+//
+// The Std-tier passes GROW in HERE, appended after `lowerMaxonToStd`: the
+// optimizations (mem2reg/canonicalize/cse/… at M3+), the Own-tier refcount passes
+// (M6), and `lowerToMachineForm` (M6) — which in v1 would have been a separate
+// "backend pipeline" over the MIR tier. Phase 7 (target lowering / regalloc /
+// prologue-epilogue) stays backend-direct: it produces a CodeResult, which is not
+// an IR module and so does not fit the module-field dispatch model.
+//
+// (v1 threads `project` here for `coverageEnabled`; M1's passes do not need it.)
+export function buildDefaultPipeline() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
 	return passes
-end 'buildMidPipeline'
-
-// The backend pipeline (phase 5): the Std→MIR lowering. B2 grows this with
-// `augmentWithRuntime` (supplies the entry point) and the MIR-tier passes;
-// phase 7 (target lowering / regalloc / prologue-epilogue) is driven directly
-// by the backend, not as pipeline passes.
-export function buildBackendPipeline() returns PassKindArray
-	var passes = PassKindArray.create()
-	passes.push(PassKind.lowerStdToMir)
-	return passes
-end 'buildBackendPipeline'
-
-// The full pipeline: mid + backend. This is the schedule Chunk C's driver runs
-// to take a parsed MaxonModule down to a MirModule (and, once B2 lands, to a
-// TargetModule + CodeResult).
-export function buildDefaultPipeline() returns PassKindArray
-	var passes = buildMidPipeline()
-	passes.append(buildBackendPipeline())
-	return passes
 end 'buildDefaultPipeline'
 
-// The pipeline owns the four IR modules across their successive phases. It
-// starts with `maxonModule` populated by the parser (Chunk C); each lowering
-// pass reads one field and populates the next. Unpopulated fields hold empty
-// modules so a read never traps. Pass methods read/write `self`'s fields
-// directly — new cross-cutting state becomes a new field, not a signature change.
+// The pipeline owns the IR modules across their successive phases. It starts with
+// `maxonModule` populated by the parser (Chunk C); the lowering pass reads one
+// field and populates the next. Unpopulated fields hold empty modules so a read
+// never traps. Pass methods read/write `self`'s fields directly — new
+// cross-cutting state becomes a new field, not a signature change.
+//
+// It owns NO target module: the pipeline's last tier is Std, and the backend is
+// driven backend-direct (`buildBackend` returns a CodeResult, which is not an IR
+// module). A `targetModule` field here would be write-once-read-never — the same
+// vestigial-tier residue the `mirModule` field was.
 export type PassPipeline
 	// The project owns the shared state the Maxon-tier passes read/write
 	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it;
-	// the lowerings do not, but every pass dispatches uniformly through `self`.
+	// the lowering does not, but every pass dispatches uniformly through `self`.
 	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
-	export var mirModule as MirModule
-	export var targetModule as TargetModule
 	export var passes as PassKindArray
 
 	export static function create(project Project, maxonModule MaxonModule) returns PassPipeline
@@ -139,8 +112,6 @@ export type PassPipeline
 			project: project,
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
-			mirModule: MirModule.create(),
-			targetModule: TargetModule.create(),
 			passes: PassKindArray.create()
 		}
 	end 'create'
@@ -172,13 +143,12 @@ export type PassPipeline
 	// standalone pass algorithm, and writes the result back. The pass algorithms
 	// stay free functions (reusable outside the pipeline); dispatch just wires
 	// them up. resolveTypes/semanticCheck operate on the Maxon module + project;
-	// the two lowerings produce the next tier's module.
+	// lowerMaxonToStd produces the next tier's module.
 	function dispatch(pass PassKind)
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule)
-			lowerStdToMir then self.mirModule = lowerStdToMir(self.stdModule)
 		end 'dispatch'
 	end 'dispatch'
 end 'PassPipeline'

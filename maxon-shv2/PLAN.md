@@ -4,7 +4,7 @@
 
 `maxon-selfhosted` (v1) works but "got away" architecturally: features that are *integral* — ownership/borrowing and parallel incremental compilation — were left until last, so they were bolted on via ~8 shared `Project` sidetables and a late 7,755-line refcount inserter. The result is slow to compile, slow to test, and uses 5–6 GB of RAM. This makes it very hard to debug.
 
-We are starting fresh as **`maxon-shv2/`**, keeping what is sound (lexer, 4-tier IR, query engine, backends) and rebuilding what is entangled, with the hard/integral features designed in **from the first commit** rather than retrofitted:
+We are starting fresh as **`maxon-shv2/`**, keeping what is sound (lexer, the tiered IR, query engine, backends) and rebuilding what is entangled, with the hard/integral features designed in **from the first commit** rather than retrofitted. (v1's IR is 4 tiers; shv2 runs **3** — the MIR tier is dropped as dead weight. See "IR tiers" below.)
 
 1. **Static ownership/borrowing** — compile-time move/borrow checking that drops values at scope exit; runtime refcounting only where escape analysis proves genuine sharing.
 2. **Parallel incremental compilation** — using the existing green-thread runtime, with the multi-core prerequisites proven *before* the first compiler milestone.
@@ -39,11 +39,11 @@ Development is **spec-driven**: copy a spec from `specs/` (or author one) into a
 - Spec harness: `Testing/SpecParser.maxon`, `Testing/SpecTestRunner.maxon` (trimmed to the block types specs-shv2 uses, plus the new mm-trace block).
 
 **PORT incrementally, structure preserved** (cannot copy verbatim — they consume the dialects we're rebuilding thin):
-- `Targets/X64/*`, `Targets/Arm64/*`, `Targets/Shared/StdOpHelpers.maxon`, InstructionScheduler, PrologueEpiloguePass — ported op-by-op as MIR ops appear in the rebuilt MirDialect, starting from the M1 thin slice (mov/ret) and growing with each milestone. Includes the runtime emitters (`emitX64Gt*` etc.), ported from v1 **but with the allocator mirrored from the C# sharded design, not v1's single-shared-mcache** (see Phase F).
+- `Targets/X64/*`, `Targets/Arm64/*`, `Targets/Shared/StdOpHelpers.maxon`, InstructionScheduler, PrologueEpiloguePass — ported op-by-op as ops appear in the rebuilt StdDialect, starting from the M1 thin slice (mov/ret) and growing with each milestone. Includes the runtime emitters (`emitX64Gt*` etc.), ported from v1 **but with the allocator mirrored from the C# sharded design, not v1's single-shared-mcache** (see Phase F).
 
 **REBUILD incrementally** (same structure, feature-by-feature):
 - `Compiler/Parser.maxon` — keep v1's recursive-descent+Pratt direct-emit contract, **one structural change**: it writes into a per-file `FileParseArtifact` instead of mutating shared `Project` (enables parallel parse; see below).
-- `Compiler/IR/Maxon/MaxonDialect.maxon` (extended with ownership), `LowerMaxonToStd.maxon`, all `IR/Std/*` opt passes, `IR/MIR/*`, `IR/Target/*`, `IR/PassPipeline.maxon`, `Compiler/Project.maxon`, `Queries.maxon` + `QueryEngine.maxon` + `QueryDatabase.maxon`, `TypeResolution.maxon`, `SemanticCheck.maxon`, `Compiler.maxon`, `Main.maxon`.
+- `Compiler/IR/Maxon/MaxonDialect.maxon` (extended with ownership), `LowerMaxonToStd.maxon`, all `IR/Std/*` opt passes, `IR/Target/*`, `IR/PassPipeline.maxon`, `Compiler/Project.maxon`, `Queries.maxon` + `QueryEngine.maxon` + `QueryDatabase.maxon`, `TypeResolution.maxon`, `SemanticCheck.maxon`, `Compiler.maxon`, `Main.maxon`. *(v1's `IR/MIR/*` is NOT rebuilt — see "IR tiers" below.)*
 
 **CREATE new** (the static-ownership + parallel machinery):
 - `Compiler/IR/Own/OwnDialect.maxon` — `own.*` ops + `OwnershipKind` + lifetime ids.
@@ -57,7 +57,16 @@ Development is **spec-driven**: copy a spec from `specs/` (or author one) into a
 
 ### IR tiers with static ownership as a first-class citizen
 
-Tiers stay **Maxon → Std → MIR → Target**. Ownership is born at the **Maxon tier** (which still has source names, scopes, `SourceRange`) and fully resolved *before* `lowerMaxonToStd`. It lives in **three first-class places, zero sidetables**:
+Tiers are **Maxon → Std → Target** — three, not v1's four. **The MIR tier is deliberately dropped** (amended after M1-C; landed as its own structural commit). Two reasons, both of which only get more expensive to act on later:
+
+- **MIR added no value model.** v1's `lowerStdToMir` is 501 lines of which ~420 are a mechanical 1:1 rename — `ValueId`s pass through verbatim, blocks clone 1:1, `IrFunction`s transfer as-is. Std's `ValueId`s **already are** the infinite virtual registers MIR claimed to introduce. The tier's only real content (~80 lines) is desugaring a handful of Std-only ops, which is a **Std→Std rewrite** (`lowerToMachineForm`), not a tier. Everything v1 ran *on* MIR (`commuteForCoalescing`, `scheduleInstructions`) is now a Std-tier pass.
+- **The boundary hid drift.** v1's `MirOp.movReg` has **zero construction sites** yet still forces match arms in the printer, the uses-extractor, `CommuteForCoalescing`, and every backend. A tier wall that nothing crosses is a place dead code goes to survive.
+
+What we give up is v1's *type-level* "no sugar reaches the backend" guarantee (sugar ops existed in `StdOp` with no `MirOp` counterpart, so the boundary made them unrepresentable). It is replaced deliberately, not accidentally: a `sugar` category on `StdOpMeta` + an `assertNoSugarOps` gate at the backend entry + an explicit `panic` arm per sugar variant (never a bare `default`). **Spec tests are the real guarantee** — that was the call, and the type wall was not worth its cost.
+
+**`StdOp` is also FLAT** (one union, no `StdOp.arith(StdArithOp.const(...))` nesting), for a reason v1's own StdDialect header admits: the nesting was a migration artifact kept "so existing pass code that matches on these variants keeps working." Maxon heap-boxes and refcounts every payload-carrying union case, so each nesting level is another heap object — nested is **3 boxes per op**, flat is **1**, on the single most numerous object in the compiler (~half of v1's self-compile cycles go to memory-management churn). Coarse membership is recovered without nesting via the required `StdOpMeta` struct backing (`category`/`role`/`inlinePolicy` + scheduling facts), and variants are declared in **category-contiguous bands** so a pass can cover a whole category with one `match` range arm. **Invariant: append new variants at the END of a band, never insert into the middle** — a range arm silently swallows anything inserted between its endpoints, and this is the one place the "no silent unhandled cases" rule has no compiler backstop.
+
+Ownership is born at the **Maxon tier** (which still has source names, scopes, `SourceRange`) and fully resolved *before* `lowerMaxonToStd`. It lives in **three first-class places, zero sidetables**:
 1. **`OwnershipKind` attribute** on every value/binding: `trivial` (scalar, no drop) · `owned` (unique heap, dropped once unless moved) · `borrow` (non-owning view, never dropped, carries a lifetime) · `shared` (escape-promoted to refcount).
 2. **Signature ownership modes in the function type**: each param `consume`/`borrow`/`copy`; return `owned`/`borrow`. Callers read ownership straight off the callee signature — the local replacement for v1's whole-module `funcParamConsumes`/`funcReturnsBorrow` fixpoints.
 3. **Explicit `Own`-dialect ops in the block stream** (alive Maxon→Std, lowered by `lowerMaxonToStd`): `own.move`, `own.borrow(kind, lifetime)`, `own.drop` (→ `__destruct_T` call), and `own.retain`/`own.release` (**the only surviving runtime refcount ops**, emitted solely for `shared`).
@@ -72,7 +81,8 @@ Maxon-tier passes, in order: **OwnershipInfer** (bounded whole-module fixpoint �
 - **Frontend:** `tokenize [m]` → `parseFile [m]` → `mergeArtifacts [M]` (deterministic, source-path order).
 - **Maxon tier:** `resolveTypes [M]` → `semanticCheck [F]` → `ownershipInfer [M]` → `ownershipCheck [F]` → `escapeAnalysis [F]`(+small `[M]` summary) → `insertDrops [F]` → `deadFunctionElimination [M]` → `lowerMaxonToStd [F]`.
 - **Std tier `[F]`:** `mem2reg` → `canonicalize` → `cse` → `licm` → `dce` → `inliner [M]` → `dceFunctions [M]` → `insertRangeChecks` → `lowerABI`. *(No `analyzeParamConsumes`/`analyzeReturnBorrows`/`insertRefcounts` — replaced by the Own tier.)*
-- **Std→MIR:** `augmentWithRuntime [M]` → `lowerStdToMir [F]`. **MIR `[F]`:** `commuteForCoalescing` → `scheduleInstructions`. **MIR→Target `[F]`:** lowerToTarget → allocateRegisters → prologue/epilogue → emit.
+- **Std tier, machine-level `[F]`** *(what v1 ran on its MIR tier)*: `lowerToMachineForm` (desugars the `sugar`-category ops — descriptors, witness methods, `drop`/`free`, unbox) → `commuteForCoalescing` → `scheduleInstructions`.
+- **Std→Target `[F]`:** `assertNoSugarOps [M]` → `lowerStdToX64` → `allocateRegisters` → `insertPrologueEpilogue` → `augmentWithRuntime [M]` → emit → `concatFunctionChunks [M]`. Note `augmentWithRuntime` runs **last, on the TargetModule** — it hand-builds the `mrt_start` entry stub in physical registers with its own explicit frame, so it must land *after* regalloc and prologue/epilogue rather than be reprocessed by them.
 
 ### Incremental from the first commit
 The query spine is **skeletal from M1**, not retrofitted: content-hash-keyed memoized queries (`querySourceFile` → `queryTokens` → `queryParseOps` → module/mid/code queries) with dependency recording, modeled on v1's `Queries.maxon`/`QueryEngine.maxon`/`QueryDatabase.maxon` but rebuilt against the `FileParseArtifact` staging (per-task dependency buffers merged deterministically, so the query engine is never touched concurrently). Warm-rebuild correctness (edit one file → only its queries re-run; unchanged input → byte-identical output) is asserted continuously from M2 onward, so incrementality never becomes a bolt-on.
@@ -82,7 +92,7 @@ shv2 compiles programs against the existing `stdlib/` and `runtime.std`/`runtime
 
 ### Parallel-ready architecture
 - **Parse fan-out + deterministic merge** reconciles "direct-emit parser mutates Project" with "parallel per-file parse": the parser writes only into a local `FileParseArtifact` (its MaxonModule fragment + a bundle recording key **and value** for every registry it would touch), so per-file parse is a pure function of `(tokens, prescan summary)` on a per-P arena. `mergeArtifacts [M]` folds artifacts into `Project` in fixed source-path order, doing all duplicate detection at merge time. Token-level prescans (`preRegisterInterfaceNames`, `preRegisterFunctionThrows`) become parallel per-file scans, merged first.
-- **Per-function fan-out** turns v1's singleton-wrap shim into real green-thread fan-out: each function is lowered Maxon→Std→MIR→Target on a worker into its own arena; only the finished code chunk + content-keyed rdata merge back. This is also the **memory lever** — pipeline one function fully and free its upper-tier forms before the next (keeps peak RAM well under 1.7 GB despite 4 tiers).
+- **Per-function fan-out** turns v1's singleton-wrap shim into real green-thread fan-out: each function is lowered Maxon→Std→Target on a worker into its own arena; only the finished code chunk + content-keyed rdata merge back. This is also the **memory lever** — pipeline one function fully and free its upper-tier forms before the next. Dropping the MIR tier works *with* this lever rather than against it: one fewer whole-module copy to hold, and one heap box per op instead of three.
 - **Determinism:** content-derived keys for all shared appends (v1 pattern: FNV-1a panic labels, `__float_<bits>`), ordered per-function merge for the one order-sensitive append (rdata `GlobalDataTable`), and a **1-core-vs-N-core byte-identity harness** as the blocking gate for the whole parallel phase.
 
 ---
@@ -166,7 +176,7 @@ Correctness-only gate through Phase E; **budget gate becomes hard at Phase F.**
 4. **async-subprocess shard-0 heap corruption (high, specific).** IOCP/non-scheduler-thread allocations have no owning P → fall to shard 0 concurrently with a worker. Mitigation: route non-P-context allocations through the locked path; validate under mm-trace with an async-subprocess workload before declaring Phase 0 done.
 5. **Conditional-move drop placement.** A value moved on one branch only needs a drop flag. Mitigation: initially promote conditionally-moved values to `shared`; add real drop flags later as an optimization.
 6. **Escape-analysis precision** (too conservative = everything refcounted; too aggressive = UAF). Mitigation: start sound-conservative, measure refcount rate, tighten behind byte-parity + spec suite.
-7. **Determinism under parallelism / memory budget with 4 live tiers.** Mitigations: content-keyed appends + ordered per-function merge + 1-vs-N-core parity gate; per-function pipelining with eager frees.
+7. **Determinism under parallelism / memory budget with 3 live tiers.** Mitigations: content-keyed appends + ordered per-function merge + 1-vs-N-core parity gate; per-function pipelining with eager frees. (Dropping the MIR tier already removes one whole-module copy from the peak, and flattening `StdOp` cuts each op from 3 heap boxes to 1.)
 
 ---
 
