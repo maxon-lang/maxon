@@ -1,8 +1,108 @@
-// maxon-shv2 compiler entry point (walking skeleton — M1).
-// Mirrors maxon-selfhosted/Main.maxon's command structure; grows into the real
-// driver (parse args -> compile a file/directory) as the pipeline lands.
+// maxon-shv2 compiler entry point (M1 driver).
+//
+// Parses the command line, dispatches `build <path>`, and maps the driver's
+// CompileError outcomes to an exit code. The `build` command reads the input
+// file/directory, runs the M1 pipeline, and writes an executable. Diagnostics
+// (E3001/E3002) are printed by `compile`; Main stays silent on the
+// `compileError` arm so a failing build's stderr is EXACTLY the reported
+// diagnostics (the `maxoncstderr` spec contract).
+//
+// CLI (documented): `maxon-shv2 build <file|directory> [-o <output>]`.
 
 function main() returns ExitCode
-	print("maxon-shv2 (walking skeleton)\n")
-	return 0
+	let args = MaxonArgs.parse()
+	return match args.command 'cmd'
+		build gives runBuild(args)
+		unknown gives unknownCommand()
+	end 'cmd'
 end 'main'
+
+function runBuild(args MaxonArgs) returns ExitCode
+	if args.path.isEmpty() 'noPath'
+		printError("Usage: maxon-shv2 build <file|directory> [-o <output>]\n")
+		return 1
+	end 'noPath'
+
+	let inputPath = try FilePath.from(args.path) otherwise 'badPath'
+		printError("error: invalid path: {args.path}\n")
+		return 1
+	end 'badPath'
+
+	let target = detectHostTarget()
+	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride) otherwise (e) 'compileErr'
+		// `compileError` = diagnostics already printed by `compile`; stay silent
+		// so stderr is exactly those diagnostic lines. The file-level arms have
+		// no diagnostics, so Main prints their message here.
+		match e 'report'
+			fileNotFound(p) then printError("error: file not found: {p}\n")
+			directoryNotFound(p) then printError("error: directory not found: {p}\n")
+			noSourceFiles(r) then printError("error: no source files under {r}\n")
+			readError(p) then printError("error: could not read {p}\n")
+			compileError then break 'report'
+		end 'report'
+		return 1
+	end 'compileErr'
+
+	print("Compiled -> {outputPath}\n")
+	return 0
+end 'runBuild'
+
+function unknownCommand() returns ExitCode
+	printUsage()
+	return 1
+end 'unknownCommand'
+
+function printUsage()
+	print("Usage: maxon-shv2 <command> [options]\n")
+	print("\n")
+	print("Commands:\n")
+	print("  build <file|directory>   Compile a Maxon program to an executable\n")
+	print("\n")
+	print("Options:\n")
+	print("  -o, --output=<path>      Output executable path (default: derived from input)\n")
+end 'printUsage'
+
+// The parsed command the driver dispatches on.
+enum MaxonCommand
+	build
+	unknown
+end 'MaxonCommand'
+
+// Thin M1 argument model: a command, an input path, and an optional output
+// override. Grows into v1's full option set (targets, logging, cache flags, ...)
+// as the driver gains those capabilities.
+type MaxonArgs
+	export let command as MaxonCommand
+	export let path as String
+	export let outputOverride as String
+
+	// Parse the process command line. argv[0] is the executable path (skipped).
+	// The first `build` token selects the command; the first bare (non-flag)
+	// argument is the input path; `-o <path>` / `--output=<path>` set the output.
+	export static function parse() returns MaxonArgs
+		var command = MaxonCommand.unknown
+		var path = ""
+		var outputOverride = ""
+
+		let args = CommandLine.args()
+		var i = 1
+		while i < args.count() 'each'
+			let arg = try args.get(i) otherwise break
+			if arg == "build" 'buildCmd'
+				command = MaxonCommand.build
+			end 'buildCmd' else if arg == "-o" 'dashOutput'
+				i = i + 1
+				outputOverride = try args.get(i) otherwise ""
+			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
+				outputOverride = try CommandLine.optionValue(arg) otherwise ""
+			end 'longOutput' else 'positional'
+				if path.isEmpty() 'firstPositional'
+					path = arg
+				end 'firstPositional'
+			end 'positional'
+			i = i + 1
+		end 'each'
+
+		return Self{command: command, path: path, outputOverride: outputOverride}
+	end 'parse'
+end 'MaxonArgs'

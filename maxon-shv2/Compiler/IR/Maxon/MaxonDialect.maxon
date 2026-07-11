@@ -74,6 +74,17 @@ export typealias ByteArrayArray = Array with ByteArray
 // without a cross-declaration lookup; TypeResolution (Chunk C) replaces every
 // `unresolved` with a concrete type. Lowering must never see it.
 //
+// `exitCode` is the RESOLVED form of the `ExitCode` builtin alias — the one
+// named alias TypeResolution knows without loading the stdlib (M1 shortcut; see
+// TypeResolution.maxon). It is a width-FREE tag exactly like `boolean` /
+// `integer`: it carries no width itself, and its width (unsigned 32-bit) is
+// assigned only at the Maxon→Std boundary by `maxonTypeToStdType`. So the
+// invariant "MaxonType has no concept of width; width collapse happens only in
+// lowering" is preserved — `exitCode` is just another primitive tag the parser
+// never writes and the resolver produces. More resolved builtin-alias arms (or
+// a general `builtinAlias(kind)` arm) grow at M9/M10 when user types + the
+// ranged-typealias registry land.
+//
 // Void is NOT a MaxonType — a non-value can't be a value-type. Function return
 // types use MaxonReturnType (below).
 export union MaxonType
@@ -81,6 +92,7 @@ export union MaxonType
 	integer
 	float
 	named(id TypeNameId)
+	exitCode
 	unresolved
 end 'MaxonType'
 

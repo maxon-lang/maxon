@@ -1,0 +1,291 @@
+// Parser — the M1 recursive-descent slice.
+//
+// shv2 keeps v1's "direct-emit" contract: the parser emits Maxon-dialect IR ops
+// directly onto blocks (no AST), and identifies values by name slices. The ONE
+// structural change (PLAN.md) is that it writes exclusively into a per-file
+// `FileParseArtifact` — its own MaxonModule fragment, its own local type-name
+// interner, and its own registry contributions — and takes NO `Project`. Per-file
+// parse is therefore a pure function of `(tokens, filePath, namespace)` with no
+// shared state; `mergeArtifact` folds the result into `Project` later.
+//
+// THIN for M1: exactly the `return 42` slice —
+//   parseModule -> dispatchTopLevel(`function`) -> parseFunction
+//     -> parseOptionalReturnType (`returns ExitCode`)
+//     -> parseStatements -> parseReturnStatement
+//       -> parseExpression -> parsePrimary -> parseIntLiteral -> emitLiteral
+//     -> setTerminator(MaxonOp.ret)
+// Anything outside this slice is rejected with a positioned diagnostic (grows
+// M2+). No params, no non-`return` statements, no operators, no user types.
+// `Scope` is threaded and reset per function but stays empty (no locals at M1).
+
+// Cursor position into the token array. Wide range: token counts are unbounded.
+typealias TokenIndex = int(0 to u64.max)
+
+// The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
+// `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
+// turns a thrown `ParseError` into a project diagnostic — the parser itself never
+// touches `Project`.
+export union ParseError implements Error
+	unexpectedToken(expected String, got String, line LineNumber, column ColumnNumber)
+	unexpectedEof(line LineNumber, column ColumnNumber)
+	integerOverflow(line LineNumber, column ColumnNumber)
+	unsupported(feature String, line LineNumber, column ColumnNumber)
+end 'ParseError'
+
+export type Parser
+	var tokens as TokenArray
+	var pos as TokenIndex
+	var filePath as FilePath
+	var namespace as String
+	// The sole output. Every emit/registry write lands here, never on `Project`.
+	var artifact as FileParseArtifact
+	// Per-function symbol table (empty at M1 — no locals). Reset per function.
+	var scope as Scope
+	// Per-function synthetic-name counter for intermediate values (`$t0`, ...).
+	var synthCounter as TokenIndex
+
+	export static function create(tokens TokenArray, filePath FilePath, namespace String) returns Parser
+		return Self{
+			tokens: tokens,
+			pos: 0,
+			filePath: filePath,
+			namespace: namespace,
+			artifact: FileParseArtifact.create(filePath),
+			scope: Scope.create(),
+			synthCounter: 0
+		}
+	end 'create'
+
+	// Parse the whole file into its artifact. Top-level loop: skip blank lines,
+	// dispatch each declaration, stop at EOF.
+	export function parseModule() returns FileParseArtifact throws ParseError
+		while true 'top'
+			self.skipNewlines()
+			if self.isEof() 'done'
+				break
+			end 'done'
+			try self.dispatchTopLevel()
+		end 'top'
+		return self.artifact
+	end 'parseModule'
+
+	// One top-level declaration. M1 accepts an optional `export`, then requires a
+	// `function`. Everything else (typealias, type, enum, ...) is out of the M1
+	// slice and rejected with a positioned error.
+	function dispatchTopLevel() throws ParseError
+		var visibility = Visibility.file
+		if self.at(TokenKind.export) 'exported'
+			self.advance()
+			visibility = Visibility.module
+		end 'exported'
+
+		if self.at(TokenKind.function) 'isFunction'
+			try self.parseFunction(visibility)
+		end 'isFunction' else 'unsupported'
+			let tok = self.current()
+			throw ParseError.unsupported("top-level {tok.kind.rawValue} (M1 parses only function declarations)", line: tok.line, column: tok.column)
+		end 'unsupported'
+	end 'dispatchTopLevel'
+
+	// Parse a free function: `function <name>() [returns <Type>] <body> end [label]`.
+	// M1 has no parameters and no `main` qualification (single-file build), so the
+	// declared name is used verbatim for registry keys — `main` stays `main`.
+	function parseFunction(visibility Visibility) throws ParseError
+		try self.consume(TokenKind.function)
+		let nameTok = try self.consume(TokenKind.identifier)
+		let name = nameTok.value
+
+		try self.consume(TokenKind.leftParen)
+		if not self.at(TokenKind.rightParen) 'hasParams'
+			let tok = self.current()
+			throw ParseError.unsupported("function parameters (M1 functions take none)", line: tok.line, column: tok.column)
+		end 'hasParams'
+		try self.consume(TokenKind.rightParen)
+
+		let returnType = try self.parseOptionalReturnType()
+
+		self.scope.reset()
+		self.synthCounter = 0
+
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: nameTok.line)
+		func.namespace = self.namespace
+		func.visibility = visibility
+		func.sourceFilePath = self.filePath
+		func.nameLine = nameTok.line
+		func.nameColumn = nameTok.column
+
+		// Create the entry block (registered in func.blockRefs) BEFORE pushing the
+		// function, mirroring the backend's own function-building order.
+		var entry = self.artifact.module.addBlockAt(func, label: "entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
+
+		self.skipNewlines()
+		try self.parseStatements(entry)
+
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+
+		self.artifact.module.pushFunc(func)
+		self.artifact.recordFuncReturnType(name, returnType: returnType)
+	end 'parseFunction'
+
+	// `returns <Type>` or nothing (void). The return type flows to the registry
+	// (for SemanticCheck) and to lowering (via the function signature).
+	function parseOptionalReturnType() returns MaxonReturnType throws ParseError
+		if not self.at(TokenKind.returns) 'noReturns'
+			return MaxonReturnType.void
+		end 'noReturns'
+		try self.consume(TokenKind.returns)
+		return MaxonReturnType.value(try self.parseTypeReference())
+	end 'parseOptionalReturnType'
+
+	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
+	// interned into the artifact's local interner) or a bare primitive keyword.
+	// Ranged/generic/qualified type syntax grows at M2+.
+	function parseTypeReference() returns MaxonType throws ParseError
+		if self.at(TokenKind.identifier) 'named'
+			let tok = try self.consume(TokenKind.identifier)
+			return MaxonType.named(self.artifact.typeNames.intern(tok.value))
+		end 'named'
+		if self.at(TokenKind.int) 'primInt'
+			try self.consume(TokenKind.int)
+			return MaxonType.integer
+		end 'primInt'
+		if self.at(TokenKind.bool) 'primBool'
+			try self.consume(TokenKind.bool)
+			return MaxonType.boolean
+		end 'primBool'
+		if self.at(TokenKind.float) 'primFloat'
+			try self.consume(TokenKind.float)
+			return MaxonType.float
+		end 'primFloat'
+		let tok = self.current()
+		throw ParseError.unexpectedToken("a type", got: tok.kind.rawValue, line: tok.line, column: tok.column)
+	end 'parseTypeReference'
+
+	// Statement list until the closing `end`. Blank lines separate statements.
+	function parseStatements(block IrBlock) throws ParseError
+		while true 'stmts'
+			self.skipNewlines()
+			if self.at(TokenKind.end) 'endBlock'
+				break
+			end 'endBlock'
+			if self.isEof() 'eof'
+				let tok = self.current()
+				throw ParseError.unexpectedEof(tok.line, column: tok.column)
+			end 'eof'
+			try self.parseStatement(block)
+		end 'stmts'
+	end 'parseStatements'
+
+	// One statement. M1 has only `return`.
+	function parseStatement(block IrBlock) throws ParseError
+		if self.at(TokenKind.return) 'ret'
+			try self.parseReturnStatement(block)
+		end 'ret' else 'unsupported'
+			let tok = self.current()
+			throw ParseError.unsupported("{tok.kind.rawValue} statement (M1 parses only `return`)", line: tok.line, column: tok.column)
+		end 'unsupported'
+	end 'parseStatement'
+
+	// `return [<expr>]`. Sets the block's `ret` terminator directly. A bare
+	// `return` (void) carries an empty value name — never lowered, since a void
+	// `main` fails the E3002 semantic check before the pipeline reaches lowering.
+	function parseReturnStatement(block IrBlock) throws ParseError
+		let retTok = try self.consume(TokenKind.return)
+		if self.at(TokenKind.newline) or self.at(TokenKind.end) or self.isEof() 'bareReturn'
+			self.artifact.module.setTerminator(block, op: MaxonOp.ret(ByteArray.create(), range: SourceRange.ofToken(retTok)))
+			return
+		end 'bareReturn'
+		let valueName = try self.parseExpression(block)
+		self.artifact.module.setTerminator(block, op: MaxonOp.ret(valueName, range: SourceRange.ofToken(retTok)))
+	end 'parseReturnStatement'
+
+	// Expression entry. M1 has no operators, so an expression is just a primary.
+	// Grows into a Pratt precedence climber at M3.
+	function parseExpression(block IrBlock) returns ByteArray throws ParseError
+		return try self.parsePrimary(block)
+	end 'parseExpression'
+
+	// A primary expression. M1: an integer literal only.
+	function parsePrimary(block IrBlock) returns ByteArray throws ParseError
+		if self.at(TokenKind.intLiteral) 'intLit'
+			return try self.parseIntLiteral(block)
+		end 'intLit'
+		let tok = self.current()
+		throw ParseError.unexpectedToken("an expression", got: tok.kind.rawValue, line: tok.line, column: tok.column)
+	end 'parsePrimary'
+
+	// Parse an integer literal token, converting its text to a value via
+	// NumberParsing.parseInt (re-raising overflow as a positioned ParseError),
+	// then emit a `literal` op and return the value it produces.
+	function parseIntLiteral(block IrBlock) returns ByteArray throws ParseError
+		let tok = try self.consume(TokenKind.intLiteral)
+		let value = try parseInt(tok.value) otherwise 'overflow'
+			throw ParseError.integerOverflow(tok.line, column: tok.column)
+		end 'overflow'
+		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+	end 'parseIntLiteral'
+
+	// Append a `literal` op producing a fresh synthetic value; return its name.
+	function emitLiteral(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ByteArray
+		let name = self.freshName()
+		self.artifact.module.appendOp(block, op: MaxonOp.literal(name, value: value, valueType: valueType, range: range))
+		return name
+	end 'emitLiteral'
+
+	// Mint a fresh per-function synthetic value name (`$t0`, `$t1`, ...).
+	function freshName() returns ByteArray
+		let n = self.synthCounter
+		self.synthCounter = self.synthCounter + 1
+		return "$t{n}".toByteArray()
+	end 'freshName'
+
+	// --- token cursor ---
+
+	// The token at the cursor, or a synthetic EOF once past the end. The lexer
+	// already appends a real EOF, so this is only a belt-and-suspenders guard.
+	function current() returns Token
+		if self.pos < self.tokens.count() 'inRange'
+			return try self.tokens.get(self.pos) otherwise panic("Parser.current: pos<count just checked but get({self.pos}) failed")
+		end 'inRange'
+		return Token.eof()
+	end 'current'
+
+	function at(kind TokenKind) returns bool
+		return self.current().kind == kind
+	end 'at'
+
+	function isEof() returns bool
+		return self.at(TokenKind.eof)
+	end 'isEof'
+
+	function advance()
+		if self.pos < self.tokens.count() 'inRange'
+			self.pos = self.pos + 1
+		end 'inRange'
+	end 'advance'
+
+	// Consume a token of the expected kind, or throw a positioned mismatch error.
+	// A TokenKind's `.rawValue` is its human-readable display text ("(", "return").
+	function consume(kind TokenKind) returns Token throws ParseError
+		let tok = self.current()
+		if tok.kind != kind 'mismatch'
+			throw ParseError.unexpectedToken(kind.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		end 'mismatch'
+		self.advance()
+		return tok
+	end 'consume'
+
+	function skipNewlines()
+		while self.at(TokenKind.newline) 'skip'
+			self.advance()
+		end 'skip'
+	end 'skipNewlines'
+
+	// Consume an optional block label (`'name'`, a charLiteral) after `end`.
+	function skipOptionalLabel()
+		if self.at(TokenKind.charLiteral) 'label'
+			self.advance()
+		end 'label'
+	end 'skipOptionalLabel'
+end 'Parser'

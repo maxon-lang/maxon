@@ -89,3 +89,80 @@ export type VarInfo
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (String, VarInfo)
+
+// --- Project: the compiler-wide shared state (Chunk C growth) ---
+//
+// GROWTH: this is the M1 `Project`. v1's `Project` has ~90 fields and ~28
+// parser-written registries; shv2 starts with the minimum the `return 42` slice
+// needs and grows one field/registry per milestone. The parse-staging design
+// (PLAN.md) keeps the parser OFF this struct — a file parses into a
+// `FileParseArtifact` (see ParseStaging.maxon) and `mergeArtifact` is the ONLY
+// writer of the derived registries below (`funcReturnTypes`, `typeNames`), so
+// per-file parse stays a pure function and the registries are rebuilt
+// deterministically from artifacts on every `queryAllModule` miss.
+
+// Registry: qualified function name -> its declared return type. The M1 example
+// of the parse-staging registry set (v1's grows to ~28). Populated by
+// `mergeArtifact` from each file's artifact; resolved in place by TypeResolution;
+// read by SemanticCheck to locate `main` and validate its return type.
+export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
+
+export type Project
+	// Incremental query plumbing (source inputs + memo caches + dep graph).
+	export var db as QueryDatabase
+	// Declared function return types (the M1 parse-staging registry).
+	export var funcReturnTypes as FuncReturnTypeMap
+	// id <-> name table behind every `MaxonType.named`. Folded from per-file
+	// artifact interners at merge time (see TypeNameInterner.maxon).
+	export var typeNames as TypeNameInterner
+	// The compile root: the file or directory this build was invoked on. Used to
+	// derive per-file namespaces and the default output path.
+	export var rootPath as FilePath
+	// Target CPU/OS this build emits for.
+	export var target as Target
+	// Accumulated user-facing diagnostics; a non-empty set fails the build.
+	export var diagnostics as DiagnosticArray
+	// Backend rdata/global constant table, threaded to `buildBackend`. Empty for
+	// the `return 42` slice (no floats / string literals / static globals yet).
+	export var globalData as GlobalDataTable
+
+	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
+		return Self{
+			db: db,
+			funcReturnTypes: FuncReturnTypeMap.create(),
+			typeNames: TypeNameInterner.create(),
+			rootPath: rootPath,
+			target: target,
+			diagnostics: DiagnosticArray.create(),
+			globalData: GlobalDataTable.create()
+		}
+	end 'create'
+end 'Project'
+
+// Construct a fresh Project rooted at `rootPath` for `target`. The single
+// constructor a driver needs; mirrors v1's `createProject` (which additionally
+// seeds three empty memo sentinels — QueryDatabase.create owns those in shv2).
+export function createProject(rootPath FilePath, target Target) returns Project
+	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target)
+end 'createProject'
+
+// Append a diagnostic to the project's sink. The single funnel every reporting
+// pass routes through, so diagnostic bookkeeping lives in one place.
+export function reportDiagnostic(project Project, diagnostic Diagnostic)
+	project.diagnostics.push(diagnostic)
+end 'reportDiagnostic'
+
+// True once any diagnostic has been reported. The pipeline's error gate reads
+// this after each pass to stop before lowering an invalid module.
+export function projectHasErrors(project Project) returns bool
+	return project.diagnostics.count() > 0
+end 'projectHasErrors'
+
+// Render every accumulated diagnostic to stderr, one per line, in report order.
+// The driver calls this on the failure path so the exact `error EXXXX: ...`
+// lines the spec compares against reach stderr.
+export function printDiagnostics(project Project)
+	for diagnostic in project.diagnostics 'each'
+		printError("{diagnostic.render()}\n")
+	end 'each'
+end 'printDiagnostics'

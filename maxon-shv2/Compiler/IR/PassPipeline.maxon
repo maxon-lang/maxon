@@ -124,14 +124,19 @@ end 'buildDefaultPipeline'
 // modules so a read never traps. Pass methods read/write `self`'s fields
 // directly — new cross-cutting state becomes a new field, not a signature change.
 export type PassPipeline
+	// The project owns the shared state the Maxon-tier passes read/write
+	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it;
+	// the lowerings do not, but every pass dispatches uniformly through `self`.
+	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
 	export var mirModule as MirModule
 	export var targetModule as TargetModule
 	export var passes as PassKindArray
 
-	export static function create(maxonModule MaxonModule) returns PassPipeline
+	export static function create(project Project, maxonModule MaxonModule) returns PassPipeline
 		return Self{
+			project: project,
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
 			mirModule: MirModule.create(),
@@ -148,26 +153,30 @@ export type PassPipeline
 		self.passes.append(more)
 	end 'addPasses'
 
-	// Run each scheduled pass in order. M1 has no error gating (there is no
-	// Project / diagnostics sink yet) and no per-pass IR compaction; Chunk C
-	// adds the `hasErrors → throw CompileError` gate and B2 the compaction.
-	export function run()
+	// Run each scheduled pass in order, gating on diagnostics after each: once a
+	// pass reports an error (semanticCheck's E3001/E3002), the pipeline throws
+	// rather than lower an invalid module (e.g. one with no `main` for the entry
+	// stub to call). The driver catches this, prints the diagnostics, and exits
+	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
+	export function run() throws CompileError
 		for pass in self.passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
 			self.dispatch(pass)
+			if projectHasErrors(self.project) 'errorGate'
+				throw CompileError.compileError
+			end 'errorGate'
 		end 'eachPass'
 	end 'run'
 
 	// One arm per PassKind. Each reads the incoming module off `self`, runs the
-	// standalone pass algorithm, and writes the result back. resolveTypes /
-	// semanticCheck are Chunk C placeholders: they no-op today (their bodies are
-	// TypeResolution + SemanticCheck, not yet built) but are dispatched so the
-	// pipeline shape is fixed. Keeping the pass algorithms as free functions
-	// preserves their reuse outside the pipeline; dispatch just wires them up.
+	// standalone pass algorithm, and writes the result back. The pass algorithms
+	// stay free functions (reusable outside the pipeline); dispatch just wires
+	// them up. resolveTypes/semanticCheck operate on the Maxon module + project;
+	// the two lowerings produce the next tier's module.
 	function dispatch(pass PassKind)
 		match pass 'dispatch'
-			resolveTypes then break 'dispatch'
-			semanticCheck then break 'dispatch'
+			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
+			semanticCheck then semanticCheck(self.project)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule)
 			lowerStdToMir then self.mirModule = lowerStdToMir(self.stdModule)
 		end 'dispatch'

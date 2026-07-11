@@ -1,0 +1,57 @@
+// ContentHash — a deterministic 64-bit FNV-1a hash of source content.
+//
+// This is the KEY the shv2 query spine memoizes on (PLAN.md §78): every
+// per-file query (queryTokens, queryParseOps) is keyed on the content hash of
+// its input, and the whole-program queryAllModule is keyed on a composite hash
+// folded over every file's content hash in source-path order. Content-hash
+// keying is **parallel-safe** — unlike v1's shared, monotonically-incrementing
+// `currentRevision` counter, a content hash is computed independently per file
+// with no shared mutable state, so per-file parse tasks never contend on a
+// global counter. Two builds of byte-identical input therefore produce
+// byte-identical cache keys, which is exactly the warm-rebuild byte-identity
+// property the M2 gate will assert.
+//
+// The algorithm is the standard 64-bit FNV-1a (the same constants v1 uses in
+// IrFunctionContentHash.maxon), computed over the raw source bytes with a
+// trailing length tag so that "ab" + "c" hashes differently from "a" + "bc".
+// The arithmetic runs in the unsigned 64-bit `ContentHash` domain and relies on
+// wraparound multiply — the defining property of FNV.
+
+// 64-bit unsigned hash value. Wide range: a hash is intentionally unbounded.
+export typealias ContentHash = int(0 to u64.max)
+
+// FNV-1a 64-bit prime.
+let fnvPrime = 1099511628211 as ContentHash
+
+// FNV-1a 64-bit offset basis (0xCBF29CE484222325 = 14695981039346656037).
+// That constant is outside Maxon's signed integer-literal range, so it is
+// reconstructed from its high/low 32-bit halves at runtime — the same trick v1
+// uses. Kept as a function so the reconstruction lives in exactly one place.
+export function fnvOffsetBasis() returns ContentHash
+	let high = 3422053188 as ContentHash
+	let low = 2216829733 as ContentHash
+	return (high shl 32) or low
+end 'fnvOffsetBasis'
+
+// Mix one 64-bit value into the running hash (FNV-1a: xor then wrapping
+// multiply). Shared by both the byte loop below and the composite whole-program
+// fold in queryAllModule, so the FNV step lives in one place.
+export function mix(state ContentHash, value ContentHash) returns ContentHash
+	var s = state xor value
+	s = s * fnvPrime
+	return s as ContentHash
+end 'mix'
+
+// FNV-1a hash of a string's UTF-8 bytes, with a trailing length tag. This is
+// the per-file source-content key.
+export function contentHash(s String) returns ContentHash
+	var h = fnvOffsetBasis()
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'each'
+		let b = try bytes.get(i) otherwise panic("contentHash: bytes.get OOB at {i} (count={n})")
+		h = mix(h, value: b as ContentHash)
+	end 'each'
+	// Length tag: distinguishes concatenations that share a byte sequence.
+	return mix(h, value: n)
+end 'contentHash'

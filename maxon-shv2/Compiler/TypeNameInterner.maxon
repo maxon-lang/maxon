@@ -1,0 +1,118 @@
+// TypeNameInterner — the id ↔ name table behind `MaxonType.named(TypeNameId)`.
+//
+// The parser never stores a type-name String on an op; it interns the name into
+// this table and stores the resulting `TypeNameId` (a single integer). Identical
+// named references (`ExitCode` used twice) share one id, so structural type
+// identity is a single integer compare and the name backing is stored once.
+//
+// PARSE-STAGING (parallel-ready): each `FileParseArtifact` owns its OWN local
+// interner, populated during that file's parse — so a file's parse touches no
+// shared state (see ParseStaging.maxon). `mergeArtifact` folds a file's local
+// interner into the project's interner in source-path order (`foldInto`),
+// returning a `TypeNameRemap` from the file-local ids to the project-global ids
+// it was assigned, which the merge then applies to the file's ops and registry
+// contributions. For M1 (one file, one named type `ExitCode`) the project
+// interner starts empty, so the fold assigns identical ids and the remap is the
+// identity — but the machinery is real from commit one, per PLAN.md.
+
+// Wide range: the interner is unbounded (one id per distinct named reference).
+export typealias TypeNameIdArray = Array with TypeNameId
+export typealias TypeNameIdMap = Map with (String, TypeNameId)
+
+// Raised when a `TypeNameId` is looked up that this interner never assigned —
+// always a compiler bug (an id must come from the same interner it is resolved
+// against), never user input.
+export union TypeNameInternerError implements Error
+	unknownId(id TypeNameId)
+end 'TypeNameInternerError'
+
+export type TypeNameInterner
+	// id -> name (index is the TypeNameId).
+	var names as StringArray
+	// name -> id, for O(1) interning of an already-seen name.
+	var ids as TypeNameIdMap
+
+	export static function create() returns TypeNameInterner
+		return Self{names: StringArray.create(), ids: TypeNameIdMap.create()}
+	end 'create'
+
+	// Intern `name`, returning its stable id. Idempotent: a name already present
+	// returns its existing id without appending a duplicate.
+	export function intern(name String) returns TypeNameId
+		if let existing = try ids.get(name) 'seen'
+			return existing
+		end 'seen'
+		let id = names.count()
+		names.push(name)
+		ids.upsert(name, value: id)
+		return id
+	end 'intern'
+
+	// Resolve an id back to its name. Throws for an id this interner never
+	// assigned (a compiler bug — see TypeNameInternerError).
+	export function nameOf(id TypeNameId) returns String throws TypeNameInternerError
+		return try names.get(id) otherwise throw TypeNameInternerError.unknownId(id)
+	end 'nameOf'
+
+	export function count() returns TypeNameId
+		return names.count()
+	end 'count'
+
+	// Fold every name of `source` (a file-local interner) into `self` (the
+	// project interner) in id order, returning the remap from each source id to
+	// the (possibly different) id it was assigned in `self`. The result's
+	// `isIdentity` short-circuits the ops/registry rewrite in `mergeArtifact`
+	// when no ids actually moved (always the case for the first file merged).
+	export function foldInto(source TypeNameInterner) returns TypeNameRemap
+		var mapping = TypeNameIdArray.create()
+		var identity = true
+		for srcId in 0 upto source.names.count() 'each'
+			let name = try source.names.get(srcId) otherwise panic("foldInto: source.names.get OOB at {srcId}")
+			let dstId = self.intern(name)
+			mapping.push(dstId)
+			if dstId != srcId 'moved'
+				identity = false
+			end 'moved'
+		end 'each'
+		return TypeNameRemap.create(mapping, isIdentity: identity)
+	end 'foldInto'
+end 'TypeNameInterner'
+
+// The id translation produced by `TypeNameInterner.foldInto`: `mapping[srcId]`
+// is the project-global id that the source's `srcId` was folded to. `isIdentity`
+// is true when every id maps to itself (the merge can then skip rewriting).
+export type TypeNameRemap
+	var mapping as TypeNameIdArray
+	export let isIdentity as bool
+
+	export static function create(mapping TypeNameIdArray, isIdentity bool) returns TypeNameRemap
+		return Self{mapping: mapping, isIdentity: isIdentity}
+	end 'create'
+
+	// Translate a source-local id to its project-global id.
+	export function apply(srcId TypeNameId) returns TypeNameId
+		return try mapping.get(srcId) otherwise panic("TypeNameRemap.apply: id {srcId} out of range (this remap was built from a smaller interner)")
+	end 'apply'
+end 'TypeNameRemap'
+
+// Rewrite the one named-type reference a `MaxonType` may carry through a remap.
+// Only the `named` arm is id-bearing; every other arm passes through unchanged.
+// Shared by the artifact's function-signature and registry rewrites at merge.
+export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonType
+	return match t 'r'
+		boolean gives t
+		integer gives t
+		float gives t
+		exitCode gives t
+		named(id) gives MaxonType.named(remap.apply(id))
+		unresolved gives t
+	end 'r'
+end 'remapMaxonType'
+
+// Rewrite the named-type id a `MaxonReturnType` may carry (its `value` inner).
+export function remapMaxonReturnType(rt MaxonReturnType, remap TypeNameRemap) returns MaxonReturnType
+	return match rt 'r'
+		void gives rt
+		value(inner) gives MaxonReturnType.value(remapMaxonType(inner, remap: remap))
+	end 'r'
+end 'remapMaxonReturnType'

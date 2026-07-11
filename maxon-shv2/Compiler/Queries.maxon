@@ -1,0 +1,159 @@
+// Queries — the typed, memoized query functions, one per frontend phase. Each
+// follows the classic memo pattern: record the caller's dependency on this
+// query, return the cached value if still valid (content-hash compare), else
+// push self onto the active-query stack, clear+rebuild deps, compute, pop, and
+// cache. The mechanics live in QueryEngine.maxon.
+//
+// The chain is:
+//   querySourceFile  (input; never computed)
+//     -> queryTokens   (per-file memo; tokenize)
+//       -> queryParseOps (per-file memo; Parser -> FileParseArtifact)
+//         -> queryAllModule (whole-program; mergeArtifact fold)
+//
+// The load-bearing shv2 differences from v1: (1) memo validity is a content-hash
+// compare, not a revision walk; (2) queryParseOps produces a `FileParseArtifact`
+// and touches NO `Project` state — the parser is a pure function; (3)
+// queryAllModule rebuilds the derived registries from artifacts on every miss
+// (resetMergeTargets), so there is no ParseDelta rollback dance.
+
+// --- Input query: source content (records the source-file dependency) ---
+function querySourceFile(project Project, path FilePath) returns String throws CompileError
+	recordDependency(project, dependency: QueryKey.sourceFile(path))
+	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
+	return entry.content
+end 'querySourceFile'
+
+// --- Per-file query: tokenize ---
+function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
+	let key = QueryKey.tokens(path)
+	recordDependency(project, dependency: key)
+
+	if tokensCacheValid(project, path: path) 'hit'
+		let memo = try project.db.tokenCache.get(path) otherwise panic("queryTokens: tokensCacheValid true but tokenCache.get({path}) failed")
+		project.db.tokenHits = project.db.tokenHits + 1
+		return memo.value
+	end 'hit'
+	project.db.tokenMisses = project.db.tokenMisses + 1
+
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
+
+	let content = try querySourceFile(project, path: path)
+	let tokens = try tokenize(content) otherwise (lexErr) 'lexFail'
+		reportLexerError(project, path: path, error: lexErr)
+		popQuery(project)
+		// A failed tokenize is NOT cached — the diagnostic gates the build, and
+		// the next attempt must re-run against corrected source.
+		return TokenArray.create()
+	end 'lexFail'
+
+	popQuery(project)
+
+	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryTokens: source entry for {path} vanished after querySourceFile")
+	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
+	return tokens
+end 'queryTokens'
+
+// --- Per-file query: parse into a FileParseArtifact ---
+function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
+	let key = QueryKey.parseOps(path)
+	recordDependency(project, dependency: key)
+
+	if parseCacheValid(project, path: path) 'hit'
+		let memo = try project.db.parseCache.get(path) otherwise panic("queryParseOps: parseCacheValid true but parseCache.get({path}) failed")
+		project.db.parseHits = project.db.parseHits + 1
+		return memo.value
+	end 'hit'
+	project.db.parseMisses = project.db.parseMisses + 1
+
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
+
+	let tokens = try queryTokens(project, path: path)
+	// M1 single-file build: namespace is empty (no cross-file qualification).
+	// Namespace derivation from the path grows with multi-file builds at M2.
+	var parser = Parser.create(tokens, filePath: path, namespace: "")
+	let errorCountBefore = project.diagnostics.count()
+	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
+		reportParseError(project, path: path, error: parseErr)
+		popQuery(project)
+		// A failed parse is never cached (preserves v1's invariant): the empty
+		// artifact is returned so the caller rolls forward to the error gate.
+		return FileParseArtifact.create(path)
+	end 'parseFail'
+
+	popQuery(project)
+
+	// Only cache a clean parse — a parse that reported a diagnostic must re-run.
+	let hadErrors = project.diagnostics.count() > errorCountBefore
+	if not hadErrors 'cacheOk'
+		artifact.module.assertAllBlocksTerminated()
+		let entry = try project.db.sourceFiles.get(path) otherwise panic("queryParseOps: source entry for {path} vanished")
+		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: entry.contentHash))
+	end 'cacheOk'
+
+	return artifact
+end 'queryParseOps'
+
+// --- Whole-program query: merge every file's artifact ---
+export function queryAllModule(project Project) returns MaxonModule throws CompileError
+	recordDependency(project, dependency: QueryKey.allModule)
+
+	if allModuleCacheValid(project) 'hit'
+		project.db.allModuleHits = project.db.allModuleHits + 1
+		return project.db.allModuleCache.value
+	end 'hit'
+	project.db.allModuleMisses = project.db.allModuleMisses + 1
+
+	pushQuery(project, key: QueryKey.allModule)
+	clearDepsFor(project, key: QueryKey.allModule)
+
+	// Artifacts are the source of truth for the derived registries; a miss
+	// rebuilds them from scratch so a warm re-run never double-commits. This is
+	// the shv2 replacement for v1's per-file beginFileParse rollback — a clean
+	// reset, since the parser wrote nothing to Project speculatively.
+	resetMergeTargets(project)
+
+	var merged = MaxonModule.create()
+	for path in project.db.sourcePaths 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+		mergeArtifact(project, target: merged, artifact: artifact)
+	end 'eachFile'
+
+	popQuery(project)
+
+	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
+	return merged
+end 'queryAllModule'
+
+// Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
+// queryAllModule miss re-derives them cleanly rather than compounding a prior
+// run's commits.
+function resetMergeTargets(project Project)
+	project.funcReturnTypes = FuncReturnTypeMap.create()
+	project.typeNames = TypeNameInterner.create()
+end 'resetMergeTargets'
+
+// Map a fatal LexerError to a project diagnostic. M1 reports every kind under a
+// single generic lexer code (the authored specs never trigger these; specific
+// codes grow when a spec needs a particular lexer diagnostic).
+function reportLexerError(project Project, path FilePath, error LexerError)
+	match error 'kind'
+		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unterminated string literal", line: line, column: column, filePath: path)
+		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unterminated block comment", line: line, column: column, filePath: path)
+		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unescaped '\{' in string literal", line: line, column: column, filePath: path)
+		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
+	end 'kind'
+end 'reportLexerError'
+
+// Map a ParseError to a project diagnostic. As with lexer errors, M1 uses one
+// generic parser code; specific codes grow per spec.
+function reportParseError(project Project, path FilePath, error ParseError)
+	match error 'kind'
+		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Expected {expected}, found {got}", line: line, column: column, filePath: path)
+		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Integer literal out of range", line: line, column: column, filePath: path)
+		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported at M1: {feature}", line: line, column: column, filePath: path)
+	end 'kind'
+end 'reportParseError'

@@ -1,0 +1,114 @@
+// ParseStaging — `FileParseArtifact` and the deterministic `mergeArtifact` fold.
+//
+// This is the load-bearing parallel-ready seam of the frontend (PLAN.md). v1's
+// parser mutates the shared `Project` directly as it parses (inserting into ~28
+// registries mid-parse), which forces per-file parse to be serial and needs a
+// ParseDelta rollback dance to undo a stale prior parse. shv2 inverts that: the
+// parser writes ONLY into a per-file `FileParseArtifact` — its own MaxonModule
+// fragment, its own local type-name interner, and a recorded key+value bundle
+// for every registry it would touch — so a file's parse is a pure function of
+// its tokens with no shared state. `mergeArtifact` is then the SINGLE writer of
+// the shared `Project`, folding artifacts in fixed source-path order so the
+// result is deterministic regardless of the order files were parsed.
+//
+// For M1 the registry set is exactly one entry family (`funcReturnTypes`); v1's
+// ParseDelta enumerates ~28. Each grows here, as an ordered entry array, at its
+// milestone. The array (not a map) keeps the contribution insertion-ordered so
+// the merge is byte-deterministic.
+
+// One `funcReturnTypes` registry contribution: a function's name and its
+// declared return type, recorded by the parser. Ordered in an array so the
+// merge order is the declaration order.
+export type FuncReturnTypeEntry
+	export var name as String
+	export var returnType as MaxonReturnType
+
+	export static function create(name String, returnType MaxonReturnType) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType}
+	end 'create'
+end 'FuncReturnTypeEntry'
+
+export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
+
+export type FileParseArtifact
+	// The file this artifact was parsed from (its identity + merge order anchor).
+	export var filePath as FilePath
+	// This file's Maxon IR fragment. `IrModule.merge` offset-relocates it into
+	// the whole-program module at merge time.
+	export var module as MaxonModule
+	// This file's `funcReturnTypes` registry contributions, in declaration order.
+	export var funcReturnTypes as FuncReturnTypeEntryArray
+	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
+	// folds them into the project interner and remaps this artifact's ids.
+	export var typeNames as TypeNameInterner
+
+	export static function create(filePath FilePath) returns FileParseArtifact
+		return Self{
+			filePath: filePath,
+			module: MaxonModule.create(),
+			funcReturnTypes: FuncReturnTypeEntryArray.create(),
+			typeNames: TypeNameInterner.create()
+		}
+	end 'create'
+
+	// Record a function's return type as this file's contribution to the
+	// project-wide `funcReturnTypes` registry. Called by the parser after it
+	// builds a function — NEVER touching `Project`.
+	export function recordFuncReturnType(name String, returnType MaxonReturnType)
+		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType))
+	end 'recordFuncReturnType'
+end 'FileParseArtifact'
+
+// Fold `artifact` into the whole-program build in source-path order:
+//   1. reconcile the artifact's local type-name ids into the project interner,
+//   2. offset-merge the artifact's MaxonModule fragment into `target`,
+//   3. commit the artifact's registry contributions into `Project`.
+// `target` is the accumulator module `queryAllModule` builds (and caches); the
+// registries land on `Project`. This is the ONLY writer of `project.typeNames`
+// and `project.funcReturnTypes` — the shv2 replacement for v1's mid-parse
+// inserts + ParseDelta rollback, needing no rollback because nothing was ever
+// written to `Project` speculatively.
+export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact)
+	let remap = project.typeNames.foldInto(artifact.typeNames)
+	if not remap.isIdentity 'remapNeeded'
+		// A prior file already interned some of these names under different ids
+		// (the multi-file case, first exercised at M2). Rewrite this artifact's
+		// module signatures + registry entries through the remap before merging
+		// so every `named(id)` indexes the project interner. Identity (always
+		// true for the first/only file) skips this entirely.
+		remapArtifact(artifact, remap: remap)
+	end 'remapNeeded'
+
+	target.merge(artifact.module)
+	commitFuncReturnTypes(project, artifact: artifact)
+end 'mergeArtifact'
+
+// Rewrite every file-local `named(id)` in the artifact — in both the module's
+// function signatures and the registry contributions — to its project-global id.
+function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
+	// Index-based so `func`/`entry` are mutable bindings (a `for x in ...` loop
+	// var is immutable; field assignment through it is rejected).
+	for i in 0 upto artifact.module.functions.count() 'eachFunc'
+		var func = try artifact.module.functions.get(i) otherwise panic("remapArtifact: functions.get OOB at {i}")
+		func.maxonReturnType = remapMaxonReturnType(func.maxonReturnType, remap: remap)
+		var remappedParams = MaxonTypeArray.create()
+		for pt in func.maxonParamTypes 'eachParam'
+			remappedParams.push(remapMaxonType(pt, remap: remap))
+		end 'eachParam'
+		func.maxonParamTypes = remappedParams
+	end 'eachFunc'
+
+	for j in 0 upto artifact.funcReturnTypes.count() 'eachEntry'
+		var entry = try artifact.funcReturnTypes.get(j) otherwise panic("remapArtifact: funcReturnTypes.get OOB at {j}")
+		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
+	end 'eachEntry'
+end 'remapArtifact'
+
+// Commit the artifact's `funcReturnTypes` contributions into the project
+// registry. Duplicate-function detection (E2001 across files) is the merge-time
+// responsibility that grows here; M1 is single-file, so a plain upsert suffices.
+function commitFuncReturnTypes(project Project, artifact FileParseArtifact)
+	for entry in artifact.funcReturnTypes 'each'
+		project.funcReturnTypes.upsert(entry.name, value: entry.returnType)
+	end 'each'
+end 'commitFuncReturnTypes'

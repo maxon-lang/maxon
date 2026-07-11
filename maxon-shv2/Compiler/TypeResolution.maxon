@@ -1,0 +1,69 @@
+// TypeResolution — the Maxon-tier `resolveTypes` pass. Replaces every
+// unresolved / named `MaxonType` with a concrete one so that `lowerMaxonToStd`
+// (whose `maxonTypeToStdType` panics on `named`/`unresolved`) never sees an
+// unresolved type, and keeps the `funcReturnTypes` registry in sync with the
+// resolved module so SemanticCheck reads resolved types.
+//
+// M1 SCOPE SHORTCUT (documented per the deliverable): the only named type M1
+// resolves is the `ExitCode` builtin alias, recognized by NAME — WITHOUT loading
+// the stdlib (full stdlib type resolution is deferred until programs call stdlib
+// functions, ~M10). `ExitCode` resolves to `MaxonType.exitCode`, a width-free
+// tag whose unsigned-32-bit width is assigned at the Maxon→Std boundary (see
+// `maxonTypeToStdType`). The integer literal `42` is already typed `integer`
+// (→ i64) by the parser, so it needs no resolution. Any OTHER named type is
+// out of the M1 slice and panics loudly (user-defined types + the ranged
+// typealias registry arrive at M9); the authored M1 specs use only `ExitCode`.
+
+// The one builtin alias M1 resolves without the stdlib. Named constant, not a
+// bare string — the alias spelling is a contract shared with the parser's
+// interner. Grows into a builtin-alias table (Character, etc.) at M9/M10.
+let ExitCodeBuiltinName = "ExitCode"
+
+// Resolve every unresolved/named type in `module`'s function signatures to a
+// concrete `MaxonType`, and re-sync each function's resolved return type into
+// the project's `funcReturnTypes` registry (SemanticCheck's source of truth).
+export function resolveTypes(project Project, module MaxonModule)
+	// Index-based so each function is a mutable binding (a `for x in ...` loop
+	// var is immutable; field assignment through it is rejected).
+	for i in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
+		func.maxonReturnType = resolveReturnType(project, ret: func.maxonReturnType)
+
+		var resolvedParams = MaxonTypeArray.create()
+		for pt in func.maxonParamTypes 'eachParam'
+			resolvedParams.push(resolveType(project, t: pt))
+		end 'eachParam'
+		func.maxonParamTypes = resolvedParams
+
+		project.funcReturnTypes.upsert(func.name, value: func.maxonReturnType)
+	end 'eachFunc'
+
+	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
+	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
+end 'resolveTypes'
+
+function resolveReturnType(project Project, ret MaxonReturnType) returns MaxonReturnType
+	return match ret 'r'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(resolveType(project, t: inner))
+	end 'r'
+end 'resolveReturnType'
+
+function resolveType(project Project, t MaxonType) returns MaxonType
+	match t 'r'
+		boolean then return t
+		integer then return t
+		float then return t
+		exitCode then return t
+		named(id) then return resolveNamedType(project, id: id)
+		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
+	end 'r'
+end 'resolveType'
+
+function resolveNamedType(project Project, id TypeNameId) returns MaxonType
+	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
+	if name == ExitCodeBuiltinName 'isExitCode'
+		return MaxonType.exitCode
+	end 'isExitCode'
+	panic("resolveTypes: unknown named type '{name}' — M1 resolves only the ExitCode builtin (user-defined types arrive at M9)")
+end 'resolveNamedType'

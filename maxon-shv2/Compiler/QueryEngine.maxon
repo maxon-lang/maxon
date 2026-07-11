@@ -1,0 +1,132 @@
+// QueryEngine — input registration, dependency tracking, and content-hash
+// cache validity. The mechanical layer under the typed queries in Queries.maxon.
+//
+// Contrast with v1's QueryEngine: v1 validates a memo by walking its recorded
+// dependencies and asking "is every upstream input unchanged since I ran"
+// (revision compare, deep recursion). shv2 validates by a direct **content-hash
+// compare** — a memo stamped `keyHash` is valid iff the input it summarizes
+// still hashes to `keyHash`. The dependency graph is still recorded (below) for
+// the M2 warm-rebuild assertion, but validity itself needs no graph walk, which
+// is what makes the per-file caches trivially parallel-safe.
+
+// --- Source input registration ---
+
+// Register or update a file's content. Computes the content hash once; if the
+// file is already present with the SAME hash, this is a no-op (an unrelated
+// file's edit never disturbs this file's cache key). A new or changed file is
+// upserted with its fresh hash — no shared revision counter is touched.
+export function fileChanged(project Project, path FilePath, content String)
+	let hash = contentHash(content)
+	if let existing = try project.db.sourceFiles.get(path) 'exists'
+		if existing.contentHash == hash 'unchanged'
+			return
+		end 'unchanged'
+	end 'exists' else 'newFile'
+		project.db.sourcePaths.push(path)
+	end 'newFile'
+
+	project.db.sourceFiles.upsert(path, value: SourceFileEntry.create(content, contentHash: hash))
+end 'fileChanged'
+
+// --- Dependency tracking ---
+
+// Record that the currently-running query (top of the active stack) read
+// `dependency`. No active query (empty stack) means a top-level call with
+// nothing to attribute the edge to — a no-op.
+export function recordDependency(project Project, dependency QueryKey)
+	let depth = project.db.activeQueryStack.count()
+	if depth == 0 'noActive'
+		return
+	end 'noActive'
+	let dependent = try project.db.activeQueryStack.get(depth - 1) otherwise panic("recordDependency: activeQueryStack.get({depth - 1}) failed after depth>0 check")
+	let edge = Dependency.create(dependent, dependency: dependency)
+	project.db.dependencies.push(edge)
+
+	let keyStr = queryKeyString(dependent)
+	if var bucket = try project.db.depIndex.get(keyStr) 'exists'
+		bucket.push(edge)
+	end 'exists' else 'new'
+		var bucket = DependencyArray.create()
+		bucket.push(edge)
+		project.db.depIndex.upsert(keyStr, value: bucket)
+	end 'new'
+end 'recordDependency'
+
+// Drop every dependency edge whose `dependent` is `key` — called before a query
+// recomputes so its dependency set is rebuilt fresh (clear-then-record).
+export function clearDepsFor(project Project, key QueryKey)
+	let keyStr = queryKeyString(key)
+	if project.db.depIndex.contains(keyStr) 'hasIndex'
+		_ = project.db.depIndex.remove(keyStr)
+	end 'hasIndex'
+
+	var kept = DependencyArray.create()
+	for edge in project.db.dependencies 'scan'
+		if queryKeyString(edge.dependent) != keyStr 'keep'
+			kept.push(edge)
+		end 'keep'
+	end 'scan'
+	project.db.dependencies = kept
+end 'clearDepsFor'
+
+export function pushQuery(project Project, key QueryKey)
+	project.db.activeQueryStack.push(key)
+end 'pushQuery'
+
+export function popQuery(project Project)
+	if project.db.activeQueryStack.count() > 0 'hasPop'
+		try project.db.activeQueryStack.pop() otherwise panic("popQuery: activeQueryStack.count()>0 just checked but pop failed")
+	end 'hasPop'
+end 'popQuery'
+
+// --- Content-hash cache validity ---
+
+// The current content hash of a registered file, or a sentinel that can never
+// equal a real stamped hash for an unregistered path. A memo whose `keyHash`
+// equals this is valid.
+function currentContentHash(project Project, path FilePath) returns ContentHash throws CompileError
+	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
+	return entry.contentHash
+end 'currentContentHash'
+
+// True iff `memoHash` (a per-file memo's stamped `keyHash`) still equals the
+// file's current content hash. The one place the hash-equality validity rule
+// lives, shared by the token and parse caches.
+function memoHashCurrent(project Project, path FilePath, memoHash ContentHash) returns bool
+	let current = try currentContentHash(project, path: path) otherwise return false
+	return memoHash == current
+end 'memoHashCurrent'
+
+// True iff the token memo for `path` was derived from the file's current bytes.
+export function tokensCacheValid(project Project, path FilePath) returns bool
+	let memo = try project.db.tokenCache.get(path) otherwise return false
+	return memoHashCurrent(project, path: path, memoHash: memo.keyHash)
+end 'tokensCacheValid'
+
+// True iff the parse memo for `path` was derived from the file's current bytes.
+export function parseCacheValid(project Project, path FilePath) returns bool
+	let memo = try project.db.parseCache.get(path) otherwise return false
+	return memoHashCurrent(project, path: path, memoHash: memo.keyHash)
+end 'parseCacheValid'
+
+// The composite whole-program hash: every source file's content hash folded in
+// source-path order. queryAllModule keys its merged-module memo on this, so any
+// file changing (or the file set changing) invalidates the merge while leaving
+// the unchanged files' per-file memos hot.
+export function compositeSourceHash(project Project) returns ContentHash
+	var h = fnvOffsetBasis()
+	for path in project.db.sourcePaths 'each'
+		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
+		h = mix(h, value: entry.contentHash)
+	end 'each'
+	return h
+end 'compositeSourceHash'
+
+// True iff the merged-module memo is present and still keyed on the current
+// composite source hash.
+export function allModuleCacheValid(project Project) returns bool
+	if not project.db.allModuleCache.computed 'never'
+		return false
+	end 'never'
+	return project.db.allModuleCache.keyHash == compositeSourceHash(project)
+end 'allModuleCacheValid'

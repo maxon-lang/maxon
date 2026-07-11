@@ -1,0 +1,156 @@
+// QueryDatabase — the incremental query system's storage: source inputs, the
+// per-query memo caches, and the dependency graph.
+//
+// **Content-hash-keyed, NOT revision-counter-keyed** (PLAN.md §78). v1's
+// `QueryDatabase` carries a single `currentRevision` counter that `fileChanged`
+// bumps and that every memo stamps `computedAt`/`verifiedAt` against; validity
+// is "walk my deps, are their inputs unchanged since I ran". shv2 replaces that
+// shared counter with a per-file `ContentHash`: each memo stamps the hash of the
+// input it was derived from (`keyHash`), and a memo is valid iff that stored
+// hash still equals the input's current hash. This is **parallel-safe** — there
+// is no shared mutable counter for concurrent per-file parse tasks to contend
+// on; a file's cache key is a pure function of its own bytes.
+//
+// The dependency graph (`dependencies` / `depIndex` / `activeQueryStack`) is
+// still recorded from day one, exactly as v1 records it — M1 has one file so it
+// never drives an invalidation, but recording it now is what lets the M2
+// warm-rebuild assertion ("edit one file → only its queries re-run") join the
+// gate without retrofitting the whole spine.
+
+// Per-file memo: the tokenized form, stamped with the source hash it came from.
+export type TokenMemo
+	export var value as TokenArray
+	export var keyHash as ContentHash
+
+	export static function create(value TokenArray, keyHash ContentHash) returns TokenMemo
+		return Self{value: value, keyHash: keyHash}
+	end 'create'
+end 'TokenMemo'
+
+// Per-file memo: the parsed artifact (this file's IR fragment + registry
+// contributions), stamped with the source hash it came from.
+export type ParseMemo
+	export var value as FileParseArtifact
+	export var keyHash as ContentHash
+
+	export static function create(value FileParseArtifact, keyHash ContentHash) returns ParseMemo
+		return Self{value: value, keyHash: keyHash}
+	end 'create'
+end 'ParseMemo'
+
+// Whole-program memo: the merged Maxon module, stamped with the COMPOSITE hash
+// folded over every source file's content hash in source-path order.
+// `computed` is the sentinel — false means "never built" (a zero hash is a
+// legitimate value, so a bool flag, not a hash sentinel, marks emptiness).
+export type ModuleMemo
+	export var value as MaxonModule
+	export var keyHash as ContentHash
+	export var computed as bool
+
+	export static function create(value MaxonModule, keyHash ContentHash, computed bool) returns ModuleMemo
+		return Self{value: value, keyHash: keyHash, computed: computed}
+	end 'create'
+
+	export static function empty() returns ModuleMemo
+		return Self{value: MaxonModule.create(), keyHash: 0, computed: false}
+	end 'empty'
+end 'ModuleMemo'
+
+// A source file input: its content plus the content hash all per-file memos key
+// against. The hash is computed once, at `fileChanged` time.
+export type SourceFileEntry
+	export var content as String
+	export var contentHash as ContentHash
+
+	export static function create(content String, contentHash ContentHash) returns SourceFileEntry
+		return Self{content: content, contentHash: contentHash}
+	end 'create'
+end 'SourceFileEntry'
+
+export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
+export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
+export typealias ParseCacheMap = Map with (FilePath, ParseMemo)
+export typealias FilePathArray = Array with FilePath
+
+// Running count of cache hits/misses. Wide range: unbounded over a long-lived
+// query session.
+export typealias QueryCount = int(0 to u64.max)
+
+// Identifies each memoized query. M1's subset of v1's key set (the per-function
+// codegen tier arms grow at their milestone). `queryKeyString` gives each a
+// stable string for the dependency index.
+export union QueryKey
+	sourceFile(path FilePath)
+	tokens(path FilePath)
+	parseOps(path FilePath)
+	allModule
+end 'QueryKey'
+
+export typealias QueryKeyArray = Array with QueryKey
+
+// A dependency edge: query `dependent` read query `dependency` while it ran.
+export type Dependency
+	export var dependent as QueryKey
+	export var dependency as QueryKey
+
+	export static function create(dependent QueryKey, dependency QueryKey) returns Dependency
+		return Self{dependent: dependent, dependency: dependency}
+	end 'create'
+end 'Dependency'
+
+export typealias DependencyArray = Array with Dependency
+export typealias DepIndexMap = Map with (String, DependencyArray)
+
+export type QueryDatabase
+	// Source inputs (path -> content + hash) and insertion-ordered path list.
+	export var sourceFiles as SourceFileMap
+	export var sourcePaths as FilePathArray
+
+	// Per-file memo caches (absence = not cached; validity via keyHash compare).
+	export var tokenCache as TokenCacheMap
+	export var parseCache as ParseCacheMap
+
+	// Whole-program merged-module memo.
+	export var allModuleCache as ModuleMemo
+
+	// Dependency graph: flat edge list + reverse index (dependent-key -> edges)
+	// + the active-query stack recordDependency reads its "current query" from.
+	export var dependencies as DependencyArray
+	export var depIndex as DepIndexMap
+	export var activeQueryStack as QueryKeyArray
+
+	// Cache hit/miss counters (drive the M2 warm-rebuild assertion + diagnostics).
+	export var tokenHits as QueryCount
+	export var tokenMisses as QueryCount
+	export var parseHits as QueryCount
+	export var parseMisses as QueryCount
+	export var allModuleHits as QueryCount
+	export var allModuleMisses as QueryCount
+
+	export static function create() returns QueryDatabase
+		return Self{
+			sourceFiles: SourceFileMap.create(),
+			sourcePaths: FilePathArray.create(),
+			tokenCache: TokenCacheMap.create(),
+			parseCache: ParseCacheMap.create(),
+			allModuleCache: ModuleMemo.empty(),
+			dependencies: DependencyArray.create(),
+			depIndex: DepIndexMap.create(),
+			activeQueryStack: QueryKeyArray.create(),
+			tokenHits: 0, tokenMisses: 0,
+			parseHits: 0, parseMisses: 0,
+			allModuleHits: 0, allModuleMisses: 0
+		}
+	end 'create'
+end 'QueryDatabase'
+
+// Stable string form of a query key, for the dependency reverse index and edge
+// dedup. `sf:`/`tk:`/`po:`/`am` prefixes keep the four key families disjoint.
+export function queryKeyString(key QueryKey) returns String
+	return match key 'toStr'
+		sourceFile(path) gives "sf:{path}"
+		tokens(path) gives "tk:{path}"
+		parseOps(path) gives "po:{path}"
+		allModule gives "am"
+	end 'toStr'
+end 'queryKeyString'

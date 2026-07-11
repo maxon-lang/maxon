@@ -1,0 +1,76 @@
+// Diagnostics — the compiler's user-facing error channel, plus the driver-level
+// `CompileError` the query/build pipeline throws.
+//
+// THIN for maxon-shv2 M1: a `Diagnostic` is a code + message + optional source
+// position, accumulated on `Project.diagnostics` by the semantic checker (and,
+// as the pipeline grows, by every reporting pass). The driver prints them and
+// bails. v1's richer diagnostic machinery (severity tiers, related-note spans,
+// first-error suppression, the full 4-digit ErrorCode registry) grows back as
+// consumers need it; M1 needs exactly the two `basics.md` semantic errors.
+
+// The 4-digit error codes M1 emits. Named constants, not bare string literals —
+// the exact code text is part of the spec contract (`specs-shv2/basics.md`), so
+// it lives in one place. Grows into a full ErrorCode registry as more checks
+// land (v1 has hundreds).
+//
+// `noMainFunction` / `mainWrongReturnType` are the two `basics.md` semantic
+// codes with exact spec-gated text. `lexerError` / `parserError` are generic
+// placeholders the query layer reports front-end failures under — the M1 specs
+// never trigger them (every authored program lexes and parses cleanly), so they
+// carry no spec-gated text yet and split into specific codes when a spec needs
+// a particular front-end diagnostic.
+export enum ErrorCode
+	noMainFunction = "E3001"
+	mainWrongReturnType = "E3002"
+	lexerError = "E1001"
+	parserError = "E3010"
+end 'ErrorCode'
+
+// One reported problem. `line` / `column` are 1-based source positions, or 0
+// when the diagnostic has no single anchor (E3001 "no main" is whole-program).
+// `filePath` is the declaring file, empty when program-wide. The rendered form
+// (`error <code>: <message>`) matches the `maxoncstderr` spec blocks exactly.
+export type Diagnostic
+	export let code as ErrorCode
+	export let message as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(code ErrorCode, message String, line LineNumber = 0, column ColumnNumber = 0, filePath FilePath = FilePath from "") returns Diagnostic
+		return Self{code: code, message: message, line: line, column: column, filePath: filePath}
+	end 'create'
+
+	// Render as `error <code>: <message>` — the exact wire format the spec's
+	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
+	// string. Position is intentionally NOT included for M1's whole-program
+	// semantic errors; positioned diagnostics (lexer/parser) grow a
+	// `<file>:<line>:<col>` prefix when their specs need it.
+	export function render() returns String
+		return "error {self.code.rawValue}: {self.message}"
+	end 'render'
+end 'Diagnostic'
+
+export typealias DiagnosticArray = Array with Diagnostic
+
+// Driver / query-pipeline failure modes. Distinct from a `Diagnostic`: a
+// `CompileError` is thrown to unwind the build, whereas diagnostics accumulate
+// and are rendered. `compileError` is the catch-all raised once one or more
+// diagnostics have been reported (the driver has already printed them, so its
+// handler stays silent for this arm — see Main.maxon).
+export union CompileError implements Error
+	fileNotFound(path FilePath)
+	directoryNotFound(path FilePath)
+	noSourceFiles(root FilePath)
+	readError(path FilePath)
+	compileError
+end 'CompileError'
+
+// Construct and report a positioned diagnostic in one call. The single funnel
+// the front-end error mappers (reportLexerError / reportParseError) route each
+// match arm through, so the `Diagnostic.create` + `reportDiagnostic` pairing is
+// not respelled at every arm. (`reportDiagnostic` — the raw sink — lives in
+// Project.maxon alongside the diagnostics field.)
+export function reportPositioned(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
+	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+end 'reportPositioned'

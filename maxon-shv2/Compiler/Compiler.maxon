@@ -1,0 +1,115 @@
+// Compiler — the build driver. Wires source loading → the query spine → the
+// mid pipeline (resolveTypes, semanticCheck) → the lowering pipeline
+// (lowerMaxonToStd, lowerStdToMir) → the backend (buildBackend, writeExecutable).
+//
+// The mid + lowering passes run through `PassPipeline` (which owns the error
+// gate); the backend runs backend-direct (a CodeResult is not an IR module, so
+// it does not fit the pass-dispatch model — mirrors v1's Phase-7 shape). On any
+// failure the accumulated diagnostics are printed to stderr, so the exact
+// `error EXXXX: ...` lines the spec compares against reach the user.
+
+// Compile the file or directory `inputPath` for `target`, returning the path of
+// the produced executable. `outputOverride` (the `-o`/`--output` value, empty
+// when unset) wins over the derived output name.
+//
+// Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`,
+// `readError`) carry NO diagnostics and propagate straight to Main, which prints
+// a specific message; (2) reported diagnostics (semantic/lexer) are printed here
+// and re-signaled as a FRESH `compileError`. It must be a fresh throw — re-
+// throwing the caught error object miscompiles under the C# runtime's refcount
+// path (a NULL incref on the rethrow), whereas the pipeline's own fresh throw of
+// the same arm propagates cleanly.
+export function compile(inputPath FilePath, target Target, outputOverride String = "") returns FilePath throws CompileError
+	var project = createProject(inputPath, target: target)
+
+	// File/IO errors propagate to Main untouched (no diagnostics attach to them).
+	try loadSourceFiles(project, path: project.rootPath)
+	let module = try queryAllModule(project)
+
+	// The mid + lowering pipeline. Its error gate throws once a pass (semantic-
+	// Check) reports a diagnostic; print the accumulated diagnostics and re-signal.
+	var pipeline = PassPipeline.create(project, maxonModule: module)
+	pipeline.addPasses(buildDefaultPipeline())
+	try pipeline.run() otherwise 'pipelineFailed'
+		printDiagnostics(project)
+		throw CompileError.compileError
+	end 'pipelineFailed'
+
+	let codeResult = buildBackend(pipeline.mirModule, target: project.target, globalData: project.globalData)
+
+	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
+	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
+	return outputPath
+end 'compile'
+
+// --- Source loading ---
+
+// Register every source file under `path` with the query database. A single
+// `.maxon` file loads directly; a directory loads every `.maxon` file beneath
+// it (except `build.maxon`). Throws when the path does not exist or yields no
+// sources. (v1's `.maxonignore` support + `.test`-fragment stripping grow back
+// when the spec runner needs them.)
+function loadSourceFiles(project Project, path FilePath) throws CompileError
+	if File.exists(path) 'isFile'
+		try loadOneSourceFile(project, path: path)
+	end 'isFile' else if Directory.exists(path) 'isDir'
+		try loadSourceDirectory(project, dir: path)
+	end 'isDir' else 'notFound'
+		throw CompileError.fileNotFound(path)
+	end 'notFound'
+
+	if project.db.sourcePaths.count() == 0 'noFiles'
+		throw CompileError.noSourceFiles(path)
+	end 'noFiles'
+end 'loadSourceFiles'
+
+// Recursively load every `.maxon` file under `dir`, descending subdirectories.
+function loadSourceDirectory(project Project, dir FilePath) throws CompileError
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+	for entry in entries 'each'
+		if Directory.isDirectory(entry) 'isSubdir'
+			try loadSourceDirectory(project, dir: entry)
+		end 'isSubdir' else 'isFile'
+			let name = entry.filename()
+			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) 'isSource'
+				try loadOneSourceFile(project, path: entry)
+			end 'isSource'
+		end 'isFile'
+	end 'each'
+end 'loadSourceDirectory'
+
+// Read one source file and register its content with the query system.
+function loadOneSourceFile(project Project, path FilePath) throws CompileError
+	let content = try File.readText(path) otherwise throw CompileError.readError(path)
+	fileChanged(project, path: path, content: content)
+end 'loadOneSourceFile'
+
+// --- Output path resolution ---
+
+// The build manifest filename and Maxon source extension. Named, not bare
+// literals — both are file-discovery contracts.
+let BuildManifestName = "build.maxon"
+let MaxonSourceExtension = ".maxon"
+
+// Resolve the output executable path: an explicit `-o` override wins; otherwise
+// the output is the input's base name with the platform executable extension
+// (single-file build → next to the source; directory build → the first source
+// file's base name). Deriving a directory build's name from a `build.maxon`
+// `build("...")` manifest grows at M2, when directory builds become the norm;
+// the M1 verification gate is a single-file build (`basic.maxon` → `basic.exe`).
+function resolveOutputPath(project Project, outputOverride String) returns FilePath throws CompileError
+	let ext = executableExtension(project.target)
+
+	if not outputOverride.isEmpty() 'hasOverride'
+		return try FilePath.from("{outputOverride}{ext}") otherwise panic("resolveOutputPath: invalid -o/--output path '{outputOverride}'")
+	end 'hasOverride'
+
+	if File.exists(project.rootPath) 'singleFile'
+		return project.rootPath.changeExtension(ext)
+	end 'singleFile'
+
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("resolveOutputPath: sourcePaths empty — loadSourceFiles should have thrown noSourceFiles")
+	return firstPath.changeExtension(ext)
+end 'resolveOutputPath'

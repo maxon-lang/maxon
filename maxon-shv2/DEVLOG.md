@@ -145,10 +145,43 @@ in: `IR/IrValueId.maxon` (zero-dep typealiases), `IR/IrBlock.maxon`,
 `IR/IrFunction.maxon` (deliberately **thinned** — dropped v1's per-ValueId
 refcount side-tables + 6-way `OwnershipClass` + generics/ABI cone, which the
 static Own tier and later milestones supersede), `IR/Maxon/SourceRange.maxon`,
-`IR/Maxon/Scope.maxon`. The **parser, ParseStaging, and query spine are Chunk C**
-(not yet built). `Compiler/Project.maxon` exists only as a THIN foundation
-(homes `VarInfo`/`Visibility`/`FieldOffset`/`StringArray`/etc.); Chunk C must
-**grow** it (add the struct + ~28 registries + `createProject`), not redefine it.
+`IR/Maxon/Scope.maxon`.
+
+**Parser + parse-staging landed (M1 Chunk C).** `Compiler/Parser.maxon` is the
+thin `return <int-literal>` slice: `parseModule → dispatchTopLevel(function) →
+parseFunction → parseOptionalReturnType → parseStatements → parseReturnStatement
+→ parseExpression → parsePrimary → parseIntLiteral → emitLiteral`, with a small
+index cursor and a per-function synthetic-name counter (`$tN`). Its ONE
+structural change from v1 (the parallel-ready seam): **it takes no `Project` and
+writes exclusively into a per-file `FileParseArtifact`** — the file's own
+`MaxonModule` fragment, its own LOCAL `TypeNameInterner`, and an ordered
+`funcReturnTypes` contribution array. So a file's parse is a pure function of
+`(tokens, filePath, namespace)` with zero shared state (M5's per-file fan-out
+needs no further parser change). Anything outside the M1 slice (params,
+non-`return` statements, operators, user types) is rejected with a positioned
+`ParseError` that `queryParseOps` turns into a project diagnostic — the parser
+itself never touches `Project` or `project.diagnostics`.
+
+**`Compiler/ParseStaging.maxon`** owns `FileParseArtifact` + `mergeArtifact(project,
+target, artifact)`, the **single writer** of the shared `Project` derived
+registries. It (1) folds the artifact's local interner into `project.typeNames`
+(via `TypeNameInterner.foldInto`, returning a `TypeNameRemap`), (2) remaps the
+artifact's `named(id)` references when the fold moved ids (M2 multi-file path;
+identity for M1's single file → skipped), (3) offset-merges the `MaxonModule`
+fragment into the accumulator via `IrModule.merge`, and (4) commits the
+`funcReturnTypes` entries. Because the parser wrote nothing to `Project`
+speculatively, there is **no ParseDelta rollback dance** — v1's ~28-registry
+rollback machinery is replaced by "artifacts are the source of truth; rebuild
+the derived registries from them on every `queryAllModule` miss"
+(`resetMergeTargets`). The registry set is one family (`funcReturnTypes`) at M1;
+it grows toward v1's ~28 per milestone, each as an ordered contribution array.
+Interner NOTE: for a *cached* artifact, a non-identity remap must clone before
+rewriting (it must not mutate the cache in place) — a documented M2 refinement,
+never triggered at M1 (single file → identity remap).
+
+`Compiler/Project.maxon` **grew** the `Project` struct (`db`/`funcReturnTypes`/
+`typeNames`/`rootPath`/`target`/`diagnostics`/`globalData`) + `createProject` +
+the diagnostic sink helpers, GROWING (not redefining) the Chunk-A foundation.
 
 **Scope ownership scaffold:** `Scope.ownedStack` runs parallel to `frameStack`,
 pushed/popped in lockstep by `pushScope`/`popScope` (panic on unmatched pop —
@@ -165,10 +198,14 @@ is non-trivial** — inert at M1 (all bindings trivial), drained at M6 to emit
   cannot be added without declaring its `OpCategory`). Values are **name slices**
   (`ByteArray` over the lexer buffer / synthetic `$tN`), not SSA ids — SSA
   numbering is assigned only at the Maxon→Std boundary.
-- `MaxonType` union — `boolean/integer/float/named(TypeNameId)/unresolved`
-  (enough to type `int` + `ExitCode`); width/signedness lives in the typealias
-  registry, not here. `unresolved` is the parser's placeholder; TypeResolution
-  (Chunk C) must eliminate it before lowering. Void is not a MaxonType —
+- `MaxonType` union — `boolean/integer/float/named(TypeNameId)/exitCode/
+  unresolved`. `named` is the parser's interned type reference; `unresolved` its
+  placeholder. **`exitCode` (added M1 Chunk C)** is the RESOLVED form of the
+  `ExitCode` builtin alias — a width-FREE tag like `boolean`/`integer`. Its
+  unsigned-32-bit width is assigned only at the Maxon→Std boundary
+  (`maxonTypeToStdType` → `StdType.u32`), so the "MaxonType carries no width;
+  width collapse happens only in lowering" invariant holds. TypeResolution
+  eliminates `named`/`unresolved` before lowering. Void is not a MaxonType —
   `MaxonReturnType{void, value}` carries return slots.
 - **`OwnershipKind` lattice** — `trivial | owned | borrow | shared`, the plan's
   first-class Maxon-tier ownership. Three homes, zero sidetables: (1) the
@@ -182,11 +219,53 @@ Later milestones GROW `MaxonType` (string/char/function/generic/interface arms),
 ### Own tier (ownership infer / check / escape / drops)
 _stub — filled in at M6._
 
+### Type resolution & semantic check (Maxon tier)
+
+**Landed (M1 Chunk C).** `TypeResolution.resolveTypes(project, module)` replaces
+every `named`/`unresolved` `MaxonType` in the module's function signatures with a
+concrete one and re-syncs each resolved return type into `project.funcReturnTypes`
+(SemanticCheck's source of truth). M1 SHORTCUT: the only named type resolved is
+the `ExitCode` builtin alias, recognized **by name** without loading the stdlib
+(→ `MaxonType.exitCode` → u32); any other named type panics loudly (user types +
+the ranged-typealias registry arrive at M9). `SemanticCheck.semanticCheck(project)`
+is the two `basics.md` checks reading the resolved registry: **E3001** (no `main`)
+and **E3002** (`main` does not return ExitCode; the M1-exercised case is a void
+`main`). Both append a `Diagnostic`; the pipeline's error gate then bails.
+
 ### Pass pipeline
-_stub — filled in at M1, extended each milestone._
+
+**Landed (M1 Chunk C).** `PassPipeline` owns the four tier modules + a `project`
+handle + the scheduled `PassKind` list. `dispatch` wires each pass to its free
+function: `resolveTypes`/`semanticCheck` (read the Maxon module + project),
+`lowerMaxonToStd`/`lowerStdToMir` (produce the next tier). `run()` gained the
+**error gate**: after each pass, `projectHasErrors → throw CompileError` — so a
+program that fails semanticCheck (e.g. has no `main` for the backend entry stub to
+call) never reaches lowering/backend. The driver (`Compiler.compile`) builds the
+pipeline with `buildDefaultPipeline()`, runs it, then goes backend-direct
+(`buildBackend` → `writeExecutable`; a CodeResult is not an IR module). Std-tier
+opt passes / Own-tier passes / `augmentWithRuntime` / MIR passes grow in at their
+milestones. Diagnostics are printed by `compile` on the failure path and the
+error is re-signaled as a FRESH `compileError` (re-throwing the *caught* error
+NULL-increfs under the C#-emitted refcount runtime; a fresh throw of the same arm
+is clean — a driver-shape gotcha worth remembering).
 
 ### Query spine (incremental)
-_stub — skeletal from M1; warm-rebuild assertion joins the gate at M2._
+
+**Landed (M1 Chunk C), content-hash-keyed.** `QueryDatabase`/`QueryEngine`/
+`Queries` implement `querySourceFile → queryTokens → queryParseOps →
+queryAllModule`. The load-bearing difference from v1: **memo validity is a
+content-hash compare, not a revision-counter walk** (PLAN.md §78). `fileChanged`
+computes an FNV-1a `ContentHash` per file (no shared `currentRevision` counter to
+contend on — parallel-safe); each per-file memo stamps the `keyHash` it was
+derived from and is valid iff that still equals the file's current hash;
+`queryAllModule` keys its merged-module memo on the COMPOSITE hash folded over
+every file's hash in source-path order. `queryParseOps` produces a
+`FileParseArtifact` and touches no `Project` state (the parser is pure);
+`queryAllModule` on a miss `resetMergeTargets` + re-folds artifacts via
+`mergeArtifact`, so there is no rollback. The dependency graph
+(`recordDependency`/`clearDepsFor`/`activeQueryStack`) is recorded from day one —
+M1's single file never drives an invalidation, but recording it now is what lets
+the **M2 warm-rebuild byte-identity assertion** join without retrofitting.
 
 ### Parallel driver
 
@@ -222,8 +301,16 @@ invariant (below) is shv2's own future backend concern, not yet exercised here.
 _Per-function fan-out enabled at M5._
 
 ### Backend (Std → MIR → Target, runtime emitters)
-_stub — thin mov/ret slice at M1; MM runtime + DebugStream producer at M6; GT
-scheduler at Phase F._
+_Thin mov/ret slice landed at M1 (Chunk B2); MM runtime + DebugStream producer at
+M6; GT scheduler at Phase F._ The M1 driver (`Compiler.compile`) feeds the parsed,
+resolved, lowered `MirModule` straight into `buildBackend(mir, target,
+globalData)` → `writeExecutable`. The driver CLI is `maxon-shv2 build
+<file|directory> [-o <output>]`; a single-file build writes next to the source
+(`basic.maxon` → `basic.exe`). **End-to-end proven:** `maxon-shv2.exe build
+examples/basic.maxon` produces a PE that exits **42**; a program with no `main`
+prints exactly `error E3001: No 'main' function found` (exit 1); a void-returning
+`main` prints exactly `error E3002: Function 'main' must return ExitCode`
+(exit 1).
 
 ### Event log & mm-trace harness
 
@@ -274,7 +361,13 @@ Phase E; budget gate (≤30 s / ≤1.7 GB / >90% CPU) becomes hard at Phase F.
 - [x] **Track 0 / Foundation 2** — binary event log + mm-trace harness (C# harness: `mm-trace` block + redefined `<!-- MmTrace -->` → `maxon monitor` capture + normalize + regen; proof spec `specs/mm-trace.md`; producer verified end-to-end)
 - [x] **Track 0 / Foundation 1** — multi-core green threads hardened (primitives + global-lock A/B + counters; **found & fixed a real ~2.5% multi-core crash** — x86 `__gt_spawn` passed `gt` in R10 to `__gt_enqueue` without reloading after `LeaveCriticalSection` clobbers it; fix mirrors ARM64's existing reload)
 - [x] **Track 0** — validation harness (`maxon-shv2/track0/`): byte-identical aggregate across `MAXON_MAX_PROCS {1,2,7,16}`, 16 vs 1 workers, leak-clean + balanced mm-trace (568 alloc == 568 free), **remote-free MPSC path exercised (7775 cross-P pushes)**, global-lock A/B parity. 480+ clean high-concurrency runs post-fix.
-- [ ] **M1** basics · [ ] **M2** variables · [ ] **M3** arithmetic
+- [x] **M1** basics — thin frontend + driver: content-hash query spine
+  (`querySourceFile→queryTokens→queryParseOps→queryAllModule`), parse-staging
+  (`FileParseArtifact` + `mergeArtifact`), thin `Parser` (`function`/`return`/int
+  literal), `resolveTypes` (ExitCode→u32 builtin), `semanticCheck` (E3001/E3002),
+  `Compiler`/`Main` driver. `maxon-shv2 build examples/basic.maxon` → exit 42;
+  E3001/E3002 error paths verified. Spec `specs-shv2/basics.md`.
+- [ ] **M2** variables · [ ] **M3** arithmetic
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
 - [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays

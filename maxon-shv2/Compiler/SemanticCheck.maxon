@@ -1,0 +1,57 @@
+// SemanticCheck — the Maxon-tier program-validity pass. Runs AFTER resolveTypes,
+// so it reads resolved types from the `funcReturnTypes` registry.
+//
+// THIN for M1: exactly the two `basics.md` checks —
+//   E3001  no `main` function
+//   E3002  `main` does not return ExitCode
+// Both append a `Diagnostic` to `project.diagnostics`; the pipeline's error gate
+// then stops the build before lowering an invalid module. The full semantic
+// check set (unused bindings, type mismatches, exhaustiveness, ...) grows here
+// per milestone.
+
+// The entrypoint function's unqualified name — a contract shared with the parser
+// (which keeps `main` unqualified) and the backend (whose entry stub calls it).
+let MainFunctionName = "main"
+
+// The exact spec-gated diagnostic text (`specs-shv2/basics.md`). Named constants
+// so the wire format lives in one place.
+let NoMainMessage = "No 'main' function found"
+let MainWrongReturnMessage = "Function 'main' must return ExitCode"
+
+// Run the M1 semantic checks over the resolved project.
+export function semanticCheck(project Project)
+	checkMainFunction(project)
+end 'semanticCheck'
+
+// E3001 / E3002: `main` must exist and return ExitCode.
+function checkMainFunction(project Project)
+	if not project.funcReturnTypes.contains(MainFunctionName) 'noMain'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.noMainFunction, message: NoMainMessage))
+		return
+	end 'noMain'
+
+	let returnType = try project.funcReturnTypes.get(MainFunctionName) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
+	if not returnsExitCode(returnType) 'wrongReturn'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.mainWrongReturnType, message: MainWrongReturnMessage))
+	end 'wrongReturn'
+end 'checkMainFunction'
+
+// True when a return type is exactly the resolved ExitCode type. A void return
+// (no `returns` clause) is false — that is the M1-exercised E3002 case.
+function returnsExitCode(returnType MaxonReturnType) returns bool
+	return match returnType 'r'
+		void gives false
+		value(inner) gives isExitCodeType(inner)
+	end 'r'
+end 'returnsExitCode'
+
+function isExitCodeType(t MaxonType) returns bool
+	return match t 'r'
+		exitCode gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		named gives false
+		unresolved gives false
+	end 'r'
+end 'isExitCodeType'
