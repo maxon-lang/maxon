@@ -65,6 +65,60 @@ full in its subsystem section once built; listed here as an index.
 
 ---
 
+## Track 0 findings — corrections to PLAN.md premises (from recon, 2026-07-10)
+
+Read these before starting Foundation 1. Detailed maps live in the recon set
+(session scratchpad `.../recon/0{1..6}-*.md`); the load-bearing corrections:
+
+- **"The C# sharded allocator has never run with >1 live P" is false as
+  stated.** A 2nd worker M is spawned on the *first* `spawn`/`async` on any
+  multi-core host — `__gt_enqueue`'s worker-spawn scan is unconditional
+  (`RuntimeEmitter.Scheduler.cs:171-262`), and `subprocess-async-parallel.test`
+  already exercises concurrent async under the C# bootstrap. What is genuinely
+  **uncovered** is narrower and is the real Foundation-1 risk: the *lock-free*
+  cross-P paths in `RuntimeEmitter.Allocator.cs` — the **ownership gate**
+  (`:2181-2198`, re-probe `:2255-2264`) and the **remote-free MPSC** (push
+  `:2575-2607`, drain `:2322-2399`) — have no known exercise. The self-hosted
+  compiler dogfoods a *different*, coarse-locked reimplementation
+  (`stdlib/Internals.maxon`), so heavy self-host load gives these paths zero
+  coverage. 1a.5 is likely a rubber-stamp; **1a.3 is the substantive work.**
+- **`__slab_lock` does not exist in the C# emitter.** 1a.1 must add a brand-new
+  `MAXON_SLAB_GLOBAL_LOCK`-gated lock bracketing the *entire bodies* of
+  `EmitSlabAlloc` (`:2081-2282`) and `EmitSlabFree` (`:2412-2638`). Use a
+  **spinlock, not a CriticalSection**: the self-hosted runtime's coarse
+  `__slab_lock` hit a real bug where a contended `EnterCriticalSection`
+  kernel-wait on a green thread's small stack corrupted it
+  (`maxon-selfhosted/.../X64Backend.maxon:7451-7467`), fixed by routing lock
+  ops through the per-P 64KB system stack. A test-and-set spinlock sidesteps
+  that class entirely. (The self-hosted's coarse `__slab_lock` is its
+  *permanent* design, not a toggle — evidence the coarse path is the proven
+  baseline.)
+- **`--max-procs 1` / `MAXON_MAX_PROCS` genuinely does not exist** and is needed
+  by two Track-0 consumers (deterministic mm-trace goldens for thread-spawning
+  programs; the validation-harness `--max-procs {1,2,7,ncpu}` stress). It
+  belongs in Foundation 1: read `MAXON_MAX_PROCS` in `__gt_init` and clamp
+  `__sched_max_procs = min(ncpu, MAXON_MAX_PROCS)`; with 1, the spawn gate
+  (`active_workers < max_procs`) never fires → single-threaded, deterministic.
+  Until it lands, mm-trace goldens are only safe for programs that never spawn
+  a green thread (the Foundation-2 proof program is one such).
+- **`maxon_cpu_count` does not exist** (1a.4 is genuine per-backend extraction:
+  `GetSystemInfo` on x86, `sysconf` on ARM64), and must be valid *before*
+  `__gt_init` (today ncpu is only read inside `__gt_init`'s prologue).
+- **Plan risk #4 (P-less alloc) is a null-deref, not a race.** Frees from raw OS
+  threads (IOCP/sync-worker/fault-handler) are already routed to the span's real
+  owning P; `__slab_alloc` has *no* NULL-P guard and every P-less path avoids it
+  by construction (direct `VirtualAlloc`). A global lock does **not** fix this —
+  it needs a NULL-P guard + shard-0 fallback in `__slab_alloc`, or continued
+  enforcement that no P-less thread reaches it.
+- **E3073 relaxation:** the C# edit adds the *runtime symbol* string
+  `"maxon_parallel_boundary"` to `IoStubs` (`SemanticCheckPass.cs:100-158`) — NOT
+  `"__Builtins.parallelBoundary"` (that qualified name is only for the
+  self-hosted mirror). Plus a `RuntimeCallIntrinsic` builtin entry in
+  `2-Parser.cs` (model on `forceSegfault` `:9506-9508`) and a bare-ret
+  `EmitMaxonParallelBoundary()` in **both** `X86CodeEmitter.Runtime.cs` and
+  `ARM64CodeEmitter.Runtime.cs`. The builtin must emit a real (empty) runtime
+  fn, else its caller becomes invisible to the E3073 yields walk.
+
 ## Subsystem sections
 
 ### Frontend (lexer, parser, parse-staging)
@@ -90,7 +144,42 @@ _stub — thin mov/ret slice at M1; MM runtime + DebugStream producer at M6; GT
 scheduler at Phase F._
 
 ### Event log & mm-trace harness
-_stub — Track 0 Foundation 2._
+
+**Producer (maxon-sharp / C# bootstrap) — verified working as of Track 0.**
+Binaries compiled by `maxon.exe` with `--debugstream` emit a binary MM event
+stream (128-byte header + 8-byte packed entry headers + ticket-spinlock reserve;
+schema frozen in `RuntimeEmitter.cs:41-148`). Only four MM codes are produced
+live: `mm_alloc`/`mm_free`/`mm_incref`/`mm_decref` (0x01–0x04) plus depth
+inc/dec (0x40/41) around destructor cascades. The Sched subsystem (0x20–0x2C)
+and several Dbg/raw codes are **dead** (decoder-only); real scheduler tracing
+rides the Dbg events (0x50–0x5E). Type-name resolution is **automatic**: every
+heap allocation flows through `EmitAlloc`→`EnsureTagIndex`, whose names land in
+the PE `.symtab` `MXDS_TAGS` blob (`module.TagNames` →
+`EmitAllMemoryManagerFunctions`) — so `maxon monitor` prints real names
+(`String`, `__ManagedMemory`), no extra wiring needed.
+
+**Consumer = `maxon monitor [--filter=mm] <exe>`** (`DebugStreamMonitor.cs`) —
+creates the shared segment, spawns the child with `MAXON_DEBUGSTREAM` set, drains
+the ring, decodes via a hand-rolled PE parser, prints
+`[+SSSS.mmm] <indent>mm_<verb> <Tag> #<id> [size=|rc=]<n>` to stdout (summary to
+stderr). It forwards the child's own stdout, so trace lines are identified by the
+`[+…]` timestamp prefix.
+
+**Two-tier gating (preserve in shv2's own producer at M6):** compile-time
+`Compiler.DebugStream` (zero instructions when off) + runtime `MAXON_DEBUGSTREAM`
+(`__ds_base==0`). Wart to NOT reproduce: MM events pay two real CALLs before the
+runtime-off check, unlike Dbg events which inline the `__ds_base` guard at the
+call site. shv2 should inline the guard for every event family.
+
+**mm-trace spec harness (this repo's C# harness).** `<!-- MmTrace -->` +
+`` ```mm-trace `` block ⇒ compile with `DebugStream=true`, run under
+`maxon monitor --filter=mm` (subprocess), **normalize**, compare. Normalization
+(deterministic goldens): keep only `[+…]`-prefixed lines, strip the timestamp
+prefix + indent, dense-renumber `#<id>` in first-appearance order. Verified
+byte-stable across runs for single-green-thread programs. `--max-procs 1`
+(needed only for programs that spawn green threads) does **not exist yet** —
+Foundation 1 dependency; the harness sets `MAXON_MAX_PROCS=1` defensively (no-op
+until F1). mm-trace tests stay off the batched path (per-process ring buffer).
 
 ---
 
@@ -99,8 +188,8 @@ _stub — Track 0 Foundation 2._
 Checkboxes track landing against `PLAN.md`. Correctness-only gate through
 Phase E; budget gate (≤30 s / ≤1.7 GB / >90% CPU) becomes hard at Phase F.
 
-- [ ] **Step 0** — plan + DEVLOG materialized in repo
-- [ ] **Track 0 / Foundation 2** — binary event log + mm-trace harness
+- [x] **Step 0** — plan + DEVLOG materialized in repo
+- [x] **Track 0 / Foundation 2** — binary event log + mm-trace harness (C# harness: `mm-trace` block + redefined `<!-- MmTrace -->` → `maxon monitor` capture + normalize + regen; proof spec `specs/mm-trace.md`; producer verified end-to-end)
 - [ ] **Track 0 / Foundation 1** — multi-core green threads hardened
 - [ ] **Track 0** — validation harness (multi-core gate)
 - [ ] **M1** basics · [ ] **M2** variables · [ ] **M3** arithmetic

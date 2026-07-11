@@ -97,7 +97,12 @@ public static partial class SpecParser {
         testArgs = argsMatch.Groups[1].Value.Trim();
       }
 
-      bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection);
+      // mm-trace capture mode is enabled by EITHER the `<!-- MmTrace -->`
+      // directive OR the presence of an ```mm-trace block (whose body is the
+      // expected normalized trace). Extract the block up front so it can both
+      // flip the mode flag and count as a valid result check below.
+      var mmTraceExpected = ExtractCodeBlock(testSection, "mm-trace");
+      bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection) || mmTraceExpected != null;
       bool asyncTrace = AsyncTraceDirectiveRegex().IsMatch(testSection);
 
       // Tests that exercise a self-hosted-only diagnostic (e.g. E3095) can
@@ -150,10 +155,12 @@ public static partial class SpecParser {
           ExpectedStderr = compilerStderr
         };
       } else {
-        if (exitCode == null && stdout == null && runtimeStderr == null && RequiredIR == null && requiredRdata == null && requiredData == null) {
+        // An ```mm-trace block is itself a result check (the trace is the
+        // assertion), so a test carrying only that block is valid.
+        if (exitCode == null && stdout == null && runtimeStderr == null && RequiredIR == null && requiredRdata == null && requiredData == null && mmTraceExpected == null) {
           throw new Exception(
             $"Test '{testName}' has a maxon block but no result checks. " +
-            "Add an exitcode, stdout, stderr, maxoncstderr, RequiredIR, RequiredRdata, or RequiredData block.");
+            "Add an exitcode, stdout, stderr, maxoncstderr, RequiredIR, RequiredRdata, RequiredData, or mm-trace block.");
         }
         expectation = new SuccessExpectation {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
@@ -167,6 +174,7 @@ public static partial class SpecParser {
 
       if (mmTrace && expectation is SuccessExpectation mmSuccess) {
         mmSuccess.MmTrace = true;
+        mmSuccess.MmTraceExpected = mmTraceExpected;
       }
       if (asyncTrace && expectation is SuccessExpectation atSuccess) {
         atSuccess.AsyncTrace = true;
@@ -179,6 +187,7 @@ public static partial class SpecParser {
         Args = testArgs,
         SourceFiles = SplitMultiFileSource(source),
         MmTrace = mmTrace,
+        MmTraceExpected = mmTraceExpected,
         AsyncTrace = asyncTrace,
         TimeoutMs = timeoutMs,
       });
@@ -267,7 +276,7 @@ public static partial class SpecParser {
   }
 
   private static readonly HashSet<string> KnownCodeBlockLanguages = [
-    "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredIR", "RequiredRdata", "RequiredData"
+    "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredIR", "RequiredRdata", "RequiredData", "mm-trace"
   ];
 
   private static readonly HashSet<string> KnownCodeBlockPrefixes = [

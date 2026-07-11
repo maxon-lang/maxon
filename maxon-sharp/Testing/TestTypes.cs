@@ -29,9 +29,19 @@ public class TestCase {
   /// </summary>
   public List<(string FileName, string Source)>? SourceFiles { get; init; }
   /// <summary>
-  /// When true, compile with --mm-trace enabled.
+  /// When true, the test runs in mm-trace capture mode: compiled with the
+  /// binary DebugStream producer and run under `monitor --filter=mm`, whose
+  /// decoded output is normalized and compared against <see cref="MmTraceExpected"/>.
+  /// Enabled by a `&lt;!-- MmTrace --&gt;` directive or the presence of an
+  /// ```mm-trace expected-trace block.
   /// </summary>
   public bool MmTrace { get; init; }
+  /// <summary>
+  /// Expected normalized mm-trace output (the body of the ```mm-trace block).
+  /// Null when the test declares mm-trace capture mode only via the directive
+  /// with no authored golden yet. Round-tripped through the fragment file.
+  /// </summary>
+  public string? MmTraceExpected { get; init; }
   /// <summary>
   /// When true, compile with --async-trace enabled.
   /// </summary>
@@ -78,10 +88,17 @@ public class SuccessExpectation : TestExpectation {
   /// </summary>
   public string? RequiredData { get; init; }
   /// <summary>
-  /// When true, compile with --mm-trace enabled so runtime memory operations
-  /// produce trace output on stderr.
+  /// When true, the test runs in mm-trace capture mode (see
+  /// <see cref="TestCase.MmTrace"/>): compiled with the binary DebugStream
+  /// producer and verified against <see cref="MmTraceExpected"/>.
   /// </summary>
   public bool MmTrace { get; set; }
+  /// <summary>
+  /// Expected normalized mm-trace output (the body of the ```mm-trace block).
+  /// Compared against the normalized `monitor --filter=mm` capture. Null when
+  /// no mm-trace golden was authored.
+  /// </summary>
+  public string? MmTraceExpected { get; set; }
   /// <summary>
   /// When true, compile with --async-trace enabled so async runtime operations
   /// produce trace output on stderr.

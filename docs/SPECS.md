@@ -285,6 +285,7 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
 
 2. **`maxon` blocks** must be followed by EITHER:
    - `` `exitcode `` + optional `` `stdout `` and/or `` `stderr `` (for successful execution)
+   - `` `mm-trace `` (memory-management trace assertion; see below)
    - `` `maxoncstderr `` (for compile/parse errors)
 
 3. **In Documentation section:**
@@ -339,9 +340,48 @@ Optional per-test directives go between the test marker and the maxon block:
 | Directive | Effect |
 |-----------|--------|
 | `<!-- Args: ... -->` | Pass the listed arguments to the test executable |
-| `<!-- MmTrace -->` | Enable memory-manager trace output |
+| `<!-- MmTrace -->` | Enable mm-trace capture mode (see below). Equivalent to adding an ` ```mm-trace ` block |
 | `<!-- AsyncTrace -->` | Enable async-runtime trace output |
 | `<!-- IncludeStdlibIr -->` | Include reachable stdlib functions in the captured CompiledIR snapshot |
+
+### mm-trace blocks
+
+An ` ```mm-trace ` block asserts a program's memory-management behavior — heap
+allocations, reference-count transitions, and frees. A test enters **mm-trace
+capture mode** when it carries either a `<!-- MmTrace -->` directive or an
+` ```mm-trace ` block; in that mode the harness compiles the program with the
+binary debug-event stream enabled, runs it under `maxon monitor --filter=mm`,
+and compares the decoded, normalized trace against the block:
+
+````markdown
+<!-- test: heap-alloc-free -->
+```maxon
+function main() returns ExitCode
+	let s = "value {n}"
+	print(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```mm-trace
+mm_alloc String #1 size=16
+mm_incref String #1 rc=1
+mm_decref String #1 rc=0
+mm_free String #1
+```
+````
+
+The trace is normalized so goldens are stable across runs and machines:
+timestamps and depth indentation are stripped, and allocation ids (`#<id>`) are
+densely renumbered `1, 2, 3, …` by first appearance. Regenerate the golden with
+`--update-required`. An ` ```exitcode ` block may accompany it (checked against
+the monitor's returned child exit code); an ` ```stdout ` block, if present, is
+checked via a separate untraced run since the monitor interleaves trace lines
+with the child's own stdout. mm-trace assertions are enforced by the C#
+bootstrap runner; the self-hosted runner currently ignores the block and runs
+only the test's other checks.
 
 ```markdown
 <!-- test: basic-example -->
@@ -445,9 +485,11 @@ A fragment has four parts separated by `---` lines:
 |-----|---------|
 | `ExitCode: N` | Expected process exit code |
 | `Args: ...` | Command-line arguments to pass to the test executable |
-| `MmTrace: true` / `AsyncTrace: true` | Enable runtime trace output |
+| `MmTrace: true` | Enable mm-trace capture mode (binary debug-stream + `monitor` decode) |
+| `AsyncTrace: true` | Enable async-runtime trace output |
 | `IncludeStdlibIr: true` | Include reachable stdlib functions in the captured CompiledIR snapshot |
 | `` Stdout: ``` `` / `` Stderr: ``` `` | Expected runtime stdout/stderr (fenced multiline block) |
+| `` MmTraceExpected: ``` `` | Expected normalized mm-trace (fenced multiline block); pairs with `MmTrace: true` |
 | `` RequiredIR: ``` `` | Expected compiler IR to verify, pinned (fenced multiline block) |
 | `` RequiredRdata: ``` `` / `` RequiredData: ``` `` | Expected .rdata / .data section contents |
 | `` MaxoncStderr: ``` `` | Expected compiler error output — used only for compiler-error tests |

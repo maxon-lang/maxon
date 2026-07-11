@@ -273,6 +273,13 @@ public static partial class FragmentGenerator {
         sb.AppendLine(success.RequiredData);
         sb.AppendLine("```");
       }
+      // Distinct key from the `MmTrace: true` flag line above so the parser
+      // can tell the capture-mode flag apart from the expected-trace block.
+      if (success.MmTraceExpected != null) {
+        sb.AppendLine("MmTraceExpected: ```");
+        sb.AppendLine(success.MmTraceExpected);
+        sb.AppendLine("```");
+      }
     } else if (test.Expectation is CompilerErrorExpectation compilerError) {
       sb.AppendLine("MaxoncStderr: ```");
       sb.AppendLine(compilerError.ExpectedStderr);
@@ -477,6 +484,7 @@ public static partial class FragmentGenerator {
     string? RequiredIR = null;
     string? requiredRdata = null;
     string? requiredData = null;
+    string? mmTraceExpected = null;
     string? expectedError = null;
     string? args = null;
     bool mmTrace = false;
@@ -494,6 +502,8 @@ public static partial class FragmentGenerator {
         }
       } else if (line.StartsWith("Args:")) {
         args = line["Args:".Length..].Trim();
+      } else if (line.StartsWith("MmTraceExpected: ```")) {
+        mmTraceExpected = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("MmTrace:")) {
         mmTrace = line["MmTrace:".Length..].Trim() == "true";
       } else if (line.StartsWith("AsyncTrace:")) {
@@ -534,6 +544,7 @@ public static partial class FragmentGenerator {
       RequiredRdata = requiredRdata,
       RequiredData = requiredData,
       MmTrace = mmTrace,
+      MmTraceExpected = mmTraceExpected,
       AsyncTrace = asyncTrace,
     }, args, mmTrace, asyncTrace, timeoutMs);
   }

@@ -682,6 +682,15 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isData'
 
+				// mm-trace — a C#-side binary-capture golden. The self-hosted
+				// runner does not assert it yet; recognize and skip the block so
+				// the shared specs/ corpus stays valid here (the test still runs
+				// its exitcode/stdout checks). No-op-extracted.
+				if blockLine.startsWith("```mm-trace") 'isMmTrace'
+					i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+					continue
+				end 'isMmTrace'
+
 				i = i + 1
 			end 'blocks'
 

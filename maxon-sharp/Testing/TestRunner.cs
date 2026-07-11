@@ -248,9 +248,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     try {
       // Step 1: Regenerate the fragment file. Always regenerated — no cache.
-      Compiler.Compiler.MmTrace = false;
-      Compiler.Compiler.AsyncTrace = false;
-      Compiler.Compiler.Testing = true;
+      // Fragment content (IR snapshot) is captured untraced; only the real
+      // test-run compile enables tracing.
+      SetCompileFlags();
       var absolutePath = Path.GetFullPath(item.FragmentPath);
       var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
       if (genError != null) {
@@ -318,9 +318,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       return FallbackBatchToSingles(item, "rewriter rejected all tests", ref generatedCount, generationErrors);
     }
 
-    Compiler.Compiler.MmTrace = false;
-    Compiler.Compiler.AsyncTrace = false;
-    Compiler.Compiler.Testing = true;
+    SetCompileFlags();
 
     var compileSw = Stopwatch.StartNew();
     Directory.CreateDirectory(Path.GetDirectoryName(item.BatchExePath)!);
@@ -745,10 +743,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source, Path.GetDirectoryName(fragment.FilePath))];
         }
         var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
-        Compiler.Compiler.MmTrace = false;
-        Compiler.Compiler.MmDebug = false;
-        Compiler.Compiler.AsyncTrace = false;
-        Compiler.Compiler.Testing = true;
+        SetCompileFlags();
         var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
         if (irTempDir != null) {
           try { Directory.Delete(irTempDir, recursive: true); } catch { }
@@ -804,20 +799,35 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
       }
 
-      // Run the executable if we have runtime expectations
-      if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
-        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+      // mm-trace capture mode: run the binary under `monitor --filter=mm`,
+      // decode + normalize the binary event stream, and compare against the
+      // authored golden. The monitor's stdout interleaves trace lines with the
+      // child's own stdout, so a plain Stdout block (if present) is checked via
+      // a separate untraced run rather than against the monitor output.
+      if (fragment.MmTrace) {
+        var (monitorExit, monitorStdout) = CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
 
+        var expectedTrace = NormalizeMmTrace(successExpectation.MmTraceExpected ?? "");
+        var actualTrace = NormalizeMmTrace(monitorStdout);
+        if (expectedTrace != actualTrace) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = $"mm-trace mismatch:\nExpected:\n{expectedTrace}\nActual:\n{actualTrace}",
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+
+        // The exit-code expectation checks against the monitor's returned exit
+        // code (which is the child's).
         if (successExpectation.ExitCode.HasValue) {
-          // On macOS/Linux, process exit codes are masked to 8 bits (0-255)
-          var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? successExpectation.ExitCode.Value
-            : successExpectation.ExitCode.Value & 0xFF;
-          if (ExitCode != expectedCode) {
+          var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorExit);
+          if (exitError != null) {
             return new TestResult {
               TestName = fragment.TestName,
               Passed = false,
-              ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
+              ErrorMessage = exitError,
               Duration = sw.Elapsed,
               FilePath = fragment.FilePath
             };
@@ -825,16 +835,51 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
 
         if (successExpectation.Stdout != null) {
-          var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
-          var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
-          // Normalize machine-specific paths so tests are portable across OSes
-          actualStdout = NormalizePathsForComparison(actualStdout);
-          expectedStdout = NormalizePathsForComparison(expectedStdout);
-          if (expectedStdout != actualStdout) {
+          var (_, plainStdout, _) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+          var stdoutError = CheckStdout(successExpectation.Stdout, plainStdout);
+          if (stdoutError != null) {
             return new TestResult {
               TestName = fragment.TestName,
               Passed = false,
-              ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
+              ErrorMessage = stdoutError,
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
+
+        return new TestResult {
+          TestName = fragment.TestName,
+          Passed = true,
+          Duration = sw.Elapsed,
+          FilePath = fragment.FilePath
+        };
+      }
+
+      // Run the executable if we have runtime expectations
+      if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
+        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+
+        if (successExpectation.ExitCode.HasValue) {
+          var exitError = CheckExitCode(successExpectation.ExitCode.Value, ExitCode);
+          if (exitError != null) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = exitError,
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
+
+        if (successExpectation.Stdout != null) {
+          var stdoutError = CheckStdout(successExpectation.Stdout, Stdout);
+          if (stdoutError != null) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = stdoutError,
               Duration = sw.Elapsed,
               FilePath = fragment.FilePath
             };
@@ -882,6 +927,45 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
   }
 
+  /// <summary>
+  /// Compare an actual process exit code against the expected value, applying
+  /// the 8-bit mask that macOS/Linux impose on exit codes. Returns an error
+  /// message on mismatch, or null on match. Shared by the plain-run and
+  /// mm-trace-capture paths.
+  /// </summary>
+  private static string? CheckExitCode(int expected, int actual) {
+    var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? expected : expected & 0xFF;
+    return actual == expectedCode ? null : $"Expected exit code {expectedCode}, got {actual}";
+  }
+
+  /// <summary>
+  /// Compare expected vs actual stdout after CRLF-folding, trimming, and
+  /// machine-specific-path normalization (so tests are portable across OSes).
+  /// Returns an error message on mismatch, or null on match.
+  /// </summary>
+  private string? CheckStdout(string expected, string actual) {
+    var expectedStdout = NormalizePathsForComparison(expected.Replace("\r\n", "\n").Trim());
+    var actualStdout = NormalizePathsForComparison(actual.Replace("\r\n", "\n").Trim());
+    return expectedStdout == actualStdout ? null : $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}";
+  }
+
+  /// <summary>
+  /// Set the process-wide (ThreadStatic) compile flags every spec-test compile
+  /// depends on. All compile sites route through here so the trace producers
+  /// (`MmTrace` text-stderr, the mm-trace binary `DebugStream`, `AsyncTrace`)
+  /// are explicitly (re)set on each compile — a flag left set from a prior
+  /// compile on the same worker thread would silently mis-trace an unrelated
+  /// test. `MmDebug` (runtime debug checks) is never enabled by the harness,
+  /// and `Testing` is always on.
+  /// </summary>
+  private static void SetCompileFlags(bool mmTrace = false, bool debugStream = false, bool asyncTrace = false) {
+    Compiler.Compiler.MmTrace = mmTrace;
+    Compiler.Compiler.DebugStream = debugStream;
+    Compiler.Compiler.AsyncTrace = asyncTrace;
+    Compiler.Compiler.MmDebug = false;
+    Compiler.Compiler.Testing = true;
+  }
+
   private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath, Compiler.CompileTarget? target = null) {
     try {
       Compiler.SourceFile[] sources;
@@ -909,9 +993,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       }
 
       try {
-        Compiler.Compiler.MmTrace = fragment.MmTrace;
-        Compiler.Compiler.AsyncTrace = fragment.AsyncTrace;
-        Compiler.Compiler.Testing = true;
+        // mm-trace capture mode compiles with the binary DebugStream producer
+        // (emits the __ds_* funcs + type-name tag blob), NOT the legacy
+        // text-stderr MmTrace producer: the harness decodes the ring buffer
+        // via `monitor --filter=mm`. Both gate the same MM instrumentation
+        // sites, so DebugStream alone is sufficient.
+        SetCompileFlags(debugStream: fragment.MmTrace, asyncTrace: fragment.AsyncTrace);
         var result = new Compiler.Compiler().Compile(sources, outputPath, target: target);
         var error = result.Errors.Count > 0
           ? string.Join("\n", result.Errors.Select(e => e.Format()))
@@ -942,22 +1029,98 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
   private const int DefaultTestTimeoutMs = 2000;
 
+  /// <summary>
+  /// Environment variable that pins the runtime scheduler to a single OS
+  /// worker so green-thread event ordering is deterministic. Set defensively
+  /// for mm-trace captures; a harmless no-op until Foundation 1 wires it into
+  /// the runtime.
+  /// </summary>
+  private const string MaxProcsEnvVar = "MAXON_MAX_PROCS";
+
+  /// <summary>
+  /// <see cref="MaxProcsEnvVar"/> value that clamps the scheduler to a single
+  /// worker (deterministic mm-trace event ordering).
+  /// </summary>
+  private const string SingleWorkerProcCount = "1";
+
+  /// <summary>
+  /// Host-compiler subcommand and MM-only filter that decode an mm-trace
+  /// binary's debug-event stream (`maxon monitor --filter=mm &lt;exe&gt;`).
+  /// </summary>
+  private const string MonitorSubcommand = "monitor";
+  private const string MmOnlyFilterArg = "--filter=mm";
+
+  /// <summary>
+  /// Prefix shared by every decoded mm-trace event line (`mm_alloc`,
+  /// `mm_incref`, `mm_free`, …); used to keep only genuine trace lines when
+  /// normalizing.
+  /// </summary>
+  private const string MmTraceEventPrefix = "mm_";
+
   private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
     var effectiveTimeoutMs = timeoutMs ?? DefaultTestTimeoutMs;
     // Code signing and executable permissions are now handled by MachOWriter at compile time
 
-    var psi = new ProcessStartInfo {
-      FileName = exePath,
-      Arguments = args ?? "",
-      WorkingDirectory = workingDirectory,
+    var psi = CreateRedirectedStartInfo(exePath);
+    psi.Arguments = args ?? "";
+    psi.WorkingDirectory = workingDirectory;
+
+    return RunProcessCaptured(psi, effectiveTimeoutMs);
+  }
+
+  /// <summary>
+  /// Build a <see cref="ProcessStartInfo"/> with stdout/stderr redirected and
+  /// UTF-8-decoded and no console window — the shared base for the plain
+  /// test-run (<see cref="RunExecutable"/>) and mm-trace-monitor
+  /// (<see cref="CaptureMmTrace"/>) launches. Callers add the arguments,
+  /// working directory, and environment they need.
+  /// </summary>
+  private static ProcessStartInfo CreateRedirectedStartInfo(string fileName) {
+    return new ProcessStartInfo {
+      FileName = fileName,
       RedirectStandardOutput = true,
       RedirectStandardError = true,
       UseShellExecute = false,
       CreateNoWindow = true,
       StandardOutputEncoding = Encoding.UTF8,
-      StandardErrorEncoding = Encoding.UTF8
+      StandardErrorEncoding = Encoding.UTF8,
     };
+  }
 
+  /// <summary>
+  /// Run the mm-trace test binary under this same maxon.exe's
+  /// `monitor --filter=mm` decoder and capture the monitor's stdout — the
+  /// formatted trace lines interleaved with the child's own stdout. Returns
+  /// the raw captured stdout and the monitor's exit code (which is the
+  /// child's exit code). The monitor sets the child's MAXON_DEBUGSTREAM, so
+  /// we don't. Normalize the returned stdout with <see cref="NormalizeMmTrace"/>
+  /// before comparing against a golden.
+  /// </summary>
+  private static (int ExitCode, string Stdout) CaptureMmTrace(string exePath, int timeoutMs) {
+    // Self-invoke the running maxon.exe as the monitor: ProcessPath is the
+    // host compiler binary, which carries the DebugStreamMonitor CLI.
+    var monitorExe = Environment.ProcessPath
+      ?? throw new InvalidOperationException("Environment.ProcessPath is null; cannot self-invoke as the mm-trace monitor.");
+
+    var psi = CreateRedirectedStartInfo(monitorExe);
+    psi.ArgumentList.Add(MonitorSubcommand);
+    psi.ArgumentList.Add(MmOnlyFilterArg);
+    psi.ArgumentList.Add(exePath);
+    psi.EnvironmentVariables[MaxProcsEnvVar] = SingleWorkerProcCount;
+
+    var (exitCode, stdout, _) = RunProcessCaptured(psi, timeoutMs);
+    return (exitCode, stdout);
+  }
+
+  /// <summary>
+  /// Start a redirected child process, enroll it in the runner-lifetime job,
+  /// read stdout/stderr asynchronously (to avoid pipe-buffer deadlocks), and
+  /// wait with a timeout. On timeout the child (and its tree) is killed and
+  /// the streams are abandoned after a short drain. Shared by the plain
+  /// test-run path (<see cref="RunExecutable"/>) and the mm-trace monitor
+  /// path (<see cref="CaptureMmTrace"/>).
+  /// </summary>
+  private static (int ExitCode, string Stdout, string Stderr) RunProcessCaptured(ProcessStartInfo psi, int timeoutMs) {
     // Enroll the child in the runner-lifetime job (Windows only, no-op
     // elsewhere). The job is configured with KILL_ON_JOB_CLOSE: when the
     // last handle to the job is closed — including by the OS on parent-
@@ -967,14 +1130,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // their cached .exe.
     using var process = Process.Start(psi)!;
     if (!RunnerJob.AssignProcess(process.Handle)) {
-      Logger.Debug(LogCategory.Testing, $"AssignProcessToJobObject failed for {exePath} (errno {Marshal.GetLastWin32Error()})");
+      Logger.Debug(LogCategory.Testing, $"AssignProcessToJobObject failed for {psi.FileName} (errno {Marshal.GetLastWin32Error()})");
     }
 
     // Read stdout/stderr asynchronously to avoid deadlocks
     var stdoutTask = process.StandardOutput.ReadToEndAsync();
     var stderrTask = process.StandardError.ReadToEndAsync();
 
-    bool exited = process.WaitForExit(effectiveTimeoutMs);
+    bool exited = process.WaitForExit(timeoutMs);
     if (!exited) {
       // Process timed out - kill it and drain streams
       try { process.Kill(entireProcessTree: true); } catch { }
@@ -996,6 +1159,45 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 #pragma warning restore VSTHRD002
 
     return (process.ExitCode, stdout, stderr);
+  }
+
+  /// <summary>
+  /// Normalize raw `monitor --filter=mm` stdout into a stable, comparable
+  /// trace. Steps: (1) keep only the monitor's `[+SSSS.mmm]`-prefixed trace
+  /// lines, dropping the child's forwarded stdout; (2) strip that timestamp
+  /// prefix and the depth indent, leaving `mm_&lt;verb&gt; ...`; (3) dense-renumber
+  /// `#&lt;id&gt;` alloc ids to 1,2,3,… by first appearance so run-specific
+  /// monotonic ids don't leak into goldens. Idempotent: re-normalizing an
+  /// already-normalized trace is a no-op, so the same routine normalizes both
+  /// captured output and the authored expected block.
+  /// </summary>
+  private static string NormalizeMmTrace(string rawStdout) {
+    var idMap = new Dictionary<string, int>(StringComparer.Ordinal);
+    var kept = new List<string>();
+
+    foreach (var rawLine in rawStdout.Replace("\r\n", "\n").Split('\n')) {
+      // A timestamped monitor line yields its payload from capture group 1
+      // (the `[+SSSS.mmm]` prefix and depth indent stripped); an
+      // already-normalized golden line is the bare trimmed text. Either way
+      // keep ONLY genuine `mm_<verb>` events — the child's forwarded stdout
+      // and any non-MM line are dropped — which also makes this idempotent.
+      var match = MmTraceLineRegex().Match(rawLine);
+      var payload = (match.Success ? match.Groups[1].Value : rawLine).Trim();
+      if (!payload.StartsWith(MmTraceEventPrefix, StringComparison.Ordinal)) continue;
+
+      payload = MmTraceAllocIdRegex().Replace(payload, m => {
+        var raw = m.Groups[1].Value;
+        if (!idMap.TryGetValue(raw, out var dense)) {
+          dense = idMap.Count + 1;
+          idMap[raw] = dense;
+        }
+        return $"#{dense}";
+      });
+
+      kept.Add(payload);
+    }
+
+    return string.Join("\n", kept).Trim();
   }
 
   private static string NormalizeIr(string ir) {
@@ -1501,10 +1703,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         // `maxoncstderr` block from the current compiler output.
         if (test.Expectation is CompilerErrorExpectation cerr) {
           try {
-            Compiler.Compiler.MmTrace = false;
-            Compiler.Compiler.MmDebug = false;
-            Compiler.Compiler.AsyncTrace = false;
-            Compiler.Compiler.Testing = true;
+            SetCompileFlags();
             var (_, compileError) = CompileToExecutable(
               new Fragment {
                 FilePath = fragmentPath,
@@ -1547,10 +1746,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (success.RequiredIR != null || HasAnyRequiredIRBlock(specContent, markerMatch)) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_ir.exe");
           try {
-            Compiler.Compiler.MmTrace = false;
-            Compiler.Compiler.MmDebug = false;
-            Compiler.Compiler.AsyncTrace = false;
-            Compiler.Compiler.Testing = true;
+            SetCompileFlags();
             var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: _target);
 
             if (irResult.Success && irResult.AllStagesIr != null) {
@@ -1621,14 +1817,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           }
         }
 
-        // Update stderr (for MmTrace, AsyncTrace, or plain stderr blocks)
+        // Update stderr (for AsyncTrace or plain panic/runtime stderr blocks).
+        // mm-trace no longer routes through stderr — it has its own binary
+        // capture branch below — so this compile never enables tracing.
         if (success.Stderr != null) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_stderr.exe");
           try {
-            Compiler.Compiler.MmTrace = test.MmTrace;
-            Compiler.Compiler.AsyncTrace = test.AsyncTrace;
-            Compiler.Compiler.MmDebug = false;
-            Compiler.Compiler.Testing = true;
+            SetCompileFlags(asyncTrace: test.AsyncTrace);
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
@@ -1659,6 +1854,38 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
           }
         }
+
+        // Regenerate the ```mm-trace golden for mm-trace capture-mode tests:
+        // compile with the binary DebugStream producer, capture + normalize the
+        // `monitor --filter=mm` output, then splice the block into the spec.
+        if (test.MmTrace) {
+          var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_mmtrace.exe");
+          try {
+            SetCompileFlags(debugStream: true);
+            var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
+
+            if (result.Success) {
+              var (_, monitorStdout) = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
+              var newTrace = NormalizeMmTrace(monitorStdout);
+              var oldTrace = NormalizeMmTrace(success.MmTraceExpected ?? "");
+              if (oldTrace != newTrace || success.MmTraceExpected == null) {
+                // Re-find marker since specContent may have shifted from the
+                // RequiredIR/stderr splices above.
+                var markerMatch2 = Regex.Match(specContent, markerPattern);
+                if (markerMatch2.Success) {
+                  var (splicedContent, spliced) = SpliceMmTraceBlock(specContent, markerMatch2, newTrace);
+                  if (spliced) {
+                    specContent = splicedContent;
+                    updated = true;
+                    Logger.Debug(LogCategory.Testing, $"Updated mm-trace for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  }
+                }
+              }
+            }
+          } finally {
+            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+          }
+        }
       }
 
       if (updated) {
@@ -1670,6 +1897,40 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     if (updatedSpecs > 0) {
       Logger.Info(LogCategory.Testing, $"Updated required blocks in {updatedSpecs} spec file(s)");
     }
+  }
+
+  /// <summary>
+  /// Splice a freshly-normalized ```mm-trace golden into the spec text for one
+  /// test. Mirrors the RequiredIR/maxoncstderr splice pattern: bound the search
+  /// to the test's slice (up to the next test marker); replace an existing
+  /// ```mm-trace block if present, otherwise insert a new one after the last
+  /// fenced result block in the slice. Returns the (possibly) rewritten content
+  /// and whether a splice occurred.
+  /// </summary>
+  private static (string Content, bool Spliced) SpliceMmTraceBlock(string specContent, Match markerMatch, string newTrace) {
+    var searchStart = markerMatch.Index + markerMatch.Length;
+    var nextTestMatch = Regex.Match(specContent[searchStart..], @"<!--\s*(?:disabled-)?test:\s*\S+\s*-->", RegexOptions.None, TimeSpan.FromSeconds(5));
+    var searchEnd = nextTestMatch.Success ? searchStart + nextTestMatch.Index : specContent.Length;
+    var replacement = $"```mm-trace\n{newTrace}\n```";
+
+    // Replace an existing block if the test already has one.
+    var existing = Regex.Match(specContent[searchStart..searchEnd], @"```mm-trace\s*\n(.*?)```", RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+    if (existing.Success) {
+      var absoluteStart = searchStart + existing.Index;
+      var absoluteEnd = absoluteStart + existing.Length;
+      return (string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd)), true);
+    }
+
+    // No existing block: insert after the last fenced result block in the slice.
+    var lastFence = Regex.Matches(specContent[searchStart..searchEnd], @"```[^\n]*\n.*?```", RegexOptions.Singleline, TimeSpan.FromSeconds(5))
+      .Cast<Match>().LastOrDefault();
+    if (lastFence != null) {
+      var insertPos = searchStart + lastFence.Index + lastFence.Length;
+      var newBlock = $"\n\n{replacement}";
+      return (string.Concat(specContent.AsSpan(0, insertPos), newBlock, specContent.AsSpan(insertPos)), true);
+    }
+
+    return (specContent, false);
   }
 
   /// <summary>
@@ -1687,6 +1948,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private static partial System.Text.RegularExpressions.Regex FragmentDirRegex();
   [GeneratedRegex(@" \[M=\d+\]$", RegexOptions.Multiline)]
   private static partial Regex AsyncWorkerSuffixRegex();
+  // A monitor trace line: `[+SSSS.mmm]` timestamp prefix, optional depth
+  // indent (captured by \s*), then the `mm_<verb> ...` payload in group 1.
+  [GeneratedRegex(@"^\[\+\d+\.\d+\]\s*(.*)$")]
+  private static partial Regex MmTraceLineRegex();
+  // An alloc-id token `#<digits>` for dense first-appearance renumbering.
+  [GeneratedRegex(@"#(\d+)")]
+  private static partial Regex MmTraceAllocIdRegex();
   [GeneratedRegex(@"^// --- file:\s*(.+)$")]
   private static partial Regex MyRegex();
 }
