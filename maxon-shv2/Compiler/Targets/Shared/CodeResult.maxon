@@ -19,7 +19,7 @@
 // GROWTH CONTRACT: the value types above this line are Chunk-A content — GROW,
 // never redefine them. The two structs below are B1 additions.
 
-typealias RelocSlotIndex = int(0 to u64.max)
+export typealias RelocSlotIndex = int(0 to u64.max)
 
 // A relocation records a code location that needs patching after section layout.
 // Used for IAT entries (Windows PE) and GOT entries (Linux ELF).
@@ -183,6 +183,21 @@ export type FunctionCodeChunk
 			rdataConstants: GlobalDataTable.create()
 		}
 	end 'create'
+
+	// Assemble a chunk from an emitter's accumulated buffers in one shot. The
+	// per-op emitter mutates local `var` buffers (`code`/`callFixups`/…) then hands
+	// them here, keeping the chunk itself an immutable `let` at the call site.
+	export static function createWith(funcName String, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
+		return Self{
+			funcName: funcName,
+			code: code,
+			entryOffset: 0,
+			callFixups: callFixups,
+			rdataRelocs: rdataRelocs,
+			iatRelocs: iatRelocs,
+			rdataConstants: rdataConstants
+		}
+	end 'createWith'
 end 'FunctionCodeChunk'
 
 export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk

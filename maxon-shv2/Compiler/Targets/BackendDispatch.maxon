@@ -1,0 +1,97 @@
+// BackendDispatch — the Phase-7 backend driver: it takes a lowered MirModule to
+// a runnable executable. `buildBackend` runs the fixed MIR→Target→CodeResult
+// sequence; `augmentWithRuntime` supplies the OS entry point; `writeExecutable`
+// dispatches the CodeResult to the per-OS object writer.
+//
+// These stages are driven as ordered function calls rather than PassKind entries
+// (the mid pipeline in PassPipeline stops at MirModule): the backend produces a
+// CodeResult, which is not an IR module, so it does not fit the module-field
+// dispatch model. This mirrors v1, where Phase 7 is backend-direct.
+//
+// THIN for maxon-shv2 M1 (x64-windows only). `augmentWithRuntime` currently
+// installs ONLY the minimal `mrt_start` entry stub + the single `ExitProcess`
+// import — a `return 42` program allocates nothing and spawns nothing, so it
+// carries none of v1's unconditional x64-windows runtime floor (no slab/MM init,
+// no green-thread scheduler, no IOCP, no fault handler). This function is
+// designed to GROW: M6 prepends slab/MM init, Phase F prepends the green-thread
+// scheduler. Linux/macOS/wasi entry stubs + `writeElf`/`writeMachO` dispatch
+// arrive at their milestones.
+
+// The user program's entry function — `mrt_start` calls it, then bridges its
+// R8 return value to ExitProcess.
+export let UserEntryName = "main"
+
+// `mrt_start`'s frame: 32 bytes of Win64 shadow space for the calls it makes,
+// plus 8 bytes so rsp is 16-byte aligned at each `call` (the OS enters the stub
+// with rsp ≡ 8 (mod 16), as if via `call`; `sub rsp, 0x28` restores 16-alignment).
+let EntryStubFrameBytes = 0x28
+
+// Run the full backend: MIR → Target → register allocation → prologue/epilogue →
+// runtime augmentation → machine-code emission → CodeResult.
+export function buildBackend(mirModule MirModule, target Target, globalData GlobalDataTable) returns CodeResult
+	var targetModule = lowerMirToX64(mirModule)
+	allocateRegisters(targetModule, target: target)
+	insertPrologueEpilogue(targetModule, target: target)
+	augmentWithRuntime(targetModule, target: target)
+
+	var chunks = FunctionCodeChunkArray.create()
+	for func in targetModule.functions 'eachFunc'
+		chunks.push(emitFunctionChunk(targetModule, func: func))
+	end 'eachFunc'
+
+	return concatX64FunctionChunks(targetModule, mirModule: mirModule, chunks: chunks, globalData: globalData)
+end 'buildBackend'
+
+// Install the OS entry point. M1 = "prepend the `mrt_start` entry stub + register
+// the ExitProcess import." Runs AFTER register allocation and prologue/epilogue so
+// the hand-built stub (all-physical registers, its own explicit frame) is never
+// reprocessed by those passes.
+export function augmentWithRuntime(module TargetModule, target Target)
+	if target.os != Os.windows 'unsupportedOs'
+		panic("augmentWithRuntime: maxon-shv2 M1 emits an entry stub for x64-windows only (got {targetToString(target)})")
+	end 'unsupportedOs'
+	prependEntryStub(module)
+end 'augmentWithRuntime'
+
+// Build `mrt_start` and lay it out FIRST so its `.text` offset is the PE entry
+// point. The stub bridges Maxon's custom ABI (primary return in R8) to Win64's
+// ExitProcess (UINT arg in ECX):
+//   sub rsp, 0x28      reserve shadow space + restore 16-byte alignment
+//   call main          main returns its ExitCode in R8 (custom ABI)
+//   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
+//   call [ExitProcess] terminate the process with that code
+//   ret                dead (ExitProcess never returns); kept for well-formedness
+function prependEntryStub(module TargetModule)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var block = module.addBlock(func, label: "entry")
+
+	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
+	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	module.appendOp(block, op: TargetOp.movReg32Reg32(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.iatCall(exitProcessIatSlot()))
+	module.setTerminator(block, op: TargetOp.ret)
+
+	prependFunction(module, func: func)
+end 'prependEntryStub'
+
+// Move `func` to the front of the module's function list so it lays out first in
+// `.text`. Block refs are flat `module.blocks` indices, so reordering the
+// function list never invalidates them.
+function prependFunction(module TargetModule, func IrFunction)
+	var reordered = IrFunctionArray.create()
+	reordered.push(func)
+	for existing in module.functions 'eachFunc'
+		reordered.push(existing)
+	end 'eachFunc'
+	module.functions = reordered
+end 'prependFunction'
+
+// Write the CodeResult to a runnable executable, dispatched on target OS. M1
+// writes an x64-windows PE; the ELF / Mach-O / WASM writers arrive at their
+// milestones.
+export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath)
+	match target.os 'os'
+		windows then writePe(outputPath, codeResult: codeResult, target: target)
+		default panic("writeExecutable: maxon-shv2 M1 writes x64-windows PE only (got {targetToString(target)})")
+	end 'os'
+end 'writeExecutable'

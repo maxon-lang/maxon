@@ -5,11 +5,15 @@
 // THIN for maxon-shv2 M1: carries exactly the x64 ops the `return 42` slice
 // needs — materialize a constant into a register (movRegImm / movRegImm32),
 // move a value between registers (movRegReg, for the R8 return move + regalloc
-// copies), and the frame/return control ops (prologue / epilogue / ret). Later
-// milestones GROW `TargetOp` with the ALU / compare-branch / call / memory / FP
-// (XMM) ops as features land, and GROW the register representation with the XMM
-// register file. arm64 support arrives at its own milestone; M1 is x64-windows
-// only, so `TargetModule` currently carries only x64 ops.
+// copies), the frame/return control ops (prologue / epilogue / ret), and the
+// three ops the runtime entry stub `mrt_start` is built from: a direct call to
+// the user entry (callDirect), the custom-ABI→Win64 bridge move (movReg32Reg32,
+// `mov ecx, r8d`), and an IAT-relative indirect call (iatCall, `call ExitProcess`
+// through the import table). Later milestones GROW `TargetOp` with the ALU /
+// compare-branch / general call / memory / FP (XMM) ops as features land, and
+// GROW the register representation with the XMM register file. arm64 support
+// arrives at its own milestone; M1 is x64-windows only, so `TargetModule`
+// currently carries only x64 ops.
 //
 // v1 returns the primary value in R8 (NOT RAX) under its self-designed calling
 // convention; the physical GPR enum here includes R8 so B2's regalloc + return
@@ -69,12 +73,17 @@ export type TargetOpMeta
 end 'TargetOpMeta'
 
 export union TargetOp
-	// Frame setup: reserve `stackSize` bytes of stack. Inserted by B2's
-	// prologue/epilogue pass at a function's entry block.
-	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	// Frame teardown (restore rsp / callee-saved registers). Placed just before
-	// `ret`; reads the primary-return register (R8) implicitly at the exit site.
-	epilogue = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Frame setup: reserve `stackSize` bytes of stack (`sub rsp, stackSize`).
+	// shv2 M1 uses a frame-pointer-omitted (rsp-only) frame — no `push rbp` — so
+	// the entry stub's `sub rsp, 0x28` shadow-space reservation IS a `prologue`.
+	// `setsFlags` is true because `sub` writes EFLAGS. Callee-saved pushes GROW
+	// in when the register allocator first promotes into callee-saved regs (none
+	// at M1). Inserted by B2's prologue/epilogue pass at a function's entry block.
+	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	// Frame teardown (`add rsp, stackSize`), the exact mirror of `prologue`.
+	// Placed just before `ret` on a return block. Carries its own `stackSize` so
+	// the encoder is self-contained (no frame tracker threaded through emit).
+	epilogue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	// `ret` instruction — return control to the caller.
 	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Materialize a 64-bit immediate into `dest` (`mov reg, imm64`).
@@ -83,9 +92,23 @@ export union TargetOp
 	// zero-extends to the full 64-bit register). B2 picks this over movRegImm
 	// for values that fit 32 bits (e.g. the literal 42) — the encoding is shorter.
 	movRegImm32(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	// Register-to-register move (`mov dest, src`). B2 emits this for the
+	// 64-bit register-to-register move (`mov dest, src`). B2 emits this for the
 	// primary-return move (value → R8) and for register-allocation copies.
 	movRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// 32-bit register-to-register move (`mov dest32, src32`, zero-extending to
+	// 64 bits). B2 emits exactly one at M1: the custom-ABI→Win64 bridge in
+	// `mrt_start` (`mov ecx, r8d`) that hands main's R8 return value to
+	// ExitProcess's ECX argument slot.
+	movReg32Reg32(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Direct near call to a named function (`call rel32`). The concat step
+	// resolves `targetName` to the callee's `.text` placement as a rel32
+	// displacement. `mrt_start` uses this to `call main`. Full call-barrier
+	// semantics (clobbers caller-saved registers).
+	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true}
+	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
+	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
+	// this to `call ExitProcess`. Full call-barrier semantics.
+	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true}
 end 'TargetOp'
 
 export typealias TargetOpArray = Array with TargetOp

@@ -1,0 +1,311 @@
+// X64Backend — the machine-code encoder. Turns a register-allocated,
+// prologue/epilogue-inserted `TargetModule` into `.text` bytes plus the fixups a
+// PE writer needs. Two public entry points:
+//   emitFunctionChunk(module, func)  -> FunctionCodeChunk  (one function's bytes
+//                                       with CHUNK-LOCAL fixup offsets)
+//   concatX64FunctionChunks(...)     -> CodeResult         (lays out `.text` in
+//                                       function order, rebases + resolves fixups)
+//
+// THIN for maxon-shv2 M1: encodes exactly the TargetOps the `return 42` slice and
+// its `mrt_start` entry stub produce — prologue/epilogue (`sub`/`add rsp, N`),
+// ret, mov reg,imm (32- and 64-bit forms), 64- and 32-bit reg-reg moves,
+// `call rel32`, and `call [rip]` through the IAT. Later milestones GROW the
+// dispatch as the TargetOp union grows. arm64 is a separate backend at its own
+// milestone.
+//
+// ENCODING FACTORING (pre-empting the duplication review): every instruction is
+// assembled from FOUR shared primitives — `emitRex` (REX prefix with W/R/B bits),
+// `emitModRmRegReg` / `emitModRmExt` (the mod=11 register-direct ModR/M byte),
+// and the `BinaryHelpers` little-endian writers. No REX/ModRM byte is hand-
+// spelled per instruction: e.g. both reg-reg move widths share `encodeMovRegReg`
+// (only the REX.W bit differs), and `sub rsp`/`add rsp` share `encodeRspAdjust`
+// (only the ModR/M opcode-extension differs). Opcodes, REX bits, and ModR/M
+// constants are all NAMED below — no bare hex is scattered through the emitters.
+
+// --- REX prefix (0x40 | W<<3 | R<<2 | X<<1 | B) ---
+// REX.W selects 64-bit operand size; REX.R/B extend the ModR/M reg / rm fields to
+// registers r8-r15. REX.X (SIB index) is unused at M1 (no memory-index operands).
+let RexBase = 0x40
+let RexW = 0x08
+let RexR = 0x04
+let RexB = 0x01
+
+// Registers r8-r15 (register number >= 8) need a REX.R/REX.B extension bit; their
+// low 3 bits go in the ModR/M field. `X64Register.rawValue` IS the x64 register
+// number (rax=0 .. r15=15) by the enum's declaration order.
+let ExtendedRegThreshold = 8
+
+// ModR/M mod=11 (register-direct): the r/m field names a register, not memory.
+let ModRmRegDirect = 0xC0
+
+// ModR/M for `call [rip+disp32]`: mod=00, reg=/2 (the CALL r/m64 extension),
+// rm=101 (the mod=00 rm=101 encoding is RIP-relative on x64) => 0x15.
+let ModRmRipRelCall = 0x15
+
+// --- Opcodes ---
+let OpcodeRet = 0xC3
+let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
+let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
+let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
+let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
+let OpcodeCallRel32 = 0xE8  // call rel32
+let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
+
+// Group-1 ALU opcode-extension (ModR/M reg field) values.
+let Grp1ExtAdd = 0  // ADD
+let Grp1ExtSub = 5  // SUB
+
+// ==========================================================================
+// Shared REX / ModR/M primitives
+// ==========================================================================
+
+// The x64 register number (rax=0 .. r15=15) of an X64Register.
+function regNumber(reg X64Register) returns MachineWord
+	return reg.rawValue as MachineWord
+end 'regNumber'
+
+// The low 3 bits that go in a ModR/M reg or r/m field.
+function regLow3(reg X64Register) returns MachineWord
+	return regNumber(reg) mod ExtendedRegThreshold
+end 'regLow3'
+
+// True for r8-r15 (need a REX extension bit).
+function regIsExtended(reg X64Register) returns bool
+	return regNumber(reg) >= ExtendedRegThreshold
+end 'regIsExtended'
+
+// Emit the REX prefix for an instruction with a ModR/M reg field and r/m field.
+// `wide` selects 64-bit operand size (REX.W). The prefix is emitted whenever it
+// carries any bit: always for 64-bit ops, and for 32-bit ops only when a reg is
+// extended (r8-r15). For opcode-extension forms (ModR/M /ext) the reg field holds
+// an extension 0..7 that never needs REX.R, so callers pass a base register
+// (`X64Register.rax`) as `regField`.
+function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register)
+	var rex = RexBase
+	if wide 'w'
+		rex = rex or RexW
+	end 'w'
+	if regIsExtended(regField) 'r'
+		rex = rex or RexR
+	end 'r'
+	if regIsExtended(rmField) 'b'
+		rex = rex or RexB
+	end 'b'
+	if wide or rex != RexBase 'needed'
+		code.push(rex)
+	end 'needed'
+end 'emitRex'
+
+// ModR/M byte for a register-direct (mod=11) reg-to-r/m instruction.
+function emitModRmRegReg(code ByteArray, regField X64Register, rmField X64Register)
+	code.push(ModRmRegDirect or (regLow3(regField) shl 3) or regLow3(rmField))
+end 'emitModRmRegReg'
+
+// ModR/M byte for a register-direct (mod=11) instruction whose reg field carries
+// a fixed opcode extension (e.g. group-1 /5 for SUB).
+function emitModRmExt(code ByteArray, ext MachineWord, rmField X64Register)
+	code.push(ModRmRegDirect or (ext shl 3) or regLow3(rmField))
+end 'emitModRmExt'
+
+// ==========================================================================
+// Per-op encoders
+// ==========================================================================
+
+// mov dest, src (register-to-register). `wide` = 64-bit (REX.W) vs 32-bit
+// (`mov dest32, src32`, which zero-extends into the full register). Opcode 0x89
+// is `mov r/m, r`, so the reg field is the SOURCE and the r/m field the DEST.
+// Shared by the 64-bit R8 return move, register-allocation copies, and the 32-bit
+// `mov ecx, r8d` ABI bridge.
+function encodeMovRegReg(code ByteArray, dest X64Register, src X64Register, wide bool)
+	emitRex(code, wide: wide, regField: src, rmField: dest)
+	code.push(OpcodeMovRmReg)
+	emitModRmRegReg(code, regField: src, rmField: dest)
+end 'encodeMovRegReg'
+
+// mov reg32, imm32 (B8+rd id). Writing a 32-bit register zero-extends to 64 bits,
+// so this is the compact form for any value that fits u32 (e.g. the literal 42).
+function encodeMovRegImm32(code ByteArray, dest X64Register, value MachineWord)
+	// REX.B only when `dest` is r8-r15 (the opcode's +rd register — there is no
+	// ModR/M byte). The shared emitRex applies the "emit only when a bit is set"
+	// rule, so no reg needs REX for rax-rdi; a base register in `regField` keeps
+	// REX.R clear (mirrors encodeMovRegImm64, which differs only in REX.W).
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest)
+	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	writeDword(code, value: value)
+end 'encodeMovRegImm32'
+
+// mov reg64, imm64 (REX.W B8+rd io). Only reached for values wider than u32 (the
+// `appendIntImmToReg` size choice routes narrower values to the 32-bit form).
+function encodeMovRegImm64(code ByteArray, dest X64Register, value MachineWord)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: dest)
+	code.push(OpcodeMovRegImmBase + regLow3(dest))
+	writeQword(code, value: value)
+end 'encodeMovRegImm64'
+
+// sub/add rsp, imm — the rsp-only frame adjustment. `ext` picks SUB (prologue) vs
+// ADD (epilogue); the two differ only in the ModR/M opcode-extension. imm8 form
+// when it fits a signed byte, else imm32.
+function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: X64Register.rsp)
+	if amount <= i8.max 'imm8'
+		code.push(OpcodeGrp1Imm8)
+		emitModRmExt(code, ext: ext, rmField: X64Register.rsp)
+		code.push(amount and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(OpcodeGrp1Imm32)
+		emitModRmExt(code, ext: ext, rmField: X64Register.rsp)
+		writeDword(code, value: amount)
+	end 'imm32'
+end 'encodeRspAdjust'
+
+// prologue: reserve the frame with `sub rsp, stackSize`. A zero-size frame emits
+// nothing (a frameless function never carries a prologue op, but the guard keeps
+// the encoder total).
+function encodePrologue(code ByteArray, stackSize StackSize)
+	if stackSize > 0 'reserve'
+		encodeRspAdjust(code, ext: Grp1ExtSub, amount: stackSize)
+	end 'reserve'
+end 'encodePrologue'
+
+// epilogue: release the frame with `add rsp, stackSize` (mirror of prologue).
+function encodeEpilogue(code ByteArray, stackSize StackSize)
+	if stackSize > 0 'release'
+		encodeRspAdjust(code, ext: Grp1ExtAdd, amount: stackSize)
+	end 'release'
+end 'encodeEpilogue'
+
+// call rel32 to a named function. The 4-byte displacement is left zero and a
+// CHUNK-LOCAL CallFixup records the disp32 offset; concat rebases it and resolves
+// it to the callee's placement.
+function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targetName String)
+	code.push(OpcodeCallRel32)
+	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	writeDword(code, value: 0)
+end 'encodeCallDirect'
+
+// call [rip+disp32] through an IAT slot. The disp32 is left zero and an IAT
+// Relocation records its offset + slot; the PE writer patches it to the IAT
+// entry's RVA once section layout is fixed.
+function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
+	code.push(OpcodeCallIndirect)
+	code.push(ModRmRipRelCall)
+	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	writeDword(code, value: 0)
+end 'encodeIatCall'
+
+// Resolve a colored operand to its physical register. A virtual reg here is an
+// allocator bug (register allocation must run before emission).
+function resolvePhysical(vreg X64VReg) returns X64Register
+	match vreg 'resolve'
+		physical(reg) then return reg
+		virtual(id) then panic("x64 emitter: unresolved virtual register v{id} — register allocation did not color it before emission")
+	end 'resolve'
+end 'resolvePhysical'
+
+// Encode one TargetOp into `code`, recording call/IAT fixups as it goes.
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray)
+	match op 'emit'
+		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
+		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
+		ret then code.push(OpcodeRet)
+		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolvePhysical(dest), value: value)
+		movRegImm32(dest, value) then encodeMovRegImm32(code, dest: resolvePhysical(dest), value: value)
+		movRegReg(destReg, srcReg) then encodeMovRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
+		movReg32Reg32(destReg, srcReg) then encodeMovRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
+		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
+		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+	end 'emit'
+end 'emitTargetOp'
+
+// ==========================================================================
+// Per-function chunk emission
+// ==========================================================================
+
+// Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets. The
+// caller (concat) shifts every fixup by the chunk's start offset. There are no
+// intra-function block jumps in the M1 slice (single-block functions), so no
+// block-fixup table is threaded through — it GROWS in with control flow (M4).
+export function emitFunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var iatRelocs = RelocationArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
+	// M3 (floats) / M10 (strings).
+	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+end 'emitFunctionChunk'
+
+// ==========================================================================
+// Concatenation: lay out .text, rebase fixups, resolve intra-module calls
+// ==========================================================================
+
+// Function name -> its start offset in the concatenated `.text`.
+typealias FuncLabelOffsetMap = Map with (String, CodeOffset)
+
+// The runtime entry point's function name — its `.text` offset becomes the PE
+// AddressOfEntryPoint (see augmentWithRuntime, which lays it out first). Exported
+// so augmentWithRuntime builds a function under the same name the concat looks up.
+export let EntryPointName = "mrt_start"
+
+// Concatenate every function chunk into the final `.text`, rebase each chunk's
+// CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct
+// calls to rel32, and package the result as a format-neutral CodeResult. Chunk
+// iteration order (which augmentWithRuntime arranges so `mrt_start` is first)
+// fixes the `.text` byte layout.
+export function concatX64FunctionChunks(targetModule TargetModule, mirModule MirModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
+	var code = ByteArray.create()
+	var relocations = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
+	var labelOffsets = FuncLabelOffsetMap.create()
+	var debugSymbols = DebugSymbolArray.create()
+
+	for chunk in chunks 'eachChunk'
+		let funcStart = code.count()
+		labelOffsets.upsert(chunk.funcName, value: funcStart)
+		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		code.append(chunk.code)
+
+		// Rebase chunk-local fixup offsets to absolute `.text` offsets.
+		for fx in chunk.callFixups 'rebaseCalls'
+			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+		end 'rebaseCalls'
+		for r in chunk.iatRelocs 'rebaseIat'
+			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+		end 'rebaseIat'
+	end 'eachChunk'
+
+	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
+
+	let entryOffset = try labelOffsets.get(EntryPointName) otherwise panic("concatX64FunctionChunks: '{EntryPointName}' was not laid out — augmentWithRuntime did not run before emission")
+
+	// M1 registers no read-only data / globals, so rdata, rdata relocs, symdata,
+	// and covdata are all empty — they GROW back at their milestones (strings/M10,
+	// globals/M6, coverage). The IAT relocations remain for the PE writer to patch.
+	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+	result.debugSymbols = debugSymbols
+	return result
+end 'concatX64FunctionChunks'
+
+// Patch every `call rel32` to the rel32 displacement of its named target. The
+// displacement is measured from the end of the instruction (disp32 offset + 4).
+function resolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
+	for fixup in callFixups 'resolve'
+		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("resolveCallFixups: call to unknown function '{fixup.targetName}'")
+		let rel = targetOffset - (fixup.codeOffset + X64Disp32Width)
+		patchX64Rel32(code, codeOffset: fixup.codeOffset, rel: rel, what: "x64CallRel32", targetAddr: targetOffset)
+	end 'resolve'
+end 'resolveCallFixups'

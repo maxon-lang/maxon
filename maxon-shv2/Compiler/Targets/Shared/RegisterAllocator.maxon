@@ -1,0 +1,134 @@
+// Register allocator — colors virtual X64VRegs (X64VReg.virtual, keyed by the
+// SSA ValueId that defined them) into physical GPRs.
+//
+// MINIMAL for maxon-shv2 M1 — a DELIBERATE placeholder, not the real allocator.
+// v1's `RegisterAllocator.maxon` is a 2,233-line SSA-dominance colorer
+// (LiveRangeBuilder + SpillManager + ApplyColoring + a density-gated recolor/
+// split engine) that operates on v1's bespoke `TargetModule` (an `x64Ops` array
+// behind a `cpu` discriminator) and needs the `TargetOpQuery` / `OpPattern` /
+// register-mask machinery to extract each op's register operands. None of that
+// scaffold exists in shv2's thin `IrModule with TargetOp` Target tier, so porting
+// it verbatim would drag in the entire regalloc cone for a program with exactly
+// ONE virtual register. Instead M1 uses a no-liveness colorer:
+//
+//   Assign each DISTINCT virtual ValueId, in first-appearance order, its own
+//   fresh caller-saved GPR from a small pool; never reuse a register.
+//
+// This is always CORRECT — giving every value a distinct register can never make
+// two live values alias — as long as the number of distinct virtual regs in a
+// function does not exceed the pool. At M1 that count is 1 (movImm's result),
+// well within the 6-register pool, and it is a hard panic (not a miscompile) if a
+// future milestone's function exceeds it before the real allocator lands. The
+// full liveness-based allocator (spilling, coalescing, live-range splitting)
+// arrives at M3/M5 when arithmetic + multi-function programs create real register
+// pressure; this file is REPLACED then, not merely extended.
+
+// Index into the fixed caller-saved GPR pool.
+typealias PoolIndex = int(0 to u64.max)
+
+// Virtual ValueId -> the physical GPR the minimal colorer assigned it.
+typealias VRegColorMap = Map with (ValueId, X64Register)
+
+export typealias X64RegisterArray = Array with X64Register
+
+// The caller-saved GPRs the minimal colorer draws from, in assignment order.
+// R8 is EXCLUDED — it is the primary-return register (the return move targets it
+// as a fixed physical reg), so keeping it out of the pool avoids a value being
+// colored to R8 and clobbering an in-flight return. RSP/RBP (frame) and the
+// callee-saved set (RBX, R12-R15) are likewise excluded; RSI/RDI are caller-saved
+// under Maxon's convention but held back until the real allocator needs them.
+function callerSavedPool() returns X64RegisterArray
+	var pool = X64RegisterArray.create()
+	pool.push(X64Register.rax)
+	pool.push(X64Register.rcx)
+	pool.push(X64Register.rdx)
+	pool.push(X64Register.r9)
+	pool.push(X64Register.r10)
+	pool.push(X64Register.r11)
+	return pool
+end 'callerSavedPool'
+
+// Color every function's virtual registers into physical GPRs, in place.
+export function allocateRegisters(module TargetModule, target Target)
+	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): coloring {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		colorFunction(module, func: func)
+	end 'eachFunc'
+end 'allocateRegisters'
+
+// Per-function coloring: walk the function's ops in block/op order and rewrite
+// each op's virtual operands to physical registers in the shared `module.ops`
+// array. Rewriting in place at the same index keeps every `opRefs` / terminator
+// reference valid.
+function colorFunction(module TargetModule, func IrFunction)
+	var colorer = MinimalColorer.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("allocateRegisters: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			recolorOpAt(module, opIdx: opIdx, colorer: colorer)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			recolorOpAt(module, opIdx: block.terminatorIndex(), colorer: colorer)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'colorFunction'
+
+// Read the op at `opIdx`, color its virtual operands, and write the colored op
+// back at the same index.
+function recolorOpAt(module TargetModule, opIdx OpIndex, colorer MinimalColorer)
+	let op = try module.ops.get(opIdx) otherwise panic("allocateRegisters: opIdx {opIdx} not in module.ops")
+	let colored = colorOp(op, colorer: colorer)
+	try module.ops.set(opIdx, value: colored) otherwise panic("allocateRegisters: ops.set OOB at {opIdx}")
+end 'recolorOpAt'
+
+// Rebuild an op with its X64VReg operands colored. Ops with no register operands
+// (control / frame / call ops) pass through unchanged.
+function colorOp(op TargetOp, colorer MinimalColorer) returns TargetOp
+	match op 'rewrite'
+		prologue to ret then return op
+		movRegImm(dest, value) then return TargetOp.movRegImm(colorer.colorVReg(dest), value: value)
+		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorer.colorVReg(dest), value: value)
+		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
+		movReg32Reg32(destReg, srcReg) then return TargetOp.movReg32Reg32(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
+		callDirect to iatCall then return op
+	end 'rewrite'
+end 'colorOp'
+
+type MinimalColorer
+	var colors as VRegColorMap
+	var pool as X64RegisterArray
+	var nextPoolIdx as PoolIndex
+
+	static function create() returns MinimalColorer
+		return Self{colors: VRegColorMap.create(), pool: callerSavedPool(), nextPoolIdx: 0}
+	end 'create'
+
+	// Color one operand: a physical reg passes through (already colored — e.g. the
+	// R8 return target or the entry stub's RCX/R8); a virtual reg resolves to its
+	// assigned physical reg (assigning one on first appearance).
+	function colorVReg(vreg X64VReg) returns X64VReg
+		match vreg 'resolve'
+			physical then return vreg
+			virtual(id) then return X64VReg.physical(self.assign(id))
+		end 'resolve'
+	end 'colorVReg'
+
+	// Return the physical GPR for `id`, minting a fresh one from the pool on first
+	// appearance. Panics (never miscompiles) if the pool is exhausted — the M1
+	// no-liveness colorer only supports as many simultaneous distinct values as
+	// the pool has registers; the real allocator (M3/M5) removes this ceiling.
+	function assign(id ValueId) returns X64Register
+		if self.colors.contains(id) 'known'
+			return try self.colors.get(id) otherwise panic("MinimalColorer: contains(id) true but get failed for v{id}")
+		end 'known'
+		if self.nextPoolIdx >= self.pool.count() 'exhausted'
+			panic("MinimalColorer: caller-saved pool of {self.pool.count()} registers exhausted (distinct virtual regs exceed the pool) — M1's no-liveness allocator handles only a handful of simultaneous values; the full liveness-based allocator arrives at M3/M5")
+		end 'exhausted'
+		let reg = try self.pool.get(self.nextPoolIdx) otherwise panic("MinimalColorer: pool.get within bounds failed at {self.nextPoolIdx}")
+		self.nextPoolIdx = self.nextPoolIdx + 1
+		self.colors.upsert(id, value: reg)
+		return reg
+	end 'assign'
+end 'MinimalColorer'

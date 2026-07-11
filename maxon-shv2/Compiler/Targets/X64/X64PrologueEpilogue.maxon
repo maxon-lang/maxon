@@ -1,0 +1,103 @@
+// X64PrologueEpilogue — inserts frame setup/teardown ops after register
+// allocation. shv2 uses a frame-pointer-omitted (rsp-only) frame: the `prologue`
+// op reserves the frame with `sub rsp, N` and the `epilogue` op releases it with
+// `add rsp, N`. This pass owns BOTH — unlike v1, where ISel pre-emits an
+// `epilogue` at each return and this pass strips/re-emits it. shv2's return
+// lowering emits only the R8 move + `ret`, so this pass simply INSERTS a
+// `prologue` at the entry block and an `epilogue` immediately before each `ret`
+// when the function needs a frame.
+//
+// THIN for maxon-shv2 M1: a function needs a frame only if it reserves stack
+// (locals / spills, none yet) or makes a call (unwinding). The single user
+// function in the `return 42` slice — `main` — is frameless (no locals, no
+// calls), so this pass is a no-op on it and `main` stays a flat
+// `mov reg,42; mov r8,reg; ret`. The runtime entry stub `mrt_start` builds its
+// own `sub rsp, 0x28` frame directly in `augmentWithRuntime` (which runs AFTER
+// this pass), so this pass never sees it. GROWS at M2 (variables → real stack
+// frames) and M5 (multi-function → callee-saved pushes/pops).
+
+// x64 frames keep rsp 16-byte aligned across calls.
+let StackFrameAlignment = 16
+
+// Insert prologue/epilogue ops for every function in the module.
+export function insertPrologueEpilogue(module TargetModule, target Target)
+	logDebug(LogCategory.codegen, message: function() gives "Prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		insertFrameForFunction(module, func: func)
+	end 'eachFunc'
+end 'insertPrologueEpilogue'
+
+function insertFrameForFunction(module TargetModule, func IrFunction)
+	if not functionNeedsFrame(module, func: func) 'frameless'
+		return
+	end 'frameless'
+
+	let frameBytes = alignUp(func.stackSize, alignment: StackFrameAlignment)
+
+	var isFirstBlock = true
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
+
+		if isFirstBlock 'entry'
+			insertPrologueAtEntry(module, block: block, frameBytes: frameBytes)
+		end 'entry'
+		isFirstBlock = false
+
+		if blockEndsWithReturn(module, block: block) 'returnBlock'
+			// Append after the last body op (the R8 return move) so teardown runs
+			// just before the `ret` terminator.
+			module.appendOp(block, op: TargetOp.epilogue(frameBytes))
+		end 'returnBlock'
+	end 'eachBlock'
+end 'insertFrameForFunction'
+
+// Prepend the `prologue` op to the entry block's op list so it runs first.
+function insertPrologueAtEntry(module TargetModule, block IrBlock, frameBytes StackSize)
+	let opIdx = module.ops.count()
+	module.ops.push(TargetOp.prologue(frameBytes))
+	try block.opRefs.insert(0, value: opIdx) otherwise panic("insertPrologueEpilogue: opRefs.insert(0) failed on block '{block.label}'")
+end 'insertPrologueAtEntry'
+
+// A function needs a frame if it reserves any stack (locals / spills) or makes a
+// call. `isCall` is read straight off each op's TargetOpMeta backing.
+function functionNeedsFrame(module TargetModule, func IrFunction) returns bool
+	if func.stackSize > 0 'hasStack'
+		return true
+	end 'hasStack'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionNeedsFrame: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			if opAtIsCall(module, opIdx: opIdx) 'call'
+				return true
+			end 'call'
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			if opAtIsCall(module, opIdx: block.terminatorIndex()) 'callTerm'
+				return true
+			end 'callTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return false
+end 'functionNeedsFrame'
+
+function opAtIsCall(module TargetModule, opIdx OpIndex) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("functionNeedsFrame: opIdx {opIdx} not in module.ops")
+	return op.rawValue.isCall
+end 'opAtIsCall'
+
+// True when the block's terminator is a `ret` — the site an `epilogue` precedes.
+function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithReturn: terminator not in module.ops")
+	return match op 'check'
+		prologue to epilogue gives false
+		ret gives true
+		movRegImm to iatCall gives false
+	end 'check'
+end 'blockEndsWithReturn'
