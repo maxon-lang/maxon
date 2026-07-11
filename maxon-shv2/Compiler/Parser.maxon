@@ -1,12 +1,18 @@
 // Parser — the M1 recursive-descent slice.
 //
 // shv2 keeps v1's "direct-emit" contract: the parser emits Maxon-dialect IR ops
-// directly onto blocks (no AST), and identifies values by name slices. The ONE
-// structural change (PLAN.md) is that it writes exclusively into a per-file
-// `FileParseArtifact` — its own MaxonModule fragment, its own local type-name
-// interner, and its own registry contributions — and takes NO `Project`. Per-file
-// parse is therefore a pure function of `(tokens, filePath, namespace)` with no
-// shared state; `mergeArtifact` folds the result into `Project` later.
+// directly onto blocks (no AST). Two structural changes from v1:
+//
+//   1. It writes exclusively into a per-file `FileParseArtifact` — its own
+//      MaxonModule fragment, its own local type-name interner, and its own
+//      registry contributions — and takes NO `Project` (PLAN.md). Per-file parse
+//      is therefore a pure function of `(tokens, filePath, namespace)` with no
+//      shared state; `mergeArtifact` folds the result into `Project` later.
+//   2. **Value numbering is born HERE.** Each op's result gets a dense, function-
+//      local `ValueId` from `self.valueIds` at emit time. v1 instead named values
+//      with synthetic `$tN` strings and re-derived the ids in `lowerMaxonToStd`
+//      from a second counter — paying a heap String + ByteArray per value plus a
+//      byte-keyed hash map to undo it. See MaxonDialect's MaxonOp header.
 //
 // THIN for M1: exactly the `return 42` slice —
 //   parseModule -> dispatchTopLevel(`function`) -> parseFunction
@@ -41,8 +47,11 @@ export type Parser
 	var artifact as FileParseArtifact
 	// Per-function symbol table (empty at M1 — no locals). Reset per function.
 	var scope as Scope
-	// Per-function synthetic-name counter for intermediate values (`$t0`, ...).
-	var synthCounter as TokenIndex
+	// Per-function ValueId allocator for the values this function's ops define.
+	// Re-seeded at `paramCount` per function (params implicitly own 0..paramCount-1
+	// by Std-ABI convention), so ids are dense and function-local. The parser is
+	// where value numbering is BORN — see MaxonDialect's MaxonOp header.
+	var valueIds as ValueIdRef
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String) returns Parser
 		return Self{
@@ -52,7 +61,7 @@ export type Parser
 			namespace: namespace,
 			artifact: FileParseArtifact.create(filePath),
 			scope: Scope.create(),
-			synthCounter: 0
+			valueIds: ValueIdRef.create(0)
 		}
 	end 'create'
 
@@ -104,10 +113,13 @@ export type Parser
 
 		let returnType = try self.parseOptionalReturnType()
 
+		// Fresh per-function value numbering. Seeded at the function's paramCount
+		// (0 at M1 — no params yet) so parameter ids stay reserved once M5 adds them.
+		let paramCount = 0 as ParamCount
 		self.scope.reset()
-		self.synthCounter = 0
+		self.valueIds = ValueIdRef.create(paramCount)
 
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: nameTok.line)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: MaxonTypeArray.create(), returnLine: nameTok.line)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath
@@ -187,27 +199,27 @@ export type Parser
 		end 'unsupported'
 	end 'parseStatement'
 
-	// `return [<expr>]`. Sets the block's `ret` terminator directly. A bare
-	// `return` (void) carries an empty value name — never lowered, since a void
-	// `main` fails the E3002 semantic check before the pipeline reaches lowering.
+	// `return [<expr>]`. Sets the block's terminator directly. A bare `return`
+	// emits the distinct `retVoid` variant rather than a `ret` carrying some
+	// absent-value sentinel — see MaxonDialect's `retVoid`.
 	function parseReturnStatement(block IrBlock) throws ParseError
 		let retTok = try self.consume(TokenKind.return)
 		if self.at(TokenKind.newline) or self.at(TokenKind.end) or self.isEof() 'bareReturn'
-			self.artifact.module.setTerminator(block, op: MaxonOp.ret(ByteArray.create(), range: SourceRange.ofToken(retTok)))
+			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
 		end 'bareReturn'
-		let valueName = try self.parseExpression(block)
-		self.artifact.module.setTerminator(block, op: MaxonOp.ret(valueName, range: SourceRange.ofToken(retTok)))
+		let retVal = try self.parseExpression(block)
+		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
 	// Expression entry. M1 has no operators, so an expression is just a primary.
 	// Grows into a Pratt precedence climber at M3.
-	function parseExpression(block IrBlock) returns ByteArray throws ParseError
+	function parseExpression(block IrBlock) returns ValueId throws ParseError
 		return try self.parsePrimary(block)
 	end 'parseExpression'
 
 	// A primary expression. M1: an integer literal only.
-	function parsePrimary(block IrBlock) returns ByteArray throws ParseError
+	function parsePrimary(block IrBlock) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.parseIntLiteral(block)
 		end 'intLit'
@@ -217,8 +229,8 @@ export type Parser
 
 	// Parse an integer literal token, converting its text to a value via
 	// NumberParsing.parseInt (re-raising overflow as a positioned ParseError),
-	// then emit a `literal` op and return the value it produces.
-	function parseIntLiteral(block IrBlock) returns ByteArray throws ParseError
+	// then emit a `literal` op and return the value it defines.
+	function parseIntLiteral(block IrBlock) returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.intLiteral)
 		let value = try parseInt(tok.value) otherwise 'overflow'
 			throw ParseError.integerOverflow(tok.line, column: tok.column)
@@ -226,19 +238,12 @@ export type Parser
 		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
 	end 'parseIntLiteral'
 
-	// Append a `literal` op producing a fresh synthetic value; return its name.
-	function emitLiteral(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ByteArray
-		let name = self.freshName()
-		self.artifact.module.appendOp(block, op: MaxonOp.literal(name, value: value, valueType: valueType, range: range))
-		return name
+	// Append a `literal` op defining a fresh value; return the ValueId it defines.
+	function emitLiteral(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+		let result = allocValueId(self.valueIds)
+		self.artifact.emitOp(block, op: MaxonOp.literal(result, value: value, valueType: valueType), range: range)
+		return result
 	end 'emitLiteral'
-
-	// Mint a fresh per-function synthetic value name (`$t0`, `$t1`, ...).
-	function freshName() returns ByteArray
-		let n = self.synthCounter
-		self.synthCounter = self.synthCounter + 1
-		return "$t{n}".toByteArray()
-	end 'freshName'
 
 	// --- token cursor ---
 

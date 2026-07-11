@@ -36,6 +36,10 @@ export type FileParseArtifact
 	// This file's Maxon IR fragment. `IrModule.merge` offset-relocates it into
 	// the whole-program module at merge time.
 	export var module as MaxonModule
+	// Source spans for `module.ops`, parallel by op index. NOT a field on the ops
+	// themselves — see SourceRangeTable. `mergeArtifact` folds this into
+	// `project.opRanges` in lockstep with the module merge.
+	export var opRanges as SourceRangeTable
 	// This file's `funcReturnTypes` registry contributions, in declaration order.
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
@@ -46,10 +50,38 @@ export type FileParseArtifact
 		return Self{
 			filePath: filePath,
 			module: MaxonModule.create(),
+			opRanges: SourceRangeTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			typeNames: TypeNameInterner.create()
 		}
 	end 'create'
+
+	// THE emit choke point for a Maxon body op — the only way the parser creates
+	// one. Appending the op and recording its span happen together here, so
+	// `module.ops` and `opRanges` cannot drift apart: there is no path that adds a
+	// Maxon op without a span. (Calling `module.appendOp` directly would be that
+	// path, which is why nothing in the Maxon tier does.)
+	//
+	// `appendOp` assigns the op the index `opCount()` holds right now, so capture it
+	// BEFORE the append. `record` then asserts that index equals the span table's
+	// own count — which is exactly the parallelism invariant, checked on every
+	// single op: if anything ever appended a Maxon op behind this function's back,
+	// the two counts diverge and the NEXT emit panics rather than silently shifting
+	// every later span by one.
+	export function emitOp(block IrBlock, op MaxonOp, range SourceRange)
+		let opIndex = self.module.opCount()
+		self.module.appendOp(block, op: op)
+		self.opRanges.record(opIndex, range: range)
+	end 'emitOp'
+
+	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
+	// `emitOp`; separate only because a terminator is stored on the block rather
+	// than appended to its op list.
+	export function emitTerminator(block IrBlock, op MaxonOp, range SourceRange)
+		let opIndex = self.module.opCount()
+		self.module.setTerminator(block, op: op)
+		self.opRanges.record(opIndex, range: range)
+	end 'emitTerminator'
 
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
@@ -62,12 +94,13 @@ end 'FileParseArtifact'
 // Fold `artifact` into the whole-program build in source-path order:
 //   1. reconcile the artifact's local type-name ids into the project interner,
 //   2. offset-merge the artifact's MaxonModule fragment into `target`,
-//   3. commit the artifact's registry contributions into `Project`.
+//   3. fold its op source spans onto `project.opRanges`, in lockstep with (2),
+//   4. commit the artifact's registry contributions into `Project`.
 // `target` is the accumulator module `queryAllModule` builds (and caches); the
-// registries land on `Project`. This is the ONLY writer of `project.typeNames`
-// and `project.funcReturnTypes` — the shv2 replacement for v1's mid-parse
-// inserts + ParseDelta rollback, needing no rollback because nothing was ever
-// written to `Project` speculatively.
+// registries land on `Project`. This is the ONLY writer of `project.typeNames`,
+// `project.funcReturnTypes`, and `project.opRanges` — the shv2 replacement for
+// v1's mid-parse inserts + ParseDelta rollback, needing no rollback because
+// nothing was ever written to `Project` speculatively.
 export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact)
 	let remap = project.typeNames.foldInto(artifact.typeNames)
 	if not remap.isIdentity 'remapNeeded'
@@ -79,7 +112,18 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 		remapArtifact(artifact, remap: remap)
 	end 'remapNeeded'
 
+	// `IrModule.merge` relocates the artifact's ops to `target.ops.count()` and up,
+	// so the spans must land at exactly that offset in `project.opRanges` to stay
+	// parallel. Both accumulate by appending in the same source-path order, so the
+	// offsets agree by construction — assert it rather than trust it, because a
+	// silent drift here misattributes every later op's diagnostics by a constant.
+	let opOffset = target.ops.count()
+	if project.opRanges.count() != opOffset 'spansOutOfStep'
+		panic("mergeArtifact: project.opRanges holds {project.opRanges.count()} spans but the merged module holds {opOffset} ops — the span table drifted out of lockstep with the op array")
+	end 'spansOutOfStep'
+
 	target.merge(artifact.module)
+	project.opRanges.appendFrom(artifact.opRanges)
 	commitFuncReturnTypes(project, artifact: artifact)
 end 'mergeArtifact'
 

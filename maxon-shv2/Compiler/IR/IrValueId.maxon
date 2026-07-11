@@ -1,10 +1,19 @@
 // Shared IR identifier types used across all dialect phases.
 //
-// ValueId: unique identifier for an SSA value produced by an IR op in the Std
-// dialect and later phases. Every op with a result in those phases is assigned
-// a fresh, function-local ValueId. The Maxon dialect does not use ValueIds —
-// it identifies values by name slices (`ByteArray`), and numbering is
-// assigned per function when lowering to Std.
+// ValueId: unique identifier for a value produced by an IR op. Function-local
+// and dense, allocated from a per-function counter. Minted by the PARSER (every
+// Maxon op's result gets one at emit time) and passed through verbatim by
+// `lowerMaxonToStd` — the Maxon, Std, and Target tiers all name values the same
+// way. ValueIds 0..paramCount-1 are reserved for parameters by Std-ABI
+// convention, so each function's counter is seeded at `paramCount`.
+//
+// The Maxon tier deliberately does NOT identify values by source-name slices:
+// its result names were only ever synthetic `$tN` counters, so routing them
+// through a heap String + ByteArray and a byte-keyed map bought a second dense
+// counter and nothing else. (User *variables* are `VarSlot`s, not values, and
+// real SSA construction is `mem2reg`'s job at the Std tier.) Identifier TEXT
+// that is not a value — a field name, a method name — stays a `ByteArray`.
+//
 // VarSlot: unique identifier for a local variable slot (stack slot) within a function.
 // BlockId: stable identifier for a basic block within a function; preserved
 // across phase lowerings so terminators can name the same target block.
@@ -12,6 +21,11 @@
 // StdTypeArray: array of StdType (function parameter/return type lists).
 
 export typealias ValueId = int(0 to u64.max)
+
+// Dense value-operand list — call arguments, enum payloads, match bindings, and
+// the block-arg lists on `BranchEdge`. A flat i64 array, NOT an array of heap
+// name objects: that is the whole point of minting ValueIds in the parser.
+export typealias ValueIdArray = Array with ValueId
 export typealias VarSlot = int(0 to u64.max)
 export typealias BlockId = int(0 to u64.max)
 export typealias BlockIdArray = Array with BlockId
@@ -24,12 +38,14 @@ export typealias BlockRefArray = Array with BlockRef
 export typealias ParamCount = int(0 to u64.max)
 export typealias StdTypeArray = Array with StdType
 
-// ValueIdRef: a mutable per-function counter for allocating Std-level ValueIds.
+// ValueIdRef: a mutable per-function counter for allocating ValueIds.
 //
-// Every pass that creates new Std (or Target) ops builds a fresh ref
-// seeded from `scanMaxValueId(func) + 1`. Allocation is function-local —
-// ValueIds 0..paramCount-1 are reserved for parameters by Std-ABI convention,
-// and each function's numbering is independent of every other.
+// The PARSER owns the primary one, reset per function and seeded at `paramCount`
+// (params implicitly occupy 0..paramCount-1 by Std-ABI convention). Every later
+// pass that SYNTHESIZES ops — the 1:N desugarings in `lowerMaxonToStd`, the Std
+// optimizers — builds its own ref seeded from `scanMaxValueId(func) + 1` so its
+// new values cannot collide with the parser's. Allocation is function-local:
+// each function's numbering is independent of every other.
 export type ValueIdRef
 	export var nextId as ValueId
 

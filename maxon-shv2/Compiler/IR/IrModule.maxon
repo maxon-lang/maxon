@@ -265,6 +265,11 @@ export type IrModule uses Op
 		self.functions.push(func)
 	end 'pushFunc'
 
+	// Both op-appenders assign the new op the index `self.ops.count()` — i.e. the
+	// value `opCount()` returns immediately BEFORE the call. The Maxon tier relies
+	// on that to key its op-parallel `SourceRangeTable` (see
+	// FileParseArtifact.emitOp), which is also the only caller that cares; every
+	// other tier just wants the op appended, so neither returns the index.
 	export function appendOp(block IrBlock, op Op)
 		let idx = self.ops.count()
 		self.ops.push(op)

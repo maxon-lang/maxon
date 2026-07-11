@@ -55,13 +55,6 @@ end 'isTrivialOwnership'
 // unbounded (one entry per distinct named reference seen in source).
 export typealias TypeNameId = int(0 to u64.max)
 
-export typealias ValueIdArray = Array with ValueId
-
-// Array of name slices — used by call ops (added later) to pass positional
-// argument names. Each element is a `ByteArray` slice, typically a zero-copy
-// view over the lexer's source buffer or a per-function synthetic name.
-export typealias ByteArrayArray = Array with ByteArray
-
 // --- MaxonType: source-level type system ---
 //
 // bool is the only standalone primitive a user writes directly; `integer` /
@@ -116,18 +109,42 @@ end 'maxonReturnTypeIsVoid'
 
 // --- MaxonOp ---
 //
-// Value operands are NAMES, not SSA ids: every result/operand is a `ByteArray`
-// — a zero-copy slice over the lexer's source buffer for user-written names, or
-// a per-function synthetic name (`$t0`, `$t1`, …) for intermediates. SSA
-// numbering is assigned only at the Maxon→Std lowering boundary, so the Maxon
-// dialect stays source-proximate and LSP-queryable.
+// **Value operands are `ValueId`s, minted by the PARSER.** Every op's result gets
+// a dense, function-local id at emit time; `lowerMaxonToStd` passes them through
+// verbatim. Maxon ops are NOT identified by name slices.
 //
-// Every variant carries a trailing `range SourceRange` (source span for
-// diagnostics/LSP; synthetic ops pass `SourceRange.none()`) and is tagged with a
-// static `MaxonOpMeta{category}` — a struct-backed enum-payload pattern used for
-// coarse membership tests ("is this any kind of call?") without a new `match`
-// arm at every site. The struct backing is REQUIRED, so a new MaxonOp variant
-// cannot be added without declaring its category here.
+// This is deliberate, and it is a correction of v1. v1 named Maxon values with
+// `ByteArray`s and let `lowerMaxonToStd` assign the "real" SSA ids — but v1's
+// result names were themselves synthetic `$tN` strings off a per-function
+// counter (`mintSynthName`), and the ids were a second per-function counter. The
+// mapping was a bijection between two dense counters, bought with a heap `String`
+// + a heap `ByteArray` per value and a byte-sequence-keyed hash map (O(len)
+// compares, one insert + one lookup per value). It constructed no SSA: user
+// variables are `VarSlot`s, and real SSA construction is `mem2reg`'s job at the
+// Std tier. So the names paid for themselves in allocation and bought a counter.
+//
+// What the front end genuinely needs, it keeps in better homes: SOURCE SPANS live
+// on the op (`range`, below) — that is what the LSP's hover/goto-def actually maps
+// cursor offsets against, and it never needed names — and NAME RESOLUTION lives in
+// `Scope`, the per-function symbol table the parser already threads.
+//
+// Identifier TEXT that is not a value stays text: a field name, a method name, a
+// struct name are `ByteArray`s (they are looked up, not computed). The split is
+// "is this operand a VALUE or a NAME?", and it is ~90/10 in favour of values.
+//
+// **Source spans are NOT a field on the op.** Every Maxon op has one, but it lives
+// in the op-parallel `SourceRangeTable` (see SourceRange.maxon), keyed by the op's
+// index. `SourceRange` is a `type`, so an inline `range` field is a POINTER to a
+// heap-boxed SourceRange — one live heap object per op, on the compiler's most
+// numerous object, retained for the module's lifetime. The table stores four dense
+// scalar columns instead and materializes a `SourceRange` only when a diagnostic or
+// LSP query asks for one (the cold path). Ops are emitted through
+// `FileParseArtifact.emitOp`/`emitTerminator`, which append op and span in lockstep.
+//
+// Each variant is tagged with a static `MaxonOpMeta{category}` — a struct-backed
+// enum-payload pattern used for coarse membership tests ("is this any kind of
+// call?") without a new `match` arm at every site. The struct backing is REQUIRED,
+// so a new MaxonOp variant cannot be added without declaring its category here.
 
 // Coarse category an op belongs to, for membership tests spanning several
 // variants. Grows as call/panic/var/await/closure ops land.
@@ -138,6 +155,13 @@ export enum OpCategory
 	varAccess
 	awaiting
 	closureProducer
+	// The `own.*` ownership ops (`move` / `borrow` / `drop` / `retain` / `release`,
+	// M6). They are a BAND OF `MaxonOp`, not a separate dialect or tier: `IrModule`
+	// is generic over exactly ONE op type, so an op living in the Maxon block stream
+	// IS a `MaxonOp`. Do NOT introduce a nested `MaxonOp.own(OwnOp)` — Maxon boxes
+	// every payload-carrying union case, so nesting would cost a second heap object
+	// per op, which is the exact anti-pattern the 3-tier collapse removed from `StdOp`.
+	ownership
 	plain  // everything else (the op stands alone; matched by variant)
 end 'OpCategory'
 
@@ -146,13 +170,32 @@ export type MaxonOpMeta
 	export let category as OpCategory
 end 'MaxonOpMeta'
 
+// Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a
+// pass that treats a whole category uniformly covers it with ONE `match` range arm
+// (`firstOwn to lastOwn then …`) instead of one arm per variant.
+//
+// INVARIANT — **a new variant is APPENDED AT THE END OF ITS BAND, never inserted
+// into the middle of one.** A range arm names its endpoints, so it silently
+// swallows anything inserted between them: the compiler reports no missing-case
+// error, and the new op is misclassified at every range-arm site at once. This is
+// the same rule `StdOp` carries, and the same one place the project's "no silent
+// unhandled cases" guarantee has no compiler backstop — reviewers enforce it by
+// hand. Appending at a band's end is always safe (the range's endpoint moves with
+// it, deliberately).
 export union MaxonOp
+	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
 	// time). `valueType` is the literal's source-level type (integer, or a
-	// named ranged alias). Result is a fresh synthetic name.
-	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
-	// Return terminator. Always placed as a block terminator via setTerminator,
-	// never as a regular body op. `retVal` names the SSA value to return.
-	ret(retVal ByteArray, range SourceRange) = MaxonOpMeta{category: OpCategory.plain}
+	// named ranged alias). `result` is the freshly-minted ValueId it defines.
+	literal(result ValueId, value ParsedInt, valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	// Value-returning return terminator. Always placed as a block terminator via
+	// setTerminator, never as a regular body op. `retVal` is the value to return.
+	ret(retVal ValueId) = MaxonOpMeta{category: OpCategory.plain}
+	// Void return terminator — `return` with no expression. A DISTINCT variant
+	// rather than a `ret` carrying some empty-value sentinel: `ValueId` has no
+	// "absent" value, and a sentinel is exactly what the project forbids. (v1
+	// passed an empty `ByteArray` here, which only ever "worked" because the
+	// void-`main` case is rejected by E3002 before lowering ever runs.)
+	retVoid = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'

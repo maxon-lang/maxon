@@ -132,6 +132,11 @@ end 'queryAllModule'
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.typeNames = TypeNameInterner.create()
+	// Must reset with the others: `mergeArtifact` appends spans to this table and
+	// asserts its count tracks the merged module's op count. The module accumulator
+	// (`merged`) is rebuilt from empty on every miss, so a span table carried over
+	// from a prior run would start out of step and trip that assert.
+	project.opRanges = SourceRangeTable.create()
 end 'resetMergeTargets'
 
 // Map a fatal LexerError to a project diagnostic. M1 reports every kind under a

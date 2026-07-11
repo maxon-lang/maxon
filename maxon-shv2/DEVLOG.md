@@ -137,6 +137,48 @@ The design each milestone establishes is documented in
   value model; nesting cost 3 heap boxes per op instead of 1). Done at M1 because
   the same merge costs ~160 lines now and ~1,500 in v1. All three M1 gates
   re-verified (exit 42 byte-identical at 28 bytes of `.text`; E3001; E3002).
+- [x] **M1 post / structural** — **Maxon values are `ValueId`s, minted by the
+  parser.** The `name → ValueId` step in `lowerMaxonToStd` was a **bijection
+  between two dense counters**: v1's Maxon result names were synthetic `$tN`
+  strings off a per-function counter (`mintSynthName`), and the ids were a second
+  per-function counter — so the mapping cost a heap `String` + heap `ByteArray`
+  per value plus a byte-sequence-keyed hash map (O(len) compares; one insert + one
+  lookup per value) and constructed **no SSA** (user vars are `VarSlot`s; `mem2reg`
+  does real SSA at the Std tier). `MaxonOp` operands are now `ValueId`s;
+  `NameToValueIdMap`/`defineName`/`resolveName` are deleted; the lowering passes
+  ids through verbatim, leaving it to do what it is actually for — the width/ABI
+  collapse and the 1:N desugaring. Identifier TEXT that is not a value (field /
+  method / struct names) stays `ByteArray`. Also: the void-return sentinel (an
+  empty `ByteArray`) became a distinct `MaxonOp.retVoid` variant — `ValueId` has no
+  empty value, and sentinels are forbidden; `MaxonOp` gained the band-append
+  invariant + an `OpCategory.ownership` band so M6's `own.*` ops land as MaxonOp
+  variants rather than a nested `MaxonOp.own(OwnOp)` (see ARCHITECTURE.md's Own tier
+  section); `ValueIdArray`/`ByteArrayArray` were rehomed to `IrValueId`/
+  `GlobalDataTable`.
+  **Source spans came off the op too.** `SourceRange` is a `type` (reference
+  semantics), so a trailing `range` field was a POINTER to a heap-boxed SourceRange
+  — one live heap object per op, retained for the module's lifetime, on the most
+  numerous object in the compiler. Spans now live in `SourceRangeTable`, an
+  op-parallel store of **four dense scalar columns**; a `SourceRange` is
+  materialized only by `get`, i.e. only when a diagnostic or LSP query asks (the
+  cold path). NOTE an `Array with SourceRange` would NOT have worked — it is an
+  array of pointers to the same boxes; the scalar columns are the whole point. The
+  table is MAXON-TIER (`FileParseArtifact` per file → `Project` whole-program, via
+  `mergeArtifact`); Std/Target carry no spans, so the post-inline peak module pays
+  nothing. Ops and spans are appended in lockstep by the single choke point
+  `FileParseArtifact.emitOp`/`emitTerminator`, and `record` asserts index ==
+  table-count on every op, so an op appended behind the choke point's back panics
+  on the next emit rather than silently shifting every later span by one.
+  Validated against v1 first: of 80 `ByteArray` operand
+  occurrences across v1's 51 `MaxonOp` variants, ~72 are values and 8 are identifier
+  text. Done now because v1's parser has 27 mint sites and 266 `ByteArray`
+  references to shv2's 3 and 7 (~38× cheaper), and because M6's Own tier is specced
+  against `Scope.ownedStack` (`Array with String`) — after that this is a rewrite,
+  not a representation change. `MaxonType` stays a **boxed union**: packing it into
+  an i64 would forfeit compiler-checked payload extraction, and the static guarantee
+  is worth more than the allocations. All M1 gates re-verified (exit 42, **byte-
+  identical** 28-byte `.text`, sha `5d9944a7…`; E3001; E3002). shv2's own `.text`
+  686,888 → 675,517 (−11,371).
 - [ ] **M2** variables · [ ] **M3** arithmetic
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount

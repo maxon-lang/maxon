@@ -47,7 +47,7 @@ Development is **spec-driven**: copy a spec from `specs/` (or author one) into a
 - `Compiler/IR/Maxon/MaxonDialect.maxon` (extended with ownership), `LowerMaxonToStd.maxon`, all `IR/Std/*` opt passes, `IR/Target/*`, `IR/PassPipeline.maxon`, `Compiler/Project.maxon`, `Queries.maxon` + `QueryEngine.maxon` + `QueryDatabase.maxon`, `TypeResolution.maxon`, `SemanticCheck.maxon`, `Compiler.maxon`, `Main.maxon`. *(v1's `IR/MIR/*` is NOT rebuilt — see "IR tiers" below.)*
 
 **CREATE new** (the static-ownership + parallel machinery):
-- `Compiler/IR/Own/OwnDialect.maxon` — `own.*` ops + `OwnershipKind` + lifetime ids.
+- `Compiler/IR/Own/OwnDialect.maxon` — `own.*` ops + `OwnershipKind` + lifetime ids. **A FILE, not a tier:** the `own.*` ops are a BAND OF `MaxonOp` (`OpCategory.ownership`), because `IrModule` is generic over exactly one op type — an op in the Maxon block stream IS a `MaxonOp`. Never nest them as `MaxonOp.own(OwnOp)`: that costs a second heap box per op, the anti-pattern the 3-tier collapse removed from `StdOp`. See ARCHITECTURE.md's Own tier section.
 - `Compiler/IR/Own/OwnershipInfer.maxon` — signature-ownership inference (replaces `ParamConsumeAnalysis` + `ReturnBorrowAnalysis`).
 - `Compiler/IR/Own/OwnershipCheck.maxon` — move/borrow/use-after-move checker (evolves `MaxonBorrowCheck.maxon`).
 - `Compiler/IR/Own/EscapeAnalysis.maxon` — unique-vs-shared classification.

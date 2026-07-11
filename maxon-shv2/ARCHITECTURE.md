@@ -119,9 +119,12 @@ static Own tier and later milestones supersede), `IR/Maxon/SourceRange.maxon`,
 thin `return <int-literal>` slice: `parseModule → dispatchTopLevel(function) →
 parseFunction → parseOptionalReturnType → parseStatements → parseReturnStatement
 → parseExpression → parsePrimary → parseIntLiteral → emitLiteral`, with a small
-index cursor and a per-function synthetic-name counter (`$tN`). Its ONE
-structural change from v1 (the parallel-ready seam): **it takes no `Project` and
-writes exclusively into a per-file `FileParseArtifact`** — the file's own
+index cursor and a per-function `ValueIdRef` (seeded at `paramCount`). Two
+structural changes from v1. **(1) Value numbering is born here** — every op's
+result gets its dense function-local `ValueId` at emit time, not at the Maxon→Std
+boundary (see the Maxon dialect section). **(2) The parallel-ready seam: it takes
+no `Project` and writes exclusively into a per-file `FileParseArtifact`** — the
+file's own
 `MaxonModule` fragment, its own LOCAL `TypeNameInterner`, and an ordered
 `funcReturnTypes` contribution array. So a file's parse is a pure function of
 `(tokens, filePath, namespace)` with zero shared state (M5's per-file fan-out
@@ -161,11 +164,53 @@ is non-trivial** — inert at M1 (all bindings trivial), drained at M6 to emit
 ### Maxon dialect
 
 **Landed (M1 Chunk A), thin + growable.** `IR/Maxon/MaxonDialect.maxon`:
-- `MaxonOp` union — `literal(result, value, valueType, range)` + `ret(retVal,
-  range)` only, each tagged `= MaxonOpMeta{category}` (v1's invariant: a new op
-  cannot be added without declaring its `OpCategory`). Values are **name slices**
-  (`ByteArray` over the lexer buffer / synthetic `$tN`), not SSA ids — SSA
-  numbering is assigned only at the Maxon→Std boundary.
+- `MaxonOp` union — `literal(result, value, valueType, range)`, `ret(retVal,
+  range)`, `retVoid(range)`, each tagged `= MaxonOpMeta{category}` (v1's
+  invariant: a new op cannot be added without declaring its `OpCategory`).
+  Variants sit in **category-contiguous bands** with the same **append-at-the-end-
+  of-a-band** invariant `StdOp` carries — a range arm silently swallows anything
+  inserted between its endpoints.
+- **Value operands are `ValueId`s, minted by the PARSER** (a correction of v1;
+  landed post-M1). v1 named Maxon values with `ByteArray`s and let
+  `lowerMaxonToStd` assign the "real" ids — but v1's result names were themselves
+  synthetic `$tN` strings off a per-function counter (`mintSynthName`), and the
+  ids were a *second* per-function counter. The mapping was a **bijection between
+  two dense counters**, bought with a heap `String` + heap `ByteArray` per value
+  and a byte-sequence-keyed hash map (O(len) compares; one insert + one lookup per
+  value). It constructed **no SSA**: user variables are `VarSlot`s, and real SSA
+  construction is `mem2reg`'s job at the Std tier. So `lowerMaxonToStd` passes ids
+  through verbatim and `nameToId`/`defineName`/`resolveName` do not exist. What
+  the front end genuinely needs it keeps in better homes: **source spans** on the
+  op (`range` — what the LSP actually maps cursor offsets against; it never needed
+  names) and **name resolution** in `Scope`. Identifier TEXT that is not a value —
+  a field name, a method name — stays a `ByteArray`; the split is "is this operand
+  a VALUE or a NAME?", ~90/10 in favour of values.
+- `retVoid` is a **distinct variant**, not a `ret` carrying an absent-value
+  sentinel: `ValueId` has no empty value, and a sentinel is what the project
+  forbids. (v1 passed an empty `ByteArray`, which only ever "worked" because a
+  void `main` is rejected by E3002 before lowering runs.)
+- **Source spans are NOT a field on the op.** Every Maxon op has one, but it lives
+  in `SourceRangeTable` — an op-parallel store of **four dense scalar columns**
+  (`startBytes`/`endBytes`/`lines`/`columns`), keyed by op index. `SourceRange` is
+  a `type`, so an inline `range` field is a POINTER to a heap-boxed SourceRange:
+  one live heap object per op, on the compiler's most numerous object, retained for
+  the module's lifetime. (Note an `Array with SourceRange` would NOT fix this — it
+  is an array of pointers to the same boxes. The scalar columns are the point.) A
+  `SourceRange` is materialized only by `SourceRangeTable.get`, i.e. only when a
+  diagnostic or an LSP query asks — the cold path. Parsing and lowering never
+  allocate one.
+  - **A MAXON-TIER table.** It lives on `FileParseArtifact` (per file) and
+    `Project` (whole-program, folded by `mergeArtifact` in lockstep with
+    `IrModule.merge`). Std and Target carry no spans — the same reason `StdOp` has
+    no `range` field.
+  - **Parallelism invariant.** Ops and spans are appended together by the single
+    choke point `FileParseArtifact.emitOp`/`emitTerminator` — the only way a Maxon
+    op is created. `SourceRangeTable.record` asserts the op index it is handed
+    equals the table's own count, which IS the invariant, checked on every op: if
+    anything ever appended a Maxon op behind the choke point's back, the next emit
+    panics instead of silently shifting every later span by one.
+  - Per-ARGUMENT spans (v1's `argRanges` on the call ops, M5+) are genuine per-arg
+    payload, not per-op, so they stay inline on the op as a `SourceRangeArray`.
 - `MaxonType` union — `boolean/integer/float/named(TypeNameId)/exitCode/
   unresolved`. `named` is the parser's interned type reference; `unresolved` its
   placeholder. **`exitCode` (added M1 Chunk C)** is the RESOLVED form of the
@@ -269,7 +314,29 @@ opcodes. `StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged fr
 Chunk A.
 
 ### Own tier (ownership infer / check / escape / drops)
-_stub — filled in at M6._
+_Passes are a stub — filled in at M6. But one structural decision is PINNED now,
+because getting it wrong at M6 is a rewrite and writing it down today is free:_
+
+**`own.*` ops are a BAND OF `MaxonOp` — not a separate dialect, not a tier.**
+"Own tier" names a *pass group* (`OwnershipInfer` → `OwnershipCheck` →
+`EscapeAnalysis` → `InsertDrops`), all of which run over the Maxon module. It is
+not a fourth IR tier: tiers are `Maxon → Std → Target`, full stop.
+
+This follows from the container. `IrModule uses Op` is generic over **exactly one**
+op type (`IrModule with MaxonOp`, `with StdOp`, `with TargetOp`), so an op living
+in the Maxon block stream **is a `MaxonOp`**. There is no `OwnModule` and no
+`lowerMaxonToOwn`. PLAN.md:50's `IR/Own/OwnDialect.maxon` is a FILE — a place to
+group the `own.*` variants, their `OpCategory.ownership` band, and the lifetime
+ids — not a dialect in the tier sense.
+
+> **Do NOT introduce `union OwnOp { move, borrow, drop, retain, release }` nested
+> as `MaxonOp.own(OwnOp)`.** Maxon heap-boxes every payload-carrying union case, so
+> nesting costs a **second heap object per op** — the exact anti-pattern the 3-tier
+> collapse (`f3b6f99ae`) removed from `StdOp`, on the ops the Own tier touches most.
+> The `own.*` variants go directly into `MaxonOp`, appended at the end of the
+> `ownership` band, exactly like every other variant.
+
+`OpCategory.ownership` already exists in `MaxonDialect.maxon` for this band.
 
 ### Type resolution & semantic check (Maxon tier)
 

@@ -1,9 +1,12 @@
 // Source-level byte range and line/column position over a file's source buffer.
 //
-// Every MaxonOp carries a SourceRange locating the syntactic span that
-// produced it. Used by diagnostic messages today and by the future LSP's
-// hover/goto-def/rename queries, which map cursor positions to ops by
-// finding the innermost op whose range contains a given byte offset.
+// Every Maxon op has a SourceRange locating the syntactic span that produced it —
+// but it is NOT a field on the op. It lives in `SourceRangeTable` (below), an
+// op-parallel store of dense scalar columns. Used by diagnostic messages today
+// and by the future LSP's hover/goto-def/rename queries, which map cursor
+// positions to ops by finding the innermost op whose range contains a given byte
+// offset. (Note this is why the front end needs no value *names*: the LSP indexes
+// ops by source SPAN, not by name.)
 //
 // The byte range is a half-open interval [startByte, endByte) into the
 // source ByteArray the lexer produced. The `line` / `column` fields carry
@@ -49,4 +52,91 @@ export type SourceRange
 	end 'isEmpty'
 end 'SourceRange'
 
+// Inline per-argument span lists on the call ops (M5+). These are genuine
+// per-ARGUMENT payload — they are not per-op, so they do not belong in the
+// op-parallel `SourceRangeTable` and stay on the op.
 export typealias SourceRangeArray = Array with SourceRange
+
+// --- SourceRangeTable: the op-parallel span store ---
+//
+// Entry `i` is the source span of the op at `module.ops[i]`.
+//
+// **WHY FOUR SCALAR COLUMNS AND NOT `Array with SourceRange`.** `SourceRange` is a
+// `type`, so it has reference semantics: an `Array with SourceRange` is an array
+// of POINTERS to heap-boxed SourceRanges — one live heap object per op, retained
+// for the module's lifetime. That is precisely the box this table exists to
+// remove, so storing SourceRange objects here would RELOCATE the cost, not
+// eliminate it. Four `Array with int` columns are dense i64 buffers: **zero heap
+// objects per op.**
+//
+// A `SourceRange` is materialized only by `get` — i.e. only when a diagnostic or
+// an LSP query actually asks for one. That is the cold path; parsing and lowering
+// never allocate one.
+//
+// **This is a MAXON-TIER structure.** It lives on `FileParseArtifact` (per file)
+// and on `Project` (whole-program, folded by `mergeArtifact`). The Std and Target
+// tiers do not carry it — source spans die at the Maxon→Std boundary, the same
+// reason `StdOp` has no `range` field.
+//
+// **Parallelism invariant:** the table is appended in lockstep with `module.ops`
+// by the single emit choke point (`FileParseArtifact.emitOp` / `emitTerminator`),
+// which is the only way a Maxon op is created. `record` asserts the index it is
+// handed is the next one, so a caller that appended an op without a span fails
+// loudly on the FOLLOWING op instead of silently shifting every later span by one.
+export type SourceRangeTable
+	var startBytes as ByteOffsetArray
+	var endBytes as ByteOffsetArray
+	var lines as LineNumberArray
+	var columns as ColumnNumberArray
+
+	export static function create() returns SourceRangeTable
+		return Self{startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.startBytes.count()
+	end 'count'
+
+	// Append `range` as the span of op `opIndex`, decomposing it into the four
+	// columns. `opIndex` must be the next unrecorded slot — that is what keeps the
+	// table parallel to `module.ops`.
+	export function record(opIndex OpIndex, range SourceRange)
+		if opIndex != self.count() 'outOfStep'
+			panic("SourceRangeTable.record: op {opIndex} recorded into slot {self.count()} — an op was appended without a span, and every later span would be misattributed")
+		end 'outOfStep'
+		self.startBytes.push(range.startByte)
+		self.endBytes.push(range.endByte)
+		self.lines.push(range.line)
+		self.columns.push(range.column)
+	end 'record'
+
+	// Materialize the span of op `opIndex`. THE COLD PATH — diagnostics and LSP
+	// queries only.
+	//
+	// An index past the end means the op was never recorded, i.e. the parallelism
+	// invariant is broken. Returning `SourceRange.none()` would silently attribute
+	// that op to byte 0 of the file and point every diagnostic about it at the top
+	// of the source, so it panics instead. The four columns are only ever pushed
+	// together by `record`, so once the index is in range all four hold it — their
+	// `otherwise` arms are unreachable-by-construction, not error handling.
+	export function get(opIndex OpIndex) returns SourceRange
+		if opIndex >= self.count() 'noSpan'
+			panic("SourceRangeTable.get: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
+		end 'noSpan'
+		let startByte = try self.startBytes.get(opIndex) otherwise panic("SourceRangeTable.get: startBytes column out of step at op {opIndex}")
+		let endByte = try self.endBytes.get(opIndex) otherwise panic("SourceRangeTable.get: endBytes column out of step at op {opIndex}")
+		let line = try self.lines.get(opIndex) otherwise panic("SourceRangeTable.get: lines column out of step at op {opIndex}")
+		let column = try self.columns.get(opIndex) otherwise panic("SourceRangeTable.get: columns column out of step at op {opIndex}")
+		return SourceRange.create(startByte, endByte: endByte, line: line, column: column)
+	end 'get'
+
+	// Fold another table's spans onto the end of this one, preserving order.
+	// `mergeArtifact` calls this in lockstep with `IrModule.merge`, so the appended
+	// spans line up with the ops that merge relocated.
+	export function appendFrom(source SourceRangeTable)
+		self.startBytes.append(source.startBytes)
+		self.endBytes.append(source.endBytes)
+		self.lines.append(source.lines)
+		self.columns.append(source.columns)
+	end 'appendFrom'
+end 'SourceRangeTable'

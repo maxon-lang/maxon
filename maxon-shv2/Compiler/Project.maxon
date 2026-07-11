@@ -115,6 +115,12 @@ export type Project
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
+	// Source span of every op in the whole-program Maxon module, parallel by op
+	// index. Folded from the per-file artifact tables by `mergeArtifact`, in the
+	// same source-path order the module itself merges. A MAXON-TIER table: the Std
+	// and Target modules carry no spans (see SourceRangeTable). Read on the cold
+	// path only — diagnostics and, later, LSP queries.
+	export var opRanges as SourceRangeTable
 	// The compile root: the file or directory this build was invoked on. Used to
 	// derive per-file namespaces and the default output path.
 	export var rootPath as FilePath
@@ -131,6 +137,7 @@ export type Project
 			db: db,
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			typeNames: TypeNameInterner.create(),
+			opRanges: SourceRangeTable.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
