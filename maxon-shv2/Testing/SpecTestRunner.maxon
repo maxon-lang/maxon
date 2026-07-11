@@ -19,6 +19,29 @@ let DraftStatus = "draft"
 let BuildSubcommand = "build"
 let OutputFlag = "-o"
 
+// `--emit-ir` makes the subprocess build write a Target-IR sidecar next to the
+// exe (`<exeBase>.ir`); the runner reads it back to embed in a codegen fragment.
+// The extension must match the driver's `IrFileExtension` (Compiler.maxon).
+let EmitIrFlag = "--emit-ir"
+let IrFileExtension = ".ir"
+
+// Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
+// These `.test` files are OUTPUTS regenerated on every `spec-test` run and
+// committed, so codegen evolution shows up as a reviewable diff (v1's
+// `specs/fragments-*` model). Named, not inline, because the layout + the
+// section punctuation below are a format contract shared with spec review.
+let FragmentsSubdir = "fragments"
+let FragmentExtension = ".test"
+let FragmentTestPrefix = "// Test: "
+let FragmentSectionSep = "---"
+let ExitCodeLabel = "ExitCode: "
+let CompilerErrorLabel = "CompilerError:"
+
+// Stand-in for the IR section when the sidecar could not be read — only reachable
+// if a supposed exitCode test failed to compile (the run then FAILs regardless),
+// so it is a visible signal in the fragment, never the normal path.
+let MissingIrPlaceholder = "// (no Target IR: compile produced no sidecar)\n"
+
 // The placeholder that replaces a fragment's absolute on-disk path in captured
 // compiler output. Machine/run independent, so an expected ```maxoncstderr block
 // authored with `<fragment>:L:C` matches regardless of where the temp file lives.
@@ -91,6 +114,7 @@ export function runSpecDir(compilerExe FilePath, specDir FilePath) returns SpecT
 
 	let host = detectHostTarget()
 	let exeExtension = executableExtension(host)
+	let fragmentsRoot = fragmentsRootDir(specDir, target: host)
 
 	let specPaths = try specFilePaths(specDir)
 	for specPath in specPaths 'eachSpec'
@@ -100,14 +124,29 @@ export function runSpecDir(compilerExe FilePath, specDir FilePath) returns SpecT
 		end 'draftSpec'
 
 		let specName = specPath.stem()
+		let fragmentDir = fragmentsRoot.join(specName)
+		// mkdir -p; a create failure just means fragments for this spec won't be
+		// written (writeTestFragment swallows the ensuing write error) — never a
+		// test gate.
+		_ = Directory.create(fragmentDir)
+
 		for test in specFile.tests 'eachTest'
-			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension)
+			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir)
 			results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 		end 'eachTest'
 	end 'eachSpec'
 
 	return results
 end 'runSpecDir'
+
+// The committed-fragment root for this host target: `<specDir>/fragments/<target>`
+// (e.g. `specs-shv2/fragments/x64-windows`). Each spec's `.test` files hang off a
+// per-spec subdirectory of this root.
+function fragmentsRootDir(specDir FilePath, target Target) returns FilePath
+	let rel = "{FragmentsSubdir}/{targetToString(target)}"
+	let relPath = try FilePath.from(rel) otherwise panic("SpecTestRunner: fragments path '{rel}' must be a valid relative path")
+	return specDir.join(relPath)
+end 'fragmentsRootDir'
 
 // The `*.md` spec files directly under `specDir`, in directory-listing order —
 // deterministic per host filesystem (String is not Comparable, so there is no
@@ -123,9 +162,11 @@ function specFilePaths(specDir FilePath) returns FilePathArray throws CompileErr
 	return specs
 end 'specFilePaths'
 
-// Compile one test's fragment via a subprocess build, then check its
-// expectation. The fragment + produced exe are cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String) returns TestOutcome
+// Compile one test's fragment via a subprocess build (with `--emit-ir` so the
+// Target-IR sidecar is produced), check its expectation, then regenerate the
+// committed `.test` fragment. The temp fragment / exe / IR sidecar are cleaned up
+// before returning.
+function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String, fragmentDir FilePath) returns TestOutcome
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
@@ -134,6 +175,9 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 	let exePath = try FilePath.from("{exeBase.toString()}{exeExtension}") otherwise 'badExePath'
 		return TestOutcome.fail("could not form output path for {test.name}")
 	end 'badExePath'
+	// `--emit-ir` writes `<output>.ir` (Compiler.writeTargetIr uses the same
+	// changeExtension), so the sidecar sits beside the exe under `.ir`.
+	let irPath = exePath.changeExtension(IrFileExtension)
 
 	if not writeFragment(fragmentPath, source: test.source) 'writeFailed'
 		return TestOutcome.fail("could not write fragment {fragmentPath.toString()}")
@@ -144,16 +188,59 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 	compileArgv.push(fragmentPath.toString())
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
+	compileArgv.push(EmitIrFlag)
 
 	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
-		cleanup(fragmentPath, exePath: exePath)
+		cleanup(fragmentPath, exePath: exePath, irPath: irPath)
 		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
 
 	let outcome = checkExpectation(test.expectation, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
-	cleanup(fragmentPath, exePath: exePath)
+
+	// Fragment regeneration is a SIDE EFFECT of the run, not a gate: it runs after
+	// the outcome is already decided and cannot change it. Do it before cleanup so
+	// the just-produced IR sidecar is still on disk.
+	writeTestFragment(fragmentDir, test: test, compile: compile, fragmentPath: fragmentPath, irPath: irPath)
+
+	cleanup(fragmentPath, exePath: exePath, irPath: irPath)
 	return outcome
 end 'runOneTest'
+
+// Regenerate the committed `.test` fragment for one test: its source plus either
+// the generated Target IR (exitCode tests) or the normalized compiler error
+// (compilerError tests). A write failure is swallowed — fragment output is never
+// a test gate. Deterministic: the IR is byte-stable across runs, and the error's
+// absolute fragment path is normalized to `<fragment>`.
+function writeTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, fragmentPath FilePath, irPath FilePath)
+	let content = match test.expectation 'e'
+		exitCode(expected) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
+		compilerError gives buildErrorFragment(test, compile: compile, fragmentPath: fragmentPath)
+	end 'e'
+
+	let outPath = fragmentDir.join("{test.name}{FragmentExtension}")
+	try File.writeText(outPath, content: content) otherwise ignore
+end 'writeTestFragment'
+
+// The shared fragment head both expectation kinds carry: the test name, its
+// source verbatim, and the section separator that closes the source block.
+function fragmentHeader(test SpecTest) returns String
+	return "{FragmentTestPrefix}{test.name}\n{test.source}\n{FragmentSectionSep}\n"
+end 'fragmentHeader'
+
+// An exitCode test's fragment: the shared head, the expected exit code, and the
+// generated Target IR read back from the `--emit-ir` sidecar.
+function buildExitCodeFragment(test SpecTest, expected ExitCodeValue, irPath FilePath) returns String
+	let irText = try File.readText(irPath) otherwise MissingIrPlaceholder
+	return "{fragmentHeader(test)}{ExitCodeLabel}{expected}\n{FragmentSectionSep}\n{irText}"
+end 'buildExitCodeFragment'
+
+// A compilerError test's fragment: the shared head plus the compiler's normalized
+// stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
+// to track — with the temp fragment's absolute path replaced by `<fragment>`).
+function buildErrorFragment(test SpecTest, compile ProcessCapture, fragmentPath FilePath) returns String
+	let normalizedError = normalizeFragmentPath(compile.stderr, fragmentPath: fragmentPath).trim()
+	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
+end 'buildErrorFragment'
 
 function checkExpectation(expectation SpecExpectation, compile ProcessCapture, fragmentPath FilePath, exePath FilePath) returns TestOutcome
 	return match expectation 'e'
@@ -217,11 +304,12 @@ function normalizeFragmentPath(text String, fragmentPath FilePath) returns Strin
 	return text.replace(fragmentPath.toString(), with: FragmentPathToken)
 end 'normalizeFragmentPath'
 
-// Best-effort removal of the per-test fragment + produced exe. A stale temp file
-// never affects correctness (the next test with this name overwrites it), so a
-// delete failure — e.g. the exe was never produced because the compile failed —
-// is ignored.
-function cleanup(fragmentPath FilePath, exePath FilePath)
+// Best-effort removal of the per-test temp fragment + produced exe + IR sidecar.
+// A stale temp file never affects correctness (the next test with this name
+// overwrites it), so a delete failure — e.g. the exe/IR were never produced
+// because the compile failed — is ignored.
+function cleanup(fragmentPath FilePath, exePath FilePath, irPath FilePath)
 	try File.delete(fragmentPath) otherwise ignore
 	try File.delete(exePath) otherwise ignore
+	try File.delete(irPath) otherwise ignore
 end 'cleanup'

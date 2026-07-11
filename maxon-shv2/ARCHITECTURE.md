@@ -643,9 +643,17 @@ exercises the real CLI) through the single `runProcess` choke point, and: for a
 runs the produced exe and compares its exit. `Main` resolves the compiler via
 `Process.executablePath()` (the runner tests itself), prints per-test PASS/FAIL +
 `N passed, M failed`, and **exits non-zero iff any failed** (a real CI gate).
-mm-trace fragments (runtime memory behavior) and Target-IR codegen fragments
-(static generated code, via a coming `TargetPrinter` + `--emit-ir`) attach per
-test at their milestones (mm-trace at M6, codegen fragments next).
+**Codegen fragments landed.** Every `spec-test` run regenerates
+`specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test source + its
+generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive
+`match` over every `TargetOp`, so a new op is a compile error, never a silent
+`??`) for a passing test, or the normalized diagnostic for an error test. Written
+via `build --emit-ir` (which prints `CodeResult.targetModule` to `<output>.ir`).
+The fragments are byte-deterministic and committed, so `git diff` surfaces every
+codegen change in review (v1's `specs/fragments-*` model). Fragment writing is a
+pure side effect — it never changes `spec-test`'s pass/fail or exit code. mm-trace
+fragments (runtime memory behavior) attach the same way at M6 / Stage 2's 2.4,
+once shv2's emitted runtime (Workstream R1) produces the event stream.
 
 ### Control flow (M4a — comparison + `if`)
 

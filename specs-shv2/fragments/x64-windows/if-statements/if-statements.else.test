@@ -1,0 +1,29 @@
+// Test: if-statements.else
+function main() returns ExitCode
+	let x = 5
+	if x == 5 'is5'
+		return 1
+	end 'is5' else 'not5'
+		return 0
+	end 'not5'
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 rcx, 5
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, is5
+    x64.jmp ifelse
+  is5:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg r8, rdx
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg r8, r9
+    x64.ret
+  ifcont:
+}

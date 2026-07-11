@@ -1,0 +1,27 @@
+// Test: if-statements.simple
+function main() returns ExitCode
+	let x = 10
+	if x > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 10
+    x64.movRegImm32 rcx, 5
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg r8, rdx
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r9, 0
+    x64.movRegReg r8, r9
+    x64.ret
+}

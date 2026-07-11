@@ -12,27 +12,54 @@
 
 // Compile the file or directory `inputPath` for `target`, returning the path of
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
-// when unset) wins over the derived output name.
+// when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
+// additionally writes the lowered Target IR beside the exe as `<output>.ir`.
 //
 // The pipeline-driving body lives in `compileToCodeResult` so that the
 // `verify-warm-rebuild` gate compiles through the EXACT same path — a determinism
 // gate over a divergent code path would prove nothing. `compile` adds only the
-// two steps unique to a real build: loading the project and writing the executable.
+// steps unique to a real build: loading the project, writing the executable, and
+// (opt-in) writing the IR sidecar.
 //
 // Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`,
 // `readError`) carry NO diagnostics and propagate straight to Main, which prints
 // a specific message; (2) reported diagnostics (semantic/lexer) are printed inside
 // `compileToCodeResult` and re-signaled as a FRESH `compileError`.
-export function compile(inputPath FilePath, target Target, outputOverride String = "") returns FilePath throws CompileError
+export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false) returns FilePath throws CompileError
 	var project = try loadProject(inputPath, target: target)
 	let codeResult = try compileToCodeResult(project)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
 
+	if emitIr 'emitIr'
+		writeTargetIr(codeResult, outputPath: outputPath)
+	end 'emitIr'
+
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath
 end 'compile'
+
+// Write the lowered Target IR (via `printTargetModule`) beside the produced exe
+// as `<output>.ir`, for `build --emit-ir` and the spec runner's fragment capture.
+// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain
+// `build` emits exactly what it did before. A write failure is logged and
+// swallowed — mirroring `writePe`, which treats the executable write the same way
+// — because the IR sidecar is diagnostic, never a build gate. `includeRuntime:
+// false` excludes the entry stub `mrt_start` (and the future emitted runtime): it
+// is invariant scaffolding, so both the fragment and `--emit-ir` show only the
+// program's own functions. A runtime-debugging view arrives with Workstream R.
+function writeTargetIr(codeResult CodeResult, outputPath FilePath)
+	let irPath = outputPath.changeExtension(IrFileExtension)
+	let irText = printTargetModule(codeResult.targetModule, includeRuntime: false)
+
+	try File.writeText(irPath, content: irText) otherwise 'writeErr'
+		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")
+		return
+	end 'writeErr'
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote Target IR to {irPath}")
+end 'writeTargetIr'
 
 // Create a project rooted at `inputPath` and register every source file under it
 // with the query database — the shared "load" step before the pipeline runs.
@@ -120,6 +147,11 @@ end 'loadOneSourceFile'
 // literals — both are file-discovery contracts.
 let BuildManifestName = "build.maxon"
 let MaxonSourceExtension = ".maxon"
+
+// Extension of the `--emit-ir` Target-IR sidecar written beside the exe. A format
+// contract shared with the spec runner (which reads back the same file), so it is
+// named here rather than spelled inline.
+let IrFileExtension = ".ir"
 
 // Resolve the output executable path: an explicit `-o` override wins; otherwise
 // the output is the input's base name with the platform executable extension

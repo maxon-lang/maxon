@@ -10,7 +10,7 @@
 // diagnostics (the `maxoncstderr` spec contract).
 //
 // CLI (documented):
-//   maxon-shv2 build <file|directory> [-o <output>]
+//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]
 //   maxon-shv2 verify-warm-rebuild <file>
 //   maxon-shv2 spec-test [dir]
 
@@ -30,7 +30,7 @@ end 'main'
 
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.path.isEmpty() 'noPath'
-		printError("Usage: maxon-shv2 build <file|directory> [-o <output>]\n")
+		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]\n")
 		return 1
 	end 'noPath'
 
@@ -40,7 +40,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'badPath'
 
 	let target = detectHostTarget()
-	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -175,6 +175,7 @@ function printUsage()
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
+	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -185,21 +186,24 @@ enum MaxonCommand
 	unknown
 end 'MaxonCommand'
 
-// Thin M1 argument model: a command, an input path, and an optional output
-// override. Grows into v1's full option set (targets, logging, cache flags, ...)
-// as the driver gains those capabilities.
+// Thin M1 argument model: a command, an input path, an optional output override,
+// and the `--emit-ir` toggle. Grows into v1's full option set (targets, logging,
+// cache flags, ...) as the driver gains those capabilities.
 type MaxonArgs
 	export let command as MaxonCommand
 	export let path as String
 	export let outputOverride as String
+	export let emitIr as bool
 
 	// Parse the process command line. argv[0] is the executable path (skipped).
 	// The first `build` token selects the command; the first bare (non-flag)
-	// argument is the input path; `-o <path>` / `--output=<path>` set the output.
+	// argument is the input path; `-o <path>` / `--output=<path>` set the output;
+	// `--emit-ir` requests the Target-IR sidecar.
 	export static function parse() returns MaxonArgs
 		var command = MaxonCommand.unknown
 		var path = ""
 		var outputOverride = ""
+		var emitIr = false
 
 		let args = CommandLine.args()
 		var i = 1
@@ -216,7 +220,9 @@ type MaxonArgs
 				outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
-			end 'longOutput' else 'positional'
+			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
+				emitIr = true
+			end 'emitIrFlag' else 'positional'
 				if path.isEmpty() 'firstPositional'
 					path = arg
 				end 'firstPositional'
@@ -224,6 +230,6 @@ type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr}
 	end 'parse'
 end 'MaxonArgs'

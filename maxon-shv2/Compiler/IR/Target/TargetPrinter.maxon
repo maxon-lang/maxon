@@ -1,0 +1,174 @@
+// TargetPrinter — serialize a lowered TargetModule to a stable, human-readable
+// text form (v1's `RequiredIR` look, trimmed to shv2's thin Target tier).
+//
+// Two consumers: `build --emit-ir` (writes the printed IR to `<output>.ir`) and
+// the spec runner (embeds it in a committed `.test` fragment so every test
+// carries its generated code, diffable across codegen changes — v1's
+// `specs/fragments-*` model).
+//
+// WHY the op match is exhaustive with NO bare `default`: this printer is the one
+// place a new `TargetOp` variant is forced to be handled. TargetOp carries no
+// tier boundary that would make an unprinted op unrepresentable, so a `default`
+// arm here would silently print `??` for any op a later milestone adds. An
+// exhaustive `match` turns "someone added a TargetOp" into a COMPILE error at
+// `formatTargetOp`, so the printer can never fall out of sync with the dialect.
+// This is the same "you cannot add an op without declaring its facts" discipline
+// the dialect's `TargetOpMeta` enforces, applied to text emission.
+
+// Two-space nesting, ISA-mnemonic prefix, and the section punctuation are format
+// contracts shared with the committed fragments — named, not scattered literals,
+// so the one place the layout is defined is here.
+let BlockLabelIndent = "  "
+let OpIndent = "    "
+
+// Every mnemonic is prefixed once by the ISA namespace (`x64.`) at the print
+// site rather than baked into all 16 match arms — the arms stay mnemonic-only
+// and the namespace lives in one constant.
+let X64OpPrefix = "x64."
+let FuncHeaderPrefix = "func @"
+
+// Serialize a whole TargetModule: each function in module order (the entry stub
+// `mrt_start` first, then user functions in source order — a deterministic
+// order the register allocator and lowering preserve), separated by one blank
+// line, with no trailing blank line.
+//
+// `includeRuntime` gates the emitted-runtime/entry functions (`mrt_start`, and
+// later the `__slab_*`/`__mm_*`/`__destruct_*` runtime): the committed spec
+// fragments pass `false` so a fragment shows ONLY the program's own functions —
+// the shared runtime scaffolding never changes per-test and is pure noise there.
+// `build --emit-ir` passes `true` for the complete backend-debugging view.
+export function printTargetModule(module TargetModule, includeRuntime bool) returns String
+	var body = ""
+	var afterFirst = false
+
+	for func in module.functions 'eachFunc'
+		if not includeRuntime and isRuntimeFunction(func.name) 'skipRuntime'
+			continue
+		end 'skipRuntime'
+
+		if afterFirst 'separator'
+			body.append("\n")
+		end 'separator'
+
+		body.append(printTargetFunction(module, func: func))
+		afterFirst = true
+	end 'eachFunc'
+
+	return body
+end 'printTargetModule'
+
+// True for the runtime/entry functions shv2's backend synthesizes (not from user
+// source): the entry stub `mrt_start` and — from Workstream R (Stage 2's 2.4) — the
+// emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …). Maxon
+// reserves `__` for compiler-internal names, so a user function can never collide.
+function isRuntimeFunction(name String) returns bool
+	return name.startsWith("mrt_") or name.startsWith("__")
+end 'isRuntimeFunction'
+
+// Serialize one function: `func @<name> {`, then each block as `<label>:` followed
+// by its ops (and terminator) one per line, then the closing brace.
+function printTargetFunction(module TargetModule, func IrFunction) returns String
+	let openBrace = "\{"
+	let closeBrace = "\}"
+	var sb = "{FuncHeaderPrefix}{func.name} {openBrace}\n"
+
+	// The function's blocks in `blockRefs` order — the same public-API walk the
+	// backend's `emitFunctionChunk` uses. Collected once so branch targets can be
+	// resolved to labels against it.
+	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
+
+	for block in funcBlocks 'eachBlock'
+		sb.append("{BlockLabelIndent}{block.label}:\n")
+
+		for opIdx in block.opRefs 'eachOp'
+			sb.append(printOpLine(module, opIdx: opIdx, blocks: funcBlocks))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), blocks: funcBlocks))
+		end 'hasTerm'
+	end 'eachBlock'
+
+	sb.append("{closeBrace}\n")
+	return sb
+end 'printTargetFunction'
+
+// One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
+// is an invariant violation (a block references an op not in `module.ops`), not
+// a user error, so it panics rather than printing a sentinel.
+function printOpLine(module TargetModule, opIdx OpIndex, blocks IrBlockArray) returns String
+	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
+	return "{OpIndent}{X64OpPrefix}{formatTargetOp(op, blocks: blocks)}\n"
+end 'printOpLine'
+
+// Render one TargetOp as `<mnemonic> <operands>` (the `x64.` namespace is added
+// by the caller). EXHAUSTIVE over every TargetOp variant — see the file header:
+// no bare `default`, so a new variant is a compile error here, not a silent `??`.
+function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
+	return match op 'op'
+		prologue(stackSize) gives "prologue {stackSize}"
+		epilogue(stackSize) gives "epilogue {stackSize}"
+		ret gives "ret"
+		jmp(targetBlockId) gives "jmp {resolveBlockLabel(targetBlockId, blocks: blocks)}"
+		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {resolveBlockLabel(targetBlockId, blocks: blocks)}"
+		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"
+		movRegImm32(dest, value) gives "movRegImm32 {vregName(dest)}, {value}"
+		movRegReg(destReg, srcReg) gives "movRegReg {vregName(destReg)}, {vregName(srcReg)}"
+		movReg32Reg32(destReg, srcReg) gives "movReg32Reg32 {vregName(destReg)}, {vregName(srcReg)}"
+		addRegReg(destReg, srcReg) gives "addRegReg {vregName(destReg)}, {vregName(srcReg)}"
+		subRegReg(destReg, srcReg) gives "subRegReg {vregName(destReg)}, {vregName(srcReg)}"
+		imulRegReg(destReg, srcReg) gives "imulRegReg {vregName(destReg)}, {vregName(srcReg)}"
+		negReg(reg) gives "negReg {vregName(reg)}"
+		cmpRegReg(lhsReg, rhsReg) gives "cmpRegReg {vregName(lhsReg)}, {vregName(rhsReg)}"
+		callDirect(targetName) gives "callDirect {targetName}"
+		iatCall(slotIndex) gives "iatCall {slotIndex}"
+	end 'op'
+end 'formatTargetOp'
+
+// A machine-register operand: a colored physical GPR by its ISA name (`rax`,
+// `r8`, …) or a still-virtual value by its SSA id (`v<id>`). A fully lowered
+// module (what CodeResult.targetModule holds) has only `physical`; `virtual`
+// appears only when printing pre-regalloc IR for debugging.
+function vregName(vreg X64VReg) returns String
+	return match vreg 'v'
+		physical(reg) gives registerName(reg)
+		virtual(id) gives "v{id}"
+	end 'v'
+end 'vregName'
+
+// The ISA name of each general-purpose register. Exhaustive over X64Register so a
+// register-file change (e.g. adding the XMM file as its own enum) does not
+// silently misname a register.
+function registerName(reg X64Register) returns String
+	return match reg 'r'
+		rax gives "rax"
+		rcx gives "rcx"
+		rdx gives "rdx"
+		rbx gives "rbx"
+		rsp gives "rsp"
+		rbp gives "rbp"
+		rsi gives "rsi"
+		rdi gives "rdi"
+		r8 gives "r8"
+		r9 gives "r9"
+		r10 gives "r10"
+		r11 gives "r11"
+		r12 gives "r12"
+		r13 gives "r13"
+		r14 gives "r14"
+		r15 gives "r15"
+	end 'r'
+end 'registerName'
+
+// The mnemonic name of each condition code a fused `jcc` can carry. Exhaustive
+// over X64CondCode so a new comparison predicate forces a printable name.
+function condCodeName(cond X64CondCode) returns String
+	return match cond 'c'
+		equal gives "equal"
+		notEqual gives "notEqual"
+		less gives "less"
+		greaterEqual gives "greaterEqual"
+		lessEqual gives "lessEqual"
+		greater gives "greater"
+	end 'c'
+end 'condCodeName'
