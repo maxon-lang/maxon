@@ -14,13 +14,19 @@
 // milestone.
 //
 // ENCODING FACTORING (pre-empting the duplication review): every instruction is
-// assembled from FOUR shared primitives — `emitRex` (REX prefix with W/R/B bits),
+// assembled from shared primitives — `emitRex` (REX prefix with W/R/B bits),
 // `emitModRmRegReg` / `emitModRmExt` (the mod=11 register-direct ModR/M byte),
-// and the `BinaryHelpers` little-endian writers. No REX/ModRM byte is hand-
-// spelled per instruction: e.g. both reg-reg move widths share `encodeMovRegReg`
-// (only the REX.W bit differs), and `sub rsp`/`add rsp` share `encodeRspAdjust`
-// (only the ModR/M opcode-extension differs). Opcodes, REX bits, and ModR/M
-// constants are all NAMED below — no bare hex is scattered through the emitters.
+// `encodeModRmDirect` (REX + optional 0F escape + opcode + ModR/M, the one place a
+// register-direct instruction is assembled) and its opcode-extension sibling
+// `encodeModRmExtDirect` (REX + opcode + `/ext` ModR/M), and the `BinaryHelpers`
+// little-endian writers. No REX/ModRM byte is hand-spelled per instruction:
+// `mov`/`add`/`sub` reg-reg all share `encodeRmRegDirect` (only the opcode differs),
+// the two-byte `imul` reuses `encodeModRmDirect`'s escape path (only the
+// operand-to-field mapping is swapped — dest in reg, src in rm), `neg` and the
+// `sub rsp`/`add rsp` frame ops share `encodeModRmExtDirect` (opcode-extension
+// forms), and both reg-reg move widths differ only in the REX.W bit. Opcodes, REX
+// bits, and ModR/M constants are all NAMED below — no bare hex is scattered through
+// the emitters.
 
 // --- REX prefix (0x40 | W<<3 | R<<2 | X<<1 | B) ---
 // REX.W selects 64-bit operand size; REX.R/B extend the ModR/M reg / rm fields to
@@ -46,15 +52,29 @@ let ModRmRipRelCall = 0x15
 let OpcodeRet = 0xC3
 let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
 let OpcodeAddRmReg = 0x01  // add r/m, r  (reg field = source), same shape as mov
+let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as add/mov
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
+let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
+
+// Two-byte-opcode escape: a `0x0F` prefix byte introduces the two-byte opcode map
+// (e.g. `imul r, r/m` is `0F AF /r`). `encodeModRmDirect` emits it when asked.
+let TwoByteOpcodeEscape = 0x0F
+
+// Second byte of the two-operand signed multiply `imul r, r/m` (0F AF /r). Unlike
+// the `r/m, r` ALU forms, its ModR/M reg field is the DESTINATION — see
+// encodeImulRegReg.
+let OpcodeImul2ndByte = 0xAF
 
 // Group-1 ALU opcode-extension (ModR/M reg field) values.
 let Grp1ExtAdd = 0  // ADD
 let Grp1ExtSub = 5  // SUB
+
+// Group-3 ALU opcode-extension (ModR/M reg field) value for `neg r/m` (F7 /3).
+let Grp3ExtNeg = 3  // NEG
 
 // ==========================================================================
 // Shared REX / ModR/M primitives
@@ -108,21 +128,68 @@ function emitModRmExt(code ByteArray, ext MachineWord, rmField X64Register)
 	code.push(ModRmRegDirect or (ext shl 3) or regLow3(rmField))
 end 'emitModRmExt'
 
+// Emit a mod=11 register-direct instruction from its parts: the REX prefix (with
+// W/R/B), an optional two-byte-opcode escape (0x0F), the opcode byte, and the
+// ModR/M byte. `regField`/`rmField` are the registers the ModR/M reg and r/m fields
+// name — the caller maps DEST/SRC onto them, because the mapping is opcode-family-
+// specific: the `r/m, r` forms (mov/add/sub) put SOURCE in reg and DEST in rm,
+// while the `r, r/m` forms (imul) put DEST in reg and SOURCE in rm. This is the one
+// primitive both `encodeRmRegDirect` and `encodeImulRegReg` build on, so the
+// two-byte `imul` needs no hand-spelled REX/ModR/M of its own.
+function encodeModRmDirect(code ByteArray, twoByteEscape bool, opcode MachineWord, regField X64Register, rmField X64Register, wide bool)
+	emitRex(code, wide: wide, regField: regField, rmField: rmField)
+	if twoByteEscape 'esc'
+		code.push(TwoByteOpcodeEscape)
+	end 'esc'
+	code.push(opcode)
+	emitModRmRegReg(code, regField: regField, rmField: rmField)
+end 'encodeModRmDirect'
+
+// Emit a mod=11 opcode-EXTENSION register-direct instruction's prefix + opcode +
+// ModR/M: the REX prefix (always 64-bit here — every opcode-extension form shv2
+// emits is 64-bit; the `/ext` reg field is an opcode extension 0..7 that never
+// needs REX.R, so `regField` is the base `rax`), the opcode byte, and the ModR/M
+// byte whose reg field carries the fixed extension. The opcode-extension analogue
+// of `encodeModRmDirect` — the one place a `neg r/m` (`F7 /3`) or `sub/add rsp`
+// (group-1) form is assembled; callers append any trailing immediate.
+function encodeModRmExtDirect(code ByteArray, opcode MachineWord, ext MachineWord, rmField X64Register)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: rmField)
+	code.push(opcode)
+	emitModRmExt(code, ext: ext, rmField: rmField)
+end 'encodeModRmExtDirect'
+
 // ==========================================================================
 // Per-op encoders
 // ==========================================================================
 
 // Register-direct (mod=11) `opcode r/m, r` — the reg field is the SOURCE, the r/m
-// field the DEST — which is the shared byte shape of the reg-to-reg `mov` (0x89)
-// and `add` (0x01). `wide` selects REX.W (64-bit operand size) vs 32-bit (which
-// zero-extends into the full register). Callers pass the opcode so the single
-// primitive serves the 64-bit R8 return move, register-allocation copies, the
-// 32-bit `mov ecx, r8d` ABI bridge, and the 64-bit `add result, rhs`.
+// field the DEST — which is the shared byte shape of the reg-to-reg `mov` (0x89),
+// `add` (0x01), and `sub` (0x29), all single-byte opcodes. `wide` selects REX.W
+// (64-bit operand size) vs 32-bit (which zero-extends into the full register).
+// Callers pass the opcode so the single primitive serves the 64-bit R8 return
+// move, register-allocation copies, the 32-bit `mov ecx, r8d` ABI bridge, and the
+// 64-bit `add`/`sub result, rhs`. (imul does NOT route here — its operand-to-field
+// mapping is swapped and its opcode is two-byte; see encodeImulRegReg.)
 function encodeRmRegDirect(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, wide bool)
-	emitRex(code, wide: wide, regField: src, rmField: dest)
-	code.push(opcode)
-	emitModRmRegReg(code, regField: src, rmField: dest)
+	encodeModRmDirect(code, twoByteEscape: false, opcode: opcode, regField: src, rmField: dest, wide: wide)
 end 'encodeRmRegDirect'
+
+// `imul dest, src` — the two-operand signed multiply `imul r64, r/m64` (0F AF /r),
+// `dest = dest * src`, always 64-bit. Its ModR/M reg field is the DESTINATION and
+// r/m is the SOURCE — the OPPOSITE mapping from the `r/m, r` forms above — and its
+// opcode is two-byte, so it takes the escape path through the shared primitive
+// rather than `encodeRmRegDirect`.
+function encodeImulRegReg(code ByteArray, dest X64Register, src X64Register)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeImul2ndByte, regField: dest, rmField: src, wide: true)
+end 'encodeImulRegReg'
+
+// `neg reg` — group-3 unary negate `F7 /3`, `reg = -reg`, always 64-bit. An
+// opcode-extension form (the /3 rides the ModR/M reg field), so it shares
+// `encodeModRmExtDirect` with the `sub/add rsp` frame ops rather than the
+// reg-to-reg path.
+function encodeNegReg(code ByteArray, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtNeg, rmField: reg)
+end 'encodeNegReg'
 
 // mov reg32, imm32 (B8+rd id). Writing a 32-bit register zero-extends to 64 bits,
 // so this is the compact form for any value that fits u32 (e.g. the literal 42).
@@ -146,16 +213,14 @@ end 'encodeMovRegImm64'
 
 // sub/add rsp, imm — the rsp-only frame adjustment. `ext` picks SUB (prologue) vs
 // ADD (epilogue); the two differ only in the ModR/M opcode-extension. imm8 form
-// when it fits a signed byte, else imm32.
+// when it fits a signed byte, else imm32. Shares the opcode-extension assembly
+// (`encodeModRmExtDirect`) with `neg`; only the trailing immediate width differs.
 function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
-	emitRex(code, wide: true, regField: X64Register.rax, rmField: X64Register.rsp)
 	if amount <= i8.max 'imm8'
-		code.push(OpcodeGrp1Imm8)
-		emitModRmExt(code, ext: ext, rmField: X64Register.rsp)
+		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm8, ext: ext, rmField: X64Register.rsp)
 		code.push(amount and 0xFF)
 	end 'imm8' else 'imm32'
-		code.push(OpcodeGrp1Imm32)
-		emitModRmExt(code, ext: ext, rmField: X64Register.rsp)
+		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: X64Register.rsp)
 		writeDword(code, value: amount)
 	end 'imm32'
 end 'encodeRspAdjust'
@@ -215,6 +280,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		movRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
 		movReg32Reg32(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
 		addRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
+		subRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
+		imulRegReg(destReg, srcReg) then encodeImulRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg))
+		negReg(reg) then encodeNegReg(code, reg: resolvePhysical(reg))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	end 'emit'

@@ -190,7 +190,21 @@ The design each milestone establishes is documented in
   asserts determinism (two fresh-`Project` cold compiles → byte-identical
   `CodeResult`) + incrementality (re-`queryAllModule` on unchanged input →
   content-hash cache hit). Spec `specs-shv2/variables.md` (test 4, top-level
-  string + `if` + `==`, deferred to M10/M4/M3). · [ ] **M3** arithmetic
+  string + `if` + `==`, deferred to M10/M4/M3).
+- [x] **M3** arithmetic — **Pratt precedence parser** (replaces M2's left-fold:
+  precedence climber `parseBinary(minPrec)`, right operand at `prec+1` for
+  left-assoc; `parseUnary` is the leaf, operand is a PRIMARY so unary binds
+  tightest but doesn't chain → `- -x` is E2004) + integer `-`/`*`
+  (`MaxonBinOp`/`StdBinOpcode` gain `sub`/`mul`, same `binOp` variant; x64 `sub`
+  `0x29` + `imul` two-byte `0F AF` + `neg` `F7 /3`, all via the shared
+  `encodeModRmDirect`/`encodeModRmExtDirect` primitives) + unary minus
+  (`MaxonOp.unaryOp`/`neg`, always runtime `neg`, no const-fold). Precedence proven
+  (`10 + 5 * 2` → 20, imul before add). **Milestone-boundary reshaping** (spec-
+  driven): comparison operators → **M4** (all their tests observe via `if`);
+  `mod`/`/` → **M5** (x64 `idiv` fixed RAX/RDX needs the real allocator; every `/`
+  test also needs `trunc`/params/loops) — deferred ops reject with a positioned
+  `E3010 … arrives at Mn` note. Placeholder allocator suffices (M3 expressions are
+  small). Specs `specs-shv2/{arithmetic,unary-operators}.md`. **Phase A complete.**
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
 - [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays

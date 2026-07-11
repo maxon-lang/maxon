@@ -33,6 +33,12 @@ typealias TokenIndex = int(0 to u64.max)
 // touches `Project`.
 export union ParseError implements Error
 	unexpectedToken(expected String, got String, line LineNumber, column ColumnNumber)
+	// A primary expression was required but the token stream had something else
+	// (e.g. an operator where an operand belongs). Distinct from `unexpectedToken`:
+	// it renders as E2004 `Expected expression but got '<got>'` (no quotes around
+	// `expression`), the exact text `unary-operators.md`'s double-negation gates on
+	// — `- -x` fails at the second `-`, since a unary operand is a PRIMARY.
+	expectedExpression(got String, line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	integerOverflow(line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
@@ -41,6 +47,78 @@ export union ParseError implements Error
 	// which the parser can detect because `Scope` is threaded through it.
 	undefinedVariable(name String, line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// --- Pratt expression parser: precedence table + operator classifiers ---
+//
+// M3 replaces M2's `+`-only left-fold with a precedence climber (`Parser.parseBinary`).
+// Binary precedence levels — HIGHER binds tighter. Left-associativity falls out of
+// recursing the right operand at `precedence + 1`. The table is deliberately shaped
+// so later milestones EXTEND it without reshaping the climber: M4 inserts comparison
+// BELOW additive; M5 adds `/`/`mod` at the multiplicative level. Unary minus is NOT
+// in this table — it is a prefix operator handled by `parseUnary` (the leaf of the
+// climber), so it binds tighter than every binary operator here.
+typealias InfixPrecedence = int(0 to 100)
+
+// A sentinel-free "not a binary operator": a real level is >= AdditivePrecedence, so
+// `infixPrecedence` returning this makes the climber's loop stop (the expression
+// ends). It is a meaningful classification result, not an error sentinel.
+let NotAnInfixOperator = 0 as InfixPrecedence
+
+// Additive `+`/`-` — the loosest binary level, where the climber starts.
+let AdditivePrecedence = 1 as InfixPrecedence
+
+// Multiplicative `*` — binds tighter than additive, so `10 + 5 * 2` groups as
+// `10 + (5 * 2)` = 20.
+let MultiplicativePrecedence = 2 as InfixPrecedence
+
+// The precedence of a binary-operator token, or NotAnInfixOperator for any token
+// that does not begin a binary operation in the M3 grammar. A DEFERRED operator
+// (`/`/`mod`/comparison) is rejected by `rejectDeferredOperator` BEFORE this is
+// consulted, so it never reaches the climber's precedence compare.
+function infixPrecedence(kind TokenKind) returns InfixPrecedence
+	if kind == TokenKind.plus or kind == TokenKind.minus 'additive'
+		return AdditivePrecedence
+	end 'additive'
+
+	if kind == TokenKind.star 'multiplicative'
+		return MultiplicativePrecedence
+	end 'multiplicative'
+
+	return NotAnInfixOperator
+end 'infixPrecedence'
+
+// The Maxon binary operator a supported infix token maps to. Only called for tokens
+// `infixPrecedence` classified as operators (precedence != NotAnInfixOperator);
+// anything else is a climber bug, so it panics rather than guessing an operator.
+function infixMaxonOp(kind TokenKind) returns MaxonBinOp
+	if kind == TokenKind.plus 'add'
+		return MaxonBinOp.add
+	end 'add'
+
+	if kind == TokenKind.minus 'sub'
+		return MaxonBinOp.sub
+	end 'sub'
+
+	if kind == TokenKind.star 'mul'
+		return MaxonBinOp.mul
+	end 'mul'
+
+	panic("infixMaxonOp: token '{kind.rawValue}' is not a supported binary operator — infixPrecedence must gate this call")
+end 'infixMaxonOp'
+
+// The division family (`/`, `mod`) is DEFERRED to M5: x64 `idiv` pins its operands
+// to the fixed RAX/RDX pair, which needs the real register allocator (the M1
+// placeholder gives every value a fresh pool register and cannot honor fixed-reg
+// constraints).
+function divisionFamilyOperator(kind TokenKind) returns bool
+	return kind == TokenKind.slash or kind == TokenKind.mod
+end 'divisionFamilyOperator'
+
+// The comparison operators are DEFERRED to M4: each feeds a branch, so it needs the
+// `if`/branch lowering (and the `cmp`-splits-out Std variant) that lands there.
+function comparisonOperator(kind TokenKind) returns bool
+	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
+end 'comparisonOperator'
 
 export type Parser
 	var tokens as TokenArray
@@ -242,22 +320,69 @@ export type Parser
 		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
-	// Expression entry. M2 handles a LEFT-ASSOCIATIVE binary `+` over primaries:
-	// parse a primary, then while the next token is `+`, consume it, parse the next
-	// primary, and fold the two into a `binOp`. This is deliberately the minimal
-	// shape; M3 REPLACES it with a full Pratt precedence climber (the other
-	// operators, comparison, unary), for which this left-fold is the base case.
+	// Expression entry — a Pratt precedence climber (M3 replaced M2's `+`-only
+	// left-fold). It starts at the loosest binary level; `parseBinary` climbs the
+	// precedence table (`infixPrecedence`), and `parseUnary` handles prefix `-` as
+	// the climber's leaf. See the precedence table above the Parser type.
 	function parseExpression(block IrBlock) returns ValueId throws ParseError
-		var left = try self.parsePrimary(block)
+		return try self.parseBinary(block, minPrec: AdditivePrecedence)
+	end 'parseExpression'
 
-		while self.at(TokenKind.plus) 'plus'
-			let opTok = try self.consume(TokenKind.plus)
-			let right = try self.parsePrimary(block)
-			left = self.emitBinOp(block, lhs: left, rhs: right, op: MaxonBinOp.add, opTok: opTok)
-		end 'plus'
+	// The precedence-climbing core. Parse a unary/primary operand, then while the
+	// next token is a binary operator whose precedence is >= `minPrec`, consume it
+	// and recurse for the right operand at `precedence + 1` (which makes the operator
+	// LEFT-associative). A supported operator below `minPrec`, a non-operator, or the
+	// end of the expression stops the climb. A DEFERRED operator (`/`/`mod`/comparison)
+	// is rejected in operator position (loud positioned error), never silently ignored.
+	function parseBinary(block IrBlock, minPrec InfixPrecedence) returns ValueId throws ParseError
+		var left = try self.parseUnary(block)
+
+		while true 'climb'
+			let opTok = self.current()
+			try self.rejectDeferredOperator(opTok)
+
+			let prec = infixPrecedence(opTok.kind)
+			if prec == NotAnInfixOperator or prec < minPrec 'stop'
+				break
+			end 'stop'
+
+			self.advance()
+			let right = try self.parseBinary(block, minPrec: prec + 1)
+			left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
+		end 'climb'
 
 		return left
-	end 'parseExpression'
+	end 'parseBinary'
+
+	// Reject an operator whose lowering is deferred to a later milestone, so a test
+	// that uses one fails LOUDLY (a positioned E3010) rather than silently dropping
+	// the operator. Called with the token in operator position (after an operand);
+	// a non-deferred token falls through untouched. Each family carries its own
+	// milestone note — see divisionFamilyOperator / comparisonOperator.
+	function rejectDeferredOperator(opTok Token) throws ParseError
+		if divisionFamilyOperator(opTok.kind) 'divFamily'
+			throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — arrives at M5 (x64 idiv's fixed RAX/RDX pair needs the real register allocator)", line: opTok.line, column: opTok.column)
+		end 'divFamily'
+
+		if comparisonOperator(opTok.kind) 'comparison'
+			throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — arrives at M4 (comparison feeds a branch, so it needs `if`/branch lowering)", line: opTok.line, column: opTok.column)
+		end 'comparison'
+	end 'rejectDeferredOperator'
+
+	// A prefix-operator operand — the climber's leaf. M3 handles prefix `-` (negate).
+	// Its operand is a PRIMARY, not another unary: `- -x` therefore fails at the
+	// second `-` (parsePrimary raises E2004), matching unary-operators.md's
+	// double-negation. Because parseUnary is the leaf of parseBinary, unary minus
+	// binds tighter than every binary operator without a precedence entry of its own.
+	function parseUnary(block IrBlock) returns ValueId throws ParseError
+		if self.at(TokenKind.minus) 'neg'
+			let opTok = try self.consume(TokenKind.minus)
+			let operand = try self.parsePrimary(block)
+			return self.emitUnaryOp(block, operand: operand, op: MaxonUnaryOp.neg, opTok: opTok)
+		end 'neg'
+
+		return try self.parsePrimary(block)
+	end 'parseUnary'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines.
 	// The source range anchors on the operator token (the conventional binop anchor).
@@ -267,7 +392,18 @@ export type Parser
 		return result
 	end 'emitBinOp'
 
-	// A primary expression. M2: an integer literal or a variable reference.
+	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The
+	// source range anchors on the operator token, mirroring emitBinOp.
+	function emitUnaryOp(block IrBlock, operand ValueId, op MaxonUnaryOp, opTok Token) returns ValueId
+		let result = allocValueId(self.valueIds)
+		self.artifact.emitOp(block, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitUnaryOp'
+
+	// A primary expression: an integer literal or a variable reference. Anything else
+	// where an operand is required (an operator, a delimiter, EOF) is E2004 —
+	// "Expected expression but got '<got>'". This is the site `- -x` hits at its
+	// second `-`: unary minus's operand is a primary, and a leading `-` is not one.
 	function parsePrimary(block IrBlock) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.parseIntLiteral(block)
@@ -278,7 +414,7 @@ export type Parser
 		end 'varRef'
 
 		let tok = self.current()
-		throw ParseError.unexpectedToken("an expression", got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		throw ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parsePrimary'
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's

@@ -108,6 +108,23 @@ export union TargetOp
 	// register allocator colors its operands rather than treating it as a
 	// passthrough call op — see RegisterAllocator.colorOp.
 	addRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	// 64-bit register-to-register subtract (`sub dest, src`, i.e. `dest = dest - src`).
+	// Same two-operand shape as `add`: `resultId = lhs - rhs` lowers to `mov result,
+	// lhs` + `sub result, rhs`. Order matters — `20 - 8` must compute lhs−rhs, which
+	// this ordering (dest=lhs, then `sub dest, rhs`) gives. `setsFlags` (SUB writes
+	// EFLAGS). Appended with the reg-operand ALU ops, before the call band.
+	subRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	// 64-bit register-to-register signed multiply (`imul dest, src`, i.e.
+	// `dest = dest * src`). Two-operand form `imul r64, r/m64` (0F AF /r); unlike
+	// `add`/`sub` its reg field is the DESTINATION (see X64Backend.encodeImulRegReg).
+	// `resultId = lhs * rhs` lowers to `mov result, lhs` + `imul result, rhs`.
+	// `setsFlags` (IMUL writes OF/CF). Appended with the reg-operand ALU ops.
+	imulRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	// 64-bit register negate (`neg reg`, i.e. `reg = -reg`). Group-3 opcode-extension
+	// form (`F7 /3`); one register operand. `resultId = -operand` lowers to `mov
+	// result, operand` + `neg result`. `setsFlags` (NEG writes EFLAGS). Appended with
+	// the reg-operand ALU ops, before the call band.
+	negReg(reg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	// Direct near call to a named function (`call rel32`). The concat step
 	// resolves `targetName` to the callee's `.text` placement as a rel32
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier

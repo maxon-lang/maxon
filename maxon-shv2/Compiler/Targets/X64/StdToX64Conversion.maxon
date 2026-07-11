@@ -106,6 +106,7 @@ type StdToX64Lowering
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
+			unaryOp(resultId, operand, opcode) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 		end 'lower'
 	end 'lowerBodyOp'
@@ -117,6 +118,7 @@ type StdToX64Lowering
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
+			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -135,15 +137,31 @@ type StdToX64Lowering
 	// followed by the in-place op against `rhs`. The M1 minimal colorer gives
 	// `result`, `lhs`, and `rhs` three DISTINCT registers, so the copy into
 	// `result` cannot clobber `rhs` before the op reads it. The shared `mov` is
-	// emitted once; the opcode selects the ALU instruction, so M3's `sub`/`mul`
-	// slot straight in as new `match` arms (each its own TargetOp).
+	// emitted once; the opcode selects the ALU instruction. Operand ORDER matters
+	// for the non-commutative `sub`: dest=lhs then `sub dest, rhs` yields lhs−rhs
+	// (e.g. `20 - 8` → 12), not rhs−lhs.
 	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(dest, srcReg: X64VReg.virtual(lhs)))
+		let src = X64VReg.virtual(rhs)
 		match opcode 'op'
-			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addRegReg(dest, srcReg: X64VReg.virtual(rhs)))
+			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addRegReg(dest, srcReg: src))
+			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, srcReg: src))
+			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegReg(dest, srcReg: src))
 		end 'op'
 	end 'lowerBinOp'
+
+	// Lower a Std unary op to x64. Mirrors lowerBinOp's copy-then-op-in-place shape:
+	// x64 `neg` is one-operand in-place (`reg = -reg`), so `result = -operand` lowers
+	// to `mov result, operand` + `neg result`. The M1 minimal colorer gives `result`
+	// and `operand` distinct registers, so the copy cannot clobber `operand`.
+	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, dstBlock IrBlock)
+		let dest = X64VReg.virtual(resultId)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(dest, srcReg: X64VReg.virtual(operand)))
+		match opcode 'op'
+			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest))
+		end 'op'
+	end 'lowerUnaryOp'
 
 	// Return: move the value into the primary-return register (R8) then emit `ret`.
 	// Void returns skip the move (callers never read the register). Frame teardown

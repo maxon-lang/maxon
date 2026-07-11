@@ -140,8 +140,20 @@ left-associative binary `+`. `let`/`var` bind a name to the initializer's SSA
 resolved AT PARSE TIME — so `let x = 42; return x` mints no `x` op at all and lowers
 identically to `return 42`. (`var` parses like `let`; mutability + reassignment
 arrive with the mem2reg/slot model when a spec needs them.) `+` emits the one new op
-(`MaxonOp.binOp`). `parseExpression` is a minimal left-fold, deliberately shaped so
-M3 replaces it with a Pratt precedence climber.
+(`MaxonOp.binOp`).
+
+**M3 replaced the left-fold with a Pratt precedence climber.** `parseBinary(minPrec)`
+parses an operand then, while the next token is a supported infix op with
+`precedence >= minPrec`, consumes it and recurses the right operand at `prec + 1`
+(the `+1` is what makes it left-associative). `parseUnary` is the climber's leaf:
+a prefix `-` consumes then parses a PRIMARY (not another unary), so unary binds
+tighter than every binary op but does not chain — `- -x` raises **E2004** at the
+second `-`. Precedence table: multiplicative (`*`) above additive (`+`/`-`).
+Deferred operators (`/`/`mod` → M5, comparison → M4) are rejected in operator
+position with a positioned `E3010 … arrives at Mn` note, so the precedence table
+extends cleanly rather than being rewritten. Integer `sub`/`mul` join `add` as
+`binOp` opcodes; unary minus is `MaxonOp.unaryOp`/`StdOp.unaryOp{neg}` (always a
+runtime `neg`, no `-<literal>` const-fold — uniform with `-x`).
 
 **`Compiler/ParseStaging.maxon`** owns `FileParseArtifact` + `mergeArtifact(project,
 target, artifact)`, the **single writer** of the shared `Project` derived
@@ -318,10 +330,14 @@ backing attaches per variant and cannot reach an opcode buried in a field. M2
 landed `binOp(… opcode StdBinOpcode)` with the `add` opcode; M3 extends the opcode
 set and splits out a separate `cmp(…)` for exactly that reason.
 
-The union holds `const(resultId, value, valueType)`, `ret(retValId)`, and — since
-M2 — `binOp(resultId, lhs, rhs, opcode StdBinOpcode)` (currently `StdBinOpcode{add}`)
-appended at the END of the arith band, `StdOpMeta` `isPure: true` (integer add does
-not trap) / `clobbersFlags: true`. `const` carries a `StdType` rather than v1's
+The union holds `const(resultId, value, valueType)`, `ret(retValId)`,
+`binOp(resultId, lhs, rhs, opcode StdBinOpcode)` (M2 `add`; M3 added `sub`/`mul` —
+same variant, opcode field, `StdOpMeta` `isPure: true` since integer add/sub/mul
+never trap / `clobbersFlags: true`), and `unaryOp(resultId, operand, opcode
+StdUnaryOpcode)` (M3, `neg`) — all appended at the END of the arith band. M5's
+`div`/`mod` split out (they need `isPure: false` — `idiv` traps — and fixed-register
+lowering); M4's comparison splits out as `cmp` (`isCmp: true`). `const` carries a
+`StdType` rather than v1's
 `constI64`/`constF64` opcode pair — it subsumes MIR's `isFloat` bool and makes
 i32/u8/f32 representable without new opcodes.
 `StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged from Chunk A.
