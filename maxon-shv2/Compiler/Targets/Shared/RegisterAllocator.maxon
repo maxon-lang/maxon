@@ -87,7 +87,7 @@ end 'recolorOpAt'
 // (control / frame / call ops) pass through unchanged.
 function colorOp(op TargetOp, colorer MinimalColorer) returns TargetOp
 	match op 'rewrite'
-		prologue to ret then return op
+		prologue to jcc then return op
 		movRegImm(dest, value) then return TargetOp.movRegImm(colorer.colorVReg(dest), value: value)
 		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorer.colorVReg(dest), value: value)
 		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
@@ -96,6 +96,7 @@ function colorOp(op TargetOp, colorer MinimalColorer) returns TargetOp
 		subRegReg(destReg, srcReg) then return TargetOp.subRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
 		imulRegReg(destReg, srcReg) then return TargetOp.imulRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
 		negReg(reg) then return TargetOp.negReg(colorer.colorVReg(reg))
+		cmpRegReg(lhsReg, rhsReg) then return TargetOp.cmpRegReg(colorer.colorVReg(lhsReg), rhsReg: colorer.colorVReg(rhsReg))
 		callDirect to iatCall then return op
 	end 'rewrite'
 end 'colorOp'

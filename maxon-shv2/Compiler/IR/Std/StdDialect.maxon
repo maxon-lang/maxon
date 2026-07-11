@@ -150,6 +150,21 @@ export enum StdUnaryOpcode
 	neg
 end 'StdUnaryOpcode'
 
+// The Std-tier comparison predicates carried by `StdOp.cmp` (M4). Signed integer
+// comparisons: the x64 lowering maps each to a signed setcc/jcc condition (`lt`→JL,
+// `gt`→JG, …). A separate op (not a `binOp` opcode) because a compare carries
+// DIFFERENT metadata (`isCmp: true`) the per-variant `StdOpMeta` backing cannot
+// reach through an opcode field — see the StdOp header's "flat does NOT mean one
+// variant per opcode" rule.
+export enum StdCmpPred
+	eq
+	ne
+	lt
+	gt
+	le
+	ge
+end 'StdCmpPred'
+
 // Per-variant static metadata backing for StdOp (read via `op.rawValue`). Carries
 // what passes need to classify an op WITHOUT matching on it: the category (see
 // above), the structural role, the two inliner axes, and the scheduling facts the
@@ -233,6 +248,21 @@ export union StdOp
 	// (x64 `neg` writes EFLAGS). Appended at the END of the arith band, after `binOp`,
 	// honoring the band-append invariant.
 	unaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// Integer comparison `resultId = lhs <pred> rhs`, producing an i1. M4's `if`
+	// condition. `isCmp: true` (the metadata the x64 backend pairs with the following
+	// branch); `isPure: true` (a compare never traps); `clobbersFlags: true` (x64 `cmp`
+	// writes EFLAGS). SPLIT OUT of `binOp` at the END of the arith band because it needs
+	// this different metadata — see StdCmpPred and the StdOp header.
+	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+	// --- band: control ---
+	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
+	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a
+	// terminator cannot be dropped or reordered); does not clobber flags (the x64
+	// `jcc` READS flags, it does not set them — the preceding `cmp` set them).
+	condBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// Unconditional branch terminator to `targetBlockId` (a then/else block falling
+	// through to the merge block). Same non-pure, flag-neutral profile as condBranch.
+	branch(targetBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// --- band: call ---
 	// Return terminator. `retValId` names the value moved into the return register.
 	ret(retValId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}

@@ -619,3 +619,54 @@ byte-stable across runs for single-green-thread programs. `--max-procs 1`
 (needed only for programs that spawn green threads) does **not exist yet** —
 Foundation 1 dependency; the harness sets `MAXON_MAX_PROCS=1` defensively (no-op
 until F1). mm-trace tests stay off the batched path (per-process ring buffer).
+
+### Testing / spec-test harness (shv2's own)
+
+**Landed (post-M3).** `maxon-shv2 spec-test [dir]` (default `specs-shv2`) is shv2's
+self-hosting spec runner — `Compiler/Testing/{SpecParser,SpecTestRunner}.maxon`,
+compiled by `maxon.exe` like the rest of shv2, so it can use the full stdlib
+(File, String, `Subprocess`). It replaces the earlier hand-driving.
+
+`SpecParser.parseSpecFile` extracts `<!-- test: NAME -->` markers + the ` ```maxon `
+block + one expected block (` ```exitcode ` or ` ```maxoncstderr `) into
+`SpecTest{name, source, expectation}` (`SpecExpectation` is a union, no sentinel).
+It scans **only the `## Tests` section** (up to the next `## ` heading): deferred
+tests live under a marker-less `## Deferred` section, because **HTML comments do
+not nest** (`<!-- … <!-- test: … --> … -->` closes at the first `-->`), so a
+comment-wrapped deferral would be run. `SpecTestRunner.runSpecDir` writes each
+test's source verbatim (headerless, code at line 1) to a temp fragment, spawns
+`<compiler> build` as a **subprocess** (isolates a compiler crash to one test;
+exercises the real CLI) through the single `runProcess` choke point, and: for a
+`compilerError` test, normalizes the fragment's absolute path to `<fragment>`
+(line/col stay shv2-native — the headerless fragment is why they differ from v1's
+`.test` files, which prepend a header line) and compares; for an `exitCode` test,
+runs the produced exe and compares its exit. `Main` resolves the compiler via
+`Process.executablePath()` (the runner tests itself), prints per-test PASS/FAIL +
+`N passed, M failed`, and **exits non-zero iff any failed** (a real CI gate).
+mm-trace fragments (runtime memory behavior) and Target-IR codegen fragments
+(static generated code, via a coming `TargetPrinter` + `--emit-ir`) attach per
+test at their milestones (mm-trace at M6, codegen fragments next).
+
+### Control flow (M4a — comparison + `if`)
+
+**Landed (M4a).** Comparison operators are a distinct `cmp` op (Maxon
+`MaxonOp.compare`/`MaxonCmpOp`; Std `StdOp.cmp`/`StdCmpPred` at the arith-band end,
+`isCmp: true`) — not a `binOp` opcode, because they need different metadata and
+lower differently. `if`/`else`/`else-if` introduce **the first multi-block
+functions**: `condBranch`/`branch` terminators (a new **`control` band** in `StdOp`
+between arith and call), then/else/continuation `IrBlock`s laid out in source order,
+and a continuation that is `Terminator.dead` when both arms return (emits nothing).
+Because a function's blocks are contiguous in its one `FunctionCodeChunk`,
+intra-function `jmp`/`jcc` are resolved **inside `emitFunctionChunk`** (not `concat`,
+which only rebases cross-function `call`/IAT fixups): each block records a chunk-local
+start offset; branches leave a zero rel32 + a `BlockJumpFixup`; `resolveBlockJumps`
+patches them via the shared `patchChunkRel32` (forward AND backward — ready for M4b
+loops). x64 is **fused `cmp`+`jcc`** (no `setcc`/bool materialization yet): `lowerCmp`
+records `condId → pred` and `lowerCondBranch` emits `jcc` off it; `jcc`'s opcode is
+`OpcodeJccRel32Base | X64CondCode.rawValue` (one table). **INVARIANT (enforced):** a
+comparison is only valid as the *sole top-level operator of an `if` condition* — so
+its `cmp` is guaranteed the last flag-setter before the branch. A comparison in value
+position (`let b = x==10`) or chained (`x==10==1`) would read stale flags / not
+materialize a result, so the parser rejects it (E3010) via a `permitComparison` flag
+until bool materialization (`setcc`) lands. `var` reassignment, `while`/`break`/
+`continue`, and boolean values are M4b.

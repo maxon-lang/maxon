@@ -191,6 +191,21 @@ export enum MaxonUnaryOp
 	neg
 end 'MaxonUnaryOp'
 
+// The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT
+// of `MaxonBinOp` — even though it also takes two operands — because it produces a
+// boolean (i1) and lowers to Std's separate `cmp` op (which sets the `isCmp`
+// metadata the arithmetic `binOp` does not). Keeping it a distinct op family from
+// its first commit mirrors the Std tier's `binOp`/`cmp` split, so nothing downstream
+// has to re-derive "this two-operand op is a compare, not arithmetic".
+export enum MaxonCmpOp
+	eq
+	ne
+	lt
+	gt
+	le
+	ge
+end 'MaxonCmpOp'
+
 // Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a
 // pass that treats a whole category uniformly covers it with ONE `match` range arm
 // (`firstOwn to lastOwn then …`) instead of one arm per variant.
@@ -230,4 +245,21 @@ export union MaxonOp
 	// (matched by variant), so category `plain` — appended at the END of the plain
 	// band, after `binOp`, honoring the band-append invariant.
 	unaryOp(result ValueId, operand ValueId, op MaxonUnaryOp) = MaxonOpMeta{category: OpCategory.plain}
+	// Comparison over two already-materialized SSA values: `result = lhs <op> rhs`,
+	// producing a boolean (i1). M4 emits this for `==`/`!=`/`<`/`>`/`<=`/`>=`. Its
+	// result feeds an `if`'s `condBranch`; the Std→x64 lowering FUSES the pair into
+	// `cmp` + `jcc` rather than materializing the bool. Category `plain` (it stands
+	// alone, matched by variant); appended at the END of the plain band after `unaryOp`.
+	compare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp) = MaxonOpMeta{category: OpCategory.plain}
+	// Two-way conditional branch terminator: if `cond` (an i1) holds, transfer to
+	// `thenBlockId`, else to `elseBlockId`. M4's `if` sets this as a block's
+	// terminator (via emitTerminator). `cond` is the SSA value a `compare` defined;
+	// the block ids are the function-local BlockIds of the successor blocks. Category
+	// `plain`, matching the other terminators `ret`/`retVoid` (the Maxon-tier
+	// `OpCategory` classifies call/effect shape, not control flow — that is the Std
+	// tier's `control` band); appended at the END of the plain band.
+	condBranch(cond ValueId, thenBlockId BlockId, elseBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+	// Unconditional branch terminator to `targetBlockId`. Emitted when a then/else
+	// block falls through to the merge (continuation) block rather than returning.
+	branch(targetBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'

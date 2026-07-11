@@ -1,0 +1,254 @@
+---
+feature: if-statements
+status: selfhosted
+keywords: [if, else, conditional, branching, control flow]
+category: control-flow
+milestone: M4a
+---
+
+# If Statements
+
+## Documentation
+
+Execute code conditionally on a boolean expression. Each block carries a string
+label after its condition and a matching label on its closing `end`:
+
+**Simple if (no else):**
+
+```maxon
+if <condition> 'identifier'
+	<statements>
+end 'identifier'
+```
+
+**If-else** — `else` comes after the closing `end`, on the same line:
+
+```maxon
+if <condition> 'if_id'
+	<statements>
+end 'if_id' else 'else_id'
+	<statements>
+end 'else_id'
+```
+
+**Else-if chain** — the `else` branch is itself a nested `if`:
+
+```maxon
+if <cond1> 'case1'
+	<statements>
+end 'case1' else if <cond2> 'case2'
+	<statements>
+end 'case2' else 'default'
+	<statements>
+end 'default'
+```
+
+Lowering (M4a): the entry block evaluates the condition (a comparison, fused with
+the branch — see `specs-shv2/comparison-operators.md`) and takes a two-way branch
+to the then block or the false target (the else block, or the continuation when
+there is no else). A branch that returns terminates itself; one that falls through
+branches to the continuation. When both branches return, the continuation is
+unreachable and emits no code.
+
+## Tests
+
+The M4a slice of `specs/if-statements.md`: simple if, if-else (taken and not taken),
+the else-if chain, and a nested if. Every test uses a comparison condition and
+returns on all reachable paths. The tests needing function parameters + calls
+(`else-if-in-helper`, `nested-if-with-multiple-returns`), strings + calls
+(`nested-if-with-scoped-string`), or a bool literal + the "newline after block
+label" reject (`single-line-block-rejected`) are DEFERRED and recorded under
+`## Deferred` below.
+
+<!-- test: if-statements.simple -->
+```maxon
+function main() returns ExitCode
+	let x = 10
+	if x > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: if-statements.else -->
+```maxon
+function main() returns ExitCode
+	let x = 5
+	if x == 5 'is5'
+		return 1
+	end 'is5' else 'not5'
+		return 0
+	end 'not5'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: if-statements.else-false -->
+```maxon
+function main() returns ExitCode
+	let x = 3
+	if x > 5 'gt5'
+		return 1
+	end 'gt5' else 'not_gt5'
+		return 0
+	end 'not_gt5'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: if-statements.else-if-chain -->
+```maxon
+function main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: if-statements.nested -->
+```maxon
+function main() returns ExitCode
+	let x = 3
+	if x == 1 'outer'
+		return 1
+	end 'outer' else 'else_outer'
+		if x == 2 'inner'
+			return 2
+		end 'inner' else 'else_inner'
+			return 3
+		end 'else_inner'
+	end 'else_outer'
+end 'main'
+```
+```exitcode
+3
+```
+
+## Deferred
+
+Tests recorded for re-enablement at the milestone that unblocks them. They live
+in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
+scans only `## Tests`, up to the next `## ` heading) never extracts them, and
+they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
+`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+
+### if-statements.else-if-in-helper
+
+Re-enable once its prerequisites land: function parameters + calls with named
+args (M5).
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function classify(x Integer) returns Integer
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	let a = classify(0)
+	let b = classify(5)
+	let c = classify(50)
+	let d = classify(200)
+	return a + b * 3 + c * 9 + d * 27
+end 'main'
+```
+```exitcode
+102
+```
+
+### if-statements.nested-if-with-scoped-string
+
+Re-enable once its prerequisites land: string literals + `==` on strings + calls
+(M5 / string milestone).
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(x Integer) returns Integer
+	if x == 0 'outer'
+		let inner = "hello"
+		if inner == "hello" 'checkInner'
+			return 1
+		end 'checkInner'
+	end 'outer'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5)
+end 'main'
+```
+```exitcode
+42
+```
+
+### if-statements.nested-if-with-multiple-returns
+
+Re-enable once its prerequisites land: function parameters + calls with named
+args (M5).
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(c Integer, next Integer) returns Integer
+	if c == 0 'maybePrefix'
+		if next == 1 'isHex'
+			return 1
+		end 'isHex'
+		if next == 2 'isBinary'
+			return 2
+		end 'isBinary'
+	end 'maybePrefix'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5, next: 0)
+end 'main'
+```
+```exitcode
+42
+```
+
+### if-statements.single-line-block-rejected
+
+Re-enable once its prerequisites land: a bool literal (`if true …`) AND the
+"expected newline after block label" reject (E2001); M4a is permissive about a
+label-then-statement on one line.
+
+```maxon
+function main() returns ExitCode
+	if true 'x' return 1 end 'x'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:3:14: Expected newline after block label, got 'return'
+```

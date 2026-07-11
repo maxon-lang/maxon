@@ -53,29 +53,37 @@ end 'ParseError'
 // M3 replaces M2's `+`-only left-fold with a precedence climber (`Parser.parseBinary`).
 // Binary precedence levels — HIGHER binds tighter. Left-associativity falls out of
 // recursing the right operand at `precedence + 1`. The table is deliberately shaped
-// so later milestones EXTEND it without reshaping the climber: M4 inserts comparison
-// BELOW additive; M5 adds `/`/`mod` at the multiplicative level. Unary minus is NOT
-// in this table — it is a prefix operator handled by `parseUnary` (the leaf of the
-// climber), so it binds tighter than every binary operator here.
+// so later milestones EXTEND it without reshaping the climber: M4 inserted comparison
+// BELOW additive (this commit); M5 adds `/`/`mod` at the multiplicative level. Unary
+// minus is NOT in this table — it is a prefix operator handled by `parseUnary` (the
+// leaf of the climber), so it binds tighter than every binary operator here.
 typealias InfixPrecedence = int(0 to 100)
 
-// A sentinel-free "not a binary operator": a real level is >= AdditivePrecedence, so
-// `infixPrecedence` returning this makes the climber's loop stop (the expression
+// A sentinel-free "not a binary operator": a real level is >= ComparisonPrecedence,
+// so `infixPrecedence` returning this makes the climber's loop stop (the expression
 // ends). It is a meaningful classification result, not an error sentinel.
 let NotAnInfixOperator = 0 as InfixPrecedence
 
-// Additive `+`/`-` — the loosest binary level, where the climber starts.
-let AdditivePrecedence = 1 as InfixPrecedence
+// Comparison `==`/`!=`/`<`/`>`/`<=`/`>=` — the LOOSEST binary level, where the climber
+// starts (M4). Binding below additive means `x + 1 == y` groups as `(x + 1) == y`.
+let ComparisonPrecedence = 1 as InfixPrecedence
+
+// Additive `+`/`-` — binds tighter than comparison.
+let AdditivePrecedence = 2 as InfixPrecedence
 
 // Multiplicative `*` — binds tighter than additive, so `10 + 5 * 2` groups as
 // `10 + (5 * 2)` = 20.
-let MultiplicativePrecedence = 2 as InfixPrecedence
+let MultiplicativePrecedence = 3 as InfixPrecedence
 
 // The precedence of a binary-operator token, or NotAnInfixOperator for any token
-// that does not begin a binary operation in the M3 grammar. A DEFERRED operator
-// (`/`/`mod`/comparison) is rejected by `rejectDeferredOperator` BEFORE this is
-// consulted, so it never reaches the climber's precedence compare.
+// that does not begin a binary operation in the grammar. A DEFERRED operator
+// (`/`/`mod`) is rejected by `rejectDeferredOperator` BEFORE this is consulted, so it
+// never reaches the climber's precedence compare.
 function infixPrecedence(kind TokenKind) returns InfixPrecedence
+	if comparisonOperator(kind) 'comparison'
+		return ComparisonPrecedence
+	end 'comparison'
+
 	if kind == TokenKind.plus or kind == TokenKind.minus 'additive'
 		return AdditivePrecedence
 	end 'additive'
@@ -106,6 +114,38 @@ function infixMaxonOp(kind TokenKind) returns MaxonBinOp
 	panic("infixMaxonOp: token '{kind.rawValue}' is not a supported binary operator — infixPrecedence must gate this call")
 end 'infixMaxonOp'
 
+// The Maxon comparison operator a comparison token maps to. Only called for tokens
+// `comparisonOperator` classified as comparisons; anything else is a climber bug, so
+// it panics rather than guessing. Kept separate from `infixMaxonOp` because a
+// comparison is a distinct op family (`MaxonOp.compare`), not a `binOp` opcode.
+function infixCmpOp(kind TokenKind) returns MaxonCmpOp
+	if kind == TokenKind.equalsEquals 'eq'
+		return MaxonCmpOp.eq
+	end 'eq'
+
+	if kind == TokenKind.bangEquals 'ne'
+		return MaxonCmpOp.ne
+	end 'ne'
+
+	if kind == TokenKind.lessThan 'lt'
+		return MaxonCmpOp.lt
+	end 'lt'
+
+	if kind == TokenKind.greaterThan 'gt'
+		return MaxonCmpOp.gt
+	end 'gt'
+
+	if kind == TokenKind.lessEquals 'le'
+		return MaxonCmpOp.le
+	end 'le'
+
+	if kind == TokenKind.greaterEquals 'ge'
+		return MaxonCmpOp.ge
+	end 'ge'
+
+	panic("infixCmpOp: token '{kind.rawValue}' is not a comparison operator — comparisonOperator must gate this call")
+end 'infixCmpOp'
+
 // The division family (`/`, `mod`) is DEFERRED to M5: x64 `idiv` pins its operands
 // to the fixed RAX/RDX pair, which needs the real register allocator (the M1
 // placeholder gives every value a fresh pool register and cannot honor fixed-reg
@@ -114,8 +154,9 @@ function divisionFamilyOperator(kind TokenKind) returns bool
 	return kind == TokenKind.slash or kind == TokenKind.mod
 end 'divisionFamilyOperator'
 
-// The comparison operators are DEFERRED to M4: each feeds a branch, so it needs the
-// `if`/branch lowering (and the `cmp`-splits-out Std variant) that lands there.
+// The comparison operators (M4). Each maps to a `MaxonOp.compare` and, since it
+// feeds an `if`, fuses with the branch at the x64 tier. Classifier shared by the
+// precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
 function comparisonOperator(kind TokenKind) returns bool
 	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
 end 'comparisonOperator'
@@ -213,7 +254,11 @@ export type Parser
 		var entry = self.artifact.module.addBlockAt(func, label: "entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
 
 		self.skipNewlines()
-		try self.parseStatements(entry)
+		// parseStatements threads a "current block" that control-flow statements can
+		// move forward (an `if` leaves subsequent statements in its continuation block);
+		// the final block it returns is not needed here — the function's own `end` closes
+		// the body regardless of which block it landed in.
+		_ = try self.parseStatements(func, block: entry)
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
@@ -256,8 +301,13 @@ export type Parser
 		throw ParseError.unexpectedToken("a type", got: tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parseTypeReference'
 
-	// Statement list until the closing `end`. Blank lines separate statements.
-	function parseStatements(block IrBlock) throws ParseError
+	// Statement list until the closing `end`, emitting into `block`. Returns the block
+	// the LAST statement left control in — the same `block` for straight-line code, but
+	// an `if` moves control into its continuation block, so subsequent statements (and
+	// the caller) must follow it. `func` is threaded so control-flow statements can
+	// create successor blocks. Blank lines separate statements.
+	function parseStatements(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		var current = block
 		while true 'stmts'
 			self.skipNewlines()
 			if self.at(TokenKind.end) 'endBlock'
@@ -267,19 +317,27 @@ export type Parser
 				let tok = self.current()
 				throw ParseError.unexpectedEof(tok.line, column: tok.column)
 			end 'eof'
-			try self.parseStatement(block)
+			current = try self.parseStatement(func, block: current)
 		end 'stmts'
+		return current
 	end 'parseStatements'
 
-	// One statement. M2 has `return` and `let`/`var` bindings.
-	function parseStatement(block IrBlock) throws ParseError
+	// One statement. Returns the block subsequent statements continue in — `block`
+	// itself for `return`/`let`/`var` (straight-line), or an `if`'s continuation block.
+	// M4 adds `if`.
+	function parseStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(block)
+			return block
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
 			try self.parseBinding(block, mutable: false)
+			return block
 		end 'letDecl' else if self.at(TokenKind.var) 'varDecl'
 			try self.parseBinding(block, mutable: true)
-		end 'varDecl' else 'unsupported'
+			return block
+		end 'varDecl' else if self.at(TokenKind.if) 'ifStmt'
+			return try self.parseIfStatement(func, block: block)
+		end 'ifStmt' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
 		end 'unsupported'
@@ -303,7 +361,7 @@ export type Parser
 
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
-		let value = try self.parseExpression(block)
+		let value = try self.parseExpression(block, permitComparison: false)
 		self.scope.declareValueBinding(nameTok.value, varType: MaxonType.integer, mutable: mutable, value: value)
 	end 'parseBinding'
 
@@ -316,26 +374,164 @@ export type Parser
 			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
 		end 'bareReturn'
-		let retVal = try self.parseExpression(block)
+		let retVal = try self.parseExpression(block, permitComparison: false)
 		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
+
+	// Parse an `if` statement (M4):
+	//   if <cond> 'thenLabel'
+	//       <then-stmts>
+	//   end 'thenLabel' [ else 'elseLabel' <else-stmts> end 'elseLabel'
+	//                   | else if <cond> …  (the else branch is itself a nested `if`) ]
+	//
+	// Lowering shape: the entry block (`block`) evaluates `cond` (a comparison, whose
+	// value the Std→x64 pass fuses with the branch) and gets a `condBranch` terminator
+	// selecting the then block vs the false target (the else block, or the continuation
+	// when there is no else). A branch that returns terminates itself; one that falls
+	// through gets a `branch` to the continuation. Blocks are created then→else→
+	// continuation so `.text` lays them out in source order.
+	//
+	// Returns the CONTINUATION — where control resumes after the `if`. It is either
+	// reachable (Terminator.unset, so subsequent statements emit into it — e.g. the
+	// `return 0` after a simple `if`) or, when both branches return, unreachable
+	// (Terminator.dead — emits no code, but is still returned so the caller always has
+	// a block to continue in).
+	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let ifTok = try self.consume(TokenKind.if)
+		let cond = try self.parseExpression(block, permitComparison: true)
+		let thenLabel = try self.consume(TokenKind.charLiteral)
+
+		// `var` because these blocks are passed to functions that mutate them (the
+		// statement parser fills the block; the finalizers wire its terminator) — a
+		// `let` binding cannot be forwarded to a mutating parameter (E3019).
+		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
+		self.skipNewlines()
+		var thenEnd = try self.parseStatements(func, block: thenBlock)
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+
+		if not self.at(TokenKind.else) 'noElse'
+			return self.finalizeIfNoElse(func, entry: block, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd)
+		end 'noElse'
+
+		try self.consume(TokenKind.else)
+		var elseBlock = self.newBlock(func, label: "ifelse", line: ifTok.line)
+		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
+		return self.finalizeIfElse(func, entry: block, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd)
+	end 'parseIfStatement'
+
+	// Parse an `else` body into `elseBlock`: either a nested `if` (the `else if …`
+	// chain — the else branch IS a nested if statement, so `elseBlock` becomes that
+	// if's entry) or a plain labelled `else` block. Returns the block the else branch
+	// left control in (its own continuation for a nested if; the block its last
+	// statement filled for a plain else).
+	function parseElseBody(func IrFunction, elseBlock IrBlock) returns IrBlock throws ParseError
+		if self.at(TokenKind.if) 'elseIf'
+			return try self.parseIfStatement(func, block: elseBlock)
+		end 'elseIf'
+
+		try self.consume(TokenKind.charLiteral)
+		self.skipNewlines()
+		let elseEnd = try self.parseStatements(func, block: elseBlock)
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+		return elseEnd
+	end 'parseElseBody'
+
+	// Finalize an `if` with no `else`: the false path flows straight to the
+	// continuation, so the continuation is always reachable. Wire the entry's
+	// condBranch (then vs continuation) and, if the then branch falls through rather
+	// than returning, branch it to the continuation.
+	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock) returns IrBlock
+		let cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
+		if not thenEnd.isTerminated() 'thenFallsThrough'
+			self.emitBranch(thenEnd, targetId: cont.id)
+		end 'thenFallsThrough'
+		return cont
+	end 'finalizeIfNoElse'
+
+	// Finalize an `if`/`else`: the entry's condBranch targets the then and else blocks.
+	// The continuation is reachable only when a branch falls through; when BOTH return
+	// it is unreachable and marked `dead`. Each falling-through branch is wired to it.
+	function finalizeIfElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, elseBlock IrBlock, elseEnd IrBlock) returns IrBlock
+		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: elseBlock.id, ifTok: ifTok)
+		let thenTerminated = thenEnd.isTerminated()
+		let elseTerminated = elseEnd.isTerminated()
+
+		if thenTerminated and elseTerminated 'bothReturn'
+			// Nothing reaches the continuation — mark it dead rather than leave it
+			// unterminated (assertAllBlocksTerminated forbids an unset block).
+			var cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+			cont.terminator = Terminator.dead
+			return cont
+		end 'bothReturn'
+
+		let cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+		if not thenTerminated 'thenFallsThrough'
+			self.emitBranch(thenEnd, targetId: cont.id)
+		end 'thenFallsThrough'
+		if not elseTerminated 'elseFallsThrough'
+			self.emitBranch(elseEnd, targetId: cont.id)
+		end 'elseFallsThrough'
+		return cont
+	end 'finalizeIfElse'
+
+	// Create + register a fresh block in `func`, filling the source footprint from the
+	// parser's own file/position so the four `if` block-creation sites don't each
+	// respell it.
+	function newBlock(func IrFunction, label String, line LineNumber) returns IrBlock
+		return self.artifact.module.addBlockAt(func, label: label, filePath: self.filePath.toString(), firstLine: line)
+	end 'newBlock'
+
+	// Set `block`'s terminator to a two-way conditional branch, anchored on the `if`
+	// keyword's span.
+	function emitCondBranch(block IrBlock, cond ValueId, thenId BlockId, elseId BlockId, ifTok Token)
+		self.artifact.emitTerminator(block, op: MaxonOp.condBranch(cond, thenBlockId: thenId, elseBlockId: elseId), range: SourceRange.ofToken(ifTok))
+	end 'emitCondBranch'
+
+	// Set `block`'s terminator to an unconditional branch. The branch is synthetic (no
+	// source token spawned it — it is the compiler wiring a fall-through), so it carries
+	// the positionless `SourceRange.none()`.
+	function emitBranch(block IrBlock, targetId BlockId)
+		self.artifact.emitTerminator(block, op: MaxonOp.branch(targetId), range: SourceRange.none())
+	end 'emitBranch'
 
 	// Expression entry — a Pratt precedence climber (M3 replaced M2's `+`-only
 	// left-fold). It starts at the loosest binary level; `parseBinary` climbs the
 	// precedence table (`infixPrecedence`), and `parseUnary` handles prefix `-` as
 	// the climber's leaf. See the precedence table above the Parser type.
-	function parseExpression(block IrBlock) returns ValueId throws ParseError
-		return try self.parseBinary(block, minPrec: AdditivePrecedence)
+	//
+	// `permitComparison` records whether a top-level comparison may appear here: true
+	// only for an `if` condition (where the Std→x64 pass fuses the compare into the
+	// branch), false in a value context (`let`/`var`/`return`) where a comparison
+	// result would have to be materialized as a boolean — deferred past M4. See
+	// parseBinary for why an unpermitted comparison must be rejected rather than lowered.
+	function parseExpression(block IrBlock, permitComparison bool) returns ValueId throws ParseError
+		return try self.parseBinary(block, minPrec: ComparisonPrecedence, permitComparison: permitComparison)
 	end 'parseExpression'
 
 	// The precedence-climbing core. Parse a unary/primary operand, then while the
 	// next token is a binary operator whose precedence is >= `minPrec`, consume it
 	// and recurse for the right operand at `precedence + 1` (which makes the operator
 	// LEFT-associative). A supported operator below `minPrec`, a non-operator, or the
-	// end of the expression stops the climb. A DEFERRED operator (`/`/`mod`/comparison)
-	// is rejected in operator position (loud positioned error), never silently ignored.
-	function parseBinary(block IrBlock, minPrec InfixPrecedence) returns ValueId throws ParseError
+	// end of the expression stops the climb. A comparison operator emits the distinct
+	// `compare` op (not a `binOp`); everything else emits `binOp`. A DEFERRED operator
+	// (`/`/`mod`) is rejected in operator position (loud positioned error).
+	function parseBinary(block IrBlock, minPrec InfixPrecedence, permitComparison bool) returns ValueId throws ParseError
 		var left = try self.parseUnary(block)
+
+		// A comparison's result is fused into its `if` branch and NEVER materialized as
+		// a value (see emitCompare + the Std→x64 fused cmp+jcc lowering). It is therefore
+		// valid ONLY as the sole top-level operator of an `if` condition. `canCompare`
+		// starts at `permitComparison` (true only for an `if` condition) and drops to
+		// false once one comparison is consumed. That rejects — loudly, in operator
+		// position — both a chained `a == b == c` and a comparison-as-value (`let x =
+		// a == b`, `return a == b`): either would feed a compare result somewhere other
+		// than the fused branch, which the M4 lowering cannot honor (it would read stale
+		// EFLAGS clobbered by an intervening op, or reference an unmaterialized result
+		// register). Materializing a boolean (setcc) lifts this restriction later.
+		var canCompare = permitComparison
 
 		while true 'climb'
 			let opTok = self.current()
@@ -346,9 +542,18 @@ export type Parser
 				break
 			end 'stop'
 
+			if comparisonOperator(opTok.kind) and not canCompare 'comparisonNotAllowed'
+				throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — a comparison is only valid as the sole top-level operator of an `if` condition in M4 (its result fuses into the branch; chained comparison and boolean values arrive with materialization)", line: opTok.line, column: opTok.column)
+			end 'comparisonNotAllowed'
+
 			self.advance()
-			let right = try self.parseBinary(block, minPrec: prec + 1)
-			left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
+			let right = try self.parseBinary(block, minPrec: prec + 1, permitComparison: false)
+			if comparisonOperator(opTok.kind) 'isCompare'
+				left = self.emitCompare(block, lhs: left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
+				canCompare = false
+			end 'isCompare' else 'isArith'
+				left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
+			end 'isArith'
 		end 'climb'
 
 		return left
@@ -357,16 +562,12 @@ export type Parser
 	// Reject an operator whose lowering is deferred to a later milestone, so a test
 	// that uses one fails LOUDLY (a positioned E3010) rather than silently dropping
 	// the operator. Called with the token in operator position (after an operand);
-	// a non-deferred token falls through untouched. Each family carries its own
-	// milestone note — see divisionFamilyOperator / comparisonOperator.
+	// a non-deferred token falls through untouched. Comparison joined the grammar at
+	// M4; only the division family (`/`/`mod`) remains deferred (see divisionFamilyOperator).
 	function rejectDeferredOperator(opTok Token) throws ParseError
 		if divisionFamilyOperator(opTok.kind) 'divFamily'
 			throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — arrives at M5 (x64 idiv's fixed RAX/RDX pair needs the real register allocator)", line: opTok.line, column: opTok.column)
 		end 'divFamily'
-
-		if comparisonOperator(opTok.kind) 'comparison'
-			throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — arrives at M4 (comparison feeds a branch, so it needs `if`/branch lowering)", line: opTok.line, column: opTok.column)
-		end 'comparison'
 	end 'rejectDeferredOperator'
 
 	// A prefix-operator operand — the climber's leaf. M3 handles prefix `-` (negate).
@@ -399,6 +600,15 @@ export type Parser
 		self.artifact.emitOp(block, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitUnaryOp'
+
+	// Append a `compare` op over two SSA values; return the i1 ValueId it defines.
+	// Mirrors emitBinOp but emits the distinct comparison variant (a comparison is not
+	// a `binOp` — see MaxonCmpOp). The source range anchors on the comparison operator.
+	function emitCompare(block IrBlock, lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId
+		let result = allocValueId(self.valueIds)
+		self.artifact.emitOp(block, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitCompare'
 
 	// A primary expression: an integer literal or a variable reference. Anything else
 	// where an operand is required (an operator, a delimiter, EOF) is E2004 —

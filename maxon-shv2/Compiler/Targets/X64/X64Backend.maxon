@@ -53,12 +53,19 @@ let OpcodeRet = 0xC3
 let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
 let OpcodeAddRmReg = 0x01  // add r/m, r  (reg field = source), same shape as mov
 let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as add/mov
+let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
+let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
+
+// Base of the two-byte `jcc rel32` opcode: after the 0x0F escape, `0x80 | cc` gives
+// the conditional-jump opcode (e.g. `0x80 | 0x4` = 0x84 = JE). The `cc` nibble comes
+// from X64CondCode's backing value.
+let OpcodeJccRel32Base = 0x80
 
 // Two-byte-opcode escape: a `0x0F` prefix byte introduces the two-byte opcode map
 // (e.g. `imul r, r/m` is `0F AF /r`). `encodeModRmDirect` emits it when asked.
@@ -191,6 +198,77 @@ function encodeNegReg(code ByteArray, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtNeg, rmField: reg)
 end 'encodeNegReg'
 
+// `cmp lhs, rhs` — register-direct 64-bit compare (`39 /r`, `lhs - rhs` discarding
+// the difference, keeping EFLAGS). Same `r/m, r` byte shape as mov/add/sub, so it
+// routes through the shared `encodeRmRegDirect` (dest=lhs in r/m, src=rhs in reg)
+// with only the opcode swapped. A signed `jcc` after it tests `lhs <cond> rhs`.
+function encodeCmpRegReg(code ByteArray, lhs X64Register, rhs X64Register)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: lhs, src: rhs, wide: true)
+end 'encodeCmpRegReg'
+
+// --- Intra-function block-branch resolution ---
+//
+// A function's blocks are laid out contiguously inside its ONE FunctionCodeChunk, so
+// a `jmp`/`jcc` to another block never crosses a chunk boundary and is resolved here
+// — not by `concat` (which only rebases inter-FUNCTION `call`/IAT fixups). This is
+// the M4 analogue of `resolveCallFixups`, keyed by BlockId within one chunk instead
+// of by function name across chunks.
+
+// One pending block branch: the chunk-local offset of its 4-byte rel32 field and the
+// BlockId it targets. `resolveBlockJumps` patches each once every block's start
+// offset is known (forward jumps target blocks emitted later in the chunk).
+type BlockJumpFixup
+	export var codeOffset as CodeOffset
+	export var targetBlockId as BlockId
+
+	export static function create(codeOffset CodeOffset, targetBlockId BlockId) returns BlockJumpFixup
+		return Self{codeOffset: codeOffset, targetBlockId: targetBlockId}
+	end 'create'
+end 'BlockJumpFixup'
+
+typealias BlockJumpFixupArray = Array with BlockJumpFixup
+
+// BlockId -> its start offset within the current function chunk.
+typealias BlockStartOffsetMap = Map with (BlockId, CodeOffset)
+
+// `jmp rel32` to a block. The 4-byte displacement is left zero and a BlockJumpFixup
+// records its offset; `resolveBlockJumps` patches it once the target block's chunk
+// offset is known.
+function encodeJmp(code ByteArray, blockJumps BlockJumpFixupArray, targetBlockId BlockId)
+	code.push(OpcodeJmpRel32)
+	blockJumps.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlockId))
+	writeDword(code, value: 0)
+end 'encodeJmp'
+
+// `jcc rel32` to a block (0F 80+cc). `cond.rawValue` is the condition nibble; the
+// displacement is a BlockJumpFixup like `encodeJmp`.
+function encodeJcc(code ByteArray, blockJumps BlockJumpFixupArray, cond X64CondCode, targetBlockId BlockId)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
+	blockJumps.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlockId))
+	writeDword(code, value: 0)
+end 'encodeJcc'
+
+// Patch a chunk-local rel32 field to the chunk-local start offset of its target.
+// The displacement is measured from the END of the 4-byte field (`codeOffset +
+// X64Disp32Width`) — the shared x64 `call`/`jmp`/`jcc` rel32 convention — so this
+// one helper backs BOTH the inter-function call fixups (resolveCallFixups) and the
+// intra-function block jumps (resolveBlockJumps) rather than respelling the
+// displacement math at each. `patchX64Rel32` guards the ±2 GiB reach.
+function patchChunkRel32(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset, what String)
+	let rel = targetOffset - (codeOffset + X64Disp32Width)
+	patchX64Rel32(code, codeOffset: codeOffset, rel: rel, what: what, targetAddr: targetOffset)
+end 'patchChunkRel32'
+
+// Patch every block branch's rel32 to the chunk-local displacement of its target
+// block (forward jumps target blocks emitted later in the chunk).
+function resolveBlockJumps(code ByteArray, blockOffsets BlockStartOffsetMap, blockJumps BlockJumpFixupArray)
+	for jump in blockJumps 'resolve'
+		let targetOffset = try blockOffsets.get(jump.targetBlockId) otherwise panic("resolveBlockJumps: branch to unknown block id {jump.targetBlockId} — the target block was not laid out in this function chunk")
+		patchChunkRel32(code, codeOffset: jump.codeOffset, targetOffset: targetOffset, what: "x64BlockJumpRel32")
+	end 'resolve'
+end 'resolveBlockJumps'
+
 // mov reg32, imm32 (B8+rd id). Writing a 32-bit register zero-extends to 64 bits,
 // so this is the compact form for any value that fits u32 (e.g. the literal 42).
 function encodeMovRegImm32(code ByteArray, dest X64Register, value MachineWord)
@@ -269,12 +347,16 @@ function resolvePhysical(vreg X64VReg) returns X64Register
 	end 'resolve'
 end 'resolvePhysical'
 
-// Encode one TargetOp into `code`, recording call/IAT fixups as it goes.
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray)
+// Encode one TargetOp into `code`, recording call / IAT / block-jump fixups as it
+// goes. `blockJumps` collects intra-function branch fixups the chunk resolves once
+// every block's offset is known (see resolveBlockJumps).
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, blockJumps BlockJumpFixupArray)
 	match op 'emit'
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
 		ret then code.push(OpcodeRet)
+		jmp(targetBlockId) then encodeJmp(code, blockJumps: blockJumps, targetBlockId: targetBlockId)
+		jcc(cond, targetBlockId) then encodeJcc(code, blockJumps: blockJumps, cond: cond, targetBlockId: targetBlockId)
 		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolvePhysical(dest), value: value)
 		movRegImm32(dest, value) then encodeMovRegImm32(code, dest: resolvePhysical(dest), value: value)
 		movRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
@@ -283,6 +365,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		subRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
 		imulRegReg(destReg, srcReg) then encodeImulRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg))
 		negReg(reg) then encodeNegReg(code, reg: resolvePhysical(reg))
+		cmpRegReg(lhsReg, rhsReg) then encodeCmpRegReg(code, lhs: resolvePhysical(lhsReg), rhs: resolvePhysical(rhsReg))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	end 'emit'
@@ -293,27 +376,38 @@ end 'emitTargetOp'
 // ==========================================================================
 
 // Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets. The
-// caller (concat) shifts every fixup by the chunk's start offset. There are no
-// intra-function block jumps in the M1 slice (single-block functions), so no
-// block-fixup table is threaded through — it GROWS in with control flow (M4).
+// caller (concat) shifts every inter-function fixup (call/IAT) by the chunk's start
+// offset. Intra-function block branches (M4's `jmp`/`jcc`), by contrast, are resolved
+// HERE: a function's blocks are contiguous within its one chunk, so a block branch's
+// rel32 is chunk-local and independent of where concat places the chunk. Each block's
+// chunk-local start offset is recorded as it is emitted, then `resolveBlockJumps`
+// patches every pending branch (including forward jumps to blocks emitted later).
 export function emitFunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
+	var blockJumps = BlockJumpFixupArray.create()
+	var blockOffsets = BlockStartOffsetMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
+		// Record this block's chunk-local start BEFORE emitting its ops, so branches
+		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
+		blockOffsets.upsert(block.id, value: code.count())
+
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps)
 		end 'hasTerm'
 	end 'eachBlock'
+
+	resolveBlockJumps(code, blockOffsets: blockOffsets, blockJumps: blockJumps)
 
 	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
 	// M3 (floats) / M10 (strings).
@@ -371,12 +465,12 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	return result
 end 'concatX64FunctionChunks'
 
-// Patch every `call rel32` to the rel32 displacement of its named target. The
-// displacement is measured from the end of the instruction (disp32 offset + 4).
+// Patch every `call rel32` to the rel32 displacement of its named target, via the
+// shared patchChunkRel32 (same "measured from end of field" convention as the
+// intra-function block jumps).
 function resolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
 	for fixup in callFixups 'resolve'
 		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("resolveCallFixups: call to unknown function '{fixup.targetName}'")
-		let rel = targetOffset - (fixup.codeOffset + X64Disp32Width)
-		patchX64Rel32(code, codeOffset: fixup.codeOffset, rel: rel, what: "x64CallRel32", targetAddr: targetOffset)
+		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: "x64CallRel32")
 	end 'resolve'
 end 'resolveCallFixups'

@@ -42,6 +42,26 @@ export function appendIntImmToReg(module TargetModule, dstBlock IrBlock, dest X6
 	end 'wide'
 end 'appendIntImmToReg'
 
+// Maps the SSA value a `cmp` defines to the predicate it compared with. Populated
+// when a `cmp` is lowered and consumed at the following `condBranch` — the two are
+// FUSED into `cmp` + `jcc` rather than materializing a boolean (see lowerCmp). Keyed
+// by ValueId, which is function-local, so the map is reset per function.
+typealias CmpPredMap = Map with (ValueId, StdCmpPred)
+
+// Map a Std comparison predicate to the x64 signed-jump condition code. ONE table
+// (not one branch encoder per predicate): the fused `cmp`+`jcc` lowering reads the
+// condition here. Signed conditions throughout — all Std integers are signed i64.
+function condCodeForPred(pred StdCmpPred) returns X64CondCode
+	return match pred 'map'
+		eq gives X64CondCode.equal
+		ne gives X64CondCode.notEqual
+		lt gives X64CondCode.less
+		gt gives X64CondCode.greater
+		le gives X64CondCode.lessEqual
+		ge gives X64CondCode.greaterEqual
+	end 'map'
+end 'condCodeForPred'
+
 export function lowerStdToX64(stdModule StdModule) returns TargetModule
 	var lowering = StdToX64Lowering.create(stdModule)
 	lowering.prepareSkeleton()
@@ -56,9 +76,12 @@ type StdToX64Lowering
 	// Exported so the free-function entry can read the finished module after
 	// driving the per-function loop (M5's fan-out driver reads it too).
 	export var targetModule as TargetModule
+	// Per-function `cmp`-value → predicate table for the fused compare/branch
+	// lowering. Reset at the start of each function (ValueIds are function-local).
+	var cmpPreds as CmpPredMap
 
 	static function create(stdModule StdModule) returns StdToX64Lowering
-		return Self{stdModule: stdModule, targetModule: TargetModule.create()}
+		return Self{stdModule: stdModule, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create()}
 	end 'create'
 
 	// Whole-module setup: clone every StdModule block 1:1 into `targetModule.blocks`
@@ -83,6 +106,11 @@ type StdToX64Lowering
 	// matching target block (indexed by the same blockRef the function carries).
 	// The function's StdReturnType drives whether the return materializes an R8 move.
 	function lowerFunction(srcFunc IrFunction)
+		// Fresh predicate table per function — a `cmp`'s ValueId only means anything
+		// within its own function, and the fused branch that consumes it is in the
+		// same function.
+		self.cmpPreds = CmpPredMap.create()
+
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
 			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
@@ -107,18 +135,24 @@ type StdToX64Lowering
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
 			unaryOp(resultId, operand, opcode) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
+			cmp(resultId, lhs, rhs, pred) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
+			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 		end 'lower'
 	end 'lowerBodyOp'
 
-	// Lower a block terminator. The only Std terminator in the M1 slice is `ret`;
-	// a `const` terminator is a lowering bug (a constant is never a terminator).
+	// Lower a block terminator. M4 adds the two branch terminators; `ret` stays. A
+	// `const`/`binOp`/`unaryOp`/`cmp` terminator is a lowering bug (none is a terminator).
 	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
+			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
+			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
+			cmp then panic("lowerStdToX64: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -162,6 +196,36 @@ type StdToX64Lowering
 			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest))
 		end 'op'
 	end 'lowerUnaryOp'
+
+	// Lower a Std `cmp` to an x64 `cmp reg, reg`, and REMEMBER its predicate keyed by
+	// the value it defines. No boolean is materialized here: in the M4 slice a compare
+	// exists only to feed the `condBranch` that immediately follows it, so the actual
+	// `jcc` is emitted at the branch (lowerCondBranch). The `cmp` still emits its
+	// instruction at this site — the last flag-setting op before the branch — so the
+	// EFLAGS the branch reads are live and set by exactly this compare.
+	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, dstBlock IrBlock)
+		self.cmpPreds.upsert(resultId, value: pred)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(X64VReg.virtual(lhs), rhsReg: X64VReg.virtual(rhs)))
+	end 'lowerCmp'
+
+	// Lower a Std `condBranch` to the fused `jcc <then>` + `jmp <else>`. The `jcc`
+	// condition is the predicate the compare that defined `condId` recorded; the `jcc`
+	// is a body op and the `jmp` is the block's terminator (a two-instruction two-way
+	// branch cannot fit one terminator slot). An unconditional `jmp` to the else/merge
+	// target is emitted for EVERY layout so correctness never depends on block ordering
+	// (a later pass may elide a fall-through). A `condId` with no recorded predicate
+	// means the `if` condition was not a comparison — the only condition form the M4
+	// slice supports — so it fails loudly rather than emitting a wrong branch.
+	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock)
+		let pred = try self.cmpPreds.get(condId) otherwise panic("lowerStdToX64: `condBranch` on value v{condId} which no `cmp` defined — the M4 slice only supports comparison conditions in an `if` (boolean values arrive later)")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.jcc(condCodeForPred(pred), targetBlockId: thenBlockId))
+		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
+	end 'lowerCondBranch'
+
+	// Lower a Std unconditional `branch` to a single `jmp` terminator.
+	function lowerBranch(targetBlockId BlockId, dstBlock IrBlock)
+		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(targetBlockId))
+	end 'lowerBranch'
 
 	// Return: move the value into the primary-return register (R8) then emit `ret`.
 	// Void returns skip the move (callers never read the register). Frame teardown

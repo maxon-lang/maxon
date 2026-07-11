@@ -81,6 +81,20 @@ export function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
 
+// Map a source-level comparison operator to its Std predicate. M4 is a 1:1 mapping;
+// exhaustive by construction (every MaxonCmpOp arm is named). The x64 tier turns the
+// predicate into a signed jcc condition when it fuses the compare with its branch.
+export function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
+	return match op 'map'
+		eq gives StdCmpPred.eq
+		ne gives StdCmpPred.ne
+		lt gives StdCmpPred.lt
+		gt gives StdCmpPred.gt
+		le gives StdCmpPred.le
+		ge gives StdCmpPred.ge
+	end 'map'
+end 'maxonCmpOpToStdPred'
+
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Instantiates the
 // per-run lowering worker (which owns the name→id state) and runs it.
 export function lowerMaxonToStd(maxonModule MaxonModule) returns StdModule
@@ -142,7 +156,13 @@ type MaxonToStdLowering
 				if srcBlock.hasTerminatorOp() 'hasTerm'
 					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerMaxonToStd: terminatorIndex not in maxonModule.ops")
 					self.lowerTerminator(termOp, dstBlock: dstBlock)
-				end 'hasTerm'
+				end 'hasTerm' else 'noTermOp'
+					// An op-less terminator (`dead` for an unreachable if/else continuation,
+					// `fallthrough` if a later pass elides one) carries no op to lower, but
+					// its marker must survive so the Std block is still "terminated" — the
+					// clone above left every dst block at `unset`.
+					self.carryOplessTerminator(srcBlock, dstBlock: dstBlock)
+				end 'noTermOp'
 			end 'eachBlock'
 		end 'eachFunc'
 
@@ -160,6 +180,9 @@ type MaxonToStdLowering
 			retVoid then self.rejectVoidReturn()
 			binOp(result, lhs, rhs, op) then self.lowerBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			unaryOp(result, operand, op) then self.lowerUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
+			compare(result, lhs, rhs, op) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			condBranch then panic("lowerMaxonToStd: a `condBranch` appeared as a body op (parser bug — a branch is always a block terminator)")
+			branch then panic("lowerMaxonToStd: a `branch` appeared as a body op (parser bug — a branch is always a block terminator)")
 		end 'lower'
 	end 'lowerOp'
 
@@ -169,9 +192,12 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
 			retVoid then self.rejectVoidReturn()
+			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
+			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
 			binOp then panic("lowerMaxonToStd: a `binOp` op appeared as a block terminator (parser bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerMaxonToStd: a `unaryOp` op appeared as a block terminator (parser bug — a unary op is never a terminator)")
+			compare then panic("lowerMaxonToStd: a `compare` op appeared as a block terminator (parser bug — a comparison is never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -200,6 +226,39 @@ type MaxonToStdLowering
 		let opcode = maxonUnaryOpToStdOpcode(op)
 		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode))
 	end 'lowerUnaryOp'
+
+	// Lower a Maxon comparison to `StdOp.cmp`. Operand/result ValueIds pass through
+	// verbatim; only the source-level comparison operator maps to a Std predicate.
+	function lowerCompare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, dstBlock IrBlock)
+		let pred = maxonCmpOpToStdPred(op)
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred))
+	end 'lowerCompare'
+
+	// Lower a Maxon conditional branch to its Std counterpart, as the block's
+	// terminator. The condition value and both target BlockIds pass through verbatim.
+	function lowerCondBranch(cond ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.condBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId))
+	end 'lowerCondBranch'
+
+	// Lower a Maxon unconditional branch to its Std counterpart, as the block's
+	// terminator.
+	function lowerBranch(targetBlockId BlockId, dstBlock IrBlock)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.branch(targetBlockId))
+	end 'lowerBranch'
+
+	// Copy a source block's op-LESS terminator marker (`dead`/`fallthrough`) onto its
+	// freshly-cloned Std block. `unset` needs no action (the clone already starts
+	// there); an `opIndex` terminator never reaches here (the caller guards with
+	// hasTerminatorOp). This keeps `assertAllBlocksTerminated` satisfied for the
+	// unreachable continuation block the `if`/`else` parser marks `dead`.
+	function carryOplessTerminator(srcBlock IrBlock, dstBlock IrBlock)
+		match srcBlock.terminator 'carry'
+			unset then break 'carry'
+			dead then dstBlock.terminator = Terminator.dead
+			fallthrough then dstBlock.terminator = Terminator.fallthrough
+			opIndex then panic("carryOplessTerminator: block '{srcBlock.label}' has an op terminator but hasTerminatorOp() was false")
+		end 'carry'
+	end 'carryOplessTerminator'
 
 	// Emit the function-return terminator (or, for a mid-block ret, a body op).
 	// M1 has only the PLAIN-ret arm: a non-throwing, non-interface-returning

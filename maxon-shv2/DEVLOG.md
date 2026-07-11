@@ -205,7 +205,8 @@ The design each milestone establishes is documented in
   test also needs `trunc`/params/loops) — deferred ops reject with a positioned
   `E3010 … arrives at Mn` note. Placeholder allocator suffices (M3 expressions are
   small). Specs `specs-shv2/{arithmetic,unary-operators}.md`. **Phase A complete.**
-- [ ] **M4** control flow · [ ] **M5** functions (fan-out)
+- **Tooling** — **spec-test runner landed** (`maxon-shv2 spec-test`, `Testing/SpecParser`+`SpecTestRunner`): parses `specs-shv2/*.md`, compiles each active test through shv2 (subprocess), compares exit-code / normalized `maxoncstderr`; deferred tests live under `## Deferred` (HTML comments don't nest). Replaces hand-driving. 27/0.
+- [~] **M4a** control flow (comparison + `if`) — comparison operators (`==`/`!=`/`<`/`>`/`<=`/`>=` as a `cmp` op, fused `cmp`+`jcc`, un-deferred from M3) + `if`/`else`/`else-if` (**first multi-block functions**: intra-function `jmp`/`jcc` rel32 resolved in `emitFunctionChunk` via `BlockStartOffsetMap`/`resolveBlockJumps`, forward+backward-ready for loops) + `return` in branches. New `control` band (`condBranch`/`branch`) between arith and call. Built in a parallel worktree; a review caught a **real miscompile** — a comparison in value position (`let b = x==10; …`) read stale flags after an intervening flag-setter — fixed by restricting comparisons to the sole top-level operator of an `if` condition (E3010 otherwise) until bool materialization/`setcc` lands. Specs `specs-shv2/{comparison-operators,if-statements,return-statement}.md`. · [ ] **M4b** while/break/continue + mem2reg · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
 - [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays
 - [ ] **M12** enums · [ ] **M13** closures · [ ] **M14** interfaces/generics · [ ] **M15** error handling

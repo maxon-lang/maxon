@@ -55,6 +55,21 @@ export union X64VReg
 	virtual(id ValueId)
 end 'X64VReg'
 
+// x64 condition codes — the `tttn` nibble of a `jcc`/`setcc` opcode. The backing
+// value IS the nibble, so the `jcc` encoder forms its opcode as `0x80 | rawValue`
+// (e.g. `equal` = 0x4 → `0F 84` = JE) with no separate lookup table. M4 emits only
+// the SIGNED integer comparisons (`less`/`greater`/… are the signed JL/JG family,
+// not the unsigned JB/JA family) — all Std integers are signed i64. StdToX64Conversion
+// maps each `StdCmpPred` to one of these when it fuses a compare with its branch.
+export enum X64CondCode
+	equal = 0x4         // JE  / JZ
+	notEqual = 0x5      // JNE / JNZ
+	less = 0xC          // JL  (signed <)
+	greaterEqual = 0xD  // JGE (signed >=)
+	lessEqual = 0xE     // JLE (signed <=)
+	greater = 0xF       // JG  (signed >)
+end 'X64CondCode'
+
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
 // consumed by B2's instruction scheduler + register allocator. THIN for M1:
 // only the semantic flags that do not require the regalloc `OpPattern` /
@@ -87,6 +102,15 @@ export union TargetOp
 	epilogue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	// `ret` instruction — return control to the caller.
 	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
+	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
+	// function's blocks are contiguous, so intra-function jumps never cross a chunk
+	// boundary). Reads/sets no flags. Placed in the control band next to `ret`.
+	jmp(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// Conditional near jump (`jcc rel32`, 0F 80+cc). Taken to `targetBlockId` when the
+	// EFLAGS the preceding `cmpRegReg` set satisfy `cond`, else falls through. `setsFlags`
+	// is false — `jcc` READS flags, it does not write them.
+	jcc(cond X64CondCode, targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Materialize a 64-bit immediate into `dest` (`mov reg, imm64`).
 	movRegImm(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Materialize a 32-bit immediate into `dest` (`mov reg32, imm32`, which
@@ -125,6 +149,12 @@ export union TargetOp
 	// result, operand` + `neg result`. `setsFlags` (NEG writes EFLAGS). Appended with
 	// the reg-operand ALU ops, before the call band.
 	negReg(reg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	// 64-bit register-to-register compare (`cmp lhs, rhs`, 0x39, i.e. `lhs - rhs`
+	// discarding the result, keeping the flags). The `r/m, r` shape shared with
+	// `mov`/`add`/`sub` (reg field = the SUBTRAHEND `rhsReg`, r/m field = `lhsReg`), so
+	// after it a signed `jcc` tests `lhs <cond> rhs`. `setsFlags` (CMP writes EFLAGS).
+	// Appended at the END of the reg-operand ALU band, before the call band.
+	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	// Direct near call to a named function (`call rel32`). The concat step
 	// resolves `targetName` to the callee's `.text` placement as a rel32
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier
