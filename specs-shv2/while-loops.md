@@ -1,0 +1,160 @@
+---
+feature: while-loops
+status: selfhosted
+keywords: [while, loop, iteration, control flow, break, continue]
+category: control-flow
+milestone: M4b
+---
+
+# While Loops
+
+## Documentation
+
+Execute a block repeatedly while a comparison condition is true:
+
+```maxon
+while <condition> 'identifier'
+	<statements>
+end 'identifier'
+```
+
+Lowering (M4b) — the first BACKWARD-branching CFG. The current block becomes the
+PREHEADER and branches unconditionally into a fresh HEADER. The header re-evaluates
+the condition (a comparison, fused into `cmp`+`jcc` exactly as an `if` — see
+`specs-shv2/comparison-operators.md`) and takes a two-way branch to the BODY or the
+EXIT. The body ends with a BACK-EDGE branch to the header; `break` branches to the
+exit, `continue` to the header. Intra-function backward `jmp`/`jcc` rel32 are patched
+by `resolveBlockJumps`, the same path forward `if` jumps use.
+
+On-the-fly SSA carries each mutable variable through the header as a **phi**
+(block-arg); a loop-carried var whose update feeds only the back-edge coalesces to a
+single register (no move), while a var also read inside the loop (an induction
+variable) keeps a distinct register and an explicit phi-elimination move. The M4b
+condition must be a comparison — a bare boolean condition (`while true`) needs the
+boolean-value support deferred past M4b.
+
+## Tests
+
+The M4b slice of `specs/while-loops.md` that fits the placeholder register allocator
+(each distinct SSA value takes its own GPR from a 6-register pool): a
+zero-iteration loop, and a loop whose body carries a `continue`. The register-heavy
+`while-loops.basic` (two loop-carried vars plus a `break`, which needs a loop-exit
+phi), the `while true` loop (`while-loops.break`), and the `mod`-using
+`nested-control` are DEFERRED under `## Deferred`.
+
+<!-- test: while-loops.zero-iterations -->
+```maxon
+function main() returns ExitCode
+	var x = 10
+	while x < 5 'loop'
+		x = x + 1
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: while-loops.continue -->
+```maxon
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 3 'skip'
+			continue
+		end 'skip'
+		sum = sum + i
+	end 'loop'
+	return sum
+end 'main'
+```
+```exitcode
+12
+```
+
+## Deferred
+
+Tests recorded for re-enablement at the milestone that unblocks them. They live in
+this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
+only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
+NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
+prefix it with its `<!-- test: NAME -->` marker.
+
+### while-loops.basic
+
+Re-enable once its prerequisites land: the liveness-based register allocator (M5).
+Two loop-carried vars plus a `break` need a loop-exit phi and several live
+constants; the distinct-value count exceeds the placeholder allocator's 6-register
+pool (a hard panic, never a miscompile). The liveness-free phi coalescing cannot
+reuse the induction variable's or the exit phi's registers, so the M5 allocator is
+the unblocker.
+
+```maxon
+function main() returns ExitCode
+	var x = 5
+	var i = 3
+	while i > 0 'loop'
+		x = x + 2
+		i = i - 1
+		if i == 0 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+11
+```
+
+### while-loops.break
+
+Re-enable once its prerequisites land: boolean-value conditions (`while true`),
+which need the `setcc`/bool-materialization support deferred past M4b. The M4b
+`while` condition must be a comparison; `while true` is rejected at parse time
+(E2004, `true` is not yet a primary expression).
+
+```maxon
+function main() returns ExitCode
+	var x = 5
+	while true 'loop'
+		x = x + 2
+		if x == 11 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+11
+```
+
+### nested-control
+
+Re-enable once its prerequisites land: the `mod` operator (M5, whose `idiv`
+lowering needs the real register allocator's fixed-register support).
+
+```maxon
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		var j = 0
+		while j < 3 'inner'
+			if (i + j) mod 2 == 0 'even'
+				result = result + 1
+			end 'even'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
+end 'main'
+```
+```exitcode
+5
+```

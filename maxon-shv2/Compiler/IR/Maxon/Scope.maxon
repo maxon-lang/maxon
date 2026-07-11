@@ -177,6 +177,26 @@ export type Scope
 		self.recordInCurrentFrame(info)
 	end 'declareValueBinding'
 
+	// Rebind an ALREADY-DECLARED name to a new SSA value (M4b's on-the-fly SSA):
+	// a `var` reassignment (`x = expr`), a loop-header phi installation, and a
+	// merge-point phi all update the variable's CURRENT value in place. Reads
+	// (`lookupValue`) resolve to this current value, so a read after a reassignment
+	// sees the new value — `boundValue` IS the variable's current SSA version, not
+	// the initializer's. The declaration metadata (mutability, type) is untouched.
+	// Panics on an unknown name — every caller has already established the binding
+	// exists (a `var` decl, or a mutability check that fetched the VarInfo).
+	export function setValue(name String, value ValueId)
+		let existing = try vars.get(name) otherwise panic("Scope.setValue: '{name}' not declared — caller must establish the binding before rebinding it")
+		// Read the two carried fields into locals FIRST so the borrow of `vars` (via
+		// `existing`) ends before the `upsert` mutates it. M4b only rebinds plain value
+		// bindings — mutable `var`s and the loop-header/exit phis — so rebuilding as a
+		// value binding preserves everything meaningful (self-field / payload bindings,
+		// which carry extra state, are never reassigned here: no methods or enums yet).
+		let varType = existing.varType
+		let mutable = existing.mutable
+		vars.upsert(name, value: VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value))
+	end 'setValue'
+
 	// Resolve a value binding to the SSA value it aliases. Throws
 	// `ScopeLookupError.notFound` for an unbound name; the parser turns that into a
 	// positioned diagnostic (an undefined identifier in an expression).

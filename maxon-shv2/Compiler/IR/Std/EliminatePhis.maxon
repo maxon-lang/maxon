@@ -1,0 +1,320 @@
+// EliminatePhis — the Std-tier phi-elimination pass (M4b).
+//
+// On-the-fly SSA (built in the parser) leaves each loop header — and each loop exit
+// that a `break` reaches — carrying block-args (phis) whose incoming values are
+// recorded per predecessor edge on `IrBlock.branchEdges`. The Target tier has no
+// phi, so this pass RESOLVES every phi before the backend runs, in two moves:
+//
+//   1. COALESCE (conservative). A phi and a given incoming value can share one
+//      register — the phi-elimination move between them vanishes — iff they never
+//      simultaneously hold distinct live values. The placeholder register allocator
+//      has no liveness, so this pass coalesces only the case it can prove safe
+//      WITHOUT it: an operand USED ONLY as this one phi operand is dead the instant
+//      the edge is taken, so it cannot interfere with the phi. Those operands are
+//      unioned with their phi and every value is rewritten to its union
+//      representative, so the coalesced values collapse to one ValueId (hence one
+//      register under the minimal colorer). This is exactly the standard "coalesce a
+//      copy whose source dies at the copy" rule, restricted to the single-use case a
+//      liveness-free pass can verify. A loop-carried var whose update feeds only the
+//      back-edge (the common `sum = sum + i` shape) coalesces fully — no move, no
+//      extra register. Operands with other uses (a value both branched-back AND read
+//      again, e.g. an induction variable tested in the loop) do NOT coalesce and keep
+//      their own register + an explicit move; a function whose distinct post-coalesce
+//      values exceed the 6-register pool is a hard panic in the colorer (M5's
+//      liveness-based allocator lifts that ceiling — see RegisterAllocator.maxon).
+//
+//   2. MOVE the rest. For a phi operand that did NOT coalesce, a `StdOp.copy phi, op`
+//      is appended at the END of the predecessor block (before its terminator), so on
+//      that edge the phi register receives the operand's value — classic phi
+//      elimination. A coalesced operand (rep == the phi's rep) needs no move.
+//
+// After both moves every block's `blockArgs`/`branchEdges` are cleared: the Std→x64
+// lowering and the colorer see plain multi-block SSA (the exact shape M4a's `if`
+// already produced), with copies where a phi could not be coalesced.
+//
+// CORRECTNESS ENVELOPE (documented, not silently assumed): the single-use coalescing
+// rule never merges two values that are simultaneously live, so it never miscompiles.
+// The two patterns that WOULD need liveness to coalesce safely — two distinct loop
+// vars sharing an initializer ValueId (e.g. `var y = x` with both loop-carried), and
+// a `let` snapshot of a mutable var read live past a merge — are simply left
+// un-coalesced here: correct, just register-hungrier (they lean on M5's allocator to
+// fit). Nothing in this pass produces wrong code for them; they only risk exceeding
+// the placeholder pool.
+
+typealias PhiUseCount = int(0 to u64.max)
+typealias UnionFindMap = Map with (ValueId, ValueId)
+typealias PhiUseCountMap = Map with (ValueId, PhiUseCount)
+
+// An operand is safe to coalesce into its phi exactly when its ONLY use is that phi's
+// edge — its use count is 1 (a phi operand always appears in the feeding branch edge,
+// so 1 is the minimum, and 1 means "used nowhere else"). Any higher count means the
+// value is also read by an op or a second edge and could still be live where the phi
+// is, so coalescing it would need liveness the placeholder allocator does not have.
+let SoleUseCount = 1 as PhiUseCount
+
+// One phi operand as it enters from a specific predecessor: the phi's ValueId, the
+// flat `blocks[]` index of the predecessor (where the elimination move goes if the
+// operand does not coalesce), and the operand value on that edge.
+type PhiIncoming
+	export var phiId as ValueId
+	export var predBlockRef as BlockRef
+	export var operand as ValueId
+
+	export static function create(phiId ValueId, predBlockRef BlockRef, operand ValueId) returns PhiIncoming
+		return Self{phiId: phiId, predBlockRef: predBlockRef, operand: operand}
+	end 'create'
+end 'PhiIncoming'
+
+typealias PhiIncomingArray = Array with PhiIncoming
+
+// Public entry: resolve every function's phis in place. ValueIds are function-local,
+// so each function gets its own union-find and use-count maps.
+export function eliminatePhis(module StdModule)
+	for func in module.functions 'eachFunc'
+		eliminatePhisInFunction(module, func: func)
+	end 'eachFunc'
+end 'eliminatePhis'
+
+function eliminatePhisInFunction(module StdModule, func IrFunction)
+	let incomings = collectPhiIncomings(module, func: func)
+	if incomings.count() == 0 'noPhis'
+		// Straight-line / phi-free function (every M1–M3 program, and any M4b function
+		// with no loops): nothing to coalesce, rewrite, or move.
+		return
+	end 'noPhis'
+
+	let useCounts = computePhiUseCounts(module, func: func)
+
+	// Conservative coalescing: union each phi with every incoming operand that is used
+	// ONLY as this phi operand (use count 1) and hence dead after the edge.
+	var parent = UnionFindMap.create()
+	for inc in incomings 'coalesce'
+		let uc = try useCounts.get(inc.operand) otherwise 0 as PhiUseCount
+		if uc <= SoleUseCount 'singleUse'
+			ufUnion(parent, a: inc.phiId, b: inc.operand)
+		end 'singleUse'
+	end 'coalesce'
+
+	rewriteValueIdsToReps(module, func: func, parent: parent)
+	insertPhiMoves(module, incomings: incomings, parent: parent)
+	clearPhiMetadata(module, func: func)
+end 'eliminatePhisInFunction'
+
+// Gather every (phi, predecessor, operand) triple for `func`. A merge block carries
+// its phis as `blockArgs`; each predecessor's `BranchEdge` to that block lists the
+// operand it passes per phi position (blockArgs[k] ↔ argIds[k]).
+function collectPhiIncomings(module StdModule, func IrFunction) returns PhiIncomingArray
+	var incomings = PhiIncomingArray.create()
+	for mergeRef in func.blockRefs 'eachMerge'
+		let mergeBlock = try module.blocks.get(mergeRef) otherwise panic("collectPhiIncomings: mergeRef not in module.blocks")
+		let phiCount = mergeBlock.blockArgs.count()
+		if phiCount == 0 'noPhi'
+			continue
+		end 'noPhi'
+
+		for predRef in func.blockRefs 'eachPred'
+			let predBlock = try module.blocks.get(predRef) otherwise panic("collectPhiIncomings: predRef not in module.blocks")
+			for edge in predBlock.branchEdges 'eachEdge'
+				if edge.targetBlockId != mergeBlock.id 'notThisMerge'
+					continue
+				end 'notThisMerge'
+				if edge.argIds.count() != phiCount 'arity'
+					panic("collectPhiIncomings: branch edge to '{mergeBlock.label}' carries {edge.argIds.count()} args but the block has {phiCount} phis")
+				end 'arity'
+				for k in 0 upto phiCount 'eachSlot'
+					let phiArg = try mergeBlock.blockArgs.get(k) otherwise panic("collectPhiIncomings: blockArgs.get OOB")
+					let operand = try edge.argIds.get(k) otherwise panic("collectPhiIncomings: argIds.get OOB")
+					incomings.push(PhiIncoming.create(phiArg.valueId, predBlockRef: predRef, operand: operand))
+				end 'eachSlot'
+			end 'eachEdge'
+		end 'eachPred'
+	end 'eachMerge'
+	return incomings
+end 'collectPhiIncomings'
+
+// Count, per ValueId, how many times it is USED as an operand across `func` — in op
+// operands and in every branch edge's arg list. A value used exactly once (its sole
+// use being one phi's edge) is safe to coalesce with that phi.
+function computePhiUseCounts(module StdModule, func IrFunction) returns PhiUseCountMap
+	var counts = PhiUseCountMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("computePhiUseCounts: blockRef not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("computePhiUseCounts: opIdx not in module.ops")
+			tallyOpUses(op, counts: counts)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("computePhiUseCounts: terminator not in module.ops")
+			tallyOpUses(termOp, counts: counts)
+		end 'hasTerm'
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				bumpUseCount(counts, id: argId)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+	return counts
+end 'computePhiUseCounts'
+
+// Tally the operand (read) ValueIds of one op — NOT its result (a def is not a use).
+// Two-operand ops route through `bumpTwo` so every arm stays a single statement
+// (Maxon match arms do not host multi-statement inline blocks).
+function tallyOpUses(op StdOp, counts PhiUseCountMap)
+	match op 'uses'
+		const then break 'uses'
+		binOp(_, lhs, rhs, _) then bumpTwo(counts, a: lhs, b: rhs)
+		unaryOp(_, operand, _) then bumpUseCount(counts, id: operand)
+		cmp(_, lhs, rhs, _) then bumpTwo(counts, a: lhs, b: rhs)
+		copy(_, srcId) then bumpUseCount(counts, id: srcId)
+		condBranch(condId, _, _) then bumpUseCount(counts, id: condId)
+		branch then break 'uses'
+		ret(retValId) then bumpUseCount(counts, id: retValId)
+	end 'uses'
+end 'tallyOpUses'
+
+function bumpTwo(counts PhiUseCountMap, a ValueId, b ValueId)
+	bumpUseCount(counts, id: a)
+	bumpUseCount(counts, id: b)
+end 'bumpTwo'
+
+function bumpUseCount(counts PhiUseCountMap, id ValueId)
+	let prior = try counts.get(id) otherwise 0 as PhiUseCount
+	counts.upsert(id, value: prior + 1)
+end 'bumpUseCount'
+
+// Rewrite every ValueId in `func` (op operands AND results, block-args, branch-edge
+// args) to its union-find representative, collapsing each coalesced set to one id.
+// After this, a coalesced phi and its coalesced operands name the same ValueId, so
+// the minimal colorer gives them one register and their phi-elimination move is a
+// self-copy (skipped in insertPhiMoves).
+function rewriteValueIdsToReps(module StdModule, func IrFunction, parent UnionFindMap)
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("rewriteValueIdsToReps: blockRef not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			rewriteOpAt(module, opIdx: opIdx, parent: parent)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			rewriteOpAt(module, opIdx: block.terminatorIndex(), parent: parent)
+		end 'hasTerm'
+
+		rewriteBlockArgs(block, parent: parent)
+		rewriteBranchEdges(block, parent: parent)
+	end 'eachBlock'
+end 'rewriteValueIdsToReps'
+
+// Rewrite one op in place at its module.ops index (the same rewrite-in-place
+// discipline the register allocator uses — opRefs/terminator indices stay valid).
+function rewriteOpAt(module StdModule, opIdx OpIndex, parent UnionFindMap)
+	let op = try module.ops.get(opIdx) otherwise panic("rewriteOpAt: opIdx not in module.ops")
+	try module.ops.set(opIdx, value: rewriteOp(op, parent: parent)) otherwise panic("rewriteOpAt: ops.set OOB at {opIdx}")
+end 'rewriteOpAt'
+
+// Rebuild an op with each of its ValueId fields mapped to its representative. Both
+// result and operand ids are rewritten — a coalesced value is one register whether it
+// is being defined or read.
+function rewriteOp(op StdOp, parent UnionFindMap) returns StdOp
+	match op 'rewrite'
+		const(resultId, value, valueType) then return StdOp.const(ufFind(parent, x: resultId), value: value, valueType: valueType)
+		binOp(resultId, lhs, rhs, opcode) then return StdOp.binOp(ufFind(parent, x: resultId), lhs: ufFind(parent, x: lhs), rhs: ufFind(parent, x: rhs), opcode: opcode)
+		unaryOp(resultId, operand, opcode) then return StdOp.unaryOp(ufFind(parent, x: resultId), operand: ufFind(parent, x: operand), opcode: opcode)
+		cmp(resultId, lhs, rhs, pred) then return StdOp.cmp(ufFind(parent, x: resultId), lhs: ufFind(parent, x: lhs), rhs: ufFind(parent, x: rhs), pred: pred)
+		copy(resultId, srcId) then return StdOp.copy(ufFind(parent, x: resultId), srcId: ufFind(parent, x: srcId))
+		condBranch(condId, thenBlockId, elseBlockId) then return StdOp.condBranch(ufFind(parent, x: condId), thenBlockId: thenBlockId, elseBlockId: elseBlockId)
+		branch then return op
+		ret(retValId) then return StdOp.ret(ufFind(parent, x: retValId))
+	end 'rewrite'
+end 'rewriteOp'
+
+function rewriteBlockArgs(block IrBlock, parent UnionFindMap)
+	var newArgs = IrBlockArgArray.create()
+	for arg in block.blockArgs 'each'
+		newArgs.push(IrBlockArg.create(ufFind(parent, x: arg.valueId), argType: arg.argType, returnRole: arg.returnRole))
+	end 'each'
+	block.blockArgs = newArgs
+end 'rewriteBlockArgs'
+
+function rewriteBranchEdges(block IrBlock, parent UnionFindMap)
+	var newEdges = BranchEdgeArray.create()
+	for edge in block.branchEdges 'eachEdge'
+		var newArgs = ValueIdArray.create()
+		for argId in edge.argIds 'eachArg'
+			newArgs.push(ufFind(parent, x: argId))
+		end 'eachArg'
+		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgs))
+	end 'eachEdge'
+	block.branchEdges = newEdges
+end 'rewriteBranchEdges'
+
+// Append a `copy phi, operand` at each predecessor for every phi operand that did NOT
+// coalesce (its representative differs from the phi's). A coalesced operand is a
+// self-copy after rewriting and needs no move. The copy lands in the predecessor's
+// `opRefs`, which the backend emits BEFORE the block's terminator — so the value
+// reaches the phi register on that edge, at block end. `StdOp.copy` is flag-neutral,
+// so a copy inserted between a header's `cmp` and its `condBranch` does not disturb
+// the flags the fused branch reads.
+//
+// CRITICAL-EDGE NOTE: when the predecessor's terminator is a two-way `condBranch`
+// (e.g. a loop header feeding a loop-exit phi on its false edge), the copy sits before
+// that branch and so runs on BOTH successor edges, not only the phi's. Under the
+// placeholder colorer this is a harmless dead write: every distinct value gets its own
+// exclusive register, so the phi's register is read on no other edge and clobbering it
+// on the sibling edge changes nothing observable. A register-reusing allocator (M5)
+// would need the edge SPLIT (a fresh block on the critical edge holding the copy); that
+// splitter is part of the real allocator, so it is deferred with it. The active spec
+// loops route every non-coalesced copy through an UNCONDITIONAL back-edge (one
+// successor), so none of them exercise this path.
+function insertPhiMoves(module StdModule, incomings PhiIncomingArray, parent UnionFindMap)
+	for inc in incomings 'eachIncoming'
+		let phiRep = ufFind(parent, x: inc.phiId)
+		let operandRep = ufFind(parent, x: inc.operand)
+		if phiRep == operandRep 'coalesced'
+			continue
+		end 'coalesced'
+		var predBlock = try module.blocks.get(inc.predBlockRef) otherwise panic("insertPhiMoves: predBlockRef not in module.blocks")
+		module.appendOp(predBlock, op: StdOp.copy(phiRep, srcId: operandRep))
+	end 'eachIncoming'
+end 'insertPhiMoves'
+
+// Drop every block's phi metadata now that it has been rewritten into copies +
+// coalesced values. The backend never sees a block-arg or branch-edge.
+function clearPhiMetadata(module StdModule, func IrFunction)
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("clearPhiMetadata: blockRef not in module.blocks")
+		block.blockArgs = IrBlockArgArray.create()
+		block.branchEdges = BranchEdgeArray.create()
+	end 'eachBlock'
+end 'clearPhiMetadata'
+
+// --- union-find over ValueIds (representative = smallest id in the set) ---
+
+// The root of `x`'s set: follow parents until a node is its own root (absent from the
+// map). Small sets (one variable's coalesced versions), so no path compression.
+function ufFind(parent UnionFindMap, x ValueId) returns ValueId
+	var root = x
+	while true 'climb'
+		let p = try parent.get(root) otherwise root
+		if p == root 'atRoot'
+			break
+		end 'atRoot'
+		root = p
+	end 'climb'
+	return root
+end 'ufFind'
+
+// Merge `a`'s and `b`'s sets, keeping the SMALLER id as representative so the
+// rewrite is deterministic (the same coalesced set always collapses to the same id).
+function ufUnion(parent UnionFindMap, a ValueId, b ValueId)
+	let ra = ufFind(parent, x: a)
+	let rb = ufFind(parent, x: b)
+	if ra == rb 'sameSet'
+		return
+	end 'sameSet'
+	if ra < rb 'aSmaller'
+		parent.upsert(rb, value: ra)
+	end 'aSmaller' else 'bSmaller'
+		parent.upsert(ra, value: rb)
+	end 'bSmaller'
+end 'ufUnion'

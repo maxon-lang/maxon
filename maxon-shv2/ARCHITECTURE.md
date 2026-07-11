@@ -678,3 +678,55 @@ position (`let b = x==10`) or chained (`x==10==1`) would read stale flags / not
 materialize a result, so the parser rejects it (E3010) via a `permitComparison` flag
 until bool materialization (`setcc`) lands. `var` reassignment, `while`/`break`/
 `continue`, and boolean values are M4b.
+
+### Control flow (M4b — `while`/`break`/`continue` + `var` reassignment)
+
+**Landed (M4b).** `while` is the first **backward-branching** CFG, built in the parser
+from M4a's terminators (no new `StdOp`/`TargetOp`, no encoder change): the current
+block becomes a **preheader** with a `branch` into a fresh **header**; the header holds
+the condition (fused `cmp`+`jcc` exactly like `if`) and a `condBranch(cond, body,
+exit)`; the **body** ends with a `branch` **back-edge** to the header; **exit** is the
+continuation. `break` → `branch` to the target loop's exit; `continue` → `branch` to
+its header. The backward `jmp`/`jcc` rel32 are patched by the same `resolveBlockJumps`
+M4a already ran forward+backward — zero backend work. Break/continue targets come from a
+**loop-context stack** (`self.loops`, mirroring the block-scope stack): `while` pushes a
+`LoopContext{label, headerId, exitId, phiVars}` around the body; `resolveControlTarget`
+returns the innermost loop or searches by label — E2047 (no enclosing/matching loop),
+E2048 (label names the loop's own header).
+
+**`var` reassignment = on-the-fly SSA (not slots + mem2reg).** A reassignment rebinds the
+variable's current SSA `ValueId` via `Scope.setValue` — no stack slot, no `store`/`load`
+(shv2's Std memory band is still empty). **Phis are `IrBlock.blockArgs` +
+`branchEdges`** (the mechanism reserved from M1), minted eagerly by the parser at the
+three merge points it structurally knows: **loop headers** (one per mutable var in
+scope), **loop exits** a `break` reaches, and **`if` continuations** (merging the
+then/else values — this fixed an `if c; x=2; end; return x` that read a stale pre-`if`
+value). Every predecessor records the value it carries per phi on its `branchEdge`, so
+operands are known at mint time — a single forward pass, no deferred backpatch. This was
+chosen over **porting v1's `Mem2Reg.maxon`** (2,327 lines): v1's IDF mem2reg needs
+`alloca`/`store`/`load`, a dominance-frontier module, and a dominator-tree rename pass
+shv2 does not have at M4b, whereas the parser already has full structural knowledge and
+lands phis at the **same blocks** v1's IDF would. v1's mem2reg becomes the port target
+when shv2 reaches unstructured control flow / the full Std optimizer (M5+ — already on
+`PLAN.md`'s Std-pass list).
+
+**`EliminatePhis` (new Std-tier pass, Phase 4, after `lowerMaxonToStd`)** resolves phis
+before the phi-free Target tier, in two moves: (1) **conservative coalescing** — a phi
+and an operand share a register iff the operand's *only* use is that phi edge
+(use-count == 1, hence provably dead at the edge with no liveness); union-find collapses
+each set to its smallest `ValueId`, so the common `sum = sum + i` loop-carried shape
+coalesces fully (no move, no extra register); (2) **moves for the rest** — a
+non-coalesced operand gets a `StdOp.copy phi, operand` (arith-band end,
+`clobbersFlags: false` so it is safe between a `cmp` and its `jcc`) appended at the
+predecessor's end, then `blockArgs`/`branchEdges` are cleared so the backend sees the
+same plain multi-block SSA M4a's `if` produced. The pass is `Map`-order-independent
+(reps are the smallest id; all output walks iterate ordered `blockRefs`/`incomings`), so
+warm-rebuild determinism holds.
+
+**M5 hand-offs (documented in code, not silently assumed):** liveness-based coalescing
+(fits the register-heavy loops the placeholder 6-GPR colorer cannot, and safely
+coalesces the two cases this pass leaves un-coalesced — two loop vars sharing an
+initializer, and a live `let` snapshot of a mutated var); **critical-edge splitting** (a
+non-coalesced copy at a `condBranch` predecessor currently runs on both edges — harmless
+under the exclusive-register placeholder colorer, deferred with the real allocator); and
+boolean-value conditions for `while true` (E2004 until `setcc`/bool materialization).

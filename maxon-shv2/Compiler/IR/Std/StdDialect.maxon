@@ -254,6 +254,13 @@ export union StdOp
 	// writes EFLAGS). SPLIT OUT of `binOp` at the END of the arith band because it needs
 	// this different metadata — see StdCmpPred and the StdOp header.
 	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+	// Register-to-register copy `resultId = srcId` — the phi-elimination move (M4b).
+	// The Std-tier phi-elim pass replaces a block-arg (phi) with copies at each
+	// predecessor block's end when a phi operand does not coalesce with the phi; the
+	// backend lowers it to `mov reg, reg`. Unlike `const`, a reg-reg `mov` does NOT
+	// touch EFLAGS (`clobbersFlags: false`); `isPure: true` (a copy never traps).
+	// Appended at the END of the arith band, honoring the band-append invariant.
+	copy(resultId ValueId, srcId ValueId) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// --- band: control ---
 	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
 	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a

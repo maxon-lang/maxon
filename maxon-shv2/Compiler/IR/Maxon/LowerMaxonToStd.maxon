@@ -119,7 +119,19 @@ type MaxonToStdLowering
 		// coverage-instrumentation pass (a later-milestone consumer).
 		for i in 0 upto self.maxonModule.blocks.count() 'cloneBlocks'
 			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: maxonModule.blocks.get OOB at {i}")
-			self.stdModule.blocks.push(IrBlock.create(srcBlock.id, label: srcBlock.label))
+			// Fresh block: opRefs/terminator are rebuilt by the per-function walk below,
+			// but the phi metadata the parser attached (block-args + the per-edge
+			// branchEdges carrying each phi's incoming values) must survive to the
+			// Std-tier phi-elim pass. Carry it across 1:1 — the ValueIds it references
+			// pass through this lowering verbatim.
+			var dstClone = IrBlock.create(srcBlock.id, label: srcBlock.label)
+			for arg in srcBlock.blockArgs 'eachArg'
+				dstClone.blockArgs.push(IrBlockArg.cloneOf(arg))
+			end 'eachArg'
+			for edge in srcBlock.branchEdges 'eachEdge'
+				dstClone.branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
+			end 'eachEdge'
+			self.stdModule.blocks.push(dstClone)
 			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
 			self.stdModule.blockSourceInfo.push(srcInfo)
 		end 'cloneBlocks'
