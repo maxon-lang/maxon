@@ -4676,8 +4676,16 @@ public partial class X86CodeEmitter {
     EmitGlobalLeaReg(X86Register.Rax, "__gt_live_count");
     EmitBytes(0xF0, 0x48, 0xFF, 0x00); // LOCK INC qword [RAX]
 
-    // Enqueue: call __gt_enqueue(gt)
-    EmitMovRegReg(X86Register.Rcx, gt);
+    // Enqueue: call __gt_enqueue(gt). Reload gt from its stack slot rather than
+    // trusting R10 to survive the LeaveCriticalSection call above. R10 is a
+    // volatile (caller-saved) register on Win64, and LeaveCriticalSection
+    // clobbers it on its contended wake-a-waiter path. EmitCallImportOnSystemStack
+    // only saves/restores R10 on the GT-stack path — main's own spawns run on the
+    // main-thread (skip) path where R10 is NOT preserved, so a contended release
+    // left a stale/NULL R10 here and __gt_enqueue faulted on gt->next (a rare,
+    // worker-count-correlated crash: main -> __gt_spawn -> __gt_enqueue). This
+    // reload mirrors the ones after the two calls above.
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
     EmitCallRuntimeLabel("__gt_enqueue");
 
     // Return gt_ptr as the promise

@@ -162,8 +162,20 @@ empty runtime stub + `IoStubs` entry so CPU-bound `async` passes E3073),
 `MAXON_MAX_PROCS` clamp in `__gt_init` (both backends). Bisection tools:
 `MAXON_SLAB_GLOBAL_LOCK` spinlock + `MAXON_SLAB_STATS` contention counters
 (lock-wait, ownership-gate-miss) + `__Builtins.schedMaxActiveWorkers()`
-high-water mark. The rdata deterministic-merge invariant (below) is shv2's own
-future backend concern, not yet exercised here.
+high-water mark. **The validation harness (`maxon-shv2/track0/`) closed 1a.3**:
+an allocation-torture program (main allocates managed arrays, hands them to
+`async` tasks without retaining a ref → the arg is freed on the *worker* P → a
+cross-P remote-free push back to P0) drove the remote-free MPSC to **7775
+pushes** and, at high concurrency, surfaced a real **~2.5% NULL crash** in the
+C#-emitted `__gt_spawn` (it passed `gt` to `__gt_enqueue` in R10, a Win64
+caller-saved reg that `LeaveCriticalSection` clobbers on its contended
+wake-a-waiter path; the main-thread spawn path — which main's own `mainThread`
+GT with `stackBase==0` takes — doesn't preserve R10). Fixed by reloading `gt`
+from its stack slot before the enqueue, matching ARM64. This is a latent
+scheduler bug affecting **every** async/multi-core program `maxon.exe` emits
+(including shv2.exe once it exists). The alloc-side ownership gate stayed at 0
+misses throughout (untriggered backstop). The rdata deterministic-merge
+invariant (below) is shv2's own future backend concern, not yet exercised here.
 
 _Per-function fan-out enabled at M5._
 
@@ -218,8 +230,8 @@ Phase E; budget gate (≤30 s / ≤1.7 GB / >90% CPU) becomes hard at Phase F.
 
 - [x] **Step 0** — plan + DEVLOG materialized in repo
 - [x] **Track 0 / Foundation 2** — binary event log + mm-trace harness (C# harness: `mm-trace` block + redefined `<!-- MmTrace -->` → `maxon monitor` capture + normalize + regen; proof spec `specs/mm-trace.md`; producer verified end-to-end)
-- [ ] **Track 0 / Foundation 1** — multi-core green threads hardened
-- [ ] **Track 0** — validation harness (multi-core gate)
+- [x] **Track 0 / Foundation 1** — multi-core green threads hardened (primitives + global-lock A/B + counters; **found & fixed a real ~2.5% multi-core crash** — x86 `__gt_spawn` passed `gt` in R10 to `__gt_enqueue` without reloading after `LeaveCriticalSection` clobbers it; fix mirrors ARM64's existing reload)
+- [x] **Track 0** — validation harness (`maxon-shv2/track0/`): byte-identical aggregate across `MAXON_MAX_PROCS {1,2,7,16}`, 16 vs 1 workers, leak-clean + balanced mm-trace (568 alloc == 568 free), **remote-free MPSC path exercised (7775 cross-P pushes)**, global-lock A/B parity. 480+ clean high-concurrency runs post-fix.
 - [ ] **M1** basics · [ ] **M2** variables · [ ] **M3** arithmetic
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount

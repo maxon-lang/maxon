@@ -123,9 +123,16 @@ public partial class RuntimeEmitter {
   // Counters (atomic; they run under multi-P). Only touched when stats are on.
   private const string SlabLockWaitCountLabel = "__slab_lock_wait_count";
   private const string SlabOwnershipGateMissCountLabel = "__slab_ownership_gate_miss_count";
+  // Cross-P remote-free MPSC pushes (PLAN 1a.3). Bumped whenever __slab_free
+  // routes a slot onto its owner P's remote_free queue instead of freeing it
+  // locally — i.e. the freed span's owning_p != the freeing thread's P. This is
+  // the direct observability of the never-run cross-P free path; a value > 0
+  // proves the torture harness actually exercised it.
+  private const string SlabRemoteFreeCountLabel = "__slab_remote_free_count";
   // Exit-dump line fragments (stderr only — must never pollute program stdout).
   private const string SlabStatsPrefixLabel = "__slab_stats_prefix";
   private const string SlabStatsMidLabel = "__slab_stats_mid";
+  private const string SlabStatsRemoteFreeLabel = "__slab_stats_remote_free";
   private const string SlabStatsNewlineLabel = "__slab_stats_newline";
 
   // Spinlock word sentinels.
@@ -176,8 +183,10 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(SlabStatsEnabledLabel, 8, 0);       // runtime-cached MAXON_SLAB_STATS flag
     _b.DefineGlobal(SlabLockWaitCountLabel, 8, 0);      // failed-CAS spin iterations (real contention)
     _b.DefineGlobal(SlabOwnershipGateMissCountLabel, 8, 0); // fast-path ownership-gate misses (cross-P traffic)
+    _b.DefineGlobal(SlabRemoteFreeCountLabel, 8, 0);    // cross-P remote-free MPSC pushes (cross-P frees)
     _b.DefineSymdata(SlabStatsPrefixLabel, "[slab-stats] lock_wait=\0"u8.ToArray());
     _b.DefineSymdata(SlabStatsMidLabel, " ownership_gate_miss=\0"u8.ToArray());
+    _b.DefineSymdata(SlabStatsRemoteFreeLabel, " remote_free=\0"u8.ToArray());
     _b.DefineSymdata(SlabStatsNewlineLabel, "\n\0"u8.ToArray());
 
     // Arena list head and last-base
@@ -2183,30 +2192,30 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// Emit a MAXON_SLAB_STATS-gated atomic increment of
-  /// <see cref="SlabOwnershipGateMissCountLabel"/>. Called on the fast-path
-  /// ownership-gate miss edge (span not owned by the current P) to measure
-  /// genuine cross-P allocator traffic — this fires even with the global lock
-  /// OFF, so it distinguishes "cross-P activity happens" from "cross-P activity
-  /// races on the lock-free paths". Atomic because it runs under multiple Ps.
-  /// Clobbers Scratch0. Off the hot path (only on a cross-P cache hit), so the
-  /// stats gate branch cost is irrelevant.
+  /// Emit a MAXON_SLAB_STATS-gated atomic increment of an 8-byte contention
+  /// counter <paramref name="counterLabel"/>. The default (stats-off) path is a
+  /// single load + correctly-predicted not-taken branch; the atomic increment
+  /// only runs when stats are enabled. Atomic because these counters are bumped
+  /// from multiple Ps concurrently. Clobbers Scratch0. Shared by every
+  /// off-hot-path allocator counter so the (load/gate/lea/atomic-inc) shape lives
+  /// in exactly one place — see the individual call sites for what each counter
+  /// measures (ownership-gate miss, cross-P remote free).
   /// </summary>
-  private void EmitOwnershipGateMissCount() {
-    var skip = UniqueLabel("slab_gate_miss_no_stat");
+  private void EmitStatsGatedAtomicInc(string counterLabel) {
+    var skip = UniqueLabel("slab_stat_no_count");
     _b.LoadGlobal(VReg.Scratch0, SlabStatsEnabledLabel);
     _b.JumpIfZero(VReg.Scratch0, skip);
-    _b.LeaGlobal(VReg.Scratch0, SlabOwnershipGateMissCountLabel);
+    _b.LeaGlobal(VReg.Scratch0, counterLabel);
     _b.AtomicInc(VReg.Scratch0, 0);
     _b.DefineLabel(skip);
   }
 
   /// <summary>
   /// Emit the MAXON_SLAB_STATS exit dump: one stderr line
-  /// "[slab-stats] lock_wait=&lt;n&gt; ownership_gate_miss=&lt;n&gt;". Gated on the
-  /// runtime-cached stats flag (no-op when unset). Called from mm_leak_check so it
-  /// runs once on the normal process-exit path. Kept on stderr (never stdout) so
-  /// it never pollutes program output.
+  /// "[slab-stats] lock_wait=&lt;n&gt; ownership_gate_miss=&lt;n&gt; remote_free=&lt;n&gt;".
+  /// Gated on the runtime-cached stats flag (no-op when unset). Called from
+  /// mm_leak_check so it runs once on the normal process-exit path. Kept on stderr
+  /// (never stdout) so it never pollutes program output.
   /// </summary>
   public void EmitSlabStatsDump() {
     var skip = UniqueLabel("slab_stats_dump_skip");
@@ -2220,6 +2229,10 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, SlabStatsMidLabel);
     _b.Call(_b.WriteStderrLabel);
     _b.LoadGlobal(VReg.Arg0, SlabOwnershipGateMissCountLabel);
+    _b.Call("mm_trace_print_i64");
+    _b.LeaSymdata(VReg.Arg0, SlabStatsRemoteFreeLabel);
+    _b.Call(_b.WriteStderrLabel);
+    _b.LoadGlobal(VReg.Arg0, SlabRemoteFreeCountLabel);
     _b.Call("mm_trace_print_i64");
     _b.LeaSymdata(VReg.Arg0, SlabStatsNewlineLabel);
     _b.Call(_b.WriteStderrLabel);
@@ -2415,7 +2428,11 @@ public partial class RuntimeEmitter {
     // drains remote frees and refills via mcentral. Placed out of line so the hot
     // path never touches it.
     _b.DefineLabel(gateMiss);
-    EmitOwnershipGateMissCount();
+    // Ownership-gate miss: the span is cached but owned by another P — genuine
+    // cross-P allocator traffic. Counted even with the global lock OFF, so it
+    // distinguishes "cross-P activity happens" from "cross-P activity races on
+    // the lock-free paths".
+    EmitStatsGatedAtomicInc(SlabOwnershipGateMissCountLabel);
 
     // --- Slow path: drain remote frees, then either re-serve from cache or
     // ask mcentral for a span. Drain runs before mcentral_get_span so that a
@@ -2771,6 +2788,14 @@ public partial class RuntimeEmitter {
     // No trace emission: see EmitSlabDrainRemoteFrees for the rationale
     // (cross-P routing is non-deterministic and would break spec tests).
     _b.DefineLabel(remotePath);
+
+    // This slot is being freed by a thread that is NOT the span's owning P (a
+    // worker P freeing another P's object, or a raw OS thread with no P at all).
+    // It is the cross-P free the ownership gate was built for — count it (stats-
+    // gated) as direct proof the never-run remote-free MPSC path executed. Bumped
+    // BEFORE the target-P lookup, which reloads owning_p/slot_base from stack
+    // slots 4/0, so the Scratch0 clobber here is harmless.
+    EmitStatsGatedAtomicInc(SlabRemoteFreeCountLabel);
 
     // target_P = __sched_procs[owning_p]
     _b.LoadGlobal(VReg.Scratch2, "__sched_procs");

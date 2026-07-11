@@ -1,0 +1,116 @@
+// Track-0 allocation-torture program — maximizes cross-P (remote) frees.
+//
+// Why this exists: the C#-emitted slab allocator is per-P sharded and lock-free.
+// A free performed by a P that does NOT own the freed slot's span cannot touch
+// the owner's free list directly; instead it CAS-pushes the slot onto the
+// owner's remote-free MPSC queue (drained lazily by the owner). That cross-P
+// remote-free path has never had runtime coverage. This program forces it.
+//
+// Mechanism: main (P0) builds managed StringArrays and passes each as an `async`
+// argument WITHOUT retaining a reference. The spawn site increfs the managed
+// arg so it survives until the green thread runs; main's scope-end decref then
+// drops it back to rc 1; the async trampoline performs the final decref on the
+// WORKER P. So a P0-allocated array — plus its element Strings and backing
+// store — get freed on a worker P, i.e. a remote-free push back onto P0. Each
+// task also churns local allocations for raw volume.
+//
+// Determinism: each task's result is a pure function of its index, and the
+// aggregate is an order-independent sum, so the printed `aggregate=` value is
+// identical no matter how many cores serviced the work. The driver asserts that
+// invariance across MAXON_MAX_PROCS in {1, 2, 7, ncpu}.
+
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+// Sized for a few seconds of run time with substantial allocation traffic:
+// taskCount green threads, each doing churnPerTask local allocations and
+// receiving argsPerTask managed Strings inside one managed array argument.
+let taskCount = 600
+let churnPerTask = 40
+let argsPerTask = 3
+
+// A much smaller workload, selected by passing any command-line argument. The
+// debugstream ring buffer drops events when the full torture floods it, which
+// would make an alloc/free balance count meaningless. This small workload fits
+// the ring with zero drops, so `maxon monitor --filter=mm` captures a COMPLETE
+// trace whose alloc and free counts balance exactly. Used only by the harness's
+// mm-trace leak check; every other check runs the default full torture.
+let smallTaskCount = 24
+let smallChurn = 6
+
+function task(idx Integer, args StringArray, churn Integer) returns Integer
+	// CPU-parallel checkpoint: marks this hand-written CPU-bound function as a
+	// legitimate `async` target (satisfies the E3073 yielding contract) without
+	// claiming fake I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+
+	var acc = idx
+
+	// Read every managed arg so the array and its Strings are genuinely live on
+	// this worker P. They are freed here (worker scope end) even though P0
+	// allocated them — that is the cross-P free this whole program is about.
+	for a in args 'read'
+		if not a.isEmpty() 'ne'
+			acc = acc + 1
+		end 'ne'
+	end 'read'
+
+	// Volume churn: allocate and free many local Strings on this worker P. These
+	// are same-P (local) frees, present purely to load the allocator hot path.
+	for j in 0 upto churn 'churn'
+		let tmp = "task{idx}-churn-{j}"
+
+		if not tmp.isEmpty() 'nz'
+			acc = acc + 1
+		end 'nz'
+	end 'churn'
+
+	return acc
+end 'task'
+
+function main() returns ExitCode
+	// Any command-line argument selects the small, drop-free workload for the
+	// mm-trace monitor run; the default (no args) is the full torture.
+	let small = CommandLine.args().count() >= 2
+	let tasks = smallTaskCount if small else taskCount
+	let churn = smallChurn if small else churnPerTask
+
+	var promises = IntPromiseArray.create()
+
+	// Spawn phase: queue every task before awaiting any, so the scheduler spins
+	// up worker Ms to service the backlog (this is what makes >1 P go live).
+	for i in 0 upto tasks 'spawn'
+		var argv = StringArray.create()
+
+		for k in 0 upto argsPerTask 'build'
+			argv.push("arg{i}-slot{k}")
+		end 'build'
+
+		// argv is handed to the async task and never referenced again by main —
+		// its final free lands on whichever worker P runs the task.
+		promises.push(async task(i, args: argv, churn: churn))
+	end 'spawn'
+
+	// Await phase: collect results in array order. The accumulation order is
+	// fixed, and each result is index-derived, so `total` is fully deterministic.
+	var total = 0
+	for p in promises 'await'
+		total = total + await p
+	end 'await'
+
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let cpus = __Builtins.cpuCount()
+
+	// The driver parses these three lines. `aggregate` is the core-count-
+	// invariant determinism signal; `workers` proves multi-core actually ran;
+	// `cpucount` gives the driver ncpu for the clamp sweep.
+	print("aggregate={total}\n")
+	print("workers={workers}\n")
+	print("cpucount={cpus}\n")
+
+	// Fixed success ExitCode: deterministic across runs (so the exit-code
+	// identity assertion holds) and never 101 (the leak-check gate value).
+	return 42
+end 'main'
