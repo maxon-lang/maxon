@@ -1,196 +1,376 @@
-# maxon-shv2 — Ground-Up Rewrite Plan
+# maxon-shv2 — Minimal-Core Plan
+
+> **ADOPTED 2026-07-11.** This replaces the original M1–M18 plan (preserved in git
+> history) — the user adopted its core-first ordering, whose load-bearing consequence
+> is **generics BEFORE ownership** (Stage 2: ownership's `own.drop` on a type-parameter
+> value needs the runtime layout descriptor, so generics must exist first; strings/arrays
+> are themselves generic and can't precede it either). The self-host reframe (compass,
+> not gate), the `stdlib-shv2/` fork, and the `selfhost-distance` ratchet come with it.
+>
+> **Stage ↔ old-M mapping** (so DEVLOG's M-numbered ledger stays interpretable):
+> - **Stage 0** (test loop + tooling) — NEW; no old-M. `0.1 spec-test` **DONE** (`72ffe87a9`).
+>   Pending: `0.2` MAXON_STDLIB, `0.3` stdlib-shv2 fork, `0.4` selfhost-distance compass,
+>   `0.5` rewrite the 9 core-violating sites, `0.6` one-command.
+> - **Stage 1** (scalar core) = old M1–M5. **DONE:** M1 basics, M2 variables, M3 arithmetic,
+>   M4a comparison+if. **IN PROGRESS:** M4b while/break/continue + mem2reg. **PENDING:** M5
+>   functions+params+calls **+ the REAL register allocator** (Stage 1's one design item).
+> - **Stage 2** (hard mechanisms, **generics-before-ownership**) = old M6–M15, REORDERED:
+>   2.1 structs → 2.2 generics → 2.3 interfaces → 2.4 heap+ownership+drops → 2.5 moves/borrows
+>   → 2.6 escape→shared → 2.7 Array → 2.8 String → 2.9 owned-payloads → 2.10 Map → 2.11 for-in
+>   → 2.12 errors → 2.13 ranged-typealias. (Original: ownership at M6, generics at M14.)
+> - **Stage 3** (self-host, 3-stage fixpoint) = old M16–M17. **Stage 4** (broaden:
+>   closures/async/general-Iterable/Set/arm64/wasm/full-suite) = NEW. **Stage 5** (budgets
+>   ≤30s/≤1.7GB/>90% CPU) = old M18. **Workstream R** (emitted runtime) slices into Stage 2.
 
 ## Context
 
-`maxon-selfhosted` (v1) works but "got away" architecturally: features that are *integral* — ownership/borrowing and parallel incremental compilation — were left until last, so they were bolted on via ~8 shared `Project` sidetables and a late 7,755-line refcount inserter. The result is slow to compile, slow to test, and uses 5–6 GB of RAM. This makes it very hard to debug.
+`maxon-shv2` is the ground-up rewrite of `maxon-selfhosted` (v1, 191,487 lines). shv2
+is at **M1**: 7,961 lines, compiles `function main() returns ExitCode / return 42` to a
+working PE. The bones are good — content-hash query spine, parse-staging, 3 IR tiers
+(Maxon→Std→Target, no MIR), flat `StdOp`, x64/PE backend.
 
-We are starting fresh as **`maxon-shv2/`**, keeping what is sound (lexer, the tiered IR, query engine, backends) and rebuilding what is entangled, with the hard/integral features designed in **from the first commit** rather than retrofitted. (v1's IR is 4 tiers; shv2 runs **3** — the MIR tier is dropped as dead weight. See "IR tiers" below.)
+**The goal:** implement every hard mechanism of Maxon *minimally*, so the compiler can
+be built and validated with fast iterations.
 
-1. **Static ownership/borrowing** — compile-time move/borrow checking that drops values at scope exit; runtime refcounting only where escape analysis proves genuine sharing.
-2. **Parallel incremental compilation** — using the existing green-thread runtime, with the multi-core prerequisites proven *before* the first compiler milestone.
-3. **A binary event-log/tracing system** — DebugStream-style binary events written to shared memory (near-zero overhead when off), consumed by `maxon-sharp` as the runner; it powers `mm-trace` for ownership/memory debugging.
+### The honest sizing (this corrects an earlier draft of this plan)
 
-Development is **spec-driven**: copy a spec from `specs/` (or author one) into a new **`specs-shv2/`**, implement until it passes, move on. A **living document** (`maxon-shv2/ARCHITECTURE.md`) documents each part of the compiler as it is built, for future agents; `maxon-shv2/DEVLOG.md` tracks milestones and dated findings alongside it.
+I initially pitched "self-host early" as a shortcut. **It isn't, and the numbers say so.**
+The critical path to self-compile is **~45–55k lines of new Maxon**, and "Maxon-core"
+turns out to be **~75–80% of the language**, not 25% — it excludes only closures, async,
+general `Iterable`, extensions, and higher-order/sort. Self-compile is the back half of
+the project no matter how it is sequenced.
 
-**Target / final acceptance:** `maxon-shv2.exe` compiling *itself* in **≤30 s**, **≤1.7 GB RAM**, **>90% CPU** across all cores. (v1 reference: `maxon.exe` compiles v1 in ~30 s / 1.7 GB — this is the bar.)
+**Two items on that path are unbudgeted in the current plan documents:**
 
-### Locked design decisions (confirmed with the user)
-- **Ownership = static-first**, minimize refcounts; RC retained only as a fallback for genuinely shared/escaping values. May reject some v1-accepted programs (accepted).
-- **Parser = direct-emit IR** (keep v1's contract: parser emits Maxon-dialect IR directly + populates declaration tables; no separate AST layer). Reuse v1's *structure* (recursive descent + Pratt), rebuilt incrementally.
-- **Parallel-runtime prerequisites land FIRST**, before `basic.maxon` compiles.
-- **Gating = correctness-only early**; the ≤30 s / ≤1.7 GB / >90% CPU budgets become a **hard gate once shv2 can compile itself**. Minimum-memory / maximum-CPU is a design discipline at every step regardless.
+1. **The runtime shv2 must *emit*** (~5–7k lines of hand-assembled machine code). A
+   self-compiled shv2 has to *run* — so shv2's backend must emit the slab allocator,
+   refcounting, `__destruct` cascades, and `__ManagedMemory`. `PLAN.md` *schedules* this
+   (MM runtime + DebugStream producer at M6, GT scheduler at M16) but budgets zero lines
+   for it. Here it is **Workstream R** — sliced into Stage 2, not a stage of its own,
+   because 2.4's own mm-trace gate cannot run without the first slice.
+2. **The runtime-binding decision.** v1 binds its runtime by *compiling*
+   `stdlib/Internals.maxon` (3,862) through a file-path-gated `__Internals` intrinsic
+   mechanism + `StdlibLoader.maxon` (2,572). The C# bootstrap instead *excludes*
+   `Internals.maxon` outright ([0-Compiler.cs:879](maxon-sharp/Compiler/0-Compiler.cs#L879))
+   and emits its runtime natively. Neither plan doc chooses for shv2. **Decision: shv2
+   follows the C# bootstrap** — exclude `Internals.maxon`, emit natively (that *is*
+   Workstream R), register the `__Managed*` builtin surface. v1's 6,434 combined lines
+   are the road not taken, not an additional budget line.
 
-### Two findings that reshape the plan (verified against the tree)
-- **The multi-core runtime is already written — in the C# bootstrap.** `maxon-sharp` (`maxon.exe`) compiles shv2 for its whole pre-self-host life and emits shv2's runtime. Its slab allocator (`maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.Allocator.cs`, `EmitSlabAlloc` ~2146–2209) is **already per-P sharded, lock-free, with an ownership gate + cross-P remote-free MPSC queue**; `__sched_max_procs = ncpu`. The "single shared mcache with no lock" blocker in `PARALLEL_CODEGEN_PLAN.md` describes the *v1 self-hosted* runtime, **not** the C# emitter. So Track 0 Phase 0 is **"prove/harden the already-written sharded allocator under >1 live P (which has never happened)"**, not "write a lockless allocator."
-- **The binary event log is already built — in the C# bootstrap.** `RuntimeEmitter.DebugStream.cs` + `DebugStreamMonitor.cs` (`maxon monitor`) implement the shared-memory ring, ticket-spinlock reserve, MM/Sched/Depth/Dbg schema, and PE-embedded tag table. The MM hooks already call `__ds_emit_mm_*` under `Compiler.DebugStream`. **Scope of "for free":** this covers **shv2.exe's own process** (`maxon.exe`-compiled, so tracing the *compiler's* allocations/scheduling costs nothing — key for its RAM/leak debugging). Test programs compiled *by shv2* carry the runtime **shv2's backend emits**, so shv2's backend must port the `__ds_*` producer (schema-compatible) into its emitted runtime before mm-trace spec sections can work — scheduled at M6, when heap values/ownership first activate.
+**Explicitly deferred: the stdlib cache.** v1's is ~6k lines (`.mxc`, format v89) and its
+version history — **v81→v89, every bump a soundness bug** in id-space stability or hash
+coverage — is a warning label. Caching is revisited *after* the compiler works; the
+approach will be reconsidered from scratch rather than ported. **Consequence: every shv2
+build re-parses the stdlib from source, so the pruned `stdlib-shv2/` (0.3) is the *only*
+lever on per-build stdlib cost** — which raises its value from "nice speedup" to "the
+iteration-speed mechanism." One cheap hedge worth keeping in the meantime: keep every
+id-producing table (`TypeNameInterner.foldInto`/`TypeNameRemap`) serializable-in-order, so
+a future cache has a stable id space to build on rather than a retrofit.
 
-**Net:** "prerequisites first" is much cheaper than it sounds — Track 0 is mostly *validate / harden / wire* work in `maxon-sharp`, stdlib, and the spec harness. shv2 inherits the multi-core runtime and event log in its binary.
+**So self-host is the compass, not a gate.** What it genuinely buys is a
+`selfhost-distance` ratchet that makes the next feature fall out of measured data
+("412 sites need `let`") instead of a guessed milestone order — and that enforces
+"shv2's source stays in core" in CI rather than as a suggestion.
 
----
-
-## Architecture
-
-### Directory layout — `maxon-shv2/` (mirrors `maxon-selfhosted/`)
-
-**COPY near-verbatim** (clean boundaries, stdlib-only deps):
-- `Compiler/Lexer.maxon` (1,426-line DFA; `tokenize(source) -> TokenArray`, `Token`/`TokenKind`, `LexerError`) + `Compiler/NumberParsing.maxon`.
-- IR containers: `Compiler/IR/IrModule.maxon`, `IrBlock.maxon`, `IrValueId.maxon`, `IrFunction.maxon`, `IrPrinter.maxon`; `Compiler/IR/Maxon/SourceRange.maxon`, `Scope.maxon` (Scope gains a per-scope owned-values list).
-- Truly self-contained backend pieces: `Targets/Windows/PeWriter.maxon`, `Targets/Linux/ElfWriter.maxon`.
-- ~~`Targets/Shared/RegisterAllocator*` (operate on generic structures)~~ — **AMENDED at M1-B2: false on both counts.** v1's allocator is welded to its bespoke `TargetModule` + `TargetOpQuery`/`OpPattern`/register-mask machinery (not generic), and copying it would import the wrong design regardless: regalloc is **~74% of v1's self-compile wall time** against shv2's ≤30 s whole-compile budget. shv2 REBUILDS it — a no-liveness placeholder at M1, the real allocator at M3/M5. See ARCHITECTURE.md's Register allocator section.
-- Spec harness: `Testing/SpecParser.maxon`, `Testing/SpecTestRunner.maxon` (trimmed to the block types specs-shv2 uses, plus the new mm-trace block).
-
-**PORT incrementally, structure preserved** (cannot copy verbatim — they consume the dialects we're rebuilding thin):
-- `Targets/X64/*`, `Targets/Arm64/*`, `Targets/Shared/StdOpHelpers.maxon`, InstructionScheduler, PrologueEpiloguePass — ported op-by-op as ops appear in the rebuilt StdDialect, starting from the M1 thin slice (mov/ret) and growing with each milestone. Includes the runtime emitters (`emitX64Gt*` etc.), ported from v1 **but with the allocator mirrored from the C# sharded design, not v1's single-shared-mcache** (see Phase F).
-
-**REBUILD incrementally** (same structure, feature-by-feature):
-- `Compiler/Parser.maxon` — keep v1's recursive-descent+Pratt direct-emit contract, **one structural change**: it writes into a per-file `FileParseArtifact` instead of mutating shared `Project` (enables parallel parse; see below).
-- `Compiler/IR/Maxon/MaxonDialect.maxon` (extended with ownership), `LowerMaxonToStd.maxon`, all `IR/Std/*` opt passes, `IR/Target/*`, `IR/PassPipeline.maxon`, `Compiler/Project.maxon`, `Queries.maxon` + `QueryEngine.maxon` + `QueryDatabase.maxon`, `TypeResolution.maxon`, `SemanticCheck.maxon`, `Compiler.maxon`, `Main.maxon`. *(v1's `IR/MIR/*` is NOT rebuilt — see "IR tiers" below.)*
-
-**CREATE new** (the static-ownership + parallel machinery):
-- `Compiler/IR/Own/OwnDialect.maxon` — `own.*` ops + `OwnershipKind` + lifetime ids. **A FILE, not a tier:** the `own.*` ops are a BAND OF `MaxonOp` (`OpCategory.ownership`), because `IrModule` is generic over exactly one op type — an op in the Maxon block stream IS a `MaxonOp`. Never nest them as `MaxonOp.own(OwnOp)`: that costs a second heap box per op, the anti-pattern the 3-tier collapse removed from `StdOp`. See ARCHITECTURE.md's Own tier section.
-- `Compiler/IR/Own/OwnershipInfer.maxon` — signature-ownership inference (replaces `ParamConsumeAnalysis` + `ReturnBorrowAnalysis`).
-- `Compiler/IR/Own/OwnershipCheck.maxon` — move/borrow/use-after-move checker (evolves `MaxonBorrowCheck.maxon`).
-- `Compiler/IR/Own/EscapeAnalysis.maxon` — unique-vs-shared classification.
-- `Compiler/IR/Own/InsertDrops.maxon` — static `own.drop` + escape-driven `own.retain/release` (replaces the 7,755-line `InsertRefcounts.maxon`).
-- `Compiler/ParseStaging.maxon` — `FileParseArtifact` + deterministic merge (generalizes v1's `ParseDelta.maxon`, which already enumerates the ~25 registries the parser touches).
-- `Compiler/ParallelDriver.maxon` — green-thread fan-out over per-file parse + per-function passes.
-- `specs-shv2/`, `ARCHITECTURE.md`, `DEVLOG.md`.
-
-### IR tiers with static ownership as a first-class citizen
-
-Tiers are **Maxon → Std → Target** — three, not v1's four. **The MIR tier is deliberately dropped** (amended after M1-C; landed as its own structural commit). Two reasons, both of which only get more expensive to act on later:
-
-- **MIR added no value model.** v1's `lowerStdToMir` is 501 lines of which ~420 are a mechanical 1:1 rename — `ValueId`s pass through verbatim, blocks clone 1:1, `IrFunction`s transfer as-is. Std's `ValueId`s **already are** the infinite virtual registers MIR claimed to introduce. The tier's only real content (~80 lines) is desugaring a handful of Std-only ops, which is a **Std→Std rewrite** (`lowerToMachineForm`), not a tier. Everything v1 ran *on* MIR (`commuteForCoalescing`, `scheduleInstructions`) is now a Std-tier pass.
-- **The boundary hid drift.** v1's `MirOp.movReg` has **zero construction sites** yet still forces match arms in the printer, the uses-extractor, `CommuteForCoalescing`, and every backend. A tier wall that nothing crosses is a place dead code goes to survive.
-
-What we give up is v1's *type-level* "no sugar reaches the backend" guarantee (sugar ops existed in `StdOp` with no `MirOp` counterpart, so the boundary made them unrepresentable). It is replaced deliberately, not accidentally: a `sugar` category on `StdOpMeta` + an `assertNoSugarOps` gate at the backend entry + an explicit `panic` arm per sugar variant (never a bare `default`). **Spec tests are the real guarantee** — that was the call, and the type wall was not worth its cost.
-
-**`StdOp` is also FLAT** (one union, no `StdOp.arith(StdArithOp.const(...))` nesting), for a reason v1's own StdDialect header admits: the nesting was a migration artifact kept "so existing pass code that matches on these variants keeps working." Maxon heap-boxes and refcounts every payload-carrying union case, so each nesting level is another heap object — nested is **3 boxes per op**, flat is **1**, on the single most numerous object in the compiler (~half of v1's self-compile cycles go to memory-management churn). Coarse membership is recovered without nesting via the required `StdOpMeta` struct backing (`category`/`role`/`inlinePolicy` + scheduling facts), and variants are declared in **category-contiguous bands** so a pass can cover a whole category with one `match` range arm. **Invariant: append new variants at the END of a band, never insert into the middle** — a range arm silently swallows anything inserted between its endpoints, and this is the one place the "no silent unhandled cases" rule has no compiler backstop.
-
-Ownership is born at the **Maxon tier** (which still has source names, scopes, `SourceRange`) and fully resolved *before* `lowerMaxonToStd`. It lives in **three first-class places, zero sidetables**:
-1. **`OwnershipKind` attribute** on every value/binding: `trivial` (scalar, no drop) · `owned` (unique heap, dropped once unless moved) · `borrow` (non-owning view, never dropped, carries a lifetime) · `shared` (escape-promoted to refcount).
-2. **Signature ownership modes in the function type**: each param `consume`/`borrow`/`copy`; return `owned`/`borrow`. Callers read ownership straight off the callee signature — the local replacement for v1's whole-module `funcParamConsumes`/`funcReturnsBorrow` fixpoints.
-3. **Explicit `Own`-dialect ops in the block stream** (alive Maxon→Std, lowered by `lowerMaxonToStd`): `own.move`, `own.borrow(kind, lifetime)`, `own.drop` (→ `__destruct_T` call), and `own.retain`/`own.release` (**the only surviving runtime refcount ops**, emitted solely for `shared`).
-
-Maxon-tier passes, in order: **OwnershipInfer** (bounded whole-module fixpoint → signature modes) → **OwnershipCheck** (per-function move/borrow/use-after-move + NLL borrow expiry; first program-rejection point) → **EscapeAnalysis** (promote `owned`→`shared` on escape: stored into longer-lived aggregate/global, returned owned where caller can't re-own, captured by escaping closure, or sent across an `async`/channel boundary; sound over-approximation = promote on doubt) → **InsertDrops** (static drops at NLL end-of-life/scope exit, `retain`/`release` for `shared`).
-
-**Contrast with v1:** v1 refcounts every managed value by default and reclaims dynamically (decref→free at 0), deciding ownership late in `LowerMaxonToStd` + `insertRefcounts` from liveness × 8 sidetables. shv2 proves unique ownership statically, drops deterministically at scope exit, and refcounts only escape-promoted `shared` values.
-
-**v1 reuse map:** `MaxonBorrowCheck.maxon` → redesigned/promoted to `OwnershipCheck`. `ParamConsumeAnalysis` + `ReturnBorrowAnalysis` → dropped as passes, folded into `OwnershipInfer` (output = signature types). `InsertRefcounts.maxon` → ~90% dropped, replaced by small `InsertDrops` + thin retain/release lowering. `StdLiveness.maxon` → reused/simplified for NLL/drop placement (backend regalloc keeps its own liveness). `InjectDrops.maxon` (dead in v1) → not ported; its intent realized correctly by `InsertDrops`.
-
-### Pass pipeline (`[F]` per-function parallel-safe, `[M]` whole-module serial, `[m]` per-file parallel-safe)
-- **Frontend:** `tokenize [m]` → `parseFile [m]` → `mergeArtifacts [M]` (deterministic, source-path order).
-- **Maxon tier:** `resolveTypes [M]` → `semanticCheck [F]` → `ownershipInfer [M]` → `ownershipCheck [F]` → `escapeAnalysis [F]`(+small `[M]` summary) → `insertDrops [F]` → `deadFunctionElimination [M]` → `lowerMaxonToStd [F]`.
-- **Std tier `[F]`:** `mem2reg` → `canonicalize` → `cse` → `licm` → `dce` → `inliner [M]` → `dceFunctions [M]` → `insertRangeChecks` → `lowerABI`. *(No `analyzeParamConsumes`/`analyzeReturnBorrows`/`insertRefcounts` — replaced by the Own tier.)*
-- **Std tier, machine-level `[F]`** *(what v1 ran on its MIR tier)*: `lowerToMachineForm` (desugars the `sugar`-category ops — descriptors, witness methods, `drop`/`free`, unbox) → `commuteForCoalescing` → `scheduleInstructions`.
-- **Std→Target `[F]`:** `assertNoSugarOps [M]` → `lowerStdToX64` → `allocateRegisters` → `insertPrologueEpilogue` → `augmentWithRuntime [M]` → emit → `concatFunctionChunks [M]`. Note `augmentWithRuntime` runs **last, on the TargetModule** — it hand-builds the `mrt_start` entry stub in physical registers with its own explicit frame, so it must land *after* regalloc and prologue/epilogue rather than be reprocessed by them.
-
-### Incremental from the first commit
-The query spine is **skeletal from M1**, not retrofitted: content-hash-keyed memoized queries (`querySourceFile` → `queryTokens` → `queryParseOps` → module/mid/code queries) with dependency recording, modeled on v1's `Queries.maxon`/`QueryEngine.maxon`/`QueryDatabase.maxon` but rebuilt against the `FileParseArtifact` staging (per-task dependency buffers merged deterministically, so the query engine is never touched concurrently). Warm-rebuild correctness (edit one file → only its queries re-run; unchanged input → byte-identical output) is asserted continuously from M2 onward, so incrementality never becomes a bolt-on.
-
-### Stdlib & runtime reuse
-shv2 compiles programs against the existing `stdlib/` and `runtime.std`/`runtime_wasm.std` (reused as-is; the stdlib compile pipeline must include every user-pipeline pass — v1's fieldInitCheck omission is the cautionary tale). shv2.exe itself links the **C#-emitted** runtime until self-host; binaries **emitted by shv2** get the runtime shv2's backend emits (ported incrementally per milestone: M1 needs only process-exit; MM runtime + DebugStream producer arrive at M6; GT runtime by Phase F).
-
-### Parallel-ready architecture
-- **Parse fan-out + deterministic merge** reconciles "direct-emit parser mutates Project" with "parallel per-file parse": the parser writes only into a local `FileParseArtifact` (its MaxonModule fragment + a bundle recording key **and value** for every registry it would touch), so per-file parse is a pure function of `(tokens, prescan summary)` on a per-P arena. `mergeArtifacts [M]` folds artifacts into `Project` in fixed source-path order, doing all duplicate detection at merge time. Token-level prescans (`preRegisterInterfaceNames`, `preRegisterFunctionThrows`) become parallel per-file scans, merged first.
-- **Per-function fan-out** turns v1's singleton-wrap shim into real green-thread fan-out: each function is lowered Maxon→Std→Target on a worker into its own arena; only the finished code chunk + content-keyed rdata merge back. This is also the **memory lever** — pipeline one function fully and free its upper-tier forms before the next. Dropping the MIR tier works *with* this lever rather than against it: one fewer whole-module copy to hold, and one heap box per op instead of three.
-- **Determinism:** content-derived keys for all shared appends (v1 pattern: FNV-1a panic labels, `__float_<bits>`), ordered per-function merge for the one order-sensitive append (rdata `GlobalDataTable`), and a **1-core-vs-N-core byte-identity harness** as the blocking gate for the whole parallel phase.
+**Intended outcome:** a ~50–65k-line compiler that self-hosts, with every pervasive
+mechanism landed *before* the passes that must be aware of it.
 
 ---
 
-## Track 0 — Foundations (before `basic.maxon`; mostly `maxon-sharp` + stdlib + harness)
+## Locked decisions
 
-**Recommended internal order: Foundation 2 first** (low-risk, mostly already built, and it provides the observability needed to debug Foundation 1).
+| | Choice |
+|---|---|
+| **Generics** | **Dictionary-passing + 64-byte layout descriptors + witness tables** — v1's design. (Rejected: monomorphization. It contaminates 3 files instead of 20, but trades code size and compile time — exactly the resources the ≤30 s / ≤1.7 GB budget exists to conserve.) |
+| **Self-host** | **Compass, not a gate.** `selfhost-distance` ratchet from day one; no "early" promise. |
+| **Conditional conformance** | **OUT of core** — see the one-line finding below. |
+| **Core `Map`** | multi-param generics + one `Hashable` constraint. No `Iterable`-on-Map, no tuple `Entry`. |
+| **Iteration** | **Hardcode `for-in`** over Array/Range/String. No general `Iterable`/associated types in core. |
+| **Errors** | v1's design **verbatim**: dual-register `(value, errorFlag)`. No unwind tables. Already minimal. |
+| **Stdlib** | `stdlib-shv2/`, a *pruned fork* (the C# bootstrap hard-couples to `__ManagedMemory` + marker interfaces). |
+| **Test loop** | Minimal spec runner, **before any new language feature**. |
+| **Targets** | x64-windows only through self-host. |
 
-### Foundation 2 — Binary event log + mm-trace harness
-- **Verify + wire the existing producer.** Confirm `maxon.exe`-compiled binaries (including shv2.exe itself) emit the full MM+sched stream under `Compiler.DebugStream` (already wired in `RuntimeEmitter.MemoryManager.cs`). Feed type names into `EmitDebugStreamTagBlob` so MM events resolve to real names. This gives compiler-process tracing for free; the producer for *shv2-emitted* binaries is M6 work (above).
-- **Schema: keep, don't fork.** Preserve the `RuntimeEmitter.cs` schema exactly (128-byte header, ticket spinlock, MM `0x01–0x09`, Sched `0x20–0x2C`, Depth `0x40/41`, Dbg `0x50–0x5E`, `MXDS_TAGS` blob) so `DebugStreamMonitor` works unchanged. New events get new unused type codes, never reinterpret existing ones.
-- **Preserve zero-overhead-when-off:** compile-time off (`Compiler.DebugStream==false` → zero instructions emitted) and compiled-in-but-runtime-off (`MAXON_DEBUGSTREAM` unset → `__ds_base==0`, one load + branch per site). Dev builds compile DebugStream *in*, gated at runtime; a release flag strips it.
-- **Keep the leak gate.** Do not remove `mrt_leak_check` (exit 101). The event log is the explanatory layer that turns a "101" into a diagnosable leak.
-- **mm-trace spec harness (decoder = `maxon-sharp`):** add a new `` ```mm-trace `` fenced-block language; redefine the existing `<!-- MmTrace -->` directive to select binary-log capture instead of `--mm-trace` string stderr. **Orchestration:** shv2's spec runner compiles the fragment with shv2, then invokes `maxon.exe monitor --filter=mm <test.exe>` (which creates the shared segment, spawns the exe with `MAXON_DEBUGSTREAM`, drains the ring, decodes via the PE tag blob) and captures/normalizes its output for comparison — `maxon-sharp` stays the sole owner of the binary-log decoding. Prove the harness end-to-end in Track 0 on a `maxon.exe`-compiled toy program; it starts gating shv2-compiled programs at M6 (once shv2's backend emits the producer). **Normalization for stable goldens:** run mm-trace programs single-threaded (`--max-procs 1`), drop timestamps/addresses, renumber `alloc_id`s to dense `1..N` in first-appearance order. Block format:
-  ```
-  mm_alloc  <TypeName> #<id> size=<n>
-  mm_incref <TypeName> #<id> rc=<n>
-  mm_decref <TypeName> #<id> rc=<n>
-  mm_free   <TypeName> #<id>
-  ```
-  Regeneration mirrors the C# `UpdateRequiredInSpecFiles` path with an mm-trace branch.
+### The one-line finding that removes the hardest feature from core
 
-### Foundation 1 — Prove/harden multi-core green threads (x64-windows only for Track 0)
-- **1a.1 Global-lock A/B safety net (ship first):** an env-gated (`MAXON_SLAB_GLOBAL_LOCK`) option to hold the existing `__slab_lock` around the alloc/free fast paths — a *bisection tool* to isolate non-allocator races from allocator races on the first multi-M runs, not the perf target. In `RuntimeEmitter.Allocator.cs`.
-- **1a.2 Contention counters:** a lock-wait / ownership-gate-miss counter dumped at exit (byte-identity + leak-check pass even if allocation is fully serialized — only this counter + wall-clock prove the lockless path helps).
-- **1a.3 Exercise + harden the never-run cross-P paths** (ownership gate, remote-free MPSC push/drain, acquire/release publication) under the validation harness with leak-check/mm-trace. **Highest-risk item in Track 0** — a validate-and-repair task with real probability of finding a bug.
-- **1a.4 `maxon_cpu_count`** runtime helper (direct `GetSystemInfo`, valid before `__gt_init`) → `Process.cpuCount()`.
-- **1a.5** Confirm the `__gt_enqueue` worker-spawn gate fires for a pure-CPU GT burst (empirically; no code change expected).
-- **1b E3073 relaxation in the C# checker first** (`SemanticCheckPass.cs`, `CheckAsyncYielding` ~163 / `IoStubs` ~100): add a first-class `__Builtins.parallelBoundary()` no-op marker (honest "CPU-parallel work", not fake I/O) and add it to the yield allowlist so shv2's `async` compile tasks compile. Mirror into `maxon-selfhosted` only when shv2 self-hosts (tracked drift).
-- **Concurrency API shv2 uses:** a `Parallel.map`/`parallelMap` stdlib helper (buckets `N ≈ max(1, count/(cpuCount()*k))`, spawns `async` bucket tasks calling `parallelBoundary()` once, awaits in input order — mirrors `specs/async-await.md`). Gate parallel codegen on `flag ON && missCount >= ~32 && cpuCount() > 1`; bucketing is the default (each GT mmaps ~1 MiB stack).
-- **Deterministic rdata by design:** shv2's backend captures rdata constants chunk-locally and merges into the shared table single-threaded in function order (idempotent-by-label dedup). Documented as a backend invariant from line one, not retrofitted.
+Under dictionary-passing, **conditional conformance** (`Array implements Hashable,
+Equatable where Element is Hashable and Equatable`, [stdlib/Array.maxon:406](stdlib/Array.maxon#L406))
+forces **per-gid witness tables + synthesized thunks** — the nastiest part of the
+generics story.
 
-### Track 0 validation harness (the gate that says "multi-core truly works")
-Built in `maxon-sharp` on a synthetic multi-function program, before shv2 exists:
-1. **Byte-identity** serial vs `parallelCodegen` (tiny/below-threshold, ~100-fn, cold-stdlib-scale, warm-rebuild-stays-serial).
-2. **A second worker actually ran** — assert via DebugStream sched events (≥2 distinct `P{id}`) or `__sched_active_workers==2`. *Mandatory* — byte-identity alone passes on single-M cooperative execution.
-3. **Leak-clean/heap-safe** under mm-trace + exit-101 gate (acceptance test for 1a.3).
-4. **Determinism stress** — `--max-procs {1,2,7,ncpu}`, all outputs identical to each other and to serial.
+shv2's source needs it in **exactly one place**:
+[GlobalDataTable.maxon:23](maxon-shv2/Compiler/Targets/Shared/GlobalDataTable.maxon#L23)
+— `Map with (ByteArray, String)`, an rdata constant-dedup index. Every *other* Map key
+(`String`, `FilePath`, `ValueId`→`int`) conforms to `Hashable` **unconditionally**.
 
----
+**Fix: key that map on a content hash instead of raw bytes.** shv2 already has
+`ContentHash.maxon` (FNV-1a). Keying on the hash is faster than hashing a `ByteArray`
+through a witness *and* it deletes conditional conformance + per-gid thunks from the
+core. **Collision guard (required):** a 64-bit FNV-1a collision would silently alias two
+different constants to one rdata label — a silent miscompile, the exact class the
+Stage-0 trap table exists for. So the value keeps the original bytes:
+`Map with (ContentHash, DedupEntry)` where `DedupEntry = {bytes, label}`, byte-equality
+verified on every hit, `panic` on mismatch. This is the "restrict shv2's source to core"
+discipline paying rent — and nobody had budgeted for actively rewriting shv2's source to
+fit core.
 
-## Step 0 — Materialize this plan in the repo
-Create `C:\Users\Eric\dev\maxon\maxon-shv2\` and write this plan (this document, verbatim) to `maxon-shv2\PLAN.md` as the first commit alongside initial `ARCHITECTURE.md` / `DEVLOG.md` stubs. The plan in-repo is the working reference; milestones check off against it as they land.
-
-## Milestone sequence (each = spec(s) into `specs-shv2/` + capability to pass)
-
-Correctness-only gate through Phase E; **budget gate becomes hard at Phase F.**
-
-**Phase A — Walking skeleton (thin end-to-end slice, x64-windows)**
-- **M1 basics** — compile & run `examples/basic.maxon`; spec `basics.md`. Copy Lexer; thin Parser (function decl, `return`, int literal); thin `MaxonOp` (`literal`, `ret`); minimal lower chain + PE. Ownership scaffolding present but trivial-only. Parser writes to `FileParseArtifact` (staged, single-threaded). **Skeletal query spine from day one** (content-hash-keyed `queryTokens`/`queryParseOps` + dependency recording). Start `ARCHITECTURE.md`.
-- **M2 variables** (`variables.md`) — `let`/`var`, block scope, `Scope`. Warm-rebuild assertion joins the gate (unchanged input → cache hit → byte-identical output). **M3 arithmetic** (`arithmetic.md`, `comparison-operators.md`, `unary-operators.md`) — full Pratt precedence.
-
-**Phase B — Control flow & functions**
-- **M4** `if-statements.md`, `return-statement.md`, while/break/continue. **M5** `function-declaration.md`, `parameter-labels.md`, `method-calls.md`. **First multi-function compile ⇒ first place parallelism can pay off** (enable per-function fan-out; the runtime prerequisite already exists from Track 0). Signature ownership modes established (all trivial for now).
-
-**Phase C — Static ownership activates (the crux)**
-- **M6 heap values & drops** — first `owned` heap value (minimal single-field heap `type` + destructor); `OwnershipCheck`/`EscapeAnalysis`/`InsertDrops` run for real; `own.drop`→`__destruct`. **Where static ownership first bites.** shv2's backend gains the MM runtime **and the DebugStream producer** (schema-compatible port of `RuntimeEmitter.DebugStream.cs` into shv2's emitted runtime) so shv2-compiled programs emit binary MM events — mm-trace spec sections start gating here. New spec `own-drop-basic.md` (mm-trace: one alloc / one free, zero incref/decref).
-- **M7 moves & borrows** — port `borrow-checker.md`, `ownership.md` **with redesigned expectations** (some v1-accepted programs now rejected). Use-after-move, double-move, borrow-outlives-owner, NLL mutate-while-borrowed (the original E3070 case).
-- **M8 escape → refcount fallback** — a genuinely escaping value promotes to `shared` with `own.retain/release` (the only place refcounting appears). Spec `own-escape-refcount.md`.
-
-**Phase D — Aggregates & strings**
-- **M9 structs** (`self-keyword.md`, `static-methods.md`, struct specs) — owned fields → recursive drop. **M10 strings** (`string-type.md`, `string-interpolation.md`) — String is owned heap; real `print()`. **M11 arrays/collections** (`arrays.md`, `array-realloc-dangling-ref.md`) — element ownership, borrow-on-`get`.
-
-**Phase E — Advanced language**
-- **M12 enums/unions** (owned payloads → drop). **M13 closures** (`closure-capture.md`) — big escape driver. **M14 interfaces & generics** (`interfaces.md`, `where-clauses.md`, layout/witness tables). **M15 error handling** (`error-handling.md`) — drops on the throw/unwind path.
-
-**Phase F — Self-hosting & budgets**
-- **M16 feature-complete** — whatever remains to parse shv2's own source, **including porting shv2's own source to satisfy the borrow checker** (use the explicit `shared` escape hatch where a static proof is impractical). Also: **shv2's backend completes its emitted runtime** — full GT scheduler (port v1's `emitX64Gt*`) **with the allocator mirroring the C# sharded per-P design, NOT v1's single-shared-mcache**, plus mirroring the `parallelBoundary` E3073 relaxation into shv2's own SemanticCheck — so a self-compiled shv2.exe still runs multi-core. **M17 self-compile correctness** — shv2 compiles shv2; the produced compiler passes the spec suite; byte parity across core counts. **M18 budget gate** — full multi-core fan-out at scale; drive to **≤30 s / ≤1.7 GB / >90% CPU**; tune per-P arenas, eager frees, per-function pipelining.
+**The same discipline applies to closures:** shv2 has **7** escaping closure sites
+(4× `logDebug`, 2× `logInfo`, 1× `logError`), all of the shape
+`log*(cat, message: function() gives "…{captured}")` against
+`Logger.maxon:35 typealias LazyMessage`. Rewrite them as `if logEnabled(cat) …` guards
+(~30 lines) and the entire closure cone leaves the critical path.
 
 ---
 
-## Living documents
-Two, both committed alongside code:
-- **`maxon-shv2/ARCHITECTURE.md`** — the onboarding document. One section per compiler part, added as it's built (frontend, Maxon dialect, Std dialect, Own tier, pipeline, query spine, parallel driver, backend, event log). It records **operation and invariants** (e.g. the rdata deterministic-merge invariant, the ownership-kind lattice, the parse-staging registry set) — so future agents onboard without re-deriving the design from the code.
-- **`maxon-shv2/DEVLOG.md`** — the dated log: the milestone ledger and the recon findings that corrected this plan's premises. Progress and history, not design.
+## Maxon-core — the language boundary
+
+Bounded by *measurement against shv2's own 7,961-line source*, not by guess:
+
+| Construct | Sites in shv2's source | Verdict |
+|---|---:|---|
+| `throws` / `try` / `otherwise` | 102 in Lexer alone | **IN** |
+| `for-in` | 97 | **IN** — hardcoded, which is what keeps associated types out |
+| ranged `typealias` | 33 | **IN** (~800 localized lines; also a repo code-quality rule) |
+| `Map with (K,V)` | 12 typealiases | **IN** (simplified) |
+| generic decls + instantiation | `IrModule uses Op`; 40+ `Array with X` | **IN** — *pervasive* |
+| `union` + `match` | 21 | **IN** |
+| enum with struct `rawValue` | the whole `StdOpMeta` design | **IN** |
+| interfaces | only `implements Error` (9×) — an **empty marker** | **IN, static only.** Witness tables are needed for the *stdlib* (`Hashable`), not shv2's code |
+| string interpolation | pervasive | **IN** |
+| **closures** | **7** | **OUT** — rewrite the 7 sites |
+| **conditional conformance** | **1** (`GlobalDedupMap`) | **OUT** — rewrite the 1 site |
+| `Set` | 1 | **OUT** — rewrite the 1 site (`DroppedNameSet`, [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18)) at 0.5 |
+| tuples · `extension` · `async` · sort/higher-order | **0** | OUT |
+
+**Also OUT** (Stage 4): general `Iterable`/associated types · arm64/wasm/macOS/Linux ·
+coverage · inliner.
 
 ---
 
-## Risks & mitigations
-1. **Self-hosting under a stricter checker (highest).** shv2's own source may be rejected by static ownership. Mitigation: the `shared` escape hatch as a pressure valve; a dedicated M16 sub-track to annotate/rewrite source.
-2. **Never-run cross-P allocator paths (high).** The C# sharded allocator's ownership gate + remote-free MPSC have zero runtime coverage. Mitigation: global-lock A/B bisection (1a.1), mm-trace/leak-check oracle, contention counter, self-host bootstrap as the strongest end-to-end test.
-3. **Runner/subprocess deadlock chains (high).** Multi-M *inside* spec-runner worker processes compounds scheduler + pipe-drain concurrency. Mitigation: **keep the spec-runner harness single-M; only the compile-under-test runs multi-M.**
-4. **async-subprocess shard-0 heap corruption (high, specific).** IOCP/non-scheduler-thread allocations have no owning P → fall to shard 0 concurrently with a worker. Mitigation: route non-P-context allocations through the locked path; validate under mm-trace with an async-subprocess workload before declaring Phase 0 done.
-5. **Conditional-move drop placement.** A value moved on one branch only needs a drop flag. Mitigation: initially promote conditionally-moved values to `shared`; add real drop flags later as an optimization.
-6. **Escape-analysis precision** (too conservative = everything refcounted; too aggressive = UAF). Mitigation: start sound-conservative, measure refcount rate, tighten behind byte-parity + spec suite.
-7. **Determinism under parallelism / memory budget with 3 live tiers.** Mitigations: content-keyed appends + ordered per-function merge + 1-vs-N-core parity gate; per-function pipelining with eager frees. (Dropping the MIR tier already removes one whole-module copy from the peak, and flattening `StdOp` cuts each op from 3 heap boxes to 1.)
+## Stage 0 — The loop (before any new language feature)
+
+shv2 has **no test runner**. `specs-shv2/basics.md` exists but *nothing executes it* —
+and its `status: selfhosted` frontmatter makes the C# runner skip it outright. DEVLOG's
+`[x] M1 … Spec specs-shv2/basics.md` is **false**; M1 was hand-verified. Nothing else is
+safe until this exists.
+
+- **0.1 `maxon-shv2 spec-test`** (~665 lines new). New
+  `maxon-shv2/Testing/{SpecParser,SpecRunner}.maxon`; grow `Compiler.maxon` with
+  `compileSource()` + `CompileOutcome` (returns `project.diagnostics` instead of printing
+  them — `Diagnostic.render()` already emits the exact `error EXXXX:` wire format
+  `maxoncstderr` compares against). Block types: ` ```maxon `/` ```exitcode `/
+  ` ```stdout `/` ```maxoncstderr ` only. **Do NOT port v1's 7,699-line harness** — shv2
+  won't be able to compile a line of it for a year.
+- **0.2 `MAXON_STDLIB` override** in
+  [0-Compiler.cs:846](maxon-sharp/Compiler/0-Compiler.cs#L846) `FindStdlibPath()` (~50
+  lines C#). Default path byte-for-byte unchanged so v1 and the 273-spec suite cannot
+  regress.
+- **0.3 `stdlib-shv2/stdlib/`** — the pruned fork. The bootstrap parses **48 files /
+  11,007 lines** today (`SearchOption.AllDirectories`; only `Internals.maxon` excluded) —
+  the 15 `helpers/` files (~3,046 lines) count too, and mostly must stay
+  (MonomorphizationPass hardcodes the `stdlib.helpers.itertools.` /
+  `stdlib.helpers.string.` prefixes; the UCD machinery lives there). Dropping the 14
+  top-level files Json, URL, Math, Set, Http, Console, Sha256, List, Tcp, Range, Log,
+  Unicode, Vector, Sleep (−3,575 lines) leaves **19 top-level files (~4,386 lines) +
+  helpers ≈ 7.4k of 11k — a ~32% cut** of stdlib frontend work per build (not the 45% an
+  earlier draft claimed from top-level-only accounting). Keep the marker-interface
+  providers, `PrimitiveExtensions`, `Print` + `PrintError` (`print`/`printError` live
+  there, NOT in the dropped Console — Main and every diagnostic path need them),
+  `Process` (it holds `ExitCode`), `Build`, `Subprocess` + `Clock` (the runner needs
+  them). Dropping `Range` is safe: for-in over `a to b` desugars directly to a while
+  loop (per Range.maxon's own header) and shv2 never uses a range in expression
+  position. The fork carries no `Internals.maxon` at all (both compilers exclude it —
+  see the runtime-binding decision). Sub-task: audit the 15 `helpers/` files and drop
+  any unreachable from the kept set.
+- **0.4 `maxon-shv2 selfhost-distance`** (~485 lines) — the compass. See below.
+- **0.5** Rewrite the 9 core-violating sites: the 7 closures (`if logEnabled(cat)`
+  guards), the `GlobalDedupMap` key (ContentHash + byte-verify), and the one `Set`
+  (`DroppedNameSet`, [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18) →
+  `Map with (String, bool)`). Delete `LazyMessage`.
+- **0.6** One command: build → spec-test → distance.
+
+**Gate:** `spec-test` green on `basics.md` — the first time M1 is verified by anything
+but hand.
+
+### Stage-0 traps (each is a silent miscompile, not an error)
+
+| # | Trap | Consequence |
+|---|---|---|
+| 1 | **The stdlib dir's LEAF NAME *is* the namespace** ([2-Parser.cs:804](maxon-sharp/Compiler/2-Parser.cs#L804)), and `"stdlib."` is hardcoded in [MonomorphizationPass.cs:754,522,619](maxon-sharp/Compiler/MLIR/Passes/MonomorphizationPass.cs#L754) | A dir named `stdlib-shv2` ⇒ namespace `stdlib-shv2` ⇒ monomorphization silently misses every call site. **The path must be `stdlib-shv2/stdlib/`**, and `FindStdlibPath()` must hard-error if the leaf isn't `stdlib`. |
+| 2 | UCD `.bin` files resolve from `<stdlib>/helpers/string/` ([MaxonToStandardConversion.cs:2629](maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.cs#L2629)) | Pruned stdlib without `ucd_bmp.bin`/`ucd_supp.bin` ⇒ hard throw mid-lowering |
+| 3 | `_cachedSources`/`_cachedStdlibModule` are **process-static** ([0-Compiler.cs:803](maxon-sharp/Compiler/0-Compiler.cs#L803)) | Use an **env var, not a per-invocation flag** — the C# TestRunner batches many compiles per process and would serve whichever stdlib loaded first |
+| 4 | `__Managed*Error` case ordinals must match `Builtins.maxon` **exactly** ([2-Parser.cs:1116](maxon-sharp/Compiler/2-Parser.cs#L1116)) | Reordering a case re-points builtin `throwsType` at the wrong ordinal |
+| 5 | `ExitCode` lives in **`Process.maxon`**, not where you'd guess | Drop it and `main() returns ExitCode` won't resolve |
+| 6 | Spec fragments need a **trailing newline** ([SpecTestRunner.maxon:1045](maxon-selfhosted/Testing/SpecTestRunner.maxon#L1045)) | Every spec test dies with a lexer EOF error |
+| 7 | **`panic()` is not catchable** — 148 sites in shv2 | `selfhost-distance` crashes instead of counting. **Audit all 148 now** (`INVARIANT` = keep vs `NOT-YET-IMPLEMENTED` = record-and-recover); by mid-Stage-2 there will be ~600. Record-and-recover on the resolve/lower/emit paths means threading `throws` through those call chains — plumbing well beyond parser recovery, NOT covered by 0.4's ~485-line reporter estimate. |
+| 8 | A recovery-mode parse artifact **must not enter the query memo** (the parse query: [Queries.maxon:58](maxon-shv2/Compiler/Queries.maxon#L58); the memo tables: `QueryDatabase.maxon:70-72`) | `selfhost-distance` poisons the cache |
+| 9 | *(inverse)* `BuildCache` is **already** stdlib-path-keyed ([BuildCache.cs:52](maxon-sharp/BuildCache.cs#L52)) | Don't "fix" it. But never set `MAXON_STDLIB` globally — v1's own `findStdlibPath()` ignores it and the two compilers would diverge. |
+
+### The compass — `selfhost-distance`
+
+`stageUnits = filesLexed + filesParsed + funcsResolved + funcsLowered + funcsEmitted` —
+the *reported* compass number. Monotone within a run (each term counts only *successes*,
+and a unit reaches stage *k+1* only if stage *k* passed) — but **NOT across commits**:
+the denominator is shv2's own source, and legitimate refactors shrink it (the M1-post
+MIR-tier deletion removed whole files). So the CI ratchet is **per-unit non-regression
+on surviving units**, not a scalar comparison: every `(file|func, stage)` pair that
+passed at the previous commit and still exists must still pass. New units may fail
+(that's the roadmap); deleted units drop out; a passing unit that regresses fails CI.
+That per-unit rule is the *only* thing that actually enforces "shv2's source stays in
+core."
+
+```
+SELFHOST DISTANCE   43
+  files  lexed 39/39   parsed 4/39      funcs  resolved 0/612  lowered 0/612  emitted 0/612
+  FIRST BLOCKING:  Lexer.maxon:5:1  top-level `typealias`
+  TOP UNSUPPORTED (1,844 sites):   412 `let`   288 type decl   201 binary op   174 `if`
+```
+
+The ranked table **is** the roadmap, and it reprioritizes itself after every milestone.
+Prerequisites (both wanted anyway): a parser **recovery mode** — Maxon's mandatory
+labeled `end '<label>'` makes `skipToMatchingEnd` ~30 lines rather than a heuristic —
+and the panic audit (trap 7). Report the pair `(SHD, specs_passing)`: SHD=0 means shv2
+*accepts* its source, not that it compiles it *correctly*.
 
 ---
 
-## Verification (how each step is proven end-to-end)
-- **Per milestone:** the ported `specs-shv2/` spec passes via the spec runner (`mcp__maxon-dev__run_spec_test` / `spec_test_outcome`); `basic.maxon` runs and exits 42 (`mcp__maxon-dev__run_program`). Ownership milestones (M6+) additionally assert their `mm-trace` block (alloc/free/refcount counts) via `maxon monitor`.
-- **Track 0:** the validation harness — byte-identity across core counts, ≥2 workers observed via sched events, leak-clean under mm-trace, `--max-procs {1,2,7,ncpu}` determinism.
-- **Parallel phase (ongoing):** 1-core-vs-N-core byte-identical output as a blocking gate.
-- **Self-hosting (Phase F):** shv2 compiles shv2, the produced compiler rebuilds and passes the full suite; then the hard budget gate — **≤30 s, ≤1.7 GB RAM, >90% CPU** on self-compile, measured with `--profile-passes` + process RAM/CPU sampling.
+## Stage 1 — Scalar core (port, don't design)
 
-### Critical files to create/modify
-- `maxon-shv2/Compiler/IR/Own/OwnershipCheck.maxon` (from `maxon-selfhosted/Compiler/IR/Maxon/MaxonBorrowCheck.maxon`) and `Own/InsertDrops.maxon` (replaces `maxon-selfhosted/Compiler/IR/Std/InsertRefcounts.maxon`).
-- `maxon-shv2/Compiler/ParseStaging.maxon` (generalizes `maxon-selfhosted/Compiler/ParseDelta.maxon`) + `Compiler/ParallelDriver.maxon`.
-- `maxon-shv2/Compiler/IR/Maxon/MaxonDialect.maxon` + `IR/Own/OwnDialect.maxon`; `Compiler/IR/PassPipeline.maxon` (models `maxon-selfhosted/Compiler/IR/PassPipeline.maxon`).
-- `maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.Allocator.cs` (Phase-0a global-lock A/B + contention counter), `Compiler/MLIR/Passes/SemanticCheckPass.cs` (`parallelBoundary` E3073 relaxation), `Testing/SpecParser.cs` + `Testing/TestRunner.cs` + `DebugStreamMonitor.cs` (mm-trace harness).
+`let`/`var`/block scope · full-Pratt arithmetic/comparison/unary · `if`/`while`/`break`/
+`continue` · functions with params + calls.
+
+**The one design item: the real register allocator.** Register allocation is **~74% of
+v1's self-compile wall time** (~418 s of 561 s) against shv2's ≤30 s *whole-compile*
+budget. Build it here with **sub-phase timers in the first commit** — v1's "74%" stood
+for months with no sub-phase attribution. Do not copy v1's: its reactive spill/color loop
+rebuilds the interference graph every iteration.
+
+---
+
+## Stage 2 — Every hard mechanism, minimal + integrated
+
+**Dictionary-passing forces this order, and it is not the order in the current PLAN.md:**
+
+- **Strings and arrays *cannot* precede generics.** `String` **is** `__ManagedMemory with
+  Byte` ([String.maxon:29](stdlib/String.maxon#L29)); `Array` is a generic declaration
+  that instantiates a generic *over its own type parameter*
+  ([Array.maxon:14](stdlib/Array.maxon#L14)).
+- **Ownership must follow generics, not precede it.** `own.drop` on a type-parameter
+  value cannot name a static `__destruct_T` — it must route through the descriptor's
+  `destroyFunc@40`. v1 bolted this on as a *second, separate release domain*
+  (`sys.dropTypeParam`, alongside the 7,755-line `InsertRefcounts`). Landing generics
+  first means `InsertDrops` is **descriptor-aware from its first commit** instead of
+  retrofitted.
+
+| # | Mechanism | Note |
+|---|---|---|
+| 2.1 | structs · enums · unions · `match` | concrete, trivial-ownership only |
+| 2.2 | **generics** ⭐ | declarations + instantiation + layout descriptors; over scalars first |
+| 2.3 | **interfaces + witness tables** | static conformance (`Hashable`). **No** conditional conformance, **no** existentials — shv2 stores nothing at interface type |
+| 2.4 | **`__ManagedMemory` + heap + ownership + drops** ⭐ | THE CRUX. `own.drop` descriptor-aware from commit 1. Runtime slice **R1** lands here (Workstream R) — mm-trace gates from here and cannot run without it |
+| 2.5 | moves + borrows (NLL) | first program-rejection point |
+| 2.6 | escape → `shared` | the **only** place refcounts appear. **Track `% values promoted to shared`** — if it's 40%, static ownership bought nothing |
+| 2.7 | **`Array`** | = 2.2 ∘ 2.4 — the first real integration proof |
+| 2.8 | **`String`** + interpolation | = Array-of-Byte + `BuiltinStringLiteral`; runtime slice **R2** |
+| 2.9 | owned payloads in enums/unions | |
+| 2.10 | **`Map`** | multi-param generics + `Hashable` constraint |
+| 2.11 | hardcoded `for-in` | Array / Range / String |
+| 2.12 | **errors** | `throws`/`try`/`otherwise`; drops on the error edge. v1's dual-register flag verbatim |
+| 2.13 | ranged typealiases | `ExpandCastRangeChecks` + `InsertRangeChecks` |
+
+**Stage 2 stays a ladder of individually-shippable increments, one spec each.** Core-first
+is a *re-ordering*, not a replacement — if that isn't explicit, Stage 2 becomes a
+six-month integration hole with no green build.
+
+---
+
+## Workstream R — the runtime shv2 must EMIT ⚠
+
+**~5–7k lines, on the critical path — and a workstream, NOT a stage.** shv2-compiled
+binaries carry the runtime *shv2's backend hand-assembles*; a self-compiled shv2 cannot
+run without it. Sequencing it *after* Stage 2 would contradict 2.4's own mm-trace gate,
+so it lands in slices, each WITH the Stage-2 milestone that first needs it:
+
+- **R1 @ 2.4:** slab allocator · `__mm_incref`/`__mm_decref` · the `__destruct_*`
+  cascade · `__ManagedMemory` · the DebugStream producer (schema-compatible port of
+  `RuntimeEmitter.DebugStream.cs`) — this is what lets mm-trace gate 2.4 onward. v1's
+  force-seeded bootstrap roots (`__slab_init`, `__mm_alloc`, `__managed_mem_create`, …)
+  become a real obligation here.
+- **R2 @ 2.8:** string runtime (`BuiltinStringLiteral` backing, UCD table access).
+- **R3 @ Stage 5 (latest):** the GT scheduler (`emitX64Gt*` port; allocator mirrored
+  from the C# sharded design, not v1's single-shared-mcache). A single-threaded
+  self-compiled shv2 is acceptable through Stages 3–4 — shv2's own source uses no
+  `async` until per-function fan-out arrives at Stage 5.
+
+Per the runtime-binding decision (Context): shv2 **excludes `Internals.maxon` and emits
+natively** — builtin registration for the `__Managed*` surface replaces v1's
+`__Internals` mechanism + `StdlibLoader` (6,434 lines, the road not taken).
+
+## Stage 3 — Self-host
+
+shv2 compiles shv2 → **3-stage bootstrap fixpoint** (stage-2 == stage-3, byte-identical);
+stage-2 shv2 passes the whole `specs-shv2/` suite. **Byte-identity is a cliff, not a
+ramp** — it demands determinism in rdata ordering, hash iteration order, name mangling,
+and float formatting. **Gate byte-identity from Stage 1 on the toy corpus**, the way the
+plan already gates 1-core-vs-N-core.
+
+## Stage 4 — Broaden
+async/green threads · closures · general `Iterable` + associated types · conditional
+conformance + per-gid witness thunks · `Set`/`List`/Json/… · arm64 + wasm · coverage ·
+inliner · port the 273-file / ~2,573-case spec suite.
+
+## Stage 5 — Budgets
+Parallel per-function fan-out at scale; **≤30 s / ≤1.7 GB / >90% CPU**. Runtime multi-core
+is already proven (Track 0). **Caching is revisited here, on a working compiler, with the
+approach chosen fresh** — not ported from v1's `.mxc`.
+
+---
+
+## Scope
+
+| | v1 | shv2-core (est.) |
+|---|---:|---:|
+| Parser | 21,862 | 6–8k |
+| TypeResolution | 12,142 | 4–5k |
+| LowerMaxonToStd | 16,135 | 6–8k |
+| Memory model (`Own/*` vs `InsertRefcounts`) | 7,755 | 3–4k |
+| Std passes | ~10k | 5–6k |
+| x64 backend + emitters | 16,030 | 8–10k |
+| Register allocator | 8,520 | 4–6k |
+| **Workstream R (emitted runtime)** | *(inside X64Backend)* | **5–7k** |
+| Testing | 7,699 | ~665 |
+| **Total** | **191,487** | **~50–65k** |
+
+Current: **7,961**. Self-compile is **~45–55k lines away**. That is the project.
+
+---
+
+## Verification
+
+- **Per milestone:** `maxon-shv2 spec-test` stays green; ownership milestones (2.4+) also
+  assert an `mm-trace` block via `maxon monitor`.
+- **Continuous:** the `selfhost-distance` **per-unit ratchet** — no surviving
+  `(unit, stage)` pass may regress (the scalar may legitimately shrink on refactors; see
+  the compass) — this is what enforces "shv2's source stays in core." Track `% values
+  promoted to shared` alongside it.
+- **From Stage 1:** byte-identity on repeat compiles, so Stage 3's fixpoint is a ramp.
+- **Stage 3:** stage-2 == stage-3 byte-identical; stage-2 shv2 passes the suite.
+- **Stage 5:** ≤30 s / ≤1.7 GB / >90% CPU on self-compile.
+
+## Critical files
+
+- **New:** `maxon-shv2/Testing/{SpecParser,SpecRunner}.maxon`;
+  `maxon-shv2/Compiler/SelfhostDistance.maxon`; `maxon-shv2/Compiler/IR/LayoutDescriptor.maxon`;
+  `maxon-shv2/Compiler/IR/Own/{OwnDialect,OwnershipInfer,OwnershipCheck,EscapeAnalysis,InsertDrops}.maxon`;
+  `stdlib-shv2/stdlib/` (leaf name **must** be `stdlib`).
+- **Modified:** [0-Compiler.cs:846](maxon-sharp/Compiler/0-Compiler.cs#L846) (`MAXON_STDLIB`);
+  [Main.maxon](maxon-shv2/Main.maxon) (`spec-test`, `selfhost-distance`);
+  [Parser.maxon](maxon-shv2/Compiler/Parser.maxon) (recovery mode; grows every milestone);
+  [Compiler.maxon](maxon-shv2/Compiler/Compiler.maxon) (`compileSource`);
+  [GlobalDataTable.maxon:23](maxon-shv2/Compiler/Targets/Shared/GlobalDataTable.maxon#L23) +
+  [Logger.maxon:35](maxon-shv2/Compiler/Logger.maxon#L35) +
+  [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18) (the 9 core-violating sites);
+  [maxon-shv2/PLAN.md](maxon-shv2/PLAN.md) (replaced by this; keep a stage↔M mapping so
+  DEVLOG's M-numbered ledger stays interpretable).
+- **Reference (read, don't copy):** `maxon-selfhosted/Compiler/IR/LayoutDescriptor.maxon`,
+  `Compiler/Passes/BuildWitnessTables.maxon`, `Compiler/IR/Std/InsertRefcounts.maxon`.

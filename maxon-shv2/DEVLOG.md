@@ -110,6 +110,30 @@ section.
 
 ---
 
+## Plan adopted — Minimal-Core / core-first (2026-07-11)
+
+The original M1–M18 `PLAN.md` was **replaced** by the Minimal-Core plan (user-adopted).
+The M-numbered ledger below stays valid via the **Stage ↔ M mapping in PLAN.md's
+header**. What changed:
+- **Generics BEFORE ownership** (Stage 2): ownership's `own.drop` on a type-parameter
+  value needs the runtime layout descriptor, and `String`/`Array` are themselves
+  generic — so generics can't come after ownership. Order is now structs → generics →
+  interfaces → **heap+ownership+drops** → moves/borrows → escape → Array → String → Map.
+  (Original had ownership at M6, generics at M14 — reversed.)
+- **Self-host = compass, not gate.** A `selfhost-distance` ratchet (`stageUnits` over
+  shv2's own source; the ranked "TOP UNSUPPORTED" table IS the roadmap; per-unit
+  non-regression CI). Not yet built (Stage-0 gap 0.4).
+- **`stdlib-shv2/` pruned fork** + `MAXON_STDLIB` override (Stage-0 gaps 0.2/0.3) — the
+  only per-build stdlib lever (no `.mxc` cache until Stage 5). Leaf dir name MUST be
+  `stdlib` (namespace/monomorphization trap).
+- **Workstream R** = the runtime shv2's backend must *emit* (~5–7k lines: slab, refcount,
+  `__destruct`, `__ManagedMemory`, DebugStream producer, GT scheduler), sliced into
+  Stage 2 (R1@2.4 gates mm-trace; R2@2.8; R3@Stage 5). shv2 excludes `Internals.maxon`
+  and emits natively (follows the C# bootstrap).
+- shv2's own source has **9 core-violating sites** (7 closures, 1 conditional conformance,
+  1 `Set`) to rewrite so it stays in "core" (Stage-0 gap 0.5).
+- x64-windows only through self-host.
+
 ## Milestone ledger
 
 Checkboxes track landing against `PLAN.md`. Correctness-only gate through
