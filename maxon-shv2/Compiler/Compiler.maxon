@@ -14,30 +14,18 @@
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
 // when unset) wins over the derived output name.
 //
+// The pipeline-driving body lives in `compileToCodeResult` so that the
+// `verify-warm-rebuild` gate compiles through the EXACT same path — a determinism
+// gate over a divergent code path would prove nothing. `compile` adds only the
+// two steps unique to a real build: loading the project and writing the executable.
+//
 // Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`,
 // `readError`) carry NO diagnostics and propagate straight to Main, which prints
-// a specific message; (2) reported diagnostics (semantic/lexer) are printed here
-// and re-signaled as a FRESH `compileError`. It must be a fresh throw — re-
-// throwing the caught error object miscompiles under the C# runtime's refcount
-// path (a NULL incref on the rethrow), whereas the pipeline's own fresh throw of
-// the same arm propagates cleanly.
+// a specific message; (2) reported diagnostics (semantic/lexer) are printed inside
+// `compileToCodeResult` and re-signaled as a FRESH `compileError`.
 export function compile(inputPath FilePath, target Target, outputOverride String = "") returns FilePath throws CompileError
-	var project = createProject(inputPath, target: target)
-
-	// File/IO errors propagate to Main untouched (no diagnostics attach to them).
-	try loadSourceFiles(project, path: project.rootPath)
-	let module = try queryAllModule(project)
-
-	// The mid + lowering pipeline. Its error gate throws once a pass (semantic-
-	// Check) reports a diagnostic; print the accumulated diagnostics and re-signal.
-	var pipeline = PassPipeline.create(project, maxonModule: module)
-	pipeline.addPasses(buildDefaultPipeline())
-	try pipeline.run() otherwise 'pipelineFailed'
-		printDiagnostics(project)
-		throw CompileError.compileError
-	end 'pipelineFailed'
-
-	let codeResult = buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData)
+	var project = try loadProject(inputPath, target: target)
+	let codeResult = try compileToCodeResult(project)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
@@ -45,6 +33,44 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath
 end 'compile'
+
+// Create a project rooted at `inputPath` and register every source file under it
+// with the query database — the shared "load" step before the pipeline runs.
+// Factored out so `build` and the warm-rebuild gate load a project identically
+// (the gate compiles the same input into several independent fresh projects).
+//
+// File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
+// diagnostics and propagate straight to the caller, which prints a specific
+// message. `loadSourceFiles` is what raises them.
+export function loadProject(inputPath FilePath, target Target) returns Project throws CompileError
+	var project = createProject(inputPath, target: target)
+	try loadSourceFiles(project, path: project.rootPath)
+	return project
+end 'loadProject'
+
+// Drive the query spine + mid/lowering pipeline + backend for an already-loaded
+// `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
+// the single compile path both `compile` (which then writes the executable) and
+// `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
+// route through — no duplicated pipeline-driving code.
+//
+// The mid + lowering pipeline owns the error gate: it throws once a pass
+// (semanticCheck) reports a diagnostic. Print the accumulated diagnostics and
+// re-signal with a FRESH throw — re-throwing the caught error object miscompiles
+// under the C# runtime's refcount path (a NULL incref on the rethrow), whereas the
+// pipeline's own fresh throw of the same arm propagates cleanly.
+export function compileToCodeResult(project Project) returns CodeResult throws CompileError
+	let module = try queryAllModule(project)
+
+	var pipeline = PassPipeline.create(project, maxonModule: module)
+	pipeline.addPasses(buildDefaultPipeline())
+	try pipeline.run() otherwise 'pipelineFailed'
+		printDiagnostics(project)
+		throw CompileError.compileError
+	end 'pipelineFailed'
+
+	return buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData)
+end 'compileToCodeResult'
 
 // --- Source loading ---
 

@@ -61,6 +61,15 @@ export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdR
 	end 'collapse'
 end 'maxonReturnTypeToStdReturnType'
 
+// Map a source-level binary operator to its width/ABI-resolved Std opcode. M2 is
+// a 1:1 `add` → `add`; the mapping GROWS in lockstep as MaxonBinOp/StdBinOpcode
+// gain arms at M3. Exhaustive by construction (every MaxonBinOp arm is named).
+export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
+	return match op 'map'
+		add gives StdBinOpcode.add
+	end 'map'
+end 'maxonBinOpToStdOpcode'
+
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Instantiates the
 // per-run lowering worker (which owns the name→id state) and runs it.
 export function lowerMaxonToStd(maxonModule MaxonModule) returns StdModule
@@ -138,6 +147,7 @@ type MaxonToStdLowering
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
 			retVoid then self.rejectVoidReturn()
+			binOp(result, lhs, rhs, op) then self.lowerBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -148,6 +158,7 @@ type MaxonToStdLowering
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
 			retVoid then self.rejectVoidReturn()
 			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
+			binOp then panic("lowerMaxonToStd: a `binOp` op appeared as a block terminator (parser bug — a binary op is never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -160,6 +171,14 @@ type MaxonToStdLowering
 		let stdType = maxonTypeToStdType(litType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: value, valueType: stdType))
 	end 'lowerLiteral'
+
+	// Lower a Maxon binary op to its Std counterpart. The operand and result
+	// ValueIds pass through verbatim (this pass never renumbers — see the header);
+	// only the source-level operator maps to a width/ABI-resolved Std opcode.
+	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
+		let opcode = maxonBinOpToStdOpcode(op)
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode))
+	end 'lowerBinOp'
 
 	// Emit the function-return terminator (or, for a mid-block ret, a body op).
 	// M1 has only the PLAIN-ret arm: a non-throwing, non-interface-returning

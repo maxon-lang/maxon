@@ -1,18 +1,23 @@
 // maxon-shv2 compiler entry point (M1 driver).
 //
-// Parses the command line, dispatches `build <path>`, and maps the driver's
-// CompileError outcomes to an exit code. The `build` command reads the input
-// file/directory, runs the M1 pipeline, and writes an executable. Diagnostics
-// (E3001/E3002) are printed by `compile`; Main stays silent on the
+// Parses the command line, dispatches a command, and maps the driver's
+// CompileError outcomes to an exit code. `build` reads the input file/directory,
+// runs the pipeline, and writes an executable. `verify-warm-rebuild` is the M2
+// warm-rebuild gate: it asserts the query spine is deterministic + incremental for
+// a file and exits 0 iff both properties hold. Diagnostics (E3001/E3002) are
+// printed by `compile`/`compileToCodeResult`; Main stays silent on the
 // `compileError` arm so a failing build's stderr is EXACTLY the reported
 // diagnostics (the `maxoncstderr` spec contract).
 //
-// CLI (documented): `maxon-shv2 build <file|directory> [-o <output>]`.
+// CLI (documented):
+//   maxon-shv2 build <file|directory> [-o <output>]
+//   maxon-shv2 verify-warm-rebuild <file>
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
 	return match args.command 'cmd'
 		build gives runBuild(args)
+		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -30,22 +35,55 @@ function runBuild(args MaxonArgs) returns ExitCode
 
 	let target = detectHostTarget()
 	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride) otherwise (e) 'compileErr'
-		// `compileError` = diagnostics already printed by `compile`; stay silent
-		// so stderr is exactly those diagnostic lines. The file-level arms have
-		// no diagnostics, so Main prints their message here.
-		match e 'report'
-			fileNotFound(p) then printError("error: file not found: {p}\n")
-			directoryNotFound(p) then printError("error: directory not found: {p}\n")
-			noSourceFiles(r) then printError("error: no source files under {r}\n")
-			readError(p) then printError("error: could not read {p}\n")
-			compileError then break 'report'
-		end 'report'
+		reportCompileError(e)
 		return 1
 	end 'compileErr'
 
 	print("Compiled -> {outputPath}\n")
 	return 0
 end 'runBuild'
+
+// The M2 warm-rebuild gate: assert the query spine is deterministic and
+// incremental for `<file>`. Exit 0 iff both properties hold. On a file/IO error
+// the specific message is printed; a `compileError` stays silent (its diagnostics
+// were already printed by the pipeline).
+function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
+	if args.path.isEmpty() 'noPath'
+		printError("Usage: maxon-shv2 verify-warm-rebuild <file>\n")
+		return 1
+	end 'noPath'
+
+	let inputPath = try FilePath.from(args.path) otherwise 'badPath'
+		printError("error: invalid path: {args.path}\n")
+		return 1
+	end 'badPath'
+
+	let target = detectHostTarget()
+	let bothPass = try verifyWarmRebuild(inputPath, target: target) otherwise (e) 'verifyErr'
+		reportCompileError(e)
+		return 1
+	end 'verifyErr'
+
+	if bothPass 'passed'
+		return 0
+	end 'passed'
+
+	return 1
+end 'runVerifyWarmRebuild'
+
+// Print the user-facing message for a file/IO CompileError. The `compileError` arm
+// is SILENT: its diagnostics were already printed by the pipeline, so stderr stays
+// exactly those diagnostic lines (the `maxoncstderr` spec contract). Shared by
+// every command's failure path so the mapping lives in one place.
+function reportCompileError(e CompileError)
+	match e 'report'
+		fileNotFound(p) then printError("error: file not found: {p}\n")
+		directoryNotFound(p) then printError("error: directory not found: {p}\n")
+		noSourceFiles(r) then printError("error: no source files under {r}\n")
+		readError(p) then printError("error: could not read {p}\n")
+		compileError then break 'report'
+	end 'report'
+end 'reportCompileError'
 
 function unknownCommand() returns ExitCode
 	printUsage()
@@ -56,15 +94,17 @@ function printUsage()
 	print("Usage: maxon-shv2 <command> [options]\n")
 	print("\n")
 	print("Commands:\n")
-	print("  build <file|directory>   Compile a Maxon program to an executable\n")
+	print("  build <file|directory>        Compile a Maxon program to an executable\n")
+	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
 	print("\n")
 	print("Options:\n")
-	print("  -o, --output=<path>      Output executable path (default: derived from input)\n")
+	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
 enum MaxonCommand
 	build
+	verifyWarmRebuild
 	unknown
 end 'MaxonCommand'
 
@@ -90,7 +130,9 @@ type MaxonArgs
 			let arg = try args.get(i) otherwise break
 			if arg == "build" 'buildCmd'
 				command = MaxonCommand.build
-			end 'buildCmd' else if arg == "-o" 'dashOutput'
+			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
+				command = MaxonCommand.verifyWarmRebuild
+			end 'verifyCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
 				outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'

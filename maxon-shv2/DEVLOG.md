@@ -179,7 +179,18 @@ The design each milestone establishes is documented in
   is worth more than the allocations. All M1 gates re-verified (exit 42, **byte-
   identical** 28-byte `.text`, sha `5d9944a7…`; E3001; E3002). shv2's own `.text`
   686,888 → 675,517 (−11,371).
-- [ ] **M2** variables · [ ] **M3** arithmetic
+- [x] **M2** variables — `let`/`var` + variable references (parse-time `Scope`
+  value-binding: `declareValueBinding`/`lookupValue`, name→`ValueId`; a ref
+  resolves to the initializer's SSA id, so `let x = 42; return x` lowers
+  *identically* to `return 42` — no IR op for let/var/refs) + binary `+`
+  (`MaxonOp.binOp`/`MaxonBinOp{add}` → `StdOp.binOp`/`StdBinOpcode{add}` appended
+  at the END of the arith band → x64 `mov`+`add` via the shared `encodeRmRegDirect`
+  primitive). `let x: int` rejected with **E2010** (positioned `file:line:col`).
+  **Warm-rebuild gate joins the battery**: `maxon-shv2 verify-warm-rebuild <file>`
+  asserts determinism (two fresh-`Project` cold compiles → byte-identical
+  `CodeResult`) + incrementality (re-`queryAllModule` on unchanged input →
+  content-hash cache hit). Spec `specs-shv2/variables.md` (test 4, top-level
+  string + `if` + `==`, deferred to M10/M4/M3). · [ ] **M3** arithmetic
 - [ ] **M4** control flow · [ ] **M5** functions (fan-out)
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
 - [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays

@@ -54,6 +54,15 @@ export type VarInfo
 	export var varType as MaxonType
 	export var mutable as bool
 	export var slot as VarSlot
+	// The SSA ValueId this binding aliases, for M2's value-substitution model: a
+	// `let`/`var x = <expr>` binds `x` directly to the ValueId its initializer
+	// produced, so a reference to `x` resolves to that value at parse time and no
+	// `x` op ever enters the IR (`let x = 42; return x` lowers identically to
+	// `return 42`). Meaningful ONLY for value bindings — exactly like `fieldOffset`
+	// for self-fields and `payloadFieldIndex` for payload bindings, it is 0 (unused)
+	// for the slot-backed binding shapes. When mutation + `mem2reg` land, the slot
+	// model (above) supersedes this direct substitution.
+	export var boundValue as ValueId
 	// Ownership lattice kind for this binding — the M1 ownership scaffold's
 	// per-binding attribute (see OwnershipKind in MaxonDialect.maxon). ALWAYS
 	// `trivial` at M1 (all bindings are scalars); the Own tier (M6) sets it to
@@ -76,16 +85,24 @@ export type VarInfo
 	export var payloadCaseName as String
 
 	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
 	end 'create'
 
 	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: slot, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
+		return Self{name: name, varType: varType, mutable: true, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
 	end 'createPayloadBinding'
+
+	// Construct a value binding for M2's substitution model: `name` aliases the SSA
+	// value `boundValue`. No stack slot is materialized (SSA substitution needs
+	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
+	// constructors above stay the home of the future mutable/mem2reg model.
+	export static function createValueBinding(name String, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
+	end 'createValueBinding'
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (String, VarInfo)

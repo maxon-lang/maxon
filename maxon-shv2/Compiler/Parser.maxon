@@ -36,6 +36,10 @@ export union ParseError implements Error
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	integerOverflow(line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
+	// A reference to a name with no binding in scope. Distinct from
+	// `unexpectedToken` (a syntactic mismatch): this is a name-resolution failure,
+	// which the parser can detect because `Scope` is threaded through it.
+	undefinedVariable(name String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 export type Parser
@@ -189,15 +193,41 @@ export type Parser
 		end 'stmts'
 	end 'parseStatements'
 
-	// One statement. M1 has only `return`.
+	// One statement. M2 has `return` and `let`/`var` bindings.
 	function parseStatement(block IrBlock) throws ParseError
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(block)
-		end 'ret' else 'unsupported'
+		end 'ret' else if self.at(TokenKind.let) 'letDecl'
+			try self.parseBinding(block, mutable: false)
+		end 'letDecl' else if self.at(TokenKind.var) 'varDecl'
+			try self.parseBinding(block, mutable: true)
+		end 'varDecl' else 'unsupported'
 			let tok = self.current()
-			throw ParseError.unsupported("{tok.kind.rawValue} statement (M1 parses only `return`)", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
 		end 'unsupported'
 	end 'parseStatement'
+
+	// Parse a `let`/`var` binding: `let <name> = <expr>`. M2 rejects a type
+	// annotation — a `:` after the name makes the `=` consume fail with E2010
+	// (`Expected '=' but got ':'`), which IS the `variables.md` type-annotation
+	// contract, so no explicit `:` check is needed. The initializer's SSA value is
+	// bound to the name in the scope, so a later reference resolves straight to it
+	// (no slot, no load/store — see Scope.declareValueBinding). `mutable`
+	// distinguishes `var` from `let`; M2 has no reassignment, so it only records
+	// intent (the assignment statement — and the mutability enforcement it needs —
+	// arrives at a later milestone). `var` therefore binds exactly like `let` here.
+	function parseBinding(block IrBlock, mutable bool) throws ParseError
+		if mutable 'isVar'
+			try self.consume(TokenKind.var)
+		end 'isVar' else 'isLet'
+			try self.consume(TokenKind.let)
+		end 'isLet'
+
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.equals)
+		let value = try self.parseExpression(block)
+		self.scope.declareValueBinding(nameTok.value, varType: MaxonType.integer, mutable: mutable, value: value)
+	end 'parseBinding'
 
 	// `return [<expr>]`. Sets the block's terminator directly. A bare `return`
 	// emits the distinct `retVoid` variant rather than a `ret` carrying some
@@ -212,20 +242,52 @@ export type Parser
 		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
-	// Expression entry. M1 has no operators, so an expression is just a primary.
-	// Grows into a Pratt precedence climber at M3.
+	// Expression entry. M2 handles a LEFT-ASSOCIATIVE binary `+` over primaries:
+	// parse a primary, then while the next token is `+`, consume it, parse the next
+	// primary, and fold the two into a `binOp`. This is deliberately the minimal
+	// shape; M3 REPLACES it with a full Pratt precedence climber (the other
+	// operators, comparison, unary), for which this left-fold is the base case.
 	function parseExpression(block IrBlock) returns ValueId throws ParseError
-		return try self.parsePrimary(block)
+		var left = try self.parsePrimary(block)
+
+		while self.at(TokenKind.plus) 'plus'
+			let opTok = try self.consume(TokenKind.plus)
+			let right = try self.parsePrimary(block)
+			left = self.emitBinOp(block, lhs: left, rhs: right, op: MaxonBinOp.add, opTok: opTok)
+		end 'plus'
+
+		return left
 	end 'parseExpression'
 
-	// A primary expression. M1: an integer literal only.
+	// Append a `binOp` op combining two SSA values; return the ValueId it defines.
+	// The source range anchors on the operator token (the conventional binop anchor).
+	function emitBinOp(block IrBlock, lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId
+		let result = allocValueId(self.valueIds)
+		self.artifact.emitOp(block, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitBinOp'
+
+	// A primary expression. M2: an integer literal or a variable reference.
 	function parsePrimary(block IrBlock) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.parseIntLiteral(block)
 		end 'intLit'
+
+		if self.at(TokenKind.identifier) 'varRef'
+			return try self.parseVariableReference()
+		end 'varRef'
+
 		let tok = self.current()
 		throw ParseError.unexpectedToken("an expression", got: tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parsePrimary'
+
+	// Resolve a variable reference to the SSA value its binding aliases — M2's
+	// value-substitution model emits NO load op; the reference simply IS the bound
+	// value. An unbound name is a positioned parse error (undefinedVariable).
+	function parseVariableReference() returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.identifier)
+		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(tok.value, line: tok.line, column: tok.column)
+	end 'parseVariableReference'
 
 	// Parse an integer literal token, converting its text to a value via
 	// NumberParsing.parseInt (re-raising overflow as a positioned ParseError),

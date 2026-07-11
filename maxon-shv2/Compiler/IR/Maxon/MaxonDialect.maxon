@@ -170,6 +170,16 @@ export type MaxonOpMeta
 	export let category as OpCategory
 end 'MaxonOpMeta'
 
+// The binary operators the Maxon tier represents. M2 lands `add` (the `+`
+// operator) only. M3 GROWS this with the rest of the arithmetic/comparison/
+// logical set when the Pratt precedence climber replaces M2's `+`-only
+// expression parser — at which point a comparison op splits out (it feeds a
+// branch and needs different Std metadata), exactly as `StdBinOpcode`/`cmp` split
+// at the Std tier.
+export enum MaxonBinOp
+	add
+end 'MaxonBinOp'
+
 // Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a
 // pass that treats a whole category uniformly covers it with ONE `match` range arm
 // (`firstOwn to lastOwn then …`) instead of one arm per variant.
@@ -198,4 +208,9 @@ export union MaxonOp
 	// passed an empty `ByteArray` here, which only ever "worked" because the
 	// void-`main` case is rejected by E3002 before lowering ever runs.)
 	retVoid = MaxonOpMeta{category: OpCategory.plain}
+	// Binary operation over two already-materialized SSA values:
+	// `result = lhs <op> rhs`. M2 emits this only for `+` (MaxonBinOp.add). It
+	// stands alone (matched by variant), so category `plain` — appended at the END
+	// of the plain band, honoring the band-append invariant above.
+	binOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'

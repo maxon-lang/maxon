@@ -128,6 +128,17 @@ export enum OpRole
 	param
 end 'OpRole'
 
+// The Std-tier binary-operation opcodes carried by `StdOp.binOp`. A family that
+// shares one operand shape (two value operands, one result) stays a single
+// `binOp` variant with this opcode field — see the StdOp header's "flat does NOT
+// mean one variant per opcode" rule. M2 lands `add` only; M3 GROWS this with the
+// rest of the non-trapping ALU ops (`sub`/`mul`/…) and splits `cmp` out as its
+// OWN variant, because a compare sets `isCmp` (different metadata the per-variant
+// backing cannot reach through an opcode field).
+export enum StdBinOpcode
+	add
+end 'StdBinOpcode'
+
 // Per-variant static metadata backing for StdOp (read via `op.rawValue`). Carries
 // what passes need to classify an op WITHOUT matching on it: the category (see
 // above), the structural role, the two inliner axes, and the scheduling facts the
@@ -200,6 +211,12 @@ export union StdOp
 	// mov-immediate vs an XMM load — replacing v1's `constI64`/`constF64` opcode
 	// pair, which could not express i32/u8/f32 without new opcodes.
 	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// Binary op `resultId = lhs <opcode> rhs` over two virtual registers. M2 only
+	// ever carries `add`, which is `isPure` (integer add never traps — unlike the
+	// `div` that M3 will declare `isPure: false`) and `clobbersFlags: true` (x64
+	// `add` writes EFLAGS). Appended at the END of the arith band, honoring the
+	// band-append invariant; `cmp` splits out as its own variant at M3.
+	binOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// --- band: call ---
 	// Return terminator. `retValId` names the value moved into the return register.
 	ret(retValId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}

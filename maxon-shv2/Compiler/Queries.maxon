@@ -126,6 +126,26 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	return merged
 end 'queryAllModule'
 
+// Re-run the per-file queries (tokens, then parse) for every source file. The M2
+// warm-rebuild gate uses this to PROVE the per-file memos survived a whole-program
+// rebuild: after `queryAllModule` has populated them on a cold pass, a subsequent
+// `queryAllModule` is a whole-program HIT that returns early and never revisits the
+// per-file caches — so to observe those caches are still hot, the gate re-queries
+// them directly. Each re-query must land as a cache HIT (content-hash re-validated,
+// not recomputed), moving `tokenHits`/`parseHits` up while their MISS counts hold.
+//
+// `queryTokens`/`queryParseOps` stay file-private; this is the one exported entry
+// the gate needs. Called at top level the active-query stack is empty, so the
+// `recordDependency` calls inside these queries are no-ops — no spurious edges.
+export function probeRebuildCacheHits(project Project) throws CompileError
+	for path in project.db.sourcePaths 'each'
+		// Both queries must run: a queryParseOps HIT returns before it would reach
+		// queryTokens, so querying tokens separately is what moves `tokenHits`.
+		_ = try queryTokens(project, path: path)
+		_ = try queryParseOps(project, path: path)
+	end 'each'
+end 'probeRebuildCacheHits'
+
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
 // queryAllModule miss re-derives them cleanly rather than compounding a prior
 // run's commits.
@@ -152,13 +172,18 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 	end 'kind'
 end 'reportLexerError'
 
-// Map a ParseError to a project diagnostic. As with lexer errors, M1 uses one
-// generic parser code; specific codes grow per spec.
+// Map a ParseError to a project diagnostic. The unexpected-token case is the
+// spec-gated E2010 (`parserExpectedToken`) — its exact `Expected '<x>' but got
+// '<y>'` text + positioned prefix is compared byte-for-byte by `variables.md`'s
+// type-annotation-rejection tests. The remaining arms have no spec-gated text
+// yet, so they report under the generic parser code and split off as specs need
+// them (mirrors reportLexerError).
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
-		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Expected {expected}, found {got}", line: line, column: column, filePath: path)
+		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected '{expected}' but got '{got}'", line: line, column: column, filePath: path)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Integer literal out of range", line: line, column: column, filePath: path)
-		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported at M1: {feature}", line: line, column: column, filePath: path)
+		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

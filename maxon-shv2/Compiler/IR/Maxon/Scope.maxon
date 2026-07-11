@@ -163,11 +163,41 @@ export type Scope
 		end 'ownedBinding'
 	end 'recordInCurrentFrame'
 
+	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
+	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
+	// is allocated — value bindings need no stack storage (contrast the slot-based
+	// `declare*` paths that back the future mutable/mem2reg model). Funnels through
+	// `recordInCurrentFrame` so the ownership scaffold stays wired (inert at M2 —
+	// every binding is trivial). The self-field-shadow guard the slot path carries
+	// is unnecessary here: M2 has no instance methods, so no self-field alias can
+	// exist to shadow — that guard joins this path when methods land.
+	export function declareValueBinding(name String, varType MaxonType, mutable bool, value ValueId)
+		let info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(info)
+	end 'declareValueBinding'
+
+	// Resolve a value binding to the SSA value it aliases. Throws
+	// `ScopeLookupError.notFound` for an unbound name; the parser turns that into a
+	// positioned diagnostic (an undefined identifier in an expression).
+	export function lookupValue(name String) returns ValueId throws ScopeLookupError
+		let info = try self.lookupInfoOrThrow(name)
+		return info.boundValue
+	end 'lookupValue'
+
 	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
 	export function lookup(name String) returns VarSlot throws ScopeLookupError
-		let info = try vars.get(name) otherwise throw ScopeLookupError.notFound(name)
+		let info = try self.lookupInfoOrThrow(name)
 		return info.slot
 	end 'lookup'
+
+	// The throwing VarInfo fetch shared by `lookup`/`lookupValue`: an unbound name
+	// is a name-resolution failure (ScopeLookupError.notFound) the parser turns into
+	// a positioned diagnostic. `getInfo`/`isSelfField` deliberately keep their own
+	// fetch — they recover differently (panic / false), not by throwing this arm.
+	function lookupInfoOrThrow(name String) returns VarInfo throws ScopeLookupError
+		return try vars.get(name) otherwise throw ScopeLookupError.notFound(name)
+	end 'lookupInfoOrThrow'
 
 	// Get the VarInfo for a variable, or panic if not found.
 	export function getInfo(name String) returns VarInfo

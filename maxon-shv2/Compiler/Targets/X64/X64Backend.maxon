@@ -45,6 +45,7 @@ let ModRmRipRelCall = 0x15
 // --- Opcodes ---
 let OpcodeRet = 0xC3
 let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
+let OpcodeAddRmReg = 0x01  // add r/m, r  (reg field = source), same shape as mov
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
@@ -111,16 +112,17 @@ end 'emitModRmExt'
 // Per-op encoders
 // ==========================================================================
 
-// mov dest, src (register-to-register). `wide` = 64-bit (REX.W) vs 32-bit
-// (`mov dest32, src32`, which zero-extends into the full register). Opcode 0x89
-// is `mov r/m, r`, so the reg field is the SOURCE and the r/m field the DEST.
-// Shared by the 64-bit R8 return move, register-allocation copies, and the 32-bit
-// `mov ecx, r8d` ABI bridge.
-function encodeMovRegReg(code ByteArray, dest X64Register, src X64Register, wide bool)
+// Register-direct (mod=11) `opcode r/m, r` — the reg field is the SOURCE, the r/m
+// field the DEST — which is the shared byte shape of the reg-to-reg `mov` (0x89)
+// and `add` (0x01). `wide` selects REX.W (64-bit operand size) vs 32-bit (which
+// zero-extends into the full register). Callers pass the opcode so the single
+// primitive serves the 64-bit R8 return move, register-allocation copies, the
+// 32-bit `mov ecx, r8d` ABI bridge, and the 64-bit `add result, rhs`.
+function encodeRmRegDirect(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, wide bool)
 	emitRex(code, wide: wide, regField: src, rmField: dest)
-	code.push(OpcodeMovRmReg)
+	code.push(opcode)
 	emitModRmRegReg(code, regField: src, rmField: dest)
-end 'encodeMovRegReg'
+end 'encodeRmRegDirect'
 
 // mov reg32, imm32 (B8+rd id). Writing a 32-bit register zero-extends to 64 bits,
 // so this is the compact form for any value that fits u32 (e.g. the literal 42).
@@ -210,8 +212,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		ret then code.push(OpcodeRet)
 		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolvePhysical(dest), value: value)
 		movRegImm32(dest, value) then encodeMovRegImm32(code, dest: resolvePhysical(dest), value: value)
-		movRegReg(destReg, srcReg) then encodeMovRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
-		movReg32Reg32(destReg, srcReg) then encodeMovRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
+		movRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
+		movReg32Reg32(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
+		addRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	end 'emit'

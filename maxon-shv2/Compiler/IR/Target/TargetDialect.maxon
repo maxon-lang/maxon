@@ -101,6 +101,13 @@ export union TargetOp
 	// `mrt_start` (`mov ecx, r8d`) that hands main's R8 return value to
 	// ExitProcess's ECX argument slot.
 	movReg32Reg32(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// 64-bit register-to-register add (`add dest, src`, i.e. `dest = dest + src`).
+	// x64 ADD is two-operand, so StdToX64Conversion lowers `resultId = lhs + rhs`
+	// to `mov result, lhs` + this `add result, rhs`. `setsFlags` because ADD writes
+	// EFLAGS. Placed with the other reg-operand ops (before the call band) so the
+	// register allocator colors its operands rather than treating it as a
+	// passthrough call op — see RegisterAllocator.colorOp.
+	addRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	// Direct near call to a named function (`call rel32`). The concat step
 	// resolves `targetName` to the callee's `.text` placement as a rel32
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier

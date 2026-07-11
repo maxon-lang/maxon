@@ -14,14 +14,17 @@
 // land (v1 has hundreds).
 //
 // `noMainFunction` / `mainWrongReturnType` are the two `basics.md` semantic
-// codes with exact spec-gated text. `lexerError` / `parserError` are generic
-// placeholders the query layer reports front-end failures under — the M1 specs
-// never trigger them (every authored program lexes and parses cleanly), so they
-// carry no spec-gated text yet and split into specific codes when a spec needs
-// a particular front-end diagnostic.
+// codes with exact spec-gated text. `parserExpectedToken` (E2010) is the
+// positioned "Expected X but got Y" parse diagnostic that `variables.md`'s
+// type-annotation-rejection tests gate on. `lexerError` / `parserError` are
+// generic placeholders the query layer reports the remaining front-end failures
+// under — the authored specs never trigger them (every other authored program
+// lexes and parses cleanly), so they carry no spec-gated text yet and split into
+// specific codes when a spec needs a particular front-end diagnostic.
 export enum ErrorCode
 	noMainFunction = "E3001"
 	mainWrongReturnType = "E3002"
+	parserExpectedToken = "E2010"
 	lexerError = "E1001"
 	parserError = "E3010"
 end 'ErrorCode'
@@ -43,11 +46,19 @@ export type Diagnostic
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
 	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
-	// string. Position is intentionally NOT included for M1's whole-program
-	// semantic errors; positioned diagnostics (lexer/parser) grow a
-	// `<file>:<line>:<col>` prefix when their specs need it.
+	// string.
+	//
+	// A POSITIONED diagnostic (one with a real source line — parser/lexer errors,
+	// e.g. E2010) renders a `<file>:<line>:<col>:` prefix before the message, which
+	// `variables.md`'s type-annotation tests gate on. A whole-program semantic error
+	// (E3001/E3002) carries no anchor (`line == 0`), so it renders bare, exactly as
+	// `basics.md` expects. `line == 0` is the discriminator because 1-based source
+	// lines start at 1 — line 0 is unreachable for a real span.
 	export function render() returns String
-		return "error {self.code.rawValue}: {self.message}"
+		if self.line == 0 'wholeProgram'
+			return "error {self.code.rawValue}: {self.message}"
+		end 'wholeProgram'
+		return "error {self.code.rawValue}: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}"
 	end 'render'
 end 'Diagnostic'
 

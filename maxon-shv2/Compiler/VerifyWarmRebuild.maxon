@@ -1,0 +1,241 @@
+// VerifyWarmRebuild — the M2 warm-rebuild gate. `verify-warm-rebuild <file>`
+// asserts two independent properties of the incremental query spine and prints a
+// clear PASS/FAIL per property, so the driver exits 0 iff BOTH hold. This gate
+// runs from M2 onward: incrementality and determinism are proven continuously,
+// never bolted on later.
+//
+//   1. Determinism (byte-identity): two independent COLD compiles of the same
+//      input must emit byte-identical CodeResults.
+//   2. Cache-hit (incrementality): a re-query over unchanged input must land as a
+//      cache HIT, not recompute.
+//
+// THE MUTATE-THE-MEMO TRAP (why the two checks are structured the way they are):
+// `resolveTypes` mutates the merged `MaxonModule` IN PLACE (named -> concrete),
+// and `queryAllModule` returns the SAME module object out of its memo. So one must
+// NOT run the full pipeline twice over a single shared `queryAllModule` result and
+// expect a clean second run — the second pipeline would see an already-resolved,
+// mutated module. Both checks sidestep this:
+//   - Determinism runs each compile on its OWN fresh Project/QueryDatabase, so the
+//     two runs share no module object at all.
+//   - Cache-hit calls ONLY `queryAllModule` between its two probes and never runs
+//     resolveTypes/the backend, so the memoized module is never mutated.
+
+// A byte count or byte offset within an emitted section. Wide range: emitted
+// section sizes have no fixed upper bound.
+typealias EmittedByteCount = int(0 to u64.max)
+
+// The names of the emitted byte arrays compared for byte-identity. `data` is the
+// `dataPrelude` (initial `.data` image); the rest map 1:1 to CodeResult fields.
+// Named so the comparison loop carries intent, not bare string literals.
+let SectionNameCode = "code"
+let SectionNameRdata = "rdata"
+let SectionNameSymdata = "symdata"
+let SectionNameCovdata = "covdata"
+let SectionNameData = "data"
+
+// A query moves its hit-or-miss counter by exactly one; a query that does no work
+// leaves it put. Named so the counter assertions read as intent, not magic 0/1.
+let NoCounterMove = 0 as QueryCount
+let OneQuery = 1 as QueryCount
+
+// The result of comparing one section across the two compiles: either byte-
+// identical (carrying the common byte count for the running total) or a rendered
+// mismatch detail (first differing offset, or a trailing length difference).
+union SectionComparison
+	identical(byteCount EmittedByteCount)
+	mismatch(detail String)
+end 'SectionComparison'
+
+// The determinism verdict over ALL sections: every section identical (with the
+// summed byte count) or the FIRST section that differed (with its detail).
+union DeterminismOutcome
+	allIdentical(totalBytes EmittedByteCount)
+	sectionDiffers(detail String)
+end 'DeterminismOutcome'
+
+// A named pair of emitted byte arrays — one from each independent compile —
+// compared as one unit so the sections share a single comparison loop.
+type EmittedSection
+	export let name as String
+	export let left as ByteArray
+	export let right as ByteArray
+
+	static function create(name String, left ByteArray, right ByteArray) returns EmittedSection
+		return Self{name: name, left: left, right: right}
+	end 'create'
+end 'EmittedSection'
+
+typealias EmittedSectionArray = Array with EmittedSection
+
+// Run both properties, printing a PASS/FAIL line for each and a final verdict.
+// Returns whether BOTH held (the driver maps that to the process exit code). A
+// file/IO CompileError (fileNotFound/noSourceFiles/readError) propagates to the
+// caller, which prints a specific message.
+export function verifyWarmRebuild(inputPath FilePath, target Target) returns bool throws CompileError
+	print("verify-warm-rebuild {inputPath}\n")
+
+	let determinismOk = try verifyDeterminism(inputPath, target: target)
+	let cacheOk = try verifyCacheHit(inputPath, target: target)
+
+	let bothOk = determinismOk and cacheOk
+	if bothOk 'passed'
+		print("verify-warm-rebuild: PASS (determinism + cache)\n")
+		return true
+	end 'passed'
+
+	printError("verify-warm-rebuild: FAIL\n")
+	return false
+end 'verifyWarmRebuild'
+
+// --- Property 1: determinism (byte-identity across two independent cold compiles) ---
+
+// One independent COLD compile: a fresh Project/QueryDatabase loaded from
+// `inputPath`, driven through the shared compile path to an emitted CodeResult and
+// then discarded. Determinism compares two of these; each MUST own its Project so
+// the two share no mutable module object (the mutate-the-memo trap in the header).
+function compileColdOnce(inputPath FilePath, target Target) returns CodeResult throws CompileError
+	var project = try loadProject(inputPath, target: target)
+	return try compileToCodeResult(project)
+end 'compileColdOnce'
+
+function verifyDeterminism(inputPath FilePath, target Target) returns bool throws CompileError
+	// Two INDEPENDENT cold compiles, each with its OWN Project/QueryDatabase (see the
+	// mutate-the-memo trap in this file's header). Two fresh projects share no module
+	// object, so each is a genuine cold compile and the byte comparison is meaningful.
+	let first = try compileColdOnce(inputPath, target: target)
+	let second = try compileColdOnce(inputPath, target: target)
+
+	var sections = EmittedSectionArray.create()
+	sections.push(EmittedSection.create(SectionNameCode, left: first.code, right: second.code))
+	sections.push(EmittedSection.create(SectionNameRdata, left: first.rdata, right: second.rdata))
+	sections.push(EmittedSection.create(SectionNameSymdata, left: first.symdata, right: second.symdata))
+	sections.push(EmittedSection.create(SectionNameCovdata, left: first.covDataSectionBytes, right: second.covDataSectionBytes))
+	sections.push(EmittedSection.create(SectionNameData, left: first.dataPrelude, right: second.dataPrelude))
+
+	return match compareEmittedSections(sections) 'outcome'
+		allIdentical(totalBytes) gives reportDeterminismPass(totalBytes)
+		sectionDiffers(detail) gives reportDeterminismFail(detail)
+	end 'outcome'
+end 'verifyDeterminism'
+
+function reportDeterminismPass(totalBytes EmittedByteCount) returns bool
+	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
+	return true
+end 'reportDeterminismPass'
+
+function reportDeterminismFail(detail String) returns bool
+	printError("FAIL determinism: {detail}\n")
+	return false
+end 'reportDeterminismFail'
+
+// Compare every section, summing identical bytes; stop at the FIRST section that
+// differs and report it (that is the actionable failure).
+function compareEmittedSections(sections EmittedSectionArray) returns DeterminismOutcome
+	var totalBytes = 0 as EmittedByteCount
+
+	for section in sections 'each'
+		match compareSection(section.name, left: section.left, right: section.right) 'result'
+			identical(byteCount) then totalBytes = totalBytes + byteCount
+			mismatch(detail) then return DeterminismOutcome.sectionDiffers(detail)
+		end 'result'
+	end 'each'
+
+	return DeterminismOutcome.allIdentical(totalBytes)
+end 'compareEmittedSections'
+
+// Byte-compare one section. Reports the first differing offset (with both byte
+// values), or a trailing length difference; otherwise identical with the count.
+function compareSection(name String, left ByteArray, right ByteArray) returns SectionComparison
+	let leftCount = left.count()
+	let rightCount = right.count()
+
+	var common = leftCount
+	if rightCount < common 'rightShorter'
+		common = rightCount
+	end 'rightShorter'
+
+	for i in 0 upto common 'scan'
+		let l = try left.get(i) otherwise panic("compareSection: left.get({i}) OOB (common={common})")
+		let r = try right.get(i) otherwise panic("compareSection: right.get({i}) OOB (common={common})")
+		if l != r 'diff'
+			return SectionComparison.mismatch("section '{name}' differs at byte {i}: left={l}, right={r}")
+		end 'diff'
+	end 'scan'
+
+	if leftCount != rightCount 'lengthDiff'
+		return SectionComparison.mismatch("section '{name}' length differs: {leftCount} vs {rightCount} bytes (first {common} match)")
+	end 'lengthDiff'
+
+	return SectionComparison.identical(leftCount)
+end 'compareSection'
+
+// --- Property 2: cache-hit (incrementality over unchanged input) ---
+
+function verifyCacheHit(inputPath FilePath, target Target) returns bool throws CompileError
+	// ONE Project shared across both queryAllModule calls, running ONLY the query
+	// between them (never resolveTypes/the backend) so the memoized module is never
+	// mutated (see the mutate-the-memo trap in this file's header).
+	var project = try loadProject(inputPath, target: target)
+	let fileCount = project.db.sourcePaths.count()
+
+	// Whole-program memo: the first call is a cold MISS, the second a cache HIT.
+	let amMissBefore = project.db.allModuleMisses
+	let amHitBefore = project.db.allModuleHits
+
+	_ = try queryAllModule(project)
+	let amMissAfterFirst = project.db.allModuleMisses
+	let amHitAfterFirst = project.db.allModuleHits
+
+	_ = try queryAllModule(project)
+	let amMissAfterSecond = project.db.allModuleMisses
+	let amHitAfterSecond = project.db.allModuleHits
+
+	// Per-file memos survived the whole-program rebuild. The cold pass populated the
+	// token/parse caches; the second (whole-program HIT) returned early and never
+	// revisited them. Re-query each file directly: a content-hash-valid memo lands as
+	// a HIT (no recompute), so token/parse HITS rise by fileCount while MISSES hold.
+	let tokHitBefore = project.db.tokenHits
+	let parHitBefore = project.db.parseHits
+	let tokMissBefore = project.db.tokenMisses
+	let parMissBefore = project.db.parseMisses
+
+	try probeRebuildCacheHits(project)
+	let tokHitAfter = project.db.tokenHits
+	let parHitAfter = project.db.parseHits
+	let tokMissAfter = project.db.tokenMisses
+	let parMissAfter = project.db.parseMisses
+
+	// Evaluate every assertion (each prints its own failure detail) before combining,
+	// so a broken gate reports ALL violated properties, not just the first.
+	let firstIsMiss = assertCounterMove("first queryAllModule is a miss (allModuleMisses)", before: amMissBefore, after: amMissAfterFirst, expectedDelta: OneQuery)
+	let firstNoHit = assertCounterMove("first queryAllModule records no hit (allModuleHits)", before: amHitBefore, after: amHitAfterFirst, expectedDelta: NoCounterMove)
+	let secondIsHit = assertCounterMove("second queryAllModule is a hit (allModuleHits)", before: amHitAfterFirst, after: amHitAfterSecond, expectedDelta: OneQuery)
+	let secondNoMiss = assertCounterMove("second queryAllModule records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
+	let tokensHitOnRebuild = assertCounterMove("rebuild token re-query hits (tokenHits)", before: tokHitBefore, after: tokHitAfter, expectedDelta: fileCount)
+	let parseHitOnRebuild = assertCounterMove("rebuild parse re-query hits (parseHits)", before: parHitBefore, after: parHitAfter, expectedDelta: fileCount)
+	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
+	let parseNotRecomputed = assertCounterMove("rebuild does not recompute parse (parseMisses)", before: parMissBefore, after: parMissAfter, expectedDelta: NoCounterMove)
+
+	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and parseHitOnRebuild and tokensNotRecomputed and parseNotRecomputed
+	if allOk 'passed'
+		print("PASS cache: allModule miss->hit, tokens/parse hit on rebuild (hits={tokHitAfter}/{parHitAfter}, misses={tokMissAfter}/{parMissAfter})\n")
+		return true
+	end 'passed'
+
+	printError("FAIL cache: incrementality assertion(s) failed (see above)\n")
+	return false
+end 'verifyCacheHit'
+
+// Assert a counter moved by exactly `expectedDelta`, printing the offending values
+// (before, delta, after) on failure so a violated assertion is self-describing.
+// Returns whether it held; callers combine several without short-circuiting so
+// every violation is reported.
+function assertCounterMove(label String, before QueryCount, after QueryCount, expectedDelta QueryCount) returns bool
+	let expected = before + expectedDelta
+	if after == expected 'ok'
+		return true
+	end 'ok'
+
+	printError("FAIL cache: {label}: expected {before}+{expectedDelta}={expected}, got {after}\n")
+	return false
+end 'assertCounterMove'

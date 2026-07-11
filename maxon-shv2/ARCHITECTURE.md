@@ -128,10 +128,20 @@ file's own
 `MaxonModule` fragment, its own LOCAL `TypeNameInterner`, and an ordered
 `funcReturnTypes` contribution array. So a file's parse is a pure function of
 `(tokens, filePath, namespace)` with zero shared state (M5's per-file fan-out
-needs no further parser change). Anything outside the M1 slice (params,
-non-`return` statements, operators, user types) is rejected with a positioned
-`ParseError` that `queryParseOps` turns into a project diagnostic — the parser
-itself never touches `Project` or `project.diagnostics`.
+needs no further parser change). Anything outside the current slice is rejected
+with a positioned `ParseError` that `queryParseOps` turns into a project diagnostic
+(rendered `error E<code>: <file>:<line>:<col>: <msg>` when the span is real, or
+prefix-free for whole-program checks whose line is 0) — the parser itself never
+touches `Project` or `project.diagnostics`.
+
+**M2 grew the slice** to `let`/`var` statements, variable references, and a
+left-associative binary `+`. `let`/`var` bind a name to the initializer's SSA
+`ValueId` in `Scope` (`declareValueBinding`); a reference is a `Scope.lookupValue`
+resolved AT PARSE TIME — so `let x = 42; return x` mints no `x` op at all and lowers
+identically to `return 42`. (`var` parses like `let`; mutability + reassignment
+arrive with the mem2reg/slot model when a spec needs them.) `+` emits the one new op
+(`MaxonOp.binOp`). `parseExpression` is a minimal left-fold, deliberately shaped so
+M3 replaces it with a Pratt precedence climber.
 
 **`Compiler/ParseStaging.maxon`** owns `FileParseArtifact` + `mergeArtifact(project,
 target, artifact)`, the **single writer** of the shared `Project` derived
@@ -304,14 +314,17 @@ too).
 Flat does **not** mean one variant per opcode: a family sharing an operand shape
 (`add`/`sub`/`mul`) stays one variant with an opcode field, but a member needing
 *different metadata* (a compare sets `isCmp`) splits out, because the `StdOpMeta`
-backing attaches per variant and cannot reach an opcode buried in a field. M3 lands
-`binOp(… opcode StdBinOpcode)` + a separate `cmp(…)` for exactly that reason.
+backing attaches per variant and cannot reach an opcode buried in a field. M2
+landed `binOp(… opcode StdBinOpcode)` with the `add` opcode; M3 extends the opcode
+set and splits out a separate `cmp(…)` for exactly that reason.
 
-Today the union holds `const(resultId, value, valueType)` and `ret(retValId)`.
-`const` carries a `StdType` rather than v1's `constI64`/`constF64` opcode pair — it
-subsumes MIR's `isFloat` bool and makes i32/u8/f32 representable without new
-opcodes. `StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged from
-Chunk A.
+The union holds `const(resultId, value, valueType)`, `ret(retValId)`, and — since
+M2 — `binOp(resultId, lhs, rhs, opcode StdBinOpcode)` (currently `StdBinOpcode{add}`)
+appended at the END of the arith band, `StdOpMeta` `isPure: true` (integer add does
+not trap) / `clobbersFlags: true`. `const` carries a `StdType` rather than v1's
+`constI64`/`constF64` opcode pair — it subsumes MIR's `isFloat` bool and makes
+i32/u8/f32 representable without new opcodes.
+`StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged from Chunk A.
 
 ### Own tier (ownership infer / check / escape / drops)
 _Passes are a stub — filled in at M6. But one structural decision is PINNED now,
@@ -392,8 +405,23 @@ every file's hash in source-path order. `queryParseOps` produces a
 `queryAllModule` on a miss `resetMergeTargets` + re-folds artifacts via
 `mergeArtifact`, so there is no rollback. The dependency graph
 (`recordDependency`/`clearDepsFor`/`activeQueryStack`) is recorded from day one —
-M1's single file never drives an invalidation, but recording it now is what lets
-the **M2 warm-rebuild byte-identity assertion** join without retrofitting.
+M1's single file never drives an invalidation, but recording it now is what let
+the **M2 warm-rebuild byte-identity gate** join without retrofitting.
+
+**Warm-rebuild gate landed (M2).** `maxon-shv2 verify-warm-rebuild <file>`
+(`Compiler/VerifyWarmRebuild.maxon`) is the standing gate that asserts two
+properties of the spine and exits 0 iff both hold: (1) **determinism** — compile
+the file to a `CodeResult` twice, each with its OWN fresh `Project`/`QueryDatabase`
+(two independent cold compiles share no module object), byte-compare all emitted
+sections; (2) **incrementality** — in one `Project`, `queryAllModule` twice
+(cold-miss then hit) plus a `probeRebuildCacheHits` that re-queries each file's
+tokens/parse, asserting via the DB hit/miss counters that the rebuild is a
+content-hash cache HIT. It sidesteps a real trap: `resolveTypes` mutates the merged
+module in place and `queryAllModule` hands back that same memoized object, so the
+determinism check must use independent projects and the cache check must run only
+`queryAllModule` (never the mutating pipeline) between its probes. `build` and the
+gate share one `compileToCodeResult(project)` — a determinism gate over a divergent
+path would prove nothing.
 
 ### Parallel driver
 

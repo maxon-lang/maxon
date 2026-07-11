@@ -105,6 +105,7 @@ type StdToX64Lowering
 	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
+			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 		end 'lower'
 	end 'lowerBodyOp'
@@ -115,6 +116,7 @@ type StdToX64Lowering
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
+			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -127,6 +129,21 @@ type StdToX64Lowering
 		end 'float'
 		appendIntImmToReg(self.targetModule, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
 	end 'lowerConst'
+
+	// Lower a Std binary op to x64. x64 ALU ops are two-operand (`dst = dst <op>
+	// src`), so `result = lhs <op> rhs` lowers to a copy of `lhs` into `result`
+	// followed by the in-place op against `rhs`. The M1 minimal colorer gives
+	// `result`, `lhs`, and `rhs` three DISTINCT registers, so the copy into
+	// `result` cannot clobber `rhs` before the op reads it. The shared `mov` is
+	// emitted once; the opcode selects the ALU instruction, so M3's `sub`/`mul`
+	// slot straight in as new `match` arms (each its own TargetOp).
+	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, dstBlock IrBlock)
+		let dest = X64VReg.virtual(resultId)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(dest, srcReg: X64VReg.virtual(lhs)))
+		match opcode 'op'
+			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addRegReg(dest, srcReg: X64VReg.virtual(rhs)))
+		end 'op'
+	end 'lowerBinOp'
 
 	// Return: move the value into the primary-return register (R8) then emit `ret`.
 	// Void returns skip the move (callers never read the register). Frame teardown
