@@ -27,7 +27,7 @@ Unary `+` (identity) is not yet parsed — no test needs it.
 The M3 slice of `specs/unary-operators.md`: prefix `-` on a literal and on a
 variable, plus the double-negation parse error. `negate-int` (needs `if` + `==`,
 M4) and `negate-float` (needs floats + `trunc`, later) are DEFERRED and recorded
-(commented out) at the end of this section.
+under `## Deferred` below.
 
 <!-- test: unary-minus -->
 ```maxon
@@ -52,17 +52,21 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/unary-operators/double-negation.test:4:12: Expected expression but got '-'
+error E2004: <fragment>:3:12: Expected expression but got '-'
 ```
 
-<!--
-DEFERRED — from `specs/unary-operators.md`. Re-enable once their prerequisites
-land:
+## Deferred
 
-  - negate-int — needs `if` (M4) and `==` (M4, comparison feeds a branch).
-  - negate-float — needs float literals + float negation (XMM) + `trunc`, later.
+Tests recorded for re-enablement at the milestone that unblocks them. They live
+in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
+scans only `## Tests`, up to the next `## ` heading) never extracts them, and
+they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
+`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
 
-<!-- test: negate-int -->
+### negate-int
+
+Needs `if` (M4) and `==` (M4, comparison feeds a branch).
+
 ```maxon
 function main() returns ExitCode
 	let x = -42
@@ -77,7 +81,10 @@ end 'main'
 0
 ```
 
-<!-- test: negate-float -->
+### negate-float
+
+Needs float literals + float negation (XMM) + `trunc`, later.
+
 ```maxon
 function main() returns ExitCode
 	let x = -3.5
@@ -89,4 +96,3 @@ end 'main'
 ```exitcode
 3
 ```
--->

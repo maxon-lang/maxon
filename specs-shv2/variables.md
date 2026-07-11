@@ -27,8 +27,8 @@ arrive at M3.)
 These are the M2 slice of `specs/variables.md`: `let`/`var` bindings, variable
 references, and `+`. The `top-level-string-constant` case from
 `specs/variables.md` is DEFERRED — it needs string literals (M10), `if` (M4),
-and `==` (M3) — and is recorded (commented out) at the end of this section so it
-is re-enabled at those milestones rather than forgotten.
+and `==` (M3) — and is recorded under `## Deferred` below so it is re-enabled at
+those milestones rather than forgotten.
 
 <!-- test: let-declaration -->
 ```maxon
@@ -73,7 +73,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/var-explicit-type-error.test:3:7: Expected '=' but got ':'
+error E2010: <fragment>:2:7: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
@@ -85,14 +85,22 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/let-explicit-type-error.test:3:7: Expected '=' but got ':'
+error E2010: <fragment>:2:7: Expected '=' but got ':'
 ```
 
-<!--
-DEFERRED — top-level-string-constant (from specs/variables.md). Re-enable once
-its prerequisites land: string literals (M10), `if` (M4), and `==` (M3).
+## Deferred
 
-<!-- test: top-level-string-constant -->
+Tests recorded for re-enablement at the milestone that unblocks them. They live
+in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
+scans only `## Tests`, up to the next `## ` heading) never extracts them, and
+they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
+`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+
+### top-level-string-constant
+
+Re-enable once its prerequisites land: string literals (M10), `if` (M4), and
+`==` (M3).
+
 ```maxon
 let GREETING = "hello"
 
@@ -106,4 +114,3 @@ end 'main'
 ```exitcode
 1
 ```
--->

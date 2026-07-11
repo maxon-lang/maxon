@@ -29,9 +29,9 @@ every value a fresh pool register and cannot honor fixed-register constraints).
 
 These are the M3 slice of `specs/arithmetic.md`: `+` (from M2), `-`, `*`, and the
 precedence proof. The division/modulo tests — and every test that also needs
-`trunc`, function parameters, or `while` — are DEFERRED and recorded (commented
-out) at the end of this section so they are re-enabled at their milestones rather
-than forgotten.
+`trunc`, function parameters, or `while` — are DEFERRED and recorded under
+`## Deferred` below so they are re-enabled at their milestones rather than
+forgotten.
 
 <!-- test: addition -->
 ```maxon
@@ -75,9 +75,15 @@ end 'main'
 20
 ```
 
-<!--
-DEFERRED — the division/modulo tests from `specs/arithmetic.md`. Re-enable once
-their prerequisites land:
+## Deferred
+
+Tests recorded for re-enablement at the milestone that unblocks them. They live
+in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
+scans only `## Tests`, up to the next `## ` heading) never extracts them, and
+they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
+`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+
+Prerequisites:
 
   - division, modulo — need x64 `idiv`'s fixed RAX/RDX pair, hence the real
     register allocator (M5). `division` also needs `trunc` (float→int, later).
@@ -89,7 +95,7 @@ their prerequisites land:
     6-register no-liveness placeholder allocator; re-enable at M5 with the real
     liveness-based allocator (spilling).
 
-<!-- test: division -->
+### division
 ```maxon
 function main() returns ExitCode
 	return trunc(100 / 4)
@@ -99,7 +105,7 @@ end 'main'
 25
 ```
 
-<!-- test: modulo -->
+### modulo
 ```maxon
 function main() returns ExitCode
 	return 17 mod 5
@@ -109,7 +115,7 @@ end 'main'
 2
 ```
 
-<!-- test: div-live-values -->
+### div-live-values
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -128,7 +134,7 @@ end 'main'
 11
 ```
 
-<!-- test: mod-live-values -->
+### mod-live-values
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -147,7 +153,7 @@ end 'main'
 7
 ```
 
-<!-- test: div-loop -->
+### div-loop
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -170,7 +176,7 @@ end 'main'
 113
 ```
 
-<!-- test: div-with-call -->
+### div-with-call
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -193,7 +199,7 @@ end 'main'
 15
 ```
 
-<!-- test: multi-div -->
+### multi-div
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -212,7 +218,7 @@ end 'main'
 10
 ```
 
-<!-- test: register-pressure -->
+### register-pressure
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -240,4 +246,3 @@ end 'main'
 ```exitcode
 84
 ```
--->

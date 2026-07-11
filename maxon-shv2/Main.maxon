@@ -12,12 +12,18 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory> [-o <output>]
 //   maxon-shv2 verify-warm-rebuild <file>
+//   maxon-shv2 spec-test [dir]
+
+// The default spec directory `spec-test` scans when no directory is given
+// (resolved against the process cwd — the runner is invoked from the repo root).
+let DefaultSpecDir = "specs-shv2"
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
 	return match args.command 'cmd'
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
+		specTest gives runSpecTest(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -71,6 +77,75 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	return 1
 end 'runVerifyWarmRebuild'
 
+// The `spec-test [dir]` command: resolve the running compiler's own path, run
+// every active test in `dir` (default `specs-shv2`) through it, print per-test
+// PASS/FAIL + an `N passed, M failed` summary, and exit non-zero iff any test
+// failed. The compiler under test is the RUNNING executable (`Process.
+// executablePath`), so a freshly built `maxon-shv2.exe` tests itself.
+function runSpecTest(args MaxonArgs) returns ExitCode
+	let specDir = try resolveSpecDir(args) otherwise 'badSpecDir'
+		printError("error: invalid spec directory: {args.path}\n")
+		return 1
+	end 'badSpecDir'
+
+	let compilerExe = try Process.executablePath() otherwise 'noExe'
+		printError("error: could not determine the running compiler's path\n")
+		return 1
+	end 'noExe'
+
+	let results = try runSpecDir(compilerExe, specDir: specDir) otherwise (e) 'runErr'
+		reportCompileError(e)
+		return 1
+	end 'runErr'
+
+	return reportResults(results)
+end 'runSpecTest'
+
+// Resolve the spec directory: an explicit positional argument wins; otherwise
+// the default `specs-shv2`, anchored at the current working directory so the
+// runner works from the repo root regardless of the absolute cwd.
+function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
+	if args.path.isEmpty() 'useDefault'
+		// Join a FilePath component (not the String overload): a bare String
+		// constant is ambiguous between join's String/FilePath overloads. Bind the
+		// FilePath to a local first — an inline `try` expression in the argument
+		// position does not disambiguate.
+		let defaultDir = try FilePath.from(DefaultSpecDir)
+		return Directory.currentPath().join(defaultDir)
+	end 'useDefault'
+	return try FilePath.from(args.path)
+end 'resolveSpecDir'
+
+// Print each test's verdict and the summary, returning the process exit code (1
+// iff any test failed). The PASS/FAIL line is built via a match EXPRESSION (both
+// arms yield a real string) so the fail reason is extracted without a sentinel.
+function reportResults(results SpecTestResultArray) returns ExitCode
+	var passed = 0
+	var failed = 0
+
+	for result in results 'each'
+		let label = "{result.specName}/{result.testName}"
+		let line = match result.outcome 'verdict'
+			pass gives "PASS {label}"
+			fail(reason) gives "FAIL {label}: {reason}"
+		end 'verdict'
+		print("{line}\n")
+
+		if result.outcome.isPass() 'countPass'
+			passed = passed + 1
+		end 'countPass' else 'countFail'
+			failed = failed + 1
+		end 'countFail'
+	end 'each'
+
+	print("\n{passed} passed, {failed} failed\n")
+
+	if failed > 0 'anyFailed'
+		return 1
+	end 'anyFailed'
+	return 0
+end 'reportResults'
+
 // Print the user-facing message for a file/IO CompileError. The `compileError` arm
 // is SILENT: its diagnostics were already printed by the pipeline, so stderr stays
 // exactly those diagnostic lines (the `maxoncstderr` spec contract). Shared by
@@ -96,6 +171,7 @@ function printUsage()
 	print("Commands:\n")
 	print("  build <file|directory>        Compile a Maxon program to an executable\n")
 	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
+	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -105,6 +181,7 @@ end 'printUsage'
 enum MaxonCommand
 	build
 	verifyWarmRebuild
+	specTest
 	unknown
 end 'MaxonCommand'
 
@@ -127,12 +204,14 @@ type MaxonArgs
 		let args = CommandLine.args()
 		var i = 1
 		while i < args.count() 'each'
-			let arg = try args.get(i) otherwise break
+			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
 			if arg == "build" 'buildCmd'
 				command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
 				command = MaxonCommand.verifyWarmRebuild
-			end 'verifyCmd' else if arg == "-o" 'dashOutput'
+			end 'verifyCmd' else if arg == "spec-test" 'specTestCmd'
+				command = MaxonCommand.specTest
+			end 'specTestCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
 				outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'

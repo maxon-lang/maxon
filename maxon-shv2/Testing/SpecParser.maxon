@@ -1,0 +1,298 @@
+// Testing/SpecParser.maxon — parse a `specs-shv2/*.md` spec file into a list of
+// runnable tests. Trimmed HARD from v1's SpecParser: shv2 needs only the
+// `<!-- test: NAME -->` marker, the ```maxon source block, and one expected
+// block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
+// v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
+// RequiredRdata / RequiredLowering, per-target `Stdout:<target>`, mm-trace,
+// `Args`/`TimeoutMs` directives, multi-file markers, doc-example extraction — is
+// dropped; each returns when a spec first needs it.
+//
+// DEFERRED-SKIP CONVENTION (why a `## Deferred` section, not a comment):
+// HTML comments do NOT nest. The obvious way to shelve a test —
+// `<!-- … <!-- test: NAME --> … -->` — is a trap: the FIRST `-->` (the one on
+// the inner `<!-- test: … -->` line) closes the OUTER comment, so the inner test
+// marker + its code blocks are exposed as live markup and a naive parser
+// extracts and RUNS a deferred test. Rather than depend on comment nesting, the
+// active-test region is bounded by markdown headings: it runs from the
+// `## Tests` heading to the NEXT `## ` heading. Deferred tests live under a
+// `## Deferred` heading (as plain `### name` subsections, carrying NO
+// `<!-- test: … -->` marker), so they are both out of the scanned region AND
+// carry no marker — belt and suspenders. The specs-shv2 files were rewritten to
+// this convention in lockstep with this parser.
+
+// --- Spec-markdown grammar tokens ---
+// Named (not inline literals) because these strings are a format contract shared
+// with spec authors, and because the ORDER two of them are matched in is
+// load-bearing: "```maxoncstderr" startsWith "```maxon", so the compiler-error
+// fence MUST be tested before the source fence or the source check swallows it.
+let FrontmatterFence = "---"
+let StatusKey = "status:"
+let DraftStatus = "draft"
+let TestsHeading = "## Tests"
+let SectionHeadingPrefix = "## "
+let TestMarker = "<!-- test:"
+let TestMarkerNameSep = ": "
+let TestMarkerEnd = " -->"
+let SourceFence = "```maxon"
+let ExitCodeFence = "```exitcode"
+let CompilerErrorFence = "```maxoncstderr"
+let FenceClose = "```"
+
+typealias LineIndex = int(0 to u64.max)
+
+// A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
+// value the runner reads back, so they compare without a cast. Exported so the
+// runner names the `SpecExpectation.exitCode` payload in its own signatures.
+export typealias ExitCodeValue = int(i64.min to i64.max)
+
+// The expected outcome of one test. A UNION (not a struct with presence flags)
+// so a test asserts EXACTLY one of two mutually exclusive things — the compiled
+// program exits with `value`, OR the compiler rejects the source with `text` (a
+// ```maxoncstderr block) — with no sentinel "unset" state.
+export union SpecExpectation
+	exitCode(value ExitCodeValue)
+	compilerError(text String)
+end 'SpecExpectation'
+
+// One active test: its name, its ```maxon source VERBATIM, and its expectation.
+export type SpecTest
+	export let name as String
+	export let source as String
+	export let expectation as SpecExpectation
+
+	export static function create(name String, source String, expectation SpecExpectation) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation}
+	end 'create'
+end 'SpecTest'
+
+export typealias SpecTestArray = Array with SpecTest
+
+// A parsed spec file: its frontmatter `status` (the runner skips `draft`) and
+// every active test. (The path is deliberately NOT stored — the caller already
+// holds the FilePath it passed to `parseSpecFile`, so a copy here would be dead.)
+export type SpecFile
+	export let status as String
+	export let tests as SpecTestArray
+
+	export static function create(status String, tests SpecTestArray) returns SpecFile
+		return Self{status: status, tests: tests}
+	end 'create'
+end 'SpecFile'
+
+// One fenced code block: its content (fence lines excluded), and the line index
+// immediately AFTER its closing ``` — the single unit the block reader returns
+// so every block type (source / exitcode / maxoncstderr) shares one routine
+// instead of copy-pasted fence walking.
+type FenceBlock
+	export let text as String
+	export let nextIndex as LineIndex
+
+	export static function create(text String, nextIndex LineIndex) returns FenceBlock
+		return Self{text: text, nextIndex: nextIndex}
+	end 'create'
+end 'FenceBlock'
+
+// Read the spec file at `path` and extract its frontmatter status + active
+// tests. Throws `readError` when the file cannot be read (the runner surfaces
+// it), reusing the driver's IO error union rather than inventing a parallel one.
+export function parseSpecFile(path FilePath) returns SpecFile throws CompileError
+	let content = try File.readText(path) otherwise throw CompileError.readError(path)
+	let lines = content.split("\n")
+	let status = parseStatus(lines)
+	let tests = extractTests(lines)
+	return SpecFile.create(status, tests: tests)
+end 'parseSpecFile'
+
+// Read the `status:` value from the YAML frontmatter (the leading `--- … ---`
+// block). Returns "" when there is no frontmatter or no status key — the runner
+// skips only the literal "draft", so "" runs normally.
+function parseStatus(lines StringArray) returns String
+	let lineCount = lines.count()
+	if lineCount == 0 'noLines'
+		return ""
+	end 'noLines'
+
+	let firstLine = try lines.get(0) otherwise ""
+	if firstLine.trim() != FrontmatterFence 'noFrontmatter'
+		return ""
+	end 'noFrontmatter'
+
+	var i = 1
+	while i < lineCount 'scan'
+		let line = try lines.get(i) otherwise panic("SpecParser.parseStatus: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+
+		let trimmed = line.trim()
+		if trimmed == FrontmatterFence 'endFrontmatter'
+			break
+		end 'endFrontmatter'
+
+		if trimmed.startsWith(StatusKey) 'isStatus'
+			return valueAfterKey(trimmed, key: StatusKey)
+		end 'isStatus'
+
+		i = i + 1
+	end 'scan'
+
+	return ""
+end 'parseStatus'
+
+// The trimmed remainder of `line` after a literal `key` prefix. `line` is known
+// to start with `key` (the caller gates on `startsWith`), so advancing
+// `key.byteLength()` ASCII positions lands exactly past the key.
+function valueAfterKey(line String, key String) returns String
+	var pos = line.startIndex()
+	for _ in 0 upto key.byteLength() 'skipKey'
+		pos = try line.indexAfter(pos) otherwise return ""
+	end 'skipKey'
+	return line.slice(pos, endIndex: line.endIndex()).trim()
+end 'valueAfterKey'
+
+// Extract every ACTIVE test. The scanned region is the `## Tests` section only:
+// from the line after the `## Tests` heading to the next `## ` heading (or EOF).
+// A `## Deferred` heading therefore ends scanning, so no deferred test is ever
+// reached — see the deferred-skip convention at the top of this file.
+function extractTests(lines StringArray) returns SpecTestArray
+	var tests = SpecTestArray.create()
+	let lineCount = lines.count()
+
+	// Locate the `## Tests` heading; the active-test region begins on the next line.
+	var i = 0
+	var inTests = false
+	while i < lineCount 'find'
+		let line = try lines.get(i) otherwise panic("SpecParser.extractTests: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+
+		if line.startsWith(TestsHeading) 'foundTests'
+			inTests = true
+			i = i + 1
+			break
+		end 'foundTests'
+
+		i = i + 1
+	end 'find'
+
+	if not inTests 'noTestsSection'
+		return tests
+	end 'noTestsSection'
+
+	while i < lineCount 'scan'
+		let line = try lines.get(i) otherwise panic("SpecParser.extractTests: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+
+		// A new `## ` section (e.g. `## Deferred`) ends the active-test region.
+		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
+			break
+		end 'sectionEnd'
+
+		if line.contains(TestMarker) 'isMarker'
+			i = appendTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests)
+		end 'isMarker' else 'notMarker'
+			i = i + 1
+		end 'notMarker'
+	end 'scan'
+
+	return tests
+end 'extractTests'
+
+// Parse one test starting at its `<!-- test: NAME -->` marker and push it onto
+// `tests`, returning the line index to resume the outer scan from. The test is
+// pushed ONLY when both a ```maxon source block and one expected block were seen
+// before the next marker / section boundary (the "marker + source + expected,
+// contiguous" active-test contract) — an incomplete run of blocks is not a
+// runnable test and is silently left out rather than half-built.
+function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray) returns LineIndex
+	let lineCount = lines.count()
+	let name = testName(markerLine)
+	var source = ""
+	var haveSource = false
+	var i = markerIndex + 1
+
+	while i < lineCount 'blocks'
+		let line = try lines.get(i) otherwise panic("SpecParser.appendTestFromMarker: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+
+		// The next marker / section boundary ends this test. Leave `i` ON that
+		// line so the outer scan re-examines it.
+		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
+			break
+		end 'sectionEnd'
+		if line.contains(TestMarker) 'nextMarker'
+			break
+		end 'nextMarker'
+
+		// CompilerError MUST be checked before Source: "```maxoncstderr" also
+		// startsWith "```maxon", so the source arm would otherwise consume it.
+		if line.startsWith(CompilerErrorFence) 'compilerErr'
+			let block = readFence(lines, openIndex: i)
+			if haveSource 'errComplete'
+				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(block.text.trim())))
+			end 'errComplete'
+			return block.nextIndex
+		end 'compilerErr'
+
+		if line.startsWith(ExitCodeFence) 'exitCode'
+			let block = readFence(lines, openIndex: i)
+			let parsed = try int.fromString(block.text.trim()) otherwise 'badExitCode'
+				return block.nextIndex
+			end 'badExitCode'
+			if haveSource 'exitComplete'
+				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.exitCode(parsed)))
+			end 'exitComplete'
+			return block.nextIndex
+		end 'exitCode'
+
+		if line.startsWith(SourceFence) 'source'
+			let block = readFence(lines, openIndex: i)
+			source = block.text
+			haveSource = true
+			i = block.nextIndex
+			continue
+		end 'source'
+
+		i = i + 1
+	end 'blocks'
+
+	return i
+end 'appendTestFromMarker'
+
+// Extract NAME from a `<!-- test: NAME -->` marker line: the text between the
+// first ": " and the trailing " -->", trimmed.
+function testName(line String) returns String
+	// The name sits between the first ": " and the trailing " -->". Advance one
+	// index past the ':' and let trim() drop the surrounding spaces — this avoids
+	// measuring the module-const separator's length, because a method call
+	// directly on a top-level `let` constant is a parse error in the bootstrap.
+	let colonIdx = try line.findFirst(TestMarkerNameSep) otherwise return ""
+	let nameStart = try line.indexAfter(colonIdx) otherwise return ""
+	let endIdx = try line.findFirst(TestMarkerEnd) otherwise line.endIndex()
+	return line.slice(nameStart, endIndex: endIdx).trim()
+end 'testName'
+
+// Read the fenced block whose opening ``` is at `openIndex`. Content lines are
+// joined with "\n" and NO trailing newline, so a ```maxon block is reproduced
+// VERBATIM with its first line at fragment line 1 — the header-free layout the
+// shv2-native error `line:col` numbers are calibrated against. A missing closing
+// fence treats EOF as the close (robust against a malformed spec rather than
+// looping).
+function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
+	let lineCount = lines.count()
+	var text = ""
+	var first = true
+	var i = openIndex + 1
+
+	while i < lineCount 'read'
+		let line = try lines.get(i) otherwise panic("SpecParser.readFence: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+
+		if line.startsWith(FenceClose) 'close'
+			return FenceBlock.create(text, nextIndex: i + 1)
+		end 'close'
+
+		if first 'firstLine'
+			text = line
+			first = false
+		end 'firstLine' else 'moreLines'
+			text = "{text}\n{line}"
+		end 'moreLines'
+
+		i = i + 1
+	end 'read'
+
+	return FenceBlock.create(text, nextIndex: lineCount)
+end 'readFence'

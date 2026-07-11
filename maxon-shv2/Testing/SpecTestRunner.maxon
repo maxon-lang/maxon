@@ -1,0 +1,227 @@
+// Testing/SpecTestRunner.maxon — run every active test in a specs-shv2 directory
+// through the shv2 compiler and collect PASS/FAIL results.
+//
+// Each test is driven end-to-end through the REAL CLI as a SUBPROCESS:
+// `<compilerExe> build <fragment> -o <exeBase>`. Spawning (rather than compiling
+// in-process) is deliberate — a compiler crash is isolated to the one test that
+// triggered it instead of killing the whole runner, and the actual `build`
+// command path (arg parsing, output-path derivation) is exercised, not bypassed.
+//
+// Trimmed HARD from v1's SpecTestRunner: no fragment cache, no parallel worker
+// pool / IPC, no RequiredIR/lowering capture, no `--update-required`, no per-
+// target run-command building, no wasm/wasmtime path. Those return when a
+// milestone needs them.
+
+let SpecFileExtension = ".md"
+let MaxonFragmentExtension = ".maxon"
+let TempSubdirName = ".spec-tmp"
+let DraftStatus = "draft"
+let BuildSubcommand = "build"
+let OutputFlag = "-o"
+
+// The placeholder that replaces a fragment's absolute on-disk path in captured
+// compiler output. Machine/run independent, so an expected ```maxoncstderr block
+// authored with `<fragment>:L:C` matches regardless of where the temp file lives.
+let FragmentPathToken = "<fragment>"
+
+typealias FilePathArray = Array with FilePath
+
+// PASS, or FAIL carrying a human-readable reason. A union (not a `bool` + a
+// message field) so a passing result has no vestigial empty-string message.
+export union TestOutcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+end 'TestOutcome'
+
+// One test's verdict, tagged with which spec it came from for the report.
+export type SpecTestResult
+	export let specName as String
+	export let testName as String
+	export let outcome as TestOutcome
+
+	export static function create(specName String, testName String, outcome TestOutcome) returns SpecTestResult
+		return Self{specName: specName, testName: testName, outcome: outcome}
+	end 'create'
+end 'SpecTestResult'
+
+export typealias SpecTestResultArray = Array with SpecTestResult
+
+// Captured result of one spawned process: exit code + both streams. The single
+// spawn/capture choke point that BOTH the compile step and the run step go
+// through, so there is exactly one place that talks to `Subprocess`.
+type ProcessCapture
+	export let exitCode as ExitCodeValue
+	export let stdout as String
+	export let stderr as String
+
+	export static function create(exitCode ExitCodeValue, stdout String, stderr String) returns ProcessCapture
+		return Self{exitCode: exitCode, stdout: stdout, stderr: stderr}
+	end 'create'
+end 'ProcessCapture'
+
+function runProcess(exe FilePath, argv StringArray) returns ProcessCapture throws SubprocessError
+	let collected = try Subprocess.run(Executable.path(exe), arguments: argv)
+	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
+end 'runProcess'
+
+// Run every active test in every `*.md` spec under `specDir` through
+// `compilerExe`, returning one result per test (draft specs skipped). Throws
+// only on a spec-directory / spec-file IO failure; a per-test compile or run
+// failure is captured as a FAIL result, never thrown, so one bad test can't
+// abort the suite.
+export function runSpecDir(compilerExe FilePath, specDir FilePath) returns SpecTestResultArray throws CompileError
+	var results = SpecTestResultArray.create()
+
+	// Build the temp path through a FilePath component (not the String overload):
+	// `TempSubdirName` is a fixed valid relative path, and a FilePath argument
+	// picks `join(FilePath)` unambiguously (a bare String constant is ambiguous
+	// between join's String/FilePath overloads).
+	let tempSub = try FilePath.from(TempSubdirName) otherwise panic("SpecTestRunner: TempSubdirName '{TempSubdirName}' must be a valid relative path")
+	let tempDir = specDir.join(tempSub)
+	if not Directory.create(tempDir) 'noTempDir'
+		throw CompileError.directoryNotFound(tempDir)
+	end 'noTempDir'
+
+	let host = detectHostTarget()
+	let exeExtension = executableExtension(host)
+
+	let specPaths = try specFilePaths(specDir)
+	for specPath in specPaths 'eachSpec'
+		let specFile = try parseSpecFile(specPath)
+		if specFile.status == DraftStatus 'draftSpec'
+			continue
+		end 'draftSpec'
+
+		let specName = specPath.stem()
+		for test in specFile.tests 'eachTest'
+			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension)
+			results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
+		end 'eachTest'
+	end 'eachSpec'
+
+	return results
+end 'runSpecDir'
+
+// The `*.md` spec files directly under `specDir`, in directory-listing order —
+// deterministic per host filesystem (String is not Comparable, so there is no
+// portable key to sort on; NTFS returns names in a stable order).
+function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
+	let entries = try Directory.list(specDir) otherwise throw CompileError.directoryNotFound(specDir)
+	var specs = FilePathArray.create()
+	for entry in entries 'eachEntry'
+		if entry.fileExtension() == SpecFileExtension 'isSpec'
+			specs.push(entry)
+		end 'isSpec'
+	end 'eachEntry'
+	return specs
+end 'specFilePaths'
+
+// Compile one test's fragment via a subprocess build, then check its
+// expectation. The fragment + produced exe are cleaned up before returning.
+function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String) returns TestOutcome
+	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
+	let exeBase = tempDir.join(test.name)
+	// The driver appends the platform extension to the `-o` value
+	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
+	// that exact path to spawn it for the exit-code check.
+	let exePath = try FilePath.from("{exeBase.toString()}{exeExtension}") otherwise 'badExePath'
+		return TestOutcome.fail("could not form output path for {test.name}")
+	end 'badExePath'
+
+	if not writeFragment(fragmentPath, source: test.source) 'writeFailed'
+		return TestOutcome.fail("could not write fragment {fragmentPath.toString()}")
+	end 'writeFailed'
+
+	var compileArgv = StringArray.create()
+	compileArgv.push(BuildSubcommand)
+	compileArgv.push(fragmentPath.toString())
+	compileArgv.push(OutputFlag)
+	compileArgv.push(exeBase.toString())
+
+	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
+		cleanup(fragmentPath, exePath: exePath)
+		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
+	end 'compileSpawnFailed'
+
+	let outcome = checkExpectation(test.expectation, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
+	cleanup(fragmentPath, exePath: exePath)
+	return outcome
+end 'runOneTest'
+
+function checkExpectation(expectation SpecExpectation, compile ProcessCapture, fragmentPath FilePath, exePath FilePath) returns TestOutcome
+	return match expectation 'e'
+		exitCode(expected) gives checkExitCode(expected, compile: compile, exePath: exePath)
+		compilerError(text) gives checkCompilerError(text, compile: compile, fragmentPath: fragmentPath)
+	end 'e'
+end 'checkExpectation'
+
+// A ```maxoncstderr test: the compile MUST fail, and its stderr — with the
+// fragment's absolute path replaced by the stable `<fragment>` token — must
+// equal the expected text (authored with the same token). The line:col are NOT
+// normalized: they are shv2-native (headerless fragment → code at line 1) and
+// part of what the test asserts.
+function checkCompilerError(expectedText String, compile ProcessCapture, fragmentPath FilePath) returns TestOutcome
+	if compile.exitCode == 0 'unexpectedSuccess'
+		return TestOutcome.fail("expected a compile error but compilation succeeded")
+	end 'unexpectedSuccess'
+
+	let actual = normalizeFragmentPath(compile.stderr, fragmentPath: fragmentPath).trim()
+	let expected = expectedText.trim()
+	if actual == expected 'matched'
+		return TestOutcome.pass
+	end 'matched'
+
+	return TestOutcome.fail("compiler-error mismatch\n    expected: {expected}\n    actual:   {actual}")
+end 'checkCompilerError'
+
+// An ```exitcode test: the compile MUST succeed, then the produced exe is
+// spawned and its process exit code compared to the expected value.
+function checkExitCode(expected ExitCodeValue, compile ProcessCapture, exePath FilePath) returns TestOutcome
+	if compile.exitCode != 0 'compileFailed'
+		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
+	end 'compileFailed'
+
+	let run = try runProcess(exePath, argv: StringArray.create()) otherwise (e) 'runSpawnFailed'
+		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
+	end 'runSpawnFailed'
+
+	if run.exitCode == expected 'matched'
+		return TestOutcome.pass
+	end 'matched'
+
+	return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
+end 'checkExitCode'
+
+// Write the test's ```maxon block to `fragmentPath` VERBATIM, appending a single
+// trailing newline if absent (the lexer needs a final newline so it doesn't hit
+// EOF mid-statement). The verbatim body keeps code at line 1, so shv2-native
+// error positions line up with the expected `<fragment>:L:C`.
+function writeFragment(fragmentPath FilePath, source String) returns bool
+	let body = source if source.endsWith("\n") else "{source}\n"
+	try File.writeText(fragmentPath, content: body) otherwise return false
+	return true
+end 'writeFragment'
+
+// Replace the fragment's absolute on-disk path with the `<fragment>` token. The
+// driver renders the path via `FilePath.from(arg).toString()` where `arg` IS
+// `fragmentPath.toString()` (already separator-normalized), and that round-trip
+// is idempotent, so the exact string emitted is `fragmentPath.toString()`.
+function normalizeFragmentPath(text String, fragmentPath FilePath) returns String
+	return text.replace(fragmentPath.toString(), with: FragmentPathToken)
+end 'normalizeFragmentPath'
+
+// Best-effort removal of the per-test fragment + produced exe. A stale temp file
+// never affects correctness (the next test with this name overwrites it), so a
+// delete failure — e.g. the exe was never produced because the compile failed —
+// is ignored.
+function cleanup(fragmentPath FilePath, exePath FilePath)
+	try File.delete(fragmentPath) otherwise ignore
+	try File.delete(exePath) otherwise ignore
+end 'cleanup'
