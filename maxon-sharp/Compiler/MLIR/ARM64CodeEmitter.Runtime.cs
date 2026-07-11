@@ -38,6 +38,13 @@ public partial class ARM64CodeEmitter {
   // Internal KqCtx filter for async connect completion (not a real kqueue filter)
   private const int KQCTX_CONNECT = -3;
 
+  // sysconf(_SC_NPROCESSORS_ONLN) — number of online logical CPUs on macOS.
+  private const int ScNprocessorsOnln = 58;
+
+  // __gt_init's local max_procs slot: [x29+32]. Class-scoped so the inline
+  // EmitReadMaxProcsEnvOverride helper stays coupled to EmitSchedInit's frame.
+  private const int GtInitMaxProcsSlotOffset = 32;
+
   // macOS fcntl / socket constants
   private const int F_SETFL = 4;
   private const int O_NONBLOCK = 0x0004;
@@ -81,6 +88,58 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionStart("maxon_force_segfault", 0, 0x20);
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X0, 0, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_parallel_boundary(): a no-op CPU-parallel scheduling checkpoint.
+  /// Backs `__Builtins.parallelBoundary()`. Emitted as a real (empty-bodied)
+  /// runtime function — a bare prologue/epilogue — rather than expanding to zero
+  /// IR, because a call to it must leave an op in the caller's body for the E3073
+  /// async-yielding analysis to recognize as a legitimate yield point (see
+  /// SemanticCheckPass.IoStubs / maxon_parallel_boundary). Does nothing today; a
+  /// future scheduler could hang a cooperative-yield check here.
+  /// </summary>
+  private void EmitMaxonParallelBoundary() {
+    EmitRuntimeFunctionStart("maxon_parallel_boundary", 0, 0x20);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_cpu_count() -> i64: logical processor count, clamped to >= 1.
+  /// Backs `__Builtins.cpuCount()`. Queries sysconf(_SC_NPROCESSORS_ONLN)
+  /// directly rather than reading __sched_max_procs, so it is valid to call
+  /// BEFORE __gt_init runs and stays independent of the scheduler. macOS needs no
+  /// system-stack switch for this call (see CallImportOnSystemStack). Returns the
+  /// value in X0, matching maxon_current_process_id's zero-arg i64 return ABI.
+  /// </summary>
+  private void EmitMaxonCpuCount() {
+    const string clampedLabel = "__maxon_cpu_count_clamped";
+
+    EmitRuntimeFunctionStart("maxon_cpu_count", 0, 0x20);
+    EmitMovRegImm(ARM64Register.X0, ScNprocessorsOnln);
+    EmitCallImport("sysconf"); // result in X0 (or -1 on error)
+
+    // Clamp to >= 1. sysconf returns -1 on error and could report 0 on a
+    // pathological host; a signed compare handles both (they are < 1).
+    EmitCmpImm(ARM64Register.X0, 1);
+    EmitBranchCond(ARM64ConditionCode.Ge, clampedLabel);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    DefineLabel(clampedLabel);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_sched_max_active_workers() -> i64: the high-water mark of concurrently
+  /// active worker Ms (>= 1). Backs `__Builtins.schedMaxActiveWorkers()`. Reads
+  /// the __sched_max_active_workers global maintained by __gt_init (init = 1) and
+  /// __sched_worker_loop (raised on each worker entry). Returns in X0, matching
+  /// maxon_cpu_count's zero-arg i64 return ABI.
+  /// </summary>
+  private void EmitMaxonSchedMaxActiveWorkers() {
+    EmitRuntimeFunctionStart("maxon_sched_max_active_workers", 0, 0x20);
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_max_active_workers");
     EmitRuntimeFunctionEnd();
   }
 
@@ -409,6 +468,9 @@ public partial class ARM64CodeEmitter {
 
   public void EmitRuntimeFunctions() {
     EmitMaxonForceSegfault();
+    EmitMaxonParallelBoundary();
+    EmitMaxonCpuCount();
+    EmitMaxonSchedMaxActiveWorkers();
     EmitMaxonDivByZero();
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
@@ -3125,6 +3187,7 @@ public partial class ARM64CodeEmitter {
     DefineGlobal("__sched_max_procs", 8, 0);       // max worker threads (CPU count)
 
     DefineGlobal("__sched_active_workers", 8, 0);   // atomic count of running workers
+    DefineGlobal("__sched_max_active_workers", 8, 0); // high-water mark of active_workers (only grows)
     DefineGlobal("__sched_shutdown_flag", 8, 0);     // 1 = shutdown requested
     DefineGlobal("__sched_tls_key", 8, 0);           // pthread_key_t for P*
     // __sched_global_lock and __sched_timer_lock are accessed via the backend
@@ -3262,11 +3325,14 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("pthread_key_create");
 
     // Step 2: Query CPU count — sysconf(_SC_NPROCESSORS_ONLN)
-    EmitMovRegImm(ARM64Register.X0, 58); // _SC_NPROCESSORS_ONLN = 58 on macOS
+    EmitMovRegImm(ARM64Register.X0, ScNprocessorsOnln);
     EmitCallImport("sysconf");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // [x29+32] = max_procs
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_procs");
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_num_procs");
+
+    // Step 2b: apply an optional MAXON_MAX_PROCS override (clamp down only).
+    EmitReadMaxProcsEnvOverride();
 
     // Step 3: Allocate P*[] array — mmap(max_procs * 8). OS-backed (see
     // EmitMmapAnon) to match x86's VirtualAlloc and stay off the MM leak ledger.
@@ -3345,9 +3411,10 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // P[0]
     EmitCallImport("pthread_setspecific");
 
-    // Set active_workers = 1
+    // Set active_workers = 1; high-water mark starts at 1 (P[0] is live).
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_active_workers");
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_active_workers");
 
     // Initialize P[0].mainThread: status = Running, stackBase = 0 (already zero from alloc)
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P[0]
@@ -3395,10 +3462,123 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X3, 0); // arg = NULL
     EmitCallImport("pthread_create");
 
+    // Cache the MAXON_SLAB_GLOBAL_LOCK / MAXON_SLAB_STATS flags before the
+    // allocator is first usable (PLAN 1a.1 / 1a.2). Must precede any allocation;
+    // nothing allocates before __gt_init returns, so here is safely early.
+    EmitReadSlabFlagsEnv();
+
     // Step 9: Initialize slab allocator
     EmitBranchLink("__slab_init");
 
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Emitted inline within __gt_init. Reads the MAXON_SLAB_GLOBAL_LOCK and
+  /// MAXON_SLAB_STATS environment variables and, when either names a non-empty
+  /// value, sets its runtime-cached enable flag (RuntimeEmitter.
+  /// SlabGlobalLockEnabledLabel / SlabStatsEnabledLabel) to 1. Presence of any
+  /// non-empty value enables the flag; unset or empty leaves it 0. getenv returns
+  /// a pointer to the value (NULL if unset), needing no stack buffer; __gt_init
+  /// runs on the main OS thread so a direct call needs no system-stack switch.
+  /// </summary>
+  private void EmitReadSlabFlagsEnv() {
+    DefineSymdata("__slab_global_lock_env_name", "MAXON_SLAB_GLOBAL_LOCK\0"u8.ToArray());
+    DefineSymdata("__slab_stats_env_name", "MAXON_SLAB_STATS\0"u8.ToArray());
+
+    EmitReadSlabFlagEnv("__slab_global_lock_env_name",
+      Runtime.RuntimeEmitter.SlabGlobalLockEnabledLabel, "glock");
+    EmitReadSlabFlagEnv("__slab_stats_env_name",
+      Runtime.RuntimeEmitter.SlabStatsEnabledLabel, "sstats");
+  }
+
+  /// <summary>
+  /// Set <paramref name="flagGlobal"/> to 1 when the environment variable named by
+  /// <paramref name="nameSym"/> holds a non-empty value. getenv returns NULL when
+  /// unset and a pointer to the value otherwise; we additionally require the first
+  /// byte to be non-NUL so an empty value ("VAR=") leaves the flag off, matching
+  /// the Windows GetEnvironmentVariableA "chars-copied > 0" semantics.
+  /// </summary>
+  private void EmitReadSlabFlagEnv(string nameSym, string flagGlobal, string tag) {
+    var doneLabel = $"__gt_init_slabflag_{tag}_done";
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, nameSym);
+    EmitCallImport("getenv");
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, done — unset, leave the flag at 0
+
+    // Non-null value: require a non-empty string (first byte != 0).
+    EmitLoadStoreUnsignedImm(0x39400000, ARM64Register.X1, ARM64Register.X0, 0, 1); // LDRB W1, [X0]
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X1)); // CBZ X1, done — empty value, leave the flag at 0
+
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitGlobalStoreReg(ARM64Register.X1, flagGlobal);
+    DefineLabel(doneLabel);
+  }
+
+  /// <summary>
+  /// Emitted inline within __gt_init (uses that function's frame). Reads the
+  /// MAXON_MAX_PROCS environment variable and, when it names a positive integer
+  /// strictly less than the detected CPU count, lowers the detected count to that
+  /// value — both scheduler globals (__sched_max_procs / __sched_num_procs) AND
+  /// __gt_init's local max_procs slot ([x29+GtInitMaxProcsSlotOffset]), so the
+  /// rest of init allocates exactly that many P structs. MAXON_MAX_PROCS=1
+  /// therefore forces single-threaded scheduling: the __gt_enqueue worker-spawn
+  /// gate (active_workers < max_procs) can never fire, giving deterministic traces
+  /// and a single-threaded validation harness. Unset / empty / non-numeric values
+  /// are ignored, and values >= the detected count are ignored (this only clamps
+  /// down). getenv returns a pointer to the value string, so no stack buffer is
+  /// needed. Uses X9..X12 as scratch (freshly reloaded by the following init steps).
+  /// </summary>
+  private void EmitReadMaxProcsEnvOverride() {
+    const int asciiZero = '0';
+    const int maxDecimalDigit = 9;
+    const int decimalRadix = 10;
+    const string parseLoopLabel = "__gt_init_maxprocs_parse";
+    const string parseDoneLabel = "__gt_init_maxprocs_parsed";
+    const string overrideDoneLabel = "__gt_init_maxprocs_done";
+
+    DefineSymdata("__maxprocs_env_name", "MAXON_MAX_PROCS\0"u8.ToArray());
+
+    // getenv(name) -> char* value (NULL if unset). __gt_init runs on the main
+    // OS thread, so a direct call needs no system-stack switch.
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__maxprocs_env_name");
+    EmitCallImport("getenv");
+    _condBranchFixups.Add((_code.Count, overrideDoneLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, done — unset, keep the detected count
+
+    // Minimal decimal parse of the returned cstring:
+    //   X9 = cursor, X10 = accumulator, X11 = digit, X12 = radix(10).
+    // Stops at the first non-digit byte (the NUL terminator included).
+    EmitMovRegReg(ARM64Register.X9, ARM64Register.X0); // cursor = value
+    EmitMovRegImm(ARM64Register.X10, 0);               // acc = 0
+    EmitMovRegImm(ARM64Register.X12, decimalRadix);
+    DefineLabel(parseLoopLabel);
+    EmitLoadStoreUnsignedImm(0x39400000, ARM64Register.X11, ARM64Register.X9, 0, 1); // LDRB W11, [X9]
+    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, asciiZero, isAdd: false);      // digit = c - '0'
+    EmitCmpImm(ARM64Register.X11, maxDecimalDigit);
+    EmitBranchCond(ARM64ConditionCode.Hi, parseDoneLabel); // unsigned > 9 -> non-digit -> stop
+    // acc = acc*10 + digit  (MADD X10, X10, X12, X11)
+    EmitWord(0x9B000000 | (Reg(ARM64Register.X12) << 16) | (Reg(ARM64Register.X11) << 10)
+      | (Reg(ARM64Register.X10) << 5) | Reg(ARM64Register.X10));
+    EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true); // ++cursor
+    EmitBranch(parseLoopLabel);
+
+    DefineLabel(parseDoneLabel);
+    // Apply only when 1 <= parsed < detected max_procs (clamp down only).
+    EmitCmpImm(ARM64Register.X10, 1);
+    EmitBranchCond(ARM64ConditionCode.Lt, overrideDoneLabel); // parsed < 1 -> ignore
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, GtInitMaxProcsSlotOffset, 8); // detected max_procs
+    EmitCmpRegReg(ARM64Register.X10, ARM64Register.X11);
+    EmitBranchCond(ARM64ConditionCode.Ge, overrideDoneLabel); // parsed >= detected -> ignore
+
+    // Commit: local slot + both scheduler globals all take the clamped value.
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X29, GtInitMaxProcsSlotOffset, 8);
+    EmitGlobalStoreReg(ARM64Register.X10, "__sched_max_procs");
+    EmitGlobalStoreReg(ARM64Register.X10, "__sched_num_procs");
+
+    DefineLabel(overrideDoneLabel);
   }
 
   // __gt_enqueue, __gt_dequeue, and __gt_steal_work are now emitted by RuntimeEmitter.Scheduler.cs
@@ -3480,6 +3660,17 @@ public partial class ARM64CodeEmitter {
     // on this.
     EmitGlobalLeaReg(ARM64Register.X9, "__sched_active_workers");
     EmitAtomicIncReg(ARM64Register.X9);
+
+    // Update the active-worker high-water mark (PLAN Track-0 validation: "≥2
+    // workers ran"). Monotonic, so a benign race here only ever loses a transient
+    // sample; this worker's own increment is already visible in the reload. X9/X10
+    // are dead here (the loop below reloads P from stack/TLS).
+    EmitGlobalLoadReg(ARM64Register.X9, "__sched_active_workers");    // current count
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_max_active_workers"); // current peak
+    EmitCmpRegReg(ARM64Register.X9, ARM64Register.X10);
+    EmitBranchCond(ARM64ConditionCode.Ls, "__sched_wloop_hiwater_done"); // cur <= peak -> skip
+    EmitGlobalStoreReg(ARM64Register.X9, "__sched_max_active_workers");
+    DefineLabel("__sched_wloop_hiwater_done");
 
     // --- Main worker loop ---
     DefineLabel("__sched_worker_loop_top");

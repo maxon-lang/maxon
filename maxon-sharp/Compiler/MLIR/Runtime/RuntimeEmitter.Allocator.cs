@@ -104,6 +104,34 @@ public partial class RuntimeEmitter {
   private const string SlabObjsLabel = "__slab_objs_per_span";
   private const string SlabInitDoneLabel = "__slab_init_done";
 
+  // -------------------------------------------------------------------------
+  // MAXON_SLAB_GLOBAL_LOCK A/B safety net (PLAN 1a.1) + MAXON_SLAB_STATS
+  // contention counters (PLAN 1a.2). All runtime-cached flags are set once from
+  // their env vars during scheduler init (per-backend __gt_init) and read on the
+  // allocator hot path as a single correctly-predicted branch when unset.
+  // -------------------------------------------------------------------------
+  // The global lock itself: a test-and-set spinlock word (0 = free, 1 = held).
+  // Deliberately NOT a kernel-wait lock: a contended EnterCriticalSection on a
+  // green thread's small stack once corrupted the self-hosted runtime — a
+  // test-and-set sidesteps the kernel entirely.
+  private const string SlabGlobalLockLabel = "__slab_global_lock";
+  // Runtime-cached "MAXON_SLAB_GLOBAL_LOCK is set" flag. Public so the per-backend
+  // env-read in __gt_init can publish it. 0 = disabled (default hot path).
+  public const string SlabGlobalLockEnabledLabel = "__slab_global_lock_enabled";
+  // Runtime-cached "MAXON_SLAB_STATS is set" flag. Public for the same reason.
+  public const string SlabStatsEnabledLabel = "__slab_stats_enabled";
+  // Counters (atomic; they run under multi-P). Only touched when stats are on.
+  private const string SlabLockWaitCountLabel = "__slab_lock_wait_count";
+  private const string SlabOwnershipGateMissCountLabel = "__slab_ownership_gate_miss_count";
+  // Exit-dump line fragments (stderr only — must never pollute program stdout).
+  private const string SlabStatsPrefixLabel = "__slab_stats_prefix";
+  private const string SlabStatsMidLabel = "__slab_stats_mid";
+  private const string SlabStatsNewlineLabel = "__slab_stats_newline";
+
+  // Spinlock word sentinels.
+  private const long SlabGlobalLockFree = 0;
+  private const long SlabGlobalLockHeld = 1;
+
   // Arena list (linked list of 64MB arenas via chunk 0 metadata)
   private const string ArenaListHeadLabel = "__slab_arena_list_head";
   // Last arena_base from __slab_arena_alloc_chunks (for callers to read)
@@ -141,6 +169,16 @@ public partial class RuntimeEmitter {
 
     // Init done flag
     _b.DefineGlobal(SlabInitDoneLabel, 8, 0);
+
+    // Global-lock A/B safety net + contention counters (PLAN 1a.1 / 1a.2).
+    _b.DefineGlobal(SlabGlobalLockLabel, 8, 0);         // spinlock word (0=free / 1=held)
+    _b.DefineGlobal(SlabGlobalLockEnabledLabel, 8, 0);  // runtime-cached MAXON_SLAB_GLOBAL_LOCK flag
+    _b.DefineGlobal(SlabStatsEnabledLabel, 8, 0);       // runtime-cached MAXON_SLAB_STATS flag
+    _b.DefineGlobal(SlabLockWaitCountLabel, 8, 0);      // failed-CAS spin iterations (real contention)
+    _b.DefineGlobal(SlabOwnershipGateMissCountLabel, 8, 0); // fast-path ownership-gate misses (cross-P traffic)
+    _b.DefineSymdata(SlabStatsPrefixLabel, "[slab-stats] lock_wait=\0"u8.ToArray());
+    _b.DefineSymdata(SlabStatsMidLabel, " ownership_gate_miss=\0"u8.ToArray());
+    _b.DefineSymdata(SlabStatsNewlineLabel, "\n\0"u8.ToArray());
 
     // Arena list head and last-base
     _b.DefineGlobal(ArenaListHeadLabel, 8, 0);
@@ -2069,6 +2107,127 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // MAXON_SLAB_GLOBAL_LOCK helpers (PLAN 1a.1) + MAXON_SLAB_STATS counters (1a.2)
+  // =========================================================================
+
+  /// <summary>
+  /// Emit the MAXON_SLAB_GLOBAL_LOCK acquire, gated on the runtime-cached
+  /// <see cref="SlabGlobalLockEnabledLabel"/> flag. When disabled (the default),
+  /// the hot path is a single load + one correctly-predicted branch (taken, over
+  /// the spin body, to the skip label). When enabled,
+  /// spins on an atomic compare-exchange of <see cref="SlabGlobalLockLabel"/>
+  /// (0 -> 1). This is a test-and-set spinlock, not a kernel-wait lock: a
+  /// contended kernel wait on a green thread's small stack once corrupted the
+  /// self-hosted runtime (PLAN 1a.1), so we never park in the kernel here.
+  ///
+  /// Under MAXON_SLAB_STATS, each failed CAS bumps
+  /// <see cref="SlabLockWaitCountLabel"/> — the count of real spin iterations,
+  /// i.e. genuine lock contention.
+  ///
+  /// Clobbers Scratch0..Scratch3. Safe at the call site: acquire runs at
+  /// function entry before any live value exists (the sole arg is already spilled
+  /// to slot 0 by the prologue). Not recursively acquirable: the allocator slow
+  /// paths call into mcentral/arena helpers (a separate MspanPoolLock) but never
+  /// back into __slab_alloc / __slab_free, so this non-recursive lock is safe.
+  /// </summary>
+  private void EmitSlabGlobalLockAcquire() {
+    var skip = UniqueLabel("slab_glock_acq_skip");
+    var spin = UniqueLabel("slab_glock_acq_spin");
+    var acquired = UniqueLabel("slab_glock_acq_got");
+    var noStat = UniqueLabel("slab_glock_acq_no_stat");
+
+    // Gate: default hot path is one load + one correctly-predicted branch.
+    _b.LoadGlobal(VReg.Scratch0, SlabGlobalLockEnabledLabel);
+    _b.JumpIfZero(VReg.Scratch0, skip);
+
+    // Re-materialize the lock address and CAS inputs every iteration so we stay
+    // robust against AtomicCAS's implicit clobbers (it trashes Scratch0/RAX).
+    // The extra ops only run when the lock is enabled AND contended.
+    _b.DefineLabel(spin);
+    _b.LeaGlobal(VReg.Scratch2, SlabGlobalLockLabel);
+    _b.MovRegImm(VReg.Scratch0, SlabGlobalLockFree); // expected = 0
+    _b.MovRegImm(VReg.Scratch1, SlabGlobalLockHeld); // desired = 1
+    _b.AtomicCAS(VReg.Scratch2, 0, VReg.Scratch0, VReg.Scratch1); // success -> Scratch3 != 0
+    _b.JumpIfNonZero(VReg.Scratch3, acquired);
+
+    // CAS failed: the lock is held elsewhere. Count the spin under stats, then retry.
+    _b.LoadGlobal(VReg.Scratch0, SlabStatsEnabledLabel);
+    _b.JumpIfZero(VReg.Scratch0, noStat);
+    _b.LeaGlobal(VReg.Scratch0, SlabLockWaitCountLabel);
+    _b.AtomicInc(VReg.Scratch0, 0);
+    _b.DefineLabel(noStat);
+    _b.Jump(spin);
+
+    _b.DefineLabel(acquired);
+    _b.DefineLabel(skip);
+  }
+
+  /// <summary>
+  /// Emit the MAXON_SLAB_GLOBAL_LOCK release, gated on the same enabled flag.
+  /// Publishes the lock word back to 0 with a store-release (STLR on ARM64, a
+  /// plain store on x86 TSO), pairing with the acquire's CAS. Clobbers
+  /// Scratch0/Scratch2. Safe at every return point: the caller has already parked
+  /// its return value in a stack slot before calling this, so register clobbers
+  /// do not corrupt the result.
+  /// </summary>
+  private void EmitSlabGlobalLockRelease() {
+    var skip = UniqueLabel("slab_glock_rel_skip");
+    _b.LoadGlobal(VReg.Scratch0, SlabGlobalLockEnabledLabel);
+    _b.JumpIfZero(VReg.Scratch0, skip);
+
+    _b.LeaGlobal(VReg.Scratch2, SlabGlobalLockLabel);
+    _b.MovRegImm(VReg.Scratch0, SlabGlobalLockFree);
+    _b.StoreRelease(VReg.Scratch2, 0, VReg.Scratch0);
+
+    _b.DefineLabel(skip);
+  }
+
+  /// <summary>
+  /// Emit a MAXON_SLAB_STATS-gated atomic increment of
+  /// <see cref="SlabOwnershipGateMissCountLabel"/>. Called on the fast-path
+  /// ownership-gate miss edge (span not owned by the current P) to measure
+  /// genuine cross-P allocator traffic — this fires even with the global lock
+  /// OFF, so it distinguishes "cross-P activity happens" from "cross-P activity
+  /// races on the lock-free paths". Atomic because it runs under multiple Ps.
+  /// Clobbers Scratch0. Off the hot path (only on a cross-P cache hit), so the
+  /// stats gate branch cost is irrelevant.
+  /// </summary>
+  private void EmitOwnershipGateMissCount() {
+    var skip = UniqueLabel("slab_gate_miss_no_stat");
+    _b.LoadGlobal(VReg.Scratch0, SlabStatsEnabledLabel);
+    _b.JumpIfZero(VReg.Scratch0, skip);
+    _b.LeaGlobal(VReg.Scratch0, SlabOwnershipGateMissCountLabel);
+    _b.AtomicInc(VReg.Scratch0, 0);
+    _b.DefineLabel(skip);
+  }
+
+  /// <summary>
+  /// Emit the MAXON_SLAB_STATS exit dump: one stderr line
+  /// "[slab-stats] lock_wait=&lt;n&gt; ownership_gate_miss=&lt;n&gt;". Gated on the
+  /// runtime-cached stats flag (no-op when unset). Called from mm_leak_check so it
+  /// runs once on the normal process-exit path. Kept on stderr (never stdout) so
+  /// it never pollutes program output.
+  /// </summary>
+  public void EmitSlabStatsDump() {
+    var skip = UniqueLabel("slab_stats_dump_skip");
+    _b.LoadGlobal(VReg.Scratch0, SlabStatsEnabledLabel);
+    _b.JumpIfZero(VReg.Scratch0, skip);
+
+    _b.LeaSymdata(VReg.Arg0, SlabStatsPrefixLabel);
+    _b.Call(_b.WriteStderrLabel);
+    _b.LoadGlobal(VReg.Arg0, SlabLockWaitCountLabel);
+    _b.Call("mm_trace_print_i64");
+    _b.LeaSymdata(VReg.Arg0, SlabStatsMidLabel);
+    _b.Call(_b.WriteStderrLabel);
+    _b.LoadGlobal(VReg.Arg0, SlabOwnershipGateMissCountLabel);
+    _b.Call("mm_trace_print_i64");
+    _b.LeaSymdata(VReg.Arg0, SlabStatsNewlineLabel);
+    _b.Call(_b.WriteStderrLabel);
+
+    _b.DefineLabel(skip);
+  }
+
+  // =========================================================================
   // EmitSlabAlloc: __slab_alloc(size) -> ptr
   //
   // Header-free allocation routing:
@@ -2081,6 +2240,12 @@ public partial class RuntimeEmitter {
   public void EmitSlabAlloc(bool mmTrace, bool mmDebug = false) {
     _b.FunctionStart("__slab_alloc", 1, 0x60);
 
+    // MAXON_SLAB_GLOBAL_LOCK A/B safety net: bracket the entire body. No-op unless
+    // enabled; when enabled, serialises alloc against alloc/free so the lock-free
+    // ownership-gate / remote-free paths can be A/B-bisected. Released before every
+    // return below. (size arg is already spilled to slot 0, so this can clobber regs.)
+    EmitSlabGlobalLockAcquire();
+
     // Check if allocator is initialized
     _b.LoadGlobal(VReg.Scratch0, SlabInitDoneLabel);
     var slabReady = UniqueLabel("slab_alloc_ready");
@@ -2088,6 +2253,7 @@ public partial class RuntimeEmitter {
 
     // Fallback: allocator not initialized — use OS-direct path
     EmitOsDirectObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
+    EmitSlabGlobalLockRelease();
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -2100,6 +2266,7 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.BelowEqual, notOsDirect);
 
     EmitOsDirectObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
+    EmitSlabGlobalLockRelease();
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -2114,6 +2281,7 @@ public partial class RuntimeEmitter {
     // Arena-large path: mspan + bitmap chunks, registered in arena map
     EmitArenaLargeObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5,
                               spanSlot: 4, arenaBaseSlot: 6, mmTrace);
+    EmitSlabGlobalLockRelease();
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -2172,6 +2340,7 @@ public partial class RuntimeEmitter {
     // span's field stores.
     _b.LoadAcquire(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
     var slowPath = UniqueLabel("slab_alloc_slow_path");
+    var gateMiss = UniqueLabel("slab_alloc_gate_miss");
     _b.JumpIfZero(VReg.Scratch1, slowPath);
 
     // Check if span has free slots
@@ -2195,7 +2364,12 @@ public partial class RuntimeEmitter {
     _b.LoadCurrentP(VReg.Scratch3);
     _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
     _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
-    _b.JumpIf(Condition.NotEqual, slowPath);
+    // Not owned by this P: divert through the ownership-gate-miss counter (PLAN
+    // 1a.2) on the way to the slow path. The hot (owned) path falls through with a
+    // single not-taken branch, unchanged. The earlier empty-cache / empty-span
+    // bailouts above jump straight to slowPath and are deliberately NOT counted —
+    // only a genuine cross-P ownership mismatch is a "gate miss".
+    _b.JumpIf(Condition.NotEqual, gateMiss);
 
     // Fast path: pop from free list.
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
@@ -2232,8 +2406,16 @@ public partial class RuntimeEmitter {
       EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_small_trace"), sizeSlot: 0, classSlot: 1);
     }
 
+    EmitSlabGlobalLockRelease();
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
+
+    // Ownership-gate miss: span is cached but owned by another P. Count the
+    // cross-P event (stats-gated), then fall through into the slow path, which
+    // drains remote frees and refills via mcentral. Placed out of line so the hot
+    // path never touches it.
+    _b.DefineLabel(gateMiss);
+    EmitOwnershipGateMissCount();
 
     // --- Slow path: drain remote frees, then either re-serve from cache or
     // ask mcentral for a span. Drain runs before mcentral_get_span so that a
@@ -2412,10 +2594,16 @@ public partial class RuntimeEmitter {
   public void EmitSlabFree(bool mmTrace, bool mmDebug = false) {
     _b.FunctionStart("__slab_free", 1, 0x50);
 
+    // MAXON_SLAB_GLOBAL_LOCK A/B safety net: bracket the entire body (mirror of
+    // __slab_alloc). Released before every return below. No-op unless enabled.
+    // (slot_base arg is already spilled to slot 0, so this can clobber regs.)
+    EmitSlabGlobalLockAcquire();
+
     // NULL check
     _b.LoadLocal(VReg.Scratch0, 0);
     var notNull = UniqueLabel("slab_free_not_null");
     _b.JumpIfNonZero(VReg.Scratch0, notNull);
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
 
     _b.DefineLabel(notNull);
@@ -2485,6 +2673,7 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg0, 1);
     _b.Call("__slab_meta_free");
 
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
 
     // --- Normal slab object free ---
@@ -2570,6 +2759,7 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 0); // slot_base
     EmitPushSlotOntoSpanFreeList(spanReg: VReg.Scratch1, slotReg: VReg.Scratch0,
                                  t0: VReg.Scratch2, t1: VReg.Scratch3);
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
 
     // --- Remote free path: CAS-push onto target P's remote_free_head ---
@@ -2604,6 +2794,7 @@ public partial class RuntimeEmitter {
     _b.CmpRegImm(VReg.Scratch3, 0);
     _b.JumpIf(Condition.Equal, remoteRetry);
 
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
 
     // --- Not a slab span: try OS-direct ---
@@ -2630,10 +2821,12 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg0, 0); // slot_base
     _b.LoadLocal(VReg.Arg1, 2); // size
     _b.OsFreePages(VReg.Arg0, VReg.Arg1);
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
 
     // --- Not found anywhere: no-op ---
     _b.DefineLabel(notOsDirect);
+    EmitSlabGlobalLockRelease();
     _b.FunctionEnd();
   }
 

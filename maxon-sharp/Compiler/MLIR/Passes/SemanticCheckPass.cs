@@ -155,6 +155,16 @@ public static class SemanticCheckPass {
     "__managed_directory_current_path", "__managed_directory_next",
     "__managed_directory_filename", "__managed_directory_close",
     "__managed_directory_exists",
+    // CPU-parallel marker (parallel-codegen). `__Builtins.parallelBoundary()`
+    // lowers to this empty-bodied runtime stub (see EmitMaxonParallelBoundary).
+    // It is not I/O, but hand-written CPU-bound `async` task functions must still
+    // satisfy the E3073 "this function legitimately yields" contract, so the
+    // lowered runtime-symbol name is listed here — CheckAsyncYielding matches
+    // MaxonCallRuntimeOp.FunctionName, which carries this symbol, not the
+    // "__Builtins.parallelBoundary" spelling (the self-hosted mirror keys off the
+    // qualified name instead). `maxon_cpu_count` is deliberately NOT listed: it
+    // does not yield; only parallelBoundary is a yield marker.
+    "maxon_parallel_boundary",
   ];
 
   /// Checks that every `async f()` call targets a function that can yield.

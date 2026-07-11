@@ -9517,6 +9517,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "or other shared-resource names across sibling subprocesses spawned by a parent.\n\n"
       + "`__Builtins.currentProcessId() returns int`",
       "maxon_current_process_id", [], true),
+    // === CPU-parallel intrinsics ===
+    ["cpuCount"] = RuntimeCallIntrinsic(
+      "Returns the number of logical CPUs (hardware threads) the OS reports for "
+      + "this machine, clamped to at least 1. Queried directly from the OS "
+      + "(GetSystemInfo on Windows, sysconf on POSIX), so it is valid before the "
+      + "async scheduler initializes and stays independent of it. On wasm32-wasi "
+      + "(no OS-thread concept) treat the result as 1.\n\n"
+      + "`__Builtins.cpuCount() returns int`",
+      "maxon_cpu_count", [], true),
+    ["schedMaxActiveWorkers"] = RuntimeCallIntrinsic(
+      "Returns the high-water mark of concurrently-active green-thread worker Ms "
+      + "(OS threads) observed since process start, clamped to at least 1. Grows as "
+      + "the scheduler spawns workers to service `async` work; a value > 1 proves "
+      + "multiple cores actually ran green threads. Used by the Track-0 multi-core "
+      + "validation harness. With MAXON_MAX_PROCS=1 this is always exactly 1.\n\n"
+      + "`__Builtins.schedMaxActiveWorkers() returns int`",
+      "maxon_sched_max_active_workers", [], true),
+    ["parallelBoundary"] = RuntimeCallIntrinsic(
+      "No-op CPU-parallel scheduling checkpoint. Marks the calling function as a "
+      + "legitimate `async` target for CPU-bound (not I/O) concurrent work without "
+      + "claiming fake I/O: it compiles to a bare runtime call so the E3073 "
+      + "async-yielding analysis recognizes the caller as a valid `async` target. "
+      + "Performs no work today.\n\n"
+      + "`__Builtins.parallelBoundary()`",
+      "maxon_parallel_boundary", [], false),
     // === Primitive type intrinsics ===
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",

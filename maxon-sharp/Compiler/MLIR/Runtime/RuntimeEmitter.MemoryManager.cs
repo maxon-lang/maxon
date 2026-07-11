@@ -1676,6 +1676,10 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 0);
     _b.StoreLocal(1, VReg.Scratch0);
 
+    // MAXON_SLAB_STATS exit dump (PLAN 1a.2): stderr-only, no-op unless enabled.
+    // Runs here so it lands on the normal process-exit path alongside the leak gate.
+    EmitSlabStatsDump();
+
     EmitLeakCheckForCounter("__mm_alloc_count", "__mm_leak_prefix", "tracked");
 
     // Under --mm-debug, print a per-tag breakdown of the tracked leaks (covers managed allocs).

@@ -110,6 +110,16 @@ Read these before starting Foundation 1. Detailed maps live in the recon set
   by construction (direct `VirtualAlloc`). A global lock does **not** fix this —
   it needs a NULL-P guard + shard-0 fallback in `__slab_alloc`, or continued
   enforcement that no P-less thread reaches it.
+- **Foundation 1 scoping (decision):** keep it entirely within `maxon-sharp`
+  (C# emitter/parser/semcheck) with **no shared-stdlib changes** in Track 0. The
+  validation-harness torture test calls `__Builtins.cpuCount()` + `async`
+  directly; the public `Process.cpuCount()` + `Parallel.map` stdlib API is
+  **deferred to M5** (its first real consumer — shv2's per-function fan-out),
+  because adding them to the *shared* `stdlib/` risks the self-hosted stdlib
+  compile (cross-compiler builtin support), and shv2 doesn't use them until M5.
+  Note `PARALLEL_CODEGEN_PLAN.md` describes the *self-hosted* single-shared-
+  mcache allocator; shv2's Track 0 hardens the *C# emitter's* already-sharded
+  allocator (`RuntimeEmitter.Allocator.cs`) — different allocators.
 - **E3073 relaxation:** the C# edit adds the *runtime symbol* string
   `"maxon_parallel_boundary"` to `IoStubs` (`SemanticCheckPass.cs:100-158`) — NOT
   `"__Builtins.parallelBoundary"` (that qualified name is only for the
@@ -137,7 +147,25 @@ _stub — filled in at M1, extended each milestone._
 _stub — skeletal from M1; warm-rebuild assertion joins the gate at M2._
 
 ### Parallel driver
-_stub — per-function fan-out enabled at M5._
+
+**Runtime multi-core proven (Track 0 / Foundation 1, x64-windows).** The C#
+emitter's green-thread scheduler + sharded allocator run correctly across many
+worker Ps. Empirical: a 32-GT CPU/alloc burst compiled by `maxon.exe`, observed
+under `maxon monitor`, ran on **16 distinct worker Ps** (P0–P15 = ncpu) unclamped
+and **exactly 1 (P0)** under `MAXON_MAX_PROCS=1`, both producing the correct
+deterministic result — so the `__gt_enqueue` worker-spawn gate fires for a
+pure-CPU burst (1a.5), and the `MAXON_MAX_PROCS` clamp is a real single-thread
+knob. Concurrency primitives (`maxon-sharp`-only, no shared-stdlib change):
+`__Builtins.cpuCount()` (`maxon_cpu_count`, `GetSystemInfo`/`sysconf`, valid
+pre-`__gt_init`), `__Builtins.parallelBoundary()` (`maxon_parallel_boundary`,
+empty runtime stub + `IoStubs` entry so CPU-bound `async` passes E3073),
+`MAXON_MAX_PROCS` clamp in `__gt_init` (both backends). Bisection tools:
+`MAXON_SLAB_GLOBAL_LOCK` spinlock + `MAXON_SLAB_STATS` contention counters
+(lock-wait, ownership-gate-miss) + `__Builtins.schedMaxActiveWorkers()`
+high-water mark. The rdata deterministic-merge invariant (below) is shv2's own
+future backend concern, not yet exercised here.
+
+_Per-function fan-out enabled at M5._
 
 ### Backend (Std → MIR → Target, runtime emitters)
 _stub — thin mov/ret slice at M1; MM runtime + DebugStream producer at M6; GT

@@ -20,6 +20,9 @@ public partial class X86CodeEmitter {
     // Static empty C string used by null-guard paths (find*, process capture, etc.)
     DefineSymdata("__rt_empty_cstring", [0x00]);
     EmitMaxonForceSegfault();
+    EmitMaxonParallelBoundary();
+    EmitMaxonCpuCount();
+    EmitMaxonSchedMaxActiveWorkers();
     EmitMaxonBoundsCheck();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
@@ -4128,6 +4131,7 @@ public partial class X86CodeEmitter {
     DefineGlobal("__sched_global_queue_cs", 40, 0); // CRITICAL_SECTION protecting run queue
     DefineGlobal("__sched_all_cs", 40, 0);           // CRITICAL_SECTION protecting all-threads list
     DefineGlobal("__sched_active_workers", 8, 0);   // atomic count of running workers
+    DefineGlobal("__sched_max_active_workers", 8, 0); // high-water mark of active_workers (only grows)
     DefineGlobal("__sched_max_procs", 8, 0);        // CPU count (from GetSystemInfo)
     DefineGlobal("__sched_shutdown_flag", 8, 0);     // 1 = shutdown requested
     DefineGlobal("__gt_live_count", 8, 0); // count of non-completed green threads (excludes main thread)
@@ -4233,14 +4237,16 @@ public partial class X86CodeEmitter {
     EmitAddRegImm(X86Register.Rax, 0x1480);
     EmitGlobalStoreReg(X86Register.Rax, "__sched_tls_teb_offset");
 
-    // Step 2: Query CPU count via GetSystemInfo
-    // SYSTEM_INFO is 48 bytes; dwNumberOfProcessors is at offset 0x20 (32-bit DWORD)
+    // Step 2: Query CPU count via GetSystemInfo. SYSTEM_INFO is 48 bytes.
     EmitLeaRegMem(X86Register.Rcx, -0x78); // &sysinfo at bottom of stack frame
     EmitCallImport("kernel32.dll", "GetSystemInfo");
-    EmitMovRegMem(X86Register.Rax, -0x78 + 0x20, 4); // RAX = dwNumberOfProcessors (32-bit, zero-extends)
+    EmitMovRegMem(X86Register.Rax, -0x78 + SystemInfoOffNumberOfProcessors, 4); // RAX = dwNumberOfProcessors (32-bit, zero-extends)
     EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = max_procs
     EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
     EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
+
+    // Step 2b: apply an optional MAXON_MAX_PROCS override (clamp down only).
+    EmitReadMaxProcsEnvOverride();
 
     // Step 3: Allocate P* array: VirtualAlloc(NULL, max_procs * 8, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // lpAddress = NULL
@@ -4356,9 +4362,10 @@ public partial class X86CodeEmitter {
     EmitLeaRegIndirect(X86Register.Rcx, X86Register.Rax, POffMainThread);
     EmitMovIndirectMemReg(X86Register.Rax, POffCurrentGt, X86Register.Rcx);
 
-    // __sched_active_workers = 1
+    // __sched_active_workers = 1; high-water mark starts at 1 (P[0] is live).
     EmitMovRegImm(X86Register.Rax, 1);
     EmitGlobalStoreReg(X86Register.Rax, "__sched_active_workers");
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_max_active_workers");
 
     // Step 7: Initialize CRITICAL_SECTIONs
     EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
@@ -4373,7 +4380,12 @@ public partial class X86CodeEmitter {
       EmitCallImport("kernel32.dll", "InitializeCriticalSection");
     }
 
-    // Step 8: Initialize slab allocator CRITICAL_SECTIONs and call __slab_init
+    // Step 8: Cache the MAXON_SLAB_GLOBAL_LOCK / MAXON_SLAB_STATS flags before the
+    // allocator is first usable (PLAN 1a.1 / 1a.2). Must precede any allocation;
+    // nothing allocates before __gt_init returns, so here is safely early.
+    EmitReadSlabFlagsEnv();
+
+    // Initialize slab allocator CRITICAL_SECTIONs and call __slab_init
     EmitGlobalLeaReg(X86Register.Rcx, "__slab_mspan_pool_lock");
     EmitCallImport("kernel32.dll", "InitializeCriticalSection");
     for (int i = 0; i < 18; i++) {
@@ -4386,6 +4398,123 @@ public partial class X86CodeEmitter {
     EmitInstallFaultHandler("__gt_fault_handler_thunk");
 
     EmitRuntimeFunctionEnd();
+  }
+
+  // __gt_init frame-coupling constants. The two env-reading helpers below are
+  // spliced into EmitSchedInit's 0x80 frame, so these must match the slot layout
+  // EmitSchedInit establishes. Class-scoped (not method locals) so both helpers
+  // share one definition and cannot drift.
+  private const int GtInitMaxProcsSlotDisp = 0x18; // local max_procs slot: [rbp-0x18]
+  private const int GtInitEnvBufDisp = 0x48;       // scratch env buffer base: &buf = rbp-0x48, spans [rbp-0x48, rbp-0x28)
+  private const int GtInitEnvBufSize = 0x20;       // 32 bytes: above the call-shadow region, clear of every named slot
+
+  /// <summary>
+  /// Emitted inline within __gt_init (uses that function's frame). Reads the
+  /// MAXON_MAX_PROCS environment variable and, when it names a positive integer
+  /// strictly less than the detected CPU count, lowers the detected count to that
+  /// value — both scheduler globals (__sched_max_procs / __sched_num_procs) AND
+  /// __gt_init's local max_procs slot, so the rest of init allocates exactly that
+  /// many P structs. MAXON_MAX_PROCS=1 therefore forces single-threaded
+  /// scheduling: the __gt_enqueue worker-spawn gate (active_workers < max_procs)
+  /// can never fire, giving deterministic traces and a single-threaded validation
+  /// harness. Unset / empty / non-numeric values are ignored, and values >= the
+  /// detected count are ignored (this only clamps down).
+  ///
+  /// Frame coupling (must be emitted within EmitSchedInit's 0x80 frame):
+  ///   - local max_procs slot at [rbp - GtInitMaxProcsSlotDisp]
+  ///   - scratch env buffer at [rbp - GtInitEnvBufDisp], sized GtInitEnvBufSize,
+  ///     placed above the call-shadow region and clear of every named slot.
+  /// </summary>
+  private void EmitReadMaxProcsEnvOverride() {
+    const int asciiZero = '0';
+    const int maxDecimalDigit = 9;
+    const int decimalRadix = 10;
+    const string parseLoopLabel = "__gt_init_maxprocs_parse";
+    const string parseDoneLabel = "__gt_init_maxprocs_parsed";
+    const string overrideDoneLabel = "__gt_init_maxprocs_done";
+
+    DefineSymdata("__maxprocs_env_name", "MAXON_MAX_PROCS\0"u8.ToArray());
+
+    // GetEnvironmentVariableA(name, buf, size) -> chars copied (0 if unset).
+    // A plain call is safe: __gt_init only ever runs on the main OS thread.
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__maxprocs_env_name"); // lpName
+    EmitLeaRegMem(X86Register.Rdx, -GtInitEnvBufDisp);            // lpBuffer
+    EmitMovRegImm(X86Register.R8, GtInitEnvBufSize);             // nSize
+    EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", overrideDoneLabel); // unset -> keep the detected CPU count
+
+    // Minimal decimal parse: RAX = accumulator, RCX = cursor, RDX = digit.
+    // Stops at the first non-digit byte (the NUL terminator included).
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);   // acc = 0
+    EmitLeaRegMem(X86Register.Rcx, -GtInitEnvBufDisp); // cursor = &buf
+    DefineLabel(parseLoopLabel);
+    EmitMovzxRegByteIndirect(X86Register.Rdx, X86Register.Rcx, 0); // RDX = *cursor
+    EmitSubRegImm(X86Register.Rdx, asciiZero);                     // digit = c - '0'
+    EmitCmpRegImm(X86Register.Rdx, maxDecimalDigit);
+    EmitJcc("a", parseDoneLabel);                      // unsigned > 9 -> non-digit -> stop
+    EmitMovRegImm(X86Register.R9, decimalRadix);
+    EmitImulRegReg(X86Register.Rax, X86Register.R9);   // acc *= 10
+    EmitAddRegReg(X86Register.Rax, X86Register.Rdx);   // acc += digit
+    EmitAddRegImm(X86Register.Rcx, 1);                 // ++cursor
+    EmitJmp(parseLoopLabel);
+
+    DefineLabel(parseDoneLabel);
+    // Apply only when 1 <= parsed < detected max_procs (clamp down only).
+    EmitCmpRegImm(X86Register.Rax, 1);
+    EmitJcc("b", overrideDoneLabel);                   // parsed < 1 -> ignore
+    EmitMovRegMem(X86Register.Rcx, -GtInitMaxProcsSlotDisp, 8); // RCX = detected max_procs
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", overrideDoneLabel);                  // parsed >= detected -> ignore
+
+    // Commit: local slot + both scheduler globals all take the clamped value.
+    EmitMovMemReg(-GtInitMaxProcsSlotDisp, X86Register.Rax, 8);
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
+
+    DefineLabel(overrideDoneLabel);
+  }
+
+  /// <summary>
+  /// Emitted inline within __gt_init (uses that function's frame). Reads the
+  /// MAXON_SLAB_GLOBAL_LOCK and MAXON_SLAB_STATS environment variables and, when
+  /// either names a non-empty value, sets its runtime-cached enable flag
+  /// (RuntimeEmitter.SlabGlobalLockEnabledLabel / SlabStatsEnabledLabel) to 1.
+  /// Presence of any non-empty value enables the flag; unset or empty leaves it 0
+  /// (the default hot path). A plain GetEnvironmentVariableA is safe here:
+  /// __gt_init only ever runs on the main OS thread. Reuses __gt_init's scratch
+  /// buffer region (same disp EmitReadMaxProcsEnvOverride used — the two reads
+  /// never overlap in time).
+  /// </summary>
+  private void EmitReadSlabFlagsEnv() {
+    DefineSymdata("__slab_global_lock_env_name", "MAXON_SLAB_GLOBAL_LOCK\0"u8.ToArray());
+    DefineSymdata("__slab_stats_env_name", "MAXON_SLAB_STATS\0"u8.ToArray());
+
+    EmitReadSlabFlagEnv("__slab_global_lock_env_name",
+      Runtime.RuntimeEmitter.SlabGlobalLockEnabledLabel, GtInitEnvBufDisp, GtInitEnvBufSize, "glock");
+    EmitReadSlabFlagEnv("__slab_stats_env_name",
+      Runtime.RuntimeEmitter.SlabStatsEnabledLabel, GtInitEnvBufDisp, GtInitEnvBufSize, "sstats");
+  }
+
+  /// <summary>
+  /// Set <paramref name="flagGlobal"/> to 1 when the environment variable named by
+  /// <paramref name="nameSym"/> holds a non-empty value. GetEnvironmentVariableA
+  /// returns the character count (0 when unset or empty), so a non-zero return is
+  /// exactly "present and non-empty".
+  /// </summary>
+  private void EmitReadSlabFlagEnv(string nameSym, string flagGlobal,
+      int envBufDisp, int envBufSize, string tag) {
+    var doneLabel = $"__gt_init_slabflag_{tag}_done";
+
+    EmitLeaRegSymdataRel(X86Register.Rcx, nameSym); // lpName
+    EmitLeaRegMem(X86Register.Rdx, -envBufDisp);    // lpBuffer
+    EmitMovRegImm(X86Register.R8, envBufSize);      // nSize
+    EmitCallImport("kernel32.dll", "GetEnvironmentVariableA");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", doneLabel); // unset/empty -> leave the flag at 0
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, flagGlobal);
+    DefineLabel(doneLabel);
   }
 
   /// <summary>
@@ -5323,6 +5452,18 @@ public partial class X86CodeEmitter {
     // Atomically increment active workers
     EmitGlobalLeaReg(X86Register.Rax, "__sched_active_workers");
     EmitBytes(0xF0, 0x48, 0xFF, 0x00); // LOCK INC qword [RAX]
+
+    // Update the active-worker high-water mark (PLAN Track-0 validation: "≥2
+    // workers ran"). Monotonic, so a benign race here only ever loses a transient
+    // sample — the mark still converges to the true peak and never underestimates
+    // 2+ concurrently-live workers (this worker's own increment is already visible
+    // in the reload below). Nothing is live in RAX/RCX at this point.
+    EmitGlobalLoadReg(X86Register.Rax, "__sched_active_workers");   // current count
+    EmitGlobalLoadReg(X86Register.Rcx, "__sched_max_active_workers"); // current peak
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("be", "__sched_wloop_hiwater_done"); // cur <= peak -> nothing to do
+    EmitGlobalStoreReg(X86Register.Rax, "__sched_max_active_workers");
+    DefineLabel("__sched_wloop_hiwater_done");
 
     if (Compiler.AsyncTrace) {
       // Trace: "worker_start #N [M=N]\n"
@@ -7992,6 +8133,69 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_force_segfault", 0, 0x20);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// Offset of the DWORD `dwNumberOfProcessors` field within a Windows SYSTEM_INFO struct.
+  private const int SystemInfoOffNumberOfProcessors = 0x20;
+
+  /// <summary>
+  /// maxon_parallel_boundary(): a no-op CPU-parallel scheduling checkpoint.
+  /// Backs `__Builtins.parallelBoundary()`. Emitted as a real (empty-bodied)
+  /// runtime function — a bare prologue/epilogue — rather than expanding to zero
+  /// IR, because a call to it must leave an op in the caller's body for the E3073
+  /// async-yielding analysis to recognize as a legitimate yield point (see
+  /// SemanticCheckPass.IoStubs / maxon_parallel_boundary). Does nothing today; a
+  /// future scheduler could hang a cooperative-yield check here.
+  /// </summary>
+  private void EmitMaxonParallelBoundary() {
+    EmitRuntimeFunctionStart("maxon_parallel_boundary", 0, 0x20);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_cpu_count() -> i64: logical processor count, clamped to >= 1.
+  /// Backs `__Builtins.cpuCount()`. Queries GetSystemInfo directly rather than
+  /// reading __sched_max_procs, so it is valid to call BEFORE __gt_init runs and
+  /// stays independent of the scheduler. Routed through the system stack so a
+  /// green-thread caller can't overflow its small stack (the wrapper falls back
+  /// to a direct call on the main thread and before scheduler init). Returns the
+  /// value in RAX, matching maxon_current_process_id's zero-arg i64 return ABI.
+  /// </summary>
+  private void EmitMaxonCpuCount() {
+    // SYSTEM_INFO (48 bytes) lives at [rbp - SysInfoBufDisp], placed above the
+    // bottom 0x20 call-shadow region so a direct GetSystemInfo call can't clobber it.
+    const int frameSize = 0x50;
+    const int sysInfoBufDisp = 0x30; // &SYSTEM_INFO = rbp - 0x30 (buffer spans [rbp-0x30, rbp))
+    const string clampedLabel = "__maxon_cpu_count_clamped";
+
+    EmitRuntimeFunctionStart("maxon_cpu_count", 0, frameSize);
+
+    EmitLeaRegMem(X86Register.Rcx, -sysInfoBufDisp); // RCX = &sysinfo
+    EmitCallImportOnSystemStack("kernel32.dll", "GetSystemInfo");
+    // dwNumberOfProcessors is a 32-bit DWORD; the MOV r32 zero-extends into RAX.
+    EmitMovRegMem(X86Register.Rax, -sysInfoBufDisp + SystemInfoOffNumberOfProcessors, 4);
+
+    // Clamp to >= 1. dwNumberOfProcessors is unsigned and is 0 only on
+    // pathological hosts, but guard defensively so callers can safely divide by it.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", clampedLabel);
+    EmitMovRegImm(X86Register.Rax, 1);
+    DefineLabel(clampedLabel);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_sched_max_active_workers() -> i64: the high-water mark of concurrently
+  /// active worker Ms (>= 1). Backs `__Builtins.schedMaxActiveWorkers()`. Reads
+  /// the __sched_max_active_workers global maintained by __gt_init (init = 1) and
+  /// __sched_worker_loop (raised on each worker entry). Returns in RAX, matching
+  /// maxon_cpu_count's zero-arg i64 return ABI.
+  /// </summary>
+  private void EmitMaxonSchedMaxActiveWorkers() {
+    EmitRuntimeFunctionStart("maxon_sched_max_active_workers", 0, 0x20);
+    EmitGlobalLoadReg(X86Register.Rax, "__sched_max_active_workers");
     EmitRuntimeFunctionEnd();
   }
 
