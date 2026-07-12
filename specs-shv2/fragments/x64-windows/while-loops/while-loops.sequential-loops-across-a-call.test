@@ -42,15 +42,11 @@ func @big {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg r12, rax
-    x64.movRegReg r13, rcx
-    x64.movRegReg r14, rdx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 r14, 0
     x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg r14, rbx
@@ -63,30 +59,23 @@ func @big {
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, r12, r13
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg r12, rax
-    x64.movRegReg rax, r13
-    x64.movRegReg r13, rcx
-    x64.movRegReg r15, rdx
+    x64.leaRegRegReg r12, r12, r13
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 r14, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.storeSlotReg slot0, rax
-    x64.cmpRegReg r15, rbx
+    x64.cmpRegReg r14, rbx
     x64.jcc less, L1
     x64.jmp whileexit
   L1:
-    x64.movRegReg rcx, r15
+    x64.movRegReg rcx, r14
     x64.callDirect work
     x64.leaRegRegReg r13, r13, r8
-    x64.leaRegRegImm32 r15, r15, 1
-    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr
   whileexit:
     x64.leaRegRegReg r8, r12, r13
-    x64.epilogue 48
-    x64.popReg r15
+    x64.epilogue 40
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

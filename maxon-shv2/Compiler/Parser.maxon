@@ -793,8 +793,17 @@ export type Parser
 	// created eagerly BEFORE the body is parsed (the set of body-mutated vars is not yet
 	// known). Each phi becomes the var's current value, so the condition and body read
 	// the loop-carried value; the preheader and every back-edge feed the phis via the
-	// predecessor's `branchEdges`. Phis for unmutated vars turn out trivial and collapse
-	// in the Std-tier phi-elim pass. Returns the EXIT block — the continuation.
+	// predecessor's `branchEdges`. Returns the EXIT block — the continuation.
+	//
+	// Minting one phi per var in scope OVER-PRODUCES, and the surplus is not free:
+	//   • a var the loop never READS gets a phi nothing reads — but the back edge passes
+	//     that phi to ITSELF, so it is self-sustaining and liveness holds it live around
+	//     the whole loop. `pruneDeadBlockArgs` (a Std pass) deletes those; without it, two
+	//     sequential loops inflate maxlive by one per dead var and can FALSE-E5001.
+	//   • a var the loop reads but never WRITES gets a phi that copies a value which never
+	//     changes. That one is left in place: biased coloring coalesces it with its
+	//     incoming value into one register and the edge copy self-elides, so it costs
+	//     nothing (see RegisterAllocator.copyGroupBlocked).
 	function parseWhileStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		let whileTok = try self.consume(TokenKind.while)
 

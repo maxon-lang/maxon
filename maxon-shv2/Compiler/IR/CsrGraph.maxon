@@ -1,0 +1,89 @@
+// CsrGraph — compressed-sparse-row adjacency over a dense integer key space, and the
+// counting-sort that builds one from a parallel (key, value) edge list.
+//
+// It lives at the IR level, not inside one tier, because THREE consumers across two tiers
+// need exactly this shape and each had grown its own copy of the same counting sort:
+//
+//   • the CFG's successor / predecessor lists    (TargetLiveness.FuncCfg)
+//   • which values die at each op of a block     (RegisterAllocator.BlockDeaths)
+//   • which values feed each phi                 (PruneDeadBlockArgs.phiFeeders)
+//
+// One flat pair of columns instead of `Array with (a per-node array)`, which in Maxon is one
+// heap-boxed, refcounted object per node — the trap `SourceRange.maxon` documents and the
+// register allocator's data-representation contract forbids outright.
+//
+// The key space must be DENSE and 0-based (a block's local index, an op's position in its
+// block, a `ValueId`), which every consumer's key already is.
+
+// A dense node key, a neighbour, or a count — all the same non-negative integer, so the
+// columns unify with the tiers' own dense columns (`ValueIdArray`, `CfgIndexArray`) rather
+// than forcing a conversion at every call site.
+export typealias CsrIndex = int(0 to u64.max)
+export typealias CsrColumn = Array with CsrIndex
+
+// `list[start[n] .. start[n+1])` are the values associated with key `n`.
+export type CsrGraph
+	export var start as CsrColumn
+	export var list as CsrColumn
+
+	export static function create(start CsrColumn, list CsrColumn) returns CsrGraph
+		return Self{start: start, list: list}
+	end 'create'
+
+	// Number of neighbours of node `n`.
+	export function degree(n CsrIndex) returns CsrIndex
+		let lo = try self.start.get(n) otherwise panic("CsrGraph.degree: node {n} out of range")
+		let hi = try self.start.get(n + 1) otherwise panic("CsrGraph.degree: node {n}+1 out of range")
+		return hi - lo
+	end 'degree'
+
+	// The `k`-th neighbour of node `n`.
+	export function neighbour(n CsrIndex, k CsrIndex) returns CsrIndex
+		let lo = try self.start.get(n) otherwise panic("CsrGraph.neighbour: node {n} out of range")
+		return try self.list.get(lo + k) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
+	end 'neighbour'
+end 'CsrGraph'
+
+// Build a CSR graph from a parallel (from, to) edge list over `nodeCount` keys, in
+// O(edges + nodes): degree of each key into `start[key + 1]`, prefix-sum into offsets, then
+// place each edge at its key's running fill cursor. No sorting and no hashing.
+//
+// The (from, to) pairs may arrive in ANY order — the counting sort restores key order — but
+// within one key the neighbours keep the order they were pushed, which the death lists and
+// the phi-feeder lists both rely on for determinism.
+export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) returns CsrGraph
+	let edgeCount = from.count()
+
+	var start = CsrColumn.create()
+	start.resize(nodeCount + 1)
+
+	for k in 0 upto edgeCount 'countDeg'
+		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
+		let cur = try start.get(f + 1) otherwise panic("buildCsr: key {f} is outside the {nodeCount}-key space")
+		try start.set(f + 1, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
+	end 'countDeg'
+	for n in 0 upto nodeCount 'prefix'
+		let a = try start.get(n) otherwise panic("buildCsr: prefix start.get(n) OOB")
+		let b = try start.get(n + 1) otherwise panic("buildCsr: prefix start.get(n+1) OOB")
+		try start.set(n + 1, value: a + b) otherwise panic("buildCsr: prefix start.set OOB")
+	end 'prefix'
+
+	var list = CsrColumn.create()
+	list.resize(edgeCount)
+	// Running fill cursor per key, seeded from `start[key]`.
+	var fill = CsrColumn.create()
+	fill.resize(nodeCount)
+	for n in 0 upto nodeCount 'seedFill'
+		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
+		try fill.set(n, value: s) otherwise panic("buildCsr: seedFill set OOB")
+	end 'seedFill'
+	for k in 0 upto edgeCount 'place'
+		let f = try from.get(k) otherwise panic("buildCsr: place from.get OOB")
+		let t = try to.get(k) otherwise panic("buildCsr: place to.get OOB")
+		let pos = try fill.get(f) otherwise panic("buildCsr: place fill.get OOB")
+		try list.set(pos, value: t) otherwise panic("buildCsr: place list.set OOB")
+		try fill.set(f, value: pos + 1) otherwise panic("buildCsr: place fill.set OOB")
+	end 'place'
+
+	return CsrGraph.create(start, list: list)
+end 'buildCsr'

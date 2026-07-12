@@ -50,31 +50,6 @@ end 'zeroColumn'
 // may NOT be colored into because an op writes them while the value is live across.
 export typealias RegMaskColumn = Array with RegMask
 
-// Compressed-sparse-row adjacency: `list[start[n] .. start[n+1])` are node `n`'s
-// neighbours. One flat array instead of `Array with (a per-node array)` (which
-// would be one heap object per block).
-export type CsrGraph
-	export var start as CfgIndexArray
-	export var list as CfgIndexArray
-
-	export static function create(start CfgIndexArray, list CfgIndexArray) returns CsrGraph
-		return Self{start: start, list: list}
-	end 'create'
-
-	// Number of neighbours of node `n`.
-	export function degree(n CfgIndex) returns CfgIndex
-		let lo = try self.start.get(n) otherwise panic("CsrGraph.degree: node {n} out of range")
-		let hi = try self.start.get(n + 1) otherwise panic("CsrGraph.degree: node {n}+1 out of range")
-		return hi - lo
-	end 'degree'
-
-	// The `k`-th neighbour of node `n`.
-	export function neighbour(n CfgIndex, k CfgIndex) returns CfgIndex
-		let lo = try self.start.get(n) otherwise panic("CsrGraph.neighbour: node {n} out of range")
-		return try self.list.get(lo + k) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
-	end 'neighbour'
-end 'CsrGraph'
-
 // The per-function CFG + loop structure, built ONCE. Local block indices are dense
 // (0..numBlocks-1); `blockRefByLocal` maps them to flat `module.blocks` indices and
 // `localByBlockId` maps a function-local `BlockId` back to a local index — both
@@ -475,45 +450,6 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
 
-// Build a CSR graph from a parallel (from, to) edge list over `nodeCount` nodes.
-function buildCsr(from CfgIndexArray, to CfgIndexArray, nodeCount CfgIndex) returns CsrGraph
-	let edgeCount = from.count()
-
-	var start = CfgIndexArray.create()
-	start.resize(nodeCount + 1)
-
-	// Degree of each node into start[node+1], then prefix-sum into offsets.
-	for k in 0 upto edgeCount 'countDeg'
-		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
-		let cur = try start.get(f + 1) otherwise panic("buildCsr: start.get(f+1) OOB")
-		try start.set(f + 1, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
-	end 'countDeg'
-	for n in 0 upto nodeCount 'prefix'
-		let a = try start.get(n) otherwise panic("buildCsr: prefix start.get(n) OOB")
-		let b = try start.get(n + 1) otherwise panic("buildCsr: prefix start.get(n+1) OOB")
-		try start.set(n + 1, value: a + b) otherwise panic("buildCsr: prefix start.set OOB")
-	end 'prefix'
-
-	var list = CfgIndexArray.create()
-	list.resize(edgeCount)
-	// Running fill cursor per node, seeded from start[node].
-	var fill = CfgIndexArray.create()
-	fill.resize(nodeCount)
-	for n in 0 upto nodeCount 'seedFill'
-		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
-		try fill.set(n, value: s) otherwise panic("buildCsr: seedFill set OOB")
-	end 'seedFill'
-	for k in 0 upto edgeCount 'place'
-		let f = try from.get(k) otherwise panic("buildCsr: place from.get OOB")
-		let t = try to.get(k) otherwise panic("buildCsr: place to.get OOB")
-		let pos = try fill.get(f) otherwise panic("buildCsr: place fill.get OOB")
-		try list.set(pos, value: t) otherwise panic("buildCsr: place list.set OOB")
-		try fill.set(f, value: pos + 1) otherwise panic("buildCsr: place fill.set OOB")
-	end 'place'
-
-	return CsrGraph.create(start, list: list)
-end 'buildCsr'
-
 // The number of distinct value ids in the function (columns for the dense state):
 // max id appearing as an op operand, block-arg, or branch-edge arg, plus one. A
 // function always has at least a return value, so the count is never zero.
@@ -843,49 +779,6 @@ type LivePairs
 	end 'add'
 end 'LivePairs'
 
-// A CSR value list keyed by block — one direction of `LiveSets`.
-type CsrValues
-	export var start as CfgIndexArray
-	export var list as ValueIdArray
-
-	static function create(start CfgIndexArray, list ValueIdArray) returns CsrValues
-		return Self{start: start, list: list}
-	end 'create'
-end 'CsrValues'
-
-// Bucket `pairs` by block into CSR form: `list[start[b] .. start[b+1])` are the values recorded for
-// block `b`. A counting sort — count, prefix-sum, place — so O(pairs + blocks): no comparison sort,
-// no hashing, and no per-block heap object.
-function bucketPairsByBlock(pairs LivePairs, numBlocks CfgIndex) returns CsrValues
-	var start = zeroColumn(numBlocks + 1)
-	for b in pairs.blocks 'count'
-		bumpCount(start, at: b + 1)
-	end 'count'
-	for b in 0 upto numBlocks 'prefix'
-		let a = try start.get(b) otherwise panic("bucketPairsByBlock: prefix start.get(b) OOB")
-		let c = try start.get(b + 1) otherwise panic("bucketPairsByBlock: prefix start.get(b+1) OOB")
-		try start.set(b + 1, value: a + c) otherwise panic("bucketPairsByBlock: prefix start.set OOB")
-	end 'prefix'
-
-	let total = pairs.blocks.count()
-	var list = ValueIdArray.create()
-	list.resize(total)
-	var fill = zeroColumn(numBlocks)
-	for b in 0 upto numBlocks 'seedFill'
-		try fill.set(b, value: try start.get(b) otherwise panic("bucketPairsByBlock: seedFill start.get OOB")) otherwise panic("bucketPairsByBlock: seedFill set OOB")
-	end 'seedFill'
-
-	for k in 0 upto total 'place'
-		let b = try pairs.blocks.get(k) otherwise panic("bucketPairsByBlock: pairs.blocks.get OOB")
-		let v = try pairs.values.get(k) otherwise panic("bucketPairsByBlock: pairs.values.get OOB")
-		let pos = try fill.get(b) otherwise panic("bucketPairsByBlock: fill.get OOB")
-		try list.set(pos, value: v) otherwise panic("bucketPairsByBlock: list.set OOB")
-		try fill.set(b, value: pos + 1) otherwise panic("bucketPairsByBlock: fill.set OOB")
-	end 'place'
-
-	return CsrValues.create(start, list: list)
-end 'bucketPairsByBlock'
-
 // The number of block-marking steps a walk took — the cost counter that replaces the fixpoint's
 // iteration count (there is no fixpoint). Returned alongside the sets.
 type LivenessWalk
@@ -971,8 +864,11 @@ function solveLivenessSsa(module TargetModule, cfg FuncCfg, valueCount ValueId) 
 		end 'walkUp'
 	end 'eachValue'
 
-	let liveInCsr = bucketPairsByBlock(inPairs, numBlocks: cfg.numBlocks)
-	let liveOutCsr = bucketPairsByBlock(outPairs, numBlocks: cfg.numBlocks)
+	// The walk discovers (block, value) memberships in walk order; `buildCsr`'s counting sort
+	// buckets each direction by block in O(pairs + blocks) — no comparison sort, no hashing, and no
+	// per-block heap object.
+	let liveInCsr = buildCsr(inPairs.blocks, to: inPairs.values, nodeCount: cfg.numBlocks)
+	let liveOutCsr = buildCsr(outPairs.blocks, to: outPairs.values, nodeCount: cfg.numBlocks)
 	return LivenessWalk.create(LiveSets.create(liveInCsr.start, inList: liveInCsr.list, outStart: liveOutCsr.start, outList: liveOutCsr.list), markSteps: markSteps)
 end 'solveLivenessSsa'
 

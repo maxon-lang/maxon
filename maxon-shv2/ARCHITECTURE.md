@@ -475,6 +475,7 @@ The default pipeline, in order:
 | `resolveTypes` | Maxon | named/unresolved types → concrete; re-sync the registries |
 | `semanticCheck` | Maxon | E3001/E3002 + call validation |
 | `lowerMaxonToStd` | Maxon → Std | width/ABI collapse; 1:N desugaring; `blockArgs`/`branchEdges` carried verbatim |
+| `pruneDeadBlockArgs` | Std → Std | delete the loop-header phis nothing reads |
 | `foldConstOperands` | Std → Std | constants into immediate operand forms |
 
 `run()` enforces the **error gate**: after each pass, `projectHasErrors → throw CompileError` —
@@ -486,6 +487,38 @@ but not yet acted on; it is what the per-function fan-out driver will read.
 **Everything grows in HERE**, appended after `lowerMaxonToStd`: the Std optimization passes,
 the Own-tier passes, and `lowerToMachineForm`. There is no second pipeline over a machine tier,
 because there is no machine tier.
+
+### `pruneDeadBlockArgs` (a register-allocator obligation, not an optimization)
+
+**The front end over-produces phis, and the surplus is what a FALSE `E5001` was made of.**
+On-the-fly SSA must mint a loop header's phis *before* it parses the body — the set of vars the
+body writes is not yet known — so `Parser.parseWhileStatement` mints one per mutable var **in
+scope**. Every `var` declared before a loop gets a loop-carried phi, including vars the loop
+never touches and vars that are already dead when the loop is reached.
+
+A phi for a var the loop never reads is not merely useless, it is **self-sustaining**: the back
+edge passes it to itself, so it *has* a use, and liveness holds it live around the **entire
+loop**. Two sequential loops are enough — every accumulator of the first loop reappears as a
+dead phi in the second loop's header. Then `maxlive` inflates by one per dead var, the splitter
+**forced-spills them around the second loop's call** (a store *and* a reload every iteration,
+for values nothing reads), and past the pool of 14 the compiler raises `E5001` against a program
+that fits the machine comfortably — ranking the dead phis first among the values to delete,
+described as "used 0 times in the loop". Which they were. They were used nowhere.
+
+**Usefulness is a LEAST FIXPOINT, not a use count.** A block-arg is useful iff (a) an *op* reads
+it, or (b) it is what some edge passes to a *useful* block-arg. A self-sustaining dead phi
+satisfies neither. Asking the question `foldConstOperands`'s const DCE asks — "is this value
+referenced anywhere, edges included?" — keeps every one of them.
+
+It never rewrites a value (a dead block-arg has no reader left to rewrite); it drops
+`blockArgs[k]` together with slot `k` of every incoming edge, so the positional alignment the
+phi model rests on is preserved by construction. It runs **before** `foldConstOperands`, whose
+const DCE then collects the `const` ops whose only reader was a dead phi's edge.
+
+A merely **redundant** phi — a var the loop reads but never writes, so the header phi carries a
+value that never changes — is deliberately left alone. It is not dead, and it costs nothing:
+biased coloring coalesces it with its incoming value into one register and SSA destruction drops
+the resulting self-move.
 
 ### `foldConstOperands` (the one Std optimization pass today)
 
@@ -675,11 +708,13 @@ Three consequences, and they are the reason several things elsewhere in the comp
 1. **A false `E5001` is the worst bug this compiler can have.** It sends an author to restructure
    code that was fine, and can break an agent's convergence loop. Trust in the diagnostic is the
    whole product.
-2. **The compiler may therefore never waste a register, because a wasted register *is* a false
-   positive.** This is what promotes 3-operand `lea`/`imul`, immediate operands,
-   `foldConstOperands`, rematerialization, biased coloring, and copy-free ISel from
+2. **The compiler may therefore never leave a surplus value in the IR, because a surplus value
+   *is* a false positive.** This is what promotes 3-operand `lea`/`imul`, immediate operands,
+   `foldConstOperands`, `pruneDeadBlockArgs`, rematerialization, and copy-free ISel from
    "optimizations" to **contract obligations**. Any of them showing up as the cause of a blocking
-   set is a defect, not a tuning opportunity.
+   set is a defect, not a tuning opportunity. (Biased coloring belongs to the same discipline but
+   is *not* on this list, and the distinction matters: it runs after the pressure decision, so it
+   can waste a **register** but never a **value**. See "Known limits" #1.)
 3. **We can afford to be exact.** Because SSA interference is chordal, per-point `maxlive` *is*
    the minimum register count for the program as lowered — not an estimate. So `E5001` fires
    **iff** the loop truly does not fit, and the only way to be wrong is to have wasted a register
@@ -857,15 +892,43 @@ dying operands, then picks the def's register with `lowestClearBit(inUse | forbi
 ~pool)`. Dominance order is ASSERTED (every use is already colored when reached).
 
 **Biased coloring is a correctness obligation, not an optimization.** Hints from
-block-arg↔branch-arg pairs and from reuse defs collapse copy-related values into one register, so
-a loop's back-edge copy elides instead of landing IN the loop, and one loop-carried value is never
-counted as two. Without it, the pressure model would over-count every accumulator loop — and
-over-counting is what produces a FALSE pressure error, the worst bug this compiler can have (it
-sends an author to "fix" correct code). The pressure decision is therefore made on the true
-per-point maxlive **after** biased coloring, never on a cardinality gate.
+block-arg↔branch-arg pairs and from reuse defs collapse copy-related values into ONE register, so
+a loop's back-edge copy elides instead of landing IN the loop, and one loop-carried value costs
+one register instead of two. A value the compiler holds in two registers is a **wasted register**,
+and Rule-of-the-contract #2 says a wasted register is a false positive waiting to happen.
+
+> **What it does NOT do — and this misdirection has cost real debugging time — is change
+> `maxlive`.** A phi and the value an edge passes it are *never simultaneously live*: the arg's
+> range ends at the edge, the phi's begins at the successor's entry. Liveness does not count them
+> twice, and the splitter (which is what raises `E5001`, and runs **before** coloring) therefore
+> cannot see a coalescing failure at all. Biased coloring buys **registers used and copies
+> emitted**, not pressure. When an `E5001` really is false, the surplus is in the *IR* — the
+> shape `pruneDeadBlockArgs` deletes — not in the coloring.
 
 Register preference is **caller-saved first**, so leaf and call-free code never touches a
 callee-saved register and never pays a prologue push.
+
+**The class constraint propagates BACKWARDS along a copy hint**, because a forward sweep in
+dominance order colors the DEF first and the hint can only be read off an *already-colored*
+partner. A loop-carried accumulator is defined in the entry block and its header phi later, so at
+the moment that matters there is no register to copy — only a constraint:
+
+```
+var sum = 0                 // survives no call -> prefers CALLER-saved -> rax
+while i < n 'L'
+    sum = sum + f(i)        // the PHI is live across the call -> forbidden all 9 caller-saved
+end 'L'                     //   -> its only home is a CALLEE-saved register -> r12
+```
+
+The hint then misses (rax is forbidden for the phi), SSA destruction materializes `mov r12, rax`
+on the loop-entry edge, and the one value `sum` holds **two** registers. `copyGroupBlocked`
+widens the constant's blocked mask by the *phi's* forbidden set, so the constant is materialized
+straight into `r12`, the edge copy self-elides, and the pair costs one register.
+`pinnedPartnerRegister` is the same move for a partner pinned by a *physical* operand (`return
+sum` pins the phi to R8 through the return move). Neither can over-constrain: both are
+PREFERENCES — `chooseRegister` falls back to the value's own mask when the group's class is full
+— and neither fires when the partner is already colored, which is what leaves M5.12's
+scarce-class protection (below) exactly as it was.
 
 ### Spilling: cold-spill live-range splitting
 
@@ -1126,15 +1189,31 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    is Hall's condition on the per-value effective pools (`popcount(pool ∖ forbidden(v))`), which is
    sound because the forbidden sets here are laminar (`∅ ⊂ {rax,rdx} ⊂ caller-saved`). Not yet built.
 
-1. **The only source of a false `E5001` is a wasted register, and copy-related values are the one
-   that bites.** `maxlive` is exact for the program as lowered (chordal ⇒ χ = ω = maxlive), and
-   liveness is per-program-point, so values live on disjoint paths correctly do **not** interfere.
-   But two values that are *copies of each other* — a block arg and what the back edge passes it —
-   hold the same value and are still counted twice. **Biased coloring is what collapses them**, and
-   without it a loop would be told it needs one more register than it does. Every other
-   waste-a-register path is likewise a contract bug, not a limitation: a literal in a register (→
-   immediates, `foldConstOperands`), a witness table in a register (→ remat), a redundant
-   two-address copy (→ `lea`, `Reuse`).
+1. **`maxlive` is exact for the program AS LOWERED — so a false `E5001` means the IR itself
+   carries a value the author did not write.** Chordal ⇒ χ = ω = maxlive, and liveness is
+   per-program-point, so values live on disjoint paths correctly do **not** interfere. The
+   diagnostic can only be wrong if something *upstream* put a surplus value into the IR, and the
+   tell is always the same: a blocking value the ranking reports as **"used 0 times in the loop"**.
+
+   > **CORRECTED (this cost real debugging time).** This entry used to claim the surplus was a
+   > *copy-related pair* — a block arg and what the back edge passes it — "counted twice" unless
+   > biased coloring collapsed them. **That is not how it works.** Those two are never
+   > simultaneously live (the arg dies at the edge; the phi is defined at the successor's entry),
+   > so liveness never counts them twice, and coloring runs *after* the splitter has already
+   > decided `E5001` — it cannot move the number either way. Biased coloring buys registers-used
+   > and copies-emitted, which is worth having, but it is not what makes the pressure model
+   > honest.
+
+   The real surplus was **dead loop-header phis**: on-the-fly SSA mints one phi per mutable var in
+   scope, a phi the loop never reads is *self-sustaining* through its own back edge, and liveness
+   correctly holds it live around the whole loop. `pruneDeadBlockArgs` deletes them (see the Std
+   passes). Two sequential loops with six accumulators each demanded **17** registers where the
+   true working set is **9**.
+
+   Every other put-a-surplus-value-in-the-IR path is likewise a contract bug, not a limitation: a
+   literal in a register (→ immediates, `foldConstOperands`), a witness table in a register (→
+   remat), a redundant two-address copy (→ `lea`, `Reuse`). **The lesson generalizes: when
+   `E5001` looks wrong, read the IR before you read the colorer.**
 2. **Fixed-register points reduce the effective pool locally, so `maxPressure ≤ pool` is necessary
    but NOT sufficient** — the splitter's peak-finder tests every op against its *own* pool
    (`popcount(pool ∖ implicitDefs)`) as well as the full one. But a reduced-pool overflow is a

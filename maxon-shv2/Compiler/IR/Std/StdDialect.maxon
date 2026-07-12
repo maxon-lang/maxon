@@ -324,6 +324,48 @@ end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
 
+// The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
+// still read this value?" — the const DCE, the dead-block-arg prune — reads it from
+// `collectStdOpUses` below rather than re-matching the union, so a new StdOp variant is a
+// compile error in ONE place instead of a silently-missed use at each of them. (This is the
+// Std tier's counterpart to `targetOpOperands`, which plays the same role for the Target
+// tier's liveness, splitter, colorer and checker.)
+export typealias StdValueUseSet = Set with ValueId
+
+// Add the value ids `op` READS to `referenced` — its DEFS are not uses, and neither are the
+// branch-edge args (those live on the predecessor's `IrBlock`, not on the op). Exhaustive
+// over StdOp, no bare `default`.
+module function collectStdOpUses(op StdOp, referenced StdValueUseSet)
+	match op 'u'
+		const then break 'u'
+		binOp(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		unaryOp(_, operand, _) then referenced.insert(operand)
+		cmp(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		binOpImm(_, lhs, _, _) then referenced.insert(lhs)
+		cmpImm(_, lhs, _, _) then referenced.insert(lhs)
+		div(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		mod (_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		condBranch(condId, _, _) then referenced.insert(condId)
+		branch then break 'u'
+		ret(retValId) then referenced.insert(retValId)
+		param then break 'u'
+		call(_, _, args) then insertUseArgs(referenced, args: args)
+	end 'u'
+end 'collectStdOpUses'
+
+// Mark every call argument value as used, so a `const` fed ONLY to a call (`f(5)`) is not
+// pruned as dead. A `param` has no uses (its result is a def), so it contributes nothing.
+function insertUseArgs(referenced StdValueUseSet, args ValueIdArray)
+	for arg in args 'each'
+		referenced.insert(arg)
+	end 'each'
+end 'insertUseArgs'
+
+function insertUsePair(referenced StdValueUseSet, a ValueId, b ValueId)
+	referenced.insert(a)
+	referenced.insert(b)
+end 'insertUsePair'
+
 // --- The sugar band contract ---
 //
 // v1 enforced "no sugar reaches the backend" with a TYPE: sugar ops existed in

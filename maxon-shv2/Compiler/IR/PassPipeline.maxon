@@ -37,9 +37,19 @@ export union PassKind
 	semanticCheck
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
-	// Phase 3.5: Std → Std machine-form rewrites. `foldConstOperands` moves a const
-	// operand into an immediate so the literal needs no register — the first of the
-	// Std-tier passes the design schedules after lowering (before the backend).
+	// Phase 3.5: Std → Std machine-form rewrites.
+	//
+	// `pruneDeadBlockArgs` deletes the loop-header phis the on-the-fly SSA construction
+	// must mint speculatively (one per mutable var in scope, before the body is parsed)
+	// and that nothing ever reads. It runs FIRST of the Std passes because a dead phi is
+	// SELF-SUSTAINING — its back edge keeps it live around the whole loop — so it inflates
+	// the register allocator's maxlive and can raise a FALSE E5001; and because dropping
+	// its edge args is what lets `foldConstOperands`'s const DCE (below) then drop a
+	// `const` whose only reader was that edge.
+	//
+	// `foldConstOperands` moves a const operand into an immediate so the literal never
+	// needs a register.
+	pruneDeadBlockArgs
 	foldConstOperands
 end 'PassKind'
 
@@ -65,6 +75,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
+		pruneDeadBlockArgs gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
 	end 'classify'
 end 'classifyPass'
@@ -79,6 +90,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
+		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		foldConstOperands gives CompilePhase.foldConstOperands
 	end 'phase'
 end 'compilePhaseOfPass'
@@ -89,6 +101,7 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
+		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		foldConstOperands gives "foldConstOperands"
 	end 'name'
 end 'passKindToString'
@@ -110,6 +123,7 @@ export function buildDefaultPipeline() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
+	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.foldConstOperands)
 	return passes
 end 'buildDefaultPipeline'
@@ -182,6 +196,7 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, funcSignatures: self.project.funcSignatures)
+			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			foldConstOperands then foldConstOperands(self.stdModule)
 		end 'dispatch'
 

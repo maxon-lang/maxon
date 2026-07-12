@@ -1,0 +1,265 @@
+// PruneDeadBlockArgs — a Std→Std pass that deletes the block-args (phis) NOTHING reads.
+//
+// WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (ARCHITECTURE.md,
+// register allocator §"the contract"), and this is where one came from.
+//
+// The parser builds SSA on the fly, and a loop header's phis must be minted BEFORE the body
+// is parsed — the set of vars the body writes is not yet known. So it mints one phi per
+// mutable var IN SCOPE (`Parser.parseWhileStatement`). Every `var` declared before a loop
+// therefore gets a loop-carried phi, INCLUDING the ones the loop neither reads nor writes,
+// and including the ones that are already dead by the time the loop is reached.
+//
+// Such a phi is not merely useless — it is SELF-SUSTAINING. The back edge passes the phi to
+// itself, so the phi HAS a use, and liveness keeps it live around the ENTIRE loop. Two
+// sequential loops are all it takes: every accumulator of the first loop reappears as a dead
+// phi in the second loop's header, and then
+//
+//   • `maxlive` inflates by one per dead var, so the loop's measured working set is wrong;
+//   • the splitter forced-spills them around the loop's call — a store AND a reload every
+//     iteration for a value nothing reads;
+//   • and past the 14-register pool the compiler raises E5001 against a program that fits
+//     the machine, ranking the dead phis first among the values to delete ("used 0 times in
+//     the loop" — the tell).
+//
+// The parser has always PROMISED this pruning ("phis for unmutated vars turn out trivial and
+// collapse in the Std-tier phi-elim pass"), but that pass was M4b's `eliminatePhis`, RETIRED
+// at M5 when the register allocator took over SSA destruction — and nothing replaced its
+// pruning half. This is that half, restored as its own pass, which is where it belongs: the
+// allocator must not be the thing that discovers the front end over-produced.
+//
+// USEFULNESS IS A LEAST FIXPOINT, NOT A USE COUNT. A block-arg is useful iff
+//   (a) an OP reads it, or
+//   (b) it is what some edge passes to a USEFUL block-arg.
+// A self-sustaining dead phi satisfies neither — its only use is the edge feeding itself.
+// Asking the question `foldConstOperands` asks ("is this value referenced anywhere, edges
+// included?") would keep every single one of them.
+//
+// IT NEVER REWRITES A VALUE. A dead block-arg has no remaining reader to rewrite: the only
+// references to it are the edge slots this pass removes alongside it. Dropping slot `k` of a
+// block means dropping `blockArgs[k]` AND slot `k` of every incoming edge's `argIds`, so the
+// positional `blockArgs[k] ↔ argIds[k]` alignment the whole phi model rests on is preserved
+// by construction. The values those slots named simply lose a use — which is why the const
+// DCE in `foldConstOperands` runs AFTER this pass: it can then drop a `const` whose only
+// reader was a dead phi's edge.
+//
+// A merely REDUNDANT phi — a var the loop reads but never writes, so the header phi carries a
+// value that never changes — is deliberately LEFT ALONE. It is not dead (the body reads it),
+// and it costs nothing: biased coloring coalesces it with its incoming value into ONE
+// register and SSA destruction drops the resulting self-move. Rewriting it here would buy no
+// register and would require a value substitution this pass is careful not to need.
+
+// A per-value flag, indexed by ValueId. DENSE (ValueIds are function-local and dense), so no
+// Map and no hashing — the same discipline the register allocator's columns follow.
+typealias ValueFlagColumn = Array with bool
+
+// Delete every dead block-arg in every function, in place.
+export function pruneDeadBlockArgs(module StdModule)
+	var removed = 0 as ValueId
+	for func in module.functions 'eachFunc'
+		removed = removed + pruneDeadBlockArgsInFunc(module, func: func)
+	end 'eachFunc'
+
+	let total = removed
+	logDebug(LogCategory.ir, message: function() gives "pruneDeadBlockArgs: removed {total} dead block-arg(s) across {module.funcCount()} function(s)")
+end 'pruneDeadBlockArgs'
+
+// Prune one function. Returns how many block-args it dropped.
+function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+	let bound = blockArgIdBound(module, func: func)
+	if bound == 0 'noBlockArgs'
+		return 0
+	end 'noBlockArgs'
+
+	var isBlockArg = flagColumn(bound)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			setFlag(isBlockArg, v: arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+
+	// Built ONCE and threaded through both walks that resolve an edge's target.
+	let refByBlockId = buildBlockIdIndex(module, func: func)
+
+	let feeders = collectArgFeeders(module, func: func, refByBlockId: refByBlockId, bound: bound)
+	let useful = computeUsefulBlockArgs(module, func: func, isBlockArg: isBlockArg, feeders: feeders, bound: bound)
+	return dropUselessBlockArgs(module, func: func, refByBlockId: refByBlockId, useful: useful)
+end 'pruneDeadBlockArgsInFunc'
+
+// One past the highest block-arg ValueId in `func` — the size of the dense flag columns
+// below — or 0 when the function has no block-args at all (a straight-line function, which
+// then skips the pass entirely). Sizing the columns by the BLOCK-ARG id space rather than
+// the function's whole value space is safe because `flagOf` reads false for any id above it,
+// and an id above it is by definition not a block-arg.
+function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
+	var bound = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if arg.valueId + 1 > bound 'higher'
+				bound = arg.valueId + 1
+			end 'higher'
+		end 'eachArg'
+	end 'eachBlock'
+	return bound
+end 'blockArgIdBound'
+
+function flagColumn(count ValueId) returns ValueFlagColumn
+	var col = ValueFlagColumn.create()
+	col.resize(count)
+	return col
+end 'flagColumn'
+
+function setFlag(col ValueFlagColumn, v ValueId)
+	try col.set(v, value: true) otherwise panic("pruneDeadBlockArgs: flag write for value {v} is outside the block-arg id space")
+end 'setFlag'
+
+// FALSE for any id outside the column: the columns are sized by the block-arg id space, and
+// an edge legitimately passes ids above it (an op result, a parameter). Such a value is not
+// a block-arg, which is exactly what a `false` here means.
+function flagOf(col ValueFlagColumn, v ValueId) returns bool
+	return try col.get(v) otherwise false
+end 'flagOf'
+
+// For each block-arg, the values its predecessors pass to it: the positional `blockArgs[k] ↔
+// edge.argIds[k]` correspondence, INVERTED — indexed by the arg instead of by the edge, which
+// is the direction the usefulness fixpoint walks. One pass collects the (arg, incoming)
+// pairs; `buildCsr`'s counting sort buckets them by arg in O(pairs + args).
+function collectArgFeeders(module StdModule, func IrFunction, refByBlockId ValueIdArray, bound ValueId) returns CsrGraph
+	var argOf = ValueIdArray.create()
+	var incomingOf = ValueIdArray.create()
+
+	for blockRef in func.blockRefs 'eachPred'
+		let pred = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for edge in pred.branchEdges 'eachEdge'
+			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			for k in 0 upto target.blockArgs.count() 'eachSlot'
+				let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+				argOf.push(arg.valueId)
+				incomingOf.push(incomingArgAt(edge, k: k, pred: pred, target: target))
+			end 'eachSlot'
+		end 'eachEdge'
+	end 'eachPred'
+
+	return buildCsr(argOf, to: incomingOf, nodeCount: bound)
+end 'collectArgFeeders'
+
+// The value `edge` passes to its target's k-th block-arg. A count mismatch here is the
+// positional phi model being broken by whatever produced the edge — the parser's on-the-fly
+// SSA or a later pass — so it panics rather than silently mis-pairing a phi with someone
+// else's value.
+function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
+	return try edge.argIds.get(k) otherwise panic("pruneDeadBlockArgs: the edge '{pred.label}' -> '{target.label}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+end 'incomingArgAt'
+
+// BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space (ids are
+// function-local and minted 0..nextBlockId-1). The +1 lets a zero-filled column carry its own
+// "not in this function" sentinel — `IrModule.getBlockByIdIn` is a LINEAR scan of the
+// function's blocks, and calling it once per edge would be O(edges × blocks), the shape the
+// allocator's data-representation contract exists to forbid.
+function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
+	var refByBlockId = ValueIdArray.create()
+	refByBlockId.resize(func.nextBlockId)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("pruneDeadBlockArgs: block '{block.label}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+	end 'eachBlock'
+	return refByBlockId
+end 'buildBlockIdIndex'
+
+function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from String) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("pruneDeadBlockArgs: block '{from}' branches to block id {id}, outside its function's block-id space")
+	if refPlusOne == 0 'notInFunction'
+		panic("pruneDeadBlockArgs: block '{from}' branches to block id {id}, which is not registered in the function")
+	end 'notInFunction'
+	return try module.blocks.get(refPlusOne - 1) otherwise panic("pruneDeadBlockArgs: blockRef for block id {id} not in module.blocks")
+end 'blockById'
+
+// The least fixpoint of "useful": an OP-read block-arg is useful, and whatever an edge passes
+// to a useful block-arg is useful too. A worklist walk over the feeder CSR, so it is linear —
+// and a self-sustaining dead phi, whose ONLY use is the back edge that feeds it to itself,
+// never enters it.
+function computeUsefulBlockArgs(module StdModule, func IrFunction, isBlockArg ValueFlagColumn, feeders CsrGraph, bound ValueId) returns ValueFlagColumn
+	var opReads = StdValueUseSet.create()
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("pruneDeadBlockArgs: live op index {opIdx} not in module.ops")
+		collectStdOpUses(op, referenced: opReads)
+	end 'eachOp'
+
+	var useful = flagColumn(bound)
+	var worklist = ValueIdArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if opReads.contains(arg.valueId) 'read'
+				markUseful(arg.valueId, useful: useful, worklist: worklist)
+			end 'read'
+		end 'eachArg'
+	end 'eachBlock'
+
+	while worklist.count() > 0 'propagate'
+		let p = try worklist.pop() otherwise panic("pruneDeadBlockArgs: pop from a non-empty worklist")
+		for k in 0 upto feeders.degree(p) 'eachFeeder'
+			let incoming = feeders.neighbour(p, k: k)
+			// Only a block-arg can be pruned, so the walk stops at the first non-block-arg on
+			// every feeder chain — an op result or a parameter is already a real def.
+			if flagOf(isBlockArg, v: incoming) and not flagOf(useful, v: incoming) 'newlyUseful'
+				markUseful(incoming, useful: useful, worklist: worklist)
+			end 'newlyUseful'
+		end 'eachFeeder'
+	end 'propagate'
+
+	return useful
+end 'computeUsefulBlockArgs'
+
+function markUseful(v ValueId, useful ValueFlagColumn, worklist ValueIdArray)
+	if flagOf(useful, v: v) 'already'
+		return
+	end 'already'
+	setFlag(useful, v: v)
+	worklist.push(v)
+end 'markUseful'
+
+// Drop every block-arg that is not useful, together with its slot in EVERY incoming edge.
+// The edges are rewritten FIRST, while each target still declares the block-args the slots
+// are aligned to; the block-arg lists are rebuilt after. Returns the number dropped.
+function dropUselessBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, useful ValueFlagColumn) returns ValueId
+	for blockRef in func.blockRefs 'eachPred'
+		var pred = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newEdges = BranchEdgeArray.create()
+		for edge in pred.branchEdges 'eachEdge'
+			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgIds(edge, pred: pred, target: target, useful: useful)))
+		end 'eachEdge'
+		pred.branchEdges = newEdges
+	end 'eachPred'
+
+	var removed = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newArgs = IrBlockArgArray.create()
+		for arg in block.blockArgs 'eachArg'
+			if flagOf(useful, v: arg.valueId) 'keep'
+				newArgs.push(arg)
+			end 'keep' else 'drop'
+				removed = removed + 1
+			end 'drop'
+		end 'eachArg'
+		block.blockArgs = newArgs
+	end 'eachBlock'
+
+	return removed
+end 'dropUselessBlockArgs'
+
+// The values `edge` passes to the block-args its target KEEPS, in slot order.
+function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, useful ValueFlagColumn) returns ValueIdArray
+	var kept = ValueIdArray.create()
+	for k in 0 upto target.blockArgs.count() 'eachSlot'
+		let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+		let incoming = incomingArgAt(edge, k: k, pred: pred, target: target)
+		if flagOf(useful, v: arg.valueId) 'keep'
+			kept.push(incoming)
+		end 'keep'
+	end 'eachSlot'
+	return kept
+end 'keptArgIds'

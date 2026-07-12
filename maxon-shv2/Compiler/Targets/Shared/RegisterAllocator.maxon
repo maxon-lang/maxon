@@ -611,20 +611,29 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 		panic("allocateDef: value {v} is already colored — a value has two defs, violating the single-def SSA invariant (RULE 1)")
 	end 'doubleDef'
 	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not pool)
-	let reg = chooseRegister(v, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, stats: stats)
+	let reg = chooseRegister(v, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
 	alloc.assign(v, regNum: reg)
 	stats.valuesColored = stats.valuesColored + 1
 	stats.noteRegisterUse(reg)
 	return regMaskAdd(working, regNum: reg)
 end 'allocateDef'
 
-// Pick a register for `v`: the hinted register FIRST (fixed, then the copy partner's), falling back
-// to the lowest free register of `v`'s own preferred class. This one biased choice is what collapses
-// copy-related values so their copy elides.
+// Pick a register for `v`. The hints come first, in this order — each is the register `v` must take
+// for SOME copy to elide, most-certain first:
 //
-// **A hint may not ALLOCATE a register outside `v`'s preferred class while that class still has one
-// free — but it may always TRANSFER one that is being vacated at this very op.** Those are different
-// acts and only the first one is harmful:
+//   1. `v`'s OWN fixed hint — a physical operand pins it (the `mov r8, retval` return move).
+//   2. its copy partner's REGISTER, when the partner is already colored (the back-edge arg taking
+//      over the phi's register: this is what keeps a loop body copy-free).
+//   3. its copy partner's PIN, when the partner is NOT yet colored (`pinnedPartnerRegister`).
+//
+// and the fallback is the lowest free register of `v`'s COPY GROUP's preferred class
+// (`copyGroupBlocked`). Hints 3 and the group class are the BACKWARD half: a forward sweep in
+// dominance order colors the def before the phi, so without them a phi's constraints can never
+// reach the value that feeds it, and the pair costs two registers.
+//
+// **A hint may not ALLOCATE a register outside that class while the class still has one free — but
+// it may always TRANSFER one that is being vacated at this very op.** Those are different acts and
+// only the first one is harmful:
 //
 //  • TRANSFER (`hintReg ∈ dyingRegs`) — the partner dies right here, so `v` inherits the register it
 //    was already holding. Total registers used: unchanged. This is the whole point of biased
@@ -632,10 +641,10 @@ end 'allocateDef'
 //    destruction emits NO back-edge copy and the loop body stays copy-free. Always allow it.
 //
 //  • ALLOCATION (the register is merely idle) — `v` consumes a register nothing was holding. If
-//    that register is CALLEE-SAVED and `v` does not need one (it does not survive a call), it has
-//    taken one of only FIVE registers that are the sole home for values which cross a call. A value
-//    that can live NOWHERE else then finds none, and the colorer dies with every register blocked.
-//    Gate this by `v`'s preferred class.
+//    that register is CALLEE-SAVED and `v`'s copy group does not need one (nothing in it survives a
+//    call), it has taken one of only FIVE registers that are the sole home for values which cross a
+//    call. A value that can live NOWHERE else then finds none, and the colorer dies with every
+//    register blocked. Gate this by the copy group's preferred class.
 //
 // The failure is not a pressure problem and the splitter cannot see it: at the failing point the
 // values FIT (five confined values, five callee-saved registers). It is a COLORING ORDER problem —
@@ -643,8 +652,10 @@ end 'allocateDef'
 // problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce class
 // is protected. Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
-function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, stats RegAllocStats) returns MachineWord
-	let takeable = preferredClassMask(blocked) or dyingRegs
+function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns MachineWord
+	// The class is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
+	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
+	let takeable = preferredClassMask(groupBlocked) or dyingRegs
 
 	if hints.hasFixed(v) 'fixed'
 		let fr = hints.fixedOf(v)
@@ -664,9 +675,25 @@ function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints Col
 		end 'partnerColored'
 	end 'copy'
 
+	// The partner is not colored yet, but it is PINNED — take its register now (see
+	// `pinnedPartnerRegister`).
+	let pinned = pinnedPartnerRegister(v, hints: hints, alloc: alloc, liveness: liveness)
+	if pinned != NoFixedHint and hintIsTakeable(pinned, blocked: blocked, takeable: takeable) 'pinnedFree'
+		stats.hintsHonoured = stats.hintsHonoured + 1
+		return pinned
+	end 'pinnedFree'
+
 	if hints.hasFixed(v) or hints.hasCopy(v) 'missed'
 		stats.hintsMissed = stats.hintsMissed + 1
 	end 'missed'
+
+	// Prefer the copy group's class. If nothing in it is free, `v` cannot coalesce with its
+	// partner however it is colored, so fall back to `v`'s OWN constraint and let SSA destruction
+	// emit the copy — which is strictly what would have happened without the group at all.
+	let grouped = pickPreferredRegister(groupBlocked)
+	if grouped != RegisterFileSize 'gotGrouped'
+		return grouped
+	end 'gotGrouped'
 
 	let reg = pickPreferredRegister(blocked)
 	if reg == RegisterFileSize 'exhausted'
@@ -675,9 +702,82 @@ function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints Col
 	return reg
 end 'chooseRegister'
 
+// The register `v`'s copy partner is PINNED to and will therefore take if it is free: the partner's
+// OWN fixed hint, when the partner is not yet colored and is not forbidden that register.
+// `NoFixedHint` when there is no such register — the same "no hint" sentinel `ColorHints.fixedOf`
+// returns.
+//
+// This is the other half of `copyGroupBlocked`, and it exists for the same reason: the forward sweep
+// colors the DEF before the phi, so a pin on the PHI can only reach the value that feeds it by being
+// read AHEAD of time. `return sum` after a loop pins `sum`'s phi to R8 (the `mov r8, sum` return
+// move); the initial `sum = 0` in the entry block is colored first, cannot see that pin, lands
+// somewhere else, and the loop-entry edge copy survives — one value, two registers, for the second
+// time. Predicting the pin removes it.
+//
+// It is safe even when the prediction is WRONG (the partner's pin turns out to be occupied at its
+// own def, so the two do not coalesce after all): `v` still only ever takes a register that
+// `hintIsTakeable` has cleared for `v` itself, so the worst case is the copy we already had.
+function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns MachineWord
+	if not hints.hasCopy(v) 'noPartner'
+		return NoFixedHint
+	end 'noPartner'
+
+	let p = hints.copyOf(v)
+	if alloc.isColored(p) 'partnerColored'
+		return NoFixedHint
+	end 'partnerColored'
+	if not hints.hasFixed(p) 'partnerNotPinned'
+		return NoFixedHint
+	end 'partnerNotPinned'
+
+	let pr = hints.fixedOf(p)
+	if regMaskContains(liveness.forbiddenOf(p), regNum: pr) 'partnerCannotTakeIt'
+		return NoFixedHint
+	end 'partnerCannotTakeIt'
+	return pr
+end 'pinnedPartnerRegister'
+
+// `blocked`, WIDENED by the forbidden set of the copy partner `v` has not been colored with yet —
+// so `v` picks a register its partner can also take, and the two coalesce.
+//
+// **A copy-related pair must be colored out of the class BOTH ends can hold, or it costs two
+// registers instead of one — and a wasted register is a false E5001 waiting to happen.** The hint
+// path above can only fire when the partner is ALREADY colored, and a forward sweep in dominance
+// order colors the DEFINITION first: a loop-carried accumulator's initial value is defined in the
+// entry block, its loop-header phi later. So at the moment that matters there is no register to
+// copy, only a constraint — and the constraint is the whole story:
+//
+//   var sum = 0                 // not live across any call -> prefers CALLER-saved -> rax
+//   while i < n 'L'
+//       sum = sum + f(i)        // the phi IS live across the call -> forbidden every caller-saved
+//   end 'L'                     //   register -> must take a CALLEE-saved one -> r12
+//
+// The hint then misses (rax is forbidden for the phi), SSA destruction materializes `mov r12, rax`
+// on the loop-entry edge, and the ONE value `sum` holds TWO registers. Widening the const's blocked
+// mask by the phi's forbidden set makes it pick r12 directly, the edge copy self-elides, and the
+// pair costs one register. Nothing else changes: a partner with no forbidden registers (the common
+// case) widens nothing, and an ALREADY-colored partner is left to the hint path — which is what
+// keeps M5.12's scarce-class protection exactly as it was.
+//
+// It cannot over-constrain: the widened mask is only a PREFERENCE (`chooseRegister` falls back to
+// `blocked` when the group's class is full), never a legality claim.
+function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegMask
+	if not hints.hasCopy(v) 'noPartner'
+		return blocked
+	end 'noPartner'
+
+	let p = hints.copyOf(v)
+	if alloc.isColored(p) 'partnerColored'
+		return blocked
+	end 'partnerColored'
+
+	return blocked or liveness.forbiddenOf(p)
+end 'copyGroupBlocked'
+
 // The class of registers a value with this `blocked` mask should take from: the CALLER-saved half
-// when any of it is free (the value needs no callee-saved register — it does not survive a call),
-// otherwise the whole pool (the value is confined, and the callee-saved half is its only home).
+// when any of it is free (nothing in the value's copy group survives a call, so none of it needs a
+// callee-saved register), otherwise the whole pool (the group is confined, and the callee-saved half
+// is its only home).
 //
 // This is `pickPreferredRegister`'s choice, named — so a HINT can be held to the same class. The
 // two must agree, or the hint path quietly bypasses the very protection the fallback path provides.
@@ -797,20 +897,17 @@ end 'allocateReuseDef'
 // it APPEARS, so every query is about one of the op's own operands, of which there are at most a
 // handful. The list is O(operands) per op and answers the same questions.
 type BlockDeaths
-	export var start as CfgIndexArray
-	export var list as ValueIdArray
+	export var byPos as CsrGraph
 
-	static function create(start CfgIndexArray, list ValueIdArray) returns BlockDeaths
-		return Self{start: start, list: list}
+	static function create(byPos CsrGraph) returns BlockDeaths
+		return Self{byPos: byPos}
 	end 'create'
 
 	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
 	// op's operand count, so this is O(1) in practice.
 	export function dies(pos ByteCount, v ValueId) returns bool
-		let lo = try self.start.get(pos) otherwise panic("BlockDeaths.dies: start.get({pos}) OOB")
-		let hi = try self.start.get(pos + 1) otherwise panic("BlockDeaths.dies: start.get({pos}+1) OOB")
-		for k in lo upto hi 'each'
-			if (try self.list.get(k) otherwise panic("BlockDeaths.dies: list.get OOB")) == v 'match'
+		for k in 0 upto self.byPos.degree(pos) 'each'
+			if self.byPos.neighbour(pos, k: k) == v 'match'
 				return true
 			end 'match'
 		end 'each'
@@ -821,10 +918,8 @@ type BlockDeaths
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
 	export function dyingRegsAt(pos ByteCount, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
-		let lo = try self.start.get(pos) otherwise panic("BlockDeaths.dyingRegsAt: start.get({pos}) OOB")
-		let hi = try self.start.get(pos + 1) otherwise panic("BlockDeaths.dyingRegsAt: start.get({pos}+1) OOB")
-		for k in lo upto hi 'each'
-			let v = try self.list.get(k) otherwise panic("BlockDeaths.dyingRegsAt: list.get OOB")
+		for k in 0 upto self.byPos.degree(pos) 'each'
+			let v = self.byPos.neighbour(pos, k: k)
 			if alloc.isColored(v) 'colored'
 				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
 			end 'colored'
@@ -887,40 +982,10 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 		bitsetRemove(seenBelow, base: 0, bit: arg.valueId)
 	end 'clearPhis'
 
-	return bucketDeathsByPos(posOf, valueOf: valueOf, opCount: n)
+	// The scan discovered the deaths in REVERSE op order; the counting sort in `buildCsr`
+	// restores forward order in O(pairs + ops), keyed by the op's position in the block.
+	return BlockDeaths.create(buildCsr(posOf, to: valueOf, nodeCount: n))
 end 'computeBlockDeaths'
-
-// Counting-sort the (pos, value) death pairs into CSR by op position.
-function bucketDeathsByPos(posOf CfgIndexArray, valueOf ValueIdArray, opCount ByteCount) returns BlockDeaths
-	var start = zeroColumn(opCount + 1)
-	for p in posOf 'count'
-		let cur = try start.get(p + 1) otherwise panic("bucketDeathsByPos: start.get OOB")
-		try start.set(p + 1, value: cur + 1) otherwise panic("bucketDeathsByPos: start.set OOB")
-	end 'count'
-	for p in 0 upto opCount 'prefix'
-		let a = try start.get(p) otherwise panic("bucketDeathsByPos: prefix start.get(p) OOB")
-		let b = try start.get(p + 1) otherwise panic("bucketDeathsByPos: prefix start.get(p+1) OOB")
-		try start.set(p + 1, value: a + b) otherwise panic("bucketDeathsByPos: prefix start.set OOB")
-	end 'prefix'
-
-	let total = posOf.count()
-	var list = ValueIdArray.create()
-	list.resize(total)
-	var fill = zeroColumn(opCount)
-	for p in 0 upto opCount 'seedFill'
-		try fill.set(p, value: try start.get(p) otherwise panic("bucketDeathsByPos: seedFill start.get OOB")) otherwise panic("bucketDeathsByPos: seedFill set OOB")
-	end 'seedFill'
-
-	for k in 0 upto total 'place'
-		let p = try posOf.get(k) otherwise panic("bucketDeathsByPos: posOf.get OOB")
-		let v = try valueOf.get(k) otherwise panic("bucketDeathsByPos: valueOf.get OOB")
-		let at = try fill.get(p) otherwise panic("bucketDeathsByPos: fill.get OOB")
-		try list.set(at, value: v) otherwise panic("bucketDeathsByPos: list.set OOB")
-		try fill.set(p, value: at + 1) otherwise panic("bucketDeathsByPos: fill.set OOB")
-	end 'place'
-
-	return BlockDeaths.create(start, list: list)
-end 'bucketDeathsByPos'
 
 // ==========================================================================
 // Applying a coloring to an op (used by the rewrite in SsaDestruction.maxon)

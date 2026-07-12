@@ -151,6 +151,84 @@ end 'main'
 14
 ```
 
+<!-- test: while-loops.sequential-loops-dead-phis -->
+**The false-`E5001` regression test.** Two sequential loops, each calling a function, each carrying
+SIX accumulators — and the first loop's accumulators are DEAD by the time the second loop starts.
+
+This shape used to be rejected outright: *"17 values must be held in registers at once inside this
+loop, but only 14 registers are available"*, with the first loop's accumulators ranked first among
+the values to delete — described as **"used 0 times in the loop"**, which is the tell. They were not
+used in that loop. They were not used anywhere. The real working set is **9**.
+
+The cause was in the front end, not the allocator. On-the-fly SSA must mint a loop header's phis
+BEFORE it parses the body, so it mints one per mutable var IN SCOPE — and a phi for a var the loop
+never touches is SELF-SUSTAINING: the back edge passes it to itself, so it *has* a use, and liveness
+holds it live around the entire loop. Seven of them (six accumulators plus the first loop's counter)
+inflated `maxlive` by seven, the splitter forced-spilled them around the second loop's call — a
+store AND a reload every iteration, for values nothing reads — and past 14 the compiler raised
+`E5001` against a program that fits the machine comfortably. `pruneDeadBlockArgs` deletes them.
+
+**A false `E5001` is the worst bug this compiler can have** (it sends an author to restructure code
+that was fine, and can break an agent's convergence loop), so this test is a gate on the whole
+contract, not on one loop shape.
+
+`work(x) = x + 1`, so each loop adds `1+2+3 = 6` to each of its accumulators over three iterations.
+Per loop the accumulators start at `1..6` and finish at `7..12`, summing to `21 + 36 = 57`; two
+loops give `total = 114`.
+```maxon
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function big(n int) returns int
+	var total = 0
+	var a0 = 1
+	var a1 = 2
+	var a2 = 3
+	var a3 = 4
+	var a4 = 5
+	var a5 = 6
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a0 = a0 + r
+		a1 = a1 + r
+		a2 = a2 + r
+		a3 = a3 + r
+		a4 = a4 + r
+		a5 = a5 + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a0 + a1 + a2 + a3 + a4 + a5
+	var b0 = 1
+	var b1 = 2
+	var b2 = 3
+	var b3 = 4
+	var b4 = 5
+	var b5 = 6
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b0 = b0 + s
+		b1 = b1 + s
+		b2 = b2 + s
+		b3 = b3 + s
+		b4 = b4 + s
+		b5 = b5 + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b0 + b1 + b2 + b3 + b4 + b5
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+```
+```exitcode
+114
+```
+
 
 ## Deferred
 

@@ -26,7 +26,6 @@
 // A wider constant keeps its register operand, which is the correct fallback.
 
 typealias ConstValueMap = Map with (ValueId, ParsedInt)
-typealias ReferencedValueSet = Set with ValueId
 
 // The result of attempting to fold one op: either unchanged, or a replacement op
 // to write back at the same index (never a sentinel op).
@@ -212,8 +211,8 @@ end 'dceUnreferencedConsts'
 
 // Every value id READ by any live op, plus every value passed on a phi branch edge —
 // the reachability roots the const DCE keeps a def alive for.
-function collectReferencedValues(module StdModule, func IrFunction) returns ReferencedValueSet
-	var referenced = ReferencedValueSet.create()
+function collectReferencedValues(module StdModule, func IrFunction) returns StdValueUseSet
+	var referenced = StdValueUseSet.create()
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
 		collectStdOpUses(op, referenced: referenced)
@@ -229,43 +228,9 @@ function collectReferencedValues(module StdModule, func IrFunction) returns Refe
 	return referenced
 end 'collectReferencedValues'
 
-// Add the value ids `op` READS to `referenced` (defs are not uses). Exhaustive over
-// StdOp, no bare `default`.
-function collectStdOpUses(op StdOp, referenced ReferencedValueSet)
-	match op 'u'
-		const then break 'u'
-		binOp(_, lhs, rhs, _) then addReferencedPair(referenced, a: lhs, b: rhs)
-		unaryOp(_, operand, _) then referenced.insert(operand)
-		cmp(_, lhs, rhs, _) then addReferencedPair(referenced, a: lhs, b: rhs)
-		binOpImm(_, lhs, _, _) then referenced.insert(lhs)
-		cmpImm(_, lhs, _, _) then referenced.insert(lhs)
-		div(_, lhs, rhs) then addReferencedPair(referenced, a: lhs, b: rhs)
-		mod(_, lhs, rhs) then addReferencedPair(referenced, a: lhs, b: rhs)
-		condBranch(condId, _, _) then referenced.insert(condId)
-		branch then break 'u'
-		ret(retValId) then referenced.insert(retValId)
-		param then break 'u'
-		call(_, _, args) then insertReferencedArgs(referenced, args: args)
-	end 'u'
-end 'collectStdOpUses'
-
-// Mark every call argument value as referenced so a `const` fed ONLY to a call
-// (`f(5)`) is not pruned as dead. A `param` has no uses (its result is a def), so it
-// contributes nothing here.
-function insertReferencedArgs(referenced ReferencedValueSet, args ValueIdArray)
-	for arg in args 'each'
-		referenced.insert(arg)
-	end 'each'
-end 'insertReferencedArgs'
-
-function addReferencedPair(referenced ReferencedValueSet, a ValueId, b ValueId)
-	referenced.insert(a)
-	referenced.insert(b)
-end 'addReferencedPair'
-
 // True for a `const` op whose result appears in no reference set — the dead def the
 // prune drops.
-function isUnreferencedConst(op StdOp, referenced ReferencedValueSet) returns bool
+function isUnreferencedConst(op StdOp, referenced StdValueUseSet) returns bool
 	return match stdConstInfo(op) 'c'
 		isConst(resultId, _) gives not referenced.contains(resultId)
 		notConst gives false
