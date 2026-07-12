@@ -154,11 +154,17 @@ export type RegAllocStats
 	export var valuesSplit as ByteCount
 	export var reloadsInserted as ByteCount
 	export var rematerialized as ByteCount
+	// Of `valuesSplit`, how many were FORCED spills at a fixed-register point (a call / `idiv`)
+	// rather than COLD splits of an idle value — the amended Rule 2's mechanism. These are the
+	// spills permitted INSIDE a loop, so this is the counter to watch: it is the number of
+	// store/reload brackets in hot code, and each one is a program that would otherwise have been
+	// a FALSE E5001.
+	export var forcedSpills as ByteCount
 
 	export static function create() returns RegAllocStats
 		var phaseMs = DurationMsArray.create()
 		phaseMs.resize(RegAllocPhase.allCases.count())
-		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0}
+		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
 	end 'create'
 
 	export function addPhaseMs(phase RegAllocPhase, ms DurationMs)
@@ -796,7 +802,7 @@ end 'colorTargetOp'
 function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = "regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n"
 	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; fixpoint iterations total={stats.fixpointIterationsTotal} max={stats.fixpointIterationsMax}\n")
-	msg.append("  splitter: valuesSplit={stats.valuesSplit}; reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
+	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 	msg.append("  phase ms: splitting={stats.phaseMsOf(RegAllocPhase.splitting)} liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
 	return msg

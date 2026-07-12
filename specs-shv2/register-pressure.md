@@ -10,30 +10,44 @@ milestone: M5.7
 
 ## Documentation
 
-The register allocator's pool is 14 GPRs. When a program point needs more values in
-registers than fit there, the **cold-spill live-range splitter** (see `register-spill`)
-relieves the pressure wherever doing so is FREE — a value idle across a loop is stored
-before it and reloaded after it, with **nothing added to the loop body**. That covers
-every value the pressured region does not actually use.
+The register allocator's pool is 14 GPRs. E5001 exists to refuse **the search**, not to refuse
+**the spill** — and those are different things. The allocator will always emit a spill whose
+placement is *forced*, because deciding it costs nothing. It raises E5001 only where relieving the
+pressure would require it to *search* — an eviction tournament, a spill-cost model, iterated
+re-splitting — which is the expensive, heuristic, non-deterministic machinery this design exists
+to avoid. That gives three cases:
 
-What it cannot relieve is a value the loop itself *uses* every iteration: spilling that
-would put a load or store *inside* the loop body — exactly the slow code this design
-refuses to emit silently. When a loop's genuine working set exceeds the registers
-available, the compiler stops and reports **E5001** instead of degrading. The remedy is a
-restructuring only the programmer can do: hold the working set in an array (array elements
-are never promoted into registers, so the spill stays spilled).
+**1. A value idle across a pressured region → split it, free.** The **cold-spill splitter** (see
+`register-spill`) stores it before the region and reloads it after, with **nothing added to the
+loop body**. One placement, no choice.
 
-The diagnostic is the feature, not the error path. Because SSA interference is chordal,
-the per-program-point `maxlive` **is** the exact minimum register count for the program as
-lowered — so E5001 fires **iff** the loop truly does not fit, never on a loop that a
-smarter allocator would have colored. It is designed to let its consumer converge in one
-step:
+**2. A value live across a fixed-register point → bracket it, cheap.** At a **call**, the callee
+clobbers all 9 caller-saved registers, so a value that must survive the call can only live in one
+of the **5 callee-saved** registers — or on the stack. When more than 5 values are live across a
+call, the excess *must* go to memory: a store before the call and a reload after. That placement
+is **forced by the ABI, not chosen by a search**, so the allocator simply emits it — *even inside
+a loop*. The pair is cheap against the call it brackets: one store and one load, against a call
+that already costs far more. (An `idiv` is the same case in miniature, reserving `RAX`/`RDX`.)
 
-- **The exact deficit** — "remove N values", not "too many".
-- **The constrained register count that actually applies.** A value live across a **call**
-  can only sit in one of the **5 callee-saved** registers (the caller-saved set is clobbered
-  by the callee), so at a call the effective pool is 5, not 14. E5001 reports the reduced
-  count, or the deficit would be misleading. (An `idiv` similarly reserves `RAX`/`RDX`.)
+This is **not** E5001, and it must never become E5001. Such a program fits the machine — the
+values are excluded only from the registers one op happens to clobber. Refusing it would be a
+false positive, and the "restructuring" it would demand (hoist the loop's values into an array)
+emits a load *and* a store at **every use** — strictly worse code than the single bracket the
+compiler declined to emit.
+
+**3. A value the loop genuinely USES, when the loop's working set exceeds the whole pool →
+E5001.** Here there is nothing to bracket: spilling any of them puts a reload at *every use*,
+every iteration, and choosing which to sacrifice is exactly the search this allocator refuses to
+run. The working set is simply larger than the machine, and no spiller can fix that — only a
+restructuring the programmer can do: hold the working set in an array (array elements are never
+promoted into registers, so the spill stays spilled).
+
+The diagnostic is the feature, not the error path. Because SSA interference is chordal, the
+per-program-point `maxlive` **is** the exact minimum register count for the program as lowered —
+so E5001 fires **iff** the loop truly does not fit the full pool, never on a loop that a smarter
+allocator would have colored. It is designed to let its consumer converge in one step:
+
+- **The exact deficit** — "remove N values", not "too many" — against the **full pool of 14**.
 - **Each blocking value's source def site**, recovered through the `ValueOrigin` table
   (`(funcIndex, ValueId)` → the Maxon op that defined it → its source span), ranked
   cheapest-to-move first: fewest uses inside the loop means fewest reloads after the array
@@ -131,12 +145,23 @@ error E5001: the loop at <fragment>:20 needs 3 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-across-call -->
-The binding constraint need not be the nominal fourteen. Here five accumulators AND the loop
-counter — six values — are all live across a `sink` call inside the loop, but only the five
-callee-saved registers survive a call (the other nine are clobbered by the callee). So the
-effective pool AT the call is five, and the deficit is 1. E5001 reports the reduced count and
-why, not "6 of 14". The counter `i` (sink's argument, the condition, and its own increment)
-ranks last at three uses; the accumulators rank first at one use each.
+A call inside a loop is **NOT** E5001 — it is case 2, the forced bracket. Five accumulators AND
+the loop counter (six values) are live across the `sink` call inside the loop, but only five
+callee-saved registers survive a call. One value therefore *cannot* stay in a register: the ABI
+leaves it exactly one home, the stack. So the splitter stores it before the call and reloads it
+after — a placement it does not choose, only obeys — and the loop body grows by one store and one
+load, bracketing a call that costs far more. Nothing is searched, and no error is raised.
+
+This is the case that must never regress to E5001. The program fits the machine: six values,
+fourteen registers. The array rewrite an E5001 would have demanded puts all five accumulators in
+memory and reads *and writes* each one every iteration — ten memory ops per iteration to avoid
+two. Refusing the spill would have produced strictly worse code AND a false error.
+
+Every accumulator is loop-carried (an SSA phi) and its update is a back-edge arg, so this also
+covers the two shapes a forced spill must handle: a phi's store anchors at its block's entry, and
+a spilled value's branch-edge args are repointed at the reload alongside its op uses.
+
+`sink(i) = i`, so each `sk` accumulates `0+1+2+3+4 = 10`: `s1..s5 = 11,12,13,14,15`, summing to 65.
 ```maxon
 function sink(x int) returns int
 	return x
@@ -165,24 +190,8 @@ function main() returns ExitCode
 	return hotCall(0)
 end 'main'
 ```
-```maxoncstderr
-error E5001: the loop at <fragment>:13 needs 1 more register(s) than are available
-  6 values are live across the call inside this loop, but only 5
-  registers survive it on x64-windows (the other 9 are clobbered by the call). The
-  values idle across the loop were already spilled around it at no cost; spilling any of
-  these would put a load or store inside the loop body, which this error exists to prevent.
-
-  remove 1 of these 6 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:10   used 3 times in the loop
-
-  to fix: hold the loop's working set in an array and index it inside the loop.
-  array elements are never promoted into registers, so the values stay in memory
-  and the loop body no longer needs a register for each one.
+```exitcode
+65
 ```
 
 <!-- test: rescued-idle-around-loop -->

@@ -601,21 +601,63 @@ because every piece of it follows from one contract.
 `virtual(id)`, and that `id` **is the `ValueId` `lowerMaxonToStd` minted**. There is no separate
 virtual-register numbering anywhere in shv2.
 
-### The contract: spill where it is cold, error where it would be hot
+### The contract: refuse the SEARCH, not the SPILL
 
-**A programmer restructuring a hot loop will beat any spiller.** A spiller can only shuffle
-values between registers and stack slots; the author can change the *data structure* — hoist the
-working set into an array, split the loop, reorder the computation. So when a loop genuinely
-does not fit, the compiler does not quietly emit worse code. It **stops and says so precisely**.
+**`E5001` exists to keep the allocator out of the search business.** What is expensive — in
+compile time, in determinism, in explainability — is not emitting a spill. It is *deciding* one:
+the eviction tournament, the spill-cost model, the iterated re-splitting, the backtracking. That
+machinery is what made v1's allocator **74% of self-compile**, and it is what makes a failure
+unactionable ("my search gave up") instead of a theorem ("your loop needs 17 registers and has
+14").
 
-- **Cold spilling is free and automatic.** A value with a gap in its uses gets its live range
-  *split*: it lives in memory across the gap and in a register where it is used. Around a loop it
-  does not touch, that is a store in the preheader and a reload after — **zero instructions added
-  to the loop body**.
-- **Hot spilling is `E5001`.** If a value the loop *uses* would have to be evicted and reloaded
-  inside that loop, the compiler reports it instead. No backtracking, no eviction tournament, no
-  spill-cost model.
+So the line is **not** hot-vs-cold. It is **forced-vs-searched**:
+
+- **If the placement is forced, emit it.** Deciding it costs nothing, so there is nothing to
+  refuse.
+- **If relieving the pressure would require a search, raise `E5001`.** That is the machinery we
+  decline to build.
+
+That yields exactly three cases:
+
+**1. A value idle across a pressured region → split it (free).** It lives in memory across the gap
+and in a register where it is used. Around a loop it does not touch: a store before, a reload
+after, **nothing added to the loop body**. One placement, no choice.
+
+**2. A value live across a fixed-register point → bracket it (cheap).** A call clobbers all 9
+caller-saved registers, so a value that must survive it has exactly two homes: one of the **5
+callee-saved** registers, or the stack. Past the fifth, the ABI has already made the decision —
+memory is the *only* home. The allocator stores before the call and reloads after, **including
+inside a loop**, because that placement is *forced by the ABI, not chosen by a search*. The pair
+is cheap against the op it brackets: one store and one load against a call that costs far more.
+(An `idiv` is the same case in miniature, reserving `RAX`/`RDX`.)
+
+> **This must never be `E5001`.** Such a program *fits the machine* — the values are excluded only
+> from the registers one op happens to clobber. Refusing it would be a false positive, and the
+> restructuring it would demand (hoist the loop's values into an array) puts **every** value in
+> memory and reads *and writes* each one at **every use** — strictly worse code than the single
+> bracket the compiler declined to emit. The remedy would be worse than the disease, and the
+> "restructuring beats the spiller" premise simply does not hold here: there is no data-structure
+> win to capture, only the same store and load, hand-written.
+>
+> This is also what keeps [Rule 3](#rule-3) true as the language grows. A dictionary-passing layout
+> descriptor inside a generic body (M14) is a hidden *parameter* — not rematerializable, invisible
+> in the author's source. Under a hot-spill ban it could land in a blocking set, which Rule 3 calls
+> unrecoverable. Under a forced bracket it simply spills around the call and blocks nothing.
+
+**3. A value the loop genuinely USES, when the working set exceeds the whole pool → `E5001`.**
+Here there is nothing to bracket. Spilling any of them puts a reload at *every use*, every
+iteration, and *choosing which to sacrifice is precisely the search this allocator refuses to
+run*. The loop's working set is simply larger than the machine. No spiller can fix that — only a
+restructuring the author can do, and that one **is** a real data-structure change: twenty
+accumulators become one array, and the pressure collapses to `{base, index, temp}`.
+
 - **One shot.** liveness → split → color. There is no reactive spill/color iteration.
+
+**The deficit is measured against the FULL pool of 14, never against a reduced one.** A reduced
+pool (the 5 callee-saved at a call) is a *clobber constraint*, not a capacity limit, and case 2
+dispatches it without an error. Reporting "6 live, only 5 survive a call" as a deficit was the
+false-positive class: it made an ordinary loop with five accumulators and a call — the shape of
+almost all real code, including this compiler's own inner loops — a compile error.
 
 **And the author is expected to be an AI agent**, which is what makes erroring-instead-of-degrading
 the right trade rather than a hostile one: the cost of an `E5001` is one compile round-trip. It
@@ -657,13 +699,41 @@ Three consequences, and they are the reason several things elsewhere in the comp
 > The `Reuse` operand model is what makes Rule 1 true at the Target tier: without it,
 > `mov dest,lhs; add dest,rhs` writes `dest` twice and the tier is not SSA.
 
-> **RULE 2 (spill placement).** A store or reload may be inserted at a point `q` only if, for
-> every loop containing `q`, the value has **no use or def inside that loop**. Consequently spill
-> code is never added to a loop body for a value that loop uses. Straight-line (depth-0) code has
-> no such loop, so Belady eviction there is unrestricted — the reload executes once.
+> **RULE 2 (spill placement — emit the forced spill, refuse the searched one).** A spill is
+> emitted when its placement is *determined*; `E5001` is raised when choosing it would require a
+> *search*. Concretely, two placements are legal, and they are the two the compiler never has to
+> think about:
 >
-> If, after splitting out every value idle across loop `L`, the pressure inside `L` still exceeds
-> the pool → **`E5001`**.
+> - **COLD** (`SpillPlacement.cold`) — the value is **idle** across the pressured region (its def
+>   and every use sit at loop depth 0). Store before, reload after; **every inserted op lies
+>   outside every loop**, asserted on insertion. This relieves a **full-pool** overflow.
+>
+> - **FORCED** (`SpillPlacement.forced`) — the value is live across a **fixed-register point** (a
+>   call, an `idiv`) whose live-across set exceeds `pool ∖ implicitDefs`. It *cannot* stay in a
+>   register the op clobbers, so the store/reload bracket is the only placement in existence.
+>   **Permitted at any loop depth** — this is the amendment, and it is what makes ordinary
+>   call-in-a-loop code compile.
+>
+> `E5001` fires **only** on a **full-pool** overflow with no cold-spillable value: the loop's
+> genuine working set exceeds the machine. A **clobber-only** overflow (pressure fits the full pool
+> but not the op's reduced pool) is *always* relievable by a forced bracket — every live-across
+> value has a store anchor, an op def or a phi's block entry — so reaching `E5001` from one is a
+> **splitter bug**, and `noVictimAtPeak` panics rather than let it surface as user register
+> pressure.
+>
+> **The two pools count two different demands, and lumping them over-counts.** Full-pool demand is
+> the colorer's total register hold at a point — live values *plus* dead-phi reservations *plus*
+> the reuse-copy transient. Reduced-pool demand is only the values the op *constrains*: those live
+> across it, plus its own operands. A dead phi is neither, and `pickPreferredRegister` lands it in
+> a caller-saved register anyway, so it never competes for the callee-saved subset.
+>
+> **A split only counts if it actually kills the value at the peak.** Uses *after* the peak become
+> reloads; uses *before* it keep the original. So the value is dead across the peak only if no
+> before-peak use is still reachable *from* the peak without passing the value's (single, SSA) def.
+> Under a back edge it often is: `n` in `while i < n` is used in the header, *before* the loop's
+> call in layout order, yet stays live across it — storing it relieves nothing and leaves a wasted
+> store in the header. A loop-header **phi** is the opposite: every back-edge path re-enters its
+> def, so it *is* relievable. `killsValueAtPeak` is that test.
 
 > **RULE 3 (the author always has a move).** There is **no escape hatch** — no attribute, no flag.
 > `E5001` is final. That is only defensible if every value in a blocking set is one the author can
@@ -803,28 +873,49 @@ callee-saved register and never pays a prologue push.
 choose a victim → remat or spill → recompute liveness → repeat, with a runaway bound and a
 post-condition assert that no point still exceeds its pool.
 
-**A point's pool is its own, not the global one.** `reducedPoolSizeAt(op) = popcount(pool ∖
-op.implicitDefs)` — so a value live across a `callDirect` competes for the **5 callee-saved**
-registers, and one live across an `idiv` for `pool ∖ {rax, rdx}`. Effective pressure at a point
-also corrects for the reuse-copy transient (+1 when the reuse input outlives the op) and for dead
-phis, so the peak-finder and the feasibility guard agree on one number.
+**Two overflows, two pools, two responses.** `reducedPoolSizeAt(op) = popcount(pool ∖
+op.implicitDefs)` — a value live across a `callDirect` competes for the **5 callee-saved**
+registers, one live across an `idiv` for `pool ∖ {rax, rdx}`. Each op is therefore tested twice:
+
+| overflow | demand counted | against | response |
+|---|---|---|---|
+| **full-pool** | `effective` — live values **+** dead-phi reservations **+** the reuse-copy transient | the whole pool (14) | COLD split; `E5001` if nothing is idle |
+| **clobber-only** | `raw` — only the values the op *constrains* (live across it, plus its own operands) | `pool ∖ implicitDefs` | **FORCED bracket**, at any loop depth. Never `E5001` |
+
+The two demands are genuinely different, and lumping them over-counts the reduced pool: a dead phi
+is not live across the call and is not forbidden its clobbered registers, and
+`pickPreferredRegister` puts it in a caller-saved register anyway — so it never competes for the
+callee-saved subset. Full-pool peaks always outrank clobber-only ones, so they are relieved first;
+that ordering is what makes the store-anchor gate sound by the time a clobber peak is reached.
 
 **Victim choice** is remat-first, then Belady/MIN:
 - **Rematerializable** values (a constant def, not a phi, not edge-passed) are re-emitted at each
   after-peak use rather than spilled — always preferred.
-- Otherwise the **farthest next use** wins, gated on being **cold-spillable**: the def and every
-  use must be at **loop depth 0**.
+- Otherwise the **farthest next use** wins, gated on (a) being spillable for the peak's placement —
+  **cold** requires def and every use at loop depth 0, **forced** requires only a store anchor (an
+  op def, or a phi's block entry) — and (b) `killsValueAtPeak`.
+
+**A split must actually kill the value at the peak.** After-peak uses become reloads; before-peak
+uses keep the original. So the value dies across the peak only if no before-peak use is still
+reachable *from* the peak without passing its (single, SSA) def. `n` in `while i < n` is the
+cautionary case: its only use is the header compare, which precedes the loop's call in **layout**
+order but follows it around the **back edge** — storing it relieves nothing and leaves a wasted
+store in the header every iteration. A loop-header **phi** is the opposite: every back-edge path
+re-enters its def, so it is relievable. (Without this test the splitter over-spills, and its
+termination potential Φ does not strictly decrease.)
 
 **Split shape: Belady split at the eviction point + dominating reloads.** Store after the last
-before-peak use (or after the def), then **one reload per after-peak use-block**, placed so it
-dominates its uses — each reload defines a **fresh `ValueId`**, so SSA is preserved and no phi or
-SSA reconstruction is needed. (This is what retires v1's SplitKit failure.) An assert panics if a
-store or reload would ever land at loop depth ≠ 0 — so **a loop body that does not use a spilled
-value is byte-identical to the un-spilled version**.
+before-peak use (or after the def — or, for a **phi**, at its block's entry, where the edge copies
+have already placed it), then **one reload per after-peak use-block**, placed so it dominates its
+uses — each reload defines a **fresh `ValueId`**, so SSA is preserved and no phi or SSA
+reconstruction is needed. (This is what retires v1's SplitKit failure.) **Branch-edge args are
+rewritten alongside op uses**: an edge arg is a real use, read at the block's end, and one left
+naming the original keeps it live to that point — so the spill would not kill it across the peak
+and the driver would re-pick it forever. Loop-carried accumulators are exactly this shape.
 
-**Hot overflow — a loop that genuinely uses more values than fit — is `E5001`** (below). An assert
-also fires if a store or reload would ever land at loop depth ≠ 0: that would be a hot spill that
-should have been reported instead, i.e. a splitter bug.
+For a **cold** split, an assert panics if any inserted op lands at loop depth ≠ 0 — so **a loop
+body that does not use a spilled value is byte-identical to the un-spilled version**. A **forced**
+bracket is exempt by construction: it is the placement that belongs in the loop.
 
 ### `E5001` — the register-pressure diagnostic
 
@@ -951,9 +1042,13 @@ attribution**, which is why the timers shipped in the allocator's first commit.
    immediates, `foldConstOperands`), a witness table in a register (→ remat), a redundant
    two-address copy (→ `lea`, `Reuse`).
 2. **Fixed-register points reduce the effective pool locally, so `maxPressure ≤ pool` is necessary
-   but NOT sufficient.** Both the splitter's peak-finder and the `E5001` deficit are therefore
-   computed per point against the *reduced* pool (`popcount(pool ∖ implicitDefs)`), never the
-   nominal 14.
+   but NOT sufficient** — the splitter's peak-finder tests every op against its *own* pool
+   (`popcount(pool ∖ implicitDefs)`) as well as the full one. But a reduced-pool overflow is a
+   **clobber constraint, not a capacity limit**: it is dispatched by a FORCED bracket, never by an
+   error. The **`E5001` deficit is always against the full pool of 14**. Reporting it against a
+   reduced pool ("6 live, only 5 survive a call") was a false-positive generator — it made an
+   ordinary loop with five accumulators and a call a compile error, which is the shape of most real
+   code and of this compiler's own inner loops.
 3. **There is always a rewrite, but sometimes it is a real restructuring.** Register pressure is
    always reducible by hand-spilling into memory: twenty accumulators become one array, and pressure
    collapses to `{base, index, temp}`. The floor is set by the most demanding single operation,

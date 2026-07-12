@@ -26,21 +26,69 @@ function main() returns ExitCode
 	return hotCall(0)
 end 'main'
 ---
-CompilerError:
-error E5001: the loop at <fragment>:13 needs 1 more register(s) than are available
-  6 values are live across the call inside this loop, but only 5
-  registers survive it on x64-windows (the other 9 are clobbered by the call). The
-  values idle across the loop were already spilled around it at no cost; spilling any of
-  these would put a load or store inside the loop body, which this error exists to prevent.
+ExitCode: 65
+---
+func @sink {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.ret
+}
 
-  remove 1 of these 6 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:6:11   used 1 time in the loop
-    <fragment>:7:11   used 1 time in the loop
-    <fragment>:8:11   used 1 time in the loop
-    <fragment>:9:11   used 1 time in the loop
-    <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:10   used 3 times in the loop
+func @hotCall {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 48
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rsi, 4
+    x64.movRegImm32 rdi, 5
+    x64.movRegImm32 r8, 0
+    x64.movRegReg rbx, rax
+    x64.movRegReg r12, rcx
+    x64.movRegReg r13, rdx
+    x64.movRegReg r14, rsi
+    x64.movRegReg r15, rdi
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegReg rcx, r8
+    x64.storeSlotReg slot0, r8
+    x64.callDirect sink
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegReg r14, r14, r8
+    x64.leaRegRegReg r15, r15, r8
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rbx, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg r8, rax, r15
+    x64.epilogue 48
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
 
-  to fix: hold the loop's working set in an array and index it inside the loop.
-  array elements are never promoted into registers, so the values stay in memory
-  and the loop body no longer needs a register for each one.
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect hotCall
+    x64.epilogue 40
+    x64.ret
+}
