@@ -2,10 +2,13 @@
 // through the shv2 compiler and collect PASS/FAIL results.
 //
 // Each test is driven end-to-end through the REAL CLI as a SUBPROCESS:
-// `<compilerExe> build <fragment> -o <exeBase>`. Spawning (rather than compiling
-// in-process) is deliberate — a compiler crash is isolated to the one test that
-// triggered it instead of killing the whole runner, and the actual `build`
-// command path (arg parsing, output-path derivation) is exercised, not bypassed.
+// `<compilerExe> build <fragment> -o <exeBase> --emit-ir --check-alloc`. Spawning
+// (rather than compiling in-process) is deliberate — a compiler crash is isolated to
+// the one test that triggered it instead of killing the whole runner, and the actual
+// `build` command path (arg parsing, output-path derivation) is exercised, not bypassed.
+// It is also why `--check-alloc` must be passed on the command line rather than set
+// in-process: the compile happens in another process (see CheckAllocFlag). An AllocChecker
+// panic there exits the build non-zero, which surfaces as a FAILED test.
 //
 // Trimmed HARD from v1's SpecTestRunner: no fragment cache, no parallel worker
 // pool / IPC, no RequiredIR/lowering capture, no `--update-required`, no per-
@@ -24,6 +27,18 @@ let OutputFlag = "-o"
 // The extension must match the driver's `IrFileExtension` (Compiler.maxon).
 let EmitIrFlag = "--emit-ir"
 let IrFileExtension = ".ir"
+
+// `--check-alloc` runs the AllocChecker on every function the test compiles. NON-NEGOTIABLE
+// on this path, and the reason the flag has to be passed HERE: each test is compiled by a
+// SUBPROCESS (`<compilerExe> build ...`), so the checker cannot be switched on from inside
+// the runner — only on that command line. A plain `build` leaves it off (it is a ~10%
+// verification tax), but the suite is exactly the place it must never be off:
+// `writeTestFragment` REGENERATES the committed `.test` fragments on every run, so they are
+// OUTPUTS, not gates — they re-record whatever the allocator just did and agree with it. A
+// wrong-but-self-consistent allocator therefore produces a self-consistent fragment and a
+// GREEN suite. The AllocChecker is the one thing in this path that can say "no"; drop this
+// flag and the allocator has no gate at all.
+let CheckAllocFlag = "--check-alloc"
 
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
 // These `.test` files are OUTPUTS regenerated on every `spec-test` run and
@@ -189,6 +204,13 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
 	compileArgv.push(EmitIrFlag)
+
+	// ON unless this test (or its spec) explicitly opted out — see SpecParser's CheckAllocKey.
+	// `test.checkAlloc` is already the EFFECTIVE value (spec frontmatter with the per-test marker
+	// applied over it), so the precedence is not re-derived here.
+	if test.checkAlloc 'checkAlloc'
+		compileArgv.push(CheckAllocFlag)
+	end 'checkAlloc'
 
 	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
 		cleanup(fragmentPath, exePath: exePath, irPath: irPath)

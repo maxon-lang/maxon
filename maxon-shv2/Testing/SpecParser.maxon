@@ -38,6 +38,33 @@ let ExitCodeFence = "```exitcode"
 let CompilerErrorFence = "```maxoncstderr"
 let FenceClose = "```"
 
+// --- The AllocChecker opt-OUT ---
+//
+// `checkAlloc` is an OPT-OUT, never an opt-in, and it DEFAULTS TO ON for every test of every
+// spec (`DefaultCheckAlloc`). That polarity is the whole design: the checker's value is that it
+// runs over code nobody thought to check. Every allocator bug it has caught surfaced where no
+// author would have ticked a box — the parameter-capture read-after-clobber (a real, shipped
+// miscompile) in `functions.md`, the two-sequential-loops colorer panic in `while-loops.md`, the
+// false-E5001 class in ordinary loop code — none of them in an allocator-focused spec. An opt-in
+// would arm the checker exactly where someone already suspected a problem, i.e. where it is
+// least needed, and disarm it everywhere else. So the suite runs it everywhere and a spec must
+// deliberately SAY it does not want it.
+//
+// Two granularities, both spelled as the value `true` or `false` (anything else is a hard
+// `specError` — an unreadable gate directive must never be guessed at):
+//   * per SPEC — a `checkAlloc: false` key in the YAML frontmatter, alongside `status:`. Applies
+//     to every test in the file.
+//   * per TEST — a `<!-- checkAlloc: false -->` marker on a line AFTER that test's
+//     `<!-- test: NAME -->` marker (i.e. inside the test's own block region). Overrides the
+//     spec-level value for that one test. It is its own HTML-comment marker rather than an
+//     extra field inside the `<!-- test: … -->` marker precisely so `markerValue` reads both
+//     with one routine and the test's NAME stays the whole of its marker's value.
+let CheckAllocKey = "checkAlloc:"
+let CheckAllocMarker = "<!-- checkAlloc:"
+let TrueValue = "true"
+let FalseValue = "false"
+let DefaultCheckAlloc = true
+
 typealias LineIndex = int(0 to u64.max)
 
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
@@ -54,14 +81,18 @@ export union SpecExpectation
 	compilerError(text String)
 end 'SpecExpectation'
 
-// One active test: its name, its ```maxon source VERBATIM, and its expectation.
+// One active test: its name, its ```maxon source VERBATIM, its expectation, and whether the
+// runner compiles it with the AllocChecker on. `checkAlloc` is the EFFECTIVE value — the spec's
+// frontmatter setting with this test's own `<!-- checkAlloc: … -->` marker applied over it — so
+// the runner reads one field and never re-derives the precedence.
 export type SpecTest
 	export let name as String
 	export let source as String
 	export let expectation as SpecExpectation
+	export let checkAlloc as bool
 
-	export static function create(name String, source String, expectation SpecExpectation) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation}
+	export static function create(name String, source String, expectation SpecExpectation, checkAlloc bool) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, checkAlloc: checkAlloc}
 	end 'create'
 end 'SpecTest'
 
@@ -69,7 +100,9 @@ export typealias SpecTestArray = Array with SpecTest
 
 // A parsed spec file: its frontmatter `status` (the runner skips `draft`) and
 // every active test. (The path is deliberately NOT stored — the caller already
-// holds the FilePath it passed to `parseSpecFile`, so a copy here would be dead.)
+// holds the FilePath it passed to `parseSpecFile`, so a copy here would be dead.
+// The frontmatter `checkAlloc` is likewise not stored: it has already been folded
+// into each test's own effective `checkAlloc`, so a copy here would be dead too.)
 export type SpecFile
 	export let status as String
 	export let tests as SpecTestArray
@@ -78,6 +111,18 @@ export type SpecFile
 		return Self{status: status, tests: tests}
 	end 'create'
 end 'SpecFile'
+
+// The spec's YAML frontmatter: the `status:` tier and the `checkAlloc:` opt-out. Both keys come
+// out of ONE scan of the frontmatter block — a second key must not mean a second walk of the
+// same lines.
+type SpecFrontmatter
+	export let status as String
+	export let checkAlloc as bool
+
+	static function create(status String, checkAlloc bool) returns SpecFrontmatter
+		return Self{status: status, checkAlloc: checkAlloc}
+	end 'create'
+end 'SpecFrontmatter'
 
 // One fenced code block: its content (fence lines excluded), and the line index
 // immediately AFTER its closing ``` — the single unit the block reader returns
@@ -98,28 +143,32 @@ end 'FenceBlock'
 export function parseSpecFile(path FilePath) returns SpecFile throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	let lines = content.split("\n")
-	let status = parseStatus(lines)
-	let tests = extractTests(lines)
-	return SpecFile.create(status, tests: tests)
+	let frontmatter = try parseFrontmatter(lines, path: path)
+	let tests = try extractTests(lines, path: path, specCheckAlloc: frontmatter.checkAlloc)
+	return SpecFile.create(frontmatter.status, tests: tests)
 end 'parseSpecFile'
 
-// Read the `status:` value from the YAML frontmatter (the leading `--- … ---`
-// block). Returns "" when there is no frontmatter or no status key — the runner
-// skips only the literal "draft", so "" runs normally.
-function parseStatus(lines StringArray) returns String
+// Read the YAML frontmatter (the leading `--- … ---` block) in ONE pass. `status` is "" when
+// there is no frontmatter or no status key — the runner skips only the literal "draft", so ""
+// runs normally. `checkAlloc` defaults to ON (see DefaultCheckAlloc): a spec that says nothing
+// gets the safety net.
+function parseFrontmatter(lines StringArray, path FilePath) returns SpecFrontmatter throws CompileError
+	var status = ""
+	var checkAlloc = DefaultCheckAlloc
+
 	let lineCount = lines.count()
 	if lineCount == 0 'noLines'
-		return ""
+		return SpecFrontmatter.create(status, checkAlloc: checkAlloc)
 	end 'noLines'
 
 	let firstLine = try lines.get(0) otherwise ""
 	if firstLine.trim() != FrontmatterFence 'noFrontmatter'
-		return ""
+		return SpecFrontmatter.create(status, checkAlloc: checkAlloc)
 	end 'noFrontmatter'
 
 	var i = 1
 	while i < lineCount 'scan'
-		let line = try lines.get(i) otherwise panic("SpecParser.parseStatus: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+		let line = try lines.get(i) otherwise panic("SpecParser.parseFrontmatter: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
 		let trimmed = line.trim()
 		if trimmed == FrontmatterFence 'endFrontmatter'
@@ -127,14 +176,32 @@ function parseStatus(lines StringArray) returns String
 		end 'endFrontmatter'
 
 		if trimmed.startsWith(StatusKey) 'isStatus'
-			return valueAfterKey(trimmed, key: StatusKey)
-		end 'isStatus'
+			status = valueAfterKey(trimmed, key: StatusKey)
+		end 'isStatus' else if trimmed.startsWith(CheckAllocKey) 'isCheckAlloc'
+			checkAlloc = try parseBoolDirective(valueAfterKey(trimmed, key: CheckAllocKey), path: path, directive: trimmed)
+		end 'isCheckAlloc'
 
 		i = i + 1
 	end 'scan'
 
-	return ""
-end 'parseStatus'
+	return SpecFrontmatter.create(status, checkAlloc: checkAlloc)
+end 'parseFrontmatter'
+
+// Read a `checkAlloc` directive's value. ONLY the literals `true` and `false` are accepted;
+// anything else THROWS rather than falling back to a default. This directive decides whether the
+// allocator's one real safety net runs, so an unreadable value is not a thing to guess at — a
+// typo'd `checkAlloc: no` must abort the run loudly, not silently disarm (or silently arm) the
+// checker for a whole spec file.
+function parseBoolDirective(value String, path FilePath, directive String) returns bool throws CompileError
+	if value == TrueValue 'isTrue'
+		return true
+	end 'isTrue'
+	if value == FalseValue 'isFalse'
+		return false
+	end 'isFalse'
+
+	throw CompileError.specError("{path.toString()}: malformed checkAlloc directive '{directive}': expected '{TrueValue}' or '{FalseValue}', got '{value}'")
+end 'parseBoolDirective'
 
 // The trimmed remainder of `line` after a literal `key` prefix. `line` is known
 // to start with `key` (the caller gates on `startsWith`), so advancing
@@ -151,7 +218,7 @@ end 'valueAfterKey'
 // from the line after the `## Tests` heading to the next `## ` heading (or EOF).
 // A `## Deferred` heading therefore ends scanning, so no deferred test is ever
 // reached — see the deferred-skip convention at the top of this file.
-function extractTests(lines StringArray) returns SpecTestArray
+function extractTests(lines StringArray, path FilePath, specCheckAlloc bool) returns SpecTestArray throws CompileError
 	var tests = SpecTestArray.create()
 	let lineCount = lines.count()
 
@@ -183,8 +250,16 @@ function extractTests(lines StringArray) returns SpecTestArray
 		end 'sectionEnd'
 
 		if line.contains(TestMarker) 'isMarker'
-			i = appendTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests)
-		end 'isMarker' else 'notMarker'
+			i = try appendTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, path: path, specCheckAlloc: specCheckAlloc)
+		end 'isMarker' else if line.contains(CheckAllocMarker) 'strayCheckAlloc'
+			// A `<!-- checkAlloc: … -->` marker reached by the OUTER scan belongs to no test:
+			// `appendTestFromMarker` consumes every line of the test it opened, so a marker
+			// surfacing here sits before the first `<!-- test: … -->` (or after a section
+			// boundary). Silently ignoring it would leave an author believing a test was
+			// opted out when it was not — exactly the false sense of coverage this checker
+			// exists to prevent. Use the frontmatter key to opt a whole file out.
+			throw CompileError.specError("{path.toString()}: stray '{line.trim()}' marker: a per-test checkAlloc marker must FOLLOW a '{TestMarker} NAME -->' marker; to opt out a whole spec use the frontmatter '{CheckAllocKey}' key")
+		end 'strayCheckAlloc' else 'notMarker'
 			i = i + 1
 		end 'notMarker'
 	end 'scan'
@@ -198,11 +273,14 @@ end 'extractTests'
 // before the next marker / section boundary (the "marker + source + expected,
 // contiguous" active-test contract) — an incomplete run of blocks is not a
 // runnable test and is silently left out rather than half-built.
-function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray) returns LineIndex
+function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, path FilePath, specCheckAlloc bool) returns LineIndex throws CompileError
 	let lineCount = lines.count()
-	let name = testName(markerLine)
+	let name = markerValue(markerLine)
 	var source = ""
 	var haveSource = false
+	// Seeded from the SPEC's frontmatter value, so a file-level `checkAlloc: false` covers every
+	// test in it; a per-test marker below overrides just this one.
+	var checkAlloc = specCheckAlloc
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -217,12 +295,20 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 			break
 		end 'nextMarker'
 
+		// This test's own AllocChecker opt-out, e.g. `<!-- checkAlloc: false -->`. Checked
+		// before the fences because it is a marker line, not a block.
+		if line.contains(CheckAllocMarker) 'checkAllocMarker'
+			checkAlloc = try parseBoolDirective(markerValue(line), path: path, directive: line.trim())
+			i = i + 1
+			continue
+		end 'checkAllocMarker'
+
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
 		// startsWith "```maxon", so the source arm would otherwise consume it.
 		if line.startsWith(CompilerErrorFence) 'compilerErr'
 			let block = readFence(lines, openIndex: i)
 			if haveSource 'errComplete'
-				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(block.text.trim())))
+				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(block.text.trim()), checkAlloc: checkAlloc))
 			end 'errComplete'
 			return block.nextIndex
 		end 'compilerErr'
@@ -233,7 +319,7 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 				return block.nextIndex
 			end 'badExitCode'
 			if haveSource 'exitComplete'
-				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.exitCode(parsed)))
+				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.exitCode(parsed), checkAlloc: checkAlloc))
 			end 'exitComplete'
 			return block.nextIndex
 		end 'exitCode'
@@ -252,18 +338,20 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 	return i
 end 'appendTestFromMarker'
 
-// Extract NAME from a `<!-- test: NAME -->` marker line: the text between the
-// first ": " and the trailing " -->", trimmed.
-function testName(line String) returns String
-	// The name sits between the first ": " and the trailing " -->". Advance one
-	// index past the ':' and let trim() drop the surrounding spaces — this avoids
-	// measuring the module-const separator's length, because a method call
-	// directly on a top-level `let` constant is a parse error in the bootstrap.
+// The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
+// " -->", trimmed. Shared by both marker kinds — it reads NAME out of `<!-- test: NAME -->` and
+// `false` out of `<!-- checkAlloc: false -->`, which is exactly why the per-test opt-out is its
+// own marker rather than a second field inside the test marker (a `<!-- test: NAME checkAlloc:
+// false -->` would make the name run to the end of the line).
+function markerValue(line String) returns String
+	// Advance one index past the ':' and let trim() drop the surrounding spaces — this avoids
+	// measuring the module-const separator's length, because a method call directly on a
+	// top-level `let` constant is a parse error in the bootstrap.
 	let colonIdx = try line.findFirst(TestMarkerNameSep) otherwise return ""
-	let nameStart = try line.indexAfter(colonIdx) otherwise return ""
+	let valueStart = try line.indexAfter(colonIdx) otherwise return ""
 	let endIdx = try line.findFirst(TestMarkerEnd) otherwise line.endIndex()
-	return line.slice(nameStart, endIndex: endIdx).trim()
-end 'testName'
+	return line.slice(valueStart, endIndex: endIdx).trim()
+end 'markerValue'
 
 // Read the fenced block whose opening ``` is at `openIndex`. Content lines are
 // joined with "\n" and NO trailing newline, so a ```maxon block is reproduced

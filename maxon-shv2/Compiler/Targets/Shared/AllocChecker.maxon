@@ -5,8 +5,21 @@
 // every use reads the register that actually holds its value — catching the exact
 // bug class a plausible fragment hides: two simultaneously-live values aliased to
 // one register, and a mis-ordered / mis-placed SSA-destruction edge copy (the v1
-// "phi-copy trampoline" miscompile). It runs on EVERY function of EVERY compile
-// (inside the allocator), so a failure PANICS the build and FAILS the test.
+// "phi-copy trampoline" miscompile).
+//
+// WHERE IT RUNS. It runs on every function of every compile that sets `Project.checkAlloc`
+// — ALWAYS under `spec-test` and `verify-warm-rebuild` (the dev gates, where it is the only
+// real check on the allocator), and on a normal `build` only via `--check-alloc`. A failure
+// PANICS the build, which under `spec-test` FAILS the test that triggered it.
+//
+// The split is safe because this pass is PURE: it reads the IR + the allocation plan and
+// either panics or does nothing. It cannot change an emitted byte, so a `build` without it
+// emits exactly what a `build` with it emits — the flag decides whether a wrong byte is
+// CAUGHT, never which byte is produced. What must never happen is the inverse: turning it
+// off where the fragments are regenerated (they would then agree with a broken allocator and
+// the suite would go green on a miscompile), which is why `spec-test` hard-codes it on rather
+// than inheriting a default. Verification of a `build` is worth ~10% of compile time only to
+// someone changing the allocator; correctness of the SUITE is worth it always.
 //
 // It runs on the still-VIRTUAL program plus the coloring, the edge move PLAN, and the
 // reuse-copy list — i.e. BEFORE applyAllocation commits them — so it validates the plan
@@ -56,8 +69,8 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 
 	var buf = OperandList.create()
 	// Scratch reused across every block — the live-in walk and the op list would otherwise each
-	// allocate once per block. The checker runs on EVERY function of EVERY compile, so its cost is
-	// production cost, not test cost.
+	// allocate once per block. Worth keeping tight even though the checker is now opt-in on a
+	// `build`: it still runs over every function of every test in the suite, on every run.
 	var liveBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
 
@@ -119,9 +132,9 @@ end 'regStateSet'
 // register — the aliasing bug, caught right here. The ENTRY block additionally seeds
 // each parameter's INCOMING register (see seedEntryParamIncomingRegs).
 // Walks the SET BITS of the live-in row, not the value space. Testing every value id here would be
-// O(blocks × values) — and since the checker runs on every function of every compile, that
-// quadratic is paid in production, not just under `spec-test`. It was the single largest line item
-// in register allocation on a large function. `liveBuf` is scratch reused across blocks.
+// O(blocks × values) — it was the single largest line item in register allocation on a large
+// function back when the checker ran unconditionally. Keep it live-set-proportional regardless:
+// the suite pays this cost on every test of every run. `liveBuf` is scratch reused across blocks.
 function seedRegState(regState RegStateRow, module TargetModule, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, paramCount ParamCount, funcName String, liveBuf ValueIdArray)
 	if local == 0 'entry'
 		seedEntryParamIncomingRegs(regState, module: module, cfg: liveness.cfg, paramCount: paramCount)

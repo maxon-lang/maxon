@@ -269,8 +269,18 @@ export type Project
 	// parameter merely to be timed, and each compile gets its own timings instead of
 	// the per-file fan-out driver contending on a global.
 	export var timings as CompileTimings
+	// Run the AllocChecker (Targets/Shared/AllocChecker.maxon) on every function of
+	// this compile. It is a VERIFICATION pass — pure, IR-read-only, and costing ~10% of
+	// total compile time — so a production `build` does not pay for it, while every
+	// context where it is the ACTUAL safety net turns it on: `spec-test` (which regenerates
+	// its fragments, so they are outputs and cannot gate the allocator — the checker is the
+	// only real gate the suite has) and `verify-warm-rebuild`. `build --check-alloc` opts in.
+	// It rides on Project for the same reason `timings` does: Project is ALREADY threaded
+	// into the backend, so the allocator reads it without a new parameter and without a
+	// global that the per-file fan-out driver would contend on.
+	export var checkAlloc as bool
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, checkAlloc bool) returns Project
 		return Self{
 			db: db,
 			funcReturnTypes: FuncReturnTypeMap.create(),
@@ -282,7 +292,8 @@ export type Project
 			target: target,
 			diagnostics: DiagnosticArray.create(),
 			globalData: GlobalDataTable.create(),
-			timings: CompileTimings.create()
+			timings: CompileTimings.create(),
+			checkAlloc: checkAlloc
 		}
 	end 'create'
 end 'Project'
@@ -290,8 +301,13 @@ end 'Project'
 // Construct a fresh Project rooted at `rootPath` for `target`. The single
 // constructor a driver needs; mirrors v1's `createProject` (which additionally
 // seeds three empty memo sentinels — QueryDatabase.create owns those in shv2).
-export function createProject(rootPath FilePath, target Target) returns Project
-	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target)
+//
+// `checkAlloc` is REQUIRED, with no default: whether the allocator's safety net runs is
+// a decision every entry point must make deliberately. A default would let a future
+// caller silently inherit "off" — which is exactly how a verification gate quietly stops
+// verifying anything.
+export function createProject(rootPath FilePath, target Target, checkAlloc bool) returns Project
+	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target, checkAlloc: checkAlloc)
 end 'createProject'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting

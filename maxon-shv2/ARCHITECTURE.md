@@ -76,7 +76,7 @@ strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
 | Gate | What it proves |
 |---|---|
 | `maxon-shv2 spec-test` | **75 passing / 0 failing** over `specs-shv2/*.md` — the functional suite |
-| `AllocChecker` | Every function of **every** compile is symbolically verified for register correctness (a failure panics the build) |
+| `AllocChecker` | Every function of every `spec-test` / `verify-warm-rebuild` compile is symbolically verified for register correctness (a failure panics the build). Opt-out per spec/test; on a plain `build` it is opt-**in** via `--check-alloc` |
 | `maxon-shv2 verify-warm-rebuild <file>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) |
 | `specs-shv2/fragments/x64-windows/**` | Committed Target-IR goldens — every codegen change shows up in `git diff` |
 
@@ -118,9 +118,12 @@ is the index.
   entries and `terminatorIndex` are indices into that array; a pass that appended or
   compacted instead would invalidate every reference in the function.
   *(→ Register allocator)*
-- **The `AllocChecker` runs on every function of every compile** — because spec
-  fragments are *outputs*, not gates: the suite would go green on a wrong-but-
-  self-consistent allocator. *(→ Register allocator)*
+- **The `AllocChecker` runs on every function of every `spec-test` compile** (and of
+  `verify-warm-rebuild`), because spec fragments are *outputs*, not gates: the suite
+  would go green on a wrong-but-self-consistent allocator. It is an **opt-out** there
+  (`checkAlloc: false` per spec / per test), never an opt-in. A plain `build` skips it
+  — it is a pure verification pass and cannot change an emitted byte — and re-arms it
+  with `--check-alloc`. *(→ Register allocator)*
 - **Ownership-kind lattice** — `trivial · owned · borrow · shared`, with three
   first-class homes and zero sidetables. Declared, inert until the ownership stage.
   *(→ Own tier)*
@@ -133,7 +136,7 @@ is the index.
 
 | Command | Purpose |
 |---|---|
-| `maxon-shv2 build <file\|dir> [-o out] [--emit-ir]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. |
+| `maxon-shv2 build <file\|dir> [-o out] [--emit-ir] [--check-alloc]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. `--check-alloc` runs the `AllocChecker` (off by default; a pure verification pass worth ~10% of compile time — it cannot change the emitted bytes). |
 | `maxon-shv2 spec-test [dir]` | Run the spec suite (default `specs-shv2`) and regenerate fragments. |
 | `maxon-shv2 verify-warm-rebuild <file>` | The determinism + incrementality gate. |
 
@@ -1032,12 +1035,50 @@ so a move never runs on a sibling edge.
 A symbolic verifier that abstractly interprets the allocated function — per-op `preg → vreg`
 state, per-edge parallel-copy simulation, spill store→slot→reload identity chains, the
 reuse-invariant (dest holds the reuse input at the op), and the incoming ABI registers seeded at
-entry — and asserts that every use reads the register holding its value.
+entry — and asserts that every use reads the register holding its value. A failure **panics** the
+build, which under `spec-test` fails the test that triggered it.
 
-**It runs on EVERY function of EVERY compile** (a failure panics the build → fails the test),
-because `SpecTestRunner` treats fragments as **outputs, not gates**: the suite would otherwise go
-green on a wrong-but-self-consistent allocator. This is the real correctness gate, and it has
-caught real silent miscompiles that the full suite passed.
+**Where it runs** — it is a *verification* pass costing ~10% of total compile time, so it is
+always on where it is the actual safety net and opt-in where it is merely a tax:
+
+| Context | AllocChecker | Why |
+|---|---|---|
+| `spec-test` | **ON** (default, per test) | the only real gate — see below |
+| `verify-warm-rebuild` | **ON** (forced) | dev gate; byte-identity across two cold compiles is satisfied just as well by two *identically wrong* compiles, so determinism alone proves nothing about correctness |
+| `build` | **OFF** unless `--check-alloc` | a production build should not pay ~10% for a verification pass |
+
+**Why `spec-test` must never turn it off.** `SpecTestRunner` **regenerates** the committed
+fragments on every run: they are **outputs, not gates**. A wrong-but-self-consistent allocator
+therefore produces a self-consistent fragment and a **green suite**. The checker is the one thing
+in that path that can say *no*. This is not hypothetical — it has caught real silent miscompiles
+the full suite passed (the parameter-capture read-after-clobber in `functions.md`), and it is
+directly reproducible: sabotage `chooseRegister` to honour a copy hint without checking the
+register is free, and `functions/call-in-loop` still **passes** with the checker off, on a
+program the checker proves is miscompiled.
+
+**Why the split is safe.** The checker is *pure*: it reads the IR plus the allocation plan and
+either panics or does nothing. It cannot change an emitted byte, so `build` and
+`build --check-alloc` emit **identical** output — the flag decides only whether a wrong byte is
+*caught*, never which byte is produced. (It runs before `applyAllocation` commits the plan.)
+
+**Opt-out, never opt-in.** Under `spec-test` the checker defaults to ON for every test, and a
+spec must deliberately *say* it does not want it:
+
+* per spec — `checkAlloc: false` in the YAML frontmatter, beside `status:`
+* per test — a `<!-- checkAlloc: false -->` marker on a line *after* that test's
+  `<!-- test: NAME -->` marker (overrides the spec-level value for that one test)
+
+Any value other than `true`/`false` is a hard `CompileError.specError` that aborts the run — an
+unreadable gate directive is never guessed at. The polarity is the whole point: the checker's
+value is that it runs over code nobody thought to check. Every allocator bug it has caught
+surfaced where no author would have ticked a box — the parameter-capture clobber in `functions`,
+the two-sequential-loops colorer panic in `while-loops`, the false-E5001 class in ordinary loop
+code; **none** in an allocator-focused spec. An opt-in would arm it exactly where someone already
+suspected a problem, i.e. where it is least needed.
+
+The setting rides on `Project.checkAlloc` (already threaded into the backend, so no global and no
+new parameter). `spec-test` passes `--check-alloc` on the **subprocess** `build` it spawns per
+test — the compile happens in another process, so the flag is the only channel available.
 
 ### The register pool and ABI
 
@@ -1305,7 +1346,10 @@ over every `TargetOp`, so a new op is a compile error, never a silent `??`), wri
 byte-deterministic and committed, so `git diff` surfaces every codegen change in review.
 
 **Fragment writing is a pure side effect** — it never changes `spec-test`'s pass/fail or exit code.
-Fragments are outputs, not gates; that is precisely why the `AllocChecker` exists.
+Fragments are outputs, not gates; that is precisely why the `AllocChecker` exists, and why the
+runner spawns each test's `build` with **`--check-alloc`** (see *The `AllocChecker`*). The compile
+runs in a subprocess, so that flag is the only channel through which the checker can be armed.
+It is on for every test unless the spec or the test explicitly opts out.
 
 ## Coverage scaffold
 

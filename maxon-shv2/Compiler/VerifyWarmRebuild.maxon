@@ -38,6 +38,14 @@ let SectionNameData = "data"
 let NoCounterMove = 0 as QueryCount
 let OneQuery = 1 as QueryCount
 
+// This gate ALWAYS runs the AllocChecker (`build` leaves it to the `--check-alloc` flag).
+// `verify-warm-rebuild` is a DEV gate, not a production build: it exists to catch the
+// backend miscompiling, and its determinism check — two cold compiles emitting identical
+// bytes — is satisfied just as happily by two IDENTICALLY WRONG compiles. Byte-identity
+// proves the compiler is a function; it says nothing about that function being correct.
+// The checker is what supplies the missing half, so it is not optional here.
+let RunAllocChecker = true
+
 // The result of comparing one section across the two compiles: either byte-
 // identical (carrying the common byte count for the running total) or a rendered
 // mismatch detail (first differing offset, or a trailing length difference).
@@ -94,7 +102,7 @@ end 'verifyWarmRebuild'
 // then discarded. Determinism compares two of these; each MUST own its Project so
 // the two share no mutable module object (the mutate-the-memo trap in the header).
 function compileColdOnce(inputPath FilePath, target Target) returns CodeResult throws CompileError
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject(inputPath, target: target, checkAlloc: RunAllocChecker)
 	return try compileToCodeResult(project)
 end 'compileColdOnce'
 
@@ -174,8 +182,10 @@ end 'compareSection'
 function verifyCacheHit(inputPath FilePath, target Target) returns bool throws CompileError
 	// ONE Project shared across both queryAllModule calls, running ONLY the query
 	// between them (never resolveTypes/the backend) so the memoized module is never
-	// mutated (see the mutate-the-memo trap in this file's header).
-	var project = try loadProject(inputPath, target: target)
+	// mutated (see the mutate-the-memo trap in this file's header). This check therefore
+	// never reaches the allocator at all; it still declares `RunAllocChecker` so that a
+	// future probe here which DOES compile inherits the gate's always-on stance.
+	var project = try loadProject(inputPath, target: target, checkAlloc: RunAllocChecker)
 	let fileCount = project.db.sourcePaths.count()
 
 	// Whole-program memo: the first call is a cold MISS, the second a cache HIT.

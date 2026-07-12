@@ -370,9 +370,18 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, stats: stats)
 	stats.addPhaseMs(RegAllocPhase.ssaDestruction, ms: Clock.elapsedMs(tPlan))
 
-	let tCheck = Clock.nowMs()
-	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies, spillPlan: outcome.plan)
-	stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
+	// The AllocChecker verifies the plan (coloring + edge moves + reuse copies + spill chains)
+	// BEFORE applyAllocation commits it. Gated on `project.checkAlloc` because it is a pure
+	// VERIFICATION pass — it reads the IR and panics or does nothing, so skipping it cannot
+	// change a single emitted byte, only whether a wrong byte is CAUGHT. It costs ~10% of total
+	// compile time, which a production `build` should not pay; `spec-test` and
+	// `verify-warm-rebuild` (where it is the only real gate on the allocator) always turn it on,
+	// and `build --check-alloc` opts in. See Project.checkAlloc.
+	if project.checkAlloc 'verifyAllocation'
+		let tCheck = Clock.nowMs()
+		checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies, spillPlan: outcome.plan)
+		stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
+	end 'verifyAllocation'
 
 	let tRewrite = Clock.nowMs()
 	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies)

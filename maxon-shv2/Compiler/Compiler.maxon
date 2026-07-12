@@ -31,12 +31,17 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false) returns FilePath throws CompileError
+// `checkAlloc` (the `--check-alloc` flag) runs the AllocChecker over every function. OFF by
+// default here — it is a verification pass, and a production build should not pay ~10% of its
+// wall time for it. The contexts where it IS the safety net enable it themselves and do not
+// route through this default: `spec-test` passes `--check-alloc` on the subprocess build it
+// spawns per test, and `verify-warm-rebuild` forces it on (see verifyWarmRebuild).
+export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, checkAlloc bool = false) returns FilePath throws CompileError
 	let tTotal = Clock.nowMs()
 
 	// Loading starts the instant the compile does, so `tTotal` is also the `load` phase's
 	// start — a second Clock read here would measure the same moment.
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject(inputPath, target: target, checkAlloc: checkAlloc)
 	project.timings.addPhaseMs(CompilePhase.load, ms: Clock.elapsedMs(tTotal))
 
 	let codeResult = try compileToCodeResult(project)
@@ -92,8 +97,11 @@ end 'writeTargetIr'
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPath FilePath, target Target) returns Project throws CompileError
-	var project = createProject(inputPath, target: target)
+//
+// `checkAlloc` is REQUIRED here (no default) so each of the three entries into a compile —
+// `build`, and the warm-rebuild gate's two — states its own answer. See `createProject`.
+export function loadProject(inputPath FilePath, target Target, checkAlloc bool) returns Project throws CompileError
+	var project = createProject(inputPath, target: target, checkAlloc: checkAlloc)
 	try loadSourceFiles(project, path: project.rootPath)
 	return project
 end 'loadProject'

@@ -10,7 +10,7 @@
 // diagnostics (the `maxoncstderr` spec contract).
 //
 // CLI (documented):
-//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]
+//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--check-alloc]
 //   maxon-shv2 verify-warm-rebuild <file>
 //   maxon-shv2 spec-test [dir]
 
@@ -30,7 +30,7 @@ end 'main'
 
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.path.isEmpty() 'noPath'
-		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]\n")
+		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--check-alloc]\n")
 		return 1
 	end 'noPath'
 
@@ -40,7 +40,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'badPath'
 
 	let target = detectHostTarget()
-	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, checkAlloc: args.checkAlloc) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -156,6 +156,7 @@ function reportCompileError(e CompileError)
 		directoryNotFound(p) then printError("error: directory not found: {p}\n")
 		noSourceFiles(r) then printError("error: no source files under {r}\n")
 		readError(p) then printError("error: could not read {p}\n")
+		specError(detail) then printError("error: malformed spec: {detail}\n")
 		compileError then break 'report'
 	end 'report'
 end 'reportCompileError'
@@ -176,6 +177,9 @@ function printUsage()
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
+	print("  --check-alloc                 Verify every function's register allocation (AllocChecker).\n")
+	print("                                A dev/verification pass, off by default; spec-test and\n")
+	print("                                verify-warm-rebuild always run it.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -187,23 +191,29 @@ enum MaxonCommand
 end 'MaxonCommand'
 
 // Thin M1 argument model: a command, an input path, an optional output override,
-// and the `--emit-ir` toggle. Grows into v1's full option set (targets, logging,
-// cache flags, ...) as the driver gains those capabilities.
+// and the `--emit-ir` / `--check-alloc` toggles. Grows into v1's full option set
+// (targets, logging, cache flags, ...) as the driver gains those capabilities.
 type MaxonArgs
 	export let command as MaxonCommand
 	export let path as String
 	export let outputOverride as String
 	export let emitIr as bool
+	// `--check-alloc`: run the AllocChecker over every function of this build (see
+	// Project.checkAlloc). Off by default — a verification pass is not a production-build
+	// tax. `spec-test` does not read this: it enables the checker on the per-test
+	// subprocess build it spawns, and `verify-warm-rebuild` forces it on unconditionally.
+	export let checkAlloc as bool
 
 	// Parse the process command line. argv[0] is the executable path (skipped).
 	// The first `build` token selects the command; the first bare (non-flag)
 	// argument is the input path; `-o <path>` / `--output=<path>` set the output;
-	// `--emit-ir` requests the Target-IR sidecar.
+	// `--emit-ir` requests the Target-IR sidecar; `--check-alloc` runs the AllocChecker.
 	export static function parse() returns MaxonArgs
 		var command = MaxonCommand.unknown
 		var path = ""
 		var outputOverride = ""
 		var emitIr = false
+		var checkAlloc = false
 
 		let args = CommandLine.args()
 		var i = 1
@@ -222,7 +232,9 @@ type MaxonArgs
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'emitIrFlag' else if arg == "--check-alloc" 'checkAllocFlag'
+				checkAlloc = true
+			end 'checkAllocFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
@@ -235,6 +247,6 @@ type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, checkAlloc: checkAlloc}
 	end 'parse'
 end 'MaxonArgs'
