@@ -59,6 +59,15 @@ export enum ErrorCode
 	callArgCountMismatch = "E3031"
 	callUnknownArgLabel = "E3032"
 	callDuplicateArg = "E3033"
+	// The `5xxx` "code emitter" band (register allocation / machine-code emission).
+	// `registerPressure` (E5001) is the one occupant so far: a loop (or a value set
+	// live across a call/idiv) genuinely needs more registers than exist, AFTER the
+	// cold-spill splitter has moved every idle value out and rematerialized every
+	// constant — a HOT overflow only the programmer can resolve (see
+	// RegisterPressureDiagnostic + ARCHITECTURE.md's register-allocator section). Its message is
+	// MULTI-LINE and whole-program-anchored (line 0), so `render` emits `error E5001:`
+	// once and the body — which embeds each source location itself — flows through.
+	registerPressure = "E5001"
 end 'ErrorCode'
 
 // One reported problem. `line` / `column` are 1-based source positions, or 0

@@ -1,0 +1,46 @@
+// Test: hot-loop-across-call
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function hotCall(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var i = 0
+	while i < 5 'loop'
+		let r = sink(i)
+		s1 = s1 + r
+		s2 = s2 + r
+		s3 = s3 + r
+		s4 = s4 + r
+		s5 = s5 + r
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5
+end 'hotCall'
+
+function main() returns ExitCode
+	return hotCall(0)
+end 'main'
+---
+CompilerError:
+error E5001: the loop at <fragment>:13 needs 1 more register(s) than are available
+  6 values are live across the call inside this loop, but only 5
+  registers survive it on x64-windows (the other 9 are clobbered by the call). The
+  values idle across the loop were already spilled around it at no cost; spilling any of
+  these would put a load or store inside the loop body, which this error exists to prevent.
+
+  remove 1 of these 6 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:10   used 3 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.

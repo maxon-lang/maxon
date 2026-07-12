@@ -335,7 +335,11 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		var paramNames = StringArray.create()
 		var paramTypes = MaxonTypeArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes)
+		// Parallel to `paramNames`: each parameter's name-token span, so `bindParameters` can
+		// record a ValueOrigin at the DECLARATION for parameter `i` — the source site the
+		// E5001 diagnostic points at when a parameter is in a register-pressure blocking set.
+		var paramRanges = SourceRangeArray.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
@@ -353,7 +357,7 @@ export type Parser
 		// body reference resolves straight to the parameter's SSA value — the same
 		// value-substitution model `let`/`var` bindings use. Parameters are immutable
 		// (a reassignment is E2013); mutating a parameter needs a local shadow.
-		self.bindParameters(paramNames, paramTypes: paramTypes)
+		self.bindParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
 		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: nameTok.line)
 		func.namespace = self.namespace
@@ -387,7 +391,7 @@ export type Parser
 	// `= <default>` after the type is a later milestone, so it is rejected here with
 	// a positioned `unsupported` rather than silently dropped. The caller has already
 	// consumed the `(` and consumes the closing `)`.
-	function parseFunctionParameters(paramNames StringArray, paramTypes MaxonTypeArray) throws ParseError
+	function parseFunctionParameters(paramNames StringArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -407,6 +411,7 @@ export type Parser
 
 			paramNames.push(nameTok.value)
 			paramTypes.push(paramType)
+			paramRanges.push(SourceRange.ofToken(nameTok))
 
 			if paramNames.count() > MaxRegisterParams 'tooMany'
 				throw ParseError.unsupported("more than {MaxRegisterParams} parameters (M5 passes arguments in registers only; stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
@@ -423,11 +428,16 @@ export type Parser
 	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
 	// numbering reserved). Bound as an immutable value binding, so a body reference
 	// resolves to the parameter value and a reassignment is rejected as immutable.
-	function bindParameters(paramNames StringArray, paramTypes MaxonTypeArray)
+	function bindParameters(paramNames StringArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray)
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
+			let paramRange = try paramRanges.get(i) otherwise panic("bindParameters: paramRanges.get OOB at {i}")
 			self.scope.declareValueBinding(paramName, varType: paramType, mutable: false, value: i as ValueId)
+			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
+			// diagnostic can resolve the parameter to source (it is minted by no op — see
+			// ParamOriginTable — so it has no `emitOp` origin).
+			self.artifact.recordParamOrigin(i as ValueId, range: paramRange)
 		end 'eachParam'
 	end 'bindParameters'
 

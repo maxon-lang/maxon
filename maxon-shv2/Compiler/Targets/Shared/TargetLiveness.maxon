@@ -222,6 +222,66 @@ end 'makeRegMaskColumn'
 // CFG construction
 // ==========================================================================
 
+// Reorder `func.blockRefs` into REVERSE-POSTORDER so LAYOUT order matches EXECUTION order
+// (a block that runs after another sits later). The cold-spill splitter classifies a value's
+// uses as before/after a pressure peak by their layout SEQUENCE, and that is sound only when
+// layout order is a topological order of the forward CFG — i.e. RPO. The parser emits a
+// NESTED loop's exit/continuation block BEFORE the inner loop's blocks, so without this an
+// idle value's post-loop use gets a LOWER sequence than the inner-loop peak, is misclassified
+// as a before-peak use, and is never split out of the loop — a FALSE E5001 on a loop that does
+// not genuinely need the registers.
+//
+// Successors are walked in REVERSE add-order. `collectBlockSuccessorIds` adds the `then`
+// (=loop body / if-then) edge before the `else` (=loop exit / if-continuation) edge, and
+// exploring the else edge FIRST lands a structured loop's exit AFTER its whole body in the
+// resulting RPO — which is exactly the property the splitter's sequence needs. For a single
+// loop, an `if`, or straight-line code this RPO already equals the parser's block order, so
+// those functions (every current spec) are UNCHANGED; only genuinely nested CFGs reorder.
+//
+// Unreachable blocks — a parser `dead` continuation with no predecessor — are not reached by
+// the DFS, so they are appended in their original relative order to preserve them (they still
+// hold ops that get emitted). Entry (local 0) is the DFS root, so it stays first (its prologue
+// must lead `.text`). Runs before the splitter in `allocateFunction`.
+export function reorderFuncBlocksRpo(module TargetModule, func IrFunction)
+	let cfg = buildFuncCfg(module, func: func)
+	if cfg.numBlocks == 0 'empty'
+		return
+	end 'empty'
+
+	var visited = BoolArray.create()
+	visited.resize(cfg.numBlocks)
+	var postorder = CfgIndexArray.create()
+	rpoDfs(cfg, local: 0, visited: visited, postorder: postorder)
+
+	var newRefs = BlockRefList.create()
+	for ri in 0 upto postorder.count() 'reverse'
+		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
+		newRefs.append(try cfg.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
+	end 'reverse'
+	for i in 0 upto cfg.numBlocks 'appendUnreachable'
+		if not (try visited.get(i) otherwise panic("reorderFuncBlocksRpo: visited.get OOB")) 'unreached'
+			newRefs.append(try cfg.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
+		end 'unreached'
+	end 'appendUnreachable'
+
+	func.blockRefs = newRefs
+end 'reorderFuncBlocksRpo'
+
+// Postorder DFS from `local`, pushing each block AFTER its whole subtree. Successors are
+// explored in REVERSE add-order (see `reorderFuncBlocksRpo`). Recursive, mirroring
+// `dfsBackEdges`; the CFGs it runs on (user programs the compiler builds) are small.
+function rpoDfs(cfg FuncCfg, local CfgIndex, visited BoolArray, postorder CfgIndexArray)
+	try visited.set(local, value: true) otherwise panic("rpoDfs: visited.set OOB")
+	let deg = cfg.succ.degree(local)
+	for k in 0 upto deg 'eachSucc'
+		let s = cfg.succ.neighbour(local, k: deg - 1 - k)
+		if not (try visited.get(s) otherwise panic("rpoDfs: visited.get OOB")) 'unvisited'
+			rpoDfs(cfg, local: s, visited: visited, postorder: postorder)
+		end 'unvisited'
+	end 'eachSucc'
+	postorder.push(local)
+end 'rpoDfs'
+
 export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncCfg
 	var blockRefByLocal = BlockRefArray.create()
 	var blockIdByLocal = CfgIndexArray.create()

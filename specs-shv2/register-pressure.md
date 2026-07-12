@@ -1,0 +1,426 @@
+---
+feature: register-pressure
+status: selfhosted
+keywords: [register-allocator, E5001, register-pressure, hot-spill, diagnostic, value-origin, callee-saved]
+category: register-allocator
+milestone: M5.7
+---
+
+# Register-pressure diagnostic (E5001)
+
+## Documentation
+
+The register allocator's pool is 14 GPRs. When a program point needs more values in
+registers than fit there, the **cold-spill live-range splitter** (see `register-spill`)
+relieves the pressure wherever doing so is FREE — a value idle across a loop is stored
+before it and reloaded after it, with **nothing added to the loop body**. That covers
+every value the pressured region does not actually use.
+
+What it cannot relieve is a value the loop itself *uses* every iteration: spilling that
+would put a load or store *inside* the loop body — exactly the slow code this design
+refuses to emit silently. When a loop's genuine working set exceeds the registers
+available, the compiler stops and reports **E5001** instead of degrading. The remedy is a
+restructuring only the programmer can do: hold the working set in an array (array elements
+are never promoted into registers, so the spill stays spilled).
+
+The diagnostic is the feature, not the error path. Because SSA interference is chordal,
+the per-program-point `maxlive` **is** the exact minimum register count for the program as
+lowered — so E5001 fires **iff** the loop truly does not fit, never on a loop that a
+smarter allocator would have colored. It is designed to let its consumer converge in one
+step:
+
+- **The exact deficit** — "remove N values", not "too many".
+- **The constrained register count that actually applies.** A value live across a **call**
+  can only sit in one of the **5 callee-saved** registers (the caller-saved set is clobbered
+  by the callee), so at a call the effective pool is 5, not 14. E5001 reports the reduced
+  count, or the deficit would be misleading. (An `idiv` similarly reserves `RAX`/`RDX`.)
+- **Each blocking value's source def site**, recovered through the `ValueOrigin` table
+  (`(funcIndex, ValueId)` → the Maxon op that defined it → its source span), ranked
+  cheapest-to-move first: fewest uses inside the loop means fewest reloads after the array
+  rewrite. A loop-carried value (an SSA phi) has no defining op, so it is chased to the
+  incoming value it copies — its declaration.
+- **The transformation**, named, not just the diagnosis.
+
+The message is **deterministic byte-for-byte** — same program, same message — which is what
+the ` ```maxoncstderr ` blocks below assert.
+
+## Tests
+
+<!-- test: hot-loop-overflow -->
+Sixteen accumulators `s1`..`s16` are ALL updated every iteration, plus the loop counter `i`
+— seventeen values the loop genuinely uses, against a pool of fourteen. None is idle across
+the loop, so the cold-spill splitter cannot relieve any of them: this is a HOT overflow, and
+the compiler reports E5001. The deficit is exactly 3 (17 − 14). The accumulators are each
+used once in the loop (their own update), so they rank first (cheapest to hoist into an
+array); the counter `i`, read by all sixteen updates plus the condition plus its own
+increment, ranks last. Each value points at its declaration's source span.
+```maxon
+function hot(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var s15 = 15
+	var s16 = 16
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = s14 + i
+		s15 = s15 + i
+		s16 = s16 + i
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:20 needs 3 more register(s) than are available
+  17 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 3 of these 17 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:2:11   used 1 time in the loop
+    <fragment>:3:11   used 1 time in the loop
+    <fragment>:4:11   used 1 time in the loop
+    <fragment>:5:11   used 1 time in the loop
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:12   used 1 time in the loop
+    <fragment>:12:12   used 1 time in the loop
+    <fragment>:13:12   used 1 time in the loop
+    <fragment>:14:12   used 1 time in the loop
+    <fragment>:15:12   used 1 time in the loop
+    <fragment>:16:12   used 1 time in the loop
+    <fragment>:17:12   used 1 time in the loop
+    <fragment>:18:10   used 18 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: hot-loop-across-call -->
+The binding constraint need not be the nominal fourteen. Here five accumulators AND the loop
+counter — six values — are all live across a `sink` call inside the loop, but only the five
+callee-saved registers survive a call (the other nine are clobbered by the callee). So the
+effective pool AT the call is five, and the deficit is 1. E5001 reports the reduced count and
+why, not "6 of 14". The counter `i` (sink's argument, the condition, and its own increment)
+ranks last at three uses; the accumulators rank first at one use each.
+```maxon
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function hotCall(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var i = 0
+	while i < 5 'loop'
+		let r = sink(i)
+		s1 = s1 + r
+		s2 = s2 + r
+		s3 = s3 + r
+		s4 = s4 + r
+		s5 = s5 + r
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5
+end 'hotCall'
+
+function main() returns ExitCode
+	return hotCall(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:13 needs 1 more register(s) than are available
+  6 values are live across the call inside this loop, but only 5
+  registers survive it on x64-windows (the other 9 are clobbered by the call). The
+  values idle across the loop were already spilled around it at no cost; spilling any of
+  these would put a load or store inside the loop body, which this error exists to prevent.
+
+  remove 1 of these 6 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:10   used 3 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: rescued-idle-around-loop -->
+The CONTRAST to `hot-loop-overflow`: the SAME sixteen values, but now they are idle across
+the loop (computed before it, summed after it) rather than updated inside it. The loop's
+genuine working set is just `sum` and `i` — two values — so it fits, and the cold-spill
+splitter stores the sixteen idle values around the loop. The loop body stays exactly
+`sum = sum + i; i = i + 1` with NOTHING added (verify in the fragment: the `loop` block is
+two `lea`s and a `jmp`). No E5001. Result is `sum(0..4)=10 + sum(1..16)=136 = 146`.
+```maxon
+function rescued(p int) returns int
+	let k1 = p + 1
+	let k2 = p + 2
+	let k3 = p + 3
+	let k4 = p + 4
+	let k5 = p + 5
+	let k6 = p + 6
+	let k7 = p + 7
+	let k8 = p + 8
+	let k9 = p + 9
+	let k10 = p + 10
+	let k11 = p + 11
+	let k12 = p + 12
+	let k13 = p + 13
+	let k14 = p + 14
+	let k15 = p + 15
+	let k16 = p + 16
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		sum = sum + i
+		i = i + 1
+	end 'loop'
+	return sum + k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12 + k13 + k14 + k15 + k16
+end 'rescued'
+
+function main() returns ExitCode
+	return rescued(0)
+end 'main'
+```
+```exitcode
+146
+```
+
+<!-- test: hot-loop-param-used -->
+A PARAMETER used every iteration is part of the hot working set, so it can appear in a
+blocking set — and it is a user-visible, deletable value. Here `p` is read inside the loop
+(`s1 = s1 + i + p`), so with thirteen accumulators plus the counter it is one of fifteen
+values live at once against a pool of fourteen. `p` has NO defining op (it is captured at
+entry, ValueId 0), yet it must NOT trip the Rule-3 "compiler-introduced value" panic: it is
+resolved to its DECLARATION span in the signature (`<fragment>:1:14` — the `p` token) through
+the `ParamOriginTable`. It ranks first (used once in the loop); the counter `i` ranks last.
+```maxon
+function hot(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i + p
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:17 needs 1 more register(s) than are available
+  15 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 1 of these 15 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:1:14   used 1 time in the loop
+    <fragment>:2:11   used 1 time in the loop
+    <fragment>:3:11   used 1 time in the loop
+    <fragment>:4:11   used 1 time in the loop
+    <fragment>:5:11   used 1 time in the loop
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:12   used 1 time in the loop
+    <fragment>:12:12   used 1 time in the loop
+    <fragment>:13:12   used 1 time in the loop
+    <fragment>:14:12   used 1 time in the loop
+    <fragment>:15:10   used 15 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: hot-loop-rematerialized-constant -->
+A constant the loop uses (`let d`, read by `s14 = d - s14`) is REMATERIALIZED by the
+splitter — re-emitted before its use with a FRESH ValueId — and that fresh id, minted after
+parsing, has no origin of its own. When it lands in the blocking set it must NOT trip the
+Rule-3 panic: it is chased through `SplitLineage` back to the original constant, so it resolves
+to the `let d` literal (`<fragment>:23:11`). The remaining working set (thirteen accumulators
+plus the counter) still overflows by two, and the deficit (2) never exceeds the sixteen listed
+values. Regression for the fresh-rematerialized-id false panic.
+```maxon
+function hot() returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		let d = 1000000007
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = d - s14
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14
+end 'hot'
+
+function main() returns ExitCode
+	return hot()
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:18 needs 2 more register(s) than are available
+  16 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:18:11   used 0 times in the loop
+    <fragment>:19:11   used 0 times in the loop
+    <fragment>:20:11   used 0 times in the loop
+    <fragment>:21:11   used 0 times in the loop
+    <fragment>:22:11   used 0 times in the loop
+    <fragment>:24:11   used 0 times in the loop
+    <fragment>:25:11   used 0 times in the loop
+    <fragment>:26:11   used 0 times in the loop
+    <fragment>:27:11   used 0 times in the loop
+    <fragment>:28:13   used 0 times in the loop
+    <fragment>:29:13   used 0 times in the loop
+    <fragment>:30:13   used 0 times in the loop
+    <fragment>:31:13   used 0 times in the loop
+    <fragment>:15:12   used 1 time in the loop
+    <fragment>:23:11   used 1 time in the loop
+    <fragment>:16:10   used 15 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: relievable-param-live-across-loop -->
+A parameter LIVE ACROSS the loop but not USED inside it is cold-spillable, so high pressure
+here is relieved — no E5001. `p` is read before the loop (the `k` computations) and after it
+(the `return`), so it is live across the loop; but the loop body touches only `sum` and `i`.
+The sixteen `k` values and `p` are all idle across the loop, so the splitter stores them
+around it and the body stays two `lea`s and a `jmp`. It compiles and runs. Result is
+`sum(0..4)=10 + sum(1..16)=136 + p=0 = 146`.
+```maxon
+function relievable(p int) returns int
+	let k1 = p + 1
+	let k2 = p + 2
+	let k3 = p + 3
+	let k4 = p + 4
+	let k5 = p + 5
+	let k6 = p + 6
+	let k7 = p + 7
+	let k8 = p + 8
+	let k9 = p + 9
+	let k10 = p + 10
+	let k11 = p + 11
+	let k12 = p + 12
+	let k13 = p + 13
+	let k14 = p + 14
+	let k15 = p + 15
+	let k16 = p + 16
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		sum = sum + i
+		i = i + 1
+	end 'loop'
+	return sum + k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12 + k13 + k14 + k15 + k16 + p
+end 'relievable'
+
+function main() returns ExitCode
+	return relievable(0)
+end 'main'
+```
+```exitcode
+146
+```

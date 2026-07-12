@@ -1,0 +1,254 @@
+// ValueOrigin — the (funcIndex, ValueId) -> Maxon OpIndex map that lets a diagnostic
+// discovered at the TARGET tier (the register allocator's E5001, M5.7) point back at
+// source. Source spans die at the Maxon->Std boundary by design (`SourceRangeTable` is
+// keyed by Maxon op index and does not survive `lowerMaxonToStd`'s fresh module), but
+// two things DO survive verbatim through Maxon -> Std -> Target: a value's `ValueId`
+// (function-local, minted by the parser) and a function's INDEX (1:1 across all three
+// tiers — see LowerMaxonToStd.prepareSkeleton). So a Target-tier ValueId maps back here
+// to the Maxon op that defined it, and that op's index indexes `Project.opRanges` for a
+// `SourceRange` — the full Target-ValueId -> source-span chain.
+//
+// **WHY THREE SCALAR COLUMNS AND NOT `Array with <a record type>`.** A `type` has
+// reference semantics, so an `Array with ValueOrigin`-struct would be an array of
+// POINTERS to heap-boxed, refcounted records — one live heap object per value, retained
+// for the whole build. That is exactly the box `SourceRange.maxon` documents and dodges
+// with dense scalar columns, and this table inherits that discipline wholesale: three
+// `Array with int` columns are dense i64 buffers, **zero heap objects per value.** A
+// `SourceRange` is materialized only on the COLD path (a diagnostic), never during a
+// normal build.
+//
+// **This is a MAXON-TIER, whole-program structure.** It lives per-file on
+// `FileParseArtifact` (recorded inside the `emitOp`/`emitTerminator` choke points, so a
+// value cannot be minted by an op without an origin — the same lockstep argument that
+// protects `SourceRangeTable`) and whole-program on `Project` (folded by `mergeArtifact`
+// with the function + op offsets the merge applies). The Std and Target tiers carry no
+// copy — the ValueIds they name index straight back into this table.
+//
+// **General, NOT E5001-specific.** M6's ownership checker needs exactly this map to say
+// "value moved HERE, used THERE"; it is (funcIndex, ValueId) -> origin infrastructure,
+// not a register-allocator private.
+//
+// **What it does NOT cover: phi/block-arg values.** A block-arg (loop/merge phi) is
+// minted OUTSIDE `emitOp` (it is defined at a block entry, by no op), so it has no entry
+// here — exactly as `SplitLiveRanges.defOpOfValue` returns `none` for it. A consumer that
+// needs the source of a phi chases it to an incoming value on one of its edges (each of
+// which IS op-defined and so IS in this table); the E5001 diagnostic does precisely that.
+
+// A dense column of function indices, one per recorded value origin. Same dense-int
+// representation as `ValueIdArray`/`OpIndexArray` (they interconvert freely), named apart
+// because it holds function indices.
+export typealias FuncIndexArray = Array with FuncIndex
+
+// The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
+// (`literal`/`binOp`/`unaryOp`/`compare`/`call`), `none` for one that defines none
+// (`ret`/`retVoid`/`condBranch`/`branch` — they USE or branch, never produce a value).
+// A UNION, not a sentinel `ValueId`: `ValueId` has no "absent" member, and a sentinel is
+// exactly what the project forbids (No sentinel return values).
+export union MaxonOpResult
+	none
+	value(id ValueId)
+end 'MaxonOpResult'
+
+// The result-value an op defines, EXHAUSTIVE over every `MaxonOp` (no bare `default`),
+// so a new op variant is a COMPILE error here — it cannot slip into the IR minting a
+// value with no recorded origin. The value-producing arms return their `result` field;
+// the branch/return arms return `none`.
+export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
+	return match op 'result'
+		call(result, _, _, _, _) gives MaxonOpResult.value(result)
+		literal(result, _, _) gives MaxonOpResult.value(result)
+		ret to retVoid gives MaxonOpResult.none
+		binOp(result, _, _, _) gives MaxonOpResult.value(result)
+		unaryOp(result, _, _) gives MaxonOpResult.value(result)
+		compare(result, _, _, _) gives MaxonOpResult.value(result)
+		condBranch to branch gives MaxonOpResult.none
+	end 'result'
+end 'maxonOpResultValue'
+
+// The outcome of an origin lookup: `found(opIndex)` for a value defined by a Maxon op,
+// `none` for a value with no op origin (a phi/block-arg, or a value not in this table).
+// A union rather than a sentinel op index — an out-of-range index would silently
+// misattribute a diagnostic to the wrong op.
+export union ValueOriginLookup
+	none
+	found(opIndex OpIndex)
+end 'ValueOriginLookup'
+
+// The outcome of a PARAMETER-origin lookup: `found(range)` for a value that is a
+// function parameter (its declaration span), `none` for any other value. A union
+// rather than a sentinel `SourceRange.none()`: an all-zero range is indistinguishable
+// from a real span at byte 0, and would silently point a diagnostic at the top of the
+// file — the same trap `SourceRangeTable.get` panics on.
+export union ParamOriginLookup
+	none
+	found(range SourceRange)
+end 'ParamOriginLookup'
+
+// ParamOriginTable — the (funcIndex, param ValueId) -> declaration SourceRange store, the
+// companion to ValueOriginTable for the one class of user value NO op defines: a function
+// PARAMETER. Parameters occupy ValueIds 0..paramCount-1 and are materialized at entry by a
+// backend-emitted capture move (`mov virtual(i), argReg[i]`), not by a Maxon op, so they
+// have no ValueOriginTable entry — exactly as `SplitLiveRanges.defOpOfValue` returns `none`
+// for a param-incoming. But a parameter is a USER-VISIBLE, deletable value: the E5001
+// diagnostic (and M6's ownership checker) must map a parameter in a blocking set back to its
+// DECLARATION span, so the parser records that span here as the parameter is bound.
+//
+// Same dense-scalar-column discipline as `ValueOriginTable`/`SourceRangeTable`: the span is
+// decomposed into four `Array with int` columns (plus the two key columns), so there is ZERO
+// heap object per parameter. A `SourceRange` is materialized only on the COLD path (a
+// diagnostic). Entries are sparse (one per parameter) and scanned linearly — only a
+// diagnostic asks, and a function's parameter list is tiny.
+export type ParamOriginTable
+	var funcIndices as FuncIndexArray
+	var valueIds as ValueIdArray
+	var startBytes as ByteOffsetArray
+	var endBytes as ByteOffsetArray
+	var lines as LineNumberArray
+	var columns as ColumnNumberArray
+
+	export static function create() returns ParamOriginTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.funcIndices.count()
+	end 'count'
+
+	// Record that parameter `valueId` in function `funcIndex` is declared at `range`.
+	// The six columns are only ever pushed together here, so they stay the same length by
+	// construction.
+	export function record(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+		self.funcIndices.push(funcIndex)
+		self.valueIds.push(valueId)
+		self.startBytes.push(range.startByte)
+		self.endBytes.push(range.endByte)
+		self.lines.push(range.line)
+		self.columns.push(range.column)
+	end 'record'
+
+	// The declaration span of parameter `valueId` in function `funcIndex`, or `none` when
+	// `valueId` is not a recorded parameter of that function (any body value). A linear scan
+	// — THE COLD PATH — and a parameter appears at most once, so the first match is
+	// authoritative.
+	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.lookup: funcIndices.get OOB at {i}")
+			if f != funcIndex 'otherFunc'
+				continue
+			end 'otherFunc'
+			let v = try self.valueIds.get(i) otherwise panic("ParamOriginTable.lookup: valueIds.get OOB at {i}")
+			if v == valueId 'match'
+				let startByte = try self.startBytes.get(i) otherwise panic("ParamOriginTable.lookup: startBytes.get OOB at {i}")
+				let endByte = try self.endBytes.get(i) otherwise panic("ParamOriginTable.lookup: endBytes.get OOB at {i}")
+				let line = try self.lines.get(i) otherwise panic("ParamOriginTable.lookup: lines.get OOB at {i}")
+				let column = try self.columns.get(i) otherwise panic("ParamOriginTable.lookup: columns.get OOB at {i}")
+				return ParamOriginLookup.found(SourceRange.create(startByte, endByte: endByte, line: line, column: column))
+			end 'match'
+		end 'each'
+		return ParamOriginLookup.none
+	end 'lookup'
+
+	// Fold another table's parameter origins onto the end of this one, shifting each entry's
+	// function index by `funcOffset` — the same relocation `IrModule.merge` applies to the
+	// artifact's functions. ValueIds and spans pass through verbatim (ValueIds are
+	// function-local; a span is absolute in its own file's source buffer). No `opOffset`
+	// analogue: these entries store spans, not op indices.
+	export function appendFrom(source ParamOriginTable, funcOffset FuncIndex)
+		for i in 0 upto source.count() 'each'
+			let f = try source.funcIndices.get(i) otherwise panic("ParamOriginTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("ParamOriginTable.appendFrom: valueIds.get OOB at {i}")
+			let startByte = try source.startBytes.get(i) otherwise panic("ParamOriginTable.appendFrom: startBytes.get OOB at {i}")
+			let endByte = try source.endBytes.get(i) otherwise panic("ParamOriginTable.appendFrom: endBytes.get OOB at {i}")
+			let line = try source.lines.get(i) otherwise panic("ParamOriginTable.appendFrom: lines.get OOB at {i}")
+			let column = try source.columns.get(i) otherwise panic("ParamOriginTable.appendFrom: columns.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, range: SourceRange.create(startByte, endByte: endByte, line: line, column: column))
+		end 'each'
+	end 'appendFrom'
+end 'ParamOriginTable'
+
+// ValueOriginTable — the (funcIndex, ValueId) -> Maxon OpIndex store, as three dense
+// scalar columns. Entry `i` records that value `valueIds[i]` in function `funcIndices[i]`
+// was defined by the Maxon op at `opIndices[i]`. One entry per value-PRODUCING op (a
+// value is defined exactly once — SSA single-def — so no (funcIndex, valueId) pair is
+// ever recorded twice).
+export type ValueOriginTable
+	var funcIndices as FuncIndexArray
+	var valueIds as ValueIdArray
+	var opIndices as OpIndexArray
+	// Parameter declaration spans (the values NO op defines) — carried alongside the
+	// op-origin columns so `Project.valueOrigins` answers BOTH "which op defined value v"
+	// and "where was parameter v declared" from one table. See ParamOriginTable.
+	var paramOrigins as ParamOriginTable
+
+	export static function create() returns ValueOriginTable
+		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), opIndices: OpIndexArray.create(), paramOrigins: ParamOriginTable.create()}
+	end 'create'
+
+	export function count() returns OpCount
+		return self.funcIndices.count()
+	end 'count'
+
+	// Record that value `valueId` in function `funcIndex` originates at Maxon op
+	// `opIndex`. Appended in lockstep with the op stream by `FileParseArtifact.emitOp`
+	// (the only site that mints an op-defined value), so a value cannot enter the IR
+	// without its origin. The three columns are only ever pushed together here, so they
+	// stay the same length by construction.
+	export function record(funcIndex FuncIndex, valueId ValueId, opIndex OpIndex)
+		self.funcIndices.push(funcIndex)
+		self.valueIds.push(valueId)
+		self.opIndices.push(opIndex)
+	end 'record'
+
+	// Record that parameter `valueId` in function `funcIndex` is declared at `range`.
+	// Delegates to the parameter sub-table; called by `FileParseArtifact.recordParamOrigin`
+	// as the parser binds each parameter (a param is minted by no op, so it cannot ride the
+	// `record` op-lockstep and needs its own recording site).
+	export function recordParam(funcIndex FuncIndex, valueId ValueId, range SourceRange)
+		self.paramOrigins.record(funcIndex, valueId: valueId, range: range)
+	end 'recordParam'
+
+	// The declaration span of parameter `valueId` in function `funcIndex`, or `none` for any
+	// non-parameter value. The E5001 diagnostic tries this FIRST: a parameter in a blocking
+	// set resolves to its declaration here, never to the op-origin/phi chase (which no param
+	// participates in).
+	export function paramRange(funcIndex FuncIndex, valueId ValueId) returns ParamOriginLookup
+		return self.paramOrigins.lookup(funcIndex, valueId: valueId)
+	end 'paramRange'
+
+	// The Maxon op index that defined value `valueId` in function `funcIndex`, or `none`
+	// when no op did (a phi/block-arg, or a value minted after parsing — a spill reload /
+	// rematerialized constant). A linear scan: THE COLD PATH — only a diagnostic asks. A
+	// value defined by an op appears exactly once, so the first match is authoritative.
+	export function lookup(funcIndex FuncIndex, valueId ValueId) returns ValueOriginLookup
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.lookup: funcIndices.get OOB at {i}")
+			if f != funcIndex 'otherFunc'
+				continue
+			end 'otherFunc'
+			let v = try self.valueIds.get(i) otherwise panic("ValueOriginTable.lookup: valueIds.get OOB at {i}")
+			if v == valueId 'match'
+				let opIndex = try self.opIndices.get(i) otherwise panic("ValueOriginTable.lookup: opIndices.get OOB at {i}")
+				return ValueOriginLookup.found(opIndex)
+			end 'match'
+		end 'each'
+		return ValueOriginLookup.none
+	end 'lookup'
+
+	// Fold another table's entries onto the end of this one, shifting each entry's
+	// function index by `funcOffset` and op index by `opOffset` — the offsets
+	// `IrModule.merge` applies as it relocates the artifact's functions + ops into the
+	// whole-program module. `mergeArtifact` calls this in lockstep with that merge, so
+	// the shifted entries name the merged module's function + op indices. ValueIds pass
+	// through verbatim (they are function-local and the merge preserves them).
+	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
+		for i in 0 upto source.count() 'each'
+			let f = try source.funcIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: funcIndices.get OOB at {i}")
+			let v = try source.valueIds.get(i) otherwise panic("ValueOriginTable.appendFrom: valueIds.get OOB at {i}")
+			let o = try source.opIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: opIndices.get OOB at {i}")
+			self.record(f + funcOffset, valueId: v, opIndex: o + opOffset)
+		end 'each'
+		// The parameter sub-table merges with the SAME function offset (its ValueIds and spans
+		// pass through verbatim), in lockstep with the op-origin fold above.
+		self.paramOrigins.appendFrom(source.paramOrigins, funcOffset: funcOffset)
+	end 'appendFrom'
+end 'ValueOriginTable'

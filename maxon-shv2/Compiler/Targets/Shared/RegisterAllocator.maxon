@@ -1,5 +1,5 @@
 // Register allocator — the real M5 core (pure Design B: SSA chordal coloring + gap
-// splitting + E5001, canonical in docs/REGISTER_ALLOCATOR.md). Spine (M5.1): liveness
+// splitting + E5001; canonical design in ARCHITECTURE.md's register-allocator section). Spine: liveness
 // → biased forward-sweep coloring → SSA destruction → AllocChecker. M5.2 adopted the
 // `Reuse` operand model to DELETE the pre-emitted two-address seed `mov`: ISel now
 // emits ONE reuse-def op (`sub`/`imul`/`neg`) and THIS pass materializes the copy only
@@ -34,16 +34,16 @@
 // every over-pool program point — full-pool overflow at a normal op AND reduced-pool
 // overflow at a FIXED-REGISTER point. `maxPressure ≤ pool` alone is NECESSARY but NOT
 // SUFFICIENT at such a point: at an `idiv`, values live across it are forbidden {RAX,RDX}
-// (effective pool `pool ∖ {RAX,RDX}`); at a call, the callee-saved subset (REGISTER_
-// ALLOCATOR.md Known-limit #2). The splitter's peak-finder checks each op against its OWN
+// (effective pool `pool ∖ {RAX,RDX}`); at a call, the callee-saved subset (ARCHITECTURE.md's
+// register-allocator "Known limits" #2). The splitter's peak-finder checks each op against its OWN
 // reduced pool (`pool ∖ op.implicitDefs`) and splits values live across it, so by the time
 // this colorer runs no point — normal or fixed-register — overflows its pool, and coloring
 // CANNOT fail. If `chooseRegister` still runs out of registers, the splitter left a point
 // unrelieved — a splitter bug, which the panic below names.
 //
-// DEFERRED to a later M5 chunk (NOT built here): the E5001 diagnostic (`ValueOrigin`), which
-// turns a genuine HOT overflow (a loop / fixed-register point the user must restructure) from
-// the splitter's placeholder panic into a positioned, source-mapped compile error.
+// A HOT overflow the splitter cannot relieve (a loop whose own working set does not fit) is
+// NOT a panic: it is the E5001 compile error, source-mapped via `ValueOrigin` and rendered by
+// `RegisterPressureDiagnostic`. Hence `throws CompileError` down this whole path.
 
 // The color column's "not yet colored" sentinel: one past the last real register.
 let Uncolored = RegisterFileSize
@@ -265,8 +265,9 @@ end 'calleeSavedMask'
 
 // Color every function's virtual registers into physical GPRs, in place. Only USER
 // functions are present here — `mrt_start` is prepended AFTER this pass by
-// augmentWithRuntime (it is hand-built in physical registers).
-export function allocateRegisters(module TargetModule, target Target)
+// augmentWithRuntime (it is hand-built in physical registers). `throws CompileError`
+// because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
+export function allocateRegisters(module TargetModule, target Target, project Project) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
 	assertCallClobberConsistent()
 	var stats = RegAllocStats.create()
@@ -278,23 +279,36 @@ export function allocateRegisters(module TargetModule, target Target)
 	// would forbid).
 	splitCriticalEdges(module)
 
-	for func in module.functions 'eachFunc'
-		allocateFunction(module, func: func, pool: pool, stats: stats)
+	// Index-based (not `for func in ...`) because the loop index IS the function's
+	// Maxon-tier index: function indices are 1:1 across Maxon -> Std -> Target, and
+	// `mrt_start` is prepended only AFTER this pass, so `module.functions` here is the
+	// user functions in their Maxon declaration order. The E5001 diagnostic passes this
+	// index to `ValueOriginTable.lookup` to map a value back to its source op.
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		var func = try module.functions.get(funcIndex) otherwise panic("allocateRegisters: functions.get OOB at {funcIndex}")
+		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
 	end 'eachFunc'
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
 
-function allocateFunction(module TargetModule, func IrFunction, pool RegMask, stats RegAllocStats)
+function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, stats RegAllocStats, project Project) throws CompileError
+	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
+	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
+	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
+	// would otherwise misclassify an idle value's post-loop use and false-E5001 (single-loop /
+	// straight-line CFGs are already in RPO, so they are untouched). See reorderFuncBlocksRpo.
+	reorderFuncBlocksRpo(module, func: func)
+
 	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
 	// idle values out (store in a cold, dominating spot and reload at their uses) or
 	// rematerialize constants, so the colorer below always finds `maxPressure ≤ pool`. HOT
-	// pressure a loop genuinely cannot fit is E5001 (an M5.7 placeholder panic inside the
-	// splitter). It runs FIRST because it MUTATES the IR — adding spill/reload/remat ops and
+	// pressure a loop genuinely cannot fit is raised as E5001 from inside the splitter.
+	// It runs FIRST because it MUTATES the IR — adding spill/reload/remat ops and
 	// fresh reload values that the liveness, coloring, and checker below then all consume. The
 	// splitter recomputes liveness internally and returns the final result (`maxPressure ≤
 	// pool` guaranteed), so no separate liveness pass is needed here.
 	let tSplit = Clock.nowMs()
-	let outcome = splitLiveRanges(module, func: func, pool: pool, stats: stats)
+	let outcome = try splitLiveRanges(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
 	stats.addPhaseMs(RegAllocPhase.splitting, ms: Clock.elapsedMs(tSplit))
 	let liveness = outcome.liveness
 	stats.recordFixpoint(liveness.fixpointIterations)

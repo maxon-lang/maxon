@@ -1,0 +1,468 @@
+// RegisterPressureDiagnostic — the E5001 "this loop needs more registers than exist"
+// message (design: ARCHITECTURE.md's register-allocator section). The DECISION that a point is a
+// genuine HOT overflow already happened in `SplitLiveRanges`: the cold-spill splitter
+// relieved every idle value and rematerialized every constant, and `chooseVictim` still
+// found NO value crossing the peak that can be moved — so what remains is the loop's true
+// working set against the registers available AT that point (the FULL pool at a normal op,
+// the REDUCED pool `pool ∖ implicitDefs` at a call/idiv). This file does NOT re-decide
+// feasibility; it only turns that already-exact decision into a source-mapped message. So
+// it can add no false positive — every number it prints comes from the same per-point,
+// reduced-pool figures the splitter converged on.
+//
+// **The message is the remedy, and the consumer is an agent in a rewrite loop**, so it must
+// let the agent converge in ONE step (design Phase 7):
+//   • the EXACT deficit ("remove N values"), not "too many";
+//   • the CONSTRAINED register count that actually applies (5 callee-saved across a call,
+//     `pool ∖ {rax,rdx}` at an idiv), never the nominal 14;
+//   • each blocking value's SOURCE def site (via ValueOrigin -> Maxon op -> SourceRange),
+//     ranked cheapest-to-move first (fewest uses inside the loop — the fewest reloads after
+//     the array rewrite);
+//   • the concrete transformation (hold the working set in an array).
+//
+// **Deterministic byte-for-byte** (the `maxoncstderr` spec block gates it): no map iteration
+// anywhere, values are swept in id order, and the candidate list is sorted by a TOTAL order
+// (uses-in-loop asc, then value id).
+//
+// **RULE 3 (design):** no compiler-introduced value may appear in the blocking set — an agent
+// told to delete a value that is not in its source cannot converge. Every blocking value is
+// resolved to a USER source span through four exhaustive routes (`defRangeOf`): a PARAMETER to
+// its declaration (`ParamOriginTable` — it is minted by no op), an op-defined value to its op,
+// a phi to the earliest incoming value it copies, and a splitter-minted value (a reload / a
+// rematerialized constant) chased through `SplitLineage` to the ORIGINAL user value it derives
+// from. Only a value with genuinely NO user ancestry after all four is a compiler DEFECT, so
+// `defRangeOf` PANICS naming it rather than emitting a misleading location. At M5 that is
+// unreachable — the routes cover every value that can block an allocation — so the panic is a
+// backstop that guards the invariant the whole contract rests on.
+
+// How many times a blocking value is USED inside the offending loop — the move-cost rank key
+// (fewer in-loop uses => fewer reloads after the array rewrite). A count, not a byte offset:
+// named apart from `ByteCount` so its purpose is legible where a candidate is ranked.
+typealias LoopUseCount = int(0 to u64.max)
+
+// One blocking value the user must consider removing from the loop: its id, the SOURCE span
+// that declares it (a parameter's declaration, an op-defined value's op, or — for a phi — the
+// incoming value it copies; a rematerialized/reloaded value chases to what it derives from —
+// see `defRangeOf`), and how many times it is USED inside the loop (the rank key).
+type PressureCandidate
+	export var valueId as ValueId
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var usesInLoop as LoopUseCount
+
+	static function create(valueId ValueId, line LineNumber, column ColumnNumber, usesInLoop LoopUseCount) returns PressureCandidate
+		return Self{valueId: valueId, line: line, column: column, usesInLoop: usesInLoop}
+	end 'create'
+end 'PressureCandidate'
+
+typealias PressureCandidateArray = Array with PressureCandidate
+
+// Report the E5001 diagnostic for a HOT register-pressure overflow onto `project.diagnostics`
+// and THROW. The overflow point (`peak`) genuinely needs `peak.pressure` registers but only
+// `reducedPoolSizeAt(peakOp, pool)` are available there. This DIRECTLY throws (rather than
+// returning an error for the caller to throw) so the control flow is byte-for-byte the shape
+// of `PassPipeline.run`'s gate — report onto the shared project, then a plain
+// `throw CompileError.compileError`; `compileToCodeResult` catches it, prints, and re-throws a
+// FRESH one (the documented re-throw gotcha). Constructing-then-returning the error to throw
+// elsewhere leaves an owned `CompileError` box in flight across the throw boundary, which the
+// C# bootstrap runtime that runs this compiler does not reclaim (a stderr "MM leak" line that
+// would corrupt the diagnostic — the very thing the `maxoncstderr` block compares).
+export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
+	let message = buildRegisterPressureMessage(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+	// Whole-program-anchored (line 0), so `Diagnostic.render` emits `error E5001:` once and
+	// the multi-line body — which embeds each source location itself — flows through verbatim.
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.registerPressure, message: message))
+	throw CompileError.compileError
+end 'raiseRegisterPressure'
+
+// Assemble the multi-line E5001 message. Structure: a headline with the exact deficit, a
+// paragraph naming the constrained register count that actually applies at the point, the
+// ranked worklist of blocking values with their source def sites, and the transformation.
+function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
+	let cfg = liveness.cfg
+	let peakOp = try module.ops.get(opAtSeq(module, cfg: cfg, targetSeq: peak.peakSeq)) otherwise panic("buildRegisterPressureMessage: peak op not in module.ops")
+	let available = reducedPoolSizeAt(peakOp, pool: pool)
+	let filePath = func.sourceFilePath.toString()
+	let loopLine = loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
+
+	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage)
+	let order = sortedOrder(candidates)
+
+	// EVERY count in the message is the number of LISTED, removable values — `candidates.count()`
+	// (the raw live-virtual working set, exactly what the worklist enumerates). The headline,
+	// the pressure paragraph, and the "remove N of these M" line all derive from it, so they are
+	// mutually consistent (never "18 must be held ... remove 4 of these 17"). `peak.pressure`
+	// (the EFFECTIVE pressure, raw + reuse-transient + dead-phi) is the register requirement the
+	// splitter decided against; the deficit is `peak.pressure - available`, the EXACT number of
+	// registers over the pool, so the remedy converges in one step. It is capped at the listed
+	// count so the message can never ask to remove more values than it lists — a safety floor
+	// that is a no-op at a hot-loop peak (there the corrections are ≤ `available`, so
+	// `peak.pressure - available ≤ candidates.count()`).
+	let heldCount = candidates.count()
+	let deficit = minCount(peak.pressure - available, b: heldCount)
+
+	// The fixed-register kind (call / idiv) is what makes `available` the REDUCED pool rather
+	// than the nominal one — reported so "5 available" is not read as "the machine has 5 GPRs".
+	let fixedKind = fixedPointKind(peakOp)
+
+	var msg = "the loop at {filePath}:{loopLine} needs {deficit} more register(s) than are available\n"
+	msg.append(pressureParagraph(heldCount, available: available, poolSize: regMaskPopcount(pool), fixedKind: fixedKind))
+	msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
+	msg.append(candidateList(candidates, order: order, filePath: filePath))
+	msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
+	msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
+	msg.append("  and the loop body no longer needs a register for each one.")
+	return msg
+end 'buildRegisterPressureMessage'
+
+// The smaller of two counts. Used to cap the reported deficit at the listed-candidate count.
+function minCount(a RegCount, b RegCount) returns RegCount
+	return a if a <= b else b
+end 'minCount'
+
+// The paragraph explaining WHERE the registers went. At a normal op every pool register is
+// available, so the overflow is the raw working-set size. At a FIXED-REGISTER point (a call
+// clobbers the caller-saved set; an idiv reserves RAX/RDX) the effective pool is smaller, and
+// saying "14 available" would be actively misleading — so the reduced count + WHY are stated.
+// `heldCount` is the listed working-set size (`candidates.count()`), so this number matches the
+// worklist below it rather than the effective `peak.pressure` (see `buildRegisterPressureMessage`).
+function pressureParagraph(heldCount RegCount, available RegCount, poolSize RegCount, fixedKind String) returns String
+	if fixedKind.isEmpty() 'normalPoint'
+		return "  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n"
+	end 'normalPoint'
+	let clobbered = poolSize - available
+	return "  {heldCount} values are live across the {fixedKind} inside this loop, but only {available}\n  registers survive it on x64-windows (the other {clobbered} are clobbered by the {fixedKind}). The\n  values idle across the loop were already spilled around it at no cost; spilling any of\n  these would put a load or store inside the loop body, which this error exists to prevent.\n"
+end 'pressureParagraph'
+
+// Render the ranked worklist, one line per candidate: its source def site + its in-loop use
+// count. The location is what identifies the value to the user — shv2 carries no value NAMES
+// (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
+// to recover.
+function candidateList(candidates PressureCandidateArray, order CfgIndexArray, filePath String) returns String
+	var out = ""
+	for idx in order 'each'
+		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
+		let plural = "" if c.usesInLoop == 1 else "s"
+		out.append("    {filePath}:{c.line}:{c.column}   used {c.usesInLoop} time{plural} in the loop\n")
+	end 'each'
+	return out
+end 'candidateList'
+
+// The source line to anchor "the loop at ..." on: the SMALLEST source line among the Target
+// ops that DEFINE an origin-carrying value inside the loop (blocks at loop depth >= 1). Note
+// the loop's CONDITION (`i < N`) does NOT contribute: it is lowered to a fused `cmp`+`jcc`
+// pair that defines no virtual value (the flags are not an SSA value), so `firstOriginLineOfOp`
+// finds no def to map. The anchor is therefore the first in-loop BODY op that defines a value
+// — the first statement inside the loop — resolved with no dependence on block source info
+// (which does not survive to the Target tier). Falls back to line 0 only if no in-loop op has
+// an origin, which cannot happen for a real loop overflow.
+function loopAnchorLine(module TargetModule, cfg FuncCfg, project Project, funcIndex FuncIndex) returns LineNumber
+	var best = 0 as LineNumber
+	var found = false
+	var buf = OperandList.create()
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let depth = try cfg.loopDepth.get(i) otherwise panic("loopAnchorLine: loopDepth.get OOB")
+		if depth == 0 'notInLoop'
+			continue
+		end 'notInLoop'
+		let block = blockAt(module, cfg: cfg, local: i)
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		for opIdx in ordered 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("loopAnchorLine: op not in module.ops")
+			let line = firstOriginLineOfOp(project, funcIndex: funcIndex, op: op, buf: buf)
+			if line == 0 'noOrigin'
+				continue
+			end 'noOrigin'
+			if (not found) or line < best 'smaller'
+				best = line
+				found = true
+			end 'smaller'
+		end 'eachOp'
+	end 'eachBlock'
+	return best
+end 'loopAnchorLine'
+
+// The source line of the first VIRTUAL DEF of `op` that has a ValueOrigin, or 0 when the op
+// defines no origin-carrying value (a control/spill op, or a phi-fed value). Used only to find
+// the loop's anchor line, so a 0 (skip) result is fine.
+function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, buf OperandList) returns LineNumber
+	targetOpOperands(op, buf: buf)
+	for o in buf 'eachOperand'
+		if operandIsDef(o) and operandIsVirtual(o) 'def'
+			match project.valueOrigins.lookup(funcIndex, valueId: operandValueId(o)) 'origin'
+				none then break 'origin'
+				found(opIndex) then return project.opRanges.get(opIndex).line
+			end 'origin'
+		end 'def'
+	end 'eachOperand'
+	return 0
+end 'firstOriginLineOfOp'
+
+// The kind of FIXED-REGISTER point `op` is, for the message wording: "call" (its caller-saved
+// implicitDefs are clobbered) or "idiv" (RAX/RDX reserved), or "" for a normal op (the full
+// pool applies). Read off the op variant, mirroring the operand model's exhaustiveness so a
+// new fixed-register op is a compile error here.
+function fixedPointKind(op TargetOp) returns String
+	return match op 'k'
+		callDirect gives "call"
+		iatCall gives "call"
+		cqo gives "idiv"
+		idivReg gives "idiv"
+		prologue to xchgRegReg gives ""
+		pushReg to loadRegSlot gives ""
+	end 'k'
+end 'fixedPointKind'
+
+// ==========================================================================
+// Collecting + ranking the blocking values
+// ==========================================================================
+
+// The blocking values (everything live at the peak op), each resolved to its source def site
+// and its in-loop use count. `peak.liveBefore` IS the working set the deficit was measured
+// against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
+// order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
+// than moving the reference-typed candidates around (moving them would mutate the array while
+// an element borrow is live, which the borrow checker rejects).
+function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage) returns PressureCandidateArray
+	let wordsPerRow = bitsetWordsFor(cfg.valueCount)
+	var candidates = PressureCandidateArray.create()
+
+	for v in 0 upto cfg.valueCount 'eachValue'
+		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
+			continue
+		end 'notLive'
+		let range = defRangeOf(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
+		let useCount = usesInLoop(module, cfg: cfg, valueId: v)
+		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInLoop: useCount))
+	end 'eachValue'
+
+	return candidates
+end 'collectCandidates'
+
+// A permutation of `candidates`' indices, sorted by the TOTAL order (uses-in-loop ASC, then
+// value id ASC) — cheapest to move out first, ties broken by id so the output is byte-
+// deterministic. Sorts a SCALAR index array (int copies, never a borrow) via insertion sort,
+// leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
+// register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
+function sortedOrder(candidates PressureCandidateArray) returns CfgIndexArray
+	var order = CfgIndexArray.create()
+	for i in 0 upto candidates.count() 'seed'
+		order.push(i)
+	end 'seed'
+
+	let n = order.count()
+	for i in 1 upto n 'each'
+		let keyIndex = try order.get(i) otherwise panic("sortedOrder: order.get OOB at {i}")
+		var j = i
+		while j > 0 and candidateAtGreater(candidates, aIndex: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB"), bIndex: keyIndex) 'shift'
+			try order.set(j, value: try order.get(j - 1) otherwise panic("sortedOrder: order.get OOB")) otherwise panic("sortedOrder: order.set OOB")
+			j = j - 1
+		end 'shift'
+		try order.set(j, value: keyIndex) otherwise panic("sortedOrder: order.set OOB")
+	end 'each'
+	return order
+end 'sortedOrder'
+
+// True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (uses-in-loop asc, then
+// value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
+function candidateAtGreater(candidates PressureCandidateArray, aIndex CfgIndex, bIndex CfgIndex) returns bool
+	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
+	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
+	if a.usesInLoop != b.usesInLoop 'byUses'
+		return a.usesInLoop > b.usesInLoop
+	end 'byUses'
+	return a.valueId > b.valueId
+end 'candidateAtGreater'
+
+// The number of times `valueId` is USED (as a virtual operand) by an op inside a loop (a block
+// at loop depth >= 1) — the move-cost rank key (fewer uses => fewer reloads after the array
+// rewrite). A value in the HOT blocking set is used only in ITS OWN loop (a value idle across
+// this loop would have been cold-spilled already and never reach here), so counting uses at any
+// depth->=1 block is exactly its uses in the offending loop.
+function usesInLoop(module TargetModule, cfg FuncCfg, valueId ValueId) returns LoopUseCount
+	var count = 0 as LoopUseCount
+	var buf = OperandList.create()
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let depth = try cfg.loopDepth.get(i) otherwise panic("usesInLoop: loopDepth.get OOB")
+		if depth == 0 'notInLoop'
+			continue
+		end 'notInLoop'
+		let block = blockAt(module, cfg: cfg, local: i)
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		for opIdx in ordered 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("usesInLoop: op not in module.ops")
+			targetOpOperands(op, buf: buf)
+			for o in buf 'eachOperand'
+				if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
+					count = count + 1
+				end 'use'
+			end 'eachOperand'
+		end 'eachOp'
+	end 'eachBlock'
+	return count
+end 'usesInLoop'
+
+// ==========================================================================
+// Source mapping (Target ValueId -> Maxon op -> source), with phi chasing
+// ==========================================================================
+
+// What a blocking value resolves to — the FOUR exhaustive routes to a user source span (see
+// the RULE 3 note at the top of the file). A union, so `collectReachableRanges` dispatches on
+// it with no bare `default`: a new route would be a compile error rather than a silent fall to
+// the phi chase.
+union ValueSource
+	// A function parameter — its declaration span (from `ParamOriginTable`).
+	param(range SourceRange)
+	// A splitter-minted value (a reload / a rematerialized constant) — the ORIGINAL value it
+	// derives from, chased recursively (its source may itself be derived, or a phi/param/op).
+	derived(sourceId ValueId)
+	// A value defined by a Maxon op — that op's index (into `project.opRanges`).
+	opDefined(opIndex OpIndex)
+	// No direct source: a phi/block-arg, chased to the incoming values its edges pass it.
+	phi
+end 'ValueSource'
+
+// Classify `valueId` into one of the four `ValueSource` routes, in priority order: parameter,
+// then splitter-derived, then op-defined, else a phi. The routes are disjoint by construction —
+// a parameter has a `ParamOriginTable` entry and no op; a fresh reload/remat id is in the
+// `SplitLineage` and in neither origin table; an op-defined value is in `ValueOriginTable`; a
+// phi is in none — so the order only decides which single table answers, never which of two.
+function classifyValue(project Project, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
+	match project.valueOrigins.paramRange(funcIndex, valueId: valueId) 'param'
+		found(range) then return ValueSource.param(range)
+		none then break 'param'
+	end 'param'
+	match lineage.sourceOf(valueId) 'derived'
+		source(sourceId) then return ValueSource.derived(sourceId)
+		none then break 'derived'
+	end 'derived'
+	match project.valueOrigins.lookup(funcIndex, valueId: valueId) 'origin'
+		found(opIndex) then return ValueSource.opDefined(opIndex)
+		none then return ValueSource.phi
+	end 'origin'
+end 'classifyValue'
+
+// The source span that declares `valueId`, for its candidate line — resolved through the four
+// `ValueSource` routes and, for phis (which have several incomings) and derived values, to the
+// EARLIEST reachable span (smallest line/column, then start/end byte). Earliest is the site a
+// user recognises: a loop-carried variable's DECLARATION rather than its in-loop update, a
+// parameter's declaration rather than a body use.
+//
+// RULE 3: after chasing parameters, split lineage, op origins, and phi incomings, a value that
+// resolves to NO span has genuinely no user ancestry — a compiler-introduced value RULE 3
+// forbids from blocking an allocation. This PANICS naming it rather than emitting a location
+// the user cannot act on. At M5 it is unreachable (the four routes cover every blocking value);
+// it is the backstop guarding the E5001 contract.
+function defRangeOf(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, valueId ValueId, wordsPerRow ByteCount, lineage SplitLineage) returns SourceRange
+	var ranges = SourceRangeArray.create()
+	var visited = BitWordArray.create()
+	visited.resize(wordsPerRow)
+	collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
+
+	if ranges.count() == 0 'ruleThree'
+		panic("register-pressure E5001: value {valueId} in '{cfg.numBlocks}'-block function {funcIndex} is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code.")
+	end 'ruleThree'
+
+	return earliestRange(ranges)
+end 'defRangeOf'
+
+// Collect every user source span reachable from `valueId`: a parameter's / op's span directly,
+// a phi's incoming spans transitively, a split-derived value's source span transitively.
+// `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
+// a lineage chase is acyclic but shares the guard), so each value is explored once.
+function collectReachableRanges(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+	if bitsetTest(visited, base: 0, bit: valueId) 'seen'
+		return
+	end 'seen'
+	bitsetAdd(visited, base: 0, bit: valueId)
+
+	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
+		param(range) then out.push(range)
+		derived(sourceId) then collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: sourceId, lineage: lineage, visited: visited, out: out)
+		opDefined(opIndex) then out.push(project.opRanges.get(opIndex))
+		phi then chasePhiIncomings(project, module: module, cfg: cfg, funcIndex: funcIndex, phiValueId: valueId, lineage: lineage, visited: visited, out: out)
+	end 'src'
+end 'collectReachableRanges'
+
+// For a phi, follow each incoming value its edges pass it, gathering their source spans. Does
+// nothing when the value is not a block-arg of any block — that leaves the caller's `out` free
+// of a span from this value, and only a value with no other route contributes none at all
+// (Rule 3).
+function chasePhiIncomings(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+	for incoming in phiIncomingValues(module, cfg: cfg, phiValueId: phiValueId) 'each'
+		collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
+	end 'each'
+end 'chasePhiIncomings'
+
+// Every value passed to `phiValueId` on a branch edge: locate the block where it is a block-arg
+// and its position there, then gather the positionally-corresponding arg from every edge that
+// targets that block. Empty when `phiValueId` is not a block-arg of any block.
+function phiIncomingValues(module TargetModule, cfg FuncCfg, phiValueId ValueId) returns ValueIdArray
+	var result = ValueIdArray.create()
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let block = blockAt(module, cfg: cfg, local: i)
+		let pos = blockArgPosition(block, valueId: phiValueId)
+		if pos == block.blockArgs.count() 'notHere'
+			continue
+		end 'notHere'
+		gatherIncomingAtPosition(module, cfg: cfg, targetBlockId: block.id, position: pos, out: result)
+	end 'eachBlock'
+	return result
+end 'phiIncomingValues'
+
+// The index of `valueId` in `block.blockArgs`, or `blockArgs.count()` when it is not a block-arg
+// of this block (a total-order "not found" sentinel, one past every valid index).
+function blockArgPosition(block IrBlock, valueId ValueId) returns ByteCount
+	for k in 0 upto block.blockArgs.count() 'each'
+		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
+		if arg.valueId == valueId 'match'
+			return k
+		end 'match'
+	end 'each'
+	return block.blockArgs.count()
+end 'blockArgPosition'
+
+// Gather the `position`-th argument of every branch edge targeting `targetBlockId` into `out`
+// (the values predecessors pass to that phi). Uses `PhiEdgeView` only for its arity check.
+function gatherIncomingAtPosition(module TargetModule, cfg FuncCfg, targetBlockId BlockId, position ByteCount, out ValueIdArray)
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let block = blockAt(module, cfg: cfg, local: i)
+		for edge in block.branchEdges 'eachEdge'
+			if edge.targetBlockId != targetBlockId 'notThisEdge'
+				continue
+			end 'notThisEdge'
+			out.push(try edge.argIds.get(position) otherwise panic("gatherIncomingAtPosition: edge to block {targetBlockId} lacks arg at phi position {position}"))
+		end 'eachEdge'
+	end 'eachBlock'
+end 'gatherIncomingAtPosition'
+
+// The EARLIEST span among `ranges` — smallest (line, column, startByte, endByte). A total order
+// over the source buffer, so the same program always picks the same def site (the loop-carried
+// variable's declaration, which precedes its in-loop update in source). The start/end-byte
+// tiebreak keeps it deterministic even for two spans on the same line and column (it never
+// arises for the distinct declarations of a real overflow, but the order must still be total).
+function earliestRange(ranges SourceRangeArray) returns SourceRange
+	var best = try ranges.get(0) otherwise panic("earliestRange: ranges is empty")
+	for idx in 1 upto ranges.count() 'each'
+		let range = try ranges.get(idx) otherwise panic("earliestRange: ranges.get OOB")
+		if rangeEarlier(range, best: best) 'earlier'
+			best = range
+		end 'earlier'
+	end 'each'
+	return best
+end 'earliestRange'
+
+// True iff `range` precedes `best` under (line, column, startByte, endByte).
+function rangeEarlier(range SourceRange, best SourceRange) returns bool
+	if range.line != best.line 'byLine'
+		return range.line < best.line
+	end 'byLine'
+	if range.column != best.column 'byColumn'
+		return range.column < best.column
+	end 'byColumn'
+	if range.startByte != best.startByte 'byStart'
+		return range.startByte < best.startByte
+	end 'byStart'
+	return range.endByte < best.endByte
+end 'rangeEarlier'

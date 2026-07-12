@@ -33,7 +33,7 @@ after the loop at its next use, and **nothing added to the loop body**. So a loo
 carries fifteen unrelated values through it pays no per-iteration cost for them; they
 sit in memory across the loop and return to registers only where they are used.
 
-This rests on two invariants (design `docs/REGISTER_ALLOCATOR.md`, Rules 1 + 2):
+This rests on two invariants (design: `maxon-shv2/ARCHITECTURE.md`, register allocator, Rules 1 + 2):
 - **Rule 2** — a store or reload is placed only where, for every loop containing it,
   the value has no use or def in that loop. So spill code never lands in a loop body
   for a value that loop uses.
@@ -545,65 +545,4 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live in
-this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans only
-`## Tests`, up to the next `## ` heading) never extracts them.
-
-### register-spill.hot-loop-overflow
-
-Re-enable once the `E5001` diagnostic lands (M5.7). A loop that itself USES more values
-than the pool holds is a HOT overflow: no value crossing the loop is idle, so the
-cold-spill splitter cannot relieve it. Today this is a hard panic (the M5.7 placeholder
-in `SplitLiveRanges.panicHotOverflow`); when `E5001` lands it becomes a positioned
-compiler error naming the loop, the exact register deficit, and which values to hoist
-out of the loop — verified by a ` ```maxoncstderr ` block here.
-
-```maxon
-function hot(p int) returns int
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var i = 0
-	while i < 5 'loop'
-		s1 = s1 + i
-		s2 = s2 + i
-		s3 = s3 + i
-		s4 = s4 + i
-		s5 = s5 + i
-		s6 = s6 + i
-		s7 = s7 + i
-		s8 = s8 + i
-		s9 = s9 + i
-		s10 = s10 + i
-		s11 = s11 + i
-		s12 = s12 + i
-		s13 = s13 + i
-		s14 = s14 + i
-		s15 = s15 + i
-		s16 = s16 + i
-		i = i + 1
-	end 'loop'
-	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16
-end 'hot'
-
-function main() returns ExitCode
-	return hot(0)
-end 'main'
 ```

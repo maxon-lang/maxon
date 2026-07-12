@@ -246,6 +246,13 @@ export type Project
 	// and Target modules carry no spans (see SourceRangeTable). Read on the cold
 	// path only — diagnostics and, later, LSP queries.
 	export var opRanges as SourceRangeTable
+	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
+	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
+	// tables by `mergeArtifact`, in the same source-path order the module merges. A
+	// MAXON-TIER table read on the cold path only — today the backend's E5001
+	// (register-pressure) diagnostic maps a Target ValueId back to its source span
+	// through it; M6's ownership checker reuses it.
+	export var valueOrigins as ValueOriginTable
 	// The compile root: the file or directory this build was invoked on. Used to
 	// derive per-file namespaces and the default output path.
 	export var rootPath as FilePath
@@ -264,6 +271,7 @@ export type Project
 			funcSignatures: FuncSignatureMap.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
+			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),

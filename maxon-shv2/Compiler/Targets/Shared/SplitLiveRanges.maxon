@@ -1,10 +1,11 @@
-// SplitLiveRanges — the cold-spill live-range splitter (design REGISTER_ALLOCATOR.md
-// Phase 4, "highest risk, build and test this first"). It is what replaces the M5.1
-// colorer's "pressure > pool → panic" for COLD pressure: a value that is idle across a
+// SplitLiveRanges — the cold-spill live-range splitter (design: ARCHITECTURE.md's
+// register-allocator section, Rule 2). It is what relieves COLD pressure, so the colorer
+// never faces "pressure > pool": a value that is idle across a
 // region of high register pressure is SPLIT — it lives in memory across the gap and in a
 // register only where it is used — so the colorer then always finds `maxPressure ≤ pool`.
-// HOT pressure (a value a loop USES that still cannot fit) stays a panic — the real E5001
-// diagnostic is M5.7 (see `panicHotOverflow`).
+// HOT pressure (a value a loop USES that still cannot fit) is the E5001 diagnostic —
+// `chooseVictim` returns `none` and the driver throws `raiseRegisterPressure` (M5.7,
+// RegisterPressureDiagnostic.maxon).
 //
 // THE TWO INVARIANTS THIS RESTS ON (design Rules 1 + 2):
 //
@@ -97,6 +98,54 @@ export function reloadOriginOf(origins ReloadOriginArray, reloadValueId ValueId)
 	return ReloadOriginLookup.none
 end 'reloadOriginOf'
 
+// The outcome of a lineage lookup: `source(id)` for a splitter-minted fresh value (the
+// value it derives from), `none` for any value the splitter did not mint. A union rather
+// than a sentinel id — a real ValueId 0 would be indistinguishable from "not found".
+export union SplitLineageLookup
+	none
+	source(sourceId ValueId)
+end 'SplitLineageLookup'
+
+// SplitLineage — maps every fresh ValueId the splitter mints back to the ORIGINAL user value
+// it derives from: a reload's `loadRegSlot` def -> the value it reloads, a rematerialized
+// constant's re-emitted def -> the constant it re-emits. This is what lets the E5001
+// diagnostic resolve a fresh id in a blocking set to a SOURCE origin (Rule 3): a fresh id has
+// no `ValueOrigin` (it is minted after parsing) and is not a phi, so without this chase it
+// would hit the Rule-3 "no origin" panic even though the value the author wrote — the spilled
+// variable, the constant — is right there in source. The chase is transitive (a reload of a
+// reload, a value spilled then its reload rematerialized), which the diagnostic follows to a
+// value that DOES have a source origin (the original constant / spilled user value / a phi).
+//
+// Two dense scalar columns (fresh id, source id), pushed in lockstep, scanned linearly — the
+// COLD path (only the diagnostic asks), and a function mints a handful of fresh ids.
+export type SplitLineage
+	var freshIds as ValueIdArray
+	var sourceIds as ValueIdArray
+
+	export static function create() returns SplitLineage
+		return Self{freshIds: ValueIdArray.create(), sourceIds: ValueIdArray.create()}
+	end 'create'
+
+	// Record that `freshId` (a reload or rematerialized def) derives from `sourceId`. The two
+	// columns are only ever pushed together here, so they stay the same length by construction.
+	export function record(freshId ValueId, sourceId ValueId)
+		self.freshIds.push(freshId)
+		self.sourceIds.push(sourceId)
+	end 'record'
+
+	// The value `freshId` derives from, or `none` when `freshId` is not splitter-minted (a
+	// parser value / phi). First match is authoritative — each fresh id is recorded once.
+	export function sourceOf(freshId ValueId) returns SplitLineageLookup
+		for i in 0 upto self.freshIds.count() 'each'
+			let fresh = try self.freshIds.get(i) otherwise panic("SplitLineage.sourceOf: freshIds.get OOB at {i}")
+			if fresh == freshId 'match'
+				return SplitLineageLookup.source(try self.sourceIds.get(i) otherwise panic("SplitLineage.sourceOf: sourceIds.get OOB at {i}"))
+			end 'match'
+		end 'each'
+		return SplitLineageLookup.none
+	end 'sourceOf'
+end 'SplitLineage'
+
 // What the splitter produced for one function: the reload origins (for the checker) and the
 // number of slots it allocated (each spilled value gets its own — no slot coalescing yet, a
 // future optimization). `slotCount * SpillSlotBytes == func.stackSize` by construction.
@@ -127,7 +176,7 @@ end 'SplitOutcome'
 // The peak-pressure program point: the op with the maximum live-before population, its owning
 // local block, and the live-before set there (the candidate spill pool). `found` is false when
 // no op's live-before count exceeds the pool (nothing left to split).
-type PressurePeak
+export type PressurePeak
 	export var found as bool
 	export var pressure as RegCount
 	export var blockLocal as CfgIndex
@@ -154,7 +203,7 @@ end 'PressureAnalysis'
 
 // A chosen victim + how to relieve it.
 union SpillChoice
-	// No cold-spillable value crosses the peak — a HOT overflow (E5001 territory, M5.7).
+	// No cold-spillable value crosses the peak — a HOT overflow (E5001, `raiseRegisterPressure`).
 	none
 	// Rematerialize a constant (re-emit it before each after-peak use, no slot).
 	remat(valueId ValueId)
@@ -166,9 +215,19 @@ end 'SpillChoice'
 // Split one function's live ranges so the colorer finds every program point within its pool.
 // Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and
 // returns the final liveness + the spill plan. Called by `allocateFunction` BEFORE coloring.
-export function splitLiveRanges(module TargetModule, func IrFunction, pool RegMask, stats RegAllocStats) returns SplitOutcome
+//
+// `throws CompileError` because a HOT overflow — a program point over its pool where NO
+// crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
+// panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
+// diagnostic maps each blocking Target ValueId back to its source span through.
+export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, stats RegAllocStats, project Project) returns SplitOutcome throws CompileError
 	let poolSize = regMaskPopcount(pool)
 	var origins = ReloadOriginArray.create()
+	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
+	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
+	// Rule-3 panic (see SplitLineage). Built alongside `origins` (which the AllocChecker needs
+	// for the reload SLOT identity `SplitLineage` does not carry).
+	var lineage = SplitLineage.create()
 	var nextSlot = 0 as SpillSlot
 	var liveness = computeLiveness(module, func: func)
 	var nextValueId = liveness.valueCount
@@ -207,9 +266,9 @@ export function splitLiveRanges(module TargetModule, func IrFunction, pool RegMa
 
 		let choice = chooseVictim(module, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, poolSize: poolSize)
 		match choice 'act'
-			none then panicHotOverflow(func, peak: peak, poolSize: poolSize)
-			remat(v) then rematerializeConstant(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats)
-			spill(v) then nextSlot = spillValue(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats)
+			none then try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+			remat(v) then rematerializeConstant(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			spill(v) then nextSlot = spillValue(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats, lineage: lineage)
 		end 'act'
 
 		// The mutators minted fresh value ids beginning at `nextValueId`; the next
@@ -335,7 +394,7 @@ end 'analyzePressure'
 // caller-saved set; `idiv`/`cqo` write RAX/RDX), so the effective pool there is `pool ∖
 // implicitDefs`. For a normal op `implicitDefs` is 0, so this is just the full pool size. Read
 // from op metadata, so a call, `idiv`, and `cqo` are all handled with no x64-specific mask here.
-function reducedPoolSizeAt(op TargetOp, pool RegMask) returns RegCount
+export function reducedPoolSizeAt(op TargetOp, pool RegMask) returns RegCount
 	return regMaskPopcount(pool and not op.rawValue.implicitDefs)
 end 'reducedPoolSizeAt'
 
@@ -373,7 +432,7 @@ end 'copyOfRow'
 // pool`): a value whose def-point pressure exceeds the pool has no register-free anchor for its
 // store YET — a spilled sibling must free a register first, which a later iteration does (its
 // `defLiveAfter` then drops). Remat has no store, so it carries no such constraint. `none` when
-// no candidate qualifies → HOT overflow (E5001, M5.7).
+// no candidate qualifies → HOT overflow (E5001, `raiseRegisterPressure`).
 function chooseVictim(module TargetModule, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, poolSize RegCount) returns SpillChoice
 	let valueCount = liveness.valueCount
 	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak)
@@ -488,7 +547,7 @@ end 'usesAtPeakOp'
 
 // The module op index at global sequence `targetSeq` (block-layout order, body then
 // terminator). The inverse of the numbering `findPressurePeak` assigns.
-function opAtSeq(module TargetModule, cfg FuncCfg, targetSeq ByteCount) returns OpIndex
+export function opAtSeq(module TargetModule, cfg FuncCfg, targetSeq ByteCount) returns OpIndex
 	var seq = 0 as ByteCount
 	for i in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: i)
@@ -776,7 +835,7 @@ end 'storeAnchorOpIdx'
 // value in its original register. The store dominates every reload (it precedes the peak, they
 // follow it) and each reload dominates the after-peak uses it serves, so no phi is ever needed
 // (the dominating-reload invariant). Returns the next free slot index (`slot + 1`).
-function spillValue(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, slot SpillSlot, origins ReloadOriginArray, nextValueId ValueId, stats RegAllocStats) returns SpillSlot
+function spillValue(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, slot SpillSlot, origins ReloadOriginArray, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns SpillSlot
 	let cfg = liveness.cfg
 
 	// Snapshot use sites BEFORE inserting anything — the store reads `valueId` too but is NOT a
@@ -810,6 +869,9 @@ function spillValue(module TargetModule, liveness LivenessResult, valueId ValueI
 		let blockLocal = u.blockLocal
 		insertReloadBefore(module, cfg: cfg, blockLocal: blockLocal, beforeOpIdx: u.opIdx, valueId: valueId, freshId: freshId, slot: slot)
 		origins.push(ReloadOrigin.create(freshId, slot: slot, originalValueId: valueId))
+		// The reload id derives from the value it reloads — record it so a reload id in an
+		// E5001 blocking set chases back to that value's source origin (see SplitLineage).
+		lineage.record(freshId, sourceId: valueId)
 
 		while idx < useSites.count() and (try useSites.get(idx) otherwise panic("spillValue: useSites.get OOB")).blockLocal == blockLocal 'sameBlock'
 			let uu = try useSites.get(idx) otherwise panic("spillValue: useSites.get OOB")
@@ -864,7 +926,7 @@ end 'insertReloadBefore'
 // depth-0 restriction on its uses (re-emitting a constant even inside a loop is free). The
 // original def is dropped ONLY when no before-peak use still reads it; otherwise it stays live
 // from its def to that last before-peak use (dead across the peak either way).
-function rematerializeConstant(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats)
+function rematerializeConstant(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage)
 	let cfg = liveness.cfg
 	let defOpIdx = requireDefOp(module, cfg: cfg, valueId: valueId)
 	let constValue = constValueOfDef(module, opIdx: defOpIdx)
@@ -887,6 +949,10 @@ function rematerializeConstant(module TargetModule, liveness LivenessResult, val
 		module.ops.push(rematOp)
 		try block.opRefs.insert(usePos, value: rematIdx) otherwise panic("rematerializeConstant: opRefs.insert OOB")
 		rewriteOpAt(module, opIdx: u.opIdx, from: valueId, to: freshId, buf: buf)
+		// The re-emitted copy derives from the original constant — record it so a
+		// rematerialized id in an E5001 blocking set chases back to the constant's source
+		// span (the `let`/literal the author wrote), not a Rule-3 panic (see SplitLineage).
+		lineage.record(freshId, sourceId: valueId)
 		freshId = freshId + 1
 	end 'eachUse'
 
@@ -1023,7 +1089,8 @@ function positionInBlock(block IrBlock, opIdx OpIndex) returns ByteCount
 end 'positionInBlock'
 
 // ==========================================================================
-// Rule 2 verification + the hot-overflow (E5001) placeholder
+// Rule 2 verification (the hot-overflow E5001 diagnostic lives in
+// RegisterPressureDiagnostic.maxon, thrown from the `chooseVictim` -> `none` arm above)
 // ==========================================================================
 
 // Assert an inserted store/reload for `valueId` is COLD per Rule 2: its block is at loop depth
@@ -1037,12 +1104,3 @@ function assertPlacementCold(cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, 
 	end 'inLoop'
 end 'assertPlacementCold'
 
-// The M5.7 E5001 placeholder: a program point's pressure genuinely exceeds the registers
-// available there (a loop's working set over the full pool, or values live across a call/idiv
-// over its REDUCED pool), and NO value crossing it is cold-spillable — every candidate is used
-// inside a loop containing the peak, or is phi/edge machinery. The real diagnostic — naming the
-// point, the exact deficit against the pool that applies there, and the values to remove — is
-// M5.7. TODO(M5.7): replace this panic with the E5001 CompileError + ValueOrigin source mapping.
-function panicHotOverflow(func IrFunction, peak PressurePeak, poolSize RegCount)
-	panic("register pressure overflow in '{func.name}': effective pressure {peak.pressure} at a program point exceeds the registers available there (the full pool is {poolSize}; a call or idiv reduces it further for values live across the point), and none crossing it is cold-spillable — this is HOT pressure the cold-spill splitter cannot relieve. The real E5001 diagnostic (the exact deficit + which values to hoist out, against the reduced pool at any call/idiv point) is the M5.7 milestone; restructure to hold fewer values across the point.")
-end 'panicHotOverflow'

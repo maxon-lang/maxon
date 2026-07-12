@@ -96,7 +96,18 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		throw CompileError.compileError
 	end 'pipelineFailed'
 
-	return buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData)
+	// The backend owns its own error gate now: the register allocator reports E5001
+	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely
+	// overflows the register file. Mirror the pipeline gate above — print the
+	// accumulated diagnostics and re-signal with a FRESH `compileError` (re-throwing
+	// the caught object miscompiles under the C# runtime's refcount path). Passing
+	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
+	// maps a Target ValueId back to its source span through.
+	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project) otherwise 'backendFailed'
+		printDiagnostics(project)
+		throw CompileError.compileError
+	end 'backendFailed'
+	return codeResult
 end 'compileToCodeResult'
 
 // --- Source loading ---

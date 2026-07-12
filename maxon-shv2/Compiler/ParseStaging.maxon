@@ -60,6 +60,12 @@ export type FileParseArtifact
 	// themselves — see SourceRangeTable. `mergeArtifact` folds this into
 	// `project.opRanges` in lockstep with the module merge.
 	export var opRanges as SourceRangeTable
+	// (funcIndex, ValueId) -> Maxon OpIndex for every value an op DEFINES in this file
+	// (see ValueOrigin). Recorded inside the emit choke points below in the same
+	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
+	// `mergeArtifact` with the merge's function + op offsets. What lets the backend's
+	// E5001 map a Target ValueId back to its source span.
+	export var valueOrigins as ValueOriginTable
 	// This file's `funcReturnTypes` registry contributions, in declaration order.
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's `funcSignatures` registry contributions, in declaration order.
@@ -73,6 +79,7 @@ export type FileParseArtifact
 			filePath: filePath,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
+			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			typeNames: TypeNameInterner.create()
@@ -95,6 +102,7 @@ export type FileParseArtifact
 		let opIndex = self.module.opCount()
 		self.module.appendOp(block, op: op)
 		self.opRanges.record(opIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex)
 	end 'emitOp'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
@@ -104,7 +112,32 @@ export type FileParseArtifact
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(block, op: op)
 		self.opRanges.record(opIndex, range: range)
+		self.recordValueOrigin(op, opIndex: opIndex)
 	end 'emitTerminator'
+
+	// Record the origin of the value `op` defines (if any) as this file's contribution
+	// to the whole-program `ValueOrigin` table. The current function's LOCAL index is
+	// `self.module.funcCount()`: the parser pushes a function to `module.functions` only
+	// AFTER parsing its whole body (`Parser.parseFunction`), so while a body's ops emit,
+	// the count is exactly the index this function will occupy. A `none`-result op
+	// (`ret`/`retVoid`/`condBranch`/`branch`) defines no value and records nothing.
+	function recordValueOrigin(op MaxonOp, opIndex OpIndex)
+		match maxonOpResultValue(op) 'result'
+			none then break 'result'
+			value(id) then self.valueOrigins.record(self.module.funcCount(), valueId: id, opIndex: opIndex)
+		end 'result'
+	end 'recordValueOrigin'
+
+	// Record a PARAMETER's declaration span as this file's contribution to the whole-program
+	// origin table. Called by the parser as it binds each parameter (a param is minted by no
+	// op, so it has no `recordValueOrigin` entry — it needs this separate site). Keyed by the
+	// current function's LOCAL index — `self.module.funcCount()` — for the same reason
+	// `recordValueOrigin` is: the parser pushes a function to `module.functions` only AFTER
+	// parsing its whole body, so while the body (and its parameter bindings) are processed the
+	// count is exactly the index this function will occupy.
+	export function recordParamOrigin(valueId ValueId, range SourceRange)
+		self.valueOrigins.recordParam(self.module.funcCount(), valueId: valueId, range: range)
+	end 'recordParamOrigin'
 
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
@@ -154,8 +187,14 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 		panic("mergeArtifact: project.opRanges holds {project.opRanges.count()} spans but the merged module holds {opOffset} ops — the span table drifted out of lockstep with the op array")
 	end 'spansOutOfStep'
 
+	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
+	// artifact's functions after the existing ones, so its k-th function lands at
+	// `funcOffset + k`. Captured BEFORE the merge, mirroring `opOffset`.
+	let funcOffset = target.funcCount()
+
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
+	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 end 'mergeArtifact'

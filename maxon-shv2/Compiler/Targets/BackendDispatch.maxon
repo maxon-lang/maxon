@@ -32,7 +32,13 @@ let EntryStubFrameBytes = 0x28
 
 // Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
-export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable) returns CodeResult
+//
+// `throws CompileError` because register allocation can now FAIL for a real reason the
+// user must fix: a loop that needs more registers than exist (E5001, reported onto
+// `project.diagnostics`). `project` also carries the `opRanges`/`valueOrigins` tables the
+// allocator maps a Target ValueId back to its source span through. Every other backend
+// stage is infallible — a failure there is a compiler bug and still panics.
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	// The sugar gate lives HERE, not in the per-target lowering: it is a property of
 	// the Std tier, not of x64, so installing it at the one target-neutral entry
 	// means arm64/wasm inherit it instead of each having to re-add it. See
@@ -40,7 +46,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	assertNoSugarOps(stdModule)
 
 	var targetModule = lowerStdToX64(stdModule)
-	allocateRegisters(targetModule, target: target)
+	try allocateRegisters(targetModule, target: target, project: project)
 	insertPrologueEpilogue(targetModule, target: target)
 	augmentWithRuntime(targetModule, target: target)
 
