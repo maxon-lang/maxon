@@ -2438,6 +2438,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then emitX64StoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(resultSlot, baseSlot, offsetSlot) then emitX64LoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
 		memcpyOp(dstSlot, srcSlot, lenSlot) then emitX64MemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		memzeroOp(dstSlot, lenSlot) then emitX64MemzeroOp(code, dstSlot: dstSlot, lenSlot: lenSlot)
 		// Register allocator ops
 		movRegReg(destReg, srcReg) then emitMovRegRegOp(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		cmpRegReg(lhsReg, rhsReg) then emitCmpRegRegOp(code, lhs: resolveGpr(lhsReg), rhs: resolveGpr(rhsReg))
@@ -2488,7 +2489,6 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		movzx32(dest, src) then emitMovzx32Op(code, dest: resolveGpr(dest), src: resolveGpr(src))
 		nullSafeLoad(dest, baseReg, offset) then emitNullSafeLoadOp(code, dest: resolveGpr(dest), baseReg: resolveGpr(baseReg), offset: offset)
 		repMovsb then emitRepMovsbOp(code)
-		repStosq then emitRepStosqOp(code)
 		lockIncMemory(addrReg) then emitLockIncMemoryOp(code, addrReg: resolveGpr(addrReg))
 		lockDecMemory(addrReg) then emitLockDecMemoryOp(code, addrReg: resolveGpr(addrReg))
 		lockXaddMemReg(valReg, addrReg) then emitLockXaddMemRegOp(code, addrReg: resolveGpr(addrReg), valReg: resolveGpr(valReg))
@@ -2690,6 +2690,194 @@ function emitX64MemcpyOp(code ByteArray, dstSlot VarSlot, srcSlot VarSlot, lenSl
 	// rep movsb
 	code.append(b"\xf3\xa4")
 end 'emitX64MemcpyOp'
+
+// Crossover, in bytes, above which `rep stosq` beats an inline store loop.
+//
+// The loop is store-port bound at ~8 B/cycle plus ~3 cycles of ladder setup.
+// `rep stosq` moves 32-64 B/cycle once running, but costs ~20-40 cycles of
+// STARTUP before it writes a byte (ERMSB/FSRM improve throughput and short
+// `rep stosb`; they do not remove `rep stosq`'s setup). Break-even is around
+// 3 + N/8 == 35 + N/48, i.e. N ~= 307 bytes. 256 is the last power of two where
+// the loop has not yet started losing, and it hands the big size classes
+// (384/512/1024/... and the 8-32 KiB span footprints) to `rep`.
+//
+// This constant existing at all is the point: a naive always-`rep stosq` would
+// spend ~30 cycles zeroing an 8-byte slot that needs ONE store, and the slab's
+// hot path is dominated by the small classes.
+let X64_MEMZERO_REP_MIN = 256
+// Bytes per iteration of the medium-size store loop (8 qwords).
+let X64_MEMZERO_LOOP_STRIDE = 64
+
+// Condition-code bytes for the ladder's branches. The rel32 forms are the second
+// byte of a 0F-prefixed Jcc; the rel8 forms are standalone one-byte opcodes.
+let X64_JCC_BELOW = 0x82
+let X64_JCC_ABOVE_EQUAL = 0x83
+let X64_JCC_ZERO = 0x84
+let X64_JCC_ABOVE_EQUAL_REL8 = 0x73
+let X64_JCC_NOT_ZERO_REL8 = 0x75
+
+// Emit `mov [base + disp], rax` — rax holds zero throughout the ladder. Routed
+// through the shared encoder so the disp==0 / disp8 / disp32 split (and the rsp
+// SIB case) stay in ONE place; hand-rolling a disp8 here is exactly the bug that
+// once made emitLoadRegRbpOffset silently read the wrong stack slot.
+function emitX64MemzeroStore(code ByteArray, base X64Register, disp MachineWord)
+	helperStoreIndirect(code, base: base, disp: disp, src: X64Register.rax)
+end 'emitX64MemzeroStore'
+
+// Emit `count` consecutive zero-qword stores starting at [base + startDisp].
+function emitX64MemzeroStoreRun(code ByteArray, base X64Register, startDisp MachineWord, count MachineWord)
+	for i in 0 upto count 'stores'
+		emitX64MemzeroStore(code, base: base, disp: startDisp + i * 8)
+	end 'stores'
+end 'emitX64MemzeroStoreRun'
+
+// x64.memzero — zero `len` bytes at `dst`. The analogue of Go's
+// memclrNoHeapPointers (memclr_amd64.s), and the slab allocator's hot primitive.
+//
+// Like x64.memcpy above, this is a MACRO-OP: it owns fixed physical registers
+// (rax/rcx/rdx/rdi, all caller-saved in this compiler's internal ABI) and reads
+// its operands from stack slots, so it is invisible to the register allocator.
+// That is what lets it contain BRANCHES at all — MirToX64Conversion builds its
+// destination blocks 1:1 from the MIR blocks and gives a lowering rule no way to
+// split or create one, so a size dispatch cannot be expressed as MIR blocks. It
+// has to live inside one op's emitter, with locally backpatched jumps. This
+// mirrors what arm64EmitMemcpyOp already does.
+//
+// The size ladder, with rdx pinned to the END of the region throughout:
+//
+//   len < 8        byte loop (rare; only mm_realloc's ragged tail gets here)
+//   8..15          2 overlapping qword stores
+//   16..31         4 overlapping qword stores
+//   32..63         8 overlapping qword stores
+//   64..255        8-qword store loop, then one overlapping 64-byte block
+//   >= 256         rep stosq, then one overlapping qword
+//
+// OVERLAPPING STORES are what make this both fast and simple. Each arm writes
+// forward from the start AND backward from the end, letting the middle be written
+// twice. That covers any length in the band with straight-line stores, no loop and
+// — crucially — no ragged-tail handling for lengths that are not multiples of 8.
+// Zeroing a byte twice is free; branching to work out whether to is not.
+function emitX64MemzeroOp(code ByteArray, dstSlot VarSlot, lenSlot VarSlot)
+	emitLoadSlotToReg(code, slotIndex: dstSlot, dest: X64Register.rdi)
+	emitLoadSlotToReg(code, slotIndex: lenSlot, dest: X64Register.rcx)
+
+	// xor eax, eax — the zero source, and rep stosq's implicit fill value.
+	code.append(b"\x31\xc0")
+	// lea rdx, [rdi + rcx] — rdx = end. Computed BEFORE anything mutates rdi/rcx,
+	// and left untouched, so every arm can anchor its backward stores on it.
+	code.append(b"\x48\x8d\x14\x0f")
+
+	// The compares route through the shared immediate encoder so it — not this
+	// emitter — owns the imm8-vs-imm32 choice (X64_MEMZERO_REP_MIN does not fit imm8).
+	// cmp rcx, 8 ; jb .lt8
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: 8)
+	let jbLt8 = emitX64MemzeroJccRel32(code, opcode: X64_JCC_BELOW)
+	// cmp rcx, 16 ; jb .n8
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: 16)
+	let jbN8 = emitX64MemzeroJccRel32(code, opcode: X64_JCC_BELOW)
+	// cmp rcx, 32 ; jb .n16
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: 32)
+	let jbN16 = emitX64MemzeroJccRel32(code, opcode: X64_JCC_BELOW)
+	// cmp rcx, 64 ; jb .n32
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: X64_MEMZERO_LOOP_STRIDE)
+	let jbN32 = emitX64MemzeroJccRel32(code, opcode: X64_JCC_BELOW)
+	// cmp rcx, X64_MEMZERO_REP_MIN ; jae .rep
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: X64_MEMZERO_REP_MIN)
+	let jaeRep = emitX64MemzeroJccRel32(code, opcode: X64_JCC_ABOVE_EQUAL)
+
+	// --- 64..255: 8 qwords per iteration, then one overlapping 64-byte block ---
+	let loopTop = code.count()
+	emitX64MemzeroStoreRun(code, base: X64Register.rdi, startDisp: 0, count: 8)
+	// add rdi, 64
+	code.append(b"\x48\x83\xc7\x40")
+	// sub rcx, 64
+	code.append(b"\x48\x83\xe9\x40")
+	// cmp rcx, 64
+	emitCmpRegImmOp(code, lhs: X64Register.rcx, value: X64_MEMZERO_LOOP_STRIDE)
+	// jae loopTop (rel8, backward — the body is well under 127 bytes)
+	code.push(X64_JCC_ABOVE_EQUAL_REL8)
+	code.push((loopTop - (code.count() + 1)) and 0xFF)
+	// Unconditional overlapping tail: len >= 64 here, so [rdx-64, rdx) is always
+	// inside the region. No remainder test — re-zeroing is cheaper than branching.
+	emitX64MemzeroStoreRun(code, base: X64Register.rdx, startDisp: 0 - X64_MEMZERO_LOOP_STRIDE, count: 8)
+	let jmpDoneFromLoop = emitX64MemzeroJmpRel32(code)
+
+	// --- >= 256: rep stosq, then one overlapping qword for the 0..7 ragged bytes ---
+	patchX64MemzeroRel32(code, site: jaeRep)
+	// shr rcx, 3 — qword count
+	code.append(b"\x48\xc1\xe9\x03")
+	emitRepStosqOp(code)
+	// len >= 256 >= 8, so [rdx-8] is inside the region; this covers len and 7.
+	emitX64MemzeroStore(code, base: X64Register.rdx, disp: 0 - 8)
+	let jmpDoneFromRep = emitX64MemzeroJmpRel32(code)
+
+	// --- 32..63 ---
+	patchX64MemzeroRel32(code, site: jbN32)
+	emitX64MemzeroStoreRun(code, base: X64Register.rdi, startDisp: 0, count: 4)
+	emitX64MemzeroStoreRun(code, base: X64Register.rdx, startDisp: 0 - 32, count: 4)
+	let jmpDoneFromN32 = emitX64MemzeroJmpRel32(code)
+
+	// --- 16..31 ---
+	patchX64MemzeroRel32(code, site: jbN16)
+	emitX64MemzeroStoreRun(code, base: X64Register.rdi, startDisp: 0, count: 2)
+	emitX64MemzeroStoreRun(code, base: X64Register.rdx, startDisp: 0 - 16, count: 2)
+	let jmpDoneFromN16 = emitX64MemzeroJmpRel32(code)
+
+	// --- 8..15 ---
+	patchX64MemzeroRel32(code, site: jbN8)
+	emitX64MemzeroStore(code, base: X64Register.rdi, disp: 0)
+	emitX64MemzeroStore(code, base: X64Register.rdx, disp: 0 - 8)
+	let jmpDoneFromN8 = emitX64MemzeroJmpRel32(code)
+
+	// --- 0..7: byte loop. Cannot use the overlapping trick (there is no whole
+	// qword to anchor on), but this band is vanishingly rare. ---
+	patchX64MemzeroRel32(code, site: jbLt8)
+	// test rcx, rcx ; jz .done
+	code.append(b"\x48\x85\xc9")
+	let jzDone = emitX64MemzeroJccRel32(code, opcode: X64_JCC_ZERO)
+	let byteLoopTop = code.count()
+	// mov [rdi], al ; inc rdi ; dec rcx ; jnz byteLoopTop
+	code.append(b"\x88\x07")
+	code.append(b"\x48\xff\xc7")
+	code.append(b"\x48\xff\xc9")
+	code.push(X64_JCC_NOT_ZERO_REL8)
+	code.push((byteLoopTop - (code.count() + 1)) and 0xFF)
+
+	// --- done ---
+	patchX64MemzeroRel32(code, site: jmpDoneFromLoop)
+	patchX64MemzeroRel32(code, site: jmpDoneFromRep)
+	patchX64MemzeroRel32(code, site: jmpDoneFromN32)
+	patchX64MemzeroRel32(code, site: jmpDoneFromN16)
+	patchX64MemzeroRel32(code, site: jmpDoneFromN8)
+	patchX64MemzeroRel32(code, site: jzDone)
+end 'emitX64MemzeroOp'
+
+// Emit a two-byte-opcode Jcc with a rel32 placeholder; returns the offset of the
+// displacement field so it can be patched once the target is known. rel32 (not
+// rel8) because the ladder's arms are far apart — the span from the first compare
+// to the byte-loop arm is well over 127 bytes.
+function emitX64MemzeroJccRel32(code ByteArray, opcode MachineWord) returns ByteOffset
+	code.push(0x0F)
+	code.push(opcode)
+	let site = code.count()
+	writeDword(code, value: 0)
+	return site
+end 'emitX64MemzeroJccRel32'
+
+// Emit `jmp rel32` with a placeholder; returns the displacement field's offset.
+function emitX64MemzeroJmpRel32(code ByteArray) returns ByteOffset
+	code.push(0xE9)
+	let site = code.count()
+	writeDword(code, value: 0)
+	return site
+end 'emitX64MemzeroJmpRel32'
+
+// Patch a rel32 displacement recorded by the two helpers above so it lands at the
+// CURRENT end of `code`. x86 displacements are relative to the END of the
+// instruction, which is `site + 4`.
+function patchX64MemzeroRel32(code ByteArray, site ByteOffset)
+	patchDword(code, offset: site, value: (code.count() - (site + 4)) and 0xFFFFFFFF)
+end 'patchX64MemzeroRel32'
 
 // =============================================================================
 // Phase B1+B2: Hand-rolled x86-64 machine code for the twelve `mrt_win32_*`

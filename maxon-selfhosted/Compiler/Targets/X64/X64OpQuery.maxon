@@ -135,7 +135,7 @@ export type X64OpQuery implements TargetOpQuery
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
 			movXmmXmm then break 'extractMov'
-			prologue to memcpyOp then break 'extractMov'
+			prologue to memzeroOp then break 'extractMov'
 			cmpRegReg to xchgRegReg then break 'extractMov'
 			spillXmmToStack to imulRegImm then break 'extractMov'
 		end 'extractMov'
@@ -150,7 +150,7 @@ export type X64OpQuery implements TargetOpQuery
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = decodeX64ParamMovRegs(destReg, srcReg: srcReg)
 			movXmmXmm then break 'extractMov'
-			prologue to memcpyOp then break 'extractMov'
+			prologue to memzeroOp then break 'extractMov'
 			cmpRegReg to xchgRegReg then break 'extractMov'
 			spillXmmToStack to imulRegImm then break 'extractMov'
 		end 'extractMov'
@@ -164,7 +164,7 @@ export type X64OpQuery implements TargetOpQuery
 		match x64Op 'check'
 			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, blockId: blockId, opPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			movXmmXmm(destFp, srcFp, _) then extractX64MovXmmXmmHint(destFp, srcFp: srcFp, blockId: blockId, opPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-			prologue to memcpyOp then break 'check'
+			prologue to memzeroOp then break 'check'
 			cmpRegReg to xchgRegReg then break 'check'
 			spillXmmToStack to imulRegImm then break 'check'
 		end 'check'

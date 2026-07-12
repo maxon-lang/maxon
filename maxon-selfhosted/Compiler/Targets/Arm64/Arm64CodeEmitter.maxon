@@ -443,6 +443,26 @@ export function arm64EmitCmpRegZero(code ByteArray, rn MachineWord)
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCmpRegZero'
 
+// CMP Xn, #imm12 => SUBS XZR, Xn, #imm12
+function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm12 MachineWord)
+	let insn = 0xF100001F or ((imm12 and 0xFFF) shl 10) or (rn shl 5)
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitCmpImm'
+
+// STUR Xt, [Xn, #simm9] — unscaled signed offset. The scaled STR form
+// (arm64EmitStrRegOffset) takes an UNSIGNED imm12, so it cannot express the
+// negative displacements the memzero ladder uses to anchor stores at the end
+// of the region.
+function arm64EmitStur(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+	let insn = 0xF8000000 or ((offset and 0x1FF) shl 12) or (baseReg shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStur'
+
+// B with an explicit imm26 branch offset (in instructions, sign-extended).
+function arm64EmitBranchOffset(code ByteArray, imm26 MachineWord)
+	arm64EmitInsn(code, insn: 0x14000000 or (imm26 and 0x3FFFFFF))
+end 'arm64EmitBranchOffset'
+
 // B.cond with imm19 placeholder (patched later)
 export function arm64EmitCondBranch(code ByteArray, cond MachineWord)
 	let insn = 0x54000000 or cond
@@ -1544,6 +1564,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then arm64EmitStoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(resultSlot, baseSlot, offsetSlot) then arm64EmitLoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
 		memcpyOp(dstSlot, srcSlot, lenSlot) then arm64EmitMemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		memzeroOp(dstSlot, lenSlot) then arm64EmitMemzeroOp(code, dstSlot: dstSlot, lenSlot: lenSlot)
 		// Register allocator ops
 		movRegReg(dest, src) then arm64EmitMovRegReg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		spillToStack(offset, src) then arm64EmitSpillToStack(code, rt: resolveArm64Gpr(src).rawValue, byteOffset: offset)
@@ -1877,6 +1898,132 @@ function arm64EmitMemcpyOp(code ByteArray, dstSlot VarSlot, srcSlot VarSlot, len
 	let cbzPatched = 0xB4000000 or ((cbzRelInsns and 0x7FFFF) shl 5) or 2
 	patchDword(code, offset: cbzOffset, value: cbzPatched)
 end 'arm64EmitMemcpyOp'
+
+// --- memzero (arm64 counterpart of emitX64MemzeroOp) ---
+
+// Condition codes used by the ladder.
+let ARM64_COND_LO = 0x3
+let ARM64_COND_HS = 0x2
+// Register numbers. XZR is encoded as register 31 in the Rt/Rt2 fields.
+let ARM64_XZR = 31
+let ARM64_MEMZERO_DST = 0
+let ARM64_MEMZERO_LEN = 1
+let ARM64_MEMZERO_END = 2
+// Bytes per iteration of the bulk loop: four STPs of a zero pair.
+let ARM64_MEMZERO_LOOP_STRIDE = 64
+
+// STP XZR, XZR, [base, #offset] — store 16 zero bytes.
+function arm64EmitStpZeroPair(code ByteArray, baseReg MachineWord, offset MachineWord)
+	arm64EmitStpOffset(code, rt1: ARM64_XZR, rt2: ARM64_XZR, baseReg: baseReg, offset: offset)
+end 'arm64EmitStpZeroPair'
+
+// `count` consecutive zero-pair stores (16 bytes each) from [base + startOffset].
+function arm64EmitStpZeroRun(code ByteArray, baseReg MachineWord, startOffset MachineWord, count MachineWord)
+	for i in 0 upto count 'pairs'
+		arm64EmitStpZeroPair(code, baseReg: baseReg, offset: startOffset + i * 16)
+	end 'pairs'
+end 'arm64EmitStpZeroRun'
+
+// Patch a B.cond emitted with a placeholder so it targets the current end of `code`.
+function arm64PatchCondBranchToHere(code ByteArray, site ByteOffset, cond MachineWord)
+	let rel = (code.count() - site) / 4
+	patchDword(code, offset: site, value: 0x54000000 or ((rel and 0x7FFFF) shl 5) or cond)
+end 'arm64PatchCondBranchToHere'
+
+// Patch a B emitted with a placeholder so it targets the current end of `code`.
+function arm64PatchBranchToHere(code ByteArray, site ByteOffset)
+	let rel = (code.count() - site) / 4
+	patchDword(code, offset: site, value: 0x14000000 or (rel and 0x3FFFFFF))
+end 'arm64PatchBranchToHere'
+
+// arm64.memzero — zero `len` bytes at `dst`. The counterpart of emitX64MemzeroOp,
+// and the same shape: a size ladder inside ONE macro-op's emitter, with locally
+// patched branches, because the MIR->target conversion cannot create blocks.
+//
+// x2 is pinned to the END of the region so every arm can anchor its backward
+// stores on it; each band writes forward from the start AND backward from the end,
+// letting the middle be written twice. That covers any length in the band with
+// straight-line stores — no loop, and no ragged-tail handling for lengths that
+// are not multiples of 8.
+//
+// Uses STP (16 B/store) rather than STR (8 B): an STP retires as a single uop
+// writing 16 bytes, so it halves the instruction count at identical store
+// bandwidth. No `dc zva` — it needs the block size read from DCZID_EL0, requires
+// 64-byte alignment, can be disabled by DCZID_EL0.DZP, and buys nothing at the
+// 8-64 byte sizes that dominate the slab's hot path. There is no `rep stosq`
+// analogue here, so unlike x64 there is no separate large-size arm: the bulk loop
+// IS the large path.
+function arm64EmitMemzeroOp(code ByteArray, dstSlot VarSlot, lenSlot VarSlot)
+	arm64EmitLdrSlot(code, rt: ARM64_MEMZERO_DST, slotIndex: dstSlot)
+	arm64EmitLdrSlot(code, rt: ARM64_MEMZERO_LEN, slotIndex: lenSlot)
+	// x2 = dst + len (the end), computed before anything mutates x0/x1.
+	arm64EmitAdd(code, rd: ARM64_MEMZERO_END, rn: ARM64_MEMZERO_DST, rm: ARM64_MEMZERO_LEN)
+
+	arm64EmitCmpImm(code, rn: ARM64_MEMZERO_LEN, imm12: 8)
+	let bLt8 = code.count()
+	arm64EmitCondBranchOffset(code, cond: ARM64_COND_LO, imm19: 0)
+	arm64EmitCmpImm(code, rn: ARM64_MEMZERO_LEN, imm12: 16)
+	let bN8 = code.count()
+	arm64EmitCondBranchOffset(code, cond: ARM64_COND_LO, imm19: 0)
+	arm64EmitCmpImm(code, rn: ARM64_MEMZERO_LEN, imm12: 32)
+	let bN16 = code.count()
+	arm64EmitCondBranchOffset(code, cond: ARM64_COND_LO, imm19: 0)
+	arm64EmitCmpImm(code, rn: ARM64_MEMZERO_LEN, imm12: ARM64_MEMZERO_LOOP_STRIDE)
+	let bN32 = code.count()
+	arm64EmitCondBranchOffset(code, cond: ARM64_COND_LO, imm19: 0)
+
+	// --- >= 64: four zero-pairs (64 B) per iteration, then one overlapping 64 B block ---
+	let loopTop = code.count()
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_DST, startOffset: 0, count: 4)
+	arm64EmitAddImm(code, rd: ARM64_MEMZERO_DST, rn: ARM64_MEMZERO_DST, imm12: ARM64_MEMZERO_LOOP_STRIDE)
+	arm64EmitSubImm(code, rd: ARM64_MEMZERO_LEN, rn: ARM64_MEMZERO_LEN, imm12: ARM64_MEMZERO_LOOP_STRIDE)
+	arm64EmitCmpImm(code, rn: ARM64_MEMZERO_LEN, imm12: ARM64_MEMZERO_LOOP_STRIDE)
+	arm64EmitCondBranchOffset(code, cond: ARM64_COND_HS, imm19: (loopTop - code.count()) / 4)
+	// len >= 64 on entry, so [end-64, end) is always inside the region. No remainder
+	// test — re-zeroing is cheaper than branching.
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: 0 - ARM64_MEMZERO_LOOP_STRIDE, count: 4)
+	let bDoneFromLoop = code.count()
+	arm64EmitBranchOffset(code, imm26: 0)
+
+	// --- 32..63 ---
+	arm64PatchCondBranchToHere(code, site: bN32, cond: ARM64_COND_LO)
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_DST, startOffset: 0, count: 2)
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: 0 - 32, count: 2)
+	let bDoneFromN32 = code.count()
+	arm64EmitBranchOffset(code, imm26: 0)
+
+	// --- 16..31 ---
+	arm64PatchCondBranchToHere(code, site: bN16, cond: ARM64_COND_LO)
+	arm64EmitStpZeroPair(code, baseReg: ARM64_MEMZERO_DST, offset: 0)
+	arm64EmitStpZeroPair(code, baseReg: ARM64_MEMZERO_END, offset: 0 - 16)
+	let bDoneFromN16 = code.count()
+	arm64EmitBranchOffset(code, imm26: 0)
+
+	// --- 8..15: one qword from each end (STUR for the negative displacement) ---
+	arm64PatchCondBranchToHere(code, site: bN8, cond: ARM64_COND_LO)
+	arm64EmitStrRegOffset(code, rt: ARM64_XZR, baseReg: ARM64_MEMZERO_DST, offset: 0)
+	arm64EmitStur(code, rt: ARM64_XZR, baseReg: ARM64_MEMZERO_END, offset: 0 - 8)
+	let bDoneFromN8 = code.count()
+	arm64EmitBranchOffset(code, imm26: 0)
+
+	// --- 0..7: byte loop. No whole qword to anchor the overlap on; vanishingly rare. ---
+	arm64PatchCondBranchToHere(code, site: bLt8, cond: ARM64_COND_LO)
+	let cbzDone = code.count()
+	arm64EmitCbz(code, rn: ARM64_MEMZERO_LEN, imm19: 0)
+	let byteLoopTop = code.count()
+	arm64EmitStrb(code, rt: ARM64_XZR, rn: ARM64_MEMZERO_DST, offset: 0)
+	arm64EmitAddImm(code, rd: ARM64_MEMZERO_DST, rn: ARM64_MEMZERO_DST, imm12: 1)
+	arm64EmitSubImm(code, rd: ARM64_MEMZERO_LEN, rn: ARM64_MEMZERO_LEN, imm12: 1)
+	arm64EmitCbnz(code, rn: ARM64_MEMZERO_LEN, imm19: (byteLoopTop - code.count()) / 4)
+
+	// --- done ---
+	let doneOffset = code.count()
+	patchDword(code, offset: cbzDone, value: 0xB4000000 or ((((doneOffset - cbzDone) / 4) and 0x7FFFF) shl 5) or ARM64_MEMZERO_LEN)
+	arm64PatchBranchToHere(code, site: bDoneFromLoop)
+	arm64PatchBranchToHere(code, site: bDoneFromN32)
+	arm64PatchBranchToHere(code, site: bDoneFromN16)
+	arm64PatchBranchToHere(code, site: bDoneFromN8)
+end 'arm64EmitMemzeroOp'
 
 // --- cset / csel / sxtw / nullSafeLoad ---
 

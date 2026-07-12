@@ -106,6 +106,20 @@ export function patchWord(buf ByteArray, offset ByteOffset, value MachineWord)
 	end 'badWrite'
 end 'patchWord'
 
+// Overwrite a single byte. Used to backpatch rel8 branch displacements in
+// self-contained emitted sequences (see emitX64MemzeroOp), where the jump is
+// written with a placeholder and fixed up once its target offset is known.
+export function patchByte(buf ByteArray, offset ByteOffset, value MachineWord)
+	try 'writeByte'
+		buf.set(offset, value: value and 0xFF)
+	end 'writeByte' otherwise (e) 'badWrite'
+		match e 'kind'
+			indexOutOfBounds then panic("patchByte: caller must ensure offset < buf.count() (offset={offset}, buf.count={buf.count()})")
+			emptySlot then panic("patchByte: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badWrite'
+end 'patchByte'
+
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+4 <= buf.count(). All four byte writes share this single invariant.
 	try 'writeBytes'

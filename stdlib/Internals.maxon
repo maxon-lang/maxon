@@ -122,12 +122,15 @@ end '__mm_drop'
 // (NOT the prior value) — the CAS loops below test it as a success boolean.
 // =============================================================================
 
-// Zeroes `size` bytes starting at `ptr`. Byte-at-a-time loop — callers do not
-// have to align `size` to 8 bytes.
+// Zeroes `size` bytes starting at `ptr`. `size` need not be a multiple of 8.
+//
+// Go's `memclrNoHeapPointers`. The backend expands `__Internals.memzero` into a
+// SIZE LADDER (straight-line overlapping stores when small, a store loop when
+// medium, `rep stosq` only once the region is big enough to amortise its ~20-40
+// cycle startup) — which is what makes it viable to zero an 8-byte slab slot on
+// the allocator's hot path. This used to be a byte-at-a-time loop.
 function __slab_memzero(ptr MachineWord, size MachineWord)
-	for i in 0 upto size 'loop'
-		__Internals.storeByte(ptr, offset: i, value: 0)
-	end 'loop'
+	__Internals.memzero(ptr, size: size)
 end '__slab_memzero'
 
 // Validate the result of an `osAllocPages` request. `osAllocPages` wraps

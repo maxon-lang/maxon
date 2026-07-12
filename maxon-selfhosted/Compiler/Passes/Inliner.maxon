@@ -2298,7 +2298,7 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 	return match op 'shape'
 		stackAddr gives true
 		globalAddr gives false
-		memcpy gives false
+		memcpy to memzero gives false
 		storeByte gives false
 		loadByte gives false
 		osExit gives false
@@ -2495,7 +2495,7 @@ end 'bindMemoryDefine'
 function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) returns ValueId
 	return match op 's'
 		globalAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
-		memcpy gives nextId
+		memcpy to memzero gives nextId
 		stackAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		storeByte gives nextId
 		loadByte(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -2931,6 +2931,7 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 's'
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(lookupRemap(remap, key: resultId), name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(lookupRemap(remap, key: dstId), srcId: lookupRemap(remap, key: srcId), lenId: lookupRemap(remap, key: lenId))
+		memzero(dstId, lenId) gives StdSystemOp.memzero(lookupRemap(remap, key: dstId), lenId: lookupRemap(remap, key: lenId))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(lookupRemap(remap, key: resultId), slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId), byteId: lookupRemap(remap, key: byteId))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(lookupRemap(remap, key: resultId), baseId: lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId))

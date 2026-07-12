@@ -2259,6 +2259,7 @@ type WasmFunctionLowering
 			osGetArgv(resultId, indexId) then emitOsGetArgv(resultId, indexId: indexId)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then emitOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId, srcId: srcId, lenId: lenId)
+			memzero(dstId, lenId) then emitMemzero(dstId, lenId: lenId)
 			storeByte(baseId, offsetId, byteId) then emitStoreByte(baseId, offsetId: offsetId, byteId: byteId)
 			loadByte(resultId, baseId, offsetId) then emitLoadByte(resultId, baseId: baseId, offsetId: offsetId)
 			osAllocPages(resultId, sizeId) then emitOsAllocPages(resultId, sizeId: sizeId)
@@ -3109,12 +3110,35 @@ type WasmFunctionLowering
 		body.push(opLocalGet)
 		writeUleb128(body, value: lenId as Wasm32Index)
 		body.push(opI32WrapI64)
-		// memory.copy opcode: 0xFC 0x0A 0x00 0x00
-		body.push(0xFC)
-		writeUleb128(body, value: 10)
+		// memory.copy opcode: 0xFC 0x0A, then TWO memory indices (dst, src).
+		body.push(opBulkMemoryPrefix)
+		writeUleb128(body, value: opBulkMemoryCopy)
 		body.push(0x00)
 		body.push(0x00)
 	end 'emitMemcpy'
+
+	// Zero `len` bytes at `dst` via a single `memory.fill`.
+	//
+	// Deliberately NOT expanded into straight-line i64.stores for small constant
+	// sizes, which is what the native backends do. On wasm each store is bounds-
+	// checked independently by the engine, whereas one memory.fill is a single
+	// check plus an engine-tuned memset that already special-cases short lengths.
+	// Hand-unrolling here would very likely be SLOWER, not faster.
+	function emitMemzero(dstId ValueId, lenId ValueId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: dstId as Wasm32Index)
+		body.push(opI32WrapI64)
+		// fill byte value (i32)
+		body.push(opI32Const)
+		writeSleb128(body, value: 0)
+		body.push(opLocalGet)
+		writeUleb128(body, value: lenId as Wasm32Index)
+		body.push(opI32WrapI64)
+		// memory.fill opcode: 0xFC 0x0B, then ONE memory index.
+		body.push(opBulkMemoryPrefix)
+		writeUleb128(body, value: opBulkMemoryFill)
+		body.push(0x00)
+	end 'emitMemzero'
 
 	function emitStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId)
 		// addr = base + offset (both i64, wrap to i32)

@@ -156,7 +156,7 @@ function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
 		subRspImm to addRspImm then break 'scan'
 		movRspOffsetReg(_, src) then x64MarkGprIfCalleeSaved(gprSeen, vreg: src)
 		loadRegRbpOffset(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
-		callDirect to memcpyOp then break 'scan'
+		callDirect to memzeroOp then break 'scan'
 		movRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
 		cmpRegReg(lhs, rhs) then x64ScanTwoGprs(gprSeen, a: lhs, b: rhs)
 		cmpRegImm(lhs, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: lhs)
@@ -184,7 +184,7 @@ function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
 		movsxd(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
 		movzx32(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
 		nullSafeLoad(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
-		repMovsb to repStosq then break 'scan'
+		repMovsb then break 'scan'
 		lockIncMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		lockDecMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
 		lockXaddMemReg(valReg, addrReg) then x64ScanTwoGprs(gprSeen, a: valReg, b: addrReg)

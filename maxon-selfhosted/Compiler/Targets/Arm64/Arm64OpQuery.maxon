@@ -121,7 +121,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		match a64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(arm64VRegOrdinal(destReg), srcId: extractArm64VRegId(srcReg))
 			fmovRegReg then break 'extractMov'
-			prologue to memcpyOp then break 'extractMov'
+			prologue to memzeroOp then break 'extractMov'
 			spillToStack to strToSpOffset then break 'extractMov'
 			spillFpToStack to xorRegImm then break 'extractMov'
 		end 'extractMov'
@@ -136,7 +136,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		match a64Op 'extractMov'
 			movRegReg(destReg, srcReg) then probe = decodeArm64ParamMovRegs(destReg, srcReg: srcReg)
 			fmovRegReg then break 'extractMov'
-			prologue to memcpyOp then break 'extractMov'
+			prologue to memzeroOp then break 'extractMov'
 			spillToStack to strToSpOffset then break 'extractMov'
 			spillFpToStack to xorRegImm then break 'extractMov'
 		end 'extractMov'
@@ -150,7 +150,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		match a64Op 'check'
 			movRegReg(destReg, srcReg) then setGprCopyHintEdge(extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			fmovRegReg(destFp, srcFp, _) then setFpCopyHintEdge(extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-			prologue to memcpyOp then break 'check'
+			prologue to memzeroOp then break 'check'
 			spillToStack to strToSpOffset then break 'check'
 			spillFpToStack to xorRegImm then break 'check'
 		end 'check'

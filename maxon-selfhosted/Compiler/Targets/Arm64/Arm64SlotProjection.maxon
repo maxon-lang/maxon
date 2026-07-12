@@ -75,6 +75,7 @@ function arm64CollectSlotReads(op Arm64Op, reads VarSlotArray)
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then collectArm64StoreByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(_, baseSlot, offsetSlot) then collectArm64LoadByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot)
 		memcpyOp(dstSlot, srcSlot, lenSlot) then collectArm64MemcpyReads(reads, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		memzeroOp(dstSlot, lenSlot) then collectArm64MemzeroReads(reads, dstSlot: dstSlot, lenSlot: lenSlot)
 		// Catch-all: every Arm64Op variant not matched above reads zero slots.
 		// Listed as disjoint ranges around the matched arms.
 		prologue to movImm then break 'check'
@@ -101,6 +102,11 @@ function collectArm64MemcpyReads(reads VarSlotArray, dstSlot VarSlot, srcSlot Va
 	reads.push(srcSlot)
 	reads.push(lenSlot)
 end 'collectArm64MemcpyReads'
+
+function collectArm64MemzeroReads(reads VarSlotArray, dstSlot VarSlot, lenSlot VarSlot)
+	reads.push(dstSlot)
+	reads.push(lenSlot)
+end 'collectArm64MemzeroReads'
 
 function arm64CollectSlotWrites(op Arm64Op, writes VarSlotArray)
 	match op 'check'
@@ -161,6 +167,7 @@ function rewriteArm64OpSlots(op Arm64Op, remap RegIntArray) returns Arm64Op
 		storeByteOp(baseSlot, offsetSlot, byteSlot) gives Arm64Op.storeByteOp(remapArm64Slot(baseSlot, remap: remap), offsetSlot: remapArm64Slot(offsetSlot, remap: remap), byteSlot: remapArm64Slot(byteSlot, remap: remap))
 		loadByteOp(resultSlot, baseSlot, offsetSlot) gives Arm64Op.loadByteOp(remapArm64Slot(resultSlot, remap: remap), baseSlot: remapArm64Slot(baseSlot, remap: remap), offsetSlot: remapArm64Slot(offsetSlot, remap: remap))
 		memcpyOp(dstSlot, srcSlot, lenSlot) gives Arm64Op.memcpyOp(remapArm64Slot(dstSlot, remap: remap), srcSlot: remapArm64Slot(srcSlot, remap: remap), lenSlot: remapArm64Slot(lenSlot, remap: remap))
+		memzeroOp(dstSlot, lenSlot) gives Arm64Op.memzeroOp(remapArm64Slot(dstSlot, remap: remap), lenSlot: remapArm64Slot(lenSlot, remap: remap))
 		// Non-slot variants: return the input op unchanged. Per-variant arms
 		// so payload bindings are introduced fresh and `op` evaluates to the
 		// same Op value with its original payload preserved.

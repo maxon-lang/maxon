@@ -222,6 +222,7 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		storeByte gives 3
 		loadByte gives 3
 		memcpy gives 3
+		memzero gives 2
 		osExit gives 1
 		osSleep gives 6
 		osWrite gives 6
@@ -1528,6 +1529,7 @@ type X64FunctionLowering
 			osGetArgv(resultId, indexId) then lowerOsGetArgv(resultId, indexId: indexId, dstBlock: dstBlock)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then lowerOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
+			memzero(dstId, lenId) then lowerMemzero(dstId, lenId: lenId, dstBlock: dstBlock)
 			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
 			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then lowerOsAllocPages(resultId, sizeId: sizeId, large: false, dstBlock: dstBlock)
@@ -1653,6 +1655,16 @@ type X64FunctionLowering
 		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
 	end 'lowerMemcpy'
+
+	// The size dispatch lives inside the macro-op's EMITTER, not here: MIR->X64
+	// builds its destination blocks 1:1 from the MIR blocks, so a lowering rule has
+	// no way to create or split one, and a branchy ladder needs blocks. Same shape
+	// as lowerMemcpy above — stage the operands into slots and emit one op.
+	function lowerMemzero(dstId ValueId, lenId ValueId, dstBlock IrBlock)
+		let dstSlot = ensureValueInSlot(dstId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
+		appendX64Op(target, block: dstBlock, op: X64Op.memzeroOp(dstSlot, lenSlot: lenSlot))
+	end 'lowerMemzero'
 
 	// ============================================================
 	// OS-neutral exit/write

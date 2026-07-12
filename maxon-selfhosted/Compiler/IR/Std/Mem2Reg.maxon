@@ -289,7 +289,7 @@ end 'analyzeSlotOp'
 function analyzeSlotSysOp(sysOp StdSystemOp, blockId BlockId, info SlotInfo)
 	match sysOp 'check'
 		stackAddr(_, slotId) then markSlotAddressTaken(slotId, blockId: blockId, info: info)
-		globalAddr to memcpy then return
+		globalAddr to memzero then return
 		storeByte to osLockRelease then return
 		boxValue then return
 		unboxValue then return
@@ -2038,6 +2038,7 @@ function maxValueIdInSys(op StdSystemOp) returns ValueId
 	return match op 'scan'
 		globalAddr(resultId, _) gives resultId
 		memcpy(dstId, srcId, lenId) gives maxOfThree(dstId, b: srcId, c: lenId)
+		memzero(dstId, lenId) gives maxOfTwo(dstId, b: lenId)
 		stackAddr(resultId, _) gives resultId
 		storeByte(baseId, offsetId, byteId) gives maxOfThree(baseId, b: offsetId, c: byteId)
 		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId, b: baseId, c: offsetId)
@@ -2212,6 +2213,7 @@ function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 'subst'
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(resultId, name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(remapValue(dstId, remap: remap), srcId: remapValue(srcId, remap: remap), lenId: remapValue(lenId, remap: remap))
+		memzero(dstId, lenId) gives StdSystemOp.memzero(remapValue(dstId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap), byteId: remapValue(byteId, remap: remap))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(resultId, baseId: remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap))

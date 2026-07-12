@@ -182,7 +182,7 @@ function classifyArm64CallArgSetup(a64Op Arm64Op, coloring ColoringResult) retur
 		strToSpOffset(offset, src) gives classifyArm64StackWrite(offset, src: src, coloring: coloring)
 		fmovRegReg(dest, src, _) gives classifyArm64FpMovForCall(dest, src: src, coloring: coloring)
 		reloadFpFromStack(dest, offset, _) gives classifyArm64FpReload(dest, offset: offset)
-		prologue to memcpyOp gives CallArgKind.none
+		prologue to memzeroOp gives CallArgKind.none
 		spillToStack gives CallArgKind.none
 		branchLinkReg to addSpImm gives CallArgKind.none
 		spillFpToStack gives CallArgKind.none
@@ -209,7 +209,7 @@ function classifyArm64CallResultCapture(a64Op Arm64Op, coloring ColoringResult) 
 		strToSpOffset gives CallArgKind.none
 		fmovRegReg(dest, src, _) gives classifyArm64ResultFpMovForCall(dest, src: src, coloring: coloring)
 		reloadFpFromStack gives CallArgKind.none
-		prologue to memcpyOp gives CallArgKind.none
+		prologue to memzeroOp gives CallArgKind.none
 		spillToStack gives CallArgKind.none
 		branchLinkReg to addSpImm gives CallArgKind.none
 		spillFpToStack gives CallArgKind.none
@@ -288,7 +288,7 @@ function isArm64CallArgSetupShape(a64Op Arm64Op) returns bool
 		strToSpOffset gives true
 		fmovRegReg(dest, _, _) gives arm64DestIsCallConvFp(dest)
 		reloadFpFromStack(dest, _, _) gives arm64DestIsCallConvFp(dest)
-		prologue to memcpyOp gives false
+		prologue to memzeroOp gives false
 		spillToStack gives false
 		branchLinkReg to addSpImm gives false
 		spillFpToStack gives false
@@ -321,7 +321,7 @@ function isArm64CallResultCaptureShape(a64Op Arm64Op) returns bool
 		strToSpOffset gives false
 		fmovRegReg(dest, src, _) gives arm64IsResultFpMovCaptureShape(dest, src: src)
 		reloadFpFromStack gives false
-		prologue to memcpyOp gives false
+		prologue to memzeroOp gives false
 		spillToStack gives false
 		branchLinkReg to addSpImm gives false
 		spillFpToStack gives false
@@ -441,7 +441,7 @@ function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		lsrRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegs(src1, src2) gives isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegZero(src) gives isVirtualArm64Gpr(src)
-		condBranch to memcpyOp gives false
+		condBranch to memzeroOp gives false
 		movRegReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		spillToStack(_, src) gives isVirtualArm64Gpr(src)
 		reloadFromStack(dest, _) gives isVirtualArm64Gpr(dest)
@@ -541,7 +541,7 @@ function collectArm64OpReads(reads RegIntArray, a64Op Arm64Op)
 		lsrRegs(_, src1, src2) then collectArm64TwoReads(reads, reg1: src1, reg2: src2)
 		cmpRegs(src1, src2) then collectArm64TwoReads(reads, reg1: src1, reg2: src2)
 		cmpRegZero(src) then collectRead(reads, id: arm64VRegId(src))
-		condBranch to memcpyOp then break 'scan'
+		condBranch to memzeroOp then break 'scan'
 		movRegReg(_, src) then collectRead(reads, id: arm64VRegId(src))
 		spillToStack(_, src) then collectRead(reads, id: arm64VRegId(src))
 		reloadFromStack then break 'scan'
@@ -685,7 +685,7 @@ end 'noteArm64BaseUseFpDefDef'
 function noteArm64MovRegRegDef(defs RegIntArray, op Arm64Op)
 	match op 'extract'
 		movRegReg(destReg, _) then noteArm64DefId(defs, vreg: destReg)
-		prologue to memcpyOp then break 'extract'
+		prologue to memzeroOp then break 'extract'
 		spillToStack to xorRegImm then break 'extract'
 	end 'extract'
 end 'noteArm64MovRegRegDef'

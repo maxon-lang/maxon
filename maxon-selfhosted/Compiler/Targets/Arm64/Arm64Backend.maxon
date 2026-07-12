@@ -455,6 +455,7 @@ export type Arm64Backend implements TargetBackend
 			storeByte gives 3
 			loadByte gives 3
 			memcpy gives 3
+			memzero gives 2
 			osExit gives 1
 			osSleep gives 6
 			osWrite gives 6
@@ -1132,6 +1133,7 @@ export type Arm64Backend implements TargetBackend
 			osGetArgv(resultId, indexId) then result = lowerOsGetArgvArm64(resultId, indexId: indexId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then result = lowerOsGetExecutablePathArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			memzero(dstId, lenId) then result = lowerMemzeroArm64(dstId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			osAllocPages(resultId, sizeId) then result = lowerOsAllocPagesArm64(resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -1592,6 +1594,23 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
 		return tempSlot
 	end 'lowerMemcpyArm64'
+
+	// Size dispatch lives inside the macro-op's EMITTER (arm64EmitMemzeroOp), not
+	// here: the MIR->target conversion builds its blocks 1:1 from the MIR blocks and
+	// gives a lowering rule no way to create one, and a size ladder needs branches.
+	function lowerMemzeroArm64(dstId ValueId, lenId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let dstSlot = ensureValueInSlotArm64(dstId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if dstSlot == tempSlot 'usedTemp1'
+			tempSlot = tempSlot + 1
+		end 'usedTemp1'
+		let lenSlot = ensureValueInSlotArm64(lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTemp2'
+			tempSlot = tempSlot + 1
+		end 'usedTemp2'
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.memzeroOp(dstSlot, lenSlot: lenSlot))
+		return tempSlot
+	end 'lowerMemzeroArm64'
 
 	function lowerOsExitArm64(codeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
 		var tempSlot = nextTempSlot

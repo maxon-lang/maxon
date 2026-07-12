@@ -308,7 +308,14 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // union ordinal, so a pre-v90 cache would mis-deserialize every system op past
 // the insertion point; bump to invalidate. Same reason v69 bumped when
 // `osClockMs` itself was inserted.
-let CACHE_FORMAT_VERSION = 90
+//
+// v90 -> v91: new `memzero` StdSystemOp (the bulk-zero primitive the always-zeroing
+// slab allocator is built on) inserted directly after `memcpy` — a SECOND insertion,
+// at a different point, in the same union. `osClockNanos` and `memzero` each bumped
+// to v90 independently on separate branches; with both variants present the ordinals
+// match NEITHER v90, so a v90 cache written by either branch alone would mis-decode
+// here. Bump again.
+let CACHE_FORMAT_VERSION = 91
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -4967,6 +4974,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 	match op 'sys'
 		globalAddr(resultId, name) then try writeStdSysGlobalAddr(buf, resultId: resultId, name: name)
 		memcpy(dstId, srcId, lenId) then writeStdSysMemcpy(buf, dstId: dstId, srcId: srcId, lenId: lenId)
+		memzero(dstId, lenId) then writeStdSysMemzero(buf, dstId: dstId, lenId: lenId)
 		stackAddr(resultId, slotId) then writeStdSysStackAddr(buf, resultId: resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) then writeStdSysStoreByte(buf, baseId: baseId, offsetId: offsetId, byteId: byteId)
 		loadByte(resultId, baseId, offsetId) then writeStdSysLoadByte(buf, resultId: resultId, baseId: baseId, offsetId: offsetId)
@@ -5034,6 +5042,11 @@ function writeStdSysMemcpy(buf ByteArray, dstId ValueId, srcId ValueId, lenId Va
 	writeQword(buf, value: srcId)
 	writeQword(buf, value: lenId)
 end 'writeStdSysMemcpy'
+
+function writeStdSysMemzero(buf ByteArray, dstId ValueId, lenId ValueId)
+	writeQword(buf, value: dstId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysMemzero'
 
 function writeStdSysStackAddr(buf ByteArray, resultId ValueId, slotId VarSlot)
 	writeQword(buf, value: resultId)
@@ -5271,6 +5284,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 	return match kase 'sys'
 		globalAddr gives try readStdSysGlobalAddr(buf, offset: pos)
 		memcpy gives try readStdSysMemcpy(buf, offset: pos)
+		memzero gives try readStdSysMemzero(buf, offset: pos)
 		stackAddr gives try readStdSysStackAddr(buf, offset: pos)
 		storeByte gives try readStdSysStoreByte(buf, offset: pos)
 		loadByte gives try readStdSysLoadByte(buf, offset: pos)
@@ -5340,6 +5354,12 @@ function readStdSysMemcpy(buf ByteArray, offset ByteOffset) returns (StdSystemOp
 	let lenId = try readQword(buf, offset: offset + 16) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId), offset + 24)
 end 'readStdSysMemcpy'
+
+function readStdSysMemzero(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let dstId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	let lenId = try readQword(buf, offset: offset + 8) otherwise throw CacheCorruption.invalidEncoding
+	return (StdSystemOp.memzero(dstId, lenId: lenId), offset + 16)
+end 'readStdSysMemzero'
 
 function readStdSysStackAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding

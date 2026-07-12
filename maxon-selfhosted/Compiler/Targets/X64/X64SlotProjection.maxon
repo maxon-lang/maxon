@@ -75,6 +75,7 @@ function x64CollectSlotReads(op X64Op, reads VarSlotArray)
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then collectStoreByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(_, baseSlot, offsetSlot) then collectLoadByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot)
 		memcpyOp(dstSlot, srcSlot, lenSlot) then collectMemcpyReads(reads, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		memzeroOp(dstSlot, lenSlot) then collectMemzeroReads(reads, dstSlot: dstSlot, lenSlot: lenSlot)
 		// Catch-all: every X64Op variant not matched above reads zero slots.
 		// Listed as a series of disjoint ranges around the matched arms.
 		prologue to movRegImm32 then break 'check'
@@ -103,6 +104,11 @@ function collectMemcpyReads(reads VarSlotArray, dstSlot VarSlot, srcSlot VarSlot
 	reads.push(srcSlot)
 	reads.push(lenSlot)
 end 'collectMemcpyReads'
+
+function collectMemzeroReads(reads VarSlotArray, dstSlot VarSlot, lenSlot VarSlot)
+	reads.push(dstSlot)
+	reads.push(lenSlot)
+end 'collectMemzeroReads'
 
 function x64CollectSlotWrites(op X64Op, writes VarSlotArray)
 	match op 'check'
@@ -168,6 +174,7 @@ function rewriteX64OpSlots(op X64Op, remap RegIntArray) returns X64Op
 		storeByteOp(baseSlot, offsetSlot, byteSlot) gives X64Op.storeByteOp(remapSlot(baseSlot, remap: remap), offsetSlot: remapSlot(offsetSlot, remap: remap), byteSlot: remapSlot(byteSlot, remap: remap))
 		loadByteOp(resultSlot, baseSlot, offsetSlot) gives X64Op.loadByteOp(remapSlot(resultSlot, remap: remap), baseSlot: remapSlot(baseSlot, remap: remap), offsetSlot: remapSlot(offsetSlot, remap: remap))
 		memcpyOp(dstSlot, srcSlot, lenSlot) gives X64Op.memcpyOp(remapSlot(dstSlot, remap: remap), srcSlot: remapSlot(srcSlot, remap: remap), lenSlot: remapSlot(lenSlot, remap: remap))
+		memzeroOp(dstSlot, lenSlot) gives X64Op.memzeroOp(remapSlot(dstSlot, remap: remap), lenSlot: remapSlot(lenSlot, remap: remap))
 		// Non-slot variants: return the input op unchanged. Per-variant
 		// arms so payload bindings are introduced fresh and `op` evaluates
 		// to the same Op value with its original payload preserved.
@@ -250,7 +257,6 @@ function rewriteX64OpSlots(op X64Op, remap RegIntArray) returns X64Op
 		movzx32 gives op
 		nullSafeLoad gives op
 		repMovsb gives op
-		repStosq gives op
 		lockIncMemory gives op
 		lockDecMemory gives op
 		lockXaddMemReg gives op

@@ -1642,6 +1642,9 @@ function extractSystemOperands(op StdSystemOp, operands StdOpOperands)
 	match op 'system'
 		globalAddr(resultId, _) then operands.writeIds.push(resultId)
 		memcpy(dstId, srcId, lenId) then pushThree(dstId, b: srcId, c: lenId, into: operands.readIds)
+		// Both operands are READS: the pointer and the length. memzero writes the
+		// memory `dstId` points AT, not the register holding the pointer.
+		memzero(dstId, lenId) then pushTwo(dstId, b: lenId, into: operands.readIds)
 		stackAddr(resultId, _) then operands.writeIds.push(resultId)
 		storeByte(baseId, offsetId, byteId) then pushThree(baseId, b: offsetId, c: byteId, into: operands.readIds)
 		loadByte(resultId, baseId, offsetId) then extractLoadByteOperands(resultId, baseId: baseId, offsetId: offsetId, operands: operands)

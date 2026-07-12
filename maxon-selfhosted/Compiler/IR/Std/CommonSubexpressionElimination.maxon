@@ -432,6 +432,10 @@ function cseSubstSys(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 	return match op 'subst'
 		globalAddr(resultId, name) gives StdSystemOp.globalAddr(resultId, name: name)
 		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(cseRemapValue(dstId, remap: remap), srcId: cseRemapValue(srcId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
+		// Operand remap only. `memzero` is never a CSE CANDIDATE — it produces no
+		// result, and two memzeros of the same (ptr, len) are not interchangeable
+		// anyway, since a store may sit between them.
+		memzero(dstId, lenId) gives StdSystemOp.memzero(cseRemapValue(dstId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(resultId, slotId: slotId)
 		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap), byteId: cseRemapValue(byteId, remap: remap))
 		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(resultId, baseId: cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap))

@@ -184,6 +184,10 @@ export union Arm64Op
 	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 7}  // x0,x1,x2
 	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 3}  // x0,x1
 	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 15}  // x0,x1,x2,x3
+	// The memzero size ladder (see arm64EmitMemzeroOp). Clobbers x0,x1,x2 = 7.
+	// `setsFlags` is TRUE — unlike memcpyOp above, the ladder CMPs the length to
+	// pick an arm, so it writes NZCV.
+	memzeroOp(dstSlot VarSlot, lenSlot VarSlot) = Arm64OpMeta{latency: 5, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 7}  // x0,x1,x2
 	// Register allocator ops
 	movRegReg(dest Arm64VReg, src Arm64VReg) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.movRegReg, implicitGprReads: 0, implicitGprDefs: 0}
 	spillToStack(offset MachineWord, src Arm64VReg) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
@@ -322,6 +326,7 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		storeByteOp gives "arm64.strb w2, [x0, #0]"
 		loadByteOp gives "arm64.ldrb w0, [x0, #0]"
 		memcpyOp gives "arm64.memcpy"
+		memzeroOp gives "arm64.memzero"
 		movRegReg(dest, src) gives "arm64.mov {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
 		spillToStack(offset, src) gives "arm64.str {arm64VRegToString(src)}, [x29, #{offset}]"
 		reloadFromStack(dest, offset) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #{offset}]"

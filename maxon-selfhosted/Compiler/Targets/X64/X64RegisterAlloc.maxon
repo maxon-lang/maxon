@@ -230,7 +230,7 @@ function x64OpHasVirtualRegs(op X64Op) returns bool
 		cmpRaxRcx to addRspImm gives false
 		movRspOffsetReg(_, srcReg) gives isVirtualGpr(srcReg)
 		loadRegRbpOffset(destReg, _) gives isVirtualGpr(destReg)
-		callDirect to memcpyOp gives false
+		callDirect to memzeroOp gives false
 		movRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		cmpRegReg(lhsReg, rhsReg) gives isVirtualGpr(lhsReg) or isVirtualGpr(rhsReg)
 		cmpRegImm(lhsReg, _) gives isVirtualGpr(lhsReg)
@@ -278,7 +278,7 @@ function x64OpHasVirtualRegs(op X64Op) returns bool
 		movsxd(dest, src) gives isVirtualGpr(dest) or isVirtualGpr(src)
 		movzx32(dest, src) gives isVirtualGpr(dest) or isVirtualGpr(src)
 		nullSafeLoad(dest, baseReg, _) gives isVirtualGpr(dest) or isVirtualGpr(baseReg)
-		repMovsb to repStosq gives false
+		repMovsb gives false
 		lockIncMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockDecMemory(addrReg) gives isVirtualGpr(addrReg)
 		lockXaddMemReg(valReg, addrReg) gives isVirtualGpr(valReg) or isVirtualGpr(addrReg)
@@ -352,7 +352,7 @@ function classifyX64CallArgSetup(x64Op X64Op, coloring ColoringResult) returns C
 		movXmmXmm(dest, src, _) gives classifyX64FpMovForCall(dest, src: src, coloring: coloring)
 		reloadXmmFromStack(dest, offset, _) gives classifyX64FpReload(dest, offset: offset)
 		prologue to addRspImm gives CallArgKind.none
-		loadRegRbpOffset to memcpyOp gives CallArgKind.none
+		loadRegRbpOffset to memzeroOp gives CallArgKind.none
 		cmpRegReg to spillToStack gives CallArgKind.none
 		xorRegRegSelf to xchgRegReg gives CallArgKind.none
 		spillXmmToStack gives CallArgKind.none
@@ -441,7 +441,7 @@ function classifyX64CallResultCapture(x64Op X64Op, coloring ColoringResult) retu
 		movXmmXmm(dest, src, _) gives classifyX64ResultFpMovForCall(dest, src: src, coloring: coloring)
 		reloadXmmFromStack gives CallArgKind.none
 		prologue to addRspImm gives CallArgKind.none
-		loadRegRbpOffset to memcpyOp gives CallArgKind.none
+		loadRegRbpOffset to memzeroOp gives CallArgKind.none
 		cmpRegReg to spillToStack gives CallArgKind.none
 		xorRegRegSelf to xchgRegReg gives CallArgKind.none
 		spillXmmToStack gives CallArgKind.none
@@ -520,7 +520,7 @@ function isX64CallArgSetupShape(x64Op X64Op) returns bool
 		movXmmXmm(dest, _, _) gives x64DestIsCallConvXmm(dest)
 		reloadXmmFromStack(dest, _, _) gives x64DestIsCallConvXmm(dest)
 		prologue to addRspImm gives false
-		loadRegRbpOffset to memcpyOp gives false
+		loadRegRbpOffset to memzeroOp gives false
 		cmpRegReg to spillToStack gives false
 		xorRegRegSelf to xchgRegReg gives false
 		spillXmmToStack gives false
@@ -554,7 +554,7 @@ function isX64CallResultCaptureShape(x64Op X64Op) returns bool
 		movXmmXmm(dest, src, _) gives x64IsResultFpMovCaptureShape(dest, src: src)
 		reloadXmmFromStack gives false
 		prologue to addRspImm gives false
-		loadRegRbpOffset to memcpyOp gives false
+		loadRegRbpOffset to memzeroOp gives false
 		cmpRegReg to spillToStack gives false
 		xorRegRegSelf to xchgRegReg gives false
 		spillXmmToStack gives false
@@ -636,7 +636,7 @@ function collectX64OpReads(reads RegIntArray, x64Op X64Op)
 		cmpRaxRcx to addRspImm then break 'scan'
 		movRspOffsetReg(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
 		loadRegRbpOffset then break 'scan'
-		callDirect to memcpyOp then break 'scan'
+		callDirect to memzeroOp then break 'scan'
 		movRegReg(_, srcReg) then collectRead(reads, id: x64VRegId(srcReg))
 		cmpRegReg(lhsReg, rhsReg) then collectX64TwoReads(reads, reg1: lhsReg, reg2: rhsReg)
 		cmpRegImm(lhsReg, _) then collectRead(reads, id: x64VRegId(lhsReg))
@@ -679,7 +679,7 @@ function collectX64OpReads(reads RegIntArray, x64Op X64Op)
 		movsxd(_, src) then collectRead(reads, id: x64VRegId(src))
 		movzx32(_, src) then collectRead(reads, id: x64VRegId(src))
 		nullSafeLoad(_, baseReg, _) then collectRead(reads, id: x64VRegId(baseReg))
-		repMovsb to repStosq then break 'scan'
+		repMovsb then break 'scan'
 		lockIncMemory(addrReg) then collectRead(reads, id: x64VRegId(addrReg))
 		lockDecMemory(addrReg) then collectRead(reads, id: x64VRegId(addrReg))
 		lockXaddMemReg(valReg, addrReg) then collectX64TwoReads(reads, reg1: valReg, reg2: addrReg)
@@ -731,7 +731,7 @@ function noteX64OpDefs(defs RegIntArray, x64Op X64Op)
 		shrRegCl(dest, _, _) then noteX64DefId(defs, vreg: dest)
 		cmpRaxRcx to movRspOffsetReg then break 'scan'
 		loadRegRbpOffset(dest, _) then noteX64DefId(defs, vreg: dest)
-		callDirect to memcpyOp then break 'scan'
+		callDirect to memzeroOp then break 'scan'
 		movRegReg(destReg, _) then noteX64DefId(defs, vreg: destReg)
 		cmpRegReg to idivReg then break 'scan'
 		spillToStack then break 'scan'
@@ -841,7 +841,7 @@ function x64OpPhysGprDestMask(x64Op X64Op) returns RegMask
 		shrRegCl(dest, _, _) gives x64PhysRegMask(dest)
 		cmpRaxRcx to movRspOffsetReg gives 0
 		loadRegRbpOffset(dest, _) gives x64PhysRegMask(dest)
-		callDirect to memcpyOp gives 0
+		callDirect to memzeroOp gives 0
 		movRegReg(destReg, _) gives x64PhysRegMask(destReg)
 		cmpRegReg to idivReg gives 0
 		spillToStack gives 0
@@ -939,7 +939,7 @@ function preSeedIfNotDivResult(module TargetModule, state RegState, x64Op X64Op,
 	// heap alloc plus an N-case select-chain per field), which bloated this
 	// function by thousands of ops. The match reads only the discriminant tag.
 	match x64Op 'dispatch'
-		prologue to memcpyOp then break 'dispatch'
+		prologue to memzeroOp then break 'dispatch'
 		movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(module, state: state, destReg: destReg, srcReg: srcReg, opRefs: opRefs, opIdx: opIdx)
 		cmpRegReg to xchgRegReg then break 'dispatch'
 		movXmmXmm(dest, src, _) then preSeedFpParam(state, dest: dest, src: src)
@@ -981,7 +981,7 @@ function isPrevOpIdivOrCall(module TargetModule, opRefs OpIndexList, opIdx RegIn
 		idivReg then result = true
 		callIndirect then result = true
 		prologue to loadRegRbpOffset then break 'checkOp'
-		syscall to memcpyOp then break 'checkOp'
+		syscall to memzeroOp then break 'checkOp'
 		movRegReg to cqo then break 'checkOp'
 		spillToStack to xorRegRegSelf then break 'checkOp'
 		xchgRegReg to imulRegImm then break 'checkOp'
@@ -2317,7 +2317,7 @@ function tryAppendFoldedX64Op(module TargetModule, x64Op X64Op, valueId RegInt, 
 		orRegReg(destReg, srcReg) gives foldTwoAddrToMem(module, destReg: destReg, srcReg: srcReg, valueId: valueId, kind: 3, rbpBase: rbp, stackOffset: stackOffset)
 		xorRegReg(destReg, srcReg) gives foldTwoAddrToMem(module, destReg: destReg, srcReg: srcReg, valueId: valueId, kind: 4, rbpBase: rbp, stackOffset: stackOffset)
 		shlRegCl to addRspImm gives -1
-		movRspOffsetReg to memcpyOp gives -1
+		movRspOffsetReg to memzeroOp gives -1
 		// movRegReg(dest, src) with spilled src is equivalent to a
 		// reloadFromStack(dest, srcOffset) — the dest is fresh and the
 		// load IS the mov. Folding removes the intermediate reload vreg.

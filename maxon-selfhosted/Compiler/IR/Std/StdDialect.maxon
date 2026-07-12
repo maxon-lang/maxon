@@ -481,6 +481,21 @@ export union StdSystemOp
 	globalAddr(resultId ValueId, name String)
 	// Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
+	// Zero `len` bytes at `dst`. The analogue of Go's `memclrNoHeapPointers`, and
+	// the primitive the slab allocator's hot path is built on.
+	//
+	// Each backend lowers this to a SIZE LADDER, not a single instruction. The
+	// dominant caller zeroes a slab size-class slot (8/16/24/32/48/... bytes), and
+	// a naive `rep stosq` would be a large regression there: it costs ~20-40 cycles
+	// of startup before it moves a byte, which dwarfs the 1-4 plain stores an
+	// 8-32 byte slot actually needs. So: straight-line overlapping stores when
+	// small, a store loop when medium, `rep stosq` only once the region is big
+	// enough to amortise it. Same shape on arm64 (`stp xzr, xzr`) and a single
+	// `memory.fill` on wasm, where the engine owns the ladder.
+	//
+	// Declared adjacent to `memcpy` so that every `globalAddr to memcpy` range arm
+	// in the passes goes non-exhaustive and forces an explicit decision here.
+	memzero(dstId ValueId, lenId ValueId)
 	// Get the address of a stack slot as a pointer. Used for local byte buffers.
 	stackAddr(resultId ValueId, slotId VarSlot)
 	// Store a byte value at base + offset.
@@ -837,6 +852,7 @@ function sysOpToString(op StdSystemOp) returns String
 	return match op 'print'
 		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{name}"
 		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
+		memzero(dstId, lenId) gives "sys.memzero %{dstId}, %{lenId}"
 		stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
 		storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"

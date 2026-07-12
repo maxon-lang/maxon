@@ -1306,6 +1306,7 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadWord", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeWord", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.memcpy", paramNames: mmParamNames3("dst", second: "src", third: "size"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.memzero", paramNames: mmParamNames2("dst", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	// Address-of-named-global ops. Each maps to `globalAddr <bakedName>` in
 	// the Std IR. No string-literal args: passing a Maxon string would
 	// trigger a String allocation for the literal at runtime (mrt_alloc
@@ -7881,6 +7882,9 @@ type MaxonToStdLowering
 		if methodName == "memcpy" 'isMemcpy'
 			return self.lowerInternalsMemcpy(result, args: args, dstBlock: dstBlock)
 		end 'isMemcpy'
+		if methodName == "memzero" 'isMemzero'
+			return self.lowerInternalsMemzero(result, args: args, dstBlock: dstBlock)
+		end 'isMemzero'
 		// Address-of-named-global / address-of-named-function bridges
 		if let globalName = try lookupInternalsGlobalAddrTarget(methodName) 'isGlobalAddr'
 			return self.lowerInternalsNamedGlobalAddr(result, args: args, dstBlock: dstBlock, globalName: globalName)
@@ -8188,6 +8192,25 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsMemcpy'
+
+	// `__Internals.memzero(dst, size)` — the analogue of Go's memclrNoHeapPointers.
+	// See StdSystemOp.memzero: each backend expands this into a size ladder, so the
+	// slab allocator can zero an 8-byte slot without paying `rep stosq`'s startup.
+	function lowerInternalsMemzero(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.memzero: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let dstName = try args.get(0) otherwise panic("invariant")
+		let sizeName = try args.get(1) otherwise panic("invariant")
+		let dstId = self.resolveName(dstName)
+		let sizeId = self.resolveName(sizeName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.memzero(dstId, lenId: sizeId)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsMemzero'
 
 	function lowerInternalsLoadFramePtr(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 0 'badArity'
