@@ -178,6 +178,40 @@ history. **There is no separate allocator design doc; ARCHITECTURE.md is canonic
   collapses copy-related values — never on a cardinality gate. Retire M4b's `EliminatePhis` (consume
   `blockArgs`/`branchEdges` directly; SSA destruction after coloring).
 
+## M5 findings — what the reviews caught, and the lesson worth keeping (2026-07-12)
+
+Every M5 chunk ran **implement → verify (build + *run the binaries*) → adversarial review → fix → commit**.
+The reviews were not ceremony: each caught defects that the **green spec suite and the `AllocChecker` both
+passed**. These are exactly the bugs that otherwise stay invisible until the compiler is compiling itself,
+where they are brutal to find.
+
+- **A critical silent miscompile in the call ABI.** Parameter-*capture* moves (`mov v, argReg[i]`) read a
+  physical *source*, but the arg-*setup* forbidding is a physical-*def* mechanism — it does not mirror to
+  sources. So an early parameter's capture destination could be colored onto a *later* parameter's incoming
+  register and clobber it before that parameter's own capture read it. Any ≥3-param function passing an
+  early parameter as a non-first call argument, with a later parameter live across the call, silently
+  returned the wrong answer — **no diagnostic, 61/61 green, checker green.** Fixed by forbidding each
+  parameter from every *other* parameter's incoming register.
+- **THE LESSON: the `AllocChecker` only catches what it MODELS.** It did not model the incoming argument
+  registers at function entry, so a physical-*source* move was untracked and the safety net was simply blind
+  there. The fix hardened the *model* (seed each parameter into its incoming register), not just the bug.
+  **When adding codegen that reads or writes physical registers the checker does not track, extend the
+  checker's model FIRST** — until then, "the suite is green" means nothing in that region.
+- **Fragments are OUTPUTS, not gates.** `spec-test` regenerates them, so a wrong-but-self-consistent
+  allocator passes them. The `AllocChecker` — plus actually *running* the produced binaries — is what gates
+  correctness.
+- **False *rejections* are Design B's characteristic failure mode, and they clustered in the splitter.**
+  Caught pre-commit: a reload placed before a block's *first* use rather than at the eviction point (so a
+  value used on both sides of a pressure peak never actually split → spurious "did not converge"); a
+  peak-finder using *raw* pressure while the guard used the *exact corrected* pressure; the reduced pool at
+  calls/`idiv` ignored (6 values live across a call panicked in the colorer); a degenerate Belady sentinel
+  (`u64.max` compares as signed −1 on `int(0 to u64.max)`) that silently collapsed farthest-next-use to
+  first-fit; and parameters / rematerialized constants false-panicking as "compiler-introduced". None
+  reached history.
+- **Measurement trap — a false alarm that cost a cycle.** A process exit code read via bash `$?` is
+  truncated to 8 bits. A correct program returning 382 shows **126**, which *looks* like a miscompile. Verify
+  a suspected miscompile with a **self-checking** program (`return 0` iff correct) before believing it.
+
 ## Milestone ledger
 
 Checkboxes track landing against `PLAN.md`. Correctness-only gate through
@@ -340,14 +374,49 @@ The design each milestone establishes is documented in
   was already made by the splitter against those same per-point reduced pools; this only maps it to source.
   A loop-carried value is a phi with no defining op, so it is chased to the incoming value it copies; a
   value with NO origin is a Rule-3 compiler defect and panics rather than print a misleading location.
-  `allocateRegisters`/`buildBackend` now `throw CompileError`. Gates: **specs-shv2 75/0**, with the new
-  `register-pressure.md` asserting the byte-exact message via `maxoncstderr`.
-  *(In the working tree, not yet committed as of this entry.)*
+  `allocateRegisters`/`buildBackend` now `throw CompileError` (through a FRESH re-throw gate — the
+  documented rethrow gotcha). An adversarial review then caught three make-or-break defects, all fixed
+  before commit: a **nested-loop false E5001** (a genuine M5.3 bug — the parser lays a nested loop's exit
+  block *before* the inner-loop blocks, so the splitter's seq-based before/after-peak classification
+  misfired; fixed at the ROOT by an **RPO block reorder** so layout order matches execution order); a
+  **parameter used in a hot loop** false-panicking as "compiler-introduced" (parameters are never minted
+  through `emitOp`, so they had no origin — they now carry their declaration span); and a **remat/reload
+  fresh id** in the blocking set doing the same (it now chases back to its source value's origin via
+  `SplitLineage`, so Rule 3 fires only for a genuinely sourceless value). Also fixed a `CompileError` leak
+  on the first-ever backend throw path (exit 101, which would have corrupted the `maxoncstderr` compare).
+  Gates: **specs-shv2 78/0**, `register-pressure.md` asserting the byte-exact message via `maxoncstderr`,
+  the E5001 text md5-stable across runs, and a no-false-E5001 matrix (straight-line to 40 values,
+  idle-across-loop to 45, nested loops, params live across calls) all compiling clean. (`8ab422598`)
+- [x] **M5.8** docs + cleanup (`e133375db`) — folded `docs/REGISTER_ALLOCATOR.md` (the adopted proposal +
+  its corrections header + the Phase 0–8 build plan) into ARCHITECTURE.md's register-allocator section and
+  deleted it: its enduring content is design, its phase plan is history. Added a `--log=<level>` /
+  `--log=<category>:<level>` CLI flag (an unrecognized spec is reported, not silently ignored). Corrected
+  `IrBlock.branchEdges`' stale doc comment (it is populated by the parser's M4b on-the-fly SSA and consumed
+  by the allocator's SSA destruction — NOT by `lowerStdToX64`). `IrBlock.clone` was already removed at M5.1.
+
+> ### STAGE 1 COMPLETE — 2026-07-12, `e133375db`, **specs-shv2 78/0**
+> The full scalar language — `let`/`var`, arithmetic, `if`/`while`/`break`/`continue`, `mod` and `/`, and
+> functions with parameters and calls — running on the **real register allocator**: biased SSA chordal
+> coloring → cold-spill splitter (dominating reloads, remat) → `E5001` hot-pressure diagnostic, all guarded
+> by the `AllocChecker`. Stage 1's one design item (the allocator) is done and its contract is complete:
+> **spill cold, error hot.** Next: **Stage 0 tooling** (the `selfhost-distance` compass + the pruned
+> `stdlib-shv2` fork — the loop that gates Stage 2), then **Stage 2** (generics BEFORE ownership).
 - [ ] **per-function fan-out** — carried by M5's original "functions (fan-out)" scope but NOT built by
   M5.1–M5.6. Both seams exist (`PassPipeline.classifyPass` labels each pass `wholeModule`/`perFunction`;
   the parser is already a pure function of its file), and the runtime under it is proven (Track 0); nothing
   drives them. Blocking gate when it starts: **1-core-vs-N-core byte identity**.
-- [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
-- [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays
-- [ ] **M12** enums · [ ] **M13** closures · [ ] **M14** interfaces/generics · [ ] **M15** error handling
-- [ ] **M16** feature-complete · [ ] **M17** self-compile · [ ] **M18** budget gate
+**The remaining ledger follows the ADOPTED plan's order — generics BEFORE ownership** (see "Plan adopted"
+above). The original list here was the pre-adoption M6–M18 numbering, which had ownership at M6 and generics
+at M14 — *reversed*, because `own.drop` on a type-parameter value needs the runtime layout descriptor, and
+`String`/`Array` are themselves generic.
+
+- [ ] **Stage 0 tooling** — the `selfhost-distance` compass (its ranked TOP-UNSUPPORTED table IS the
+  roadmap), the pruned `stdlib-shv2/stdlib/` fork + `MAXON_STDLIB` override, and the 9 core-violating
+  rewrites. This is the loop that gates Stage 2.
+- [ ] **Stage 2** — 2.1 structs · 2.2 **generics** (dictionary-passing + layout descriptors + witness
+  tables) · 2.3 interfaces · 2.4 **heap + ownership + drops** (Workstream **R1** — the emitted runtime:
+  slab / refcount / `__destruct` / DebugStream producer; also what gates mm-trace) · 2.5 moves+borrows ·
+  2.6 escape→refcount · 2.7 Array · 2.8 String (R2) · 2.9 owned payloads · 2.10 Map · 2.11 for-in ·
+  2.12 error handling · 2.13 ranged typealias
+- [ ] **Stage 3** self-host · [ ] **Stage 4** broaden · [ ] **Stage 5** budget gate (≤30 s / ≤1.7 GB /
+  >90% CPU; Workstream **R3** = the GT scheduler)
