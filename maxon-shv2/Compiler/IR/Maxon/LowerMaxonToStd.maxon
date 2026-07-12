@@ -99,10 +99,12 @@ export function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
 	end 'map'
 end 'maxonCmpOpToStdPred'
 
-// Public entry: lower a whole MaxonModule to a fresh StdModule. Instantiates the
-// per-run lowering worker (which owns the name→id state) and runs it.
-export function lowerMaxonToStd(maxonModule MaxonModule) returns StdModule
-	return MaxonToStdLowering.create(maxonModule).lower()
+// Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the project's
+// `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
+// to the callee's declaration order (the registry is the only whole-program source of
+// parameter names — `IrFunction` carries types but not names).
+export function lowerMaxonToStd(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns StdModule
+	return MaxonToStdLowering.create(maxonModule, funcSignatures: funcSignatures).lower()
 end 'lowerMaxonToStd'
 
 type MaxonToStdLowering
@@ -110,9 +112,12 @@ type MaxonToStdLowering
 	var stdModule as StdModule
 	// Qualified name of the function currently lowering — for diagnostics only.
 	var currentFuncName as String
+	// Whole-program parameter signatures (names + types), for `lowerCall`'s
+	// label→positional argument slotting.
+	var funcSignatures as FuncSignatureMap
 
-	static function create(maxonModule MaxonModule) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), currentFuncName: ""}
+	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns MaxonToStdLowering
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), currentFuncName: "", funcSignatures: funcSignatures}
 	end 'create'
 
 	function lower() returns StdModule
@@ -159,6 +164,7 @@ type MaxonToStdLowering
 		// per function, and this pass passes them through untouched.
 		for srcFunc in self.stdModule.functions 'eachFunc'
 			self.currentFuncName = srcFunc.name
+			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
@@ -191,6 +197,7 @@ type MaxonToStdLowering
 	// appended rather than set.
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
+			call(result, callee, args, argLabels, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
 			retVoid then self.rejectVoidReturn()
@@ -214,6 +221,7 @@ type MaxonToStdLowering
 			binOp then panic("lowerMaxonToStd: a `binOp` op appeared as a block terminator (parser bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerMaxonToStd: a `unaryOp` op appeared as a block terminator (parser bug — a unary op is never a terminator)")
 			compare then panic("lowerMaxonToStd: a `compare` op appeared as a block terminator (parser bug — a comparison is never a terminator)")
+			call then panic("lowerMaxonToStd: a `call` op appeared as a block terminator (parser bug — a call is a body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -226,6 +234,42 @@ type MaxonToStdLowering
 		let stdType = maxonTypeToStdType(litType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: value, valueType: stdType))
 	end 'lowerLiteral'
+
+	// Emit one `StdOp.param` per parameter at the function's ENTRY block, before any
+	// body op. Parameter `i` is ValueId `i` (the ids the parser reserved), of the
+	// function's `i`-th resolved Std param type. The x64 lowering turns each into the
+	// `mov virtual(i), physical(argReg[i])` that captures the incoming ABI register. A
+	// zero-parameter function emits nothing. The entry block is the first `blockRef`.
+	function emitParams(func IrFunction)
+		if func.paramCount == 0 'noParams'
+			return
+		end 'noParams'
+		let entryRef = try func.blockRefs.get(0) otherwise panic("emitParams: function '{func.name}' has no entry block")
+		var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("emitParams: entry blockRef {entryRef} not in stdModule.blocks")
+		for i in 0 upto func.paramCount 'eachParam'
+			let paramType = try func.paramTypes.get(i) otherwise panic("emitParams: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
+			self.stdModule.appendOp(entryBlock, op: StdOp.param(i as ValueId, index: i, paramType: paramType))
+		end 'eachParam'
+	end 'emitParams'
+
+	// Lower a Maxon `call` to `StdOp.call`. The parser recorded the argument SSA values
+	// in SOURCE order with their labels; here they are reordered to the callee's
+	// declaration order via `slotCallArgs` against the `funcSignatures` registry. Every
+	// slotting error (unknown callee, arity, unknown/duplicate label) was already
+	// reported by SemanticCheck, which gates the pipeline before lowering — so a miss
+	// here is a compiler-invariant violation and panics rather than emitting wrong code.
+	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
+	// so lowering ignores them.
+	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels StringArray, dstBlock IrBlock)
+		let calleeName = String.from(callee)
+		let sig = try self.funcSignatures.get(calleeName) otherwise panic("lowerCall: callee '{calleeName}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: calleeName, args: argIds))
+			arityMismatch then panic("lowerCall: arity mismatch for '{calleeName}' reached lowering — SemanticCheck must gate it")
+			unknownLabel then panic("lowerCall: unknown argument label for '{calleeName}' reached lowering — SemanticCheck must gate it")
+			duplicateArg then panic("lowerCall: duplicate argument for '{calleeName}' reached lowering — SemanticCheck must gate it")
+		end 'slot'
+	end 'lowerCall'
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);

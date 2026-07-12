@@ -1,0 +1,27 @@
+// Test: subtract-order
+function sub(a int, b int) returns int
+	return a - b
+end 'sub'
+
+function main() returns ExitCode
+	return sub(20, b: 8)
+end 'main'
+---
+ExitCode: 12
+---
+func @sub {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.subRegReg r8, rcx, rdx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 8
+    x64.callDirect sub
+    x64.epilogue 40
+    x64.ret
+}

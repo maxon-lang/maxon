@@ -18,10 +18,64 @@ let MainFunctionName = "main"
 let NoMainMessage = "No 'main' function found"
 let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 
-// Run the M1 semantic checks over the resolved project.
-export function semanticCheck(project Project)
+// Run the semantic checks over the resolved project + module. M1 checks `main`; M5
+// adds per-call-site validation (the callee exists, the argument count matches, and
+// every `name:` label names a distinct parameter) — the checks that need the callee's
+// signature, which only the whole-program `funcSignatures` registry carries.
+export function semanticCheck(project Project, module MaxonModule)
 	checkMainFunction(project)
+	checkCalls(project, module: module)
 end 'semanticCheck'
+
+// Validate every `call` op against its callee's signature. Walked by FUNCTION (not the
+// flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
+// the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
+// ops (never terminators), so only `block.opRefs` is scanned.
+function checkCalls(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
+				match op 'op'
+					call(_, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+					literal to branch then break 'op'
+				end 'op'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkCalls'
+
+// Validate one call site. Reports the FIRST error found (unknown callee, then the arg
+// slotting result: arity, unknown label, or a parameter given two arguments). The call
+// site's own span (`project.opRanges[opIndex]`) anchors the callee/arity errors; an
+// argument's own span (`argRanges[argIndex]`) anchors a per-argument label error.
+function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray)
+	let calleeName = String.from(callee)
+	let callRange = project.opRanges.get(opIndex)
+	let filePath = func.sourceFilePath
+
+	if not project.funcSignatures.contains(calleeName) 'unknownFn'
+		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{calleeName}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		return
+	end 'unknownFn'
+
+	let sig = try project.funcSignatures.get(calleeName) otherwise panic("validateCall: contains('{calleeName}') true but get failed")
+	match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+		ordered then break 'slot'
+		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{calleeName}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
+		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{calleeName}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{calleeName}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+	end 'slot'
+end 'validateCall'
+
+// Report a per-ARGUMENT call error anchored on the offending argument's own source
+// span (from the call op's inline `argRanges`), so the diagnostic points at the bad
+// `name:` label rather than the call site.
+function reportArgError(project Project, code ErrorCode, message String, argRanges SourceRangeArray, argIndex ParamCount, filePath FilePath)
+	let range = try argRanges.get(argIndex) otherwise panic("reportArgError: argRanges.get OOB at {argIndex}")
+	reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: filePath)
+end 'reportArgError'
 
 // E3001 / E3002: `main` must exist and return ExitCode.
 function checkMainFunction(project Project)

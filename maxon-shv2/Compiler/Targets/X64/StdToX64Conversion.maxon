@@ -42,6 +42,22 @@ export function appendIntImmToReg(module TargetModule, dstBlock IrBlock, dest X6
 	end 'wide'
 end 'appendIntImmToReg'
 
+// The custom-ABI integer ARGUMENT registers, in slot order: argument `k` arrives in
+// (and is passed in) `argRegisters[k]`. This is v1's order MINUS its 7th slot rbx —
+// rbx is CALLEE-saved in shv2, so it must never carry an argument. All six are
+// caller-saved and in the allocatable pool. The RETURN value uses R8, which is not an
+// argument register, so there is no return/argument register conflict. The array LENGTH
+// is the register-argument cap: a 7th argument would need a stack slot (a later
+// milestone), which the parser rejects up front (see `MaxRegisterParams`).
+let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
+
+// The physical register argument `index` occupies. An index past the register file is
+// a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
+// compiler-invariant break here, not a user error.
+function argRegisterAt(index ParamCount) returns X64Register
+	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — the parser caps parameters at that count until stack arguments land")
+end 'argRegisterAt'
+
 // Maps the SSA value a `cmp` defines to the predicate it compared with. Populated
 // when a `cmp` is lowered and consumed at the following `condBranch` — the two are
 // FUSED into `cmp` + `jcc` rather than materializing a boolean (see lowerCmp). Keyed
@@ -148,6 +164,8 @@ type StdToX64Lowering
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rdx, dstBlock: dstBlock)
+			param(resultId, index, _) then self.lowerParam(resultId, index: index, dstBlock: dstBlock)
+			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
@@ -169,6 +187,8 @@ type StdToX64Lowering
 			cmpImm then panic("lowerStdToX64: a `cmpImm` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
 			div then panic("lowerStdToX64: a `div` op appeared as a block terminator (lowering bug — a division is never a terminator)")
 			mod then panic("lowerStdToX64: a `mod` op appeared as a block terminator (lowering bug — a modulo is never a terminator)")
+			param then panic("lowerStdToX64: a `param` op appeared as a block terminator (lowering bug — a parameter is an entry body op)")
+			call then panic("lowerStdToX64: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -252,6 +272,44 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.idivReg(X64VReg.virtual(rhs)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(resultReg)))
 	end 'lowerDivMod'
+
+	// Lower a Std `param` to the entry move that captures the parameter's incoming ABI
+	// register into its virtual register: `mov virtual(resultId), physical(argReg[index])`.
+	// Modelled as a copy from a PHYSICAL source, so the existing `collectOpHints` fixed-
+	// register hint (mov-to-virtual from a physical source) biases the parameter value
+	// toward its own argument register — when free, the coloring lands it there and this
+	// move self-elides. The AllocChecker treats it as a copy: it does not assert the
+	// physical source (an incoming register the caller populated, untracked at entry) and
+	// establishes `resultId` in its color, so downstream uses verify.
+	function lowerParam(resultId ValueId, index ParamCount, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(argRegisterAt(index))))
+	end 'lowerParam'
+
+	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI
+	// register, `callDirect` the callee, then move the R8 return value into the result.
+	//
+	// The argument moves are emitted in slot order as plain `mov argReg[k], arg_k`
+	// (physical destination, virtual source) — the same "pre-move into a fixed physical
+	// register" pattern the `idiv` dividend uses, extended to N arguments. This is SOUND
+	// without an explicit parallel-copy sequencer BECAUSE each `mov argReg[k], …` has a
+	// physical def of `argReg[k]`, which the liveness pass adds to `forbiddenPhys` for
+	// every value LIVE ACROSS that move — so an argument value live into a later move can
+	// never be colored to an EARLIER argument register (the read-after-clobber class
+	// `project_call_arg_parallel_copy_fix` names). Forward-order emission then reads each
+	// argument's register before any later move overwrites it. The `callDirect` carries
+	// no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to
+	// values live across the call (never to the just-established argument registers), and
+	// `forbidOperandsFromImplicit` is a no-op on it. The AllocChecker verifies each
+	// argument reaches its register (the arg move asserts its source and writes argReg[k])
+	// and that no value live across the call sits in a clobbered register.
+	function lowerCall(resultId ValueId, callee String, args ValueIdArray, dstBlock IrBlock)
+		for k in 0 upto args.count() 'eachArg'
+			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(argRegisterAt(k)), srcReg: X64VReg.virtual(argId)))
+		end 'eachArg'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.r8)))
+	end 'lowerCall'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32`, recording its
 	// predicate keyed by the value it defines — the same fused compare/branch protocol

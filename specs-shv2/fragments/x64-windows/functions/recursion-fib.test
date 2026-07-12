@@ -1,0 +1,50 @@
+// Test: recursion-fib
+function fib(n int) returns int
+	if n <= 1 'base'
+		return n
+	end 'base'
+	return fib(n - 1) + fib(n - 2)
+end 'fib'
+
+function main() returns ExitCode
+	return fib(10)
+end 'main'
+---
+ExitCode: 55
+---
+func @fib {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.jcc lessEqual, base
+    x64.jmp ifcont
+  base:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rbx, -1
+    x64.callDirect fib
+    x64.movRegReg r12, r8
+    x64.leaRegRegImm32 rcx, rbx, -2
+    x64.callDirect fib
+    x64.leaRegRegReg r8, r12, r8
+    x64.epilogue 40
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 10
+    x64.callDirect fib
+    x64.epilogue 40
+    x64.ret
+}

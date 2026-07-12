@@ -151,6 +151,7 @@ end 'probeRebuildCacheHits'
 // run's commits.
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
+	project.funcSignatures = FuncSignatureMap.create()
 	project.typeNames = TypeNameInterner.create()
 	// Must reset with the others: `mergeArtifact` appends spans to this table and
 	// asserts its count tracks the merged module's op count. The module accumulator
@@ -185,10 +186,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Integer literal out of range", line: line, column: column, filePath: path)
 		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 		assignToImmutable(name, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
 		controlOutsideLoop(keyword, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a loop", line: line, column: column, filePath: path)
 		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
 		unknownLoopLabel(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing loop with label '{label}'", line: line, column: column, filePath: path)
+		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
+		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

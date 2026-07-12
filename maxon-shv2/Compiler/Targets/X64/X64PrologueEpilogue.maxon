@@ -1,23 +1,39 @@
 // X64PrologueEpilogue — inserts frame setup/teardown ops after register
 // allocation. shv2 uses a frame-pointer-omitted (rsp-only) frame: the `prologue`
-// op reserves the frame with `sub rsp, N` and the `epilogue` op releases it with
-// `add rsp, N`. This pass owns BOTH — unlike v1, where ISel pre-emits an
+// op reserves the frame with `sub rsp, N`, the `epilogue` op releases it with
+// `add rsp, N`, and `pushReg`/`popReg` save/restore the callee-saved registers the
+// coloring used. This pass owns ALL of it — unlike v1, where ISel pre-emits an
 // `epilogue` at each return and this pass strips/re-emits it. shv2's return
-// lowering emits only the R8 move + `ret`, so this pass simply INSERTS a
-// `prologue` at the entry block and an `epilogue` immediately before each `ret`
-// when the function needs a frame.
+// lowering emits only the R8 move + `ret`.
 //
-// THIN for maxon-shv2 M1: a function needs a frame only if it reserves stack
-// (locals / spills, none yet) or makes a call (unwinding). The single user
-// function in the `return 42` slice — `main` — is frameless (no locals, no
-// calls), so this pass is a no-op on it and `main` stays a flat
-// `mov reg,42; mov r8,reg; ret`. The runtime entry stub `mrt_start` builds its
-// own `sub rsp, 0x28` frame directly in `augmentWithRuntime` (which runs AFTER
-// this pass), so this pass never sees it. GROWS at M2 (variables → real stack
-// frames) and M5 (multi-function → callee-saved pushes/pops).
+// A function gets a frame when it (a) reserves stack (locals / spills), (b) makes a
+// CALL — which forces a 16-byte-aligned frame with 32 bytes of Win64 shadow space so
+// `rsp` is aligned at the call, or (c) used a CALLEE-saved register (which M5 now
+// colors into for values live across a call), which must be preserved. The prologue
+// then pushes exactly those callee-saved registers and reserves the frame; the
+// epilogue mirrors both before each `ret`. A leaf that needs none — a frameless
+// `main` like `return 42`, or a call-free arithmetic function — is left untouched.
+//
+// The runtime entry stub `mrt_start` builds its own `sub rsp, 0x28` frame directly in
+// `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it. Stack
+// arguments (a 7th+ parameter) and real spill slots grow the frame further at their
+// milestones; today `outgoingArgSize` is 0 and `stackSize` is 0 for every function.
 
-// x64 frames keep rsp 16-byte aligned across calls.
+// x64 frames keep rsp 16-byte aligned at each call site.
 let StackFrameAlignment = 16
+
+// Win64 requires a caller to reserve 32 bytes of SHADOW SPACE below its outgoing args
+// — scratch the callee may use for its first four register parameters. Every function
+// that makes a call reserves it (the same reservation `mrt_start`'s 0x28 folds in).
+let ShadowSpaceBytes = 32 as StackSize
+
+// The custom-ABI callee-saved GPRs, in PUSH order (popped in reverse). The register
+// allocator may color values into any of these; the prologue pushes exactly the ones a
+// function's coloring used, and the epilogue pops them. rbx + r12–r15 mirror
+// RegisterAllocator.calleeSavedMask (kept in one order here so push/pop stay paired).
+let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+
+typealias X64RegisterArray = Array with X64Register
 
 // Insert prologue/epilogue ops for every function in the module.
 export function insertPrologueEpilogue(module TargetModule, target Target)
@@ -27,46 +43,171 @@ export function insertPrologueEpilogue(module TargetModule, target Target)
 	end 'eachFunc'
 end 'insertPrologueEpilogue'
 
+// Insert a function's frame: push the callee-saved registers its coloring used, reserve
+// its frame (`sub rsp`), and mirror both on every return. A function needs a frame if it
+// reserves stack (locals / spills), makes a call (16-byte alignment + shadow space), or
+// used a callee-saved register (which must be preserved). A leaf with none is untouched.
 function insertFrameForFunction(module TargetModule, func IrFunction)
-	if not functionNeedsFrame(module, func: func) 'frameless'
+	let usedCallee = usedCalleeSavedRegs(module, func: func)
+	let makesCall = functionMakesCall(module, func: func)
+	let needsFrame = func.stackSize > 0 or makesCall or usedCallee.count() > 0
+	if not needsFrame 'frameless'
 		return
 	end 'frameless'
 
-	let frameBytes = alignUp(func.stackSize, alignment: StackFrameAlignment)
+	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count())
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
-			insertPrologueAtEntry(module, block: block, frameBytes: frameBytes)
+			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, frameBytes: frameBytes)
 		end 'entry'
 		isFirstBlock = false
 
 		if blockEndsWithReturn(module, block: block) 'returnBlock'
-			// Append after the last body op (the R8 return move) so teardown runs
-			// just before the `ret` terminator.
-			module.appendOp(block, op: TargetOp.epilogue(frameBytes))
+			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, frameBytes: frameBytes)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertFrameForFunction'
 
-// Prepend the `prologue` op to the entry block's op list so it runs first.
-function insertPrologueAtEntry(module TargetModule, block IrBlock, frameBytes StackSize)
-	let opIdx = module.ops.count()
-	module.ops.push(TargetOp.prologue(frameBytes))
-	try block.opRefs.insert(0, value: opIdx) otherwise panic("insertPrologueEpilogue: opRefs.insert(0) failed on block '{block.label}'")
+// The bytes to reserve with `sub rsp, N`.
+//   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16); each
+//     of `pushCount` callee-saved pushes moves it by 8, and the `sub` must land it on ≡ 0
+//     — so the reservation is ≡ (8 − 8·pushCount) (mod 16): 8 when pushCount is even, 0
+//     when odd. It must also cover shadow space + locals + any stack-passed args (0 at
+//     M5). `mrt_start`'s 0x28 IS this formula with pushCount 0, stackSize 0 (32 + 8).
+//   • A LEAF that needs a frame only for locals / callee-saved has no call, so alignment
+//     is irrelevant; it reserves just its (16-rounded) locals. push/pop alone balance rsp.
+function computeFrameBytes(func IrFunction, makesCall bool, pushCount ByteCount) returns StackSize
+	if not makesCall 'leaf'
+		return alignUp(func.stackSize, alignment: StackFrameAlignment)
+	end 'leaf'
+	let base = func.stackSize + func.outgoingArgSize + ShadowSpaceBytes
+	let targetMod = frameAlignTarget(pushCount)
+	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
+end 'computeFrameBytes'
+
+// The `sub rsp` size's required residue mod 16 for a caller with `pushCount` callee-saved
+// pushes: 8 when even (entry rsp ≡ 8 stays ≡ 8 after an even number of pushes, so an 8
+// (mod 16) sub reaches ≡ 0), 0 when odd.
+function frameAlignTarget(pushCount ByteCount) returns StackSize
+	if pushCount mod 2 == 0 'even'
+		return 8
+	end 'even'
+	return 0
+end 'frameAlignTarget'
+
+// The smallest value >= `base` congruent to `targetMod` modulo `modulus` — `base` plus
+// the least non-negative delta that lands its residue on `targetMod`.
+function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) returns StackSize
+	let delta = ((targetMod - (base mod modulus)) + modulus) mod modulus
+	return base + delta
+end 'roundUpToMod'
+
+// The callee-saved registers a function's colored body references, in push order. The
+// allocator colors values into rbx/r12–r15 for values live across a call (or under
+// pressure); each such register must be preserved, so it is pushed/popped. Scanned by
+// intersecting every op's physical registers with the callee-saved set.
+function usedCalleeSavedRegs(module TargetModule, func IrFunction) returns X64RegisterArray
+	var mask = 0 as RegMask
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("usedCalleeSavedRegs: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			mask = mask or opPhysicalRegs(try module.ops.get(opIdx) otherwise panic("usedCalleeSavedRegs: opIdx {opIdx} not in module.ops"))
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			mask = mask or opPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("usedCalleeSavedRegs: terminator not in module.ops"))
+		end 'hasTerm'
+	end 'eachBlock'
+
+	var used = X64RegisterArray.create()
+	for reg in calleeSavedOrder 'eachCallee'
+		if regMaskContains(mask, regNum: reg.rawValue) 'isUsed'
+			used.push(reg)
+		end 'isUsed'
+	end 'eachCallee'
+	return used
+end 'usedCalleeSavedRegs'
+
+// Every physical GPR a colored TargetOp names, as a mask. Runs on the fully-colored
+// program (post-regalloc, post-SSA-destruction — `xchgRegReg` may be present, so this
+// does NOT route through `targetOpOperands`, which rejects that post-coloring op). Ops
+// with no register operands contribute nothing. EXHAUSTIVE over TargetOp — a new op
+// fails to compile here until its registers are declared.
+function opPhysicalRegs(op TargetOp) returns RegMask
+	return match op 'p'
+		prologue to jcc gives 0
+		movRegImm(dest, _) gives physRegBit(dest)
+		movRegImm32(dest, _) gives physRegBit(dest)
+		movRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		movReg32Reg32(d, s) gives physRegBit(d) or physRegBit(s)
+		subRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		imulRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		negReg(d, s) gives physRegBit(d) or physRegBit(s)
+		cmpRegReg(l, r) gives physRegBit(l) or physRegBit(r)
+		leaRegRegReg(d, b, i) gives physRegBit(d) or physRegBit(b) or physRegBit(i)
+		leaRegRegImm32(d, b, _) gives physRegBit(d) or physRegBit(b)
+		imulRegRegImm32(d, s, _) gives physRegBit(d) or physRegBit(s)
+		cmpRegImm32(reg, _) gives physRegBit(reg)
+		xchgRegReg(a, b) gives physRegBit(a) or physRegBit(b)
+		callDirect to cqo gives 0
+		idivReg(divisor) gives physRegBit(divisor)
+		pushReg(reg) gives regMaskOf(reg)
+		popReg(reg) gives regMaskOf(reg)
+	end 'p'
+end 'opPhysicalRegs'
+
+// The single-register mask of a colored operand. Every operand is physical at this
+// point (register allocation rewrote virtuals), so a virtual here is an allocator bug.
+function physRegBit(vreg X64VReg) returns RegMask
+	match vreg 'v'
+		physical(reg) then return regMaskOf(reg)
+		virtual(id) then panic("opPhysicalRegs: unresolved virtual register v{id} reached the prologue pass — register allocation must color every operand first")
+	end 'v'
+end 'physRegBit'
+
+// Prepend the callee-saved pushes then the frame `sub` to the entry block, so at runtime
+// they run push-first then sub. Built by inserting at index 0 in reverse (`sub` first,
+// then each push before it) so the final order is push₀ … pushₙ, sub.
+function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
+	if frameBytes > 0 'reserve'
+		prependOp(module, block: block, op: TargetOp.prologue(frameBytes))
+	end 'reserve'
+	for ri in 0 upto usedCallee.count() 'eachPushRev'
+		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("insertPrologueAtEntry: usedCallee.get OOB")
+		prependOp(module, block: block, op: TargetOp.pushReg(reg))
+	end 'eachPushRev'
 end 'insertPrologueAtEntry'
 
-// A function needs a frame if it reserves any stack (locals / spills) or makes a
-// call. `isCall` is read straight off each op's TargetOpMeta backing.
-function functionNeedsFrame(module TargetModule, func IrFunction) returns bool
-	if func.stackSize > 0 'hasStack'
-		return true
-	end 'hasStack'
+// Append the frame teardown before the `ret` terminator: release the frame (`add rsp`),
+// then pop the callee-saved registers in REVERSE push order (LIFO), so the caller's
+// values are restored. Appended to the body, which runs before the `ret` terminator.
+function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
+	if frameBytes > 0 'release'
+		module.appendOp(block, op: TargetOp.epilogue(frameBytes))
+	end 'release'
+	for ri in 0 upto usedCallee.count() 'eachPopRev'
+		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("appendEpilogueBeforeReturn: usedCallee.get OOB")
+		module.appendOp(block, op: TargetOp.popReg(reg))
+	end 'eachPopRev'
+end 'appendEpilogueBeforeReturn'
 
+// Insert `op` at the front of `block`'s op list (a fresh `module.ops` slot). The shared
+// "prepend a new op" helper the prologue's pushes and `sub` both use.
+function prependOp(module TargetModule, block IrBlock, op TargetOp)
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	try block.opRefs.insert(0, value: opIdx) otherwise panic("insertPrologueEpilogue: opRefs.insert(0) failed on block '{block.label}'")
+end 'prependOp'
+
+// True when the function makes a call — the frame trigger that forces 16-byte alignment
+// + shadow space even for a leaf-caller with no locals. `isCall` is read straight off
+// each op's TargetOpMeta backing.
+function functionMakesCall(module TargetModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("functionNeedsFrame: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("functionMakesCall: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.opRefs 'eachOp'
 			if opAtIsCall(module, opIdx: opIdx) 'call'
@@ -82,10 +223,10 @@ function functionNeedsFrame(module TargetModule, func IrFunction) returns bool
 	end 'eachBlock'
 
 	return false
-end 'functionNeedsFrame'
+end 'functionMakesCall'
 
 function opAtIsCall(module TargetModule, opIdx OpIndex) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("functionNeedsFrame: opIdx {opIdx} not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("functionMakesCall: opIdx {opIdx} not in module.ops")
 	return op.rawValue.isCall
 end 'opAtIsCall'
 
@@ -99,5 +240,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		prologue to epilogue gives false
 		ret gives true
 		jmp to idivReg gives false
+		pushReg to popReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

@@ -301,6 +301,25 @@ export union StdOp
 	// --- band: call ---
 	// Return terminator. `retValId` names the value moved into the return register.
 	ret(retValId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// Parameter materialization at function entry: `resultId` is the SSA value of
+	// parameter `index` (M5: the two coincide — a parameter is ValueId `index`), of
+	// type `paramType`. Emitted once per parameter at the entry block; the x64
+	// lowering turns it into `mov virtual(resultId), physical(argReg[index])` so the
+	// parameter's incoming ABI register is captured into its virtual register. `role`
+	// is `param`; `isCall: true` marks it a scheduling barrier that must stay at entry
+	// (per the StdOpMeta `isCall` contract, which names `param`), and `isPure: false`
+	// keeps it from being reordered or dropped. APPENDED at the END of the call band,
+	// after `ret`, honoring the band-append invariant.
+	param(resultId ValueId, index ParamCount, paramType StdType) = StdOpMeta{category: StdOpCategory.call, role: OpRole.param, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: true, clobbersFlags: false, isCmp: false}
+	// A direct function call `resultId = callee(args…)`. `callee` is the resolved
+	// function name; `args` are the argument SSA values in the callee's PARAMETER
+	// order (lowerCall has already reordered any labelled arguments to declaration
+	// order). The x64 lowering moves each arg into its ABI register, emits the
+	// `callDirect`, then moves the R8 return value into `resultId`. Full call-barrier
+	// metadata (`isCall`/`isMemory`/`isStore`/`clobbersFlags` all true, `isPure` false
+	// — a call may read/write memory and must not move or drop). APPENDED at the END of
+	// the call band, after `param`.
+	call(resultId ValueId, callee String, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp

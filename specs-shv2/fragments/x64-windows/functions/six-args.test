@@ -1,0 +1,34 @@
+// Test: six-args
+function sum6(a int, b int, c int, d int, e int, f int) returns int
+	return a + b + c + d + e + f
+end 'sum6'
+
+function main() returns ExitCode
+	return sum6(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+end 'main'
+---
+ExitCode: 21
+---
+func @sum6 {
+  entry:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg r8, rax, rdi
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 r9, 4
+    x64.movRegImm32 rsi, 5
+    x64.movRegImm32 rdi, 6
+    x64.callDirect sum6
+    x64.epilogue 40
+    x64.ret
+}

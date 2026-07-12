@@ -186,37 +186,79 @@ export type RegAllocStats
 	end 'noteRegisterUse'
 end 'RegAllocStats'
 
-// The allocatable register pool for `target`. M5.1: the Maxon caller-saved GPRs
-// INCLUDING R8 — R8 is admitted because the implicit-use mask on `ret` proves
-// nothing is live across the `mov r8, retval` return move (so coloring a value into
-// R8 cannot clobber an in-flight return), which lets the return move ELIDE when the
-// return value is hinted to R8. Callee-saved {rbx, r12–r15} are excluded so no
-// prologue push/pop is needed for the current leaf functions; rsp/rbp are the frame.
-// r10/r11 stay in the pool for now (user functions make no calls at M5.1); they
-// become reserved scratch when M5 colors calls. The pool is a property of the
-// target — arm64 declares its own when its backend lands.
+// The allocatable register pool for `target`. M5.6 GREW the pool to the full 14 GPRs
+// (every register except rsp/rbp, the frame): the 9 CALLER-saved {rax, rcx, rdx, rsi,
+// rdi, r8, r9, r10, r11} PLUS the 5 CALLEE-saved {rbx, r12–r15}. The callee-saved half
+// is what makes calls colorable: a value live ACROSS a call is forbidden every caller-
+// saved register (`callDirect`'s `implicitDefs`), so its only home is a callee-saved
+// register — the prologue/epilogue pass then push/pops exactly the callee-saved registers
+// a function's coloring actually used. R8 is admitted because `ret`'s implicit-use mask
+// proves nothing is live across the `mov r8, retval` return move. r10/r11 stay in the
+// pool — shv2 needs no reserved scratch (SSA destruction breaks copy cycles with `xchg`,
+// and the IAT call is RIP-relative), so the doc's r10/r11-as-scratch is a FUTURE tuning.
+// The pool is a property of the target — arm64 declares its own when its backend lands.
 export function allocatablePool(target Target) returns RegMask
 	if target.os != Os.windows 'unsupported'
-		panic("allocatablePool: maxon-shv2 M5.1 allocates for x64-windows only (got {targetToString(target)})")
+		panic("allocatablePool: maxon-shv2 allocates for x64-windows only (got {targetToString(target)})")
 	end 'unsupported'
-	var pool = 0 as RegMask
-	pool = pool or regMaskOf(X64Register.rax)
-	pool = pool or regMaskOf(X64Register.rcx)
-	pool = pool or regMaskOf(X64Register.rdx)
-	pool = pool or regMaskOf(X64Register.rsi)
-	pool = pool or regMaskOf(X64Register.rdi)
-	pool = pool or regMaskOf(X64Register.r8)
-	pool = pool or regMaskOf(X64Register.r9)
-	pool = pool or regMaskOf(X64Register.r10)
-	pool = pool or regMaskOf(X64Register.r11)
-	return pool
+	return callerSavedMask() or calleeSavedMask()
 end 'allocatablePool'
+
+// Guard the load-bearing invariant that `callDirect`'s inline `implicitDefs` clobber
+// mask (which the liveness pass forbids for every value live across a call) equals the
+// CALLER-saved half of the allocatable pool: a value live across a call is forbidden the
+// former and must find a home in `pool ∖ caller-saved` = the callee-saved half. If they
+// drift, such a value is mis-constrained — a false E5001 later, or a real clobber. The
+// mask is read from the op's own metadata (not re-spelled), and rbx is checked out of it
+// explicitly (a shipped v1 bug — project_regalloc_crosscall_spill_fixes). Runs once per
+// module, so the check is free.
+function assertCallClobberConsistent()
+	let clobber = TargetOp.callDirect("").rawValue.implicitDefs
+	if clobber != callerSavedMask() 'drift'
+		panic("assertCallClobberConsistent: callDirect clobber mask {clobber} != caller-saved pool {callerSavedMask()} — TargetDialect.callDirect's implicitDefs and RegisterAllocator.callerSavedMask drifted apart")
+	end 'drift'
+	if regMaskContains(clobber, regNum: X64Register.rbx.rawValue) 'rbxClobbered'
+		panic("assertCallClobberConsistent: callDirect clobber mask wrongly includes rbx, which is CALLEE-saved (project_regalloc_crosscall_spill_fixes shipped exactly this bug in v1)")
+	end 'rbxClobbered'
+end 'assertCallClobberConsistent'
+
+// The 9 CALLER-saved GPRs the custom ABI clobbers across a call — the same set
+// `callDirect`'s `implicitDefs` mask (0xFC7) names, kept in ONE place so the pool and
+// the clobber mask cannot drift (asserted equal by `assertCallClobberConsistent`). A
+// value live across a call is forbidden all of these.
+export function callerSavedMask() returns RegMask
+	var mask = 0 as RegMask
+	mask = mask or regMaskOf(X64Register.rax)
+	mask = mask or regMaskOf(X64Register.rcx)
+	mask = mask or regMaskOf(X64Register.rdx)
+	mask = mask or regMaskOf(X64Register.rsi)
+	mask = mask or regMaskOf(X64Register.rdi)
+	mask = mask or regMaskOf(X64Register.r8)
+	mask = mask or regMaskOf(X64Register.r9)
+	mask = mask or regMaskOf(X64Register.r10)
+	mask = mask or regMaskOf(X64Register.r11)
+	return mask
+end 'callerSavedMask'
+
+// The 5 CALLEE-saved GPRs a function must preserve across its own body — the effective
+// pool for a value live across a call. The prologue/epilogue pass push/pops exactly the
+// ones a function's coloring used. rsp/rbp are the frame and are never allocatable.
+export function calleeSavedMask() returns RegMask
+	var mask = 0 as RegMask
+	mask = mask or regMaskOf(X64Register.rbx)
+	mask = mask or regMaskOf(X64Register.r12)
+	mask = mask or regMaskOf(X64Register.r13)
+	mask = mask or regMaskOf(X64Register.r14)
+	mask = mask or regMaskOf(X64Register.r15)
+	return mask
+end 'calleeSavedMask'
 
 // Color every function's virtual registers into physical GPRs, in place. Only USER
 // functions are present here — `mrt_start` is prepended AFTER this pass by
 // augmentWithRuntime (it is hand-built in physical registers).
 export function allocateRegisters(module TargetModule, target Target)
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
+	assertCallClobberConsistent()
 	var stats = RegAllocStats.create()
 	let pool = allocatablePool(target)
 
@@ -361,6 +403,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		prologue to jcc then break 'hint'
 		movRegImm to movRegImm32 then break 'hint'
 		subRegReg to idivReg then break 'hint'
+		pushReg to popReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -517,12 +560,27 @@ function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allo
 		stats.hintsMissed = stats.hintsMissed + 1
 	end 'missed'
 
-	let reg = lowestClearRegister(blocked)
+	let reg = pickPreferredRegister(blocked)
 	if reg == RegisterFileSize 'exhausted'
-		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — maxPressure exceeded the pool, which the earlier feasibility check should have caught")
+		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — the effective pool at a FIXED-REGISTER point is REDUCED below the nominal pool (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands), so the full-pool `maxPressure <= pool` feasibility gate — which already passed for this function — CANNOT catch it. The real diagnosis is the M5.7 E5001 per-point deficit, computed against the reduced pool at each such point, not the nominal pool.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
+
+// Pick a free register, preferring a CALLER-saved one — it needs no prologue push/pop,
+// so a value that does NOT outlive a call stays cheap. A value live ACROSS a call is
+// forbidden every caller-saved register (it is in `blocked`), so none is free here and
+// the pick falls through to the full pool — landing it in the callee-saved half, which
+// the prologue then preserves. This is the standard "allocate volatiles first" bias; it
+// keeps leaf and call-free functions off the callee-saved registers entirely.
+function pickPreferredRegister(blocked RegMask) returns MachineWord
+	let nonCallerSaved = fullRegisterMask() and not callerSavedMask()
+	let callerPick = lowestClearRegister(blocked or nonCallerSaved)
+	if callerPick != RegisterFileSize 'gotCaller'
+		return callerPick
+	end 'gotCaller'
+	return lowestClearRegister(blocked)
+end 'pickPreferredRegister'
 
 // Color one op: assert its uses are already colored (dominance), free the operands
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
@@ -696,6 +754,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		xchgRegReg to iatCall then return op
 		cqo then return op
 		idivReg(divisor) then return TargetOp.idivReg(colorVRegWith(divisor, alloc: alloc))
+		pushReg to popReg then return op
 	end 'rewrite'
 end 'colorTargetOp'
 

@@ -199,6 +199,7 @@ export function computeLiveness(module TargetModule, func IrFunction) returns Li
 
 	var forbidden = makeRegMaskColumn(valueCount)
 	let maxPressure = computePressureAndForbidden(module, cfg: cfg, liveOut: liveOut, forbidden: forbidden, wordsPerRow: wordsPerRow, valueCount: valueCount)
+	forbidEntryParamCrossRegisters(module, cfg: cfg, forbidden: forbidden, paramCount: func.paramCount)
 
 	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: iters)
 end 'computeLiveness'
@@ -280,6 +281,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			jcc(_, target) then out.push(target)
 			prologue to jmp then break 'bodyCtrl'
 			movRegImm to idivReg then break 'bodyCtrl'
+			pushReg to popReg then break 'bodyCtrl'
 		end 'bodyCtrl'
 	end 'eachOp'
 
@@ -291,6 +293,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			prologue to epilogue then panic("collectBlockSuccessorIds: block '{block.label}' terminator is a frame op, not a branch/return")
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
 			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
+			pushReg to popReg then panic("collectBlockSuccessorIds: block '{block.label}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -634,6 +637,98 @@ function countDeadPhis(block IrBlock, liveRow BitWordArray) returns RegCount
 	return dead
 end 'countDeadPhis'
 
+// ==========================================================================
+// Entry parameter captures + cross-param register forbidding
+// ==========================================================================
+
+// A parameter's entry capture: the SSA value id the parameter binds to and the physical
+// register NUMBER it arrives in. The entry block opens with one `mov virtual(v_i),
+// physical(argReg[i])` per parameter — a PARALLEL COPY from the incoming ABI registers.
+// Collected once (paramCount is capped at the register-arg count), then consumed by the
+// cross-param forbidding here and the AllocChecker's entry seed + capture verification.
+export type ParamCapture
+	export var valueId as ValueId
+	export var incomingReg as MachineWord
+
+	export static function create(valueId ValueId, incomingReg MachineWord) returns ParamCapture
+		return Self{valueId: valueId, incomingReg: incomingReg}
+	end 'create'
+end 'ParamCapture'
+
+export typealias ParamCaptureArray = Array with ParamCapture
+
+// Collect `func`'s entry parameter captures: each `mov virtual(v), physical(P)` in the
+// ENTRY block whose destination value id is a parameter (`v < paramCount`). Parameter
+// value ids are exactly [0, paramCount) (the parser reserves them) and each is defined
+// ONLY by its capture, so this matches every capture exactly and excludes the call- and
+// idiv-result `mov`s (whose destinations are >= paramCount). The incoming register is read
+// straight from the IR — the copy's physical source — so this needs no target ABI table.
+export function collectEntryParamCaptures(module TargetModule, cfg FuncCfg, paramCount ParamCount) returns ParamCaptureArray
+	var captures = ParamCaptureArray.create()
+	if paramCount == 0 'noParams'
+		return captures
+	end 'noParams'
+
+	let entry = blockAt(module, cfg: cfg, local: 0)
+	for opIdx in entry.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("collectEntryParamCaptures: opIdx not in module.ops")
+		match op 'capture'
+			movRegReg(dst, src) then recordParamCapture(captures, dst: dst, src: src, paramCount: paramCount)
+			prologue to movRegImm32 then break 'capture'
+			movReg32Reg32 to popReg then break 'capture'
+		end 'capture'
+	end 'eachOp'
+	return captures
+end 'collectEntryParamCaptures'
+
+// Record a `mov dst, src` as a parameter capture iff `dst` is a parameter value (a
+// virtual whose id is < paramCount) and `src` is a physical register (the incoming ABI
+// register). Every other `movRegReg` in the entry block — a call/idiv result move, an
+// arg-setup move — fails one of the two gates and is skipped.
+function recordParamCapture(captures ParamCaptureArray, dst X64VReg, src X64VReg, paramCount ParamCount)
+	match dst 'd'
+		virtual(vid) then recordParamCaptureFromPhysSource(captures, vid: vid, src: src, paramCount: paramCount)
+		physical then break 'd'
+	end 'd'
+end 'recordParamCapture'
+
+function recordParamCaptureFromPhysSource(captures ParamCaptureArray, vid ValueId, src X64VReg, paramCount ParamCount)
+	if vid >= paramCount 'notParam'
+		return
+	end 'notParam'
+	match src 's'
+		physical(reg) then captures.push(ParamCapture.create(vid, incomingReg: reg.rawValue))
+		virtual then break 's'
+	end 's'
+end 'recordParamCaptureFromPhysSource'
+
+// Forbid each entry parameter from every OTHER parameter's incoming register, closing the
+// param-capture read-after-clobber hole. The captures `mov color(v_i), argReg[i]` are
+// emitted naively in slot order and form a parallel copy whose SOURCES are physical
+// registers; unlike the arg-SETUP direction (physical DEFs the backward sweep already folds
+// into `forbidden`), nothing otherwise stops an earlier capture's DESTINATION from being
+// colored onto a later parameter's incoming SOURCE register, clobbering it before that
+// capture reads it. Forbidding the sibling incoming registers forces v_i into its OWN
+// argReg[i] (the capture self-move then elides) or a non-parameter register (whose write
+// clobbers no sibling source) — so the in-order emit is safe regardless of coloring order.
+function forbidEntryParamCrossRegisters(module TargetModule, cfg FuncCfg, forbidden RegMaskColumn, paramCount ParamCount)
+	let captures = collectEntryParamCaptures(module, cfg: cfg, paramCount: paramCount)
+	if captures.count() < 2 'nothingToCross'
+		return
+	end 'nothingToCross'
+
+	var allParamRegs = 0 as RegMask
+	for cap in captures 'union'
+		allParamRegs = regMaskAdd(allParamRegs, regNum: cap.incomingReg)
+	end 'union'
+
+	for cap in captures 'forbid'
+		let siblingRegs = regMaskRemove(allParamRegs, regNum: cap.incomingReg)
+		let cur = try forbidden.get(cap.valueId) otherwise panic("forbidEntryParamCrossRegisters: forbidden.get OOB for value {cap.valueId}")
+		try forbidden.set(cap.valueId, value: cur or siblingRegs) otherwise panic("forbidEntryParamCrossRegisters: forbidden.set OOB for value {cap.valueId}")
+	end 'forbid'
+end 'forbidEntryParamCrossRegisters'
+
 // Process one op backward: fold its register clobbers into `forbidden` for values
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
@@ -758,11 +853,16 @@ end 'operandDefinesValue'
 // `idiv` reads RAX/RDX in the SAME instruction that reads the divisor, so the divisor
 // genuinely cannot occupy them. It is NOT correct for a LATE-clobber op such as a call:
 // a call's `implicitDefs` clobber AFTER its args are consumed, so an arg (an EARLY use)
-// may legally sit in a caller-saved (clobbered) arg register. M5.6 must therefore make
-// this position-aware before adding the call op — skip `FixedReg`-pinned operands, and
-// forbid only EARLY uses from `implicitUses`, never the LATE `implicitDefs` clobber set.
-// Today the only caller is `idiv`/`cqo` (simultaneous-conflict), so the simple form is
-// sound. Reads the operand model rather than hardcoding opcodes.
+// may legally sit in a caller-saved (clobbered) arg register.
+//
+// M5.6 SIDESTEPS this rather than making the helper position-aware: the call (`callDirect`)
+// carries NO explicit register operands — its arguments are PRE-MOVED into their physical
+// ABI registers by separate `mov argReg[k], arg_k` ops (see StdToX64Conversion.lowerCall),
+// so `targetOpOperands(callDirect)` is empty and this helper iterates nothing on a call.
+// The call's caller-saved `implicitDefs` still flow, correctly, ONLY through `applyForbidden`
+// (values LIVE ACROSS the call, never the call's own — non-existent — operands). So the only
+// caller whose operands this touches is `idiv`/`cqo` (simultaneous-conflict), for which the
+// simple form is sound. Reads the operand model rather than hardcoding opcodes.
 function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, implicitMask RegMask)
 	for o in buf 'each'
 		if operandIsVirtual(o) 'virt'

@@ -1,0 +1,24 @@
+// Test: zero-arg-call
+function answer() returns int
+	return 42
+end 'answer'
+
+function main() returns ExitCode
+	return answer()
+end 'main'
+---
+ExitCode: 42
+---
+func @answer {
+  entry:
+    x64.movRegImm32 r8, 42
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect answer
+    x64.epilogue 40
+    x64.ret
+}

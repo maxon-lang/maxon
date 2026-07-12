@@ -1,0 +1,26 @@
+// Test: add-labelled
+function add(a int, b int) returns int
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(2, b: 3)
+end 'main'
+---
+ExitCode: 5
+---
+func @add {
+  entry:
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 3
+    x64.callDirect add
+    x64.epilogue 40
+    x64.ret
+}

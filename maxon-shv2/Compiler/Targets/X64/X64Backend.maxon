@@ -93,6 +93,8 @@ let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
 let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
+let OpcodePushBase = 0x50  // push r64 (50+r) — 64-bit operand size by default in long mode
+let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 
 // Base of the two-byte `jcc rel32` opcode: after the 0x0F escape, `0x80 | cc` gives
 // the conditional-jump opcode (e.g. `0x80 | 0x4` = 0x84 = JE). The `cc` nibble comes
@@ -503,6 +505,21 @@ function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
 	end 'imm32'
 end 'encodeRspAdjust'
 
+// push r64 (50+r). 64-bit operand size is the default in long mode, so NO REX.W —
+// only REX.B when the register is r8–r15 (r12–r15 are the callee-saved regs the
+// prologue pushes). `emitRex` with `wide: false` emits exactly that: nothing for
+// rax–rdi/rbx, `0x41` for an extended register.
+function encodePushReg(code ByteArray, reg X64Register)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
+	code.push(OpcodePushBase + regLow3(reg))
+end 'encodePushReg'
+
+// pop r64 (58+r) — the exact mirror of `encodePushReg`.
+function encodePopReg(code ByteArray, reg X64Register)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
+	code.push(OpcodePopBase + regLow3(reg))
+end 'encodePopReg'
+
 // prologue: reserve the frame with `sub rsp, stackSize`. A zero-size frame emits
 // nothing (a frameless function never carries a prologue op, but the guard keeps
 // the encoder total).
@@ -574,6 +591,8 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 		cqo then encodeCqo(code)
 		idivReg(divisor) then encodeIdivReg(code, divisor: resolvePhysical(divisor))
+		pushReg(reg) then encodePushReg(code, reg: reg)
+		popReg(reg) then encodePopReg(code, reg: reg)
 	end 'emit'
 end 'emitTargetOp'
 

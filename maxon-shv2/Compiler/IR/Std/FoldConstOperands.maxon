@@ -45,7 +45,7 @@ end 'StdConstInfo'
 function stdConstInfo(op StdOp) returns StdConstInfo
 	return match op 'c'
 		const(resultId, value, _) gives StdConstInfo.isConst(resultId, value: value)
-		binOp to ret gives StdConstInfo.notConst
+		binOp to call gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -101,7 +101,7 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		binOp(resultId, lhs, rhs, opcode) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, constMap: constMap)
 		unaryOp gives FoldResult.unchanged
 		cmp(resultId, lhs, rhs, pred) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, constMap: constMap)
-		binOpImm to ret gives FoldResult.unchanged
+		binOpImm to call gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 
@@ -244,8 +244,19 @@ function collectStdOpUses(op StdOp, referenced ReferencedValueSet)
 		condBranch(condId, _, _) then referenced.insert(condId)
 		branch then break 'u'
 		ret(retValId) then referenced.insert(retValId)
+		param then break 'u'
+		call(_, _, args) then insertReferencedArgs(referenced, args: args)
 	end 'u'
 end 'collectStdOpUses'
+
+// Mark every call argument value as referenced so a `const` fed ONLY to a call
+// (`f(5)`) is not pruned as dead. A `param` has no uses (its result is a def), so it
+// contributes nothing here.
+function insertReferencedArgs(referenced ReferencedValueSet, args ValueIdArray)
+	for arg in args 'each'
+		referenced.insert(arg)
+	end 'each'
+end 'insertReferencedArgs'
 
 function addReferencedPair(referenced ReferencedValueSet, a ValueId, b ValueId)
 	referenced.insert(a)

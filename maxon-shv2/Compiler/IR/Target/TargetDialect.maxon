@@ -208,7 +208,17 @@ export union TargetOp
 	// resolves `targetName` to the callee's `.text` placement as a rel32
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier
 	// semantics (clobbers caller-saved registers).
-	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	//
+	// implicitDefs = 0xFC7 = the CALLER-SAVED GPR set the custom ABI clobbers across a
+	// call: {rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9, r10=10, r11=11} — bits
+	// 0x1|0x2|0x4|0x40|0x80|0x100|0x200|0x400|0x800. rbx (0x8) and r12–r15 (0xF000) are
+	// CALLEE-saved and DELIBERATELY EXCLUDED (rbx being wrongly clobbered was a shipped
+	// v1 regalloc bug — project_regalloc_crosscall_spill_fixes). The liveness pass folds
+	// this mask into `forbiddenPhys` for every value live ACROSS a call, so such a value
+	// is forced into a callee-saved register; the AllocChecker then verifies it survives
+	// (a value left in a clobbered register reads `noValue` at its next use → a panic).
+	// A union-backing literal cannot reference a named `let`, so the mask is inline.
+	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0xFC7}
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
 	// this to `call ExitProcess`. Full call-barrier semantics.
@@ -238,6 +248,21 @@ export union TargetOp
 	// `setsFlags: true` (idiv leaves EFLAGS undefined — a "may clobber" barrier).
 	// APPENDED at the END of the union, after `cqo`.
 	idivReg(divisor X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0x1, implicitDefs: 0x5}
+	// Push a physical GPR onto the stack (`push r64`, 50+r, +REX.B for r8–r15). POST-
+	// REGALLOC and physical-only: `insertPrologueEpilogue` emits one per callee-saved
+	// register the coloring actually used, at the function's entry, so the callee-saved
+	// convention holds even though the allocator now colors values into rbx/r12–r15. It
+	// carries an `X64Register` directly (never a virtual — it is inserted AFTER coloring,
+	// so it is invisible to liveness/coloring, like `xchgRegReg`). Sets no flags.
+	// APPENDED at the END of the union, after `idivReg`, so no existing `… to idivReg`
+	// range arm can silently swallow it (the band-append invariant — each such arm fails
+	// to compile until consciously extended).
+	pushReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
+	// Pop a physical GPR from the stack (`pop r64`, 58+r, +REX.B), the exact mirror of
+	// `pushReg`. `insertPrologueEpilogue` emits one per used callee-saved register before
+	// each `ret`, in REVERSE push order. Physical-only, post-regalloc. APPENDED after
+	// `pushReg`.
+	popReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 export typealias TargetOpArray = Array with TargetOp

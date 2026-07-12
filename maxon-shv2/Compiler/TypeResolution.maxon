@@ -36,11 +36,27 @@ export function resolveTypes(project Project, module MaxonModule)
 		func.maxonParamTypes = resolvedParams
 
 		project.funcReturnTypes.upsert(func.name, value: func.maxonReturnType)
+		syncResolvedSignature(project, func: func)
 	end 'eachFunc'
 
 	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
 	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
 end 'resolveTypes'
+
+// Re-sync a function's `funcSignatures` entry with its now-resolved param types.
+// The parser recorded the signature with the SAME raw param types it put on
+// `func.maxonParamTypes` (both from one param-parse), so the resolved
+// `func.maxonParamTypes` above is exactly the concrete type list to write back; the
+// param NAMES are untouched (resolution never renames a parameter). A function with
+// no registered signature (none at M5 — the parser records one per function it
+// builds) is left alone rather than fabricated.
+function syncResolvedSignature(project Project, func IrFunction)
+	if not project.funcSignatures.contains(func.name) 'noSig'
+		return
+	end 'noSig'
+	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({func.name}) true but get failed")
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes))
+end 'syncResolvedSignature'
 
 function resolveReturnType(project Project, ret MaxonReturnType) returns MaxonReturnType
 	return match ret 'r'

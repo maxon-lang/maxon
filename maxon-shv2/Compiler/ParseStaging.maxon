@@ -30,6 +30,26 @@ end 'FuncReturnTypeEntry'
 
 export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 
+// One `funcSignatures` registry contribution: a function's name paired with its
+// parameter signature (names + types). Recorded by the parser alongside the return
+// type. Ordered in an array (not a map) so the merge order is the declaration order
+// — exactly the discipline `FuncReturnTypeEntry` follows. Carries the NAME's source
+// position so `commitFuncSignatures` can anchor a duplicate-definition diagnostic
+// (E2001) on the offending declaration.
+export type FuncSignatureEntry
+	export var name as String
+	export var signature as FuncSignature
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	export var sourceFilePath as FilePath
+
+	export static function create(name String, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath) returns FuncSignatureEntry
+		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath}
+	end 'create'
+end 'FuncSignatureEntry'
+
+export typealias FuncSignatureEntryArray = Array with FuncSignatureEntry
+
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
@@ -42,6 +62,8 @@ export type FileParseArtifact
 	export var opRanges as SourceRangeTable
 	// This file's `funcReturnTypes` registry contributions, in declaration order.
 	export var funcReturnTypes as FuncReturnTypeEntryArray
+	// This file's `funcSignatures` registry contributions, in declaration order.
+	export var funcSignatures as FuncSignatureEntryArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -52,6 +74,7 @@ export type FileParseArtifact
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
+			funcSignatures: FuncSignatureEntryArray.create(),
 			typeNames: TypeNameInterner.create()
 		}
 	end 'create'
@@ -89,6 +112,15 @@ export type FileParseArtifact
 	export function recordFuncReturnType(name String, returnType MaxonReturnType)
 		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType))
 	end 'recordFuncReturnType'
+
+	// Record a function's parameter signature as this file's contribution to the
+	// project-wide `funcSignatures` registry. Called by the parser after it builds
+	// a function — NEVER touching `Project` (mirrors `recordFuncReturnType`). The
+	// name's source position travels with the entry so a merge-time duplicate can be
+	// positioned on the offending declaration.
+	export function recordFuncSignature(name String, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
+		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
+	end 'recordFuncSignature'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -125,10 +157,16 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
 	commitFuncReturnTypes(project, artifact: artifact)
+	commitFuncSignatures(project, artifact: artifact)
 end 'mergeArtifact'
 
-// Rewrite every file-local `named(id)` in the artifact — in both the module's
-// function signatures and the registry contributions — to its project-global id.
+// Rewrite every file-local `named(id)` that a LATER pass will READ — the module's
+// function return types + param types — to its project-global id. The `funcSignatures`
+// registry's param types are deliberately NOT remapped here: `resolveTypes`
+// (`syncResolvedSignature`) unconditionally OVERWRITES each signature's param types with
+// the function's own (already-remapped, then resolved) `maxonParamTypes` before the merge
+// output is ever consumed, and no consumer reads a signature's param types regardless
+// (`slotCallArgs` uses only the param NAMES + count). Remapping them here would be dead work.
 function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 	// Index-based so `func`/`entry` are mutable bindings (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
@@ -148,11 +186,31 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 	end 'eachEntry'
 end 'remapArtifact'
 
-// Commit the artifact's `funcReturnTypes` contributions into the project
-// registry. Duplicate-function detection (E2001 across files) is the merge-time
-// responsibility that grows here; M1 is single-file, so a plain upsert suffices.
+// Commit the artifact's `funcReturnTypes` contributions into the project registry.
+// A plain upsert: whole-program duplicate-function detection lives in the parallel
+// `commitFuncSignatures` (every function records BOTH a return type and a signature, so
+// one detection site covers all functions — see there). A duplicate reported there fails
+// the build, so a last-wins overwrite of a return type here is never observed.
 function commitFuncReturnTypes(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcReturnTypes 'each'
 		project.funcReturnTypes.upsert(entry.name, value: entry.returnType)
 	end 'each'
 end 'commitFuncReturnTypes'
+
+// Commit the artifact's `funcSignatures` contributions into the project registry,
+// detecting DUPLICATE FUNCTION DEFINITIONS. A name already in the registry — from an
+// earlier file, or an earlier declaration in THIS file (both entries sit in this array in
+// declaration order) — is a duplicate: a plain `upsert` would SILENTLY overwrite the first
+// entry, and a call would then validate against (and lower to) the WRONG signature. So the
+// collision is reported positioned at the offending (later) declaration (E2001), and the
+// first definition is kept. This is the single whole-program duplicate check: every
+// function the parser builds records exactly one signature entry here.
+function commitFuncSignatures(project Project, artifact FileParseArtifact)
+	for entry in artifact.funcSignatures 'each'
+		if project.funcSignatures.contains(entry.name) 'duplicate'
+			reportPositioned(project, code: ErrorCode.duplicateFunction, message: "duplicate definition of function '{entry.name}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			continue
+		end 'duplicate'
+		project.funcSignatures.upsert(entry.name, value: entry.signature)
+	end 'each'
+end 'commitFuncSignatures'

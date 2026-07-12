@@ -1,0 +1,34 @@
+// Test: call-result-in-expression
+function add(a int, b int) returns int
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(2, b: 3) + add(10, b: 20) * 2
+end 'main'
+---
+ExitCode: 65
+---
+func @add {
+  entry:
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbx
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 3
+    x64.callDirect add
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 20
+    x64.callDirect add
+    x64.imulRegRegImm32 rax, r8, 2
+    x64.leaRegRegReg r8, rbx, rax
+    x64.epilogue 32
+    x64.popReg rbx
+    x64.ret
+}

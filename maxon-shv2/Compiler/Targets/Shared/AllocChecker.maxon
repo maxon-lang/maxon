@@ -33,6 +33,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let noValue = valueCount
+	let paramCount = func.paramCount
 
 	// Per-block EXIT states (numBlocks rows of RegisterFileSize registers), so each
 	// edge can be simulated from its predecessor's exit.
@@ -42,7 +43,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
 		var regState = freshRegState(noValue)
-		seedRegState(regState, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, funcName: func.name)
+		seedRegState(regState, module: module, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, paramCount: paramCount, funcName: func.name)
 
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
@@ -52,7 +53,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 			// input from the destination register — exactly what the machine does.
 			applyReuseCopy(reuseCopies, opIdx: opIdx, regState: regState)
 			let op = try module.ops.get(opIdx) otherwise panic("AllocChecker: opIdx not in module.ops")
-			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: func.name, blockLabel: block.label)
+			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, paramCount: paramCount, funcName: func.name, blockLabel: block.label)
 		end 'eachOp'
 
 		copyRegState(exitStates, dstBase: local * RegisterFileSize, src: regState, srcBase: 0)
@@ -94,8 +95,13 @@ end 'regStateSet'
 
 // Seed a block's entry state: every non-phi live-in value and every phi resides in
 // its color. Two of them sharing a color would be simultaneously live in one
-// register — the aliasing bug, caught right here.
-function seedRegState(regState RegStateRow, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, funcName String)
+// register — the aliasing bug, caught right here. The ENTRY block additionally seeds
+// each parameter's INCOMING register (see seedEntryParamIncomingRegs).
+function seedRegState(regState RegStateRow, module TargetModule, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, paramCount ParamCount, funcName String)
+	if local == 0 'entry'
+		seedEntryParamIncomingRegs(regState, module: module, cfg: liveness.cfg, paramCount: paramCount)
+	end 'entry'
+
 	for v in 0 upto liveness.valueCount 'eachValue'
 		if liveness.isLiveIn(local, v: v) 'liveIn'
 			placeValueAtColor(regState, v: v, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "live-in")
@@ -105,6 +111,20 @@ function seedRegState(regState RegStateRow, liveness LivenessResult, local CfgIn
 		placeValueAtColor(regState, v: arg.valueId, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "phi")
 	end 'eachPhi'
 end 'seedRegState'
+
+// Seed the ENTRY block's abstract state with each parameter residing in its INCOMING ABI
+// register — the ABI delivers parameter i in argReg[i] before the entry capture `mov
+// color(v_i), argReg[i]` copies it out. Establishing that fact is what gives the checker
+// teeth against the F1 read-after-clobber class: each capture then reads a register the
+// checker knows holds its parameter and VERIFIES it (checkCopyOp), so if an earlier
+// capture's destination clobbered that incoming register, the checker sees the wrong value
+// and PANICS instead of shipping a silent miscompile.
+function seedEntryParamIncomingRegs(regState RegStateRow, module TargetModule, cfg FuncCfg, paramCount ParamCount)
+	let captures = collectEntryParamCaptures(module, cfg: cfg, paramCount: paramCount)
+	for cap in captures 'eachParam'
+		regStateSet(regState, reg: cap.incomingReg, value: cap.valueId)
+	end 'eachParam'
+end 'seedEntryParamIncomingRegs'
 
 function placeValueAtColor(regState RegStateRow, v ValueId, alloc Allocation, noValue ValueId, funcName String, blockLabel String, what String)
 	let reg = alloc.regNumOf(v)
@@ -118,12 +138,13 @@ end 'placeValueAtColor'
 // A `mov`/`mov32` is a COPY (special-cased): its virtual source must hold its value,
 // and its destination register receives the copied value's identity. Every other op
 // is interpreted generically from the operand model + implicit-register masks.
-function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, funcName String, blockLabel String)
+function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, paramCount ParamCount, funcName String, blockLabel String)
 	match op 'chk'
-		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
-		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
+		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
+		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
 		prologue to movRegImm32 then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
 		subRegReg to idivReg then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
+		pushReg to popReg then panic("AllocChecker.checkOp: pushReg/popReg are inserted by the prologue/epilogue pass AFTER the checker runs, so they must never reach it")
 	end 'chk'
 end 'checkOp'
 
@@ -143,16 +164,49 @@ end 'applyReuseCopy'
 // virtual dst is a fresh SSA value (its own identity now sits in its register); a
 // physical dst (the R8 return move) receives the SOURCE value's identity, so the
 // implicit-R8 use at `ret` can confirm the return value is there.
-function checkCopyOp(dst X64VReg, src X64VReg, regState RegStateRow, alloc Allocation, funcName String, blockLabel String)
+function checkCopyOp(dst X64VReg, src X64VReg, regState RegStateRow, alloc Allocation, paramCount ParamCount, funcName String, blockLabel String)
 	let srcReg = physRegNumOf(src, alloc: alloc)
 	assertSourceHolds(src, srcReg: srcReg, regState: regState, funcName: funcName, blockLabel: blockLabel)
 	let dstReg = physRegNumOf(dst, alloc: alloc)
 
 	match dst 'd'
-		virtual(did) then regStateSet(regState, reg: dstReg, value: did)
+		virtual(did) then defineCopyVirtualDst(did, src: src, srcReg: srcReg, dstReg: dstReg, regState: regState, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
 		physical then regStateSet(regState, reg: dstReg, value: regStateGet(regState, reg: srcReg))
 	end 'd'
 end 'checkCopyOp'
+
+// A copy into a virtual (SSA) destination establishes the destination value in its
+// register. For a PARAMETER CAPTURE — a copy from a physical source into a parameter value
+// (`did < paramCount`) — additionally VERIFY the source (incoming) register still holds
+// that parameter: the entry seed placed parameter `did` in its incoming register, so if an
+// earlier capture's destination clobbered it, a different value sits there now and this
+// assertion fires. This is the check that was missing when the F1 silent miscompile shipped
+// — a physical copy source was UNCONDITIONALLY untracked (assertSourceHolds skips it), so a
+// clobbered incoming register was never noticed.
+function defineCopyVirtualDst(did ValueId, src X64VReg, srcReg MachineWord, dstReg MachineWord, regState RegStateRow, paramCount ParamCount, funcName String, blockLabel String)
+	if isParamCaptureSource(did, src: src, paramCount: paramCount) 'paramCapture'
+		let held = regStateGet(regState, reg: srcReg)
+		if held != did 'clobbered'
+			panic("AllocChecker: parameter-capture clobber in '{funcName}' block '{blockLabel}': parameter {did} arrives in register {srcReg}, but that register holds value {held} at its capture — an earlier parameter capture's destination was colored onto this incoming register and clobbered it before the capture read it (a read-after-clobber miscompile)")
+		end 'clobbered'
+	end 'paramCapture'
+	regStateSet(regState, reg: dstReg, value: did)
+end 'defineCopyVirtualDst'
+
+// True iff `mov virtual(did), src` is a parameter capture: `did` is a parameter value
+// (< paramCount, the ids the parser reserves for parameters) and `src` is a physical
+// register (the incoming ABI register). A physical source that is NOT a parameter capture
+// (the call- and idiv-result `mov`s) names a register, not a value the entry seed tracks,
+// so it stays unverified — its register was clobbered to `noValue` by the call / idiv.
+function isParamCaptureSource(did ValueId, src X64VReg, paramCount ParamCount) returns bool
+	if did >= paramCount 'notParam'
+		return false
+	end 'notParam'
+	return match src 's'
+		physical gives true
+		virtual gives false
+	end 's'
+end 'isParamCaptureSource'
 
 // Generic op: every USE reads a register that must hold its value (explicit virtual
 // operands, and the implicit-use registers like R8 at `ret`); every DEF writes its

@@ -224,6 +224,24 @@ end 'MaxonCmpOp'
 // hand. Appending at a band's end is always safe (the range's endpoint moves with
 // it, deliberately).
 export union MaxonOp
+	// --- band: callFree ---
+	// A free-function call `callee(args…)` whose result is a freshly-minted ValueId.
+	// M5's first call op. Declared in its OWN band, BEFORE the plain band, so it is a
+	// genuine new band rather than a mid-`plain` insert (a `plain`-band range arm would
+	// silently swallow a variant appended into the middle of it — the band-append
+	// invariant). `callFree` is the FIRST `OpCategory`, so this band leads the union.
+	//
+	// `callee` is identifier TEXT (a name, not a value) — a `ByteArray` slice of the
+	// source per the MaxonOp header's value/name split (a name is looked up, not
+	// computed). `args` are the argument SSA VALUES in SOURCE order (before label
+	// reordering). `argLabels[i]` is arg `i`'s source-level `name:` label, or the empty
+	// string for a positional argument (a parameter name can never be empty, so "" is an
+	// unambiguous "no label" marker, not a value-masking sentinel); the parser enforces
+	// that only the first argument is positional. `argRanges[i]` is arg `i`'s source span,
+	// kept ON the op (genuine per-ARGUMENT payload, so not in the op-parallel
+	// SourceRangeTable) for per-argument diagnostics. lowerCall reorders the labelled args
+	// to the callee's declaration order using the `funcSignatures` registry.
+	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit

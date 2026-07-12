@@ -27,6 +27,12 @@
 // Cursor position into the token array. Wide range: token counts are unbounded.
 typealias TokenIndex = int(0 to u64.max)
 
+// The custom ABI passes arguments in six registers (StdToX64Conversion.argRegisters), so
+// M5 caps a function at six parameters. A seventh would need a stack argument slot — a
+// later milestone — so the parser rejects it up front with a positioned `unsupported`
+// rather than letting it reach the backend as a crash.
+let MaxRegisterParams = 6 as ParamCount
+
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
 // turns a thrown `ParseError` into a project diagnostic — the parser itself never
@@ -42,6 +48,10 @@ export union ParseError implements Error
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	integerOverflow(line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
+	// A parameter list that repeats a name (`function f(x int, x int)`). The second
+	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
+	// Renders as E2002, positioned at the repeated name.
+	duplicateParameter(name String, line LineNumber, column ColumnNumber)
 	// A reference to a name with no binding in scope. Distinct from
 	// `unexpectedToken` (a syntactic mismatch): this is a name-resolution failure,
 	// which the parser can detect because `Scope` is threaded through it.
@@ -58,7 +68,26 @@ export union ParseError implements Error
 	// A labelled `break 'l'`/`continue 'l'` whose label matches no enclosing loop.
 	// Renders as E2047.
 	unknownLoopLabel(keyword String, label String, line LineNumber, column ColumnNumber)
+	// A call whose FIRST argument carries a `name:` label — the first argument is
+	// positional, only the 2nd and later take labels. Renders as E2052. A syntactic
+	// rule the parser checks without the callee's signature.
+	firstArgNamed(line LineNumber, column ColumnNumber)
+	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053. The
+	// symmetric syntactic rule to `firstArgNamed`.
+	argMissingLabel(line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
+// only caller is parameter-name duplicate detection), so no membership set is worth its
+// heap object (the same reasoning `FuncSignature.indexOfParam` documents).
+function stringArrayContains(names StringArray, name String) returns bool
+	for existing in names 'each'
+		if existing == name 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'stringArrayContains'
 
 // --- Pratt expression parser: precedence table + operator classifiers ---
 //
@@ -290,32 +319,43 @@ export type Parser
 		end 'unsupported'
 	end 'dispatchTopLevel'
 
-	// Parse a free function: `function <name>() [returns <Type>] <body> end [label]`.
-	// M1 has no parameters and no `main` qualification (single-file build), so the
-	// declared name is used verbatim for registry keys — `main` stays `main`.
+	// Parse a free function: `function <name>(<params>) [returns <Type>] <body> end
+	// [label]`. M5 adds parameters (`name type`, comma-separated); there is still no
+	// `main` qualification (single-file build), so the declared name is used verbatim
+	// for registry keys — `main` stays `main`.
 	function parseFunction(visibility Visibility) throws ParseError
 		try self.consume(TokenKind.function)
 		let nameTok = try self.consume(TokenKind.identifier)
 		let name = nameTok.value
 
+		// Parameters are parsed into parallel name/type lists BEFORE the scope reset:
+		// binding them needs the fresh per-function scope + value numbering, which is
+		// re-seeded at the resulting paramCount just below. Parsing itself only
+		// consumes tokens, so it needs no scope.
 		try self.consume(TokenKind.leftParen)
-		if not self.at(TokenKind.rightParen) 'hasParams'
-			let tok = self.current()
-			throw ParseError.unsupported("function parameters (M1 functions take none)", line: tok.line, column: tok.column)
-		end 'hasParams'
+		var paramNames = StringArray.create()
+		var paramTypes = MaxonTypeArray.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes)
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
 
-		// Fresh per-function value numbering. Seeded at the function's paramCount
-		// (0 at M1 — no params yet) so parameter ids stay reserved once M5 adds them.
-		let paramCount = 0 as ParamCount
+		// Fresh per-function value numbering, seeded at the function's paramCount so
+		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
+		// then starts at paramCount — see IrValueId's ValueIdRef contract).
+		let paramCount = paramNames.count()
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
 		self.mutableVars = StringArray.create()
 		self.loops = LoopContextArray.create()
 
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: MaxonTypeArray.create(), returnLine: nameTok.line)
+		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
+		// body reference resolves straight to the parameter's SSA value — the same
+		// value-substitution model `let`/`var` bindings use. Parameters are immutable
+		// (a reassignment is E2013); mutating a parameter needs a local shadow.
+		self.bindParameters(paramNames, paramTypes: paramTypes)
+
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: nameTok.line)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath
@@ -338,7 +378,58 @@ export type Parser
 
 		self.artifact.module.pushFunc(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 	end 'parseFunction'
+
+	// Parse a comma-separated parameter list `name type[, name type]*` into the
+	// parallel `paramNames`/`paramTypes` lists (empty when the list is empty). Each
+	// parameter is `name type` — a bare identifier followed by a type reference. A
+	// `= <default>` after the type is a later milestone, so it is rejected here with
+	// a positioned `unsupported` rather than silently dropped. The caller has already
+	// consumed the `(` and consumes the closing `)`.
+	function parseFunctionParameters(paramNames StringArray, paramTypes MaxonTypeArray) throws ParseError
+		if self.at(TokenKind.rightParen) 'noParams'
+			return
+		end 'noParams'
+
+		while true 'paramLoop'
+			let nameTok = try self.consume(TokenKind.identifier)
+			let paramType = try self.parseTypeReference()
+
+			if self.at(TokenKind.equals) 'hasDefault'
+				let eqTok = self.current()
+				throw ParseError.unsupported("a default value on parameter '{nameTok.value}' (parameter defaults arrive at a later milestone)", line: eqTok.line, column: eqTok.column)
+			end 'hasDefault'
+
+			if stringArrayContains(paramNames, name: nameTok.value) 'duplicate'
+				throw ParseError.duplicateParameter(nameTok.value, line: nameTok.line, column: nameTok.column)
+			end 'duplicate'
+
+			paramNames.push(nameTok.value)
+			paramTypes.push(paramType)
+
+			if paramNames.count() > MaxRegisterParams 'tooMany'
+				throw ParseError.unsupported("more than {MaxRegisterParams} parameters (M5 passes arguments in registers only; stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
+			end 'tooMany'
+
+			if not self.at(TokenKind.comma) 'endParams'
+				break
+			end 'endParams'
+			try self.consume(TokenKind.comma)
+		end 'paramLoop'
+	end 'parseFunctionParameters'
+
+	// Bind each parameter name to its reserved SSA ValueId in the fresh function
+	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
+	// numbering reserved). Bound as an immutable value binding, so a body reference
+	// resolves to the parameter value and a reassignment is rejected as immutable.
+	function bindParameters(paramNames StringArray, paramTypes MaxonTypeArray)
+		for i in 0 upto paramNames.count() 'eachParam'
+			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
+			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
+			self.scope.declareValueBinding(paramName, varType: paramType, mutable: false, value: i as ValueId)
+		end 'eachParam'
+	end 'bindParameters'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
 	// (for SemanticCheck) and to lowering (via the function signature).
@@ -420,13 +511,16 @@ export type Parser
 			try self.parseContinueStatement(block)
 			return block
 		end 'continueStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.equals 'assign'
-			// An identifier followed by `=` is a reassignment; an identifier in any
-			// other statement position is not yet a valid statement (M5's bare
-			// call-expression statement). The two-token lookahead keeps a bare
-			// identifier from being mis-parsed as an incomplete assignment.
+			// An identifier followed by `=` is a reassignment. The two-token lookahead
+			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			try self.parseAssignment(block)
 			return block
-		end 'assign' else 'unsupported'
+		end 'assign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+			// An identifier followed by `(` is a bare-call statement — the call is
+			// evaluated for its effect and its result discarded (M5).
+			try self.parseCallStatement(block)
+			return block
+		end 'callStmt' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
 		end 'unsupported'
@@ -990,6 +1084,12 @@ export type Parser
 		end 'intLit'
 
 		if self.at(TokenKind.identifier) 'varRef'
+			// An identifier followed by `(` is a call expression; otherwise it is a
+			// variable reference. The one-token lookahead is the same shape the
+			// statement parser uses to tell a call/assignment apart from a bare name.
+			if self.peekKind() == TokenKind.leftParen 'callExpr'
+				return try self.parseCallExpression(block)
+			end 'callExpr'
 			return try self.parseVariableReference()
 		end 'varRef'
 
@@ -1004,6 +1104,96 @@ export type Parser
 		let tok = try self.consume(TokenKind.identifier)
 		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(tok.value, line: tok.line, column: tok.column)
 	end 'parseVariableReference'
+
+	// Parse a bare-call statement `callee(args…)` — the call is emitted for its effect
+	// and its freshly-minted result value is discarded (M5). Deferred result-use rules
+	// (`discarded non-void result` lints) grow at a later milestone.
+	function parseCallStatement(block IrBlock) throws ParseError
+		_ = try self.parseCallExpression(block)
+	end 'parseCallStatement'
+
+	// Parse a call expression `callee(args…)` into `block` and return the ValueId its
+	// result defines. The callee name is kept as identifier TEXT (a `ByteArray` slice
+	// per the MaxonOp value/name split); the arguments are parsed in source order with
+	// their `name:` labels. Call-site diagnostics anchor on the callee-through-`)` span.
+	function parseCallExpression(block IrBlock) returns ValueId throws ParseError
+		let calleeTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.leftParen)
+
+		var args = ValueIdArray.create()
+		var argLabels = StringArray.create()
+		var argRanges = SourceRangeArray.create()
+		try self.parseCallArgs(block, args: args, argLabels: argLabels, argRanges: argRanges)
+
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		return self.emitCall(block, calleeTok: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
+	end 'parseCallExpression'
+
+	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
+	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves
+	// the cursor on `)`. Each argument is an expression, optionally prefixed by a
+	// `name:` label — the FIRST argument must be positional and every later argument
+	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
+	// token). Whether a `name:` label actually matches a parameter is a SEMANTIC check
+	// (SemanticCheck, which has the callee's signature) — not the parser's job.
+	function parseCallArgs(block IrBlock, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray) throws ParseError
+		if self.at(TokenKind.rightParen) 'noArgs'
+			return
+		end 'noArgs'
+
+		var argIndex = 0 as ParamCount
+		while true 'argLoop'
+			// The argument's leading token — the label token when labelled, else the
+			// value's first token — anchors this argument's diagnostic span.
+			let argFirstTok = self.current()
+			let label = try self.consumeArgLabel(argIndex)
+			let value = try self.parseExpression(block, permitComparison: false)
+
+			args.push(value)
+			argLabels.push(label)
+			argRanges.push(SourceRange.ofToken(argFirstTok))
+			argIndex = argIndex + 1
+
+			if not self.at(TokenKind.comma) 'endArgs'
+				break
+			end 'endArgs'
+			try self.consume(TokenKind.comma)
+		end 'argLoop'
+	end 'parseCallArgs'
+
+	// Consume and validate an optional `name:` label on the next argument, returning the
+	// label text (the empty string when unlabelled). The FIRST argument (`argIndex == 0`)
+	// must be positional — a label there is E2052; every later argument must be labelled —
+	// a bare value there is E2053. A `name:` label is two tokens (identifier + colon); a
+	// bare value leaves the cursor untouched. (Whether the label names a real parameter
+	// is checked later, in SemanticCheck.)
+	function consumeArgLabel(argIndex ParamCount) returns String throws ParseError
+		let labelTok = self.current()
+		let isNamed = labelTok.kind == TokenKind.identifier and self.peekKind() == TokenKind.colon
+
+		if argIndex == 0 'firstArg'
+			if isNamed 'firstNamed'
+				throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
+			end 'firstNamed'
+			return ""
+		end 'firstArg'
+
+		if not isNamed 'missingLabel'
+			throw ParseError.argMissingLabel(labelTok.line, column: labelTok.column)
+		end 'missingLabel'
+		try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.colon)
+		return labelTok.value
+	end 'consumeArgLabel'
+
+	// Append a `call` op defining a fresh result value; return the ValueId it defines.
+	// The callee is stored as a `ByteArray` slice of its identifier token; the call span
+	// runs from the callee name through the closing `)` (the conventional call anchor).
+	function emitCall(block IrBlock, calleeTok Token, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
+		let result = allocValueId(self.valueIds)
+		self.artifact.emitOp(block, op: MaxonOp.call(result, callee: calleeTok.valueBytes, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
+		return result
+	end 'emitCall'
 
 	// Parse an integer literal token, converting its text to a value via
 	// NumberParsing.parseInt (re-raising overflow as a positioned ParseError),

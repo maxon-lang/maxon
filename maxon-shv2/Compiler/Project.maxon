@@ -124,11 +124,119 @@ export typealias VarInfoMap = Map with (String, VarInfo)
 // read by SemanticCheck to locate `main` and validate its return type.
 export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 
+// A function's parameter signature: the declared parameter NAMES (in declaration
+// order) and their source-level TYPES (parallel, same order). The M5 parse-staging
+// registry the call machinery needs — the return-type registry above answers "what
+// does this callee return?", this answers "what does it take, and by what labels?".
+// Param NAMES are the load-bearing field: a call reorders its labelled arguments
+// (`add(2, b: 3)`) to the callee's declaration order by matching each `name:` label
+// to the parameter position holding that name. Param TYPES back arity/type checking.
+// (v1 homes the same data on a richer `FuncSignature` with defaults/companions; shv2
+// carries only names + types until defaults and generics land.)
+export type FuncSignature
+	export var paramNames as StringArray
+	export var paramTypes as MaxonTypeArray
+
+	export static function create(paramNames StringArray, paramTypes MaxonTypeArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes}
+	end 'create'
+
+	// The declared parameter count — the arity a call must match.
+	export function paramCount() returns ParamCount
+		return self.paramNames.count()
+	end 'paramCount'
+
+	// The declaration index of the parameter named `name`, or `paramCount()` when
+	// no parameter carries that name (an unknown label). A linear scan over the
+	// name list — parameter counts are tiny, so no per-signature name→index map is
+	// worth its heap object (contrast v1's `nameToIndex`, which paid for one on
+	// every signature to serve method dispatch this milestone does not have).
+	export function indexOfParam(name String) returns ParamCount
+		for i in 0 upto self.paramNames.count() 'each'
+			let paramName = try self.paramNames.get(i) otherwise panic("FuncSignature.indexOfParam: paramNames.get OOB at {i}")
+			if paramName == name 'match'
+				return i
+			end 'match'
+		end 'each'
+		return self.paramNames.count()
+	end 'indexOfParam'
+end 'FuncSignature'
+
+// Registry: qualified function name -> its parameter signature. Populated by
+// `mergeArtifact` alongside `funcReturnTypes`; resolved in place by TypeResolution
+// (its param types collapse `named`→concrete); read by SemanticCheck (call
+// validation) and lowerCall (label→positional arg slotting).
+export typealias FuncSignatureMap = Map with (String, FuncSignature)
+
+// The outcome of slotting a call's arguments to its callee's parameter positions.
+// `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
+// every other arm is a call error the caller renders as a positioned diagnostic. This
+// single result type is what lets SemanticCheck (which reports the error) and lowerCall
+// (which consumes the ordered ids, `otherwise panic` since SemanticCheck already gated
+// them) share one slotting algorithm rather than re-deriving the mapping twice.
+export union ArgSlotResult
+	ordered(argIds ValueIdArray)
+	arityMismatch(expected ParamCount, got ParamCount)
+	unknownLabel(argIndex ParamCount, label String)
+	duplicateArg(argIndex ParamCount, paramName String)
+end 'ArgSlotResult'
+
+// Slot a call's `args` (in source order, each paired with its `argLabels` entry — the
+// empty string for a positional argument) into the callee `sig`'s DECLARATION order.
+// A positional argument at index `i` fills parameter position `i`; a labelled argument
+// `name: value` fills the position of the parameter named `name`. The parser has
+// already enforced that only the first argument is positional. Returns the reordered
+// value list, or the first slotting error found (arity, unknown label, or two arguments
+// targeting one parameter). THE one place the label→position mapping lives — shared by
+// call validation and call lowering.
+export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels StringArray) returns ArgSlotResult
+	let paramCount = sig.paramCount()
+	if args.count() != paramCount 'arity'
+		return ArgSlotResult.arityMismatch(paramCount, got: args.count())
+	end 'arity'
+
+	// Fresh per-call buffers (paramCount is tiny); `filled` starts all-false so the
+	// duplicate check below is sound, and `slotIds` is fully written iff every position
+	// is filled exactly once — guaranteed once arity matches and no duplicate is found.
+	var slotIds = ValueIdArray.create()
+	var filled = BoolArray.create()
+	for _ in 0 upto paramCount 'initSlots'
+		slotIds.push(0 as ValueId)
+		filled.push(false)
+	end 'initSlots'
+
+	for i in 0 upto args.count() 'placeArgs'
+		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
+		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
+
+		var pos = i as ParamCount
+		if not label.isEmpty() 'labelled'
+			pos = sig.indexOfParam(label)
+			if pos >= paramCount 'unknown'
+				return ArgSlotResult.unknownLabel(i, label: label)
+			end 'unknown'
+		end 'labelled'
+
+		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
+		if alreadyFilled 'dup'
+			let paramName = try sig.paramNames.get(pos) otherwise panic("slotCallArgs: paramNames.get OOB at {pos}")
+			return ArgSlotResult.duplicateArg(i, paramName: paramName)
+		end 'dup'
+		try slotIds.set(pos, value: argId) otherwise panic("slotCallArgs: slotIds.set OOB at {pos}")
+		try filled.set(pos, value: true) otherwise panic("slotCallArgs: filled.set OOB at {pos}")
+	end 'placeArgs'
+
+	return ArgSlotResult.ordered(slotIds)
+end 'slotCallArgs'
+
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
+	// Declared function parameter signatures (names + types), keyed by name.
+	// The M5 parse-staging registry the call machinery reads (see FuncSignature).
+	export var funcSignatures as FuncSignatureMap
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -153,6 +261,7 @@ export type Project
 		return Self{
 			db: db,
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			funcSignatures: FuncSignatureMap.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			rootPath: rootPath,

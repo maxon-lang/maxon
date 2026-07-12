@@ -1,0 +1,40 @@
+// Test: nested-calls
+function zero() returns int
+	return 7
+end 'zero'
+
+function inc(x int) returns int
+	return x + 1
+end 'inc'
+
+function main() returns ExitCode
+	return inc(inc(inc(zero())))
+end 'main'
+---
+ExitCode: 10
+---
+func @zero {
+  entry:
+    x64.movRegImm32 r8, 7
+    x64.ret
+}
+
+func @inc {
+  entry:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect zero
+    x64.movRegReg rcx, r8
+    x64.callDirect inc
+    x64.movRegReg rcx, r8
+    x64.callDirect inc
+    x64.movRegReg rcx, r8
+    x64.callDirect inc
+    x64.epilogue 40
+    x64.ret
+}
