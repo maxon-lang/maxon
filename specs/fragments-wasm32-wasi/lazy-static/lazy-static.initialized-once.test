@@ -45,12 +45,13 @@ module {
     mir.store %3, %4, 0 width: qword
     %5 = mir.mov_imm 8 : i64
     %7 = mir.mov_imm 0 : i64
-    %6 = mir.call @stdlib.__mm_alloc(%5, %7)
-    %10 = mir.call @stdlib.__mm_incref(%6)
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.call @stdlib.__mm_alloc_needzero(%5, %7, %10)
+    %12 = mir.call @stdlib.__mm_incref(%11)
     %8 = mir.global_addr @__data_Counter.initCount
     %9 = mir.load %8, 0 width: qword
-    mir.store %9, %6, 0 width: qword
-    mir.ret %6
+    mir.store %9, %11, 0 width: qword
+    mir.ret %11
   }
   func @Counter.getInitCount() -> u64 {
   entry:
@@ -143,16 +144,17 @@ module {
     mir.store %66, %63, 32 width: qword
     %68 = mir.mov_imm 16 : i64
     %69 = mir.func_addr @__destruct_String
-    %67 = mir.call @stdlib.__mm_alloc(%68, %69)
-    mir.store %63, %67, 0 width: qword
-    mir.store %0, %67, 8 width: qword
-    %78 = mir.load %67, 0 width: qword
-    %82 = mir.call @stdlib.__mm_incref(%78)
-    %79 = mir.load %78, 0 width: qword
-    %80 = mir.load %78, 8 width: qword
-    %81 = mir.call @mrt_write_stdout(%79, %80)
-    %84 = mir.call @mm_drop(%67)
-    %83 = mir.call @__mm_decref_maybenull_helper(%78)
+    %78 = mir.mov_imm 1 : i64
+    %79 = mir.call @stdlib.__mm_alloc_needzero(%68, %69, %78)
+    mir.store %63, %79, 0 width: qword
+    mir.store %0, %79, 8 width: qword
+    %80 = mir.load %79, 0 width: qword
+    %84 = mir.call @stdlib.__mm_incref(%80)
+    %81 = mir.load %80, 0 width: qword
+    %82 = mir.load %80, 8 width: qword
+    %83 = mir.call @mrt_write_stdout(%81, %82)
+    %86 = mir.call @mm_drop(%79)
+    %85 = mir.call @__mm_decref_maybenull_helper(%80)
     mir.ret %0
   }
 }

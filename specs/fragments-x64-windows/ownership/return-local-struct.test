@@ -33,11 +33,12 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=112
+    x64.mov eax, 1
     x64.xor edx, edx
     x64.mov ecx, 16
     x64.mov ebx, 10
     x64.mov r12d, 20
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r13, r8
     x64.mov [r13+0], rbx (8b)
     x64.mov [r13+8], r12 (8b)
@@ -88,9 +89,10 @@ module {
     x64.call stdlib.__mm_decref
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
     x64.mov ecx, 48
-    x64.mov r8, -1
-    x64.lea rbx, [rip+__destruct_String]
-    x64.mov r12d, 16
+    x64.mov rbx, -1
+    x64.mov r8d, 1
+    x64.lea r12, [rip+__destruct_String]
+    x64.mov r8d, 16
     x64.call mrt_alloc_with_dtor
     x64.mov r14, r8
     x64.mov [r14+40], r15 (8b)
@@ -101,11 +103,11 @@ module {
     x64.mov [r14+16], r8 (8b)
     x64.mov r8, [rbp+-40]
     x64.mov [r14+24], r8 (8b)
-    x64.mov r8, -1
-    x64.mov [r14+32], r8 (8b)
-    x64.mov rcx, r12
-    x64.mov rdx, rbx
-    x64.call stdlib.__mm_alloc
+    x64.mov [r14+32], rbx (8b)
+    x64.mov rcx, 16
+    x64.mov rdx, r12
+    x64.mov rax, 1
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov rbx, r8
     x64.mov [rbx+0], r14 (8b)
     x64.mov [rbx+8], r15 (8b)
@@ -169,9 +171,10 @@ module {
     x64.mov [rbx+24], r8 (8b)
     x64.mov r8, -1
     x64.mov [rbx+32], r8 (8b)
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r12, r8
     x64.mov [r12+0], rbx (8b)
     x64.mov [r12+8], r15 (8b)

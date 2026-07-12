@@ -40,9 +40,10 @@ module {
     %0 = mir.mov_imm 0 : i64
     %33 = mir.mov_imm 0 : i64
     %34 = mir.mov_imm 0 : i64
-    %35 = mir.call @stdlib.__mm_alloc(%33, %34)
-    %3 = mir.call @Three.bump(%35)
-    %41 = mir.call @mm_drop(%35)
+    %35 = mir.mov_imm 1 : i64
+    %36 = mir.call @stdlib.__mm_alloc_needzero(%33, %34, %35)
+    %3 = mir.call @Three.bump(%36)
+    %44 = mir.call @mm_drop(%36)
     %4 = mir.global_addr @__istr_0
     %6 = mir.mov_imm 21 : i64
     %7 = mir.call @mrt_alloc(%6)
@@ -73,16 +74,17 @@ module {
     mir.store %27, %24, 32 width: qword
     %29 = mir.mov_imm 16 : i64
     %30 = mir.func_addr @__destruct_String
-    %28 = mir.call @stdlib.__mm_alloc(%29, %30)
-    mir.store %24, %28, 0 width: qword
-    mir.store %0, %28, 8 width: qword
-    %36 = mir.load %28, 0 width: qword
-    %40 = mir.call @stdlib.__mm_incref(%36)
-    %37 = mir.load %36, 0 width: qword
-    %38 = mir.load %36, 8 width: qword
-    %39 = mir.call @mrt_write_stdout(%37, %38)
-    %43 = mir.call @mm_drop(%28)
-    %42 = mir.call @__mm_decref_maybenull_helper(%36)
+    %37 = mir.mov_imm 1 : i64
+    %38 = mir.call @stdlib.__mm_alloc_needzero(%29, %30, %37)
+    mir.store %24, %38, 0 width: qword
+    mir.store %0, %38, 8 width: qword
+    %39 = mir.load %38, 0 width: qword
+    %43 = mir.call @stdlib.__mm_incref(%39)
+    %40 = mir.load %39, 0 width: qword
+    %41 = mir.load %39, 8 width: qword
+    %42 = mir.call @mrt_write_stdout(%40, %41)
+    %46 = mir.call @mm_drop(%38)
+    %45 = mir.call @__mm_decref_maybenull_helper(%39)
     mir.ret %0
   }
   func @Three.bump(local0: i64) -> i64 {
@@ -93,11 +95,12 @@ module {
     %3 = mir.stack_slot_addr slot_2
     %4 = mir.mov_imm 8 : i64
     %5 = mir.mov_imm 0 : i64
-    %6 = mir.call @stdlib.__mm_alloc(%4, %5)
-    mir.store %3, %6, 0 width: qword
-    %12 = mir.mov_imm 3 : i64
-    %10 = mir.indirect_call %2(%12, %6)
-    %13 = mir.call @mm_drop(%6)
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.call @stdlib.__mm_alloc_needzero(%4, %5, %12)
+    mir.store %3, %13, 0 width: qword
+    %14 = mir.mov_imm 3 : i64
+    %10 = mir.indirect_call %2(%14, %13)
+    %15 = mir.call @mm_drop(%13)
     mir.ret %10
   }
   func @Tagger.bump$closure_0$Three(local0: i64, local1: i64) -> i64 {

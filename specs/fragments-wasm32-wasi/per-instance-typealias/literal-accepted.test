@@ -38,13 +38,14 @@ module {
     %3 = mir.global_addr @__layout_Wrapper_Integer
     %13 = mir.mov_imm 16 : i64
     %14 = mir.load %3, 40 width: qword
-    %15 = mir.call @stdlib.__mm_alloc(%13, %14)
-    mir.store %1, %15, 0 width: qword
-    mir.store %2, %15, 8 width: qword
-    %16 = mir.load %15, 8 width: qword
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.call @stdlib.__mm_alloc_needzero(%13, %14, %15)
+    mir.store %1, %16, 0 width: qword
+    mir.store %2, %16, 8 width: qword
+    %17 = mir.load %16, 8 width: qword
     %9 = mir.mov_imm 5 : i64
-    %10 = mir.cmp eq, %16, %9
-    %17 = mir.call @mm_drop(%15)
+    %10 = mir.cmp eq, %17, %9
+    %18 = mir.call @mm_drop(%16)
     mir.cond_br %10 [then: check_0(), else: check_0.after()]
   check_0:
     %11 = mir.mov_imm 0 : i64

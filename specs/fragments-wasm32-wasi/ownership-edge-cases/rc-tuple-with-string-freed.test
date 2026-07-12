@@ -28,25 +28,27 @@ module {
     mir.store %10, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    %21 = mir.call @stdlib.__mm_incref(%11)
-    mir.store %5, %11, 0 width: qword
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.call @stdlib.__mm_alloc_needzero(%12, %13, %21)
+    %25 = mir.call @stdlib.__mm_incref(%22)
+    mir.store %5, %22, 0 width: qword
     %14 = mir.mov_imm 1 : i64
-    mir.store %14, %11, 8 width: qword
+    mir.store %14, %22, 8 width: qword
     %15 = mir.mov_imm 16 : i64
     %18 = mir.global_addr @__layout___Tuple2_Int_String
     %17 = mir.load %18, 40 width: qword
-    %16 = mir.call @stdlib.__mm_alloc(%15, %17)
-    mir.store %1, %16, 0 width: qword
-    mir.store %11, %16, 8 width: qword
-    %20 = mir.load %16, 0 width: qword
-    %22 = mir.call @mm_drop(%16)
-    %23 = mir.mov_imm 255 : i64
-    %24 = mir.cmp ugt, %20, %23
-    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.call @stdlib.__mm_alloc_needzero(%15, %17, %23)
+    mir.store %1, %24, 0 width: qword
+    mir.store %22, %24, 8 width: qword
+    %20 = mir.load %24, 0 width: qword
+    %26 = mir.call @mm_drop(%24)
+    %27 = mir.mov_imm 255 : i64
+    %28 = mir.cmp ugt, %20, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %25 = mir.global_addr @__panic_msg_abbc006d550d53e2
-    %26 = mir.call @mrt_panic(%25)
+    %29 = mir.global_addr @__panic_msg_abbc006d550d53e2
+    %30 = mir.call @mrt_panic(%29)
   __range_ok_0:
     mir.ret %20
   }

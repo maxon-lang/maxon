@@ -72,17 +72,18 @@ module {
     %1 = mir.mov_imm 0 : i64
     %4 = mir.mov_imm 8 : i64
     %5 = mir.mov_imm 0 : i64
-    %6 = mir.call @stdlib.__mm_alloc(%4, %5)
-    mir.store %0, %6, 0 width: byte
-    mir.store %1, %6, 1 width: byte
-    %3 = mir.call @pick(%6)
-    %7 = mir.call @mm_drop(%6)
-    %8 = mir.mov_imm 255 : i64
-    %9 = mir.cmp ugt, %3, %8
-    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.call @stdlib.__mm_alloc_needzero(%4, %5, %6)
+    mir.store %0, %7, 0 width: byte
+    mir.store %1, %7, 1 width: byte
+    %3 = mir.call @pick(%7)
+    %8 = mir.call @mm_drop(%7)
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %3, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %10 = mir.global_addr @__panic_msg_6b880b0346a2b25b
-    %11 = mir.call @mrt_panic(%10)
+    %11 = mir.global_addr @__panic_msg_6b880b0346a2b25b
+    %12 = mir.call @mrt_panic(%11)
   __range_ok_0:
     mir.ret %3
   }

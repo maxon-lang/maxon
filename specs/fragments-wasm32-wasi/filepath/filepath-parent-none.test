@@ -33,14 +33,15 @@ module {
     mir.store %0, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    %43 = mir.call @stdlib.__mm_incref(%11)
-    mir.store %5, %11, 0 width: qword
+    %39 = mir.mov_imm 1 : i64
+    %40 = mir.call @stdlib.__mm_alloc_needzero(%12, %13, %39)
+    %47 = mir.call @stdlib.__mm_incref(%40)
+    mir.store %5, %40, 0 width: qword
     %14 = mir.mov_imm 1 : i64
-    mir.store %14, %11, 8 width: qword
-    %15 = mir.call @FilePath.init(%11)
+    mir.store %14, %40, 8 width: qword
+    %15 = mir.call @FilePath.init(%40)
     %17, %18 = mir.try_call @FilePath.parent(%15)
-    %44 = mir.call @__mm_decref_maybenull_helper(%15)
+    %48 = mir.call @__mm_decref_maybenull_helper(%15)
     %20 = mir.cmp ne, %18, %0
     mir.cond_br %20 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
@@ -59,18 +60,19 @@ module {
     mir.store %0, %25, 32 width: qword
     %32 = mir.mov_imm 16 : i64
     %33 = mir.func_addr @__destruct_String
-    %31 = mir.call @stdlib.__mm_alloc(%32, %33)
-    mir.store %25, %31, 0 width: qword
+    %41 = mir.mov_imm 1 : i64
+    %42 = mir.call @stdlib.__mm_alloc_needzero(%32, %33, %41)
+    mir.store %25, %42, 0 width: qword
     %34 = mir.mov_imm 1 : i64
-    mir.store %34, %31, 8 width: qword
-    %39 = mir.load %31, 0 width: qword
-    %40 = mir.load %39, 0 width: qword
-    %41 = mir.load %39, 8 width: qword
-    %42 = mir.call @mrt_write_stdout(%40, %41)
-    %45 = mir.call @mm_drop(%31)
+    mir.store %34, %42, 8 width: qword
+    %43 = mir.load %42, 0 width: qword
+    %44 = mir.load %43, 0 width: qword
+    %45 = mir.load %43, 8 width: qword
+    %46 = mir.call @mrt_write_stdout(%44, %45)
+    %49 = mir.call @mm_drop(%42)
     mir.ret %0
   try_0.merge:
-    %46 = mir.call @__mm_decref_maybenull_helper(%17)
+    %50 = mir.call @__mm_decref_maybenull_helper(%17)
     %38 = mir.mov_imm 1 : i64
     mir.ret %38
   }

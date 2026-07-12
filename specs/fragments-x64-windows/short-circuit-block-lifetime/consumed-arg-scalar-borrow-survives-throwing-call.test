@@ -125,6 +125,30 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
+  func @Module.addBlock(rcx: i64, rdx: u64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov eax, 1
+    x64.xor edx, edx
+    x64.mov ecx, 8
+    x64.call stdlib.__mm_alloc_needzero
+    x64.mov r13, r8
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r12, [rbx+0] (8b)
+    x64.mov rcx, r13
+    x64.call stdlib.__mm_incref
+    x64.lea rax, [rip+__layout_Array_Blk]
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call Array.push
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
   func @Module.sumIds(rcx: i64) -> u64 {
   entry:
     x64.prologue stack_size=48
@@ -294,9 +318,10 @@ module {
     x64.prologue stack_size=32
     x64.mov rbx, rcx
     x64.mov r12, rdx
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_Parser]
     x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r13, r8
     x64.mov rcx, r13
     x64.call stdlib.__mm_incref
@@ -545,34 +570,22 @@ module {
     x64.prologue stack_size=48
     x64.mov rbx, rcx
     x64.mov r8, rdx
-    x64.mov r12, [rbx+8] (8b)
-    x64.mov r13, [r8+0] (8b)
-    x64.xor r8d, r8d
-    x64.mov ecx, 8
-    x64.mov rdx, r8
-    x64.call stdlib.__mm_alloc
-    x64.mov r14, r8
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
+    x64.mov rcx, [rbx+8] (8b)
+    x64.mov r12, [r8+0] (8b)
     x64.mov r8d, 101
-    x64.mov [r14+0], r8 (8b)
-    x64.mov r15, [r12+0] (8b)
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_incref
-    x64.lea rax, [rip+__layout_Array_Blk]
-    x64.mov rcx, r15
-    x64.mov rdx, r14
-    x64.call Array.push
+    x64.mov rdx, r8
+    x64.call Module.addBlock
+    x64.mov r13, r8
     x64.mov rcx, [rbx+0] (8b)
-    x64.mov r12, [r14+0] (8b)
+    x64.mov r14, [r13+0] (8b)
     x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, r14
+    x64.mov rcx, r13
     x64.call stdlib.__mm_incref
-    x64.mov [rbx+0], r14 (8b)
+    x64.mov [rbx+0], r13 (8b)
     x64.mov r9d, 1
     x64.xor r8d, r8d
     x64.mov rcx, rbx
-    x64.mov rdx, r14
+    x64.mov rdx, r13
     x64.mov rax, 0
     x64.call Parser.parseExpressionBP
     x64.mov r15, r8
@@ -581,41 +594,25 @@ module {
     x64.test r8, r8
     x64.je try_0.cont
   try_0.err:
-    x64.mov rcx, r14
-    x64.call stdlib.__mm_decref
+    x64.mov rcx, r13
+    x64.call __mm_decref_maybenull_helper
     x64.mov r8, 0
     x64.mov rdx, [rbp+-8]
     x64.epilogue
     x64.ret
   try_0.cont:
-    x64.mov r14, [rbx+8] (8b)
-    x64.xor edx, edx
-    x64.mov ecx, 8
-    x64.call stdlib.__mm_alloc
-    x64.mov rcx, r8
-    x64.mov [rbp+-8], r8
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 102
-    x64.mov r9, [rbp+-8]
-    x64.mov [r9+0], r8 (8b)
-    x64.mov r8, [r14+0] (8b)
-    x64.mov rcx, [rbp+-8]
-    x64.mov r14, r8
-    x64.call stdlib.__mm_incref
-    x64.lea rax, [rip+__layout_Array_Blk]
-    x64.mov rcx, r14
-    x64.mov rdx, [rbp+-8]
-    x64.call Array.push
-    x64.mov r8, [rbp+-8]
-    x64.mov r9, [r8+0] (8b)
-    x64.add r9, 1
-    x64.mov [r8+0], r9 (8b)
+    x64.mov rcx, [rbx+8] (8b)
+    x64.mov edx, 102
+    x64.call Module.addBlock
+    x64.mov r13, r8
+    x64.mov r8, [r13+0] (8b)
+    x64.add r8, 1
+    x64.mov [r13+0], r8 (8b)
     x64.mov rcx, [rbx+0] (8b)
     x64.call __mm_decref_maybenull_helper
-    x64.mov r8, [rbp+-8]
-    x64.mov [rbx+0], r8 (8b)
-    x64.add r12, r13
-    x64.mov r8, r12
+    x64.mov [rbx+0], r13 (8b)
+    x64.add r14, r12
+    x64.mov r8, r14
     x64.add r8, r15
     x64.mov rdx, 0
     x64.epilogue
@@ -623,87 +620,70 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_Module]
     x64.mov ecx, 8
-    x64.xor ebx, ebx
-    x64.lea r12, [rip+__layout_Array_Blk]
-    x64.xor r13d, r13d
-    x64.mov r8d, 8
-    x64.mov r14d, 1
-    x64.call stdlib.__mm_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov [r15+0], rbx (8b)
-    x64.mov rcx, r12
-    x64.call Array.create
-    x64.mov [r15+0], r8 (8b)
-    x64.mov rcx, 8
-    x64.mov rdx, r13
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov rbx, r8
     x64.mov rcx, rbx
     x64.call stdlib.__mm_incref
-    x64.mov [rbx+0], r14 (8b)
-    x64.mov r12, [r15+0] (8b)
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
+    x64.xor r8d, r8d
+    x64.mov [rbx+0], r8 (8b)
+    x64.lea rcx, [rip+__layout_Array_Blk]
+    x64.call Array.create
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov edx, 1
     x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.lea rax, [rip+__layout_Array_Blk]
-    x64.mov rcx, r12
-    x64.mov rdx, rbx
-    x64.call Array.push
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.mov rcx, r15
-    x64.call stdlib.__mm_incref
-    x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, r15
-    x64.mov rdx, rbx
-    x64.call Parser.create
+    x64.call Module.addBlock
     x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.call stdlib.__mm_incref
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call Parser.create
+    x64.mov r13, r8
     x64.mov r9d, 1
     x64.mov eax, 1
-    x64.mov rcx, r12
-    x64.mov rdx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, r12
     x64.call Parser.parseExpressionBP
-    x64.mov rbx, r8
-    x64.mov r13, rdx
-    x64.mov rcx, r12
+    x64.mov r12, r8
+    x64.mov r14, rdx
+    x64.mov rcx, r13
     x64.call __mm_decref_maybenull_helper
-    x64.xor r12d, r12d
-    x64.test r13, r13
+    x64.xor r13d, r13d
+    x64.test r14, r14
     x64.je try_0.merge
   try_0.otherwise:
-    x64.mov rcx, r15
+    x64.mov rcx, rbx
     x64.call stdlib.__mm_decref
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
   try_0.merge:
-    x64.mov rcx, r15
+    x64.mov rcx, rbx
     x64.call Module.sumIds
-    x64.mov r13, r8
-    x64.mov rcx, r15
+    x64.mov r14, r8
+    x64.mov rcx, rbx
     x64.call stdlib.__mm_decref
-    x64.cmp r13, 205
+    x64.cmp r14, 205
     x64.je corrupt_0.after
   corrupt_0:
     x64.mov r8d, 1
     x64.epilogue
     x64.ret
   corrupt_0.after:
-    x64.test rbx, rbx
+    x64.test r12, r12
     x64.jne noResult_0.after
   noResult_0:
     x64.mov r8d, 2
     x64.epilogue
     x64.ret
   noResult_0.after:
-    x64.mov r8, r12
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
   }

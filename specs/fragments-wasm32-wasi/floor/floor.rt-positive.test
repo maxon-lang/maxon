@@ -23,7 +23,7 @@ module {
     %41 = mir.cmp ne, %39, %40
     mir.cond_br %41 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
   inlined_Array.get_1_0:
-    %49 = mir.call @__mm_decref_maybenull_helper(%2)
+    %51 = mir.call @__mm_decref_maybenull_helper(%2)
     %42 = mir.mov_imm 0 : i64
     %43 = mir.mov_imm 1 : i64
     mir.br inline_cont_main_0(%42, %43)
@@ -34,7 +34,7 @@ module {
     %9 = mir.cmp ne, %46, %0
     mir.cond_br %9 [then: try_0.otherwise(), else: try_0.merge(%45)]
   try_0.otherwise:
-    %50 = mir.call @__mm_decref_maybenull_helper(%45)
+    %52 = mir.call @__mm_decref_maybenull_helper(%45)
     %11 = mir.global_addr @__istr_0
     %12 = mir.mov_imm 48 : i64
     %13 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -49,15 +49,16 @@ module {
     mir.store %0, %14, 32 width: qword
     %21 = mir.mov_imm 16 : i64
     %22 = mir.func_addr @__destruct_String
-    %20 = mir.call @stdlib.__mm_alloc(%21, %22)
-    %47 = mir.call @stdlib.__mm_incref(%20)
-    mir.store %14, %20, 0 width: qword
+    %47 = mir.mov_imm 1 : i64
+    %48 = mir.call @stdlib.__mm_alloc_needzero(%21, %22, %47)
+    %49 = mir.call @stdlib.__mm_incref(%48)
+    mir.store %14, %48, 0 width: qword
     %23 = mir.mov_imm 1 : i64
-    mir.store %23, %20, 8 width: qword
-    mir.br try_0.merge(%20)
+    mir.store %23, %48, 8 width: qword
+    mir.br try_0.merge(%48)
   try_0.merge(%35: i64):
     %25, %26 = mir.try_call @stdlib.__float_fromString(%35)
-    %48 = mir.call @__mm_decref_maybenull_helper(%35)
+    %50 = mir.call @__mm_decref_maybenull_helper(%35)
     %28 = mir.cmp ne, %26, %0
     mir.cond_br %28 [then: try_1.otherwise(), else: try_1.merge(%25)]
   try_1.otherwise:
@@ -66,16 +67,16 @@ module {
   try_1.merge(%36: f64):
     %33 = mir.floor.f64 %36
     %34 = mir.fptosi.i64 %33
-    %53 = mir.mov_imm 255 : i64
-    %54 = mir.cmp ugt, %34, %53
-    mir.cond_br %54 [then: __range_panic_0(), else: __range_ok_0()]
+    %55 = mir.mov_imm 255 : i64
+    %56 = mir.cmp ugt, %34, %55
+    mir.cond_br %56 [then: __range_panic_0(), else: __range_ok_0()]
   __rc_edge_9_0:
-    %51 = mir.call @stdlib.__mm_incref(%38)
-    %52 = mir.call @__mm_decref_maybenull_helper(%2)
+    %53 = mir.call @stdlib.__mm_incref(%38)
+    %54 = mir.call @__mm_decref_maybenull_helper(%2)
     mir.br inline_cont_main_0(%38, %44)
   __range_panic_0:
-    %55 = mir.global_addr @__panic_msg_50c7bb9e5329939a
-    %56 = mir.call @mrt_panic(%55)
+    %57 = mir.global_addr @__panic_msg_50c7bb9e5329939a
+    %58 = mir.call @mrt_panic(%57)
   __range_ok_0:
     mir.ret %34
   }

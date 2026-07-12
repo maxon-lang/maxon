@@ -49,18 +49,19 @@ module {
     %14 = mir.param local2 : i64
     %3 = mir.mov_imm 24 : i64
     %5 = mir.func_addr @__destruct_MultiManaged
-    %4 = mir.call @stdlib.__mm_alloc(%3, %5)
-    %15 = mir.call @stdlib.__mm_incref(%4)
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.call @stdlib.__mm_alloc_needzero(%3, %5, %15)
+    %17 = mir.call @stdlib.__mm_incref(%16)
     %6 = mir.mov_imm 0 : i64
-    mir.store %6, %4, 0 width: qword
+    mir.store %6, %16, 0 width: qword
     %7 = mir.mov_imm 0 : i64
-    mir.store %7, %4, 8 width: qword
+    mir.store %7, %16, 8 width: qword
     %8 = mir.mov_imm 0 : i64
-    mir.store %8, %4, 16 width: qword
-    mir.store %12, %4, 0 width: qword
-    mir.store %13, %4, 8 width: qword
-    mir.store %14, %4, 16 width: qword
-    mir.ret %4
+    mir.store %8, %16, 16 width: qword
+    mir.store %12, %16, 0 width: qword
+    mir.store %13, %16, 8 width: qword
+    mir.store %14, %16, 16 width: qword
+    mir.ret %16
   }
   func @mayFail(local0: i1) -> i64 {
   entry:
@@ -94,10 +95,11 @@ module {
     mir.store %1, %21, 32 width: qword
     %28 = mir.mov_imm 16 : i64
     %29 = mir.func_addr @__destruct_String
-    %27 = mir.call @stdlib.__mm_alloc(%28, %29)
-    %47 = mir.call @stdlib.__mm_incref(%27)
-    mir.store %21, %27, 0 width: qword
-    mir.store %3, %27, 8 width: qword
+    %47 = mir.mov_imm 1 : i64
+    %48 = mir.call @stdlib.__mm_alloc_needzero(%28, %29, %47)
+    %51 = mir.call @stdlib.__mm_incref(%48)
+    mir.store %21, %48, 0 width: qword
+    mir.store %3, %48, 8 width: qword
     %31 = mir.global_addr @__istr_1
     %32 = mir.mov_imm 48 : i64
     %33 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -112,11 +114,12 @@ module {
     mir.store %1, %34, 32 width: qword
     %41 = mir.mov_imm 16 : i64
     %42 = mir.func_addr @__destruct_String
-    %40 = mir.call @stdlib.__mm_alloc(%41, %42)
-    %48 = mir.call @stdlib.__mm_incref(%40)
-    mir.store %34, %40, 0 width: qword
-    mir.store %3, %40, 8 width: qword
-    %44 = mir.call @MultiManaged.create(%8, %27, %40)
+    %49 = mir.mov_imm 1 : i64
+    %50 = mir.call @stdlib.__mm_alloc_needzero(%41, %42, %49)
+    %52 = mir.call @stdlib.__mm_incref(%50)
+    mir.store %34, %50, 0 width: qword
+    mir.store %3, %50, 8 width: qword
+    %44 = mir.call @MultiManaged.create(%8, %48, %50)
     mir.error_return %44, %1
   }
   func @main() -> u8 {

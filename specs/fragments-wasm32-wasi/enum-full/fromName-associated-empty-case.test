@@ -37,38 +37,40 @@ module {
     mir.store %0, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    mir.store %5, %11, 0 width: qword
+    %36 = mir.mov_imm 1 : i64
+    %37 = mir.call @stdlib.__mm_alloc_needzero(%12, %13, %36)
+    mir.store %5, %37, 0 width: qword
     %14 = mir.mov_imm 1 : i64
-    mir.store %14, %11, 8 width: qword
-    %15, %16 = mir.try_call @__enum_Container_fromName(%11)
-    %41 = mir.call @mm_drop(%11)
+    mir.store %14, %37, 8 width: qword
+    %15, %16 = mir.try_call @__enum_Container_fromName(%37)
+    %44 = mir.call @mm_drop(%37)
     %18 = mir.cmp ne, %16, %0
-    %42 = mir.call @__mm_decref_maybenull_helper(%16)
+    %45 = mir.call @__mm_decref_maybenull_helper(%16)
     mir.cond_br %18 [then: try_0.otherwise(), else: try_0.merge(%15)]
   try_0.otherwise:
     %20 = mir.mov_imm 99 : i64
-    %36 = mir.mov_imm 16 : i64
-    %37 = mir.mov_imm 0 : i64
-    %38 = mir.mov_imm 1 : i64
-    %39 = mir.call @stdlib.__mm_alloc(%36, %37)
-    %40 = mir.call @stdlib.__mm_incref(%39)
-    mir.store %38, %39, 0 width: qword
-    mir.store %20, %39, 8 width: qword
-    mir.br try_0.merge(%39)
+    %38 = mir.mov_imm 16 : i64
+    %39 = mir.mov_imm 0 : i64
+    %40 = mir.mov_imm 1 : i64
+    %41 = mir.mov_imm 1 : i64
+    %42 = mir.call @stdlib.__mm_alloc_needzero(%38, %39, %41)
+    %43 = mir.call @stdlib.__mm_incref(%42)
+    mir.store %40, %42, 0 width: qword
+    mir.store %20, %42, 8 width: qword
+    mir.br try_0.merge(%42)
   try_0.merge(%35: i64):
     %24 = mir.load %35, 0 width: qword
     %26 = mir.cmp eq, %24, %0
     mir.cond_br %26 [then: check_0.case0(), else: check_0.next0()]
   check_0.case0:
-    %44 = mir.call @__mm_decref_maybenull_helper(%35)
+    %47 = mir.call @__mm_decref_maybenull_helper(%35)
     %27 = mir.mov_imm 1 : i64
     mir.ret %27
   check_0.next0:
     %28 = mir.load %35, 0 width: qword
     %29 = mir.mov_imm 1 : i64
     %30 = mir.cmp eq, %28, %29
-    %43 = mir.call @__mm_decref_maybenull_helper(%35)
+    %46 = mir.call @__mm_decref_maybenull_helper(%35)
     mir.cond_br %30 [then: check_0.case1(), else: check_0.next1()]
   check_0.case1:
     mir.ret %0

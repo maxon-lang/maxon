@@ -16,22 +16,23 @@ module {
     %1 = mir.global_addr @__layout_List_String
     %20 = mir.mov_imm 8 : i64
     %21 = mir.func_addr @__destruct_List
-    %22 = mir.call @stdlib.__mm_alloc(%20, %21)
-    %37 = mir.mov_imm 8 : i64
-    %38 = mir.sub.i64 %22, %37
-    mir.atomic_inc %38
+    %39 = mir.mov_imm 1 : i64
+    %40 = mir.call @stdlib.__mm_alloc_needzero(%20, %21, %39)
+    %41 = mir.mov_imm 8 : i64
+    %42 = mir.sub.i64 %40, %41
+    mir.atomic_inc %42
     %24 = mir.load %1, 24 width: qword
     %25 = mir.mov_imm 1 : i64
     %26 = mir.and.i64 %24, %25
     %27 = mir.call @mrt_managed_list_create(%26)
-    mir.store %27, %22, 0 width: qword
+    mir.store %27, %40, 0 width: qword
     %28 = mir.load %1, 24 width: qword
     %29 = mir.mov_imm 1 : i64
     %30 = mir.and.i64 %28, %29
     %31 = mir.call @mrt_managed_list_create(%30)
-    %32 = mir.load %22, 0 width: qword
+    %32 = mir.load %40, 0 width: qword
     %33 = mir.call @__mm_decref_maybenull_helper(%32)
-    mir.store %31, %22, 0 width: qword
+    mir.store %31, %40, 0 width: qword
     %4 = mir.global_addr @__istr_0
     %5 = mir.mov_imm 48 : i64
     %6 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -49,15 +50,16 @@ module {
     mir.store %12, %7, 32 width: qword
     %14 = mir.mov_imm 16 : i64
     %15 = mir.func_addr @__destruct_String
-    %13 = mir.call @stdlib.__mm_alloc(%14, %15)
-    %39 = mir.call @stdlib.__mm_incref(%13)
-    mir.store %7, %13, 0 width: qword
+    %34 = mir.mov_imm 1 : i64
+    %35 = mir.call @stdlib.__mm_alloc_needzero(%14, %15, %34)
+    %43 = mir.call @stdlib.__mm_incref(%35)
+    mir.store %7, %35, 0 width: qword
     %16 = mir.mov_imm 1 : i64
-    mir.store %16, %13, 8 width: qword
-    %34 = mir.load %22, 0 width: qword
-    %35 = mir.call @mrt_managed_list_insert_last_value(%34, %13)
-    %36 = mir.call @__mm_decref_maybenull_helper(%35)
-    %40 = mir.call @__mm_decref_maybenull_helper(%22)
+    mir.store %16, %35, 8 width: qword
+    %36 = mir.load %40, 0 width: qword
+    %37 = mir.call @mrt_managed_list_insert_last_value(%36, %35)
+    %38 = mir.call @__mm_decref_maybenull_helper(%37)
+    %44 = mir.call @__mm_decref_maybenull_helper(%40)
     %19 = mir.mov_imm 0 : i64
     mir.ret %19
   }

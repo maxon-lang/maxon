@@ -109,9 +109,10 @@ module {
     x64.cmp r9, 2
     x64.jne k_0.merge
   k_0.case2:
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_Ty]
     x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r12, r8
     x64.mov rcx, r12
     x64.call stdlib.__mm_incref
@@ -164,19 +165,7 @@ module {
     x64.test rcx, rcx
     x64.jne z_0.after
   z_0:
-    x64.lea rdx, [rip+__destruct_Expr]
-    x64.mov ecx, 24
-    x64.call stdlib.__mm_alloc
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 2
-    x64.mov [rbx+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [rbx+8], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [rbx+16], r8 (8b)
-    x64.mov r8, rbx
+    x64.call __construct_Expr_unresolved
     x64.epilogue
     x64.ret
   z_0.after:
@@ -196,9 +185,10 @@ module {
     x64.mov [rbx+24], r8 (8b)
     x64.xor r8d, r8d
     x64.mov [rbx+32], r8 (8b)
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_String]
     x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r12, r8
     x64.mov [r12+0], rbx (8b)
     x64.mov r8d, 1
@@ -212,27 +202,18 @@ module {
     x64.mov rbx, r8
     x64.mov rcx, r12
     x64.call mm_drop
+    x64.mov eax, 1
     x64.lea rdx, [rip+__destruct_Ty]
     x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc
+    x64.call stdlib.__mm_alloc_needzero
     x64.mov r12, r8
     x64.mov rcx, r12
     x64.call stdlib.__mm_incref
     x64.xor r8d, r8d
     x64.mov [r12+0], r8 (8b)
     x64.mov [r12+8], rbx (8b)
-    x64.lea rdx, [rip+__destruct_Expr]
-    x64.mov ecx, 24
-    x64.call stdlib.__mm_alloc
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.xor r8d, r8d
-    x64.mov [rbx+0], r8 (8b)
-    x64.mov [rbx+8], r12 (8b)
-    x64.xor r8d, r8d
-    x64.mov [rbx+16], r8 (8b)
-    x64.mov r8, rbx
+    x64.mov rcx, r12
+    x64.call __construct_Expr_direct
     x64.epilogue
     x64.ret
   }
@@ -240,22 +221,11 @@ module {
   entry:
     x64.prologue stack_size=96
     x64.mov [rbp+-32], rcx
-    x64.lea rdx, [rip+__destruct_Expr]
-    x64.mov ecx, 24
-    x64.call stdlib.__mm_alloc
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 2
-    x64.mov [rbx+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [rbx+8], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [rbx+16], r8 (8b)
+    x64.call __construct_Expr_unresolved
     x64.mov ecx, 1
-    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov rbx, r9
     x64.mov r12, rcx
-    x64.xchg r8, rbx
   loop_0.header:
     x64.cmp r12, [rbp+-32]
     x64.jg loop_0.exit
@@ -271,7 +241,7 @@ module {
   loop_0.step:
     x64.mov rcx, r12
     x64.add rcx, 1
-    x64.mov r8, r13
+    x64.mov r8, r14
     x64.mov r12, rcx
     x64.jmp loop_0.header
   loop_0.exit:
@@ -289,7 +259,8 @@ module {
     x64.jne inlined_exprType_3_0
     x64.jmp inlined_exprType_2_0
   inlined_exprType_1_0:
-    x64.jmp inline_cont_walk_4
+    x64.mov r13, rcx
+    x64.jmp inline_cont_walk_7
   inlined_exprType_2_0:
     x64.mov r8, [rbp+-24]
     x64.mov r13, [r8+8] (8b)
@@ -297,7 +268,7 @@ module {
     x64.call stdlib.__mm_incref
     x64.mov rcx, [rbp+-24]
     x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r13
+    x64.mov rcx, r13
     x64.jmp inlined_exprType_1_0
   inlined_exprType_3_0:
     x64.mov r8, [rbp+-24]
@@ -311,7 +282,7 @@ module {
     x64.call stdlib.__mm_incref
     x64.mov rcx, [rbp+-24]
     x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r13
+    x64.mov rcx, r13
     x64.jmp inlined_exprType_1_0
   inlined_exprType_5_0:
     x64.mov r8, [rbp+-24]
@@ -322,29 +293,34 @@ module {
     x64.jne __phi_trampoline_12_0
   inlined_exprType_6_0:
     x64.mov r8d, 1
+    x64.mov r9d, 1
     x64.lea r13, [rip+__destruct_Ty]
-    x64.mov r8d, 16
-  inlined_stdlib.__mm_alloc_0_0:
-    x64.xor r9d, r9d
-    x64.cmp r8, 1
-    x64.jge inlined_stdlib.__mm_alloc_2_0
-  inlined_stdlib.__mm_alloc_1_0:
+    x64.mov r9d, 16
+  inlined_stdlib.__mm_alloc_needzero_0_0:
+    x64.xor esi, esi
+    x64.cmp r9, 1
+    x64.jge inlined_stdlib.__mm_alloc_needzero_2_0
+  inlined_stdlib.__mm_alloc_needzero_1_0:
+    x64.mov r9d, 1
+  inlined_stdlib.__mm_alloc_needzero_2_0:
+    x64.mov [rbp+-40], r9
+    x64.lea r9, [rip+__mm_alloc_count]
+    x64.lock inc qword ptr [r9]
+    x64.test r8, r8
+    x64.je inlined_stdlib.__mm_alloc_needzero_4_0
+  inlined_stdlib.__mm_alloc_needzero_3_0:
     x64.mov r8d, 1
-  inlined_stdlib.__mm_alloc_2_0:
-    x64.mov [rbp+-40], r8
-    x64.lea r8, [rip+__mm_alloc_count]
-    x64.lock inc qword ptr [r8]
     x64.mov r8, [rbp+-40]
     x64.mov [rbp+-48], r8
     x64.mov r8, [rbp+-48]
     x64.add r8, 32
     x64.mov [rbp+-48], r8
-  inlined_stdlib.__slab_alloc_0_0:
+  inlined_stdlib.__slab_alloc_needzero_0_0:
     x64.xor r8d, r8d
     x64.mov r8, [rbp+-48]
     x64.cmp r8, 32768
     x64.jle inlined_stdlib.__slab_class_index_for_0_0
-  inlined_stdlib.__slab_alloc_1_0:
+  inlined_stdlib.__slab_alloc_needzero_1_0:
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_acquire
     x64.mov rcx, [rbp+-48]
@@ -382,10 +358,10 @@ module {
     x64.add rcx, 1
     x64.jmp inlined_stdlib.__slab_class_index_for_3_0
   inline_cont_walk_0:
-    x64.mov r8, -1
+    x64.call stdlib.__slab_current_p_id
     x64.test r8, r8
     x64.mov r8, 0
-    x64.jge inlined_stdlib.__slab_alloc_4_0
+    x64.jge inlined_stdlib.__slab_alloc_needzero_4_0
   inlined_stdlib.__slab_proc_at_0_0:
     x64.mov r8, 0
     x64.test r8, r8
@@ -410,23 +386,124 @@ module {
   inline_cont_walk_1:
     x64.test r8, r8
     x64.setne r8
-  inlined_stdlib.__slab_alloc_4_0:
+  inlined_stdlib.__slab_alloc_needzero_4_0:
     x64.test r8, r8
-    x64.je inlined_stdlib.__slab_alloc_6_0
-  inlined_stdlib.__slab_alloc_5_0:
+    x64.je inlined_stdlib.__slab_alloc_needzero_6_0
+  inlined_stdlib.__slab_alloc_needzero_5_0:
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_acquire
     x64.mov rcx, r14
+    x64.mov rdx, 1
     x64.call stdlib.__slab_alloc_class
     x64.mov r14, r8
     x64.lea rcx, [rip+__slab_lock]
     x64.call __rt_oslock_release
     x64.jmp inline_cont_walk_2
-  inlined_stdlib.__slab_alloc_6_0:
+  inlined_stdlib.__slab_alloc_needzero_6_0:
     x64.mov rcx, r14
+    x64.mov rdx, 1
     x64.call stdlib.__slab_alloc_class
     x64.mov r14, r8
   inline_cont_walk_2:
+    x64.jmp inlined_stdlib.__mm_alloc_needzero_5_0
+  inlined_stdlib.__mm_alloc_needzero_4_0:
+    x64.xor r8d, r8d
+    x64.mov r8, [rbp+-40]
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-48]
+    x64.add r8, 32
+    x64.mov [rbp+-48], r8
+  inlined_stdlib.__slab_alloc_needzero_0_1:
+    x64.xor r8d, r8d
+    x64.mov r8, [rbp+-48]
+    x64.cmp r8, 32768
+    x64.jle inlined_stdlib.__slab_class_index_for_0_1
+  inlined_stdlib.__slab_alloc_needzero_1_1:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, [rbp+-48]
+    x64.call stdlib.__slab_os_direct_alloc
+    x64.mov r14, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_walk_5
+  inlined_stdlib.__slab_class_index_for_0_1:
+    x64.xor r8d, r8d
+    x64.xor ecx, ecx
+    x64.mov r14, rcx
+    x64.mov r15, r8
+  inlined_stdlib.__slab_class_index_for_1_1:
+    x64.cmp r15, 18
+    x64.jge inlined_stdlib.__slab_class_index_for_4_1
+  inlined_stdlib.__slab_class_index_for_2_1:
+    x64.mov rcx, r14
+    x64.call stdlib.__slab_class_size
+    x64.cmp r8, [rbp+-48]
+    x64.jl inlined_stdlib.__slab_class_index_for_6_1
+    x64.jmp inline_cont_walk_3
+  inlined_stdlib.__slab_class_index_for_3_1:
+    x64.add r15, 1
+    x64.mov r14, rcx
+    x64.jmp inlined_stdlib.__slab_class_index_for_1_1
+  inlined_stdlib.__slab_class_index_for_4_1:
+    x64.mov r8d, 136
+    x64.xor r14d, r14d
+    x64.mov [rbp-8], r8
+    x64.call_import slot_0
+    x64.jmp inline_cont_walk_3
+  inlined_stdlib.__slab_class_index_for_6_1:
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.jmp inlined_stdlib.__slab_class_index_for_3_1
+  inline_cont_walk_3:
+    x64.call stdlib.__slab_current_p_id
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.jge inlined_stdlib.__slab_alloc_needzero_4_1
+  inlined_stdlib.__slab_proc_at_0_1:
+    x64.mov r8, 0
+    x64.test r8, r8
+    x64.jge inlined_stdlib.__slab_proc_at_2_1
+  inlined_stdlib.__slab_proc_at_1_1:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_walk_4
+  inlined_stdlib.__slab_proc_at_2_1:
+    x64.lea r8, [rip+__sched_procs]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne inlined_stdlib.__slab_proc_at_4_1
+  inlined_stdlib.__slab_proc_at_3_1:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_walk_4
+  inlined_stdlib.__slab_proc_at_4_1:
+    x64.mov ecx, 3
+    x64.mov r8, 0
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
+    x64.mov r8, [r9+0] (8b)
+  inline_cont_walk_4:
+    x64.test r8, r8
+    x64.setne r8
+  inlined_stdlib.__slab_alloc_needzero_4_1:
+    x64.test r8, r8
+    x64.je inlined_stdlib.__slab_alloc_needzero_6_1
+  inlined_stdlib.__slab_alloc_needzero_5_1:
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_acquire
+    x64.mov rcx, r14
+    x64.mov rdx, 0
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r14, r8
+    x64.lea rcx, [rip+__slab_lock]
+    x64.call __rt_oslock_release
+    x64.jmp inline_cont_walk_5
+  inlined_stdlib.__slab_alloc_needzero_6_1:
+    x64.mov rcx, r14
+    x64.mov rdx, 0
+    x64.call stdlib.__slab_alloc_class
+    x64.mov r14, r8
+  inline_cont_walk_5:
+  inlined_stdlib.__mm_alloc_needzero_5_0:
     x64.mov r8, 0
     x64.mov [r14+0], r8 (8b)
     x64.mov r8, r14
@@ -443,153 +520,75 @@ module {
     x64.mov rcx, r14
     x64.add rcx, 32
     x64.mov r13, rcx
-  inline_cont_walk_3:
+  inline_cont_walk_6:
     x64.call stdlib.__mm_incref
     x64.mov r8, 1
     x64.mov [r13+0], r8 (8b)
     x64.xor r8d, r8d
     x64.mov [r13+8], r8 (8b)
-    x64.mov r8, r13
+    x64.mov rcx, r13
     x64.jmp inlined_exprType_1_0
-  inline_cont_walk_4:
-    x64.mov [rbp+-40], r8
-    x64.mov rcx, [rbp+-40]
+  inline_cont_walk_7:
+    x64.mov rcx, r13
     x64.call tyLen
-    x64.xor r9d, r9d
-    x64.lea r9, [rip+__destruct_Expr]
-    x64.mov [rbp+-48], r9
-    x64.mov r9d, 24
+    x64.mov r9d, 1
+    x64.xor esi, esi
+    x64.lea r14, [rip+__destruct_Expr]
+    x64.mov esi, 24
     x64.add rbx, r8
-  inlined_stdlib.__mm_alloc_0_1:
+  inlined_stdlib.__mm_alloc_needzero_0_1:
     x64.xor r8d, r8d
-    x64.cmp r9, 1
-    x64.jge inlined_stdlib.__mm_alloc_2_1
-  inlined_stdlib.__mm_alloc_1_1:
+    x64.cmp rsi, 1
+    x64.jge __phi_trampoline_38_0
+  inlined_stdlib.__mm_alloc_needzero_1_1:
     x64.mov r8d, 1
-    x64.mov r9, r8
-  inlined_stdlib.__mm_alloc_2_1:
-    x64.mov [rbp+-56], r9
+    x64.mov r15, r8
+  inlined_stdlib.__mm_alloc_needzero_2_1:
     x64.lea r8, [rip+__mm_alloc_count]
     x64.lock inc qword ptr [r8]
-    x64.mov r13, [rbp+-56]
-    x64.add r13, 32
-  inlined_stdlib.__slab_alloc_0_1:
-    x64.xor r8d, r8d
-    x64.cmp r13, 32768
-    x64.jle inlined_stdlib.__slab_class_index_for_0_1
-  inlined_stdlib.__slab_alloc_1_1:
-    x64.lea rcx, [rip+__slab_lock]
-    x64.call __rt_oslock_acquire
-    x64.mov rcx, r13
-    x64.call stdlib.__slab_os_direct_alloc
-    x64.mov r13, r8
-    x64.lea rcx, [rip+__slab_lock]
-    x64.call __rt_oslock_release
-    x64.jmp inline_cont_walk_7
-  inlined_stdlib.__slab_class_index_for_0_1:
-    x64.xor r8d, r8d
-    x64.xor ecx, ecx
-    x64.mov r14, rcx
-    x64.mov r15, r8
-  inlined_stdlib.__slab_class_index_for_1_1:
-    x64.cmp r15, 18
-    x64.jge inlined_stdlib.__slab_class_index_for_4_1
-  inlined_stdlib.__slab_class_index_for_2_1:
-    x64.mov rcx, r14
-    x64.call stdlib.__slab_class_size
-    x64.cmp r8, r13
-    x64.jl inlined_stdlib.__slab_class_index_for_6_1
-    x64.mov r13, r14
-    x64.jmp inline_cont_walk_5
-  inlined_stdlib.__slab_class_index_for_3_1:
-    x64.add r15, 1
-    x64.mov r14, rcx
-    x64.jmp inlined_stdlib.__slab_class_index_for_1_1
-  inlined_stdlib.__slab_class_index_for_4_1:
-    x64.mov r8d, 136
-    x64.xor r13d, r13d
-    x64.mov [rbp-8], r8
-    x64.call_import slot_0
-    x64.jmp inline_cont_walk_5
-  inlined_stdlib.__slab_class_index_for_6_1:
-    x64.mov rcx, r14
-    x64.add rcx, 1
-    x64.jmp inlined_stdlib.__slab_class_index_for_3_1
-  inline_cont_walk_5:
-    x64.call stdlib.__slab_current_p_id
-    x64.test r8, r8
-    x64.mov r8, 0
-    x64.jge inlined_stdlib.__slab_alloc_4_1
-  inlined_stdlib.__slab_proc_at_0_1:
-    x64.mov r8, 0
-    x64.test r8, r8
-    x64.jge inlined_stdlib.__slab_proc_at_2_1
-  inlined_stdlib.__slab_proc_at_1_1:
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_walk_6
-  inlined_stdlib.__slab_proc_at_2_1:
-    x64.lea r8, [rip+__sched_procs]
-    x64.mov r9, [r8+0] (8b)
     x64.test r9, r9
-    x64.jne inlined_stdlib.__slab_proc_at_4_1
-  inlined_stdlib.__slab_proc_at_3_1:
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_walk_6
-  inlined_stdlib.__slab_proc_at_4_1:
-    x64.mov ecx, 3
-    x64.mov r8, 0
-    x64.shl r8, r8, rcx
-    x64.add r9, r8
-    x64.mov r8, [r9+0] (8b)
-  inline_cont_walk_6:
-    x64.test r8, r8
-    x64.setne r8
-  inlined_stdlib.__slab_alloc_4_1:
-    x64.test r8, r8
-    x64.je inlined_stdlib.__slab_alloc_6_1
-  inlined_stdlib.__slab_alloc_5_1:
-    x64.lea rcx, [rip+__slab_lock]
-    x64.call __rt_oslock_acquire
-    x64.mov rcx, r13
-    x64.call stdlib.__slab_alloc_class
-    x64.mov r13, r8
-    x64.lea rcx, [rip+__slab_lock]
-    x64.call __rt_oslock_release
-    x64.jmp inline_cont_walk_7
-  inlined_stdlib.__slab_alloc_6_1:
-    x64.mov rcx, r13
-    x64.call stdlib.__slab_alloc_class
-    x64.mov r13, r8
-  inline_cont_walk_7:
-    x64.mov r8, 0
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r8, r13
-    x64.add r8, 8
-    x64.mov r9, [rbp+-48]
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r8, r13
-    x64.add r8, 16
-    x64.mov r9, [rbp+-56]
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r8, r13
-    x64.add r8, 24
+    x64.je inlined_stdlib.__mm_alloc_needzero_4_1
+  inlined_stdlib.__mm_alloc_needzero_3_1:
+    x64.mov edx, 1
+    x64.mov rcx, r15
+    x64.add rcx, 32
+    x64.call stdlib.__slab_alloc_needzero
+    x64.jmp inlined_stdlib.__mm_alloc_needzero_5_1
+  inlined_stdlib.__mm_alloc_needzero_4_1:
+    x64.xor edx, edx
+    x64.mov rcx, r15
+    x64.add rcx, 32
+    x64.call stdlib.__slab_alloc_needzero
+  inlined_stdlib.__mm_alloc_needzero_5_1:
     x64.mov r9, 0
     x64.mov [r8+0], r9 (8b)
-    x64.mov rcx, r13
+    x64.mov r9, r8
+    x64.add r9, 8
+    x64.mov [r9+0], r14 (8b)
+    x64.mov r9, r8
+    x64.add r9, 16
+    x64.mov [r9+0], r15 (8b)
+    x64.mov r9, r8
+    x64.add r9, 24
+    x64.mov rsi, 0
+    x64.mov [r9+0], rsi (8b)
+    x64.mov rcx, r8
     x64.add rcx, 32
-    x64.mov r13, rcx
+    x64.mov r14, rcx
   inline_cont_walk_8:
     x64.call stdlib.__mm_incref
     x64.mov r8, 0
-    x64.mov [r13+0], r8 (8b)
-    x64.mov r8, [rbp+-40]
-    x64.mov [r13+8], r8 (8b)
+    x64.mov [r14+0], r8 (8b)
+    x64.mov [r14+8], r13 (8b)
     x64.xor r8d, r8d
-    x64.mov [r13+16], r8 (8b)
+    x64.mov [r14+16], r8 (8b)
     x64.jmp loop_0.step
   __phi_trampoline_12_0:
-    x64.mov r8, r13
+    x64.mov rcx, r13
     x64.jmp inlined_exprType_1_0
+  __phi_trampoline_38_0:
+    x64.mov r15, rsi
+    x64.jmp inlined_stdlib.__mm_alloc_needzero_2_1
   }
   func @main() -> u32 {
   entry:

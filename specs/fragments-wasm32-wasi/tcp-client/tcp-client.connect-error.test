@@ -32,15 +32,16 @@ module {
     mir.store %0, %4, 32 width: qword
     %11 = mir.mov_imm 16 : i64
     %12 = mir.func_addr @__destruct_String
-    %10 = mir.call @stdlib.__mm_alloc(%11, %12)
-    mir.store %4, %10, 0 width: qword
-    mir.store %8, %10, 8 width: qword
-    %15, %16 = mir.try_call @TcpClient.connect(%10, %8)
-    %25 = mir.call @mm_drop(%10)
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.call @stdlib.__mm_alloc_needzero(%11, %12, %25)
+    mir.store %4, %26, 0 width: qword
+    mir.store %8, %26, 8 width: qword
+    %15, %16 = mir.try_call @TcpClient.connect(%26, %8)
+    %27 = mir.call @mm_drop(%26)
     %18 = mir.cmp eq, %16, %0
     mir.cond_br %18 [then: ok_0(), else: err_0()]
   ok_0:
-    %26 = mir.call @__mm_decref_maybenull_helper(%15)
+    %28 = mir.call @__mm_decref_maybenull_helper(%15)
     mir.ret %8
   err_0:
     %21 = mir.sub.i64 %16, %8

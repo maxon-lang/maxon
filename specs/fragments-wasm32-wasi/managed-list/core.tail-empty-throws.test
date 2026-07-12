@@ -24,7 +24,7 @@ module {
     %0 = mir.mov_imm 0 : i64
     %2 = mir.call @mrt_managed_list_create(%0)
     %4, %5 = mir.try_call @mrt_managed_list_tail(%2)
-    %27 = mir.call @__mm_decref_maybenull_helper(%2)
+    %29 = mir.call @__mm_decref_maybenull_helper(%2)
     %7 = mir.cmp eq, %5, %0
     mir.cond_br %7 [then: try_0(), else: err_0()]
   try_0:
@@ -46,15 +46,16 @@ module {
     mir.store %0, %12, 32 width: qword
     %19 = mir.mov_imm 16 : i64
     %20 = mir.func_addr @__destruct_String
-    %18 = mir.call @stdlib.__mm_alloc(%19, %20)
-    mir.store %12, %18, 0 width: qword
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.call @stdlib.__mm_alloc_needzero(%19, %20, %23)
+    mir.store %12, %24, 0 width: qword
     %21 = mir.mov_imm 1 : i64
-    mir.store %21, %18, 8 width: qword
-    %23 = mir.load %18, 0 width: qword
-    %24 = mir.load %23, 0 width: qword
-    %25 = mir.load %23, 8 width: qword
-    %26 = mir.call @mrt_write_stdout(%24, %25)
-    %28 = mir.call @mm_drop(%18)
+    mir.store %21, %24, 8 width: qword
+    %25 = mir.load %24, 0 width: qword
+    %26 = mir.load %25, 0 width: qword
+    %27 = mir.load %25, 8 width: qword
+    %28 = mir.call @mrt_write_stdout(%26, %27)
+    %30 = mir.call @mm_drop(%24)
     mir.ret %0
   }
 }

@@ -50,15 +50,16 @@ module {
     mir.store %24, %21, 32 width: qword
     %26 = mir.mov_imm 16 : i64
     %27 = mir.func_addr @__destruct_String
-    %25 = mir.call @stdlib.__mm_alloc(%26, %27)
-    mir.store %21, %25, 0 width: qword
+    %32 = mir.mov_imm 1 : i64
+    %33 = mir.call @stdlib.__mm_alloc_needzero(%26, %27, %32)
+    mir.store %21, %33, 0 width: qword
     %28 = mir.mov_imm 0 : i64
-    mir.store %28, %25, 8 width: qword
-    %32 = mir.load %25, 0 width: qword
-    %33 = mir.load %32, 0 width: qword
-    %34 = mir.load %32, 8 width: qword
-    %35 = mir.call @mrt_write_stdout(%33, %34)
-    %36 = mir.call @mm_drop(%25)
+    mir.store %28, %33, 8 width: qword
+    %34 = mir.load %33, 0 width: qword
+    %35 = mir.load %34, 0 width: qword
+    %36 = mir.load %34, 8 width: qword
+    %37 = mir.call @mrt_write_stdout(%35, %36)
+    %38 = mir.call @mm_drop(%33)
     %30 = mir.mov_imm 0 : i64
     mir.ret %30
   }
@@ -81,18 +82,19 @@ module {
     mir.store %8, %3, 32 width: qword
     %10 = mir.mov_imm 16 : i64
     %11 = mir.func_addr @__destruct_String
-    %9 = mir.call @stdlib.__mm_alloc(%10, %11)
-    mir.store %3, %9, 0 width: qword
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.call @stdlib.__mm_alloc_needzero(%10, %11, %14)
+    mir.store %3, %15, 0 width: qword
     %12 = mir.mov_imm 1 : i64
-    mir.store %12, %9, 8 width: qword
-    %13 = mir.call @greet(%9)
-    %14 = mir.call @mm_drop(%9)
-    %15 = mir.mov_imm 255 : i64
-    %16 = mir.cmp ugt, %13, %15
-    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+    mir.store %12, %15, 8 width: qword
+    %13 = mir.call @greet(%15)
+    %16 = mir.call @mm_drop(%15)
+    %17 = mir.mov_imm 255 : i64
+    %18 = mir.cmp ugt, %13, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %17 = mir.global_addr @__panic_msg_7b4a8831a79aebe9
-    %18 = mir.call @mrt_panic(%17)
+    %19 = mir.global_addr @__panic_msg_7b4a8831a79aebe9
+    %20 = mir.call @mrt_panic(%19)
   __range_ok_0:
     mir.ret %13
   }

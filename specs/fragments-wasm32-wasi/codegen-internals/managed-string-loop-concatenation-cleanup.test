@@ -31,9 +31,10 @@ module {
     mir.store %0, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    mir.store %5, %11, 0 width: qword
-    mir.store %9, %11, 8 width: qword
+    %41 = mir.mov_imm 1 : i64
+    %42 = mir.call @stdlib.__mm_alloc_needzero(%12, %13, %41)
+    mir.store %5, %42, 0 width: qword
+    mir.store %9, %42, 8 width: qword
     %15 = mir.global_addr @__istr_1
     %16 = mir.mov_imm 48 : i64
     %17 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -47,39 +48,40 @@ module {
     mir.store %0, %18, 32 width: qword
     %25 = mir.mov_imm 16 : i64
     %26 = mir.func_addr @__destruct_String
-    %24 = mir.call @stdlib.__mm_alloc(%25, %26)
-    mir.store %18, %24, 0 width: qword
-    mir.store %9, %24, 8 width: qword
+    %43 = mir.mov_imm 1 : i64
+    %44 = mir.call @stdlib.__mm_alloc_needzero(%25, %26, %43)
+    mir.store %18, %44, 0 width: qword
+    mir.store %9, %44, 8 width: qword
     mir.br loop_0.header(%0)
   loop_0.header(%40: i64):
     %30 = mir.mov_imm 5 : i64
     %31 = mir.cmp lt, %40, %30
     mir.cond_br %31 [then: inlined_String.append_0_0(), else: loop_0.exit()]
   inlined_String.append_0_0:
-    %41 = mir.load %11, 0 width: qword
-    %42 = mir.load %24, 0 width: qword
-    %43 = mir.call @stdlib.__managed_mem_append(%41, %42)
-    %44 = mir.load %24, 8 width: byte signed
-    %45 = mir.mov_imm 1 : i64
-    %46 = mir.xor.i64 %44, %45
-    mir.cond_br %46 [then: inlined_String.append_1_0(), else: inline_cont_main_0()]
+    %45 = mir.load %42, 0 width: qword
+    %46 = mir.load %44, 0 width: qword
+    %47 = mir.call @stdlib.__managed_mem_append(%45, %46)
+    %48 = mir.load %44, 8 width: byte signed
+    %49 = mir.mov_imm 1 : i64
+    %50 = mir.xor.i64 %48, %49
+    mir.cond_br %50 [then: inlined_String.append_1_0(), else: inline_cont_main_0()]
   inlined_String.append_1_0:
-    %47 = mir.mov_imm 0 : i64
-    mir.store %47, %11, 8 width: byte
+    %51 = mir.mov_imm 0 : i64
+    mir.store %51, %42, 8 width: byte
     mir.br inline_cont_main_0()
   inline_cont_main_0:
     %37 = mir.add.i64 %40, %9
     mir.br loop_0.header(%37)
   loop_0.exit:
-    %49 = mir.call @mm_drop(%24)
-    %39 = mir.call @String.byteLength(%11)
-    %48 = mir.call @mm_drop(%11)
-    %50 = mir.mov_imm 255 : i64
-    %51 = mir.cmp ugt, %39, %50
-    mir.cond_br %51 [then: __range_panic_0(), else: __range_ok_0()]
+    %53 = mir.call @mm_drop(%44)
+    %39 = mir.call @String.byteLength(%42)
+    %52 = mir.call @mm_drop(%42)
+    %54 = mir.mov_imm 255 : i64
+    %55 = mir.cmp ugt, %39, %54
+    mir.cond_br %55 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %52 = mir.global_addr @__panic_msg_de0d98da4a19a6df
-    %53 = mir.call @mrt_panic(%52)
+    %56 = mir.global_addr @__panic_msg_de0d98da4a19a6df
+    %57 = mir.call @mrt_panic(%56)
   __range_ok_0:
     mir.ret %39
   }

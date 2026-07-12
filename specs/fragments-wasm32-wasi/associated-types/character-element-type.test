@@ -51,38 +51,40 @@ module {
     mir.store %13, %8, 32 width: qword
     %15 = mir.mov_imm 8 : i64
     %16 = mir.func_addr @__destruct_Character
-    %14 = mir.call @stdlib.__mm_alloc(%15, %16)
-    %43 = mir.call @stdlib.__mm_incref(%14)
-    mir.store %8, %14, 0 width: qword
-    %33 = mir.mov_imm 8 : i64
-    %34 = mir.func_addr @__destruct_SingleChar
-    %35 = mir.call @stdlib.__mm_alloc(%33, %34)
-    %36 = mir.mov_imm 0 : i64
-    mir.store %36, %35, 0 width: qword
-    mir.store %14, %35, 0 width: qword
-    %37 = mir.load %35, 0 width: qword
-    %38 = mir.load %37, 0 width: qword
-    %41 = mir.mov_imm 8 : i64
-    %42 = mir.sub.i64 %38, %41
-    mir.atomic_inc %42
-    %40 = mir.call @CodepointView.create(%38)
-    %44 = mir.call @mm_drop(%35)
-    %22, %23 = mir.try_call @CodepointView.createIterator(%40)
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.call @stdlib.__mm_alloc_needzero(%15, %16, %33)
+    %46 = mir.call @stdlib.__mm_incref(%34)
+    mir.store %8, %34, 0 width: qword
+    %35 = mir.mov_imm 8 : i64
+    %36 = mir.func_addr @__destruct_SingleChar
+    %37 = mir.mov_imm 1 : i64
+    %38 = mir.call @stdlib.__mm_alloc_needzero(%35, %36, %37)
+    %39 = mir.mov_imm 0 : i64
+    mir.store %39, %38, 0 width: qword
+    mir.store %34, %38, 0 width: qword
+    %40 = mir.load %38, 0 width: qword
+    %41 = mir.load %40, 0 width: qword
+    %44 = mir.mov_imm 8 : i64
+    %45 = mir.sub.i64 %41, %44
+    mir.atomic_inc %45
+    %43 = mir.call @CodepointView.create(%41)
+    %47 = mir.call @mm_drop(%38)
+    %22, %23 = mir.try_call @CodepointView.createIterator(%43)
     %25 = mir.cmp ne, %23, %0
     mir.cond_br %25 [then: loop_0.exit(), else: loop_0()]
   loop_0:
     %32 = mir.call @CodepointIterator.current(%22)
-    %46 = mir.call @__mm_decref_maybenull_helper(%40)
-    %45 = mir.call @__mm_decref_maybenull_helper(%22)
-    %48 = mir.mov_imm 255 : i64
-    %49 = mir.cmp ugt, %32, %48
-    mir.cond_br %49 [then: __range_panic_0(), else: __range_ok_0()]
+    %49 = mir.call @__mm_decref_maybenull_helper(%43)
+    %48 = mir.call @__mm_decref_maybenull_helper(%22)
+    %51 = mir.mov_imm 255 : i64
+    %52 = mir.cmp ugt, %32, %51
+    mir.cond_br %52 [then: __range_panic_0(), else: __range_ok_0()]
   loop_0.exit:
-    %47 = mir.call @__mm_decref_maybenull_helper(%40)
+    %50 = mir.call @__mm_decref_maybenull_helper(%43)
     mir.ret %0
   __range_panic_0:
-    %50 = mir.global_addr @__panic_msg_3281642b1a77bc65
-    %51 = mir.call @mrt_panic(%50)
+    %53 = mir.global_addr @__panic_msg_3281642b1a77bc65
+    %54 = mir.call @mrt_panic(%53)
   __range_ok_0:
     mir.ret %32
   }

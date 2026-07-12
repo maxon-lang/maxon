@@ -15,22 +15,23 @@ module {
     %3 = mir.mov_imm 39 : i64
     %4 = mir.mov_imm 24 : i64
     %6 = mir.mov_imm 0 : i64
-    %5 = mir.call @stdlib.__mm_alloc(%4, %6)
-    mir.store %1, %5, 0 width: qword
-    mir.store %2, %5, 8 width: qword
-    mir.store %3, %5, 16 width: qword
-    %8 = mir.load %5, 0 width: qword
-    %10 = mir.load %5, 8 width: qword
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.call @stdlib.__mm_alloc_needzero(%4, %6, %15)
+    mir.store %1, %16, 0 width: qword
+    mir.store %2, %16, 8 width: qword
+    mir.store %3, %16, 16 width: qword
+    %8 = mir.load %16, 0 width: qword
+    %10 = mir.load %16, 8 width: qword
     %11 = mir.add.i64 %8, %10
-    %13 = mir.load %5, 16 width: qword
+    %13 = mir.load %16, 16 width: qword
     %14 = mir.add.i64 %11, %13
-    %15 = mir.call @mm_drop(%5)
-    %16 = mir.mov_imm 255 : i64
-    %17 = mir.cmp ugt, %14, %16
-    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+    %17 = mir.call @mm_drop(%16)
+    %18 = mir.mov_imm 255 : i64
+    %19 = mir.cmp ugt, %14, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %18 = mir.global_addr @__panic_msg_49b816ce5feeaa6d
-    %19 = mir.call @mrt_panic(%18)
+    %20 = mir.global_addr @__panic_msg_49b816ce5feeaa6d
+    %21 = mir.call @mrt_panic(%20)
   __range_ok_0:
     mir.ret %14
   }

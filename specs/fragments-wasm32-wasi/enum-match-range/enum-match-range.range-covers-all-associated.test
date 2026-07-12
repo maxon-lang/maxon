@@ -24,15 +24,16 @@ module {
     %14 = mir.mov_imm 16 : i64
     %15 = mir.mov_imm 0 : i64
     %16 = mir.mov_imm 1 : i64
-    %17 = mir.call @stdlib.__mm_alloc(%14, %15)
-    mir.store %16, %17, 0 width: qword
-    mir.store %1, %17, 8 width: qword
-    %4 = mir.load %17, 0 width: qword
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.call @stdlib.__mm_alloc_needzero(%14, %15, %17)
+    mir.store %16, %18, 0 width: qword
+    mir.store %1, %18, 8 width: qword
+    %4 = mir.load %18, 0 width: qword
     %5 = mir.mov_imm 0 : i64
     %6 = mir.cmp ge, %4, %5
     %7 = mir.mov_imm 2 : i64
     %8 = mir.cmp le, %4, %7
-    %18 = mir.call @mm_drop(%17)
+    %19 = mir.call @mm_drop(%18)
     %9 = mir.and.i64 %6, %8
     mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
   check_0.case0:

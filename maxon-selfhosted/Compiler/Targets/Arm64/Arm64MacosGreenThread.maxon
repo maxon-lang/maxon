@@ -2366,24 +2366,20 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64GtLoadField(code, dest: 9, baseReg: 11, disp: GtPOffFreeListLen)
 	arm64EmitSubImm(code, rd: 9, rn: 9, imm12: 1)
 	arm64GtStoreField(code, baseReg: 11, disp: GtPOffFreeListLen, src: 9)
-	arm64GtBranch(code, state: state, targetBlock: haveGt)
+	arm64GtStore(code, disp: 0x28, src: 0)  // gt (the zero loop below reads it back)
 
-	arm64GtMarkBlock(state, code: code, blockId: allocNew)
-	arm64EmitMovImm(code, rd: 0, value: GtGtStructSize)
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_alloc")  // x0 = gt
-
-	arm64GtMarkBlock(state, code: code, blockId: haveGt)
-	arm64GtStore(code, disp: 0x28, src: 0)  // gt
-
-	// Zero the whole GreenThread struct (parity with x64 c9dac82f6 / emitX64GtSpawn).
-	// Both allocation paths leave it dirty: a fresh __slab_alloc region is
-	// uninitialized (unlike C#'s HEAP_ZERO_MEMORY alloc) and a recycled free-list slot
-	// carries its previous tenant's fields. Clearing the whole struct — not just
-	// status/result/waiter/next/threw/cancel below — also zeroes cancel_flag (0x78),
-	// the io_* result/handle words, and the fault-redirect fields, killing the latent
-	// garbage class that made pipe reads spuriously abort. The concrete field stores
-	// below overwrite the ones that need real values. UNTESTED ON TARGET (no arm64 host
-	// available); byte-for-byte mirrors the x64 whole-struct clear.
+	// Zero the whole GreenThread struct — on THIS path only (parity with x64
+	// emitX64GtSpawn). The P's GT free list is a recycling pool that lives OUTSIDE the
+	// slab, so a GT taken from it carries its previous tenant's fields verbatim no
+	// matter what the allocator guarantees. The always-zeroing __slab_alloc does not
+	// cover this arm, which is why the zeroing moved here rather than being deleted
+	// with the slab-side ones.
+	//
+	// Clearing the whole struct — not just status/result/waiter/next/threw/cancel below
+	// — also zeroes cancel_flag (0x78), the io_* result/handle words, and the
+	// fault-redirect fields, killing the latent garbage class that made pipe reads
+	// spuriously abort (c9dac82f6). The concrete field stores below overwrite the ones
+	// that need real values. UNTESTED ON TARGET (no arm64 host available).
 	if GtGtStructSize mod 8 != 0 'sizeGuard'
 		// The str/add-8 loop clears whole qwords; a non-8-multiple size would leave a
 		// dirty tail or overrun. Fail loudly at emit time.
@@ -2400,6 +2396,17 @@ function emitArm64GtSpawn(code ByteArray, relocations RelocationArray, callFixup
 	arm64EmitAddImm(code, rd: 12, rn: 12, imm12: 8)
 	arm64GtBranch(code, state: state, targetBlock: structZeroLoop)
 	arm64GtMarkBlock(state, code: code, blockId: structZeroDone)
+	arm64GtBranch(code, state: state, targetBlock: haveGt)
+
+	// alloc_new: __slab_alloc hands back memory that is ALREADY ZERO, so this arm needs
+	// no zeroing — that guarantee is precisely what used to be missing here.
+	arm64GtMarkBlock(state, code: code, blockId: allocNew)
+	arm64EmitMovImm(code, rd: 0, value: GtGtStructSize)
+	arm64GtBranchLink(code, callFixups: callFixups, name: "__slab_alloc")  // x0 = gt
+
+	// have_gt: the GT struct is in x0 either way, and zeroed either way.
+	arm64GtMarkBlock(state, code: code, blockId: haveGt)
+	arm64GtStore(code, disp: 0x28, src: 0)  // gt
 
 	// stack_base = mmap(NULL, GtStackSize, RW, ANON|PRIVATE, -1, 0).
 	arm64GtMmapAnon(code, relocations: relocations, length: GtStackSize)

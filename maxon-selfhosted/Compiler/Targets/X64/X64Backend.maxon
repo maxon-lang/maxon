@@ -4127,16 +4127,15 @@ function emitX64SubprocessSpawn(code ByteArray, relocations RelocationArray, cal
 	// Free the cmdline scratch.
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
-	// Allocate + zero the handle struct.
+	// Allocate the handle struct (__slab_alloc returns it zeroed).
 	helperMovRegImm(code, dest: X64Register.rcx, value: SubpHandleStructSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
 	helperStoreSlot(code, slotIndex: 11, src: X64Register.r8)
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	helperMovRegImm(code, dest: X64Register.rcx, value: SubpHandleStructSize / 8)
-	code.append(b"\xf3\x48\xab")  // rep stosq
+	// The struct arrives ZEROED from __slab_alloc, so this no longer hand-zeroes it:
+	// the fields not explicitly stored below read as 0, not as the previous occupant's
+	// bytes.
 	// Populate the handle struct.
 	helperLoadSlot(code, slotIndex: 11, dest: X64Register.rdi)
 	helperLoadSlot(code, slotIndex: 56, dest: X64Register.rax)  // PI.hProcess (PI+0 = slot56)
@@ -4697,10 +4696,9 @@ function emitX64SubprocessWaitCollect(code ByteArray, relocations RelocationArra
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 2)  // jz fail
 	helperStoreSlot(code, slotIndex: 6, src: X64Register.r8)
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	helperMovRegImm(code, dest: X64Register.rcx, value: SubpResultStructSize / 8)
-	code.append(b"\xf3\x48\xab")  // rep stosq
+	// The struct arrives ZEROED from __slab_alloc, so this no longer hand-zeroes it:
+	// the fields not explicitly stored below read as 0, not as the previous occupant's
+	// bytes.
 	// Populate status: timedOut(2)/124 on WAIT_TIMEOUT, else exited(0)/exitCode.
 	// The struct is already zeroed, so the exited path only writes statusCode
 	// (statusKind stays 0); the timedOut path writes both. The stdlib throws on
@@ -5069,16 +5067,15 @@ function emitX64SubprocessSpawnStreaming(code ByteArray, relocations RelocationA
 	// Free the cmdline scratch.
 	helperLoadSlot(code, slotIndex: 5, dest: X64Register.rcx)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_free")
-	// Allocate + zero the handle struct.
+	// Allocate the handle struct (__slab_alloc returns it zeroed).
 	helperMovRegImm(code, dest: X64Register.rcx, value: SubpHandleStructSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperTestReg(code, reg: X64Register.r8)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 1)  // jz fail
 	helperStoreSlot(code, slotIndex: 48, src: X64Register.r8)
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	helperMovRegImm(code, dest: X64Register.rax, value: 0)
-	helperMovRegImm(code, dest: X64Register.rcx, value: SubpHandleStructSize / 8)
-	code.append(b"\xf3\x48\xab")  // rep stosq
+	// The struct arrives ZEROED from __slab_alloc, so this no longer hand-zeroes it:
+	// the fields not explicitly stored below read as 0, not as the previous occupant's
+	// bytes.
 	// Populate the handle struct. hStdinWrite / hStdoutRead / hStderrRead are the
 	// parent ends the streaming ops drive; release_handle closes all three (+ the
 	// per-stream line pushback buffers, lazily allocated by the readers).
@@ -8430,29 +8427,23 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	helperLoadIndirect(code, dest: X64Register.rax, base: X64Register.r11, disp: POffFreeListLen)
 	code.append(b"\x48\x83\xe8\x01")  // sub rax, 1
 	helperStoreIndirect(code, base: X64Register.r11, disp: POffFreeListLen, src: X64Register.rax)
-	helperEmitJmp(code, state: state, targetBlock: 2)  // jmp got_gt
 
-	// block 1: alloc_new — gt = __slab_alloc(GtStructSize)   (rcx=size, result r8)
-	helperMarkBlock(state, code: code, blockId: 1)
-	helperMovRegImm(code, dest: X64Register.rcx, value: GtStructSize)
-	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
-	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)
-
-	// block 2: got_gt — the GT struct is in slot 3 either way.
-	helperMarkBlock(state, code: code, blockId: 2)
-
-	// Zero the whole GreenThread struct. Both allocation paths leave it dirty: a
-	// fresh __slab_alloc region is uninitialized (unlike C#'s zeroed mm_raw_alloc)
-	// and a free-list slot carries its previous tenant's fields. The C# EmitGtSpawn
-	// relies on the whole struct starting at zero, so mirror that here — otherwise
-	// read-before-write fields hold garbage. The critical one is cancel_flag (0x78):
+	// Zero the whole GreenThread struct — on THIS path only.
+	//
+	// The P's GT free list is a recycling pool that lives OUTSIDE the slab, so a GT
+	// taken from it carries its previous tenant's fields verbatim no matter what the
+	// allocator guarantees. The always-zeroing __slab_alloc does not cover this arm,
+	// which is why this zeroing MOVED here rather than being deleted along with the
+	// slab-side ones.
+	//
+	// The field that makes it load-bearing is cancel_flag (0x78):
 	// maxon_pipe_overlapped_read's entry cancel-check reads it and, if non-zero,
 	// aborts every I/O with -1 → __subp_read_line_inner returns an empty line →
 	// readStdoutLine reports a spurious EOF → the spec-runner's drain green thread
-	// wrongly declares its (live) worker crashed and the run deadlocks. The io_*
-	// result/handle and fault-redirect fields (0x60-0x80, 0xB0-0xD0) were likewise
-	// uncleared. rep stosq clears all GtStructSize bytes; the explicit non-zero
-	// field stores below still overwrite the ones that need concrete values.
+	// wrongly declares its (live) worker crashed and the run deadlocks (c9dac82f6).
+	// The io_* result/handle and fault-redirect fields (0x60-0x80, 0xB0-0xD0) are
+	// likewise read-before-write. The explicit field stores further down still
+	// overwrite the ones that need concrete values.
 	helperLoadSlot(code, slotIndex: 3, dest: X64Register.rdi)  // gt
 	code.append(b"\x48\x31\xc0")  // xor rax, rax
 	if GtStructSize mod 8 != 0 'sizeGuard'
@@ -8463,6 +8454,19 @@ function emitX64GtSpawn(code ByteArray, relocations RelocationArray, callFixups 
 	end 'sizeGuard'
 	helperMovRegImm(code, dest: X64Register.rcx, value: GtStructSize / 8)  // qword count
 	code.append(b"\xf3\x48\xab")  // rep stosq
+	helperEmitJmp(code, state: state, targetBlock: 2)  // jmp got_gt
+
+	// block 1: alloc_new — gt = __slab_alloc(GtStructSize)   (rcx=size, result r8)
+	// No zeroing on this arm: __slab_alloc hands back memory that is already zero,
+	// which is precisely the guarantee that was missing when the uninitialized
+	// cancel_flag deadlocked the runner.
+	helperMarkBlock(state, code: code, blockId: 1)
+	helperMovRegImm(code, dest: X64Register.rcx, value: GtStructSize)
+	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
+	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)
+
+	// block 2: got_gt — the GT struct is in slot 3 either way, and zeroed either way.
+	helperMarkBlock(state, code: code, blockId: 2)
 
 	// stack_base = VirtualAlloc(NULL, GtInitialStackSize, MEM_COMMIT|RESERVE, PAGE_RW)
 	// Win64 ABI: rcx=lpAddress, rdx=dwSize, r8=flAllocationType, r9=flProtect → rax
@@ -9341,9 +9345,9 @@ end 'emitX64SchedWorkerLoop'
 //
 // Deliberate divergences from the C# reference, all driven by self-hosted realities:
 //   * Allocations use `__slab_alloc`/`__slab_free` (the self-hosted raw allocator)
-//     rather than C#'s `mm_raw_alloc`/`mm_raw_free`. Unlike `mm_raw_alloc`
-//     (HEAP_ZERO_MEMORY), `__slab_alloc` does NOT zero its slots — callers that need
-//     clean memory (e.g. an OVERLAPPED context) must zero it explicitly after alloc.
+//     rather than C#'s `mm_raw_alloc`/`mm_raw_free`. Both zero what they return, so
+//     an OVERLAPPED context comes back clean with no explicit zeroing at the call
+//     site — see the zeroing contract at the top of stdlib/Internals.maxon.
 //   * `__io_init` omits the ConnectEx-pointer acquisition (WSAStartup + WSASocketW +
 //     WSAIoctl): that is a networking detail requiring the ws2_32 import DLL, and
 //     `__io_connectex_ptr` is consumed only by the ConnectEx networking path which is
@@ -10114,10 +10118,9 @@ function emitX64IoSubmitSync(code ByteArray, relocations RelocationArray, callFi
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoSyncReqSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // req
-	// Fill op/arg0/arg1/waiter. __slab_alloc does NOT zero the slot, so explicitly
-	// null req.next — a garbage next link would corrupt the sync-request queue.
-	code.append(b"\x48\x31\xc9")  // xor rcx, rcx
-	helperStoreIndirect(code, base: X64Register.r8, disp: IoSyncReqOffNext, src: X64Register.rcx)
+	// Fill op/arg0/arg1/waiter. req.next needs no explicit null: __slab_alloc returns
+	// the slot zeroed, so the next link is already 0 (a garbage one would corrupt the
+	// sync-request queue).
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rdx)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoSyncReqOffOp, src: X64Register.rdx)
 	helperLoadSlot(code, slotIndex: 1, dest: X64Register.rdx)
@@ -10321,16 +10324,10 @@ function emitX64PipeOverlappedRead(code ByteArray, relocations RelocationArray, 
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
-	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
-	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
-	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
-	// completion packet, so a parked op would never wake (deadlock). Zero the whole
-	// ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
-	code.append(b"\xf3\x48\xab")  // rep stosq
-	// ctx.waiter = self.
+	// The ctx arrives ZEROED from __slab_alloc, so nothing hand-zeroes it here any more.
+	// That guarantee is exactly what used to be missing: a garbage OVERLAPPED.hEvent
+	// (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP completion
+	// packet, so a parked op would never wake — the deadlock fixed in a1a3db047.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
@@ -10446,16 +10443,10 @@ function emitX64IoSubmitOverlapped(code ByteArray, relocations RelocationArray, 
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
-	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
-	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
-	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
-	// completion packet, so a parked op would never wake (deadlock). Zero the whole
-	// ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
-	code.append(b"\xf3\x48\xab")  // rep stosq
-	// ctx.waiter = self.
+	// The ctx arrives ZEROED from __slab_alloc, so nothing hand-zeroes it here any more.
+	// That guarantee is exactly what used to be missing: a garbage OVERLAPPED.hEvent
+	// (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP completion
+	// packet, so a parked op would never wake — the deadlock fixed in a1a3db047.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
@@ -11079,16 +11070,10 @@ function emitX64IoSubmitSocketOverlapped(code ByteArray, relocations RelocationA
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 4, src: X64Register.r8)  // ctx
-	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
-	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
-	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
-	// completion packet, so a parked send/recv would never wake (deadlock). Zero the
-	// whole ctx (7 qwords) — clears the OVERLAPPED, waiter, and custom_result.
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
-	code.append(b"\xf3\x48\xab")  // rep stosq
-	// ctx.waiter = self ; self.io_handle = handle ; self.status = waiting.
+	// The ctx arrives ZEROED from __slab_alloc, so nothing hand-zeroes it here any more.
+	// That guarantee is exactly what used to be missing: a garbage OVERLAPPED.hEvent
+	// (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP completion
+	// packet, so a parked op would never wake — the deadlock fixed in a1a3db047.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)
@@ -11523,16 +11508,10 @@ function emitX64NetTcpConnect(code ByteArray, relocations RelocationArray, callF
 	helperMovRegImm(code, dest: X64Register.rcx, value: IoAsyncCtxSize)
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__slab_alloc")
 	helperStoreSlot(code, slotIndex: 3, src: X64Register.r8)  // ctx
-	// __slab_alloc does NOT zero (slab bytes are uninitialized), unlike C#'s
-	// mm_raw_alloc(HEAP_ZERO_MEMORY). The OVERLAPPED must be clean: a garbage
-	// hEvent (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP
-	// completion packet, so a parked ConnectEx would never wake (deadlock). Zero the
-	// whole ctx (7 qwords) — clears the OVERLAPPED and waiter; custom_result is set next.
-	emitMovRegRegOp(code, dest: X64Register.rdi, src: X64Register.r8)
-	code.append(b"\x48\x31\xc0")  // xor rax, rax
-	helperMovRegImm(code, dest: X64Register.rcx, value: 7)  // IoAsyncCtxSize / 8
-	code.append(b"\xf3\x48\xab")  // rep stosq
-	// ctx.waiter = self ; ctx.custom_result = socket ; self.io_handle = socket ; waiting.
+	// The ctx arrives ZEROED from __slab_alloc, so nothing hand-zeroes it here any more.
+	// That guarantee is exactly what used to be missing: a garbage OVERLAPPED.hEvent
+	// (offset 24) whose low bit is set makes the kernel SUPPRESS the IOCP completion
+	// packet, so a parked op would never wake — the deadlock fixed in a1a3db047.
 	emitX64GtLoadCurrentP(code, dest: X64Register.r10, rdataRelocs: rdataRelocs)
 	helperLoadIndirect(code, dest: X64Register.rdx, base: X64Register.r10, disp: POffCurrentGt)
 	helperStoreIndirect(code, base: X64Register.r8, disp: IoAsyncCtxOffWaiter, src: X64Register.rdx)

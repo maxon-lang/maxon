@@ -31,16 +31,17 @@ module {
     mir.store %12, %7, 32 width: qword
     %14 = mir.mov_imm 8 : i64
     %15 = mir.func_addr @__destruct_Character
-    %13 = mir.call @stdlib.__mm_alloc(%14, %15)
-    mir.store %7, %13, 0 width: qword
-    %16 = mir.call @Character.byteLength(%13)
-    %17 = mir.call @mm_drop(%13)
-    %18 = mir.mov_imm 255 : i64
-    %19 = mir.cmp ugt, %16, %18
-    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.call @stdlib.__mm_alloc_needzero(%14, %15, %17)
+    mir.store %7, %18, 0 width: qword
+    %16 = mir.call @Character.byteLength(%18)
+    %19 = mir.call @mm_drop(%18)
+    %20 = mir.mov_imm 255 : i64
+    %21 = mir.cmp ugt, %16, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %20 = mir.global_addr @__panic_msg_bf1196e9c88d390b
-    %21 = mir.call @mrt_panic(%20)
+    %22 = mir.global_addr @__panic_msg_bf1196e9c88d390b
+    %23 = mir.call @mrt_panic(%22)
   __range_ok_0:
     mir.ret %16
   }

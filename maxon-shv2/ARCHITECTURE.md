@@ -1351,6 +1351,133 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    a real implementation would already do — not a one-line tweak. Say so, rather than let an author
    conclude the compiler is being arbitrary.
 
+## Allocator: the zeroing contract (Workstream R / slice R1) ⚠ NOT BUILT YET
+
+shv2 emits its runtime natively (Workstream R), so the slab allocator is shv2's to
+*write*, not to inherit. This section is R1's spec. It is written down now because the
+guarantee below is cheap to build in and expensive to retrofit.
+
+> **The allocator ALWAYS returns zeroed memory.** Zeroing is a property of the
+> allocator, not a thing each caller is trusted to remember.
+
+**Why this is non-negotiable.** v1 shipped a non-zeroing slab and paid for it three
+separate times, each root-caused independently and each "fixed" by bolting a zeroing
+loop onto the *caller*: `__gt_spawn`'s GreenThread struct (an uninitialized
+`cancel_flag` aborted every overlapped read, so the coordinator declared live workers
+dead and the runner hung); socket/`ConnectEx` `OVERLAPPED` contexts (a garbage `hEvent`
+suppressed the IOCP completion packet, so a parked green thread never woke); and
+`mrt_alloc`'s buffers (a sparsely-filled Map/Set hash table left unwritten slots holding
+the previous occupant's bytes, which the element-walk decref'd as live pointers). The
+v1 ownership audit named the pattern: *"C# fails SAFE (zero-filled alloc), self-hosted
+fails DEADLY."* Every new raw-buffer call site was another chance to reopen the class.
+
+### The model is Go's
+
+| Go | shv2 R1 |
+|---|---|
+| `mallocgc(size, typ, needzero bool)` | `__slab_alloc` (zeroes) + `__slab_alloc_raw` (does not) |
+| `if needzero && span.needzero != 0 { memclrNoHeapPointers(x, size) }` | same rule, same place |
+| `mspan.freeindex` (bump cursor) | `mspan.bump_next` |
+| `memclrNoHeapPointers` | a `memzero` **size ladder** the backend emits (below) |
+
+A slot reaches a caller from one of two places, and they differ in whether the memory is
+dirty:
+
+- **the free list** — a recycled slot, still holding the previous occupant's bytes plus
+  the free-list link written into `slot[0]` when it was freed. **Must be memzeroed.**
+- **the bump region** `[bump_next, bump_end)` — slots never handed out. Their pages came
+  straight from fresh `VirtualAlloc`/`mmap`/`memory.grow`, which every target guarantees
+  arrives **zeroed** (Go leans on exactly this: *"sysAlloc obtains a large chunk of
+  ZEROED memory from the operating system"*). **Already zero — costs nothing.**
+
+**The load-bearing consequence — do not skip this:**
+
+> Threading an intrusive free list through a fresh span writes a next-pointer into
+> `slot[0]` of **every** slot, which **dirties every one of them**. A dirty slot must be
+> memzeroed before it can be handed out. So building the free list up front is not merely
+> wasted work — **it is the thing that would force a memzero on every first-ever
+> allocation.** Leaving the region pristine is the *precondition* for any zero-elision at
+> all. **Do not build an eager intrusive free list.**
+
+This is finer-grained than Go, whose `needzero` is per-span: Go re-zeroes even never-used
+slots in a span that has seen one free; a per-slot cursor never pays for a slot that was
+never dirtied.
+
+**Invariants** (every mutation site must re-establish them):
+```
+INV-1  free_count == |free_list| + (bump_end - bump_next) / slot_size
+INV-2  bump_end   == base_addr + slot_size * total_slots      (derived, never stored)
+INV-3  every byte in [bump_next, bump_end) is ZERO
+```
+The case a reviewer will not believe, so state it: a span can return to mcentral carrying
+**both** an unconsumed bump region **and** a populated free list (allocate 3 slots from a
+fresh 1024-slot span, free all 3 → `free_count == total_slots` → returned, holding 3
+free-list entries and 1021 virgin slots). Both survive; INV-1 holds.
+
+**Decommit/recommit is NOT zero.** If R1 gains a scavenger, recommitted pages must be
+re-zeroed: Windows `VirtualAlloc(MEM_COMMIT)` and Linux `MADV_DONTNEED` do zero, but
+macOS `MADV_FREE` does **not**, and a wasm no-op decommit leaves contents verbatim. Go
+guards this with a per-platform `needZeroAfterSysUnused()`; v1 takes the always-true
+branch (eager memzero on reback) because its reback is cold. Either is fine — silently
+assuming zero is not.
+
+**If chunks are ever recycled, the chunk-free path must memzero them.** v1's self-hosted
+arena never recycles chunks, but the C# bootstrap's arena-large tier does — and there,
+`__slab_arena_free_chunks` MUST zero the run it releases, or the bump region's "already
+zero" assumption is false. This is the single easiest way to break the design.
+
+### `__slab_alloc_raw` — the escape hatch, and its audit rule
+
+Go's `needzero=false`. Keep the caller set as small as Go does (`rawbyteslice`,
+`rawstring`, `growslice`).
+
+> `__slab_alloc_raw` may ONLY be used where the caller provably writes **every byte** of
+> the returned region before anything else can read it, **AND** the region is never walked
+> as managed pointers. A region is *walked as managed pointers* if a destructor's element
+> walk, a Map/Set slot-table teardown, or an `array.set` old-occupant decref will ever run
+> over it. Such a buffer **must** come from `__slab_alloc` — a non-zeroed slot read as a
+> pointer and decref'd is precisely the bug this design exists to prevent. When in doubt,
+> use the zeroing path: it is now cheap.
+
+The canonical legitimate caller is `realloc`: allocate raw, `memcpy` the prefix, zero the
+grown tail — together covering every byte. That is Go's `growslice`, and the tail-zero
+*is what makes the raw allocation safe*.
+
+### The `memzero` the backend must emit
+
+**Not one instruction — a SIZE LADDER.** The dominant caller zeroes a size-class slot
+(8/16/24/32/48/64…), and a naive `rep stosq` there is a large regression: it costs ~20–40
+cycles of startup before writing a byte, dwarfing the 1–4 plain stores an 8–32 byte slot
+needs. (ERMSB/FSRM improve throughput and short `rep stosb`; they do not remove
+`rep stosq`'s setup.)
+
+```
+x64    <8 byte loop | 8..63 straight-line overlapping stores
+       | 64..255 8-qword store loop | >=256 rep stosq
+arm64  same bands with `stp xzr, xzr` (16 B, single uop). No `rep` analogue, so the
+       bulk loop IS the large path. No `dc zva` (needs DCZID_EL0, wants 64-byte
+       alignment, is disable-able, and buys nothing at the dominant sizes).
+wasm   one `memory.fill`. Do NOT unroll small constant sizes: each i64.store is
+       independently bounds-checked, whereas one memory.fill is a single check plus an
+       engine-tuned memset.
+```
+
+Every arm pins a register to the **end** of the region and writes forward from the start
+*and* backward from the end, letting the middle be written twice. **Overlapping stores**
+cover any length in the band with straight-line code — no loop, and no ragged-tail
+handling for lengths that are not multiples of 8. Zeroing a byte twice is free; branching
+to decide whether to is not.
+
+If the memzero is a Target-dialect op rather than a raw encoder, it must declare
+**`setsFlags: true`** — the ladder `cmp`s the length to pick an arm. (v1's `memcpy` op
+declares `false`, correct for a bare `rep movsb`; copying that metadata onto memzero lets
+the scheduler hoist a `cmp` feeding a `condBranch` across it — a silent miscompile.)
+
+The v1 implementation of all of the above is `stdlib/Internals.maxon` (the slab) and
+`maxon-selfhosted/Compiler/Targets/*/` (`emitX64MemzeroOp`, `arm64EmitMemzeroOp`,
+`emitMemzero`) — port the *design*, not the code, since shv2 hand-assembles where v1
+compiles Maxon source.
+
 ## Parallel driver
 
 **Not built.** Passes are classified `wholeModule`/`perFunction` and the parser is already a pure

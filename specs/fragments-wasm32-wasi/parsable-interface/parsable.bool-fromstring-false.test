@@ -30,14 +30,15 @@ module {
     mir.store %8, %3, 32 width: qword
     %10 = mir.mov_imm 16 : i64
     %11 = mir.func_addr @__destruct_String
-    %9 = mir.call @stdlib.__mm_alloc(%10, %11)
-    mir.store %3, %9, 0 width: qword
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.call @stdlib.__mm_alloc_needzero(%10, %11, %24)
+    mir.store %3, %25, 0 width: qword
     %12 = mir.mov_imm 1 : i64
-    mir.store %12, %9, 8 width: qword
-    %13, %14 = mir.try_call @stdlib.__bool_fromString(%9)
+    mir.store %12, %25, 8 width: qword
+    %13, %14 = mir.try_call @stdlib.__bool_fromString(%25)
     %15 = mir.mov_imm 0 : i64
     %16 = mir.cmp ne, %14, %15
-    %24 = mir.call @mm_drop(%9)
+    %26 = mir.call @mm_drop(%25)
     mir.cond_br %16 [then: try_0.otherwise(), else: try_0.merge(%13)]
   try_0.otherwise:
     %18 = mir.mov_imm 1 : i64

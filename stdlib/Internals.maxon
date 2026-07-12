@@ -111,16 +111,71 @@ end '__mm_drop'
 // __slab_lock. On single-P targets (wasm / arm64 / pre-scheduler x64)
 // __slab_current_p_id returns -1 → shard 0, collapsing to a single shard.
 //
-// mspan struct (80-byte / 0x50 slot):
+// mspan struct (88 bytes used; 96-byte / 0x60 slot — see MSPAN_META_SLOT_SIZE):
 //   +0x00 base_addr  +0x08 slot_size  +0x10 free_list  +0x18 free_count
 //   +0x20 next_span  +0x28 class_idx  +0x30 total_slots +0x38 arena_base
 //   +0x40 owning_p   (RAW P id; 0xFFFFFFFF sentinel while parked in mcentral)
+//   +0x48 scav_state (SPAN_SCAV_ACTIVE / SEEN_FREE / DECOMMITTED)
+//   +0x50 bump_next  (Go's mspan.freeindex, held as an address — see below)
 //
 // ProcContext remote-free queue head sits at p_ptr + 0x78 (Treiber stack).
 //
 // `__Internals.atomicCas(addr, old, new)` returns 1 on success / 0 on failure
 // (NOT the prior value) — the CAS loops below test it as a success boolean.
+//
+// -----------------------------------------------------------------------------
+// ZEROING: the allocator hands back memory that is always zero.
+//
+// This is Go's model (`mallocgc(size, typ, needzero bool)`), which this allocator
+// already mirrors elsewhere. Callers get zeroed memory by default; the audited
+// `__slab_alloc_raw` opts out.
+//
+// A slot can reach a caller from two places, and they differ in whether the
+// memory is dirty:
+//
+//   * the FREE LIST — a recycled slot. It still holds the previous occupant's
+//     bytes, plus the free-list link written into slot[0] when it was freed. It
+//     MUST be zeroed before the caller sees it.
+//
+//   * the BUMP REGION [bump_next, bump_end) — slots that have NEVER been handed
+//     out. Their pages came straight from `__slab_arena_alloc_chunks`, i.e.
+//     fresh VirtualAlloc/mmap/memory.grow address space, which every one of our
+//     four targets guarantees arrives zeroed. (Go leans on exactly this: "sysAlloc
+//     obtains a large chunk of ZEROED memory from the operating system.") They are
+//     already zero, so they cost NOTHING to hand out.
+//
+// The bump cursor is what makes the second case possible at all, and it is the
+// reason `__slab_build_freelist` no longer exists:
+//
+//   >>> Threading an intrusive free list through a fresh span writes a next-pointer
+//   >>> into slot[0] of EVERY slot, which DIRTIES every one of them. A dirty slot
+//   >>> must be memzeroed before it can be handed out. So building the list up front
+//   >>> was not merely wasted work — it was the thing that would FORCE a memzero on
+//   >>> every first-ever allocation. Leaving the region pristine is the precondition
+//   >>> for any zero-elision at all.
+//
+// This is FINER-GRAINED than Go, whose `needzero` is per-span: Go re-zeroes even
+// never-used slots in a span that has seen a single free. Our cursor is per-slot,
+// so we never pay for a slot that was never dirtied.
+//
+// INVARIANTS (every mutation site below re-establishes these):
+//   INV-1  free_count == |free_list| + (bump_end - bump_next) / slot_size
+//   INV-2  bump_end   == base_addr + slot_size * total_slots   (DERIVED, never stored)
+//   INV-3  every byte in [bump_next, bump_end) is ZERO
+//
+// The case worth stating explicitly, because it looks wrong: a span can be
+// returned to mcentral carrying BOTH an unconsumed bump region AND a populated
+// free list. (Allocate 3 slots from a fresh 1024-slot span, free all 3 →
+// free_count == 1024 == total_slots → returned to mcentral, holding 3 free-list
+// entries and 1021 never-used slots.) Both survive in the mspan, and the next P to
+// take the span keeps using both. INV-1 holds throughout.
 // =============================================================================
+
+// Metadata-slab slot size for one mspan header. The struct occupies 0x00..0x58;
+// 0x60 keeps successive headers 16-byte aligned inside the 8 KiB metadata chunk.
+// MUST stay in lockstep with the mspan layout above — a stale value here silently
+// OVERLAPS adjacent mspan headers.
+let MSPAN_META_SLOT_SIZE = 0x60
 
 // Zeroes `size` bytes starting at `ptr`. `size` need not be a multiple of 8.
 //
@@ -389,12 +444,14 @@ function __slab_objs_per_span(idx MachineWord) returns MachineWord
 	return 1
 end '__slab_objs_per_span'
 
-// Hands out 80-byte (0x50) slots used as mspan-header storage. Three-tier:
+// Hands out MSPAN_META_SLOT_SIZE-byte slots used as mspan-header storage. Three-tier:
 //   1. Pop from the intrusive free-list at __slab_meta_free_head if non-null.
-//   2. Otherwise bump within the current metadata chunk if it has room
-//      (bump_ptr + 0x50 <= bump_end).
-//   3. Otherwise grab a fresh 8 KiB chunk; reserve its first 0x50 bytes as the
-//      result and reseed bump_ptr = chunk + 0x50, bump_end = chunk + 0x2000.
+//   2. Otherwise bump within the current metadata chunk if it has room.
+//   3. Otherwise grab a fresh 8 KiB chunk; reserve its first slot as the result
+//      and reseed bump_ptr / bump_end.
+//
+// NOTE this hands back RECYCLED headers (tier 1), which are NOT zero — so every
+// caller must initialise every mspan field it relies on. See __slab_refill_mcache.
 function __slab_meta_alloc() returns MachineWord
 	let head = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
 	if head != 0 'popFree'
@@ -407,17 +464,17 @@ function __slab_meta_alloc() returns MachineWord
 	// Bump path. Std-IR uses signed Lt for the gate; both values are well below
 	// the high bit so signed/unsigned agree.
 	let bumpPtr = __Internals.loadIndirect(__Internals.slabMetaBumpPtrAddr())
-	let advanced = bumpPtr + 0x50
+	let advanced = bumpPtr + MSPAN_META_SLOT_SIZE
 	let bumpEnd = __Internals.loadIndirect(__Internals.slabMetaBumpEndAddr())
 	if bumpEnd >= advanced 'doBump'
 		__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: advanced)
 		return bumpPtr
 	end 'doBump'
 
-	// Grow: fresh 8 KiB metadata chunk. First 0x50 bytes is the result; the
+	// Grow: fresh 8 KiB metadata chunk. The first slot is the result; the
 	// rest becomes the new bump region.
 	let chunkBase = __slab_arena_alloc_chunks(1)
-	__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: chunkBase + 0x50)
+	__Internals.storeIndirect(__Internals.slabMetaBumpPtrAddr(), value: chunkBase + MSPAN_META_SLOT_SIZE)
 	__Internals.storeIndirect(__Internals.slabMetaBumpEndAddr(), value: chunkBase + 0x2000)
 	return chunkBase
 end '__slab_meta_alloc'
@@ -576,21 +633,20 @@ function __slab_drain_remote_frees(pPtr MachineWord)
 	end 'walk'
 end '__slab_drain_remote_frees'
 
-// Build a span's intrusive free list in place: slot[i] links to slot[i+1] and the
-// last slot links to 0, so `free_list = pageBase` walks every slot once. Shared by
-// the fresh-span path in __slab_refill_mcache and the scavenged-span rebuild in
-// __slab_reback_span (a decommitted span loses its in-page links and must be rebuilt).
-function __slab_build_freelist(pageBase MachineWord, slotSize MachineWord, totalSlots MachineWord)
-	for i in 0 upto totalSlots 'linkLoop'
-		let current = pageBase + i * slotSize
-		if i + 1 == totalSlots 'lastSlot'
-			__Internals.storeIndirect(current, value: 0)
-		end 'lastSlot'
-		if i + 1 != totalSlots 'midSlot'
-			__Internals.storeIndirect(current, value: pageBase + (i + 1) * slotSize)
-		end 'midSlot'
-	end 'linkLoop'
-end '__slab_build_freelist'
+// Reset a span's slot region to "entirely virgin": empty free list, bump cursor at
+// the base, every slot available. The caller must guarantee the pages are already
+// zero (fresh from the arena, or explicitly memzeroed).
+//
+// This REPLACES the old __slab_build_freelist, which threaded a next-pointer through
+// slot[0] of all N slots. That loop was not just expensive (up to 1024 dependent
+// stores touching a whole 8 KiB span); it DIRTIED every slot, and a dirty slot has
+// to be memzeroed before it can be handed out. Deleting it is what lets
+// __slab_alloc_class hand out a never-used slot for free.
+function __slab_reset_span_to_virgin(span MachineWord, base MachineWord, totalSlots MachineWord)
+	__Internals.storeIndirect(span + 0x10, value: 0)
+	__Internals.storeIndirect(span + 0x18, value: totalSlots)
+	__Internals.storeIndirect(span + 0x50, value: base)
+end '__slab_reset_span_to_virgin'
 
 // Chunk-aligned physical footprint of a span's slot data: ceil(slotSize *
 // totalSlots / 8192) * 8192, matching how __slab_refill_mcache sized the span's
@@ -604,11 +660,26 @@ end '__slab_span_footprint'
 
 // Reset a just-reclaimed span's scavenge grace state to ACTIVE and, if the
 // scavenger actually handed its pages back to the OS (DECOMMITTED), re-back and
-// re-zero them and rebuild the intrusive free list before the owning P allocates
-// from it — the free-list head/links lived in the discarded data pages. A span
-// merely in its grace period (SEEN_FREE) still has an intact free list, so it just
-// gets the reset. Caller holds __slab_lock, so this cannot race a concurrent
-// scavenge of the same span.
+// re-zero them before the owning P allocates from it — the free-list head/links
+// lived in the discarded data pages. A span merely in its grace period (SEEN_FREE)
+// still has an intact free list and bump cursor, so it just gets the reset. Caller
+// holds __slab_lock, so this cannot race a concurrent scavenge of the same span.
+//
+// The memzero here is Go's `needZeroAfterSysUnused()`, and we take the always-true
+// branch. Recommitted pages are NOT reliably zero:
+//
+//   Windows  VirtualAlloc(MEM_COMMIT) over a decommitted range -> zero
+//   Linux    madvise(MADV_DONTNEED)   -> refaults zero
+//   macOS    madvise(MADV_FREE)       -> NOT zero; the kernel may hand the SAME
+//                                        page back with its old contents intact
+//   wasm     decommit is a no-op      -> contents survive verbatim
+//
+// Go's own docs say the same of this transition: "Accessing memory in such a region
+// is undefined (may fault, may give back unexpected zeroes, etc.)". We zero eagerly
+// rather than carrying a per-span `needzero` flag like Go does, because our reback
+// is COLD (the scavenger's two-epoch grace means only genuinely idle spans ever get
+// here) where Go's is hot — and on Windows/Linux the flag would be permanently 0,
+// i.e. dead weight. That keeps INV-3 unconditional and one line long.
 function __slab_reback_span(span MachineWord)
 	if __Internals.loadIndirect(span + 0x48) == SPAN_SCAV_DECOMMITTED 'wasDecommitted'
 		let slotSize = __Internals.loadIndirect(span + 0x08)
@@ -617,9 +688,8 @@ function __slab_reback_span(span MachineWord)
 		let base = __Internals.loadIndirect(span)
 		__Internals.osRecommitPages(base, size: footprint)
 		__slab_memzero(base, size: footprint)
-		__slab_build_freelist(base, slotSize: slotSize, totalSlots: totalSlots)
-		__Internals.storeIndirect(span + 0x10, value: base)
-		__Internals.storeIndirect(span + 0x18, value: totalSlots)
+		// Pages are zero again, so the whole span is virgin once more.
+		__slab_reset_span_to_virgin(span, base: base, totalSlots: totalSlots)
 	end 'wasDecommitted'
 	__Internals.storeIndirect(span + 0x48, value: SPAN_SCAV_ACTIVE)
 end '__slab_reback_span'
@@ -677,11 +747,11 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 
 		span = __slab_meta_alloc()
 
-		// Initialise mspan fields.
+		// Initialise mspan fields. __slab_meta_alloc recycles headers through a free
+		// list, so an uninitialised field here is STALE DATA, not zero — every field
+		// must be written.
 		__Internals.storeIndirect(span, value: pageBase)
 		__Internals.storeIndirect(span + 0x08, value: slotSize)
-		__Internals.storeIndirect(span + 0x10, value: pageBase)
-		__Internals.storeIndirect(span + 0x18, value: totalSlots)
 		__Internals.storeIndirect(span + 0x20, value: 0)
 		__Internals.storeIndirect(span + 0x28, value: classIdx)
 		__Internals.storeIndirect(span + 0x30, value: totalSlots)
@@ -699,8 +769,12 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 		// because chunks and pages are both 8KB.
 		__slab_arena_map_set(pageBase, numPages: numChunks, mspan: span)
 
-		// Build the intrusive free list: slot[i] -> slot[i+1], last slot -> 0.
-		__slab_build_freelist(pageBase, slotSize: slotSize, totalSlots: totalSlots)
+		// The slot region is entirely virgin: empty free list, bump cursor at the
+		// base. `pageBase` came from __slab_arena_alloc_chunks, i.e. fresh arena
+		// address space, which the OS guarantees is zeroed — so every slot in it is
+		// already zero and can be handed out with NO memzero. Do not thread a free
+		// list through it; that would dirty all of them (see the header comment).
+		__slab_reset_span_to_virgin(span, base: pageBase, totalSlots: totalSlots)
 	end 'growNew'
 
 	// mcache[rowShard][classIdx] = span
@@ -714,7 +788,7 @@ end '__slab_refill_mcache'
 // P's remote-free queue and re-probes; if still empty it refills (which takes
 // __slab_lock) then pops. A successful pop that drains the span clears the
 // mcache entry so the next call refills cleanly.
-function __slab_alloc_class(classIdx MachineWord) returns MachineWord
+function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns MachineWord
 	// rawId = current P id (-1 if none); shard = clamp(rawId) for the mcache row.
 	let rawId = __slab_current_p_id()
 	let shard = __slab_clamp_shard(rawId)
@@ -776,11 +850,36 @@ function __slab_alloc_class(classIdx MachineWord) returns MachineWord
 
 	// After any drain/refill the mcache slot points at a span with free_count > 0.
 	let span = __Internals.loadIndirect(mcacheSlot)
-	// result = span.free_list
-	let result = __Internals.loadIndirect(span + 0x10)
-	// span.free_list = [result] (next pointer at slot offset 0)
-	__Internals.storeIndirect(span + 0x10, value: __Internals.loadIndirect(result))
-	// span.free_count -= 1
+	let slotSize = __Internals.loadIndirect(span + 0x08)
+	let freeList = __Internals.loadIndirect(span + 0x10)
+
+	var result = 0
+	if freeList != 0 'recycled'
+		// A RECYCLED slot: it holds the previous occupant's bytes plus the free-list
+		// link we wrote into slot[0] when it was freed. Pop it, then zero it — the
+		// memzero subsumes the link, so there is no separate slot[0] clear.
+		result = freeList
+		__Internals.storeIndirect(span + 0x10, value: __Internals.loadIndirect(freeList))
+		if needzero != 0 'zeroIt'
+			__slab_memzero(result, size: slotSize)
+		end 'zeroIt'
+	end 'recycled' else 'virgin'
+		// A VIRGIN slot carved from the bump region. Never handed out, so it still
+		// holds the zeroes the OS gave us — no memzero, at any size class. This is
+		// the common case while a span fills for the first time.
+		let bumpNext = __Internals.loadIndirect(span + 0x50)
+		// INV-1 says free_count > 0 and an empty free list imply bump_next < bump_end.
+		// If that ever fails we would hand out a slot past the end of the span, so
+		// trap loudly instead of silently corrupting the next span's memory.
+		let bumpEnd = __Internals.loadIndirect(span) + slotSize * __Internals.loadIndirect(span + 0x30)
+		if bumpNext >= bumpEnd 'invariantViolated'
+			panic("__slab_alloc_class: free_count > 0 but no free-list entry and bump region exhausted (INV-1 violated)")
+		end 'invariantViolated'
+		result = bumpNext
+		__Internals.storeIndirect(span + 0x50, value: bumpNext + slotSize)
+	end 'virgin'
+
+	// span.free_count -= 1 (both arms consumed exactly one slot)
 	let newFreeCount = __Internals.loadIndirect(span + 0x18) - 1
 	__Internals.storeIndirect(span + 0x18, value: newFreeCount)
 	// Drop drained spans from the mcache so the next call hits the refill path.
@@ -1081,8 +1180,41 @@ end '__slab_class_index_for'
 // (under __slab_lock, mutating the shared OS-direct array); otherwise finds the
 // smallest class >= size and serves it from the calling P's own mcache row
 // (lockless fast path; refill takes __slab_lock).
+// Public allocator entry point — returns ZEROED memory. See __slab_alloc_needzero.
 function __slab_alloc(size MachineWord) returns MachineWord
+	return __slab_alloc_needzero(size, needzero: 1)
+end '__slab_alloc'
+
+// Allocation WITHOUT zeroing. This is Go's `mallocgc(..., needzero: false)`.
+//
+// AUDIT RULE — read this before adding a caller:
+//
+//   __slab_alloc_raw may ONLY be used where the caller provably writes EVERY BYTE
+//   of the returned region before anything else can read it, AND the region is
+//   never walked as managed pointers.
+//
+//   A region is "walked as managed pointers" if __destruct___ManagedMemory's
+//   element walk, a Map/Set slot-table teardown, or an array.set old-occupant
+//   decref will ever run over it. Such a buffer MUST come from __slab_alloc — a
+//   non-zeroed slot read as a pointer and decref'd is exactly the bug this design
+//   exists to prevent (a sparsely-filled Map hash table whose unwritten slots held
+//   the previous occupant's garbage, decref'd as if live).
+//
+//   When in doubt use __slab_alloc. It is now CHEAP: a slot carved from a span's
+//   virgin bump region costs nothing at all to zero.
+//
+// Go keeps this set tiny (rawbyteslice / rawstring / growslice's copied prefix) and
+// so do we — see mm_realloc in runtime.std, which memcpy's the prefix and zeroes
+// the grown tail, together covering every byte.
+function __slab_alloc_raw(size MachineWord) returns MachineWord
+	return __slab_alloc_needzero(size, needzero: 0)
+end '__slab_alloc_raw'
+
+function __slab_alloc_needzero(size MachineWord, needzero MachineWord) returns MachineWord
 	if size > SLAB_MAX_SMALL_ALLOC 'osPath'
+		// OS-direct: every request is a fresh VirtualAlloc/mmap and every release is a
+		// full VirtualFree/munmap, so the pages ALWAYS arrive zeroed from the OS and
+		// are never recycled through us. `needzero` is satisfied for free here.
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
 		let osPtr = __slab_os_direct_alloc(size)
 		__Internals.osLockRelease(__Internals.slabLockAddr())
@@ -1103,12 +1235,12 @@ function __slab_alloc(size MachineWord) returns MachineWord
 	// Real Ps (id >= 0) always keep the lockless fast path — each owns its shard.
 	if __slab_current_p_id() < 0 and __slab_proc_at(0) != 0 'rawThreadLocked'
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
-		let rawSlot = __slab_alloc_class(classIdx)
+		let rawSlot = __slab_alloc_class(classIdx, needzero: needzero)
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 		return rawSlot
 	end 'rawThreadLocked'
-	return __slab_alloc_class(classIdx)
-end '__slab_alloc'
+	return __slab_alloc_class(classIdx, needzero: needzero)
+end '__slab_alloc_needzero'
 
 // Report the actual number of bytes `__slab_alloc(size)` would hand back — i.e.
 // the size class it rounds `size` up to. `__slab_alloc` rounds every request to a
@@ -2487,7 +2619,20 @@ end '__leak_count_dec'
 //                                 anywhere is freed at its producing scope's exit
 //                                 decref of rc 0→... — see __mm_decref guard.)
 //   user_ptr       = slot_base + 32 (returned)
+// The user region is ZEROED (the slab guarantees it). `__mm_alloc_raw` is the
+// opt-out — see the audit rule on `__slab_alloc_raw` before using it.
 function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWord
+	return __mm_alloc_needzero(size, destructor: destructor, needzero: 1)
+end '__mm_alloc'
+
+// Tracked allocation whose user region is NOT zeroed. Go's `needzero: false`.
+// Same audit rule as `__slab_alloc_raw`: the caller must write every byte before
+// anything can read it, and the region must never be walked as managed pointers.
+function __mm_alloc_raw(size MachineWord, destructor MachineWord) returns MachineWord
+	return __mm_alloc_needzero(size, destructor: destructor, needzero: 0)
+end '__mm_alloc_raw'
+
+function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero MachineWord) returns MachineWord
 	var clampedSize = size
 	if size < 1 'clamp'
 		clampedSize = 1
@@ -2510,7 +2655,14 @@ function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWor
 	#if leakReport(true)
 		__leak_count_inc(destructor, allocRA: __Internals.loadIndirect(__Internals.loadFramePtr() + 8), allocRA2: __leak_walk_2deep(__Internals.loadFramePtr()))
 	#endif
-	let slotBase = __slab_alloc(clampedSize + 32)
+	// The 32-byte header is fully written below on BOTH paths, so only the user
+	// region's zeroing is in question — which is exactly what `needzero` selects.
+	var slotBase = 0
+	if needzero != 0 'zeroed'
+		slotBase = __slab_alloc(clampedSize + 32)
+	end 'zeroed' else 'raw'
+		slotBase = __slab_alloc_raw(clampedSize + 32)
+	end 'raw'
 	// The first header word is reserved (always 0). It is kept so the
 	// destructor / size / refcount offsets stay at their historical
 	// `user_ptr - 24 / -16 / -8`. Under `--rc-sanitize` it instead carries this
@@ -2531,7 +2683,7 @@ function __mm_alloc(size MachineWord, destructor MachineWord) returns MachineWor
 	// comment above and the __mm_decref rc-guard.)
 	__Internals.storeIndirect(slotBase + 24, value: 0)
 	return slotBase + 32
-end '__mm_alloc'
+end '__mm_alloc_needzero'
 
 // Release a tracked allocation. Reads the destructor from [ptr - 24] and
 // invokes it (if non-null) before slab-freeing. The destructor is
@@ -2677,19 +2829,17 @@ let LAYOUT_FLAG_BIT_PACKED = 2
 function __managed_mem_alloc_buffer(byteLen MachineWord) returns MachineWord
 	let buf = __mm_alloc(byteLen, destructor: 0)
 	__mm_incref(buf)
-	// Zero-fill the buffer (matches the C# `mm_raw_alloc`, which zero-fills every
-	// raw allocation). `__mm_alloc` hands back a reused slab slot holding the
-	// previous occupant's bytes. A container that fills its buffer SPARSELY — a
-	// Map/Set hash table writes keys at hashed positions, leaving the rest
-	// unwritten — would have those stale bytes read by the ROOT destructor's
-	// element-walk and decref'd as live managed pointers → a fault (the
-	// String-keyed-map teardown crash). Zero-init makes unoccupied slots read null
-	// so the walk's `if slot != 0` guard skips them.
-	var i = 0
-	while i < byteLen 'zero'
-		__Internals.storeByte(buf, offset: i, value: 0)
-		i = i + 1
-	end 'zero'
+	// The buffer arrives ZEROED — `__mm_alloc` guarantees it, so this function no
+	// longer zeroes it itself (it used to, with a byte-at-a-time loop, on every
+	// Array/Map/Set buffer).
+	//
+	// That guarantee is load-bearing, not a nicety: a container that fills its
+	// buffer SPARSELY — a Map/Set hash table writes keys at hashed positions and
+	// leaves the rest unwritten — would otherwise have the previous occupant's stale
+	// bytes read by the ROOT destructor's element-walk and decref'd as live managed
+	// pointers (the String-keyed-map teardown crash). Zeroed slots read null, so the
+	// walk's `if slot != 0` guard skips them. This buffer must therefore NEVER be
+	// moved to `__mm_alloc_raw`.
 	return buf
 end '__managed_mem_alloc_buffer'
 
@@ -3685,17 +3835,15 @@ function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, e
 		// alloc-at-0 → restore the rc=1 contract (identical to the external path below).
 		__mm_incref(rec)
 		let inlineBuf = rec + MANAGED_MEM_RECORD_SIZE
-		// Zero-fill the inline element region for the same reason
-		// `__managed_mem_alloc_buffer` zeroes external buffers: a reused slab slot
-		// holds the previous occupant's bytes, and a sparsely-filled managed-element
-		// record would have the ROOT/INLINE element-walk decref those stale bytes as
-		// live pointers → a fault. Zero-init makes unoccupied slots read null so the
-		// walk's `if slot != 0` guard skips them.
-		var z = 0
-		while z < inlineBytes 'zero'
-			__Internals.storeByte(inlineBuf, offset: z, value: 0)
-			z = z + 1
-		end 'zero'
+		// The inline element region lives INSIDE this record's own slab slot, which
+		// `__mm_alloc` already handed back zeroed — so there is no zero loop here any
+		// more (there used to be, byte-at-a-time, on every small array).
+		//
+		// The guarantee matters for the same reason it does in
+		// `__managed_mem_alloc_buffer`: a sparsely-filled managed-element record would
+		// otherwise have the ROOT/INLINE element-walk decref the previous occupant's
+		// stale bytes as live pointers. Zeroed slots read null and the walk's
+		// `if slot != 0` guard skips them.
 		__Internals.storeIndirect(rec, value: inlineBuf)
 		__Internals.storeIndirect(rec + MM_OFFSET_LENGTH, value: 0)
 		__Internals.storeIndirect(rec + MM_OFFSET_CAPACITY, value: cap)

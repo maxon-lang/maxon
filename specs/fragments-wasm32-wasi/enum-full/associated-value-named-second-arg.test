@@ -53,21 +53,15 @@ module {
   entry:
     %1 = mir.mov_imm 10 : i64
     %2 = mir.mov_imm 20 : i64
-    %6 = mir.mov_imm 24 : i64
-    %7 = mir.mov_imm 0 : i64
-    %8 = mir.mov_imm 1 : i64
-    %9 = mir.call @stdlib.__mm_alloc(%6, %7)
-    mir.store %8, %9, 0 width: qword
-    mir.store %1, %9, 8 width: qword
-    mir.store %2, %9, 16 width: qword
-    %5 = mir.call @sum(%9)
-    %10 = mir.call @mm_drop(%9)
-    %11 = mir.mov_imm 255 : i64
-    %12 = mir.cmp ugt, %5, %11
-    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+    %3 = mir.call @__construct_TwoParts_values(%1, %2)
+    %5 = mir.call @sum(%3)
+    %6 = mir.call @__mm_decref_maybenull_helper(%3)
+    %7 = mir.mov_imm 255 : i64
+    %8 = mir.cmp ugt, %5, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %13 = mir.global_addr @__panic_msg_2b341ffaaba40490
-    %14 = mir.call @mrt_panic(%13)
+    %9 = mir.global_addr @__panic_msg_2b341ffaaba40490
+    %10 = mir.call @mrt_panic(%9)
   __range_ok_0:
     mir.ret %5
   }

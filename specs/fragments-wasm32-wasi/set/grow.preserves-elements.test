@@ -21,27 +21,28 @@ module {
     %1 = mir.mov_imm 1 : i64
     %18 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %19 = mir.mov_imm 48 : i64
-    %20 = mir.call @stdlib.__mm_alloc(%19, %18)
-    %71 = mir.call @stdlib.__mm_incref(%20)
+    %71 = mir.mov_imm 1 : i64
+    %72 = mir.call @stdlib.__mm_alloc_needzero(%19, %18, %71)
+    %73 = mir.call @stdlib.__mm_incref(%72)
     %21 = mir.global_addr @__rdata_arr_main_0
-    mir.store %21, %20, 0 width: qword
+    mir.store %21, %72, 0 width: qword
     %22 = mir.mov_imm 15 : i64
-    mir.store %22, %20, 8 width: qword
+    mir.store %22, %72, 8 width: qword
     %23 = mir.mov_imm -2 : i64
-    mir.store %23, %20, 16 width: qword
+    mir.store %23, %72, 16 width: qword
     %24 = mir.mov_imm 8 : i64
-    mir.store %24, %20, 24 width: qword
+    mir.store %24, %72, 24 width: qword
     %25 = mir.mov_imm -2 : i64
-    mir.store %25, %20, 32 width: qword
+    mir.store %25, %72, 32 width: qword
     %26 = mir.mov_imm 0 : i64
-    mir.store %26, %20, 40 width: qword
+    mir.store %26, %72, 40 width: qword
     %44 = mir.global_addr @__layout_Array_Int
-    %45 = mir.call @Array.init(%20, %44)
+    %45 = mir.call @Array.init(%72, %44)
     %46 = mir.global_addr @__layout_Set_Int
     %47 = mir.global_addr @__witness_int_Hashable
     %48 = mir.global_addr @__witness_int_Equatable
     %49 = mir.call @Set.init(%45, %46, %47, %48)
-    %72 = mir.call @__mm_decref_maybenull_helper(%45)
+    %74 = mir.call @__mm_decref_maybenull_helper(%45)
     mir.br check_0.header(%1, %1)
   check_0.header(%69: i64, %70: i64):
     %53 = mir.mov_imm 15 : i64
@@ -55,10 +56,10 @@ module {
     %62 = mir.xor.i64 %60, %1
     mir.cond_br %62 [then: missing_0(), else: missing_0.after(%69)]
   check_0.exit:
-    %73 = mir.call @__mm_decref_maybenull_helper(%49)
-    %74 = mir.mov_imm 255 : i64
-    %75 = mir.cmp ugt, %69, %74
-    mir.cond_br %75 [then: __range_panic_0(), else: __range_ok_0()]
+    %75 = mir.call @__mm_decref_maybenull_helper(%49)
+    %76 = mir.mov_imm 255 : i64
+    %77 = mir.cmp ugt, %69, %76
+    mir.cond_br %77 [then: __range_panic_0(), else: __range_ok_0()]
   missing_0:
     %64 = mir.mov_imm 0 : i64
     mir.br missing_0.after(%64)
@@ -66,8 +67,8 @@ module {
     %67 = mir.add.i64 %70, %1
     mir.br check_0.header(%68, %67)
   __range_panic_0:
-    %76 = mir.global_addr @__panic_msg_16982e707298c7c7
-    %77 = mir.call @mrt_panic(%76)
+    %78 = mir.global_addr @__panic_msg_16982e707298c7c7
+    %79 = mir.call @mrt_panic(%78)
   __range_ok_0:
     mir.ret %69
   }

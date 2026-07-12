@@ -73,38 +73,40 @@ module {
     mir.store_slot slot_1, %9
     %2 = mir.mov_imm 16 : i64
     %4 = mir.func_addr @__destruct_Holder
-    %3 = mir.call @stdlib.__mm_alloc(%2, %4)
-    %10 = mir.call @stdlib.__mm_incref(%3)
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.call @stdlib.__mm_alloc_needzero(%2, %4, %10)
+    %12 = mir.call @stdlib.__mm_incref(%11)
     %5 = mir.mov_imm 0 : i64
-    mir.store %5, %3, 0 width: qword
+    mir.store %5, %11, 0 width: qword
     %6 = mir.load_slot slot_0
     %7 = mir.load_slot slot_1
-    mir.store %6, %3, 0 width: qword
-    mir.store %7, %3, 8 width: qword
-    mir.ret %3
+    mir.store %6, %11, 0 width: qword
+    mir.store %7, %11, 8 width: qword
+    mir.ret %11
   }
   func @main() -> u8 {
   entry:
     %1 = mir.mov_imm 9 : i64
     %7 = mir.mov_imm 8 : i64
     %8 = mir.mov_imm 0 : i64
-    %9 = mir.call @stdlib.__mm_alloc(%7, %8)
-    %13 = mir.call @stdlib.__mm_incref(%9)
-    mir.store %1, %9, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.call @stdlib.__mm_alloc_needzero(%7, %8, %9)
+    %14 = mir.call @stdlib.__mm_incref(%10)
+    mir.store %1, %10, 0 width: qword
     %3 = mir.global_addr @__witness_Marker_Tagged
-    %4 = mir.call @Holder.create(%9, %3)
-    %10 = mir.load %4, 0 width: qword
-    %11 = mir.load %4, 8 width: qword
-    %12 = mir.call @callTag(%10, %11)
-    %14 = mir.call @__mm_decref_maybenull_helper(%4)
-    %15 = mir.mov_imm 255 : i64
-    %16 = mir.cmp ugt, %12, %15
-    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+    %4 = mir.call @Holder.create(%10, %3)
+    %11 = mir.load %4, 0 width: qword
+    %12 = mir.load %4, 8 width: qword
+    %13 = mir.call @callTag(%11, %12)
+    %15 = mir.call @__mm_decref_maybenull_helper(%4)
+    %16 = mir.mov_imm 255 : i64
+    %17 = mir.cmp ugt, %13, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %17 = mir.global_addr @__panic_msg_875eeda17181a65d
-    %18 = mir.call @mrt_panic(%17)
+    %18 = mir.global_addr @__panic_msg_875eeda17181a65d
+    %19 = mir.call @mrt_panic(%18)
   __range_ok_0:
-    mir.ret %12
+    mir.ret %13
   }
 }
 ---

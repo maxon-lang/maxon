@@ -30,10 +30,11 @@ module {
     mir.store %9, %4, 32 width: qword
     %11 = mir.mov_imm 8 : i64
     %12 = mir.func_addr @__destruct_Character
-    %10 = mir.call @stdlib.__mm_alloc(%11, %12)
-    mir.store %4, %10, 0 width: qword
-    %14, %15 = mir.try_call @Character.asciiValue(%10)
-    %20 = mir.call @mm_drop(%10)
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.call @stdlib.__mm_alloc_needzero(%11, %12, %20)
+    mir.store %4, %21, 0 width: qword
+    %14, %15 = mir.try_call @Character.asciiValue(%21)
+    %22 = mir.call @mm_drop(%21)
     %16 = mir.mov_imm 0 : i64
     %17 = mir.cmp eq, %15, %16
     mir.cond_br %17 [then: hasAscii_0(), else: hasAscii_0.after()]

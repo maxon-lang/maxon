@@ -72,11 +72,12 @@ module {
     mir.store %1, %10, 32 width: qword
     %17 = mir.mov_imm 16 : i64
     %18 = mir.func_addr @__destruct_String
-    %16 = mir.call @stdlib.__mm_alloc(%17, %18)
-    %56 = mir.call @stdlib.__mm_incref(%16)
-    mir.store %10, %16, 0 width: qword
-    mir.store %55, %16, 8 width: qword
-    mir.br m_0.merge(%16)
+    %56 = mir.mov_imm 1 : i64
+    %57 = mir.call @stdlib.__mm_alloc_needzero(%17, %18, %56)
+    %62 = mir.call @stdlib.__mm_incref(%57)
+    mir.store %10, %57, 0 width: qword
+    mir.store %55, %57, 8 width: qword
+    mir.br m_0.merge(%57)
   m_0.next0:
     %21 = mir.cmp eq, %54, %55
     mir.cond_br %21 [then: m_0.case1(), else: m_0.next1()]
@@ -95,11 +96,12 @@ module {
     mir.store %1, %25, 32 width: qword
     %32 = mir.mov_imm 16 : i64
     %33 = mir.func_addr @__destruct_String
-    %31 = mir.call @stdlib.__mm_alloc(%32, %33)
-    %57 = mir.call @stdlib.__mm_incref(%31)
-    mir.store %25, %31, 0 width: qword
-    mir.store %55, %31, 8 width: qword
-    mir.br m_0.merge(%31)
+    %58 = mir.mov_imm 1 : i64
+    %59 = mir.call @stdlib.__mm_alloc_needzero(%32, %33, %58)
+    %63 = mir.call @stdlib.__mm_incref(%59)
+    mir.store %25, %59, 0 width: qword
+    mir.store %55, %59, 8 width: qword
+    mir.br m_0.merge(%59)
   m_0.next1:
     %35 = mir.mov_imm 2 : i64
     %36 = mir.cmp ge, %54, %35
@@ -122,11 +124,12 @@ module {
     mir.store %1, %43, 32 width: qword
     %50 = mir.mov_imm 16 : i64
     %51 = mir.func_addr @__destruct_String
-    %49 = mir.call @stdlib.__mm_alloc(%50, %51)
-    %58 = mir.call @stdlib.__mm_incref(%49)
-    mir.store %43, %49, 0 width: qword
-    mir.store %55, %49, 8 width: qword
-    mir.br m_0.merge(%49)
+    %60 = mir.mov_imm 1 : i64
+    %61 = mir.call @stdlib.__mm_alloc_needzero(%50, %51, %60)
+    %64 = mir.call @stdlib.__mm_incref(%61)
+    mir.store %43, %61, 0 width: qword
+    mir.store %55, %61, 8 width: qword
+    mir.br m_0.merge(%61)
   }
   func @main() -> u8 {
   entry:
@@ -138,7 +141,7 @@ module {
     %29 = mir.cmp eq, %27, %28
     mir.cond_br %29 [then: empty_0(), else: empty_0.after()]
   empty_0:
-    %32 = mir.call @__mm_decref_maybenull_helper(%2)
+    %34 = mir.call @__mm_decref_maybenull_helper(%2)
     %5 = mir.mov_imm 2 : i64
     mir.ret %5
   empty_0.after:
@@ -160,24 +163,25 @@ module {
     mir.store %17, %12, 32 width: qword
     %19 = mir.mov_imm 16 : i64
     %20 = mir.func_addr @__destruct_String
-    %18 = mir.call @stdlib.__mm_alloc(%19, %20)
-    mir.store %12, %18, 0 width: qword
+    %30 = mir.mov_imm 1 : i64
+    %31 = mir.call @stdlib.__mm_alloc_needzero(%19, %20, %30)
+    mir.store %12, %31, 0 width: qword
     %21 = mir.mov_imm 1 : i64
-    mir.store %21, %18, 8 width: qword
-    %22 = mir.call @String.equals(%2, %18)
-    %30 = mir.call @mm_drop(%18)
+    mir.store %21, %31, 8 width: qword
+    %22 = mir.call @String.equals(%2, %31)
+    %32 = mir.call @mm_drop(%31)
     %23 = mir.mov_imm 1 : i64
-    %31 = mir.call @__mm_decref_maybenull_helper(%2)
+    %33 = mir.call @__mm_decref_maybenull_helper(%2)
     mir.cond_br %22 [then: ternary.merge(%6), else: ternary.else()]
   ternary.else:
     mir.br ternary.merge(%23)
   ternary.merge(%25: i64):
-    %33 = mir.mov_imm 255 : i64
-    %34 = mir.cmp ugt, %25, %33
-    mir.cond_br %34 [then: __range_panic_0(), else: __range_ok_0()]
+    %35 = mir.mov_imm 255 : i64
+    %36 = mir.cmp ugt, %25, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %35 = mir.global_addr @__panic_msg_8de4032e4b365228
-    %36 = mir.call @mrt_panic(%35)
+    %37 = mir.global_addr @__panic_msg_8de4032e4b365228
+    %38 = mir.call @mrt_panic(%37)
   __range_ok_0:
     mir.ret %25
   }

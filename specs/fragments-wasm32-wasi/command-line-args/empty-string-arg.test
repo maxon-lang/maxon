@@ -27,7 +27,7 @@ module {
     %48 = mir.cmp ne, %46, %47
     mir.cond_br %48 [then: inlined_Array.get_1_0(), else: inlined_Array.get_3_0()]
   inlined_Array.get_1_0:
-    %57 = mir.call @__mm_decref_maybenull_helper(%3)
+    %61 = mir.call @__mm_decref_maybenull_helper(%3)
     %49 = mir.mov_imm 0 : i64
     %50 = mir.mov_imm 1 : i64
     mir.br inline_cont_main_0(%49, %50)
@@ -38,7 +38,7 @@ module {
     %10 = mir.cmp ne, %53, %0
     mir.cond_br %10 [then: try_0.otherwise(), else: try_0.merge(%52)]
   try_0.otherwise:
-    %58 = mir.call @__mm_decref_maybenull_helper(%52)
+    %62 = mir.call @__mm_decref_maybenull_helper(%52)
     %12 = mir.global_addr @__istr_0
     %13 = mir.mov_imm 48 : i64
     %14 = mir.func_addr @stdlib.__destruct___ManagedMemory
@@ -52,11 +52,12 @@ module {
     mir.store %0, %15, 32 width: qword
     %22 = mir.mov_imm 16 : i64
     %23 = mir.func_addr @__destruct_String
-    %21 = mir.call @stdlib.__mm_alloc(%22, %23)
-    %54 = mir.call @stdlib.__mm_incref(%21)
-    mir.store %15, %21, 0 width: qword
-    mir.store %5, %21, 8 width: qword
-    mir.br try_0.merge(%21)
+    %54 = mir.mov_imm 1 : i64
+    %55 = mir.call @stdlib.__mm_alloc_needzero(%22, %23, %54)
+    %58 = mir.call @stdlib.__mm_incref(%55)
+    mir.store %15, %55, 0 width: qword
+    mir.store %5, %55, 8 width: qword
+    mir.br try_0.merge(%55)
   try_0.merge(%43: i64):
     %27 = mir.global_addr @__istr_1
     %28 = mir.mov_imm 48 : i64
@@ -71,20 +72,21 @@ module {
     mir.store %0, %30, 32 width: qword
     %37 = mir.mov_imm 16 : i64
     %38 = mir.func_addr @__destruct_String
-    %36 = mir.call @stdlib.__mm_alloc(%37, %38)
-    mir.store %30, %36, 0 width: qword
-    mir.store %5, %36, 8 width: qword
-    %40 = mir.call @String.equals(%43, %36)
-    %56 = mir.call @__mm_decref_maybenull_helper(%43)
-    %55 = mir.call @mm_drop(%36)
+    %56 = mir.mov_imm 1 : i64
+    %57 = mir.call @stdlib.__mm_alloc_needzero(%37, %38, %56)
+    mir.store %30, %57, 0 width: qword
+    mir.store %5, %57, 8 width: qword
+    %40 = mir.call @String.equals(%43, %57)
+    %60 = mir.call @__mm_decref_maybenull_helper(%43)
+    %59 = mir.call @mm_drop(%57)
     mir.cond_br %40 [then: check_0(), else: check_0.after()]
   check_0:
     mir.ret %0
   check_0.after:
     mir.ret %5
   __rc_edge_8_0:
-    %59 = mir.call @stdlib.__mm_incref(%45)
-    %60 = mir.call @__mm_decref_maybenull_helper(%3)
+    %63 = mir.call @stdlib.__mm_incref(%45)
+    %64 = mir.call @__mm_decref_maybenull_helper(%3)
     mir.br inline_cont_main_0(%45, %51)
   }
 }

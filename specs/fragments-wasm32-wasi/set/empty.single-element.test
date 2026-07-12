@@ -12,38 +12,39 @@ module {
   entry:
     %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
     %5 = mir.mov_imm 48 : i64
-    %6 = mir.call @stdlib.__mm_alloc(%5, %4)
-    %27 = mir.call @stdlib.__mm_incref(%6)
+    %27 = mir.mov_imm 1 : i64
+    %28 = mir.call @stdlib.__mm_alloc_needzero(%5, %4, %27)
+    %29 = mir.call @stdlib.__mm_incref(%28)
     %7 = mir.global_addr @__rdata_arr_main_0
-    mir.store %7, %6, 0 width: qword
+    mir.store %7, %28, 0 width: qword
     %8 = mir.mov_imm 1 : i64
-    mir.store %8, %6, 8 width: qword
+    mir.store %8, %28, 8 width: qword
     %9 = mir.mov_imm -2 : i64
-    mir.store %9, %6, 16 width: qword
+    mir.store %9, %28, 16 width: qword
     %10 = mir.mov_imm 8 : i64
-    mir.store %10, %6, 24 width: qword
+    mir.store %10, %28, 24 width: qword
     %11 = mir.mov_imm -2 : i64
-    mir.store %11, %6, 32 width: qword
+    mir.store %11, %28, 32 width: qword
     %12 = mir.mov_imm 0 : i64
-    mir.store %12, %6, 40 width: qword
+    mir.store %12, %28, 40 width: qword
     %16 = mir.global_addr @__layout_Array_Int
-    %17 = mir.call @Array.init(%6, %16)
+    %17 = mir.call @Array.init(%28, %16)
     %18 = mir.global_addr @__layout_Set_Int
     %19 = mir.global_addr @__witness_int_Hashable
     %20 = mir.global_addr @__witness_int_Equatable
     %21 = mir.call @Set.init(%17, %18, %19, %20)
-    %28 = mir.call @__mm_decref_maybenull_helper(%17)
+    %30 = mir.call @__mm_decref_maybenull_helper(%17)
     %23 = mir.global_addr @__layout_Set_Int
     %24 = mir.global_addr @__witness_int_Hashable
     %25 = mir.global_addr @__witness_int_Equatable
     %26 = mir.call @Set.count(%21, %23, %24, %25)
-    %29 = mir.call @__mm_decref_maybenull_helper(%21)
-    %30 = mir.mov_imm 255 : i64
-    %31 = mir.cmp ugt, %26, %30
-    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+    %31 = mir.call @__mm_decref_maybenull_helper(%21)
+    %32 = mir.mov_imm 255 : i64
+    %33 = mir.cmp ugt, %26, %32
+    mir.cond_br %33 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %32 = mir.global_addr @__panic_msg_0b3d20ac628a98fc
-    %33 = mir.call @mrt_panic(%32)
+    %34 = mir.global_addr @__panic_msg_0b3d20ac628a98fc
+    %35 = mir.call @mrt_panic(%34)
   __range_ok_0:
     mir.ret %26
   }

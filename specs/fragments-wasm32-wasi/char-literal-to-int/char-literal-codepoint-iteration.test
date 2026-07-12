@@ -31,46 +31,47 @@ module {
     mir.store %0, %5, 32 width: qword
     %12 = mir.mov_imm 16 : i64
     %13 = mir.func_addr @__destruct_String
-    %11 = mir.call @stdlib.__mm_alloc(%12, %13)
-    mir.store %5, %11, 0 width: qword
+    %37 = mir.mov_imm 1 : i64
+    %38 = mir.call @stdlib.__mm_alloc_needzero(%12, %13, %37)
+    mir.store %5, %38, 0 width: qword
     %14 = mir.mov_imm 1 : i64
-    mir.store %14, %11, 8 width: qword
-    %37 = mir.load %11, 0 width: qword
-    %58 = mir.mov_imm 8 : i64
-    %59 = mir.sub.i64 %37, %58
-    mir.atomic_inc %59
-    %39 = mir.call @CodepointView.create(%37)
-    %60 = mir.call @mm_drop(%11)
-    %16, %17 = mir.try_call @CodepointView.createIterator(%39)
+    mir.store %14, %38, 8 width: qword
+    %39 = mir.load %38, 0 width: qword
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.sub.i64 %39, %60
+    mir.atomic_inc %61
+    %41 = mir.call @CodepointView.create(%39)
+    %62 = mir.call @mm_drop(%38)
+    %16, %17 = mir.try_call @CodepointView.createIterator(%41)
     %19 = mir.cmp ne, %17, %0
     mir.cond_br %19 [then: __rc_edge_0_0(), else: chars_0(%0)]
   inlined_CodepointIterator.advance_0_0:
-    %40 = mir.load %16, 8 width: qword
-    %41 = mir.load %16, 20 width: byte
-    %42 = mir.add.i64 %40, %41
-    %43 = mir.load %16, 0 width: qword
-    %44 = mir.load %43, 8 width: qword
-    %45 = mir.cmp ge, %42, %44
-    mir.cond_br %45 [then: inlined_CodepointIterator.advance_1_0(), else: inlined_CodepointIterator.advance_2_0()]
+    %42 = mir.load %16, 8 width: qword
+    %43 = mir.load %16, 20 width: byte
+    %44 = mir.add.i64 %42, %43
+    %45 = mir.load %16, 0 width: qword
+    %46 = mir.load %45, 8 width: qword
+    %47 = mir.cmp ge, %44, %46
+    mir.cond_br %47 [then: inlined_CodepointIterator.advance_1_0(), else: inlined_CodepointIterator.advance_2_0()]
   inlined_CodepointIterator.advance_1_0:
-    %46 = mir.mov_imm 0 : i64
-    %47 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_2(%46, %47)
+    %48 = mir.mov_imm 0 : i64
+    %49 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%48, %49)
   inlined_CodepointIterator.advance_2_0:
-    mir.store %42, %16, 8 width: qword
-    %48 = mir.load %16, 0 width: qword
-    %49 = mir.load %16, 8 width: qword
-    %50 = mir.call @stdlib.helpers.string.utf8DecodeAt(%48, %49)
-    mir.store %50, %16, 16 width: word
-    %51 = mir.load %16, 0 width: qword
-    %52 = mir.load %16, 8 width: qword
-    %53 = mir.call @stdlib.helpers.string.utf8ByteLengthAt(%51, %52)
-    mir.store %53, %16, 20 width: byte
-    %54 = mir.mov_imm 0 : i64
-    %55 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_2(%54, %55)
-  inline_cont_main_2(%56: i64, %57: i64):
-    %24 = mir.cmp ne, %57, %0
+    mir.store %44, %16, 8 width: qword
+    %50 = mir.load %16, 0 width: qword
+    %51 = mir.load %16, 8 width: qword
+    %52 = mir.call @stdlib.helpers.string.utf8DecodeAt(%50, %51)
+    mir.store %52, %16, 16 width: word
+    %53 = mir.load %16, 0 width: qword
+    %54 = mir.load %16, 8 width: qword
+    %55 = mir.call @stdlib.helpers.string.utf8ByteLengthAt(%53, %54)
+    mir.store %55, %16, 20 width: byte
+    %56 = mir.mov_imm 0 : i64
+    %57 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_2(%56, %57)
+  inline_cont_main_2(%58: i64, %59: i64):
+    %24 = mir.cmp ne, %59, %0
     mir.cond_br %24 [then: __rc_edge_10_0(), else: chars_0(%34)]
   chars_0(%35: i64):
     %26 = mir.call @CodepointIterator.current(%16)
@@ -78,9 +79,9 @@ module {
     %29 = mir.cmp eq, %26, %28
     mir.cond_br %29 [then: dash_0(), else: dash_0.after(%35)]
   chars_0.exit(%36: i64):
-    %64 = mir.mov_imm 255 : i64
-    %65 = mir.cmp ugt, %36, %64
-    mir.cond_br %65 [then: __range_panic_0(), else: __range_ok_0()]
+    %66 = mir.mov_imm 255 : i64
+    %67 = mir.cmp ugt, %36, %66
+    mir.cond_br %67 [then: __range_panic_0(), else: __range_ok_0()]
   dash_0:
     %32 = mir.mov_imm 1 : i64
     %33 = mir.add.i64 %35, %32
@@ -88,15 +89,15 @@ module {
   dash_0.after(%34: i64):
     mir.br inlined_CodepointIterator.advance_0_0()
   __rc_edge_0_0:
-    %61 = mir.call @__mm_decref_maybenull_helper(%39)
+    %63 = mir.call @__mm_decref_maybenull_helper(%41)
     mir.br chars_0.exit(%0)
   __rc_edge_10_0:
-    %62 = mir.call @__mm_decref_maybenull_helper(%16)
-    %63 = mir.call @__mm_decref_maybenull_helper(%39)
+    %64 = mir.call @__mm_decref_maybenull_helper(%16)
+    %65 = mir.call @__mm_decref_maybenull_helper(%41)
     mir.br chars_0.exit(%34)
   __range_panic_0:
-    %66 = mir.global_addr @__panic_msg_2b656b6c9153ad15
-    %67 = mir.call @mrt_panic(%66)
+    %68 = mir.global_addr @__panic_msg_2b656b6c9153ad15
+    %69 = mir.call @mrt_panic(%68)
   __range_ok_0:
     mir.ret %36
   }

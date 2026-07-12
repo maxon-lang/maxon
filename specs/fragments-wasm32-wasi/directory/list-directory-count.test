@@ -33,14 +33,15 @@ module {
     mir.store %8, %3, 32 width: qword
     %10 = mir.mov_imm 16 : i64
     %11 = mir.func_addr @__destruct_String
-    %9 = mir.call @stdlib.__mm_alloc(%10, %11)
-    %30 = mir.call @stdlib.__mm_incref(%9)
-    mir.store %3, %9, 0 width: qword
+    %30 = mir.mov_imm 1 : i64
+    %31 = mir.call @stdlib.__mm_alloc_needzero(%10, %11, %30)
+    %32 = mir.call @stdlib.__mm_incref(%31)
+    mir.store %3, %31, 0 width: qword
     %12 = mir.mov_imm 1 : i64
-    mir.store %12, %9, 8 width: qword
-    %13 = mir.call @FilePath.init(%9)
+    mir.store %12, %31, 8 width: qword
+    %13 = mir.call @FilePath.init(%31)
     %14, %15 = mir.try_call @Directory.list(%13)
-    %31 = mir.call @__mm_decref_maybenull_helper(%13)
+    %33 = mir.call @__mm_decref_maybenull_helper(%13)
     %16 = mir.mov_imm 0 : i64
     %17 = mir.cmp ne, %15, %16
     mir.cond_br %17 [then: try_0.otherwise(), else: try_0.merge()]
@@ -54,19 +55,19 @@ module {
     %25 = mir.cmp ge, %23, %24
     mir.cond_br %25 [then: ok_0(), else: ok_0.after()]
   ok_0:
-    %33 = mir.call @__mm_decref_maybenull_helper(%14)
+    %35 = mir.call @__mm_decref_maybenull_helper(%14)
     %26 = mir.mov_imm 42 : i64
     mir.ret %26
   ok_0.after:
     %28 = mir.global_addr @__layout_Array_FilePath
     %29 = mir.call @Array.count(%14, %28)
-    %32 = mir.call @__mm_decref_maybenull_helper(%14)
-    %34 = mir.mov_imm 255 : i64
-    %35 = mir.cmp ugt, %29, %34
-    mir.cond_br %35 [then: __range_panic_0(), else: __range_ok_0()]
+    %34 = mir.call @__mm_decref_maybenull_helper(%14)
+    %36 = mir.mov_imm 255 : i64
+    %37 = mir.cmp ugt, %29, %36
+    mir.cond_br %37 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %36 = mir.global_addr @__panic_msg_97d8b5fc0a11f600
-    %37 = mir.call @mrt_panic(%36)
+    %38 = mir.global_addr @__panic_msg_97d8b5fc0a11f600
+    %39 = mir.call @mrt_panic(%38)
   __range_ok_0:
     mir.ret %29
   }

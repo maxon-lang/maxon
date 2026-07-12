@@ -1896,58 +1896,22 @@ end
 // returned pointer carries a 24-byte mm header and refcount=1. Callers
 // that drop their reference must call mm_decref; callers that don't are
 // effectively leaking under __mm_alloc_count.
-func mrt_memzero 2 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-    v2 = std constI64 0
-    std storeSlot 2 v2
-    std br loop
-
-  block loop:
-    v3 = std loadSlot 2
-    v4 = std loadSlot 1
-    v5 = std cmpI64Lt v3 v4
-    std condBr v5 body done
-
-  block body:
-    v6 = std loadSlot 0
-    v7 = std loadSlot 2
-    v8 = std addI64 v6 v7
-    v9 = std constI64 0
-    v13 = std constI64 0
-    std storeByte v8 v9 v13
-    v10 = std loadSlot 2
-    v11 = std constI64 1
-    v12 = std addI64 v10 v11
-    std storeSlot 2 v12
-    std br loop
-
-  block done:
-    v14 = std constI64 0
-    std ret v14
-end
-
+// The buffer arrives ZEROED: `__mm_alloc` guarantees it, so this no longer runs a
+// zero-fill of its own (it used to, byte-at-a-time, on EVERY raw allocation).
+//
+// The guarantee is load-bearing. A sparsely-filled container buffer — a Map/Set
+// hash table writes keys at hashed positions and leaves the rest unwritten — would
+// otherwise hold the previous occupant's bytes in those slots, and the container's
+// element-walk would decref that junk as a live pointer and fault. Zeroed slots
+// read null so the walk's `if slot != 0` guard skips them. This buffer must
+// therefore NEVER move to `__mm_alloc_raw`.
 func mrt_alloc 1 i64
   block entry:
     v0 = std param 0 i64
-    std storeSlot 0 v0
     v1 = std constI64 0
     v3 = std call __mm_alloc v0 v1
-    std storeSlot 1 v3
     // alloc-at-0 → restore the rc=1 contract this raw-buffer wrapper promises.
     v4 = std call __mm_incref v3
-    // Zero the buffer (matches the C# `mm_raw_alloc`, which zero-fills every raw
-    // allocation). A reused slab slot holds the previous occupant's bytes; a
-    // sparsely-filled container buffer (a Map/Set hash table) leaves unwritten
-    // slots holding that garbage, and the container's element-walk would then
-    // decref the junk as a live pointer → fault. Zero-init makes unoccupied slots
-    // read null so the walk's `if slot != 0` guard skips them.
-    v5 = std loadSlot 1
-    v6 = std loadSlot 0
-    std call mrt_memzero v5 v6
     std ret v3
 end
 
@@ -1956,12 +1920,14 @@ end
 // `__mm_alloc` returns rc=0, so incref to the rc=1 contract the caller
 // (e.g. the hand-emitted `__ManagedSocket` / `__ManagedFile` wrappers in the
 // backends) expects. No zero-fill — the caller fully initializes the fixed-size
-// wrapper struct it allocates.
+// wrapper struct it allocates — so it takes the __mm_alloc_raw path (Go's
+// needzero=false), making that long-standing contract machine-checkable instead of
+// merely documented. See the audit rule on __slab_alloc_raw in Internals.maxon.
 func mrt_alloc_with_dtor 2 i64
   block entry:
     v0 = std param 0 i64
     v1 = std param 1 i64
-    v3 = std call __mm_alloc v0 v1
+    v3 = std call __mm_alloc_raw v0 v1
     v4 = std call __mm_incref v3
     std ret v3
 end
@@ -4071,14 +4037,21 @@ func mm_realloc 2 i64
     v15 = std loadIndirect v14 0
     std storeSlot 3 v15
 
-    // new_ptr = __mm_alloc(new_size, destructor). This refreshes the
+    // new_ptr = __mm_alloc_raw(new_size, destructor). This refreshes the
     // destructor on the new buffer so a subsequent mm_decref still has it.
     // alloc-at-0: the new buffer INHERITS the old object's reference (realloc
     // identity), so incref to rc=1 — the old buffer is slab-freed below without
     // a matching decref, so its +1 transfers here.
+    //
+    // RAW (Go's needzero=false), and this is Go's growslice exactly: every byte of
+    // the new buffer is written before anyone can read it — the memcpy below fills
+    // [0, copy_size) and the tail zero after it fills [copy_size, new_size). Asking
+    // the slab to zero it first would be a wasted full pass over the buffer.
+    // This is one of only two audited __mm_alloc_raw callers; see the audit rule on
+    // __slab_alloc_raw in Internals.maxon before adding another.
     v16 = std loadSlot 1
     v17 = std loadSlot 3
-    v19 = std call __mm_alloc v16 v17
+    v19 = std call __mm_alloc_raw v16 v17
     std storeSlot 4 v19
     v35 = std call __mm_incref v19
 
@@ -4105,19 +4078,21 @@ func mm_realloc 2 i64
     v27 = std loadSlot 5
     std memcpy v25 v26 v27
 
-    // Zero the GROWN tail [copy_size, new_size). The new buffer came from
-    // __mm_alloc (uninitialized slab bytes); memcpy only filled [0, copy_size).
-    // A container that grows its buffer and fills it SPARSELY (a Map/Set hash
-    // table) leaves the tail slots holding garbage, which its element-walk would
-    // decref as live pointers → fault. Zeroing the tail makes unoccupied slots
-    // read null so the walk skips them (matches C# `mm_raw_realloc`, whose new
-    // buffer is zero-filled by `mm_raw_alloc` before the copy).
+    // Zero the GROWN tail [copy_size, new_size). This is the OTHER HALF of the
+    // __mm_alloc_raw bargain above: the memcpy filled the prefix, this fills the
+    // rest, and between them every byte of the new buffer is written. It is not
+    // redundant work — it is what MAKES the raw allocation safe.
+    //
+    // It is also load-bearing on its own terms: a container that grows its buffer
+    // and fills it SPARSELY (a Map/Set hash table) leaves the tail slots holding
+    // garbage, which its element-walk would decref as live pointers → fault. Zeroing
+    // the tail makes unoccupied slots read null so the walk skips them.
     v40 = std loadSlot 4
     v41 = std loadSlot 5
     v42 = std addI64 v40 v41
     v43 = std loadSlot 1
     v44 = std subI64 v43 v41
-    std call mrt_memzero v42 v44
+    std memzero v42 v44
 
     // --leak-report census untrack: the OLD buffer is about to be slab-freed
     // directly (bypassing __mm_free), so its per-destructor census entry — bumped

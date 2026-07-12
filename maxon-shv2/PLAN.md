@@ -296,6 +296,15 @@ so it lands in slices, each WITH the Stage-2 milestone that first needs it:
   `RuntimeEmitter.DebugStream.cs`) — this is what lets mm-trace gate 2.4 onward. v1's
   force-seeded bootstrap roots (`__slab_init`, `__mm_alloc`, `__managed_mem_create`, …)
   become a real obligation here.
+  **The allocator R1 emits must ALWAYS RETURN ZEROED MEMORY, from commit 1** — it is a
+  property of the allocator, not a thing each caller remembers. Non-zeroing alloc cost
+  v1 at least three separately root-caused bugs (the `__gt_spawn` `cancel_flag`
+  deadlock, the socket `OVERLAPPED.hEvent` IOCP hang, and `mrt_alloc`'s Map/Set hash
+  tables decref'ing garbage), each "fixed" by bolting a zeroing loop onto the caller.
+  Retrofitting the guarantee later means re-auditing every raw-buffer call site.
+  See **ARCHITECTURE.md → "Allocator: the zeroing contract"** for the full design
+  (Go's `needzero` model, the bump cursor, `__slab_alloc_raw` + its audit rule, and the
+  memzero size ladder R1's backend must emit).
 - **R2 @ 2.8:** string runtime (`BuiltinStringLiteral` backing, UCD table access).
 - **R3 @ Stage 5 (latest):** the GT scheduler (`emitX64Gt*` port; allocator mirrored
   from the C# sharded design, not v1's single-shared-mcache). A single-threaded

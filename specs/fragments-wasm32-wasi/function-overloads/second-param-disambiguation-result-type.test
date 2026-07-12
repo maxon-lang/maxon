@@ -47,42 +47,43 @@ module {
     %1 = mir.mov_imm 10 : i64
     %14 = mir.mov_imm 8 : i64
     %15 = mir.mov_imm 0 : i64
-    %16 = mir.call @stdlib.__mm_alloc(%14, %15)
-    mir.store %1, %16, 0 width: qword
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.call @stdlib.__mm_alloc_needzero(%14, %15, %16)
+    mir.store %1, %17, 0 width: qword
     %4 = mir.mov_imm 5 : i64
-    %17 = mir.load %16, 0 width: qword
-    %18 = mir.add.i64 %17, %4
+    %18 = mir.load %17, 0 width: qword
+    %19 = mir.add.i64 %18, %4
     %7 = mir.mov_imm 1 : i64
     mir.br inlined_lookup$Registry$bool_0_1()
   inlined_lookup$Registry$bool_0_1:
     mir.cond_br %7 [then: inlined_lookup$Registry$bool_1_2(), else: inlined_lookup$Registry$bool_2_3()]
   inlined_lookup$Registry$bool_1_2:
-    %19 = mir.load %16, 0 width: qword
-    %20 = mir.mov_imm 0 : i64
-    %21 = mir.cmp gt, %19, %20
-    mir.br inline_cont_main_0(%21)
-  inlined_lookup$Registry$bool_2_3:
-    %22 = mir.mov_imm 0 : i64
+    %20 = mir.load %17, 0 width: qword
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.cmp gt, %20, %21
     mir.br inline_cont_main_0(%22)
-  inline_cont_main_0(%23: i1):
+  inlined_lookup$Registry$bool_2_3:
+    %23 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%23)
+  inline_cont_main_0(%24: i1):
     mir.br inlined_useBool_0_0()
   inlined_useBool_0_0:
-    mir.cond_br %23 [then: inlined_useBool_1_0(), else: inlined_useBool_2_0()]
+    mir.cond_br %24 [then: inlined_useBool_1_0(), else: inlined_useBool_2_0()]
   inlined_useBool_1_0:
-    %24 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_4(%24)
-  inlined_useBool_2_0:
-    %25 = mir.mov_imm 0 : i64
+    %25 = mir.mov_imm 1 : i64
     mir.br inline_cont_main_4(%25)
-  inline_cont_main_4(%26: i64):
-    %13 = mir.add.i64 %18, %26
-    %27 = mir.call @mm_drop(%16)
-    %28 = mir.mov_imm 255 : i64
-    %29 = mir.cmp ugt, %13, %28
-    mir.cond_br %29 [then: __range_panic_0(), else: __range_ok_0()]
+  inlined_useBool_2_0:
+    %26 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_4(%26)
+  inline_cont_main_4(%27: i64):
+    %13 = mir.add.i64 %19, %27
+    %28 = mir.call @mm_drop(%17)
+    %29 = mir.mov_imm 255 : i64
+    %30 = mir.cmp ugt, %13, %29
+    mir.cond_br %30 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %30 = mir.global_addr @__panic_msg_97939554e5f10bfb
-    %31 = mir.call @mrt_panic(%30)
+    %31 = mir.global_addr @__panic_msg_97939554e5f10bfb
+    %32 = mir.call @mrt_panic(%31)
   __range_ok_0:
     mir.ret %13
   }

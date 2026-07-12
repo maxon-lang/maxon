@@ -46,11 +46,12 @@ module {
     %4 = mir.stack_slot_addr slot_2
     %5 = mir.mov_imm 8 : i64
     %6 = mir.mov_imm 0 : i64
-    %7 = mir.call @stdlib.__mm_alloc(%5, %6)
-    mir.store %4, %7, 0 width: qword
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.call @stdlib.__mm_alloc_needzero(%5, %6, %12)
+    mir.store %4, %13, 0 width: qword
     %9 = mir.mov_imm 10 : i64
-    %10 = mir.indirect_call %3(%9, %7)
-    %12 = mir.call @mm_drop(%7)
+    %10 = mir.indirect_call %3(%9, %13)
+    %14 = mir.call @mm_drop(%13)
     mir.ret %10
   }
   func @main() -> u8 {
@@ -58,16 +59,17 @@ module {
     %1 = mir.mov_imm 5 : i64
     %5 = mir.mov_imm 8 : i64
     %6 = mir.mov_imm 0 : i64
-    %7 = mir.call @stdlib.__mm_alloc(%5, %6)
-    mir.store %1, %7, 0 width: qword
-    %4 = mir.call @Box.greet(%7)
-    %8 = mir.call @mm_drop(%7)
-    %9 = mir.mov_imm 255 : i64
-    %10 = mir.cmp ugt, %4, %9
-    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.call @stdlib.__mm_alloc_needzero(%5, %6, %7)
+    mir.store %1, %8, 0 width: qword
+    %4 = mir.call @Box.greet(%8)
+    %9 = mir.call @mm_drop(%8)
+    %10 = mir.mov_imm 255 : i64
+    %11 = mir.cmp ugt, %4, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %11 = mir.global_addr @__panic_msg_34f2f7cdf8d67875
-    %12 = mir.call @mrt_panic(%11)
+    %12 = mir.global_addr @__panic_msg_34f2f7cdf8d67875
+    %13 = mir.call @mrt_panic(%12)
   __range_ok_0:
     mir.ret %4
   }
