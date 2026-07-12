@@ -9,6 +9,11 @@
 //   Phase 3  Maxon → Std  : lowerMaxonToStd              (maxonModule → stdModule)
 //   Phase 7  Std → Target : handled directly by the backend (not pipeline passes)
 //
+// PHI RESOLUTION moved OUT of the pipeline at M5: the register allocator consumes
+// `blockArgs`/`branchEdges` DIRECTLY and does SSA destruction after coloring, so
+// the M4b `eliminatePhis` Std pass is retired (it eagerly inserted edge copies and
+// cleared the phi model before the backend, which the biased colorer needs intact).
+//
 // There is NO MIR tier — see StdDialect's header. v1's `lowerStdToMir` pass and
 // `mirModule` field are gone, and everything v1 ran ON the MIR tier (instruction
 // scheduling, coalescing, and the desugaring that becomes `lowerToMachineForm`)
@@ -32,11 +37,6 @@ export union PassKind
 	semanticCheck
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
-	// Phase 4: Std-tier. M4b's phi elimination — resolves the loop-header / loop-exit
-	// block-args the parser's on-the-fly SSA produced into coalesced values + copies
-	// before the backend (which has no phi). The first real Std-tier pass; the M3+
-	// optimizers (mem2reg-as-canonicalize, cse, licm, dce) grow in alongside it.
-	eliminatePhis
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
@@ -61,9 +61,6 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
-		// Phi elimination is intra-function (a phi's operands and predecessors are all
-		// in the same function), so it joins the per-function fan-out at M5.
-		eliminatePhis gives PassClassification.perFunction
 	end 'classify'
 end 'classifyPass'
 
@@ -73,7 +70,6 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
-		eliminatePhis gives "eliminatePhis"
 	end 'name'
 end 'passKindToString'
 
@@ -94,7 +90,6 @@ export function buildDefaultPipeline() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
-	passes.push(PassKind.eliminatePhis)
 	return passes
 end 'buildDefaultPipeline'
 
@@ -159,7 +154,6 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule)
-			eliminatePhis then eliminatePhis(self.stdModule)
 		end 'dispatch'
 	end 'dispatch'
 end 'PassPipeline'

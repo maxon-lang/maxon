@@ -1,0 +1,247 @@
+// TargetOperands — the register allocator's OPERAND MODEL.
+//
+// Every consumer that needs "which registers does this op read, and which does it
+// write?" — dense liveness, the colorer, the AllocChecker — reads it from exactly
+// ONE place: `targetOpOperands`, an EXHAUSTIVE match over every `TargetOp` with NO
+// bare `default`. So a new `TargetOp` variant is a COMPILE error here rather than a
+// silent miscompile (the ad-hoc "which field is a register / is this read-modify-
+// write?" knowledge would otherwise be smeared across three passes). This is the
+// operand model regalloc2 is built on, adapted to shv2's thin Target tier.
+//
+// DATA REP (design §"Data representation"): an operand is PACKED INTO ONE
+// `MachineWord`, and `targetOpOperands` fills a REUSABLE dense int buffer
+// (`OperandList` = `Array with MachineWord`, so zero heap boxes per operand —
+// the trap an `Array with Operand`-struct would spring, one refcounted object per
+// operand on the hottest path). Named accessor functions read the packed fields;
+// named bit-field constants define the layout in one place.
+
+// Packed operand encoding. Low bits carry the small flag fields; the high bits
+// carry the vreg (tagged physical/virtual so any value id fits with no cap). A full
+// machine word, so a shifted-up value id is never truncated.
+export typealias Operand = int(0 to u64.max)
+
+// A reusable dense buffer of packed operands for one op. `targetOpOperands`
+// clears it (keeping capacity) and refills it, so it is allocated once and reused
+// across every op of every function.
+export typealias OperandList = Array with Operand
+
+// Index of an operand within an op's own operand list — the target of a `reuse`
+// constraint (a def that must land in the same register as an earlier operand).
+export typealias OperandIndex = int(0 to u64.max)
+
+// --- Operand field kinds (typed views of the packed bits) ---
+
+// Whether the operand READS the register (a use) or WRITES it (a def).
+export enum OperandKind
+	use
+	def
+end 'OperandKind'
+
+// When the operand acts, within the op's execution: an `early` use is read
+// before `late` defs are written, so a `late` def may reuse an `early` use's
+// register once that use is dead. Makes "may this def reuse a dying use?" a
+// DECLARED fact per operand rather than an emergent property of sweep order.
+export enum OperandPosition
+	early
+	late
+end 'OperandPosition'
+
+// --- Packed layout (bit fields of an `Operand`), named in one place ---
+
+// bit 0: kind (0 = use, 1 = def).
+let OperandKindBit = 0x1
+
+// bit 1: position (0 = early, 1 = late).
+let OperandPositionBit = 0x2
+
+// bits 2-3: constraint tag (see the tag constants below).
+let OperandConstraintTagShift = 2
+let OperandConstraintTagMask = 0x3
+
+// bits 4-11: constraint argument (operand index for `reuse`, register number for
+// `fixedReg`) — 8 bits, ample for both.
+let OperandConstraintArgShift = 4
+let OperandConstraintArgMask = 0xFF
+
+// bit 12: vreg tag (0 = physical, 1 = virtual). bits 13+: vreg payload (physical
+// register number, or the value id — shifted clear of every flag field, so no
+// value id is ever truncated).
+let OperandVRegShift = 13
+let OperandVRegVirtualBit = 0x1000
+
+// Constraint tags stored in the 2-bit constraint-tag field — the register-assignment
+// constraint on an operand:
+//   any (default) — any allocatable register.
+//   reuse         — a def that must land in the SAME register as the operand named by
+//                   the constraint arg (the two-address `dest ⟸ input` rule).
+//   fixedReg      — pinned to the physical register named by the constraint arg (M5's
+//                   idiv / call ABI).
+let OperandConstraintTagAny = 0
+let OperandConstraintTagReuse = 1
+let OperandConstraintTagFixed = 2
+
+// --- Packing ---
+
+// Encode a vreg's payload into the high bits, tagging physical vs virtual.
+function packVRegBits(vreg X64VReg) returns MachineWord
+	return match vreg 'v'
+		physical(reg) gives reg.rawValue shl OperandVRegShift
+		virtual(id) gives OperandVRegVirtualBit or (id shl OperandVRegShift)
+	end 'v'
+end 'packVRegBits'
+
+// Assemble a packed operand from its typed fields.
+function packOperand(vreg X64VReg, kind OperandKind, position OperandPosition, constraintTag MachineWord, constraintArg MachineWord) returns Operand
+	var word = packVRegBits(vreg)
+	if operandKindIsDef(kind) 'isDef'
+		word = word or OperandKindBit
+	end 'isDef'
+	if operandPositionIsLate(position) 'isLate'
+		word = word or OperandPositionBit
+	end 'isLate'
+	word = word or (constraintTag shl OperandConstraintTagShift)
+	word = word or (constraintArg shl OperandConstraintArgShift)
+	return word
+end 'packOperand'
+
+function operandKindIsDef(kind OperandKind) returns bool
+	return match kind 'k'
+		use gives false
+		def gives true
+	end 'k'
+end 'operandKindIsDef'
+
+function operandPositionIsLate(position OperandPosition) returns bool
+	return match position 'p'
+		early gives false
+		late gives true
+	end 'p'
+end 'operandPositionIsLate'
+
+// Append helpers keep `targetOpOperands` a single readable statement per operand.
+function pushUse(buf OperandList, vreg X64VReg)
+	buf.push(packOperand(vreg, kind: OperandKind.use, position: OperandPosition.early, constraintTag: OperandConstraintTagAny, constraintArg: 0))
+end 'pushUse'
+
+function pushDef(buf OperandList, vreg X64VReg)
+	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagAny, constraintArg: 0))
+end 'pushDef'
+
+// A read-modify-write def: a `late` def whose register REUSES the operand at
+// `reuseIndex` (the same vreg read at `early`). Models the two-address `add`/
+// `sub`/`imul`/`neg`, whose destination is also their first source.
+function pushReuseDef(buf OperandList, vreg X64VReg, reuseIndex OperandIndex)
+	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagReuse, constraintArg: reuseIndex))
+end 'pushReuseDef'
+
+// --- Accessors (read the packed bits back) ---
+
+export function operandIsDef(op Operand) returns bool
+	return (op and OperandKindBit) != 0
+end 'operandIsDef'
+
+// --- Reuse read-API (consumed by M5.2's Reuse rework) ---
+// The two-address seed `mov` is deleted in M5.2: ISel emits one reuse-def op and the
+// allocator materializes the copy only when the input outlives it. That rework reads
+// the constraint field these accessors decode; `targetOpOperands` already SETS it (via
+// `pushReuseDef`), so the constraint is live in the packing today even though nothing
+// reads it back until then.
+export function operandConstraintTag(op Operand) returns MachineWord
+	return (op shr OperandConstraintTagShift) and OperandConstraintTagMask
+end 'operandConstraintTag'
+
+export function operandConstraintArg(op Operand) returns MachineWord
+	return (op shr OperandConstraintArgShift) and OperandConstraintArgMask
+end 'operandConstraintArg'
+
+export function operandIsReuseDef(op Operand) returns bool
+	return operandIsDef(op) and operandConstraintTag(op) == OperandConstraintTagReuse
+end 'operandIsReuseDef'
+
+export function operandIsVirtual(op Operand) returns bool
+	return (op and OperandVRegVirtualBit) != 0
+end 'operandIsVirtual'
+
+// The vreg payload: the value id for a virtual operand, the register number for a
+// physical one. Callers gate on `operandIsVirtual` first.
+export function operandPayload(op Operand) returns MachineWord
+	return op shr OperandVRegShift
+end 'operandPayload'
+
+// The value id of a VIRTUAL operand (caller must have checked `operandIsVirtual`).
+export function operandValueId(op Operand) returns ValueId
+	return operandPayload(op)
+end 'operandValueId'
+
+// The physical register of a PHYSICAL operand (caller must have checked
+// `not operandIsVirtual`). The payload was built from a real `X64Register.rawValue`
+// (0..15), so `fromRawValue` never fails here.
+export function operandRegister(op Operand) returns X64Register
+	return try X64Register.fromRawValue(operandPayload(op)) otherwise panic("operandRegister: packed physical operand payload {operandPayload(op)} is not a valid X64Register number")
+end 'operandRegister'
+
+// Decode `reuse(i)`'s operand index (caller must have checked `operandIsReuseDef`).
+export function operandReuseIndex(op Operand) returns OperandIndex
+	return operandConstraintArg(op)
+end 'operandReuseIndex'
+
+// THE operand model: fill `buf` with the register operands of `op`. EXHAUSTIVE
+// over every `TargetOp` — no bare `default`, so a new variant fails to compile
+// here until its operands are declared. `buf` is cleared (capacity kept) and
+// refilled, so one buffer serves every op of every function.
+//
+// Ops with NO register operands (frame/control/call ops) leave `buf` empty; the
+// registers `ret` and a call touch implicitly live on `TargetOpMeta.implicitUses`/
+// `implicitDefs`, not here.
+export function targetOpOperands(op TargetOp, buf OperandList)
+	buf.clear()
+	match op 'operands'
+		prologue then break 'operands'
+		epilogue then break 'operands'
+		ret then break 'operands'
+		jmp then break 'operands'
+		jcc then break 'operands'
+		movRegImm(dest, _) then pushDef(buf, vreg: dest)
+		movRegImm32(dest, _) then pushDef(buf, vreg: dest)
+		movRegReg(destReg, srcReg) then pushCopyOperands(buf, dest: destReg, src: srcReg)
+		movReg32Reg32(destReg, srcReg) then pushCopyOperands(buf, dest: destReg, src: srcReg)
+		addRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
+		subRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
+		imulRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
+		negReg(reg) then pushRmwUnaryOperands(buf, reg: reg)
+		cmpRegReg(lhsReg, rhsReg) then pushCmpOperands(buf, lhs: lhsReg, rhs: rhsReg)
+		xchgRegReg then panic("targetOpOperands: xchgRegReg is a POST-COLORING physical op — it is spliced in after coloring, so it must never reach the operand model")
+		callDirect then break 'operands'
+		iatCall then break 'operands'
+	end 'operands'
+end 'targetOpOperands'
+
+// A plain register-to-register copy: `dest` is a fresh value that COPIES `src`
+// (not a reuse — dest is independent of src). Shared by the 64- and 32-bit movs.
+function pushCopyOperands(buf OperandList, dest X64VReg, src X64VReg)
+	pushUse(buf, vreg: src)
+	pushDef(buf, vreg: dest)
+end 'pushCopyOperands'
+
+// A two-address binary op `dest = dest <op> src`: dest is read (operand 0) and
+// written (a reuse-of-0 def), src is read. The kept two-address lowering seeds
+// `dest` with a preceding `mov dest, lhs`, so at this op `dest` is already colored
+// and its def is a re-def in place — the reuse constraint documents that.
+function pushRmwBinOperands(buf OperandList, dest X64VReg, src X64VReg)
+	pushUse(buf, vreg: dest)
+	pushUse(buf, vreg: src)
+	pushReuseDef(buf, vreg: dest, reuseIndex: 0)
+end 'pushRmwBinOperands'
+
+// A two-address unary op `reg = <op> reg`: reg is read (operand 0) and written
+// (reuse-of-0). Models `neg`.
+function pushRmwUnaryOperands(buf OperandList, reg X64VReg)
+	pushUse(buf, vreg: reg)
+	pushReuseDef(buf, vreg: reg, reuseIndex: 0)
+end 'pushRmwUnaryOperands'
+
+// A compare reads both registers and defines none (it sets flags only).
+function pushCmpOperands(buf OperandList, lhs X64VReg, rhs X64VReg)
+	pushUse(buf, vreg: lhs)
+	pushUse(buf, vreg: rhs)
+end 'pushCmpOperands'

@@ -501,100 +501,95 @@ found` (exit 1); a void-returning `main` prints exactly `error E3002: Function
 
 ### Register allocator (Std `ValueId`s → physical GPRs)
 
-**Landed M1 (Chunk B2) as a deliberate placeholder — `Targets/Shared/RegisterAllocator.maxon`.**
-
-> **M5 replaces it with the real allocator: PURE Design B (SSA chordal coloring + `E5001`).**
-> The design is canonical in [`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md)
-> (read the corrections header first). Unlike a conventional spiller, it **refuses to emit
-> hot spill code** — a loop that *uses* more values than fit is a compile error (`E5001`)
-> naming the values to remove, on the premise that the (AI) author restructures. Cold spills
-> (values idle across a loop) are free via dominating reloads. Key pieces: the `Reuse` operand
-> model (deletes the two-address `mov`), dense `ProgPoint`/bitset liveness, a forward
-> biased-coloring sweep, an **`AllocChecker`** symbolic verifier under `spec-test` (the only
-> catch for a self-consistent miscompile, since fragments are outputs not gates), and — the
-> make-or-break — **no false `E5001`** (overflow is decided on true per-point maxlive after
-> biased coloring, never a used-in-loop cardinality gate). M5 also retires `EliminatePhis`:
-> the allocator consumes `blockArgs`/`branchEdges` directly and does SSA-destruction after
-> coloring. This section is rewritten in full when the allocator lands.
+**Landed M5.1 — the real allocator SPINE (pure Design B: SSA chordal coloring), replacing
+the M1 `MinimalColorer` placeholder.** Canonical design in
+[`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md) (read the corrections header
+first). The M5.1 spine covers the current op set (const / binOp / unaryOp / cmp / branch /
+ret); the cold-spill live-range splitter and the `E5001` diagnostic are later M5 chunks
+(the deferred list is at the end of this section).
 
 **What it colors is Std's own value space.** A `X64VReg` is either `physical(reg)` or
 `virtual(id)` — and that `id` **is the `ValueId` `lowerMaxonToStd` minted**. There is no
-separate virtual-register numbering anywhere in shv2; that is the 3-tier collapse cashing
-out (the tier v1 introduced to "add virtual registers" was adding a rename — see Std
-dialect). The allocator's input domain is exactly the Std value space, unchanged since
-SSA construction.
+separate virtual-register numbering anywhere in shv2 (the 3-tier collapse cashing out). The
+allocator's input domain is exactly the Std value space, unchanged since SSA construction.
 
-**The M1 colorer (`MinimalColorer`) has no liveness at all:** assign each DISTINCT virtual
-`ValueId`, in first-appearance order, its own fresh caller-saved GPR from a 6-register
-pool (`rax`/`rcx`/`rdx`/`r9`/`r10`/`r11`); never reuse a register. This is **always
-correct** — giving every value a distinct register cannot make two live values alias — as
-long as a function's distinct virtual regs do not exceed the pool. At M1 that count is 1
-(`movImm`'s result). Exhausting the pool is a **hard panic, never a miscompile**: the
-placeholder fails loudly the moment a milestone outgrows it.
+**The pieces** (all in `Targets/Shared/`, plus `IR/Target/TargetOperands.maxon`):
 
-The pool's composition is the ABI, not an arbitrary choice. **R8 is excluded** because it
-is the primary-return register under Maxon's custom convention — the return move targets it
-as a *fixed physical* reg, so coloring some value into R8 could clobber an in-flight return.
-RSP/RBP are the frame; the callee-saved set (RBX, R12–R15) is excluded because nothing
-saves/restores it yet (the prologue pass emits no pushes until M5); RSI/RDI are caller-saved
-under Maxon's convention but held back for the real allocator.
+- **Operand model** (`TargetOperands.maxon`). `targetOpOperands` is ONE exhaustive `match`
+  over every `TargetOp` — no bare `default`, so a new op is a compile error until its
+  operands (`Def`/`Use`, `Early`/`Late` position, `any`/`reuse`/`fixedReg` constraint) are
+  declared. Every consumer — liveness, colorer, checker — reads register facts ONLY here, and
+  `TargetOpMeta` grows `implicitUses`/`implicitDefs` `u16` masks (`ret` implicitly uses `{R8}`).
+  Operands are PACKED into one `MachineWord` in a reusable dense buffer (no heap box per
+  operand — the `SourceRange.maxon` discipline).
+- **Dense liveness + loops** (`TargetLiveness.maxon`, `RegBits.maxon`). A `FuncCfg` built ONCE
+  (CSR succ/pred, `BlockId`→local flat arrays — never a `Map` in a fixpoint), back-edge loop
+  detection → per-block depth, and SSA live-in/out iterated to a **FIXPOINT** (M4b's back
+  edges make a single reverse pass wrong; `fixpointIterations` counts the rounds). A backward
+  sweep yields `maxPressure` (the exact per-point χ = ω) and `forbiddenPhys`. All state is
+  `Array`-indexed columns + a `blocks × words` bitset matrix + `u16` register masks.
+- **Biased forward-sweep colorer** (`RegisterAllocator.maxon`). A forward walk over a `u16`
+  in-use bitmask, seeded per block from `liveIn`; at each op it frees dying operands then
+  picks the def's register with `lowestClearBit(inUse | forbiddenPhys(v) | ~pool)`. **BIASED
+  COLORING is a correctness obligation** (design correction #2): hints from block-arg↔branch-arg
+  pairs and from the two-address seed copies collapse copy-related values into one register, so
+  a loop's back-edge copy elides instead of landing IN the loop, and one loop-carried value is
+  never counted as two. Dominance order is ASSERTED (every use already colored). If
+  `maxPressure` ever exceeds the pool the spine PANICS (a placeholder for the deferred `E5001`
+  + splitter; M5.1 programs have `maxPressure ≤ 3–4`).
+- **SSA destruction** (`SsaDestruction.maxon`), AFTER coloring. `EliminatePhis` is RETIRED —
+  the allocator consumes `blockArgs`/`branchEdges` directly. Per phi-carrying edge it sequences
+  a parallel copy of physical `mov`s, breaking cycles with a new physical-only `xchgRegReg`
+  (`REX.W 87 /r`, invisible to SSA). Placement: at the predecessor's end (single-successor
+  pred) or the successor's start (single-predecessor succ). A **pre-pass splits every
+  phi-carrying CRITICAL edge** before coloring (so a move never runs on a sibling edge) — it
+  runs outside the per-function loop because inserting a block mutates `func.blockRefs`.
+- **`AllocChecker.maxon`** — a symbolic verifier that abstractly interprets the allocated
+  function (per-op `preg → vreg` state; per-edge parallel-copy simulation) and asserts every
+  use reads the register holding its value. It runs on EVERY function of EVERY compile (a
+  failure panics the build → fails the test), because `SpecTestRunner` treats fragments as
+  OUTPUTS, not gates — the suite would otherwise go green on a wrong-but-self-consistent
+  allocator. This is the real correctness gate.
+- **Stats + sub-phase timers** (`RegAllocStats`, `RegAllocPhase`). Per-phase `Clock`-based ms
+  plus the counters that matter more at sub-ms scale: `fixpointIterations`, `maxPressure`,
+  `copiesInserted`, `hintsHonoured`/`hintsMissed`. Logged under `LogCategory.codegen`.
 
 > **INVARIANT: coloring rewrites ops IN PLACE, at the same `module.ops` index.**
-> `colorFunction` reads the op at index *i*, rebuilds it with colored operands, and writes
-> it back at *i*. Every `block.opRefs` entry and every `terminatorIndex` is an index into
-> that array — an allocator that appended colored ops or compacted the array would
-> invalidate every reference in the function. (This is the append-only-`module.ops` fact
-> from the other direction: passes may not renumber what other structures point at.)
+> `applyAllocation` reads the op at index *i*, rebuilds it with colored operands, and writes
+> it back at *i* (dropping a `mov r,r` self-move biased coloring produced, e.g. the elided R8
+> return move). Every `block.opRefs` entry and `terminatorIndex` is an index into that array —
+> appending colored ops or compacting would invalidate every reference in the function.
 
-Physical operands pass through `colorVReg` untouched, so the pass is safe on ops that mix
-already-colored regs with virtual ones (the R8 return move; `mrt_start`'s RCX/R8).
+**The pool** is the Maxon caller-saved GPRs INCLUDING R8: `{rax, rcx, rdx, rsi, rdi, r8, r9,
+r10, r11}`. R8 is admitted because the implicit-use mask on `ret` proves nothing is live
+across the `mov r8, retval` return move (so a value colored to R8 cannot clobber an in-flight
+return, and the return move ELIDES when the return value is hinted to R8). Callee-saved
+`{rbx, r12–r15}` are excluded so no prologue push/pop is needed for the current leaf
+functions; `r10`/`r11` become reserved scratch when M5 colors calls. The pool is a property
+of the target (`allocatablePool`); arm64 declares its own.
 
 **Where it sits in the backend chain, and why that order is forced:**
 `lowerStdToX64` → **`allocateRegisters`** → `insertPrologueEpilogue` → `augmentWithRuntime`.
 Regalloc runs **before** prologue/epilogue because *the frame is a function of the
-allocation*: which callee-saved registers need a push/pop is known only after coloring, and
-the frame size must cover the spill slots the allocator creates. It runs **before**
-`augmentWithRuntime` because the `mrt_start` entry stub is hand-built in physical registers
-with its own explicit `sub rsp, 0x28` frame — it must not be re-processed by either pass.
-(shv2 tightens v1 here: `insertPrologueEpilogue` is the SOLE owner of both frame ops, where
-v1's ISel pre-emitted an `epilogue` at each return that the pass then stripped and re-emitted.)
+allocation*. It runs **before** `augmentWithRuntime` because the `mrt_start` entry stub is
+hand-built in physical registers with its own `sub rsp, 0x28` frame — it must not be
+re-processed. `allocateRegisters` first runs the `splitCriticalEdges` pre-pass, then colors
+each user function (`mrt_start` is prepended AFTER, so the allocator never sees it).
 
-**The replacement (M3/M5) is the compiler's single most performance-critical pass, and
-PLAN.md's premise about it was wrong on both counts.** The plan listed
-`Targets/Shared/RegisterAllocator*` under COPY-near-verbatim, "operates on generic
-structures." It does not: v1's 2,233-line SSA-dominance colorer is welded to v1's bespoke
-`TargetModule` (an `x64Ops` array behind a `cpu` discriminator) and needs the
-`TargetOpQuery` / `OpPattern` / register-mask machinery to find an op's register operands —
-none of which shv2's thin `IrModule with TargetOp` tier has. And copying it would import the
-wrong design anyway: **in v1, register allocation is ~74% of self-compile wall time** (~418 s
-of 561 s; worst single function 58 s), against an shv2 acceptance budget of ≤30 s for the
-*entire* self-compile. The allocator is where that budget is won or lost.
+**Why this shape** (v1 lessons the design is built around): v1's register allocation was
+~74% of self-compile wall time — not because backtracking is inherently slow, but because it
+rebuilt the interference graph from scratch every spill iteration. shv2 builds NO graph
+(availability sweep) and NO reactive spill loop (one shot). v1's "74%" stood for months with
+**zero sub-phase attribution**, so the timers ship in the first commit. And every v1
+miscompile at this boundary — a call-clobber mask listing a callee-saved reg, a phi-copy
+trampoline only one edge routed through — is exactly the class the `AllocChecker` exists to
+catch. `TargetOpMeta` is the extension point (it now carries the implicit-register masks).
 
-What v1 paid for, that shv2's allocator must be designed around from its first commit:
-- **The interference graph is the cost.** v1's first-fit colorer walks `ig.neighbors`, so the
-  graph is load-bearing for coloring — and v1's *reactive* spill/color loop rebuilds it from
-  scratch each iteration, because `insertSpillCode` shifts positions and invalidates every
-  range. The two structural wins v1 identified but never landed: kill the per-iteration
-  rebuild (incremental remap, or **virtual spilling** that defers code insertion to the end),
-  and replace the graph with an **availability sweep + on-demand adjacency**.
-- **A one-shot (Braun–Hack MIN) spiller is not a drop-in.** v1 tried and failed: cross-block
-  call-crossers cannot be relieved by splitting inside the def-block, and *spilling* a crosser
-  rather than *splitting* it re-creates a re-crossing reload cluster. A correct one-shot
-  spiller needs a genuine cross-block splitter (SplitKit-class).
-- **Build it to be measured.** v1's "74%" figure stood for months with **no sub-phase
-  attribution inside it** — the allocator's own phases were never individually profiled, and
-  the wins that did land (an insertion sort in `sortByDomPreorder`; a 495 MB dedup matrix)
-  fell only once someone measured. Sub-phase timers belong in the first commit, not a later
-  perf push.
-- **The correctness traps are all at this boundary.** Each of these was a real v1 miscompile:
-  a call-clobber mask that listed a callee-saved register; a spill-demand sweep that skipped
-  position-0 live-in intervals; rematerializable constants losing scarce registers to live
-  pointers; a phi-copy trampoline that only one edge of a two-jump condition routed through.
-
-`TargetOpMeta` is the extension point: it carries per-variant `isMemory`/`isStore`/`isCall`/
-`setsFlags` today and GROWS with the coloring `pattern` + implicit-register read/def masks
-(the epilogue reads R8; a call clobbers the caller-saved set) when the real allocator lands —
-same "you cannot add an op without declaring its facts" discipline as `StdOpMeta`.
+**Deferred to later M5 chunks** (not built by the M5.1 spine): calls / the caller-saved-halving
+pressure model, `idiv`/`mod` fixed registers, function params, immediate operand forms,
+3-operand `lea`, deleting the two-address seed `mov` via the `Reuse` operand quality-rework,
+the cold-spill live-range splitter, next-use distances (their sole consumer), and the `E5001`
+diagnostic + `ValueOrigin` table.
 
 ### Event log & mm-trace harness
 
@@ -724,23 +719,18 @@ lands phis at the **same blocks** v1's IDF would. v1's mem2reg becomes the port 
 when shv2 reaches unstructured control flow / the full Std optimizer (M5+ — already on
 `PLAN.md`'s Std-pass list).
 
-**`EliminatePhis` (new Std-tier pass, Phase 4, after `lowerMaxonToStd`)** resolves phis
-before the phi-free Target tier, in two moves: (1) **conservative coalescing** — a phi
-and an operand share a register iff the operand's *only* use is that phi edge
-(use-count == 1, hence provably dead at the edge with no liveness); union-find collapses
-each set to its smallest `ValueId`, so the common `sum = sum + i` loop-carried shape
-coalesces fully (no move, no extra register); (2) **moves for the rest** — a
-non-coalesced operand gets a `StdOp.copy phi, operand` (arith-band end,
-`clobbersFlags: false` so it is safe between a `cmp` and its `jcc`) appended at the
-predecessor's end, then `blockArgs`/`branchEdges` are cleared so the backend sees the
-same plain multi-block SSA M4a's `if` produced. The pass is `Map`-order-independent
-(reps are the smallest id; all output walks iterate ordered `blockRefs`/`incomings`), so
-warm-rebuild determinism holds.
+**Phi resolution: M4b's `EliminatePhis` Std pass, RETIRED at M5.1.** For M4b, a Std-tier
+`EliminatePhis` pass resolved phis before the phi-free Target tier via conservative
+(liveness-free) coalescing plus `StdOp.copy` moves for the rest. **M5.1 retired it** (the
+pass, the `StdOp.copy` op it produced, and its `X64` lowering are all deleted): the register
+allocator now consumes `blockArgs`/`branchEdges` DIRECTLY and does SSA destruction AFTER
+coloring (see the Register-allocator section). The allocator's biased coloring is strictly
+better than the old use-count coalescing — it collapses induction variables the M4b pass had
+to leave un-coalesced (in `assignment-in-loop` and `while-loops.continue` the loop bodies are
+now copy-free) — so `EliminatePhis` bought nothing the allocator does not do better.
 
-**M5 hand-offs (documented in code, not silently assumed):** liveness-based coalescing
-(fits the register-heavy loops the placeholder 6-GPR colorer cannot, and safely
-coalesces the two cases this pass leaves un-coalesced — two loop vars sharing an
-initializer, and a live `let` snapshot of a mutated var); **critical-edge splitting** (a
-non-coalesced copy at a `condBranch` predecessor currently runs on both edges — harmless
-under the exclusive-register placeholder colorer, deferred with the real allocator); and
+**M5.1 also settled the two deferred M4b hand-offs:** liveness-based coalescing (now the
+allocator's biased forward-sweep coloring) and **critical-edge splitting** (a `splitCriticalEdges`
+pre-pass splits every phi-carrying critical edge before coloring, so an edge copy never runs
+on a sibling edge — `if c; x = …; end; return x` compiles correctly). Still deferred:
 boolean-value conditions for `while true` (E2004 until `setcc`/bool materialization).

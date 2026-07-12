@@ -88,12 +88,20 @@ type StdToX64Lowering
 	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
 	// transfer every function (its StdReturnType / paramTypes carry across
 	// unchanged). Must run before any lowerFunction call.
+	//
+	// Both `blockArgs` (the phis) AND `branchEdges` (each predecessor's per-phi
+	// incoming values) are carried across: the register allocator consumes them
+	// DIRECTLY and does SSA destruction after coloring (EliminatePhis is retired),
+	// so the phi model must survive into the Target tier intact.
 	function prepareSkeleton()
 		for srcBlock in self.stdModule.blocks 'cloneBlocks'
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
 			for srcArg in srcBlock.blockArgs 'eachArg'
 				dstBlock.blockArgs.push(IrBlockArg.cloneOf(srcArg))
 			end 'eachArg'
+			for srcEdge in srcBlock.branchEdges 'eachEdge'
+				dstBlock.branchEdges.push(BranchEdge.create(srcEdge.targetBlockId, argIds: srcEdge.argIds.clone()))
+			end 'eachEdge'
 			self.targetModule.blocks.push(dstBlock)
 		end 'cloneBlocks'
 
@@ -136,7 +144,6 @@ type StdToX64Lowering
 			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
 			unaryOp(resultId, operand, opcode) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
 			cmp(resultId, lhs, rhs, pred) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
-			copy(resultId, srcId) then self.lowerCopy(resultId, srcId: srcId, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
@@ -154,7 +161,6 @@ type StdToX64Lowering
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
 			cmp then panic("lowerStdToX64: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
-			copy then panic("lowerStdToX64: a `copy` op appeared as a block terminator (lowering bug — a copy is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -168,20 +174,17 @@ type StdToX64Lowering
 		appendIntImmToReg(self.targetModule, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
 	end 'lowerConst'
 
-	// Lower a Std binary op to x64. x64 ALU ops are two-operand (`dst = dst <op>
-	// src`), so `result = lhs <op> rhs` lowers to a copy of `lhs` into `result`
-	// followed by the in-place op against `rhs`. The M1 minimal colorer gives
-	// `result`, `lhs`, and `rhs` three DISTINCT registers, so the copy into
-	// `result` cannot clobber `rhs` before the op reads it. The opcode selects the
-	// ALU instruction. Operand ORDER matters for the non-commutative `sub`: dest=lhs
-	// then `sub dest, rhs` yields lhs−rhs (e.g. `20 - 8` → 12), not rhs−lhs.
-	//
-	// The `mov result, lhs` is ELIDED when `result` and `lhs` are the same value —
-	// which M4b's phi-elim coalescing produces for a loop-carried update like
-	// `sum = sum + i` (result and lhs both collapse to `sum`'s ValueId). Skipping the
-	// self-copy `mov rax, rax` is the one place the lowering can drop a provably
-	// redundant instruction with no register knowledge (equal ValueIds always color to
-	// one register); a general copy peephole is the real allocator's job at M5.
+	// Lower a Std binary op to x64. x64 ALU ops are two-address (`dst = dst <op>
+	// src`), so `result = lhs <op> rhs` lowers to the SEED copy `mov result, lhs`
+	// then the in-place op against `rhs`. This kept two-address shape is described to
+	// the register allocator by the OPERAND MODEL (TargetOperands): `result` is a
+	// fresh value seeded from `lhs`, then read-modify-written by the ALU op. The
+	// allocator's BIASED coloring gives `result` the same register as `lhs` when
+	// `lhs` dies at the seed copy, and its rewrite then drops the resulting
+	// `mov r, r` — so the seed never survives for a loop-carried update like
+	// `sum = sum + i`, with NO Std-level coalescing needed (that is exactly what M5
+	// deletes EliminatePhis for). Operand ORDER matters for the non-commutative
+	// `sub`: dest=lhs then `sub dest, rhs` yields lhs−rhs (e.g. `20 - 8` → 12).
 	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
 		self.emitInPlaceCopy(resultId, srcId: lhs, dstBlock: dstBlock)
@@ -193,11 +196,11 @@ type StdToX64Lowering
 		end 'op'
 	end 'lowerBinOp'
 
-	// Lower a Std unary op to x64. Mirrors lowerBinOp's copy-then-op-in-place shape:
+	// Lower a Std unary op to x64. Mirrors lowerBinOp's seed-then-op-in-place shape:
 	// x64 `neg` is one-operand in-place (`reg = -reg`), so `result = -operand` lowers
-	// to `mov result, operand` + `neg result`. The M1 minimal colorer gives `result`
-	// and `operand` distinct registers, so the copy cannot clobber `operand`; the
-	// self-copy is elided when they coalesce (see lowerBinOp).
+	// to the seed `mov result, operand` + `neg result`. The operand model marks
+	// `result` a fresh value seeded from `operand`; the allocator elides the seed when
+	// biased coloring lands both in one register (see lowerBinOp).
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
 		self.emitInPlaceCopy(resultId, srcId: operand, dstBlock: dstBlock)
@@ -206,13 +209,11 @@ type StdToX64Lowering
 		end 'op'
 	end 'lowerUnaryOp'
 
-	// Emit the `mov dest, src` that seeds an in-place ALU op, unless dest and src are
-	// the same ValueId (post-coalescing) — a self-move that always colors to `mov r, r`
-	// and does nothing. Shared by lowerBinOp and lowerUnaryOp.
+	// Emit the `mov dest, src` seeding an in-place ALU op. `dest` (a fresh binOp/
+	// unaryOp result) is a distinct SSA value from `src`, so the seed is ALWAYS
+	// emitted; the register allocator drops it when biased coloring gives `dest` and
+	// `src` the same physical register. Shared by lowerBinOp and lowerUnaryOp.
 	function emitInPlaceCopy(destId ValueId, srcId ValueId, dstBlock IrBlock)
-		if destId == srcId 'selfMove'
-			return
-		end 'selfMove'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(destId), srcReg: X64VReg.virtual(srcId)))
 	end 'emitInPlaceCopy'
 
@@ -226,14 +227,6 @@ type StdToX64Lowering
 		self.cmpPreds.upsert(resultId, value: pred)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(X64VReg.virtual(lhs), rhsReg: X64VReg.virtual(rhs)))
 	end 'lowerCmp'
-
-	// Lower a Std `copy` (a phi-elimination move) to `mov result, src`. The M4b
-	// phi-elim pass emits these at predecessor block ends for phi operands that did
-	// not coalesce with their phi; a coalesced (self-copy) operand emits no `copy` at
-	// all, so a `copy` reaching here always names two DISTINCT virtual registers.
-	function lowerCopy(resultId ValueId, srcId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
-	end 'lowerCopy'
 
 	// Lower a Std `condBranch` to the fused `jcc <then>` + `jmp <else>`. The `jcc`
 	// condition is the predicate the compare that defined `condId` recorded; the `jcc`

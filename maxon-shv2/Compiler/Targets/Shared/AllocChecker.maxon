@@ -1,0 +1,313 @@
+// AllocChecker — the symbolic verifier the design calls "the single highest-value
+// safety net available here." `SpecTestRunner` treats the committed fragments as
+// OUTPUTS, not gates, so the suite would otherwise go GREEN on a wrong-but-self-
+// consistent allocator. This abstractly interprets the ALLOCATED program and asserts
+// every use reads the register that actually holds its value — catching the exact
+// bug class a plausible fragment hides: two simultaneously-live values aliased to
+// one register, and a mis-ordered / mis-placed SSA-destruction edge copy (the v1
+// "phi-copy trampoline" miscompile). It runs on EVERY function of EVERY compile
+// (inside the allocator), so a failure PANICS the build and FAILS the test.
+//
+// It runs on the still-VIRTUAL program plus the coloring + the edge move PLAN —
+// i.e. BEFORE applyAllocation commits them — so it validates the plan before it is
+// shipped. With no live-range splitting (M5.1), each value holds ONE register for
+// its whole range, which makes the abstract state precise: at any point, live value
+// `v` resides in `color[v]`.
+//
+// Two checks, no CFG fixpoint:
+//   A (interference). Per block, seed the abstract state from the live-in values +
+//     phis (each in its color) — distinct colors, or ALIASING — then walk the ops
+//     asserting each use reads its value and each def writes its register.
+//   B (edge copies). Per phi-carrying edge, simulate the parallel copy from the
+//     predecessor's exit state and assert each phi's register ends holding the value
+//     the edge passes and each live-through value flows undisturbed.
+
+// The abstract register state: `regState[r]` is the value id currently in register
+// `r`, or the `noValue` sentinel (= valueCount) when the register holds nothing the
+// checker tracks.
+typealias RegStateRow = Array with CfgIndex
+
+export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray)
+	let cfg = liveness.cfg
+	let valueCount = liveness.valueCount
+	let noValue = valueCount
+
+	// Per-block EXIT states (numBlocks rows of RegisterFileSize registers), so each
+	// edge can be simulated from its predecessor's exit.
+	var exitStates = filledColumn(cfg.numBlocks * RegisterFileSize, value: noValue)
+
+	var buf = OperandList.create()
+	for local in 0 upto cfg.numBlocks 'eachBlock'
+		let block = blockAt(module, cfg: cfg, local: local)
+		var regState = freshRegState(noValue)
+		seedRegState(regState, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, funcName: func.name)
+
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		for opIdx in ordered 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("AllocChecker: opIdx not in module.ops")
+			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: func.name, blockLabel: block.label)
+		end 'eachOp'
+
+		copyRegState(exitStates, dstBase: local * RegisterFileSize, src: regState, srcBase: 0)
+	end 'eachBlock'
+
+	// Validate EVERY CFG edge, not only the move-producing plans. A fully-coalesced
+	// edge (dstReg == srcReg for every phi → no move, no plan) is otherwise never
+	// checked, so a value clobbered in a predecessor whose only remaining "use" is that
+	// edge — the coalesced loop back-edge this design relies on most — would slip
+	// through. Each edge is simulated from its predecessor's exit, applying its plan's
+	// moves if it has one (else none).
+	for predLocal in 0 upto cfg.numBlocks 'eachPred'
+		let deg = cfg.succ.degree(predLocal)
+		for k in 0 upto deg 'eachSucc'
+			let succLocal = cfg.succ.neighbour(predLocal, k: k)
+			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, noValue: noValue)
+		end 'eachSucc'
+	end 'eachPred'
+end 'checkFunctionAllocation'
+
+function freshRegState(noValue ValueId) returns RegStateRow
+	return filledColumn(RegisterFileSize, value: noValue)
+end 'freshRegState'
+
+function copyRegState(dst RegStateRow, dstBase ByteCount, src RegStateRow, srcBase ByteCount)
+	for r in 0 upto RegisterFileSize 'each'
+		let v = try src.get(srcBase + r) otherwise panic("AllocChecker.copyRegState: src.get OOB")
+		try dst.set(dstBase + r, value: v) otherwise panic("AllocChecker.copyRegState: dst.set OOB")
+	end 'each'
+end 'copyRegState'
+
+function regStateGet(regState RegStateRow, reg MachineWord) returns ValueId
+	return try regState.get(reg) otherwise panic("AllocChecker.regStateGet: register {reg} out of range")
+end 'regStateGet'
+
+function regStateSet(regState RegStateRow, reg MachineWord, value ValueId)
+	try regState.set(reg, value: value) otherwise panic("AllocChecker.regStateSet: register {reg} out of range")
+end 'regStateSet'
+
+// Seed a block's entry state: every non-phi live-in value and every phi resides in
+// its color. Two of them sharing a color would be simultaneously live in one
+// register — the aliasing bug, caught right here.
+function seedRegState(regState RegStateRow, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, funcName String)
+	for v in 0 upto liveness.valueCount 'eachValue'
+		if liveness.isLiveIn(local, v: v) 'liveIn'
+			placeValueAtColor(regState, v: v, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "live-in")
+		end 'liveIn'
+	end 'eachValue'
+	for arg in block.blockArgs 'eachPhi'
+		placeValueAtColor(regState, v: arg.valueId, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "phi")
+	end 'eachPhi'
+end 'seedRegState'
+
+function placeValueAtColor(regState RegStateRow, v ValueId, alloc Allocation, noValue ValueId, funcName String, blockLabel String, what String)
+	let reg = alloc.regNumOf(v)
+	let occupant = regStateGet(regState, reg: reg)
+	if occupant != noValue and occupant != v 'aliased'
+		panic("AllocChecker: register aliasing in '{funcName}' block '{blockLabel}': {what} value {v} and value {occupant} are both live in register {reg} — the colorer gave two simultaneously-live values the same register")
+	end 'aliased'
+	regStateSet(regState, reg: reg, value: v)
+end 'placeValueAtColor'
+
+// A `mov`/`mov32` is a COPY (special-cased): its virtual source must hold its value,
+// and its destination register receives the copied value's identity. Every other op
+// is interpreted generically from the operand model + implicit-register masks.
+function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, funcName String, blockLabel String)
+	match op 'chk'
+		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
+		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
+		prologue to movRegImm32 then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
+		addRegReg to iatCall then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
+	end 'chk'
+end 'checkOp'
+
+// `mov dst, src`: assert src holds its value, then dst receives that value. A
+// virtual dst is a fresh SSA value (its own identity now sits in its register); a
+// physical dst (the R8 return move) receives the SOURCE value's identity, so the
+// implicit-R8 use at `ret` can confirm the return value is there.
+function checkCopyOp(dst X64VReg, src X64VReg, regState RegStateRow, alloc Allocation, funcName String, blockLabel String)
+	let srcReg = physRegNumOf(src, alloc: alloc)
+	assertSourceHolds(src, srcReg: srcReg, regState: regState, funcName: funcName, blockLabel: blockLabel)
+	let dstReg = physRegNumOf(dst, alloc: alloc)
+
+	match dst 'd'
+		virtual(did) then regStateSet(regState, reg: dstReg, value: did)
+		physical then regStateSet(regState, reg: dstReg, value: regStateGet(regState, reg: srcReg))
+	end 'd'
+end 'checkCopyOp'
+
+// Generic op: every USE reads a register that must hold its value (explicit virtual
+// operands, and the implicit-use registers like R8 at `ret`); every DEF writes its
+// register with its value; implicit defs clobber their registers to `noValue`.
+function checkGenericOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, funcName String, blockLabel String)
+	targetOpOperands(op, buf: buf)
+
+	for o in buf 'uses'
+		if not operandIsDef(o) 'isUse'
+			assertOperandUse(o, regState: regState, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
+		end 'isUse'
+	end 'uses'
+
+	let implicitUses = op.rawValue.implicitUses
+	for reg in 0 upto RegisterFileSize 'implUse'
+		if regMaskContains(implicitUses, regNum: reg) 'reads'
+			if regStateGet(regState, reg: reg) == noValue 'undefined'
+				panic("AllocChecker: implicit use of register {reg} in '{funcName}' block '{blockLabel}' but it holds no value — the return value never reached R8, or was clobbered before `ret`")
+			end 'undefined'
+		end 'reads'
+	end 'implUse'
+
+	for o in buf 'defs'
+		if operandIsDef(o) 'isDef'
+			applyOperandDef(o, regState: regState, alloc: alloc, noValue: noValue)
+		end 'isDef'
+	end 'defs'
+
+	let implicitDefs = op.rawValue.implicitDefs
+	for reg in 0 upto RegisterFileSize 'implDef'
+		if regMaskContains(implicitDefs, regNum: reg) 'writes'
+			regStateSet(regState, reg: reg, value: noValue)
+		end 'writes'
+	end 'implDef'
+end 'checkGenericOp'
+
+function assertOperandUse(o Operand, regState RegStateRow, alloc Allocation, noValue ValueId, funcName String, blockLabel String)
+	if operandIsVirtual(o) 'virt'
+		let v = operandValueId(o)
+		let reg = alloc.regNumOf(v)
+		let held = regStateGet(regState, reg: reg)
+		if held != v 'wrong'
+			panic("AllocChecker: bad use in '{funcName}' block '{blockLabel}': value {v} was colored to register {reg}, but that register holds value {held} at the use — a clobber or aliasing")
+		end 'wrong'
+	end 'virt' else 'phys'
+		let reg = operandRegister(o).rawValue
+		if regStateGet(regState, reg: reg) == noValue 'undefined'
+			panic("AllocChecker: physical use of register {reg} in '{funcName}' block '{blockLabel}' but it holds no value")
+		end 'undefined'
+	end 'phys'
+end 'assertOperandUse'
+
+function applyOperandDef(o Operand, regState RegStateRow, alloc Allocation, noValue ValueId)
+	if operandIsVirtual(o) 'virt'
+		let v = operandValueId(o)
+		regStateSet(regState, reg: alloc.regNumOf(v), value: v)
+	end 'virt' else 'phys'
+		regStateSet(regState, reg: operandRegister(o).rawValue, value: noValue)
+	end 'phys'
+end 'applyOperandDef'
+
+// Assert a copy's SOURCE register holds its value (virtual source only — a physical
+// source names a register, not a tracked value).
+function assertSourceHolds(src X64VReg, srcReg MachineWord, regState RegStateRow, funcName String, blockLabel String)
+	match src 's'
+		virtual(sid) then assertHolds(regState, reg: srcReg, expected: sid, funcName: funcName, blockLabel: blockLabel)
+		physical then break 's'
+	end 's'
+end 'assertSourceHolds'
+
+function assertHolds(regState RegStateRow, reg MachineWord, expected ValueId, funcName String, blockLabel String)
+	let held = regStateGet(regState, reg: reg)
+	if held != expected 'wrong'
+		panic("AllocChecker: bad copy source in '{funcName}' block '{blockLabel}': register {reg} should hold value {expected} but holds {held}")
+	end 'wrong'
+end 'assertHolds'
+
+// The physical register number of an operand: a virtual register's color, or a
+// physical register's own number.
+function physRegNumOf(vreg X64VReg, alloc Allocation) returns MachineWord
+	return match vreg 'v'
+		virtual(id) gives alloc.regNumOf(id)
+		physical(reg) gives reg.rawValue
+	end 'v'
+end 'physRegNumOf'
+
+// ==========================================================================
+// Check B — edge copies
+// ==========================================================================
+
+// Simulate one CFG edge from the predecessor's exit state and assert it establishes
+// the successor's entry: every phi register ends holding the value the edge passes,
+// and every live-through (non-phi) value flows undisturbed. Blocks are resolved by the
+// O(1) flat FuncCfg index (never `getBlockByIdIn`). The edge's moves come from its plan
+// if it has one; a fully-coalesced edge has none, and the assertions below still catch
+// a predecessor clobber whose only remaining "use" was this edge.
+function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, noValue ValueId)
+	var sim = freshRegState(noValue)
+	copyRegState(sim, dstBase: 0, src: exitStates, srcBase: predLocal * RegisterFileSize)
+
+	let planIdx = findPlanIndex(plans, predLocal: predLocal, succLocal: succLocal)
+	if planIdx < plans.count() 'hasPlan'
+		applyPlanMoves(sim, plan: try plans.get(planIdx) otherwise panic("checkEdge: plans.get OOB"))
+	end 'hasPlan'
+
+	let predBlock = blockAt(module, cfg: cfg, local: predLocal)
+	let succBlock = blockAt(module, cfg: cfg, local: succLocal)
+
+	if succBlock.blockArgs.count() > 0 'hasPhis'
+		let view = PhiEdgeView.resolve(succBlock, argIds: edgeArgIds(predBlock, succBlockId: succBlock.id), context: "(edge check)")
+		for k in 0 upto view.count 'eachPhi'
+			let incoming = view.incomingAt(k)
+			let reg = alloc.regNumOf(view.phiValueIdAt(k))
+			let held = regStateGet(sim, reg: reg)
+			if held != incoming 'wrongPhi'
+				panic("AllocChecker: bad edge copy from '{predBlock.label}' to '{succBlock.label}' in '{func.name}': phi {view.phiValueIdAt(k)} (register {reg}) should receive the incoming value {incoming} but the edge moves left {held} there — a mis-ordered parallel copy")
+			end 'wrongPhi'
+		end 'eachPhi'
+	end 'hasPhis'
+
+	for v in 0 upto liveness.valueCount 'liveThrough'
+		if liveness.isLiveIn(succLocal, v: v) and not isPhiValue(succBlock, v: v) 'flowsThrough'
+			let reg = alloc.regNumOf(v)
+			let held = regStateGet(sim, reg: reg)
+			if held != v 'disturbed'
+				panic("AllocChecker: bad edge from '{predBlock.label}' to '{succBlock.label}' in '{func.name}': live-through value {v} (register {reg}) was clobbered by the edge (now holds {held})")
+			end 'disturbed'
+		end 'flowsThrough'
+	end 'liveThrough'
+end 'checkEdge'
+
+// Apply a plan's ordered parallel moves (`mov` / `xchg`) to the abstract state.
+function applyPlanMoves(sim RegStateRow, plan EdgeMovePlan)
+	for i in 0 upto plan.moveCount() 'applyMoves'
+		let dst = plan.moveDstAt(i)
+		let src = plan.moveSrcAt(i)
+		if plan.moveIsSwapAt(i) 'swap'
+			let tmp = regStateGet(sim, reg: dst)
+			regStateSet(sim, reg: dst, value: regStateGet(sim, reg: src))
+			regStateSet(sim, reg: src, value: tmp)
+		end 'swap' else 'copy'
+			regStateSet(sim, reg: dst, value: regStateGet(sim, reg: src))
+		end 'copy'
+	end 'applyMoves'
+end 'applyPlanMoves'
+
+// The index of the move-plan for edge `predLocal -> succLocal`, or `plans.count()` when
+// the edge has no plan (fully coalesced — no moves to apply).
+function findPlanIndex(plans EdgeMovePlanArray, predLocal CfgIndex, succLocal CfgIndex) returns ByteCount
+	for i in 0 upto plans.count() 'each'
+		let p = try plans.get(i) otherwise panic("findPlanIndex: plans.get OOB")
+		if p.predLocal == predLocal and p.succLocal == succLocal 'match'
+			return i
+		end 'match'
+	end 'each'
+	return plans.count()
+end 'findPlanIndex'
+
+// The values a predecessor passes on its edge to `succBlockId`.
+function edgeArgIds(predBlock IrBlock, succBlockId BlockId) returns ValueIdArray
+	for edge in predBlock.branchEdges 'eachEdge'
+		if edge.targetBlockId == succBlockId 'match'
+			return edge.argIds
+		end 'match'
+	end 'eachEdge'
+	panic("edgeArgIds: predecessor '{predBlock.label}' has no branch edge to block id {succBlockId}")
+end 'edgeArgIds'
+
+function isPhiValue(block IrBlock, v ValueId) returns bool
+	for arg in block.blockArgs 'each'
+		if arg.valueId == v 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'isPhiValue'

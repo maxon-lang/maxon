@@ -1,0 +1,526 @@
+// SsaDestruction — the register allocator's back half: turn the phi model
+// (`blockArgs` / `branchEdges`) into machine code AFTER coloring, and commit the
+// coloring in place. Two products:
+//   1. buildSsaDestructionPlan — per phi-carrying edge, the ordered PHYSICAL moves
+//      (`mov` / `xchg`) that deliver each predecessor's value to the phi's register,
+//      classified by where they may safely go (pred end / succ start / a split block
+//      on a critical edge). Copy CYCLES are broken with `xchgRegReg` — no scratch.
+//   2. applyAllocation — rewrite every op to physical registers at its SAME
+//      `module.ops` index (the in-place-coloring invariant), drop the `mov r, r`
+//      self-moves biased coloring produced, splice the edge moves, and clear the
+//      phi model (the backend, which has no phi, must not see a block-arg).
+//
+// The plan is BUILT here and VERIFIED by the AllocChecker BEFORE applyAllocation
+// commits it — so a mis-ordered parallel copy is caught symbolically, not shipped.
+
+// Where an edge's parallel copy may be placed without running on a sibling edge.
+export enum EdgePlacement
+	// Pred has ONE successor: the moves run at the predecessor's end.
+	predEnd
+	// Succ has ONE predecessor: the moves run at the successor's start.
+	succStart
+	// A CRITICAL edge (pred has >1 successor AND succ has >1 predecessor): a fresh
+	// block on the edge holds the moves, so they run on exactly this edge.
+	split
+end 'EdgePlacement'
+
+// One edge's parallel copy, sequenced into ordered physical moves. `moveDsts[i]` ←
+// `moveSrcs[i]` is a `mov` unless `moveIsSwap[i]` (an `xchg` breaking a cycle). All
+// values are physical register NUMBERS (0..15).
+export type EdgeMovePlan
+	export var predLocal as CfgIndex
+	export var succLocal as CfgIndex
+	export var predBlockId as BlockId
+	export var succBlockId as BlockId
+	// Flat `module.blocks` indices — the splice mutates `module` while holding the
+	// block, which requires a FIELD-level borrow (`module.blocks.get`), not the
+	// whole-module borrow `getBlockByIdIn` takes.
+	export var predBlockRef as BlockRef
+	export var succBlockRef as BlockRef
+	export var moveDsts as RegNumColumn
+	export var moveSrcs as RegNumColumn
+	export var moveIsSwap as BoolArray
+	export var placement as EdgePlacement
+
+	export static function create(predLocal CfgIndex, succLocal CfgIndex, predBlockId BlockId, succBlockId BlockId, predBlockRef BlockRef, succBlockRef BlockRef, moves MoveSequence, placement EdgePlacement) returns EdgeMovePlan
+		return Self{predLocal: predLocal, succLocal: succLocal, predBlockId: predBlockId, succBlockId: succBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moveDsts: moves.dsts, moveSrcs: moves.srcs, moveIsSwap: moves.isSwap, placement: placement}
+	end 'create'
+
+	export function moveCount() returns ByteCount
+		return self.moveDsts.count()
+	end 'moveCount'
+
+	export function moveDstAt(i ByteCount) returns MachineWord
+		return try self.moveDsts.get(i) otherwise panic("EdgeMovePlan.moveDstAt: OOB")
+	end 'moveDstAt'
+
+	export function moveSrcAt(i ByteCount) returns MachineWord
+		return try self.moveSrcs.get(i) otherwise panic("EdgeMovePlan.moveSrcAt: OOB")
+	end 'moveSrcAt'
+
+	export function moveIsSwapAt(i ByteCount) returns bool
+		return try self.moveIsSwap.get(i) otherwise panic("EdgeMovePlan.moveIsSwapAt: OOB")
+	end 'moveIsSwapAt'
+end 'EdgeMovePlan'
+
+export typealias EdgeMovePlanArray = Array with EdgeMovePlan
+
+// A sequenced parallel copy: `dsts[i]` ← `srcs[i]`, a swap when `isSwap[i]`.
+export type MoveSequence
+	export var dsts as RegNumColumn
+	export var srcs as RegNumColumn
+	export var isSwap as BoolArray
+
+	export static function create() returns MoveSequence
+		return Self{dsts: RegNumColumn.create(), srcs: RegNumColumn.create(), isSwap: BoolArray.create()}
+	end 'create'
+
+	export function pushMove(dst MachineWord, src MachineWord, swap bool)
+		self.dsts.push(dst)
+		self.srcs.push(src)
+		self.isSwap.push(swap)
+	end 'pushMove'
+
+	export function count() returns ByteCount
+		return self.dsts.count()
+	end 'count'
+end 'MoveSequence'
+
+// Build the per-edge SSA-destruction plan for a function. A fully-coalesced edge
+// (every phi shares its incoming value's register) produces no moves and no plan.
+export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns EdgeMovePlanArray
+	let cfg = liveness.cfg
+	var plans = EdgeMovePlanArray.create()
+
+	for predLocal in 0 upto cfg.numBlocks 'eachPred'
+		let predBlock = blockAt(module, cfg: cfg, local: predLocal)
+		for edge in predBlock.branchEdges 'eachEdge'
+			let plan = buildEdgePlan(module, cfg: cfg, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
+			if plan.moveCount() > 0 'hasMoves'
+				stats.copiesInserted = stats.copiesInserted + plan.moveCount()
+				plans.push(plan)
+			end 'hasMoves'
+		end 'eachEdge'
+	end 'eachPred'
+
+	return plans
+end 'buildSsaDestructionPlan'
+
+function buildEdgePlan(module TargetModule, cfg FuncCfg, predBlock IrBlock, predLocal CfgIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
+	let succLocal = localOfBlockId(cfg, blockId: edge.targetBlockId)
+	let targetBlock = blockAt(module, cfg: cfg, local: succLocal)
+	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(SSA destruction)")
+
+	var dsts = RegNumColumn.create()
+	var srcs = RegNumColumn.create()
+	for k in 0 upto view.count 'eachPhi'
+		let dstReg = alloc.regNumOf(view.phiValueIdAt(k))
+		let srcReg = alloc.regNumOf(view.incomingAt(k))
+		if dstReg != srcReg 'needsMove'
+			dsts.push(dstReg)
+			srcs.push(srcReg)
+		end 'needsMove'
+	end 'eachPhi'
+
+	let moves = sequenceParallelCopy(dsts, srcs: srcs)
+	let placement = classifyPlacement(cfg, predLocal: predLocal, succLocal: succLocal)
+	let predBlockRef = try cfg.blockRefByLocal.get(predLocal) otherwise panic("buildEdgePlan: predLocal out of range")
+	let succBlockRef = try cfg.blockRefByLocal.get(succLocal) otherwise panic("buildEdgePlan: succLocal out of range")
+	return EdgeMovePlan.create(predLocal, succLocal: succLocal, predBlockId: predBlock.id, succBlockId: edge.targetBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moves: moves, placement: placement)
+end 'buildEdgePlan'
+
+// Where the edge's moves may go: at the predecessor's end when it has one
+// successor; at the successor's start when it has one predecessor; otherwise the
+// edge is CRITICAL and gets its own split block.
+function classifyPlacement(cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex) returns EdgePlacement
+	if cfg.succ.degree(predLocal) == 1 'predSingleSucc'
+		return EdgePlacement.predEnd
+	end 'predSingleSucc'
+	if cfg.pred.degree(succLocal) == 1 'succSinglePred'
+		return EdgePlacement.succStart
+	end 'succSinglePred'
+	return EdgePlacement.split
+end 'classifyPlacement'
+
+// Sequence a parallel copy (`dsts[i]` ← `srcs[i]`, dsts distinct) into ordered
+// moves. Repeatedly emit a move whose dst is no other move's source (a leaf); when
+// only cycles remain, break one with an `xchg` and rewrite the remaining sources
+// through the swap. This is the standard parallel-move algorithm.
+function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns MoveSequence
+	var moves = MoveSequence.create()
+	var pd = dsts.clone()
+	var ps = srcs.clone()
+
+	while pd.count() > 0 'sequence'
+		// Drop moves already satisfied (dst == src) — the initial ones the caller may
+		// leave, and the one a preceding `xchg` just fulfilled (its source, rewritten
+		// through the swap, now equals its dst). Emitting `xchg r, r` would be a no-op.
+		removeSatisfiedMoves(pd, ps: ps)
+		if pd.count() == 0 'allDone'
+			break
+		end 'allDone'
+
+		let leaf = findLeafMove(pd, ps: ps)
+		if leaf < pd.count() 'foundLeaf'
+			let d = try pd.get(leaf) otherwise panic("sequenceParallelCopy: pd.get OOB")
+			let s = try ps.get(leaf) otherwise panic("sequenceParallelCopy: ps.get OOB")
+			moves.pushMove(d, src: s, swap: false)
+			removeMoveAt(pd, ps: ps, idx: leaf)
+		end 'foundLeaf' else 'cycle'
+			let a = try pd.get(0) otherwise panic("sequenceParallelCopy: pd.get(0) OOB")
+			let b = try ps.get(0) otherwise panic("sequenceParallelCopy: ps.get(0) OOB")
+			moves.pushMove(a, src: b, swap: true)
+			removeMoveAt(pd, ps: ps, idx: 0)
+			rewriteSourcesThroughSwap(ps, a: a, b: b)
+		end 'cycle'
+	end 'sequence'
+
+	return moves
+end 'sequenceParallelCopy'
+
+// Index of a move whose dst is NOT any pending move's source (safe to emit now), or
+// `pd.count()` if every remaining dst is still needed as a source (a pure cycle).
+function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns ByteCount
+	for i in 0 upto pd.count() 'eachMove'
+		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
+		if not isAnySource(ps, reg: d) 'leaf'
+			return i
+		end 'leaf'
+	end 'eachMove'
+	return pd.count()
+end 'findLeafMove'
+
+// Remove every pending move whose dst already equals its src (an already-satisfied
+// copy). Scans back-to-front so removals do not shift not-yet-visited indices.
+function removeSatisfiedMoves(pd RegNumColumn, ps RegNumColumn)
+	let n = pd.count()
+	for ri in 0 upto n 'each'
+		let i = n - 1 - ri
+		let d = try pd.get(i) otherwise panic("removeSatisfiedMoves: pd.get OOB")
+		let s = try ps.get(i) otherwise panic("removeSatisfiedMoves: ps.get OOB")
+		if d == s 'satisfied'
+			removeMoveAt(pd, ps: ps, idx: i)
+		end 'satisfied'
+	end 'each'
+end 'removeSatisfiedMoves'
+
+function isAnySource(ps RegNumColumn, reg MachineWord) returns bool
+	for s in ps 'each'
+		if s == reg 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'isAnySource'
+
+function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx ByteCount)
+	_ = try pd.remove(idx) otherwise panic("removeMoveAt: pd.remove OOB")
+	_ = try ps.remove(idx) otherwise panic("removeMoveAt: ps.remove OOB")
+end 'removeMoveAt'
+
+// After `xchg a, b`, registers a and b hold each other's old contents, so a pending
+// move reading a now finds its value in b and vice-versa.
+function rewriteSourcesThroughSwap(ps RegNumColumn, a MachineWord, b MachineWord)
+	for i in 0 upto ps.count() 'each'
+		let s = try ps.get(i) otherwise panic("rewriteSourcesThroughSwap: ps.get OOB")
+		if s == a 'wasA'
+			try ps.set(i, value: b) otherwise panic("rewriteSourcesThroughSwap: ps.set OOB")
+		end 'wasA' else if s == b 'wasB'
+			try ps.set(i, value: a) otherwise panic("rewriteSourcesThroughSwap: ps.set OOB")
+		end 'wasB'
+	end 'each'
+end 'rewriteSourcesThroughSwap'
+
+// ==========================================================================
+// Commit: rewrite ops to physical, drop self-moves, splice edge moves, clear phis
+// ==========================================================================
+
+export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray)
+	colorAndDropSelfMoves(module, func: func, alloc: alloc)
+
+	for plan in plans 'eachPlan'
+		spliceEdgeMoves(module, plan: plan)
+	end 'eachPlan'
+
+	clearPhiModel(module, func: func)
+end 'applyAllocation'
+
+// Rewrite every op in place at its `module.ops` index (opRefs / terminator indices
+// stay valid), dropping any `mov r, r` self-move biased coloring produced.
+function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation)
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
+
+		var newRefs = OpIndexList.create()
+		for opIdx in block.opRefs 'eachOp'
+			let colored = colorTargetOp(try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops"), alloc: alloc)
+			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
+			if isPhysicalSelfMove(colored) 'selfMove'
+				continue
+			end 'selfMove'
+			newRefs.append(opIdx)
+		end 'eachOp'
+		block.opRefs = newRefs
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let ti = block.terminatorIndex()
+			try module.ops.set(ti, value: colorTargetOp(try module.ops.get(ti) otherwise panic("colorAndDropSelfMoves: terminator not in module.ops"), alloc: alloc)) otherwise panic("colorAndDropSelfMoves: terminator ops.set OOB")
+		end 'hasTerm'
+	end 'eachBlock'
+end 'colorAndDropSelfMoves'
+
+// True for a `mov r, r` — a no-op the biased coloring produced (a coalesced seed
+// copy, or the R8 return move when the return value landed in R8).
+function isPhysicalSelfMove(op TargetOp) returns bool
+	match op 'sm'
+		movRegReg(dst, src) then return vregsSamePhysical(dst, b: src)
+		prologue to movRegImm32 then return false
+		movReg32Reg32 to iatCall then return false
+	end 'sm'
+end 'isPhysicalSelfMove'
+
+function vregsSamePhysical(a X64VReg, b X64VReg) returns bool
+	return match a 'a'
+		physical(ra) gives physicalEquals(b, ra: ra)
+		virtual gives false
+	end 'a'
+end 'vregsSamePhysical'
+
+function physicalEquals(b X64VReg, ra X64Register) returns bool
+	return match b 'b'
+		physical(rb) gives ra == rb
+		virtual gives false
+	end 'b'
+end 'physicalEquals'
+
+// Splice one edge's moves at the placement chosen for it.
+function spliceEdgeMoves(module TargetModule, plan EdgeMovePlan)
+	match plan.placement 'place'
+		predEnd then splicePredEnd(module, plan: plan)
+		succStart then spliceSuccStart(module, plan: plan)
+		split then spliceSplitUnreachable(plan)
+	end 'place'
+end 'spliceEdgeMoves'
+
+// Pred has one successor: append the moves to its body (they run before the
+// terminator, on the only edge out). The block is re-fetched per move via a
+// FIELD-level borrow (`module.blocks.get`) so `appendOp` may mutate `module.ops`.
+function splicePredEnd(module TargetModule, plan EdgeMovePlan)
+	for i in 0 upto plan.moveCount() 'eachMove'
+		var predBlock = try module.blocks.get(plan.predBlockRef) otherwise panic("splicePredEnd: predBlockRef {plan.predBlockRef} not in module.blocks")
+		module.appendOp(predBlock, op: moveOpOf(plan, i: i))
+	end 'eachMove'
+end 'splicePredEnd'
+
+// Succ has one predecessor: insert the moves at the front of its body (they run on
+// entry, which can only be reached via this edge).
+function spliceSuccStart(module TargetModule, plan EdgeMovePlan)
+	for i in 0 upto plan.moveCount() 'eachMove'
+		let opIdx = module.ops.count()
+		module.ops.push(moveOpOf(plan, i: i))
+		let succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
+		try succBlock.opRefs.insert(i, value: opIdx) otherwise panic("spliceSuccStart: opRefs.insert OOB")
+	end 'eachMove'
+end 'spliceSuccStart'
+
+// A CRITICAL EDGE must never reach here: `splitCriticalEdges` (below) runs BEFORE
+// coloring and splits every phi-carrying critical edge, so by the time SSA
+// destruction places moves, every phi edge is either from a single-successor block
+// or into a single-predecessor block.
+function spliceSplitUnreachable(plan EdgeMovePlan)
+	panic("spliceEdgeMoves: a critical edge (block id {plan.predBlockId} → {plan.succBlockId}) reached SSA destruction — splitCriticalEdges must run before coloring and eliminate it")
+end 'spliceSplitUnreachable'
+
+// ==========================================================================
+// Critical-edge splitting — a PRE-PASS run before coloring
+// ==========================================================================
+
+let CritSplitLabel = "critsplit"
+
+// Split every phi-carrying critical edge in the module, so SSA destruction always
+// has a safe home for its moves (a block reached from exactly this edge). A critical
+// edge — a `branchEdge` (i.e. carrying phis) from a block with >1 successor into a
+// block with >1 predecessor — gets a fresh block spliced onto it: `pred → split →
+// succ`, with the phi `branchEdge` MOVED onto `split` (which has one successor, so
+// SSA destruction places the moves at its end).
+//
+// Run before coloring so the mutation of `func.blockRefs`/`func.nextBlockId` happens
+// OUTSIDE the per-function coloring loop's borrow of `func`. Each function is driven
+// by INDEX and re-fetched inside `addSplitBlock`, so no `func` borrowed from
+// `module.functions` is ever passed to a function that mutates it.
+export function splitCriticalEdges(module TargetModule)
+	for funcIdx in 0 upto module.funcCount() 'eachFunc'
+		splitCriticalEdgesInFunc(module, funcIdx: funcIdx)
+	end 'eachFunc'
+end 'splitCriticalEdges'
+
+function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex)
+	// The CFG is built through a helper so `func`'s borrow is scoped to it — the
+	// split loop below mutates `module.functions[funcIdx]` (adding block refs), which
+	// must not overlap a live borrow of that function.
+	let cfg = buildFuncCfgByIndex(module, funcIdx: funcIdx)
+
+	// Collect the critical phi edges first (reads), then split them (writes) — the
+	// splits are independent (each only redirects its own edge through a new block),
+	// so the original CFG's classification stays valid across all of them.
+	var predRefs = BlockRefArray.create()
+	var succIds = BlockIdArray.create()
+	for predLocal in 0 upto cfg.numBlocks 'eachPred'
+		if cfg.succ.degree(predLocal) <= 1 'singleSucc'
+			continue
+		end 'singleSucc'
+		let predBlock = blockAt(module, cfg: cfg, local: predLocal)
+		for edge in predBlock.branchEdges 'eachEdge'
+			let succLocal = try cfg.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
+			if cfg.pred.degree(succLocal) > 1 'critical'
+				predRefs.push(try cfg.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
+				succIds.push(edge.targetBlockId)
+			end 'critical'
+		end 'eachEdge'
+	end 'eachPred'
+
+	for k in 0 upto predRefs.count() 'eachSplit'
+		let predRef = try predRefs.get(k) otherwise panic("splitCriticalEdgesInFunc: predRefs.get OOB")
+		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
+		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId)
+	end 'eachSplit'
+end 'splitCriticalEdgesInFunc'
+
+function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId)
+	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId)
+	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
+	let newId = newBlock.id
+	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
+	retargetControlOp(module, predRef: predRef, oldTarget: succId, newTarget: newId)
+end 'performCriticalSplit'
+
+// Create the split block (`jmp succId` terminator) and register it in
+// `module.blocks` + `func.blockRefs`. `func` is fetched HERE by index and mutated
+// directly, so its borrow never escapes to a caller (which would clash with the
+// split loop mutating the same function).
+function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) returns BlockRef
+	var func = module.getFunc(funcIdx)
+	let newId = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel))
+	let newRef = module.blocks.count() - 1
+	func.blockRefs.append(newRef)
+	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
+	module.setTerminator(splitBlock, op: TargetOp.jmp(succId))
+	return newRef
+end 'addSplitBlock'
+
+// Move the predecessor's `branchEdge` to `succId` (its phi args) onto the split
+// block. The phi args now flow pred → split → succ, and the split block (one
+// successor) is where SSA destruction places their moves. The pred and split block
+// borrows are scoped to separate helpers so two live borrows of `module.blocks`
+// never coexist.
+function moveBranchEdgeToSplit(module TargetModule, predRef BlockRef, succId BlockId, splitRef BlockRef)
+	let movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
+	addSplitEdge(module, splitRef: splitRef, succId: succId, argIds: movedArgs)
+end 'moveBranchEdgeToSplit'
+
+// Remove the predecessor's `branchEdge` to `succId` and return its phi args.
+function extractPredEdge(module TargetModule, predRef BlockRef, succId BlockId) returns ValueIdArray
+	var movedArgs = ValueIdArray.create()
+	var found = false
+	var keptEdges = BranchEdgeArray.create()
+	var predBlock = try module.blocks.get(predRef) otherwise panic("extractPredEdge: predRef not in module.blocks")
+	for edge in predBlock.branchEdges 'eachEdge'
+		if (not found) and edge.targetBlockId == succId 'moveThis'
+			movedArgs = edge.argIds
+			found = true
+		end 'moveThis' else 'keep'
+			keptEdges.push(edge)
+		end 'keep'
+	end 'eachEdge'
+	if not found 'noEdge'
+		panic("extractPredEdge: predecessor block ref {predRef} has no branch edge to block id {succId}")
+	end 'noEdge'
+	predBlock.branchEdges = keptEdges
+	return movedArgs
+end 'extractPredEdge'
+
+// Give the split block its outgoing phi `branchEdge` to `succId`.
+function addSplitEdge(module TargetModule, splitRef BlockRef, succId BlockId, argIds ValueIdArray)
+	var splitBlock = try module.blocks.get(splitRef) otherwise panic("addSplitEdge: splitRef not in module.blocks")
+	splitBlock.branchEdges.push(BranchEdge.create(succId, argIds: argIds))
+end 'addSplitEdge'
+
+// Build a function's CFG by INDEX, so the `func` borrow it needs is scoped to this
+// helper and never held across the caller's mutation of the same function.
+function buildFuncCfgByIndex(module TargetModule, funcIdx FuncIndex) returns FuncCfg
+	let func = module.getFunc(funcIdx)
+	return buildFuncCfg(module, func: func)
+end 'buildFuncCfgByIndex'
+
+// Redirect the predecessor's branch to `oldTarget` (a `jcc` body op or the `jmp`
+// terminator) so it targets `newTarget` instead. Exactly one control op matches.
+function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
+	var retargeted = false
+	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
+	for opIdx in predBlock.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: opIdx not in module.ops")
+		match op 'body'
+			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			prologue to jmp then break 'body'
+			movRegImm to iatCall then break 'body'
+		end 'body'
+	end 'eachOp'
+
+	if predBlock.hasTerminatorOp() 'hasTerm'
+		let ti = predBlock.terminatorIndex()
+		let op = try module.ops.get(ti) otherwise panic("retargetControlOp: terminator not in module.ops")
+		match op 'term'
+			jmp(target) then retargeted = retargetJmp(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			ret then break 'term'
+			prologue to epilogue then panic("retargetControlOp: pred terminator is a frame op")
+			jcc then panic("retargetControlOp: jcc reached as a terminator")
+			movRegImm to iatCall then panic("retargetControlOp: non-terminator op as terminator")
+		end 'term'
+	end 'hasTerm'
+
+	if not retargeted 'noMatch'
+		panic("retargetControlOp: predecessor block ref {predRef} has no branch to block id {oldTarget} to redirect")
+	end 'noMatch'
+end 'retargetControlOp'
+
+function retargetJcc(module TargetModule, opIdx OpIndex, cond X64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.jcc(cond, targetBlockId: newTarget)) otherwise panic("retargetJcc: ops.set OOB")
+	return true
+end 'retargetJcc'
+
+function retargetJmp(module TargetModule, opIdx OpIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.jmp(newTarget)) otherwise panic("retargetJmp: ops.set OOB")
+	return true
+end 'retargetJmp'
+
+// The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
+export function moveOpOf(plan EdgeMovePlan, i ByteCount) returns TargetOp
+	let dst = X64VReg.physical(regFromNum(plan.moveDstAt(i)))
+	let src = X64VReg.physical(regFromNum(plan.moveSrcAt(i)))
+	if plan.moveIsSwapAt(i) 'swap'
+		return TargetOp.xchgRegReg(dst, b: src)
+	end 'swap'
+	return TargetOp.movRegReg(dst, srcReg: src)
+end 'moveOpOf'
+
+function regFromNum(regNum MachineWord) returns X64Register
+	return try X64Register.fromRawValue(regNum) otherwise panic("regFromNum: {regNum} is not a valid x64 register number")
+end 'regFromNum'
+
+// Drop every block's phi model now that it is realized as edge moves — the backend
+// has no phi and must not see a block-arg or branch-edge.
+function clearPhiModel(module TargetModule, func IrFunction)
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("clearPhiModel: blockRef not in module.blocks")
+		block.blockArgs = IrBlockArgArray.create()
+		block.branchEdges = BranchEdgeArray.create()
+	end 'eachBlock'
+end 'clearPhiModel'

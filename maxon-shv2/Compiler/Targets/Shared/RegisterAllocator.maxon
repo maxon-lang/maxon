@@ -1,139 +1,591 @@
-// Register allocator — colors virtual X64VRegs (X64VReg.virtual, keyed by the
-// SSA ValueId that defined them) into physical GPRs.
+// Register allocator — the real M5 core (pure Design B: SSA chordal coloring + gap
+// splitting + E5001, canonical in docs/REGISTER_ALLOCATOR.md). This is the M5.1
+// SPINE: liveness → biased forward-sweep coloring → SSA destruction → AllocChecker,
+// over the current op set (const/binOp/unaryOp/cmp/branch/ret). It REPLACES the M1
+// `MinimalColorer` (no liveness; a fresh register per distinct value, forever).
 //
-// MINIMAL for maxon-shv2 M1 — a DELIBERATE placeholder, not the real allocator.
-// v1's `RegisterAllocator.maxon` is a 2,233-line SSA-dominance colorer
-// (LiveRangeBuilder + SpillManager + ApplyColoring + a density-gated recolor/
-// split engine) that operates on v1's bespoke `TargetModule` (an `x64Ops` array
-// behind a `cpu` discriminator) and needs the `TargetOpQuery` / `OpPattern` /
-// register-mask machinery to extract each op's register operands. None of that
-// scaffold exists in shv2's thin `IrModule with TargetOp` Target tier, so porting
-// it verbatim would drag in the entire regalloc cone for a program with exactly
-// ONE virtual register. Instead M1 uses a no-liveness colorer:
+// The pieces:
+//   • liveness/loops/pressure           — TargetLiveness.maxon
+//   • dense bitsets + register masks     — RegBits.maxon
+//   • the operand model                  — TargetOperands.maxon (Def/Use, Reuse)
+//   • biased forward-sweep colorer       — this file
+//   • SSA destruction (edge copies/xchg) — SsaDestruction.maxon
+//   • the symbolic verifier              — AllocChecker.maxon
 //
-//   Assign each DISTINCT virtual ValueId, in first-appearance order, its own
-//   fresh caller-saved GPR from a small pool; never reuse a register.
+// TWO RULES this rests on (design):
+//   RULE 1 (SSA). Every value has one def dominating its uses, so live ranges are
+//     dominance-closed, the interference graph is CHORDAL, and dominance-order
+//     greedy coloring is EXACT (χ = ω = maxPressure). Layout order is a perfect
+//     elimination order, ASSERTED by "every use is already colored" at each op.
+//   RULE 2 (biased coloring is CORRECTNESS, not optimization). Copy-related values
+//     (a phi and its back-edge arg; a two-address seed's dest and its source) hold
+//     the same value; coloring them together (a) keeps a loop's back-edge copy from
+//     landing IN the loop and (b) stops a false E5001 by not counting one value as
+//     two. Hints come from block-arg/branch-arg pairs and from the seed copies.
 //
-// This is always CORRECT — giving every value a distinct register can never make
-// two live values alias — as long as the number of distinct virtual regs in a
-// function does not exceed the pool. At M1 that count is 1 (movImm's result),
-// well within the 6-register pool, and it is a hard panic (not a miscompile) if a
-// future milestone's function exceeds it before the real allocator lands. The
-// full liveness-based allocator (spilling, coalescing, live-range splitting)
-// arrives at M3/M5 when arithmetic + multi-function programs create real register
-// pressure; this file is REPLACED then, not merely extended.
+// DEFERRED to later M5 chunks (NOT built here): calls / the caller-saved-halving
+// pressure model, idiv/mod fixed registers, function params, immediate operand
+// forms, 3-operand lea, deleting the seed `mov` via `Reuse`, the cold-spill live-
+// range splitter, and the E5001 diagnostic (`ValueOrigin`). While maxPressure stays
+// within the pool (M5.1 programs: ≤ 3–4), overflow cannot occur; if it somehow did,
+// this PANICS (a placeholder for the real E5001 + splitter).
 
-// Index into the fixed caller-saved GPR pool.
-typealias PoolIndex = int(0 to u64.max)
+// The color column's "not yet colored" sentinel: one past the last real register.
+let Uncolored = RegisterFileSize
 
-// Virtual ValueId -> the physical GPR the minimal colorer assigned it.
-typealias VRegColorMap = Map with (ValueId, X64Register)
+// A per-function coloring: value id → physical register number (0..15), dense. With
+// no live-range splitting at M5.1 a value holds ONE register for its whole range, so
+// the column is a total function.
+export type Allocation
+	export var color as RegNumColumn
+	export var valueCount as ValueId
 
-export typealias X64RegisterArray = Array with X64Register
-
-// The caller-saved GPRs the minimal colorer draws from, in assignment order.
-// R8 is EXCLUDED — it is the primary-return register (the return move targets it
-// as a fixed physical reg), so keeping it out of the pool avoids a value being
-// colored to R8 and clobbering an in-flight return. RSP/RBP (frame) and the
-// callee-saved set (RBX, R12-R15) are likewise excluded; RSI/RDI are caller-saved
-// under Maxon's convention but held back until the real allocator needs them.
-function callerSavedPool() returns X64RegisterArray
-	var pool = X64RegisterArray.create()
-	pool.push(X64Register.rax)
-	pool.push(X64Register.rcx)
-	pool.push(X64Register.rdx)
-	pool.push(X64Register.r9)
-	pool.push(X64Register.r10)
-	pool.push(X64Register.r11)
-	return pool
-end 'callerSavedPool'
-
-// Color every function's virtual registers into physical GPRs, in place.
-export function allocateRegisters(module TargetModule, target Target)
-	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): coloring {module.funcCount()} function(s)")
-	for func in module.functions 'eachFunc'
-		colorFunction(module, func: func)
-	end 'eachFunc'
-end 'allocateRegisters'
-
-// Per-function coloring: walk the function's ops in block/op order and rewrite
-// each op's virtual operands to physical registers in the shared `module.ops`
-// array. Rewriting in place at the same index keeps every `opRefs` / terminator
-// reference valid.
-function colorFunction(module TargetModule, func IrFunction)
-	var colorer = MinimalColorer.create()
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("allocateRegisters: blockRef from func.blockRefs not in module.blocks")
-
-		for opIdx in block.opRefs 'eachOp'
-			recolorOpAt(module, opIdx: opIdx, colorer: colorer)
-		end 'eachOp'
-
-		if block.hasTerminatorOp() 'hasTerm'
-			recolorOpAt(module, opIdx: block.terminatorIndex(), colorer: colorer)
-		end 'hasTerm'
-	end 'eachBlock'
-end 'colorFunction'
-
-// Read the op at `opIdx`, color its virtual operands, and write the colored op
-// back at the same index.
-function recolorOpAt(module TargetModule, opIdx OpIndex, colorer MinimalColorer)
-	let op = try module.ops.get(opIdx) otherwise panic("allocateRegisters: opIdx {opIdx} not in module.ops")
-	let colored = colorOp(op, colorer: colorer)
-	try module.ops.set(opIdx, value: colored) otherwise panic("allocateRegisters: ops.set OOB at {opIdx}")
-end 'recolorOpAt'
-
-// Rebuild an op with its X64VReg operands colored. Ops with no register operands
-// (control / frame / call ops) pass through unchanged.
-function colorOp(op TargetOp, colorer MinimalColorer) returns TargetOp
-	match op 'rewrite'
-		prologue to jcc then return op
-		movRegImm(dest, value) then return TargetOp.movRegImm(colorer.colorVReg(dest), value: value)
-		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorer.colorVReg(dest), value: value)
-		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
-		movReg32Reg32(destReg, srcReg) then return TargetOp.movReg32Reg32(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
-		addRegReg(destReg, srcReg) then return TargetOp.addRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
-		subRegReg(destReg, srcReg) then return TargetOp.subRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
-		imulRegReg(destReg, srcReg) then return TargetOp.imulRegReg(colorer.colorVReg(destReg), srcReg: colorer.colorVReg(srcReg))
-		negReg(reg) then return TargetOp.negReg(colorer.colorVReg(reg))
-		cmpRegReg(lhsReg, rhsReg) then return TargetOp.cmpRegReg(colorer.colorVReg(lhsReg), rhsReg: colorer.colorVReg(rhsReg))
-		callDirect to iatCall then return op
-	end 'rewrite'
-end 'colorOp'
-
-type MinimalColorer
-	var colors as VRegColorMap
-	var pool as X64RegisterArray
-	var nextPoolIdx as PoolIndex
-
-	static function create() returns MinimalColorer
-		return Self{colors: VRegColorMap.create(), pool: callerSavedPool(), nextPoolIdx: 0}
+	export static function create(valueCount ValueId) returns Allocation
+		return Self{color: filledColumn(valueCount, value: Uncolored), valueCount: valueCount}
 	end 'create'
 
-	// Color one operand: a physical reg passes through (already colored — e.g. the
-	// R8 return target or the entry stub's RCX/R8); a virtual reg resolves to its
-	// assigned physical reg (assigning one on first appearance).
-	function colorVReg(vreg X64VReg) returns X64VReg
-		match vreg 'resolve'
-			physical then return vreg
-			virtual(id) then return X64VReg.physical(self.assign(id))
-		end 'resolve'
-	end 'colorVReg'
+	export function isColored(v ValueId) returns bool
+		return (try self.color.get(v) otherwise panic("Allocation.isColored: value {v} out of range")) != Uncolored
+	end 'isColored'
 
-	// Return the physical GPR for `id`, minting a fresh one from the pool on first
-	// appearance. Panics (never miscompiles) if the pool is exhausted — the M1
-	// no-liveness colorer only supports as many simultaneous distinct values as
-	// the pool has registers; the real allocator (M3/M5) removes this ceiling.
-	function assign(id ValueId) returns X64Register
-		if self.colors.contains(id) 'known'
-			return try self.colors.get(id) otherwise panic("MinimalColorer: contains(id) true but get failed for v{id}")
-		end 'known'
-		if self.nextPoolIdx >= self.pool.count() 'exhausted'
-			panic("MinimalColorer: caller-saved pool of {self.pool.count()} registers exhausted (distinct virtual regs exceed the pool) — M1's no-liveness allocator handles only a handful of simultaneous values; the full liveness-based allocator arrives at M3/M5")
-		end 'exhausted'
-		let reg = try self.pool.get(self.nextPoolIdx) otherwise panic("MinimalColorer: pool.get within bounds failed at {self.nextPoolIdx}")
-		self.nextPoolIdx = self.nextPoolIdx + 1
-		self.colors.upsert(id, value: reg)
-		return reg
+	// The register NUMBER assigned to `v` (panics if uncolored — a coloring bug).
+	export function regNumOf(v ValueId) returns MachineWord
+		let c = try self.color.get(v) otherwise panic("Allocation.regNumOf: value {v} out of range")
+		if c == Uncolored 'uncolored'
+			panic("Allocation.regNumOf: value {v} is uncolored — a use was reached before its def was colored (dominance-order violation)")
+		end 'uncolored'
+		return c
+	end 'regNumOf'
+
+	// The physical register assigned to `v`.
+	export function colorOf(v ValueId) returns X64Register
+		return try X64Register.fromRawValue(self.regNumOf(v)) otherwise panic("Allocation.colorOf: value {v} colored to invalid register number")
+	end 'colorOf'
+
+	export function assign(v ValueId, regNum MachineWord)
+		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
 	end 'assign'
-end 'MinimalColorer'
+end 'Allocation'
+
+// The sub-phases the timers + counters attribute time to (design §"Stats": v1's
+// "74% of self-compile" figure stood for months with ZERO sub-phase attribution).
+export enum RegAllocPhase
+	liveness
+	coloring
+	ssaDestruction
+	checking
+	rewrite
+end 'RegAllocPhase'
+
+export typealias DurationMsArray = Array with DurationMs
+
+// Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
+// than the clock at M5.1's sub-millisecond functions (design §"Stats").
+export type RegAllocStats
+	export var phaseMs as DurationMsArray
+	export var functionsAllocated as ByteCount
+	export var fixpointIterationsTotal as ByteCount
+	export var fixpointIterationsMax as ByteCount
+	export var maxPressure as RegCount
+	export var maxPressureFunc as String
+	export var maxLoopDepth as CfgIndex
+	export var copiesInserted as ByteCount
+	export var hintsHonoured as ByteCount
+	export var hintsMissed as ByteCount
+	export var valuesColored as ByteCount
+	export var registersUsed as RegMask
+
+	export static function create() returns RegAllocStats
+		var phaseMs = DurationMsArray.create()
+		phaseMs.resize(RegAllocPhase.allCases.count())
+		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0}
+	end 'create'
+
+	export function addPhaseMs(phase RegAllocPhase, ms DurationMs)
+		let idx = phase.ordinal
+		let cur = try self.phaseMs.get(idx) otherwise panic("RegAllocStats.addPhaseMs: phase index OOB")
+		try self.phaseMs.set(idx, value: cur + ms) otherwise panic("RegAllocStats.addPhaseMs: phase index OOB")
+	end 'addPhaseMs'
+
+	export function phaseMsOf(phase RegAllocPhase) returns DurationMs
+		return try self.phaseMs.get(phase.ordinal) otherwise panic("RegAllocStats.phaseMsOf: phase index OOB")
+	end 'phaseMsOf'
+
+	export function recordFixpoint(iterations ByteCount)
+		self.fixpointIterationsTotal = self.fixpointIterationsTotal + iterations
+		if iterations > self.fixpointIterationsMax 'newMax'
+			self.fixpointIterationsMax = iterations
+		end 'newMax'
+	end 'recordFixpoint'
+
+	export function recordPressure(pressure RegCount, funcName String)
+		if pressure > self.maxPressure 'newMax'
+			self.maxPressure = pressure
+			self.maxPressureFunc = funcName
+		end 'newMax'
+	end 'recordPressure'
+
+	export function recordLoopDepth(depth CfgIndex)
+		if depth > self.maxLoopDepth 'newMax'
+			self.maxLoopDepth = depth
+		end 'newMax'
+	end 'recordLoopDepth'
+
+	export function noteRegisterUse(regNum MachineWord)
+		self.registersUsed = regMaskAdd(self.registersUsed, regNum: regNum)
+	end 'noteRegisterUse'
+end 'RegAllocStats'
+
+// The allocatable register pool for `target`. M5.1: the Maxon caller-saved GPRs
+// INCLUDING R8 — R8 is admitted because the implicit-use mask on `ret` proves
+// nothing is live across the `mov r8, retval` return move (so coloring a value into
+// R8 cannot clobber an in-flight return), which lets the return move ELIDE when the
+// return value is hinted to R8. Callee-saved {rbx, r12–r15} are excluded so no
+// prologue push/pop is needed for the current leaf functions; rsp/rbp are the frame.
+// r10/r11 stay in the pool for now (user functions make no calls at M5.1); they
+// become reserved scratch when M5 colors calls. The pool is a property of the
+// target — arm64 declares its own when its backend lands.
+export function allocatablePool(target Target) returns RegMask
+	if target.os != Os.windows 'unsupported'
+		panic("allocatablePool: maxon-shv2 M5.1 allocates for x64-windows only (got {targetToString(target)})")
+	end 'unsupported'
+	var pool = 0 as RegMask
+	pool = pool or regMaskOf(X64Register.rax)
+	pool = pool or regMaskOf(X64Register.rcx)
+	pool = pool or regMaskOf(X64Register.rdx)
+	pool = pool or regMaskOf(X64Register.rsi)
+	pool = pool or regMaskOf(X64Register.rdi)
+	pool = pool or regMaskOf(X64Register.r8)
+	pool = pool or regMaskOf(X64Register.r9)
+	pool = pool or regMaskOf(X64Register.r10)
+	pool = pool or regMaskOf(X64Register.r11)
+	return pool
+end 'allocatablePool'
+
+// Color every function's virtual registers into physical GPRs, in place. Only USER
+// functions are present here — `mrt_start` is prepended AFTER this pass by
+// augmentWithRuntime (it is hand-built in physical registers).
+export function allocateRegisters(module TargetModule, target Target)
+	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
+	var stats = RegAllocStats.create()
+	let pool = allocatablePool(target)
+
+	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
+	// always has a safe home for its parallel copies. This runs OUTSIDE the
+	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
+	// would forbid).
+	splitCriticalEdges(module)
+
+	for func in module.functions 'eachFunc'
+		allocateFunction(module, func: func, pool: pool, stats: stats)
+	end 'eachFunc'
+	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
+end 'allocateRegisters'
+
+function allocateFunction(module TargetModule, func IrFunction, pool RegMask, stats RegAllocStats)
+	let tLive = Clock.nowMs()
+	let liveness = computeLiveness(module, func: func)
+	stats.addPhaseMs(RegAllocPhase.liveness, ms: Clock.elapsedMs(tLive))
+	stats.recordFixpoint(liveness.fixpointIterations)
+	stats.recordPressure(liveness.maxPressure, funcName: func.name)
+	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
+
+	let poolSize = regMaskPopcount(pool)
+	if liveness.maxPressure > poolSize 'overflow'
+		panic("register pressure overflow in '{func.name}': {liveness.maxPressure} values are simultaneously live but the pool has {poolSize} registers. The real E5001 diagnostic and the cold-spill live-range splitter are later M5 chunks; an M5.1 program must fit the pool.")
+	end 'overflow'
+
+	let tColor = Clock.nowMs()
+	let alloc = colorFunction(module, liveness: liveness, pool: pool, stats: stats)
+	stats.addPhaseMs(RegAllocPhase.coloring, ms: Clock.elapsedMs(tColor))
+
+	let tPlan = Clock.nowMs()
+	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, stats: stats)
+	stats.addPhaseMs(RegAllocPhase.ssaDestruction, ms: Clock.elapsedMs(tPlan))
+
+	let tCheck = Clock.nowMs()
+	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans)
+	stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
+
+	let tRewrite = Clock.nowMs()
+	applyAllocation(module, func: func, alloc: alloc, plans: plans)
+	stats.addPhaseMs(RegAllocPhase.rewrite, ms: Clock.elapsedMs(tRewrite))
+
+	stats.functionsAllocated = stats.functionsAllocated + 1
+end 'allocateFunction'
+
+// ==========================================================================
+// Register hints (biased coloring) — a CORRECTNESS obligation, not an optimization
+// ==========================================================================
+
+// The "no fixed-register hint" sentinel (a copy-partner uses valueCount).
+let NoFixedHint = RegisterFileSize
+
+// Per-value coloring hints: a FIXED physical register (a value copied to/from a
+// pinned register — the R8 return value), and a COPY PARTNER value (a two-address
+// seed's source, or the value on the other end of a phi edge). At a def the fixed
+// register is tried first, then the partner's register; taking one collapses
+// copy-related values into a single register so the copy elides — for a loop back
+// edge, that keeps the copy OUT of the loop.
+type ColorHints
+	export var fixedHint as RegNumColumn
+	export var copyHint as ValueIdArray
+	export var noPartner as ValueId
+
+	export static function create(valueCount ValueId) returns ColorHints
+		let fixedHint = filledColumn(valueCount, value: NoFixedHint)
+		let copyHint = filledColumn(valueCount, value: valueCount)
+		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
+	end 'create'
+
+	function setFixedIfUnset(v ValueId, regNum MachineWord)
+		let cur = try self.fixedHint.get(v) otherwise panic("ColorHints.setFixedIfUnset: OOB")
+		if cur == NoFixedHint 'unset'
+			try self.fixedHint.set(v, value: regNum) otherwise panic("ColorHints.setFixedIfUnset: set OOB")
+		end 'unset'
+	end 'setFixedIfUnset'
+
+	function setCopyIfUnset(v ValueId, partner ValueId)
+		if v == partner 'selfPartner'
+			return
+		end 'selfPartner'
+		let cur = try self.copyHint.get(v) otherwise panic("ColorHints.setCopyIfUnset: OOB")
+		if cur == self.noPartner 'unset'
+			try self.copyHint.set(v, value: partner) otherwise panic("ColorHints.setCopyIfUnset: set OOB")
+		end 'unset'
+	end 'setCopyIfUnset'
+
+	export function fixedOf(v ValueId) returns MachineWord
+		return try self.fixedHint.get(v) otherwise panic("ColorHints.fixedOf: OOB")
+	end 'fixedOf'
+
+	export function copyOf(v ValueId) returns ValueId
+		return try self.copyHint.get(v) otherwise panic("ColorHints.copyOf: OOB")
+	end 'copyOf'
+
+	export function hasFixed(v ValueId) returns bool
+		return self.fixedOf(v) != NoFixedHint
+	end 'hasFixed'
+
+	export function hasCopy(v ValueId) returns bool
+		return self.copyOf(v) != self.noPartner
+	end 'hasCopy'
+end 'ColorHints'
+
+// Collect hints by scanning ops (seed copies + the R8 return move) and phi edges.
+// Blocks are scanned in layout order so a phi's stored copy partner is its
+// FORWARD-edge incoming (defined in a dominator) — the one already colored when the
+// phi is reached.
+function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) returns ColorHints
+	var hints = ColorHints.create(valueCount)
+	for local in 0 upto cfg.numBlocks 'eachBlock'
+		let block = blockAt(module, cfg: cfg, local: local)
+
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		for opIdx in ordered 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("computeHints: opIdx not in module.ops")
+			collectOpHints(op, hints: hints)
+		end 'eachOp'
+
+		collectPhiEdgeHints(module, cfg: cfg, predBlock: block, hints: hints)
+	end 'eachBlock'
+	return hints
+end 'computeHints'
+
+// A `movRegReg`/`movReg32Reg32` is the only op that carries a coloring hint: a copy
+// to a FIXED register hints its virtual source to that register (the R8 return move
+// → the return value elides); a copy between two virtual registers (the two-address
+// seed) hints its dest to its source so it reuses the source's register when it dies.
+function collectOpHints(op TargetOp, hints ColorHints)
+	match op 'hint'
+		movRegReg(dst, src) then addCopyHint(dst, src: src, hints: hints)
+		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
+		prologue to jcc then break 'hint'
+		movRegImm to movRegImm32 then break 'hint'
+		addRegReg to iatCall then break 'hint'
+	end 'hint'
+end 'collectOpHints'
+
+function addCopyHint(dst X64VReg, src X64VReg, hints ColorHints)
+	match dst 'd'
+		physical(dReg) then addFixedFromPhysDst(dReg, src: src, hints: hints)
+		virtual(dId) then addCopyFromVirtualDst(dId, src: src, hints: hints)
+	end 'd'
+end 'addCopyHint'
+
+// `mov <fixed physical>, <virtual src>`: the source wants that fixed register.
+function addFixedFromPhysDst(dReg X64Register, src X64VReg, hints ColorHints)
+	match src 's'
+		virtual(sId) then hints.setFixedIfUnset(sId, regNum: dReg.rawValue)
+		physical then break 's'
+	end 's'
+end 'addFixedFromPhysDst'
+
+// `mov <virtual dst>, <src>`: dst wants src's register (virtual src) or src's fixed
+// register (physical src).
+function addCopyFromVirtualDst(dId ValueId, src X64VReg, hints ColorHints)
+	match src 's'
+		virtual(sId) then hints.setCopyIfUnset(dId, partner: sId)
+		physical(sReg) then hints.setFixedIfUnset(dId, regNum: sReg.rawValue)
+	end 's'
+end 'addCopyFromVirtualDst'
+
+// Each phi and the value a predecessor passes it on an edge are copy-related — hint
+// them to each other so the parallel edge copy elides (the loop back edge especially,
+// where a surviving copy would land inside the loop body).
+function collectPhiEdgeHints(module TargetModule, cfg FuncCfg, predBlock IrBlock, hints ColorHints)
+	for edge in predBlock.branchEdges 'eachEdge'
+		let targetBlock = blockAt(module, cfg: cfg, local: localOfBlockId(cfg, blockId: edge.targetBlockId))
+		let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(coloring hints)")
+		for k in 0 upto view.count 'eachPhi'
+			let phi = view.phiValueIdAt(k)
+			let incoming = view.incomingAt(k)
+			hints.setCopyIfUnset(phi, partner: incoming)
+			hints.setCopyIfUnset(incoming, partner: phi)
+		end 'eachPhi'
+	end 'eachEdge'
+end 'collectPhiEdgeHints'
+
+// ==========================================================================
+// The colorer — a forward sweep over a `u16` in-use mask, per block
+// ==========================================================================
+
+function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats) returns Allocation
+	let cfg = liveness.cfg
+	let valueCount = liveness.valueCount
+	let wordsPerRow = liveness.wordsPerRow
+	var alloc = Allocation.create(valueCount)
+	let hints = computeHints(module, cfg: cfg, valueCount: valueCount)
+	var buf = OperandList.create()
+
+	for local in 0 upto cfg.numBlocks 'eachBlock'
+		let block = blockAt(module, cfg: cfg, local: local)
+
+		// Seed occupancy from the non-phi live-ins (each already colored in a
+		// dominator), then allocate the block-arg phis defined at entry.
+		var inUse = seedInUse(liveness, local: local, alloc: alloc, valueCount: valueCount)
+		for arg in block.blockArgs 'eachPhi'
+			inUse = allocateDef(arg.valueId, working: inUse, dyingRegs: 0, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
+		end 'eachPhi'
+
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, wordsPerRow: wordsPerRow, buf: buf)
+
+		for pos in 0 upto ordered.count() 'eachOp'
+			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
+			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, wordsPerRow: wordsPerRow, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf)
+		end 'eachOp'
+	end 'eachBlock'
+
+	return alloc
+end 'colorFunction'
+
+// The in-use mask at a block's entry: every non-phi live-in value occupies its
+// color. A live-in value must already be colored (its def dominates) — the
+// dominance-order assertion.
+function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, valueCount ValueId) returns RegMask
+	var mask = 0 as RegMask
+	for v in 0 upto valueCount 'eachValue'
+		if liveness.isLiveIn(local, v: v) 'liveIn'
+			if not alloc.isColored(v) 'notColored'
+				panic("seedInUse: value {v} is live-in to block {local} but was never colored — a use dominates its def (structured-layout invariant broken)")
+			end 'notColored'
+			mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
+		end 'liveIn'
+	end 'eachValue'
+	return mask
+end 'seedInUse'
+
+// Allocate a register for `v` if it is uncolored (an already-colored value is a
+// two-address RMW re-def — no new register). Returns `working` with the assigned
+// register added, so the next def at the same op avoids it.
+function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats) returns RegMask
+	if alloc.isColored(v) 'rmwRedef'
+		return working
+	end 'rmwRedef'
+	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not pool)
+	let reg = chooseRegister(v, blocked: blocked, hints: hints, alloc: alloc, stats: stats)
+	alloc.assign(v, regNum: reg)
+	stats.valuesColored = stats.valuesColored + 1
+	stats.noteRegisterUse(reg)
+	return regMaskAdd(working, regNum: reg)
+end 'allocateDef'
+
+// Pick a register for `v`: the hinted register FIRST (fixed, then the copy
+// partner's), falling back to the lowest free pool register. This one biased choice
+// is what collapses copy-related values so their copy elides.
+function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, stats RegAllocStats) returns MachineWord
+	if hints.hasFixed(v) 'fixed'
+		let fr = hints.fixedOf(v)
+		if not regMaskContains(blocked, regNum: fr) 'fixedFree'
+			stats.hintsHonoured = stats.hintsHonoured + 1
+			return fr
+		end 'fixedFree'
+	end 'fixed'
+	if hints.hasCopy(v) 'copy'
+		let p = hints.copyOf(v)
+		if alloc.isColored(p) 'partnerColored'
+			let cr = alloc.regNumOf(p)
+			if not regMaskContains(blocked, regNum: cr) 'copyFree'
+				stats.hintsHonoured = stats.hintsHonoured + 1
+				return cr
+			end 'copyFree'
+		end 'partnerColored'
+	end 'copy'
+
+	if hints.hasFixed(v) or hints.hasCopy(v) 'missed'
+		stats.hintsMissed = stats.hintsMissed + 1
+	end 'missed'
+
+	let reg = lowestClearRegister(blocked)
+	if reg == RegisterFileSize 'exhausted'
+		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — maxPressure exceeded the pool, which the earlier feasibility check should have caught")
+	end 'exhausted'
+	return reg
+end 'chooseRegister'
+
+// Color one op: assert its uses are already colored (dominance), free the operands
+// that die here (so a def may reuse a dying use's register), allocate the def, then
+// return the block's in-use mask for the point AFTER the op.
+function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BitWordArray, wordsPerRow ByteCount, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList) returns RegMask
+	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
+	targetOpOperands(op, buf: buf)
+
+	for o in buf 'assertUses'
+		if (not operandIsDef(o)) and operandIsVirtual(o) 'vu'
+			if not alloc.isColored(operandValueId(o)) 'notColored'
+				panic("colorOpForward: use of value {operandValueId(o)} before it was colored — dominance-order violation (a future block-reordering pass would need to preserve dominance layout)")
+			end 'notColored'
+		end 'vu'
+	end 'assertUses'
+
+	let dyingRegs = dyingRegsAt(deaths, pos: pos, wordsPerRow: wordsPerRow, buf: buf, alloc: alloc)
+
+	var working = inUse
+	for o in buf 'allocDefs'
+		if operandIsDef(o) and operandIsVirtual(o) 'vd'
+			working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
+		end 'vd'
+	end 'allocDefs'
+
+	// in-use after the op: drop the dying operands, keep the LIVE defs (a def that
+	// is dead the instant it is written frees its register too, via `dyingRegs`).
+	var liveDefRegs = 0 as RegMask
+	for o in buf 'liveDefs'
+		if operandIsDef(o) and operandIsVirtual(o) 'vd2'
+			let v = operandValueId(o)
+			if not deathTest(deaths, pos: pos, v: v, wordsPerRow: wordsPerRow) 'stillLive'
+				liveDefRegs = regMaskAdd(liveDefRegs, regNum: alloc.regNumOf(v))
+			end 'stillLive'
+		end 'vd2'
+	end 'liveDefs'
+
+	return (inUse and not dyingRegs) or liveDefRegs
+end 'colorOpForward'
+
+// A `(numOps × wordsPerRow)` matrix: bit `v` of row `pos` is set iff value `v`'s
+// live range ENDS at op `pos` (its last use, or a dead def). A backward scan from
+// the block's live-out marks a value dying at an op iff it is an operand there and
+// not live below.
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, wordsPerRow ByteCount, buf OperandList) returns BitWordArray
+	let n = ordered.count()
+	var deaths = BitWordArray.create()
+	deaths.resize(n * wordsPerRow)
+
+	var seenBelow = BitWordArray.create()
+	seenBelow.resize(wordsPerRow)
+	bitsetCopyRow(seenBelow, dstBase: 0, src: liveness.liveOut, srcBase: local * wordsPerRow, wordsPerRow: wordsPerRow)
+
+	for ri in 0 upto n 'eachOpRev'
+		let pos = n - 1 - ri
+		let opIdx = try ordered.get(pos) otherwise panic("computeBlockDeaths: ordered.get OOB")
+		let op = try module.ops.get(opIdx) otherwise panic("computeBlockDeaths: opIdx not in module.ops")
+		targetOpOperands(op, buf: buf)
+		let base = pos * wordsPerRow
+
+		for o in buf 'markDeaths'
+			if operandIsVirtual(o) 'virt'
+				let v = operandValueId(o)
+				if not bitsetTest(seenBelow, base: 0, bit: v) 'dies'
+					bitsetAdd(deaths, base: base, bit: v)
+				end 'dies'
+			end 'virt'
+		end 'markDeaths'
+
+		// Transform `seenBelow` from live-below-this-op to live-below-the-op-above it —
+		// the same backward SSA transfer the liveness pressure sweep uses.
+		stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf)
+	end 'eachOpRev'
+
+	return deaths
+end 'computeBlockDeaths'
+
+// The register mask of every value dying at op `pos`. The dying set is a SUBSET of the
+// op's own operands (a value can only die where it appears), so iterate the operand
+// buffer — O(operands), not O(valueCount) — testing each against the death bitset,
+// which is what the dense-bitset representation is for. Colored values only: an
+// uncolored dead def is handled by the caller's live-def computation, not here.
+function dyingRegsAt(deaths BitWordArray, pos ByteCount, wordsPerRow ByteCount, buf OperandList, alloc Allocation) returns RegMask
+	var mask = 0 as RegMask
+	let base = pos * wordsPerRow
+	for o in buf 'eachOperand'
+		if operandIsVirtual(o) 'virt'
+			let v = operandValueId(o)
+			if bitsetTest(deaths, base: base, bit: v) and alloc.isColored(v) 'diesColored'
+				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
+			end 'diesColored'
+		end 'virt'
+	end 'eachOperand'
+	return mask
+end 'dyingRegsAt'
+
+function deathTest(deaths BitWordArray, pos ByteCount, v ValueId, wordsPerRow ByteCount) returns bool
+	return bitsetTest(deaths, base: pos * wordsPerRow, bit: v)
+end 'deathTest'
+
+// ==========================================================================
+// Applying a coloring to an op (used by the rewrite in SsaDestruction.maxon)
+// ==========================================================================
+
+// Resolve one operand: a physical register passes through (the R8 return target); a
+// virtual register becomes its assigned physical register.
+export function colorVRegWith(vreg X64VReg, alloc Allocation) returns X64VReg
+	return match vreg 'v'
+		physical gives vreg
+		virtual(id) gives X64VReg.physical(alloc.colorOf(id))
+	end 'v'
+end 'colorVRegWith'
+
+// Rebuild an op with its X64VReg operands colored to physical registers. EXHAUSTIVE
+// over every TargetOp — control/frame/call ops with no register operands pass
+// through. `xchgRegReg` is spliced in AFTER this rewrite, so its operands are already
+// physical (pass through).
+export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
+	match op 'rewrite'
+		prologue to jcc then return op
+		movRegImm(dest, value) then return TargetOp.movRegImm(colorVRegWith(dest, alloc: alloc), value: value)
+		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorVRegWith(dest, alloc: alloc), value: value)
+		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		movReg32Reg32(destReg, srcReg) then return TargetOp.movReg32Reg32(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		addRegReg(destReg, srcReg) then return TargetOp.addRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		subRegReg(destReg, srcReg) then return TargetOp.subRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		imulRegReg(destReg, srcReg) then return TargetOp.imulRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		negReg(reg) then return TargetOp.negReg(colorVRegWith(reg, alloc: alloc))
+		cmpRegReg(lhsReg, rhsReg) then return TargetOp.cmpRegReg(colorVRegWith(lhsReg, alloc: alloc), rhsReg: colorVRegWith(rhsReg, alloc: alloc))
+		xchgRegReg to iatCall then return op
+	end 'rewrite'
+end 'colorTargetOp'
+
+// ==========================================================================
+// Stats logging
+// ==========================================================================
+
+function regAllocStatsMessage(stats RegAllocStats) returns String
+	var msg = "regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n"
+	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; fixpoint iterations total={stats.fixpointIterationsTotal} max={stats.fixpointIterationsMax}\n")
+	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
+	msg.append("  phase ms: liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
+	return msg
+end 'regAllocStatsMessage'

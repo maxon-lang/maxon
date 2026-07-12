@@ -1,0 +1,724 @@
+// TargetLiveness — the pass that decides whether the register allocator is fast:
+// the per-function CFG (built ONCE), loop structure from back edges, and SSA
+// live-in/live-out to a FIXPOINT. Everything is dense (design §"Data
+// representation"): `Array`-indexed columns keyed by the dense function-local
+// block index / value id, live-in/out as a `blocks × words` BITSET matrix, u16
+// register masks — NO `Map` and NO hashing in the hot path.
+//
+// M4b introduced BACK EDGES, so live-in/out is a genuine fixpoint (a single reverse
+// pass is correct only for a DAG); `fixpointIterations` counts the rounds. Phi
+// nodes are read straight off `blockArgs`/`branchEdges` (EliminatePhis is retired):
+// a block-arg is DEFINED at its block's entry, and the value a predecessor passes
+// on its edge is live-out of that predecessor — the standard SSA liveness.
+
+// A dense function-local index: a block's position in `func.blockRefs`, or a count.
+export typealias CfgIndex = int(0 to u64.max)
+export typealias CfgIndexArray = Array with CfgIndex
+
+// A dense column of physical register NUMBERS (0..15), indexed by value id or by
+// parallel-move slot — a coloring, a fixed-register hint, or an edge-move operand
+// list. Same dense-int representation as `CfgIndexArray` (they interconvert freely),
+// named apart because it holds register numbers, not CFG indices (the misleading reuse
+// the review flagged).
+export typealias RegNumColumn = Array with MachineWord
+
+// Build a dense `CfgIndexArray` of `count` entries, every entry set to `value` — the
+// "resize a column then fill a sentinel" pattern the allocator's color/hint columns,
+// the flat BlockId index, and the checker's register-state rows all share. The result
+// unifies with any `Array with <non-negative int>` column (RegNumColumn, RegStateRow).
+export function filledColumn(count ByteCount, value CfgIndex) returns CfgIndexArray
+	var col = CfgIndexArray.create()
+	col.resize(count)
+	for i in 0 upto count 'fill'
+		try col.set(i, value: value) otherwise panic("filledColumn: set OOB")
+	end 'fill'
+	return col
+end 'filledColumn'
+
+// A physical-register mask per value id (`forbiddenPhys`): the registers a value
+// may NOT be colored into because an op writes them while the value is live across.
+export typealias RegMaskColumn = Array with RegMask
+
+// Compressed-sparse-row adjacency: `list[start[n] .. start[n+1])` are node `n`'s
+// neighbours. One flat array instead of `Array with (a per-node array)` (which
+// would be one heap object per block).
+export type CsrGraph
+	export var start as CfgIndexArray
+	export var list as CfgIndexArray
+
+	export static function create(start CfgIndexArray, list CfgIndexArray) returns CsrGraph
+		return Self{start: start, list: list}
+	end 'create'
+
+	// Number of neighbours of node `n`.
+	export function degree(n CfgIndex) returns CfgIndex
+		let lo = try self.start.get(n) otherwise panic("CsrGraph.degree: node {n} out of range")
+		let hi = try self.start.get(n + 1) otherwise panic("CsrGraph.degree: node {n}+1 out of range")
+		return hi - lo
+	end 'degree'
+
+	// The `k`-th neighbour of node `n`.
+	export function neighbour(n CfgIndex, k CfgIndex) returns CfgIndex
+		let lo = try self.start.get(n) otherwise panic("CsrGraph.neighbour: node {n} out of range")
+		return try self.list.get(lo + k) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
+	end 'neighbour'
+end 'CsrGraph'
+
+// The per-function CFG + loop structure, built ONCE. Local block indices are dense
+// (0..numBlocks-1); `blockRefByLocal` maps them to flat `module.blocks` indices and
+// `localByBlockId` maps a function-local `BlockId` back to a local index — both
+// flat arrays, never a `Map` in a fixpoint (the O(B²·iters) trap v1 fell into).
+export type FuncCfg
+	export var numBlocks as CfgIndex
+	export var blockRefByLocal as BlockRefArray
+	export var blockIdByLocal as CfgIndexArray
+	export var localByBlockId as CfgIndexArray
+	export var succ as CsrGraph
+	export var pred as CsrGraph
+	export var loopDepth as CfgIndexArray
+	export var valueCount as ValueId
+
+	export static function create(numBlocks CfgIndex, blockRefByLocal BlockRefArray, blockIdByLocal CfgIndexArray, localByBlockId CfgIndexArray, succ CsrGraph, pred CsrGraph, loopDepth CfgIndexArray, valueCount ValueId) returns FuncCfg
+		return Self{numBlocks: numBlocks, blockRefByLocal: blockRefByLocal, blockIdByLocal: blockIdByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred, loopDepth: loopDepth, valueCount: valueCount}
+	end 'create'
+
+	// The maximum loop nesting depth over all blocks (a stat + a health check that
+	// the parser's structured loops were recognised).
+	export function maxLoopDepth() returns CfgIndex
+		var m = 0 as CfgIndex
+		for d in self.loopDepth 'each'
+			if d > m 'deeper'
+				m = d
+			end 'deeper'
+		end 'each'
+		return m
+	end 'maxLoopDepth'
+end 'FuncCfg'
+
+// The liveness result the colorer and AllocChecker consume. `liveIn`/`liveOut` are
+// the `blocks × wordsPerRow` bitset matrices; `forbidden` is the per-value register
+// mask; `maxPressure` is the exact per-program-point maxlive (χ = ω) the E5001
+// feasibility decision rests on; `fixpointIterations` is the convergence counter.
+export type LivenessResult
+	export var cfg as FuncCfg
+	export var valueCount as ValueId
+	export var wordsPerRow as ByteCount
+	export var liveIn as BitWordArray
+	export var liveOut as BitWordArray
+	export var forbidden as RegMaskColumn
+	export var maxPressure as RegCount
+	export var fixpointIterations as ByteCount
+
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, liveIn BitWordArray, liveOut BitWordArray, forbidden RegMaskColumn, maxPressure RegCount, fixpointIterations ByteCount) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: fixpointIterations}
+	end 'create'
+
+	// True iff value `v` is live on entry to (respectively exit from) local block
+	// `local` — the seeds the colorer and checker read.
+	export function isLiveIn(local CfgIndex, v ValueId) returns bool
+		return bitsetTest(self.liveIn, base: local * self.wordsPerRow, bit: v)
+	end 'isLiveIn'
+
+	export function isLiveOut(local CfgIndex, v ValueId) returns bool
+		return bitsetTest(self.liveOut, base: local * self.wordsPerRow, bit: v)
+	end 'isLiveOut'
+
+	// The register mask value `v` must avoid (empty for every M5.1 value — no op in
+	// the current set writes a physical register while another value is live across).
+	export function forbiddenOf(v ValueId) returns RegMask
+		return try self.forbidden.get(v) otherwise panic("LivenessResult.forbiddenOf: value {v} out of range (valueCount={self.valueCount})")
+	end 'forbiddenOf'
+end 'LivenessResult'
+
+// The local index of a function-local `BlockId`, via the O(1) flat `FuncCfg` index —
+// NEVER `IrModule.getBlockByIdIn` (an O(blocks) scan, the O(B²) trap the design
+// forbids inside per-block/per-edge loops). Panics if the id is not in this function.
+export function localOfBlockId(cfg FuncCfg, blockId BlockId) returns CfgIndex
+	let local = try cfg.localByBlockId.get(blockId) otherwise panic("localOfBlockId: block id {blockId} out of id range")
+	if local == cfg.numBlocks 'notInFunc'
+		panic("localOfBlockId: block id {blockId} is not in this function")
+	end 'notInFunc'
+	return local
+end 'localOfBlockId'
+
+// A resolved phi-carrying edge: the target block's block-args (phis) paired
+// positionally with the incoming values a predecessor passes on the edge. Built once
+// per edge — arity-checked HERE, the one place that check lives — then indexed by the
+// three consumers that each walk the (phi, incoming) pairs differently: SSA-destruction
+// plan building, the colorer's biased-coloring hints, and the AllocChecker's edge
+// simulation. Holds references to the existing arrays (no per-element copy).
+export type PhiEdgeView
+	export var blockArgs as IrBlockArgArray
+	export var argIds as ValueIdArray
+	export var count as ByteCount
+
+	// Resolve + arity-check the phi edge into `targetBlock` carrying `argIds`. `context`
+	// names the caller for the panic. A mismatch is a malformed SSA edge — the ONE
+	// arity assertion for all three consumers.
+	export static function resolve(targetBlock IrBlock, argIds ValueIdArray, context String) returns PhiEdgeView
+		let phiCount = targetBlock.blockArgs.count()
+		if argIds.count() != phiCount 'arity'
+			panic("PhiEdgeView.resolve {context}: edge to '{targetBlock.label}' carries {argIds.count()} args but the block has {phiCount} phis")
+		end 'arity'
+		return Self{blockArgs: targetBlock.blockArgs, argIds: argIds, count: phiCount}
+	end 'resolve'
+
+	// The value id of the k-th phi (block-arg) of the target block.
+	export function phiValueIdAt(k ByteCount) returns ValueId
+		let arg = try self.blockArgs.get(k) otherwise panic("PhiEdgeView.phiValueIdAt: OOB")
+		return arg.valueId
+	end 'phiValueIdAt'
+
+	// The value id the predecessor passes to the k-th phi on this edge.
+	export function incomingAt(k ByteCount) returns ValueId
+		return try self.argIds.get(k) otherwise panic("PhiEdgeView.incomingAt: OOB")
+	end 'incomingAt'
+end 'PhiEdgeView'
+
+// DFS coloring for back-edge detection.
+let DfsWhite = 0
+let DfsGray = 1
+let DfsBlack = 2
+
+// Public entry: compute the full liveness result for one function.
+export function computeLiveness(module TargetModule, func IrFunction) returns LivenessResult
+	let cfg = buildFuncCfg(module, func: func)
+	let valueCount = cfg.valueCount
+	let wordsPerRow = bitsetWordsFor(valueCount)
+	let numBlocks = cfg.numBlocks
+	let matrixWords = numBlocks * wordsPerRow
+
+	var defBits = makeMatrix(matrixWords)
+	var useBits = makeMatrix(matrixWords)
+	var phiDefBits = makeMatrix(matrixWords)
+	computeLocalSets(module, cfg: cfg, defBits: defBits, useBits: useBits, phiDefBits: phiDefBits, wordsPerRow: wordsPerRow)
+
+	var liveIn = makeMatrix(matrixWords)
+	var liveOut = makeMatrix(matrixWords)
+	let iters = solveLivenessFixpoint(module, cfg: cfg, defBits: defBits, useBits: useBits, phiDefBits: phiDefBits, liveIn: liveIn, liveOut: liveOut, wordsPerRow: wordsPerRow)
+
+	var forbidden = makeRegMaskColumn(valueCount)
+	let maxPressure = computePressureAndForbidden(module, cfg: cfg, liveOut: liveOut, forbidden: forbidden, wordsPerRow: wordsPerRow, valueCount: valueCount)
+
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: iters)
+end 'computeLiveness'
+
+// A zeroed word matrix of `wordCount` words.
+function makeMatrix(wordCount ByteCount) returns BitWordArray
+	var m = BitWordArray.create()
+	m.resize(wordCount)
+	return m
+end 'makeMatrix'
+
+// A zeroed per-value register-mask column.
+function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
+	var col = RegMaskColumn.create()
+	col.resize(valueCount)
+	return col
+end 'makeRegMaskColumn'
+
+// ==========================================================================
+// CFG construction
+// ==========================================================================
+
+export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncCfg
+	var blockRefByLocal = BlockRefArray.create()
+	var blockIdByLocal = CfgIndexArray.create()
+	var maxBlockId = 0 as CfgIndex
+	for blockRef in func.blockRefs 'eachRef'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildFuncCfg: blockRef {blockRef} from func.blockRefs not in module.blocks")
+		blockRefByLocal.push(blockRef)
+		blockIdByLocal.push(block.id)
+		if block.id > maxBlockId 'higher'
+			maxBlockId = block.id
+		end 'higher'
+	end 'eachRef'
+
+	let numBlocks = blockRefByLocal.count()
+
+	// BlockId -> local index; sentinel `numBlocks` marks an id not in this function.
+	var localByBlockId = filledColumn(maxBlockId + 1, value: numBlocks)
+	for i in 0 upto numBlocks 'mapIds'
+		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncCfg: blockIdByLocal.get OOB")
+		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncCfg: localByBlockId.set(bid) OOB")
+	end 'mapIds'
+
+	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
+	var edgeFrom = CfgIndexArray.create()
+	var edgeTo = CfgIndexArray.create()
+	for i in 0 upto numBlocks 'eachBlock'
+		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncCfg: blockRefByLocal.get OOB")) otherwise panic("buildFuncCfg: block ref not in blocks")
+		var succIds = BlockIdArray.create()
+		collectBlockSuccessorIds(module, block: block, out: succIds)
+		for sid in succIds 'eachSucc'
+			let j = try localByBlockId.get(sid) otherwise panic("buildFuncCfg: successor block id {sid} out of id range")
+			if j == numBlocks 'notInFunc'
+				panic("buildFuncCfg: block '{block.label}' branches to block id {sid} which is not in function '{func.name}'")
+			end 'notInFunc'
+			edgeFrom.push(i)
+			edgeTo.push(j)
+		end 'eachSucc'
+	end 'eachBlock'
+
+	let succ = buildCsr(edgeFrom, to: edgeTo, nodeCount: numBlocks)
+	let pred = buildCsr(edgeTo, to: edgeFrom, nodeCount: numBlocks)
+
+	let valueCount = scanFunctionValueCount(module, func: func)
+	let loopDepth = computeLoopDepth(succ, pred: pred, numBlocks: numBlocks)
+
+	return FuncCfg.create(numBlocks, blockRefByLocal: blockRefByLocal, blockIdByLocal: blockIdByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred, loopDepth: loopDepth, valueCount: valueCount)
+end 'buildFuncCfg'
+
+// A block's successor BlockIds: a `jcc` body op names the then-target; the `jmp`
+// terminator names the (unconditional / else) target; `ret` names none. Derived
+// from the ops themselves (the ground truth), NOT from `branchEdges` (which exist
+// only for phi-carrying edges).
+function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("collectBlockSuccessorIds: opIdx {opIdx} not in module.ops")
+		match op 'bodyCtrl'
+			jcc(_, target) then out.push(target)
+			prologue to jmp then break 'bodyCtrl'
+			movRegImm to iatCall then break 'bodyCtrl'
+		end 'bodyCtrl'
+	end 'eachOp'
+
+	if block.hasTerminatorOp() 'hasTerm'
+		let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockSuccessorIds: terminator not in module.ops")
+		match op 'termCtrl'
+			jmp(target) then out.push(target)
+			ret then break 'termCtrl'
+			prologue to epilogue then panic("collectBlockSuccessorIds: block '{block.label}' terminator is a frame op, not a branch/return")
+			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
+			movRegImm to iatCall then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
+		end 'termCtrl'
+	end 'hasTerm'
+end 'collectBlockSuccessorIds'
+
+// Build a CSR graph from a parallel (from, to) edge list over `nodeCount` nodes.
+function buildCsr(from CfgIndexArray, to CfgIndexArray, nodeCount CfgIndex) returns CsrGraph
+	let edgeCount = from.count()
+
+	var start = CfgIndexArray.create()
+	start.resize(nodeCount + 1)
+
+	// Degree of each node into start[node+1], then prefix-sum into offsets.
+	for k in 0 upto edgeCount 'countDeg'
+		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
+		let cur = try start.get(f + 1) otherwise panic("buildCsr: start.get(f+1) OOB")
+		try start.set(f + 1, value: cur + 1) otherwise panic("buildCsr: start.set OOB")
+	end 'countDeg'
+	for n in 0 upto nodeCount 'prefix'
+		let a = try start.get(n) otherwise panic("buildCsr: prefix start.get(n) OOB")
+		let b = try start.get(n + 1) otherwise panic("buildCsr: prefix start.get(n+1) OOB")
+		try start.set(n + 1, value: a + b) otherwise panic("buildCsr: prefix start.set OOB")
+	end 'prefix'
+
+	var list = CfgIndexArray.create()
+	list.resize(edgeCount)
+	// Running fill cursor per node, seeded from start[node].
+	var fill = CfgIndexArray.create()
+	fill.resize(nodeCount)
+	for n in 0 upto nodeCount 'seedFill'
+		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
+		try fill.set(n, value: s) otherwise panic("buildCsr: seedFill set OOB")
+	end 'seedFill'
+	for k in 0 upto edgeCount 'place'
+		let f = try from.get(k) otherwise panic("buildCsr: place from.get OOB")
+		let t = try to.get(k) otherwise panic("buildCsr: place to.get OOB")
+		let pos = try fill.get(f) otherwise panic("buildCsr: place fill.get OOB")
+		try list.set(pos, value: t) otherwise panic("buildCsr: place list.set OOB")
+		try fill.set(f, value: pos + 1) otherwise panic("buildCsr: place fill.set OOB")
+	end 'place'
+
+	return CsrGraph.create(start, list: list)
+end 'buildCsr'
+
+// The number of distinct value ids in the function (columns for the dense state):
+// max id appearing as an op operand, block-arg, or branch-edge arg, plus one. A
+// function always has at least a return value, so the count is never zero.
+function scanFunctionValueCount(module TargetModule, func IrFunction) returns ValueId
+	var maxId = 0 as ValueId
+	var buf = OperandList.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("scanFunctionValueCount: blockRef not in module.blocks")
+
+		for arg in block.blockArgs 'eachArg'
+			maxId = maxOf(maxId, b: arg.valueId)
+		end 'eachArg'
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachEdgeArg'
+				maxId = maxOf(maxId, b: argId)
+			end 'eachEdgeArg'
+		end 'eachEdge'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("scanFunctionValueCount: opIdx not in module.ops")
+			targetOpOperands(op, buf: buf)
+			for o in buf 'eachOperand'
+				if operandIsVirtual(o) 'virt'
+					maxId = maxOf(maxId, b: operandValueId(o))
+				end 'virt'
+			end 'eachOperand'
+		end 'eachOp'
+	end 'eachBlock'
+	return maxId + 1
+end 'scanFunctionValueCount'
+
+// ==========================================================================
+// Loop structure (back edges -> natural loops -> per-block depth)
+// ==========================================================================
+
+// Per-block loop nesting depth. The CFG the structured parser emits is reducible,
+// so every DFS retreating edge is a genuine back edge; each back edge's natural
+// loop is the header plus every block that reaches the tail without leaving through
+// the header. Back edges sharing a header (a loop with `continue`) form ONE loop.
+function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) returns CfgIndexArray
+	var depth = CfgIndexArray.create()
+	depth.resize(numBlocks)
+	if numBlocks == 0 'empty'
+		return depth
+	end 'empty'
+
+	var colors = CfgIndexArray.create()
+	colors.resize(numBlocks)
+	var backTails = CfgIndexArray.create()
+	var backHeads = CfgIndexArray.create()
+	dfsBackEdges(succ, u: 0, colors: colors, backTails: backTails, backHeads: backHeads)
+
+	var headHandled = BoolArray.create()
+	headHandled.resize(numBlocks)
+	for k in 0 upto backHeads.count() 'eachBackEdge'
+		let h = try backHeads.get(k) otherwise panic("computeLoopDepth: backHeads.get OOB")
+		let already = try headHandled.get(h) otherwise panic("computeLoopDepth: headHandled.get OOB")
+		if already 'seen'
+			continue
+		end 'seen'
+		try headHandled.set(h, value: true) otherwise panic("computeLoopDepth: headHandled.set OOB")
+		bumpNaturalLoopDepth(pred, header: h, backTails: backTails, backHeads: backHeads, numBlocks: numBlocks, depth: depth)
+	end 'eachBackEdge'
+
+	return depth
+end 'computeLoopDepth'
+
+function dfsBackEdges(succ CsrGraph, u CfgIndex, colors CfgIndexArray, backTails CfgIndexArray, backHeads CfgIndexArray)
+	try colors.set(u, value: DfsGray) otherwise panic("dfsBackEdges: colors.set OOB")
+	let deg = succ.degree(u)
+	for k in 0 upto deg 'eachSucc'
+		let v = succ.neighbour(u, k: k)
+		let c = try colors.get(v) otherwise panic("dfsBackEdges: colors.get OOB")
+		if c == DfsWhite 'unvisited'
+			dfsBackEdges(succ, u: v, colors: colors, backTails: backTails, backHeads: backHeads)
+		end 'unvisited' else if c == DfsGray 'retreating'
+			backTails.push(u)
+			backHeads.push(v)
+		end 'retreating'
+	end 'eachSucc'
+	try colors.set(u, value: DfsBlack) otherwise panic("dfsBackEdges: colors.set black OOB")
+end 'dfsBackEdges'
+
+// Bump `depth` by 1 for every block in the natural loop of `header` (the union over
+// all back edges targeting `header`): the header, plus everything reaching a tail
+// through predecessors without passing back through the header.
+function bumpNaturalLoopDepth(pred CsrGraph, header CfgIndex, backTails CfgIndexArray, backHeads CfgIndexArray, numBlocks CfgIndex, depth CfgIndexArray)
+	var member = BoolArray.create()
+	member.resize(numBlocks)
+	try member.set(header, value: true) otherwise panic("bumpNaturalLoopDepth: member.set(header) OOB")
+
+	var worklist = CfgIndexArray.create()
+	for k in 0 upto backHeads.count() 'seedTails'
+		let h = try backHeads.get(k) otherwise panic("bumpNaturalLoopDepth: backHeads.get OOB")
+		if h != header 'otherLoop'
+			continue
+		end 'otherLoop'
+		let t = try backTails.get(k) otherwise panic("bumpNaturalLoopDepth: backTails.get OOB")
+		let isMember = try member.get(t) otherwise panic("bumpNaturalLoopDepth: member.get(t) OOB")
+		if not isMember 'newTail'
+			try member.set(t, value: true) otherwise panic("bumpNaturalLoopDepth: member.set(t) OOB")
+			worklist.push(t)
+		end 'newTail'
+	end 'seedTails'
+
+	while worklist.count() > 0 'bfs'
+		let n = try worklist.pop() otherwise panic("bumpNaturalLoopDepth: worklist.pop on non-empty failed")
+		let deg = pred.degree(n)
+		for k in 0 upto deg 'eachPred'
+			let p = pred.neighbour(n, k: k)
+			let isMember = try member.get(p) otherwise panic("bumpNaturalLoopDepth: member.get(p) OOB")
+			if not isMember 'newMember'
+				try member.set(p, value: true) otherwise panic("bumpNaturalLoopDepth: member.set(p) OOB")
+				worklist.push(p)
+			end 'newMember'
+		end 'eachPred'
+	end 'bfs'
+
+	for b in 0 upto numBlocks 'bump'
+		let isMember = try member.get(b) otherwise panic("bumpNaturalLoopDepth: member.get(b) OOB")
+		if isMember 'inLoop'
+			let d = try depth.get(b) otherwise panic("bumpNaturalLoopDepth: depth.get OOB")
+			try depth.set(b, value: d + 1) otherwise panic("bumpNaturalLoopDepth: depth.set OOB")
+		end 'inLoop'
+	end 'bump'
+end 'bumpNaturalLoopDepth'
+
+// ==========================================================================
+// Local sets (use / def / phiDefs) per block
+// ==========================================================================
+
+// Fill `defBits`/`useBits`/`phiDefBits`. `defBits` = phi defs + every op def;
+// `useBits` = upward-exposed uses (used before defined in the block, phi operands
+// excluded — those belong to the edge); `phiDefBits` = the block-arg defs.
+function computeLocalSets(module TargetModule, cfg FuncCfg, defBits BitWordArray, useBits BitWordArray, phiDefBits BitWordArray, wordsPerRow ByteCount)
+	var buf = OperandList.create()
+	var definedSoFar = makeMatrix(wordsPerRow)
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let base = i * wordsPerRow
+		let block = blockAt(module, cfg: cfg, local: i)
+
+		bitsetClearRow(definedSoFar, base: 0, wordsPerRow: wordsPerRow)
+		for arg in block.blockArgs 'eachPhi'
+			bitsetAdd(phiDefBits, base: base, bit: arg.valueId)
+			bitsetAdd(defBits, base: base, bit: arg.valueId)
+			bitsetAdd(definedSoFar, base: 0, bit: arg.valueId)
+		end 'eachPhi'
+
+		for opIdx in block.opRefs 'eachOp'
+			accumulateOpLocalSets(module, opIdx: opIdx, base: base, defBits: defBits, useBits: useBits, definedSoFar: definedSoFar, buf: buf)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			accumulateOpLocalSets(module, opIdx: block.terminatorIndex(), base: base, defBits: defBits, useBits: useBits, definedSoFar: definedSoFar, buf: buf)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'computeLocalSets'
+
+function accumulateOpLocalSets(module TargetModule, opIdx OpIndex, base ByteCount, defBits BitWordArray, useBits BitWordArray, definedSoFar BitWordArray, buf OperandList)
+	let op = try module.ops.get(opIdx) otherwise panic("accumulateOpLocalSets: opIdx not in module.ops")
+	targetOpOperands(op, buf: buf)
+	for o in buf 'eachOperand'
+		if not operandIsVirtual(o) 'physical'
+			continue
+		end 'physical'
+		let v = operandValueId(o)
+		if operandIsDef(o) 'isDef'
+			bitsetAdd(defBits, base: base, bit: v)
+			bitsetAdd(definedSoFar, base: 0, bit: v)
+		end 'isDef' else 'isUse'
+			if not bitsetTest(definedSoFar, base: 0, bit: v) 'upwardExposed'
+				bitsetAdd(useBits, base: base, bit: v)
+			end 'upwardExposed'
+		end 'isUse'
+	end 'eachOperand'
+end 'accumulateOpLocalSets'
+
+// ==========================================================================
+// The fixpoint
+// ==========================================================================
+
+// Iterate liveIn/liveOut to convergence (M4b back edges make this a real
+// fixpoint). Blocks are swept in reverse local order each round for fast
+// propagation; returns the number of rounds.
+function solveLivenessFixpoint(module TargetModule, cfg FuncCfg, defBits BitWordArray, useBits BitWordArray, phiDefBits BitWordArray, liveIn BitWordArray, liveOut BitWordArray, wordsPerRow ByteCount) returns ByteCount
+	let numBlocks = cfg.numBlocks
+	var tmpOut = makeMatrix(wordsPerRow)
+	var tmpRow = makeMatrix(wordsPerRow)
+	var iters = 0 as ByteCount
+	var changed = true
+
+	while changed 'fixpoint'
+		changed = false
+		iters = iters + 1
+		for ri in 0 upto numBlocks 'eachBlockRev'
+			let i = numBlocks - 1 - ri
+			let base = i * wordsPerRow
+			let block = blockAt(module, cfg: cfg, local: i)
+
+			// liveOut[i] = ∪_s ( (liveIn[s] \ phiDefs[s]) ∪ phiArgs(i->s) )
+			bitsetClearRow(tmpOut, base: 0, wordsPerRow: wordsPerRow)
+			let deg = cfg.succ.degree(i)
+			for k in 0 upto deg 'eachSucc'
+				let j = cfg.succ.neighbour(i, k: k)
+				let sBase = j * wordsPerRow
+				bitsetCopyRow(tmpRow, dstBase: 0, src: liveIn, srcBase: sBase, wordsPerRow: wordsPerRow)
+				bitsetSubtractRow(tmpRow, dstBase: 0, src: phiDefBits, srcBase: sBase, wordsPerRow: wordsPerRow)
+				_ = bitsetOrRow(tmpOut, dstBase: 0, src: tmpRow, srcBase: 0, wordsPerRow: wordsPerRow)
+				let targetBlockId = try cfg.blockIdByLocal.get(j) otherwise panic("solveLivenessFixpoint: blockIdByLocal.get OOB")
+				addPhiArgsOnEdge(block, targetBlockId: targetBlockId, out: tmpOut)
+			end 'eachSucc'
+			if not bitsetRowsEqual(tmpOut, aBase: 0, b: liveOut, bBase: base, wordsPerRow: wordsPerRow) 'outGrew'
+				bitsetCopyRow(liveOut, dstBase: base, src: tmpOut, srcBase: 0, wordsPerRow: wordsPerRow)
+				changed = true
+			end 'outGrew'
+
+			// liveIn[i] = useBits[i] ∪ (liveOut[i] \ defBits[i])
+			bitsetCopyRow(tmpRow, dstBase: 0, src: liveOut, srcBase: base, wordsPerRow: wordsPerRow)
+			bitsetSubtractRow(tmpRow, dstBase: 0, src: defBits, srcBase: base, wordsPerRow: wordsPerRow)
+			_ = bitsetOrRow(tmpRow, dstBase: 0, src: useBits, srcBase: base, wordsPerRow: wordsPerRow)
+			if not bitsetRowsEqual(tmpRow, aBase: 0, b: liveIn, bBase: base, wordsPerRow: wordsPerRow) 'inGrew'
+				bitsetCopyRow(liveIn, dstBase: base, src: tmpRow, srcBase: 0, wordsPerRow: wordsPerRow)
+				changed = true
+			end 'inGrew'
+		end 'eachBlockRev'
+	end 'fixpoint'
+
+	return iters
+end 'solveLivenessFixpoint'
+
+// Add every value a predecessor passes on its edge to `targetBlockId` (the phi
+// operands, which are live at the predecessor's exit) into `out` (row base 0).
+function addPhiArgsOnEdge(predBlock IrBlock, targetBlockId BlockId, out BitWordArray)
+	for edge in predBlock.branchEdges 'eachEdge'
+		if edge.targetBlockId != targetBlockId 'notThisEdge'
+			continue
+		end 'notThisEdge'
+		for argId in edge.argIds 'eachArg'
+			bitsetAdd(out, base: 0, bit: argId)
+		end 'eachArg'
+	end 'eachEdge'
+end 'addPhiArgsOnEdge'
+
+// ==========================================================================
+// Pressure + forbiddenPhys (backward sweep over the converged live-out)
+// ==========================================================================
+
+// Backward per-op sweep: track the exact live set at each program point, taking
+// `maxPressure` (the χ = ω the feasibility decision needs) and folding each op's
+// physical/implicit register writes into `forbidden` for every value live across.
+function computePressureAndForbidden(module TargetModule, cfg FuncCfg, liveOut BitWordArray, forbidden RegMaskColumn, wordsPerRow ByteCount, valueCount ValueId) returns RegCount
+	var liveRow = makeMatrix(wordsPerRow)
+	var buf = OperandList.create()
+	var maxPressure = 0 as RegCount
+
+	for i in 0 upto cfg.numBlocks 'eachBlock'
+		let base = i * wordsPerRow
+		let block = blockAt(module, cfg: cfg, local: i)
+		bitsetCopyRow(liveRow, dstBase: 0, src: liveOut, srcBase: base, wordsPerRow: wordsPerRow)
+		var blockMax = bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
+
+		var ordered = OpIndexArray.create()
+		collectBlockOps(block, out: ordered)
+		for ri in 0 upto ordered.count() 'eachOpRev'
+			let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("computePressureAndForbidden: ordered.get OOB")
+			let after = stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, valueCount: valueCount)
+			blockMax = maxOf(blockMax, b: after)
+		end 'eachOpRev'
+
+		// A DEAD block-arg phi (never used, not live-out — e.g. the continuation phi a
+		// merge mints for a value nothing reads after an `if`) is never "live", so the
+		// sweep above counts it as zero. But the colorer colors EVERY block-arg and
+		// holds its register for the WHOLE block — a dead phi never appears as an
+		// operand, so it never dies and its register is freed only at the block
+		// boundary. So the colorer's true simultaneous demand in this block is
+		// `blockMax + (dead-phi count)`. Adding it keeps `maxPressure` equal to the
+		// exact χ the colorer needs, so the "coloring cannot fail when maxPressure <=
+		// pool" invariant — and the future E5001 deficit count — stay sound. After the
+		// backward sweep `liveRow` is the live-in view: a block-arg is present iff it is
+		// live (used here or live-out); a dead phi is absent.
+		let deadPhis = countDeadPhis(block, liveRow: liveRow)
+		maxPressure = maxOf(maxPressure, b: blockMax + deadPhis)
+	end 'eachBlock'
+
+	return maxPressure
+end 'computePressureAndForbidden'
+
+// The number of DEAD block-arg phis of `block`: block-args absent from `liveRow` (the
+// live-in view the backward sweep leaves), i.e. with no use in the block and not
+// live-out. The colorer reserves a register for each across the whole block, so they
+// count toward the block's true register demand even though they are never live.
+function countDeadPhis(block IrBlock, liveRow BitWordArray) returns RegCount
+	var dead = 0 as RegCount
+	for arg in block.blockArgs 'each'
+		if not bitsetTest(liveRow, base: 0, bit: arg.valueId) 'deadPhi'
+			dead = dead + 1
+		end 'deadPhi'
+	end 'each'
+	return dead
+end 'countDeadPhis'
+
+// Process one op backward: fold its register clobbers into `forbidden` for values
+// live across it, then transform `liveRow` from live-after to live-before. Returns the
+// resulting live-before population (pressure).
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow ByteCount, valueCount ValueId) returns RegCount
+	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
+	targetOpOperands(op, buf: buf)
+
+	// Registers this op writes without being a virtual def: physical def operands +
+	// the implicit-def mask (a call's clobbers, M5). Values live across must avoid them.
+	var clobberMask = op.rawValue.implicitDefs
+	for o in buf 'physDefs'
+		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
+			clobberMask = clobberMask or regMaskOf(operandRegister(o))
+		end 'physDef'
+	end 'physDefs'
+	if clobberMask != 0 'hasClobber'
+		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, valueCount: valueCount)
+	end 'hasClobber'
+
+	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
+
+	return bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
+end 'stepBackwardOverOp'
+
+// Transform a live/seen bitset ROW from live-AFTER an op to live-BEFORE it: remove the
+// op's virtual defs, then add its virtual uses. Defs are removed FIRST so a read-
+// modify-write value (removed by its def, re-added by its own use) stays live. `buf`
+// must already hold the op's operands. Shared by the liveness pressure sweep
+// (`stepBackwardOverOp`) and the colorer's per-block death computation — an identical
+// backward SSA transfer that must not drift between the two.
+export function stepRowBackwardOverOperands(row BitWordArray, base ByteCount, buf OperandList)
+	for o in buf 'removeDefs'
+		if operandIsDef(o) and operandIsVirtual(o) 'vd'
+			bitsetRemove(row, base: base, bit: operandValueId(o))
+		end 'vd'
+	end 'removeDefs'
+	for o in buf 'addUses'
+		if (not operandIsDef(o)) and operandIsVirtual(o) 'vu'
+			bitsetAdd(row, base: base, bit: operandValueId(o))
+		end 'vu'
+	end 'addUses'
+end 'stepRowBackwardOverOperands'
+
+// For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own
+// defs), add `clobberMask` to its forbidden registers.
+function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, valueCount ValueId)
+	for v in 0 upto valueCount 'eachValue'
+		if not bitsetTest(liveRow, base: 0, bit: v) 'notLive'
+			continue
+		end 'notLive'
+		if operandDefinesValue(buf, v: v) 'ownDef'
+			continue
+		end 'ownDef'
+		let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
+		try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
+	end 'eachValue'
+end 'applyForbidden'
+
+function operandDefinesValue(buf OperandList, v ValueId) returns bool
+	for o in buf 'each'
+		if operandIsDef(o) and operandIsVirtual(o) and operandValueId(o) == v 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'operandDefinesValue'
+
+// The block's ops in execution order: body `opRefs` then the terminator op.
+export function collectBlockOps(block IrBlock, out OpIndexArray)
+	for opIdx in block.opRefs 'eachOp'
+		out.push(opIdx)
+	end 'eachOp'
+	if block.hasTerminatorOp() 'hasTerm'
+		out.push(block.terminatorIndex())
+	end 'hasTerm'
+end 'collectBlockOps'
+
+// Larger of two non-negative counts (a value id and a count share the same
+// `int(0 to u64.max)` type, so this serves the value-count scan and maxPressure both).
+function maxOf(a ByteCount, b ByteCount) returns ByteCount
+	return a if a >= b else b
+end 'maxOf'
+
+// Fetch the IrBlock for a local block index.
+export function blockAt(module TargetModule, cfg FuncCfg, local CfgIndex) returns IrBlock
+	let blockRef = try cfg.blockRefByLocal.get(local) otherwise panic("blockAt: local {local} out of range")
+	return try module.blocks.get(blockRef) otherwise panic("blockAt: blockRef {blockRef} not in module.blocks")
+end 'blockAt'

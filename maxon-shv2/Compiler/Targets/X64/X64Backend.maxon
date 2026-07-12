@@ -54,6 +54,7 @@ let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
 let OpcodeAddRmReg = 0x01  // add r/m, r  (reg field = source), same shape as mov
 let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as add/mov
 let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
+let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
@@ -205,6 +206,14 @@ end 'encodeNegReg'
 function encodeCmpRegReg(code ByteArray, lhs X64Register, rhs X64Register)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: lhs, src: rhs, wide: true)
 end 'encodeCmpRegReg'
+
+// `xchg a, b` — swap two 64-bit registers (`87 /r`). The register allocator's
+// SSA-destruction step emits it to break a parallel-copy cycle with no scratch.
+// `xchg` is symmetric (reg vs r/m field placement is irrelevant), so it shares
+// the `r/m, r` assembly with mov/add/sub/cmp — only the opcode differs.
+function encodeXchgRegReg(code ByteArray, a X64Register, b X64Register)
+	encodeRmRegDirect(code, opcode: OpcodeXchgRmReg, dest: a, src: b, wide: true)
+end 'encodeXchgRegReg'
 
 // --- Intra-function block-branch resolution ---
 //
@@ -366,6 +375,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		imulRegReg(destReg, srcReg) then encodeImulRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg))
 		negReg(reg) then encodeNegReg(code, reg: resolvePhysical(reg))
 		cmpRegReg(lhsReg, rhsReg) then encodeCmpRegReg(code, lhs: resolvePhysical(lhsReg), rhs: resolvePhysical(rhsReg))
+		xchgRegReg(a, b) then encodeXchgRegReg(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	end 'emit'

@@ -62,20 +62,26 @@ end 'X64VReg'
 // not the unsigned JB/JA family) — all Std integers are signed i64. StdToX64Conversion
 // maps each `StdCmpPred` to one of these when it fuses a compare with its branch.
 export enum X64CondCode
-	equal = 0x4         // JE  / JZ
-	notEqual = 0x5      // JNE / JNZ
-	less = 0xC          // JL  (signed <)
+	equal = 0x4  // JE  / JZ
+	notEqual = 0x5  // JNE / JNZ
+	less = 0xC  // JL  (signed <)
 	greaterEqual = 0xD  // JGE (signed >=)
-	lessEqual = 0xE     // JLE (signed <=)
-	greater = 0xF       // JG  (signed >)
+	lessEqual = 0xE  // JLE (signed <=)
+	greater = 0xF  // JG  (signed >)
 end 'X64CondCode'
 
+// A set of physical GPRs as a 16-bit mask: bit `i` is set iff `X64Register`
+// number `i` (its `rawValue`) is in the set. Used for an op's implicit register
+// reads/writes — the registers it touches WITHOUT naming them as an explicit
+// operand. Picking / testing a register is a single bit op, no set iteration.
+// A full machine word so bit-complement (`not pool`) never overflows the range.
+export typealias RegMask = int(0 to u64.max)
+
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
-// consumed by B2's instruction scheduler + register allocator. THIN for M1:
-// only the semantic flags that do not require the regalloc `OpPattern` /
-// register-mask machinery. B2 GROWS this with the coloring `pattern` and the
-// implicit-GPR read/def masks (e.g. epilogue reads R8, a call clobbers the
-// caller-saved set) when it ports the allocator.
+// consumed by the instruction scheduler + register allocator. The scheduling
+// flags plus the implicit-GPR read/def masks the register allocator's liveness
+// and AllocChecker consume — same "you cannot add an op without declaring its
+// facts" discipline `StdOpMeta` enforces.
 export type TargetOpMeta
 	// Accesses memory / has a side effect the scheduler must order as a barrier.
 	export let isMemory as bool
@@ -86,6 +92,15 @@ export type TargetOpMeta
 	export let isCall as bool
 	// May clobber x64 EFLAGS when lowered.
 	export let setsFlags as bool
+	// Registers this op READS without naming them as an explicit operand: R8 for
+	// `ret` today; the volatile set a `call` reads/clobbers grows in when M5
+	// colors calls. Liveness folds these into `forbiddenPhys`; the AllocChecker
+	// asserts each is defined at the op.
+	export let implicitUses as RegMask
+	// Registers this op WRITES without an explicit operand — a `call`'s
+	// caller-saved clobber set (M5). 0 for every op the M5.1 spine colors, so a
+	// value live across such an op must avoid these registers.
+	export let implicitDefs as RegMask
 end 'TargetOpMeta'
 
 export union TargetOp
@@ -95,75 +110,89 @@ export union TargetOp
 	// `setsFlags` is true because `sub` writes EFLAGS. Callee-saved pushes GROW
 	// in when the register allocator first promotes into callee-saved regs (none
 	// at M1). Inserted by B2's prologue/epilogue pass at a function's entry block.
-	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// Frame teardown (`add rsp, stackSize`), the exact mirror of `prologue`.
 	// Placed just before `ret` on a return block. Carries its own `stackSize` so
 	// the encoder is self-contained (no frame tracker threaded through emit).
-	epilogue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	epilogue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// `ret` instruction — return control to the caller.
-	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	// implicitUses = 0x100 = the R8 bit (`X64Register.r8.rawValue` == 8, so 1<<8):
+	// `ret` reads the primary-return register. This is what lets the register
+	// allocator ADMIT R8 into the pool safely — forbiddenPhys proves nothing is live
+	// across the `mov r8, retval` return move, and the AllocChecker verifies R8 holds
+	// a value at every `ret`. (A union-backing literal cannot reference a named `let`,
+	// so the mask is written inline.)
+	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0x100, implicitDefs: 0}
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
 	// function's blocks are contiguous, so intra-function jumps never cross a chunk
 	// boundary). Reads/sets no flags. Placed in the control band next to `ret`.
-	jmp(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	jmp(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// Conditional near jump (`jcc rel32`, 0F 80+cc). Taken to `targetBlockId` when the
 	// EFLAGS the preceding `cmpRegReg` set satisfy `cond`, else falls through. `setsFlags`
 	// is false — `jcc` READS flags, it does not write them.
-	jcc(cond X64CondCode, targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	jcc(cond X64CondCode, targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// Materialize a 64-bit immediate into `dest` (`mov reg, imm64`).
-	movRegImm(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movRegImm(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// Materialize a 32-bit immediate into `dest` (`mov reg32, imm32`, which
 	// zero-extends to the full 64-bit register). B2 picks this over movRegImm
 	// for values that fit 32 bits (e.g. the literal 42) — the encoding is shorter.
-	movRegImm32(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movRegImm32(dest X64VReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register move (`mov dest, src`). B2 emits this for the
 	// primary-return move (value → R8) and for register-allocation copies.
-	movRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// 32-bit register-to-register move (`mov dest32, src32`, zero-extending to
 	// 64 bits). B2 emits exactly one at M1: the custom-ABI→Win64 bridge in
 	// `mrt_start` (`mov ecx, r8d`) that hands main's R8 return value to
 	// ExitProcess's ECX argument slot.
-	movReg32Reg32(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movReg32Reg32(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register add (`add dest, src`, i.e. `dest = dest + src`).
 	// x64 ADD is two-operand, so StdToX64Conversion lowers `resultId = lhs + rhs`
 	// to `mov result, lhs` + this `add result, rhs`. `setsFlags` because ADD writes
 	// EFLAGS. Placed with the other reg-operand ops (before the call band) so the
 	// register allocator colors its operands rather than treating it as a
 	// passthrough call op — see RegisterAllocator.colorOp.
-	addRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	addRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register subtract (`sub dest, src`, i.e. `dest = dest - src`).
 	// Same two-operand shape as `add`: `resultId = lhs - rhs` lowers to `mov result,
 	// lhs` + `sub result, rhs`. Order matters — `20 - 8` must compute lhs−rhs, which
 	// this ordering (dest=lhs, then `sub dest, rhs`) gives. `setsFlags` (SUB writes
 	// EFLAGS). Appended with the reg-operand ALU ops, before the call band.
-	subRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	subRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register signed multiply (`imul dest, src`, i.e.
 	// `dest = dest * src`). Two-operand form `imul r64, r/m64` (0F AF /r); unlike
 	// `add`/`sub` its reg field is the DESTINATION (see X64Backend.encodeImulRegReg).
 	// `resultId = lhs * rhs` lowers to `mov result, lhs` + `imul result, rhs`.
 	// `setsFlags` (IMUL writes OF/CF). Appended with the reg-operand ALU ops.
-	imulRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	imulRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register negate (`neg reg`, i.e. `reg = -reg`). Group-3 opcode-extension
 	// form (`F7 /3`); one register operand. `resultId = -operand` lowers to `mov
 	// result, operand` + `neg result`. `setsFlags` (NEG writes EFLAGS). Appended with
 	// the reg-operand ALU ops, before the call band.
-	negReg(reg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	negReg(reg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register compare (`cmp lhs, rhs`, 0x39, i.e. `lhs - rhs`
 	// discarding the result, keeping the flags). The `r/m, r` shape shared with
 	// `mov`/`add`/`sub` (reg field = the SUBTRAHEND `rhsReg`, r/m field = `lhsReg`), so
 	// after it a signed `jcc` tests `lhs <cond> rhs`. `setsFlags` (CMP writes EFLAGS).
 	// Appended at the END of the reg-operand ALU band, before the call band.
-	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true}
+	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// Exchange the contents of two physical registers (`xchg a, b`, REX.W 87 /r).
+	// POST-COLORING and physical-only: the register allocator's SSA-destruction step
+	// emits it to break a parallel-copy CYCLE on a CFG edge with no scratch register
+	// (regalloc2's trick). It has TWO defs, so it would violate the single-def SSA
+	// rule the colorer relies on — legal precisely because the allocator never sees
+	// it (it is spliced in AFTER coloring, so it is invisible to liveness/coloring).
+	// `xchg` does NOT set flags. Appended at the END of the reg-operand ALU band.
+	xchgRegReg(a X64VReg, b X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 	// Direct near call to a named function (`call rel32`). The concat step
 	// resolves `targetName` to the callee's `.text` placement as a rel32
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier
 	// semantics (clobbers caller-saved registers).
-	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true}
+	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
 	// this to `call ExitProcess`. Full call-barrier semantics.
-	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true}
+	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 export typealias TargetOpArray = Array with TargetOp
