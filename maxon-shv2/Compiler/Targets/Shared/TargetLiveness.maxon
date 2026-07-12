@@ -636,10 +636,16 @@ end 'countDeadPhis'
 
 // Process one op backward: fold its register clobbers into `forbidden` for values
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
-// resulting live-before population (pressure).
+// pressure this op contributes — the live-before population, PLUS one for the reuse-copy
+// transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
 function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow ByteCount, valueCount ValueId) returns RegCount
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
+
+	// Read the reuse-copy transient BEFORE the backward step mutates `liveRow` — it still
+	// holds the live-AFTER set here, which is where "does the reuse input outlive the op?"
+	// is decided.
+	let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
 
 	// Registers this op writes without being a virtual def: physical def operands +
 	// the implicit-def mask (a call's clobbers, M5). Values live across must avoid them.
@@ -655,8 +661,35 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 
 	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
 
-	return bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
+	var pressure = bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
+	if reuseTransient 'reuseCopyTransient'
+		// The allocator inserts `mov dest, input` BEFORE the op, where `dest` holds
+		// input's value while input (outliving), the other operand, and every value live
+		// across are all still live — a pressure of |live-before-op| + 1 that the op-
+		// boundary popcounts alone would miss (the analogue of the dead-phi undercount the
+		// block-level correction handles).
+		pressure = pressure + 1
+	end 'reuseCopyTransient'
+	return pressure
 end 'stepBackwardOverOp'
+
+// True iff `buf` (an op's operands) holds a reuse def whose reuse INPUT (operand 0) is
+// live AFTER the op — the case where the allocator materializes `mov dest, input` BEFORE
+// the op (`allocateReuseDef`), so `dest` co-exists with everything live entering the op.
+// `liveRow` must still be the live-AFTER set (test it BEFORE the backward step, where a
+// live-after input is present and a use has not yet been re-added). Reuse-ness and the
+// input value come from the operand model, never from hardcoded opcodes.
+function reuseInputOutlivesOp(buf OperandList, liveRow BitWordArray) returns bool
+	for o in buf 'each'
+		if operandIsReuseDef(o) 'reuseDef'
+			let inputId = operandReuseInputValueId(o, buf: buf)
+			if bitsetTest(liveRow, base: 0, bit: inputId) 'inputLiveAfter'
+				return true
+			end 'inputLiveAfter'
+		end 'reuseDef'
+	end 'each'
+	return false
+end 'reuseInputOutlivesOp'
 
 // Transform a live/seen bitset ROW from live-AFTER an op to live-BEFORE it: remove the
 // op's virtual defs, then add its virtual uses. Defs are removed FIRST so a read-

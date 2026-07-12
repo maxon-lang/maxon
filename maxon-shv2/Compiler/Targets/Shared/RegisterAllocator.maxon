@@ -1,7 +1,9 @@
 // Register allocator — the real M5 core (pure Design B: SSA chordal coloring + gap
-// splitting + E5001, canonical in docs/REGISTER_ALLOCATOR.md). This is the M5.1
-// SPINE: liveness → biased forward-sweep coloring → SSA destruction → AllocChecker,
-// over the current op set (const/binOp/unaryOp/cmp/branch/ret). It REPLACES the M1
+// splitting + E5001, canonical in docs/REGISTER_ALLOCATOR.md). Spine (M5.1): liveness
+// → biased forward-sweep coloring → SSA destruction → AllocChecker. M5.2 adopted the
+// `Reuse` operand model to DELETE the pre-emitted two-address seed `mov`: ISel now
+// emits ONE reuse-def op (`sub`/`imul`/`neg`) and THIS pass materializes the copy only
+// when the reuse input outlives the op (`allocateReuseDef`). It REPLACES the M1
 // `MinimalColorer` (no liveness; a fresh register per distinct value, forever).
 //
 // The pieces:
@@ -18,17 +20,18 @@
 //     greedy coloring is EXACT (χ = ω = maxPressure). Layout order is a perfect
 //     elimination order, ASSERTED by "every use is already colored" at each op.
 //   RULE 2 (biased coloring is CORRECTNESS, not optimization). Copy-related values
-//     (a phi and its back-edge arg; a two-address seed's dest and its source) hold
-//     the same value; coloring them together (a) keeps a loop's back-edge copy from
-//     landing IN the loop and (b) stops a false E5001 by not counting one value as
-//     two. Hints come from block-arg/branch-arg pairs and from the seed copies.
+//     (a phi and its back-edge arg; a reuse def and its two-address input) hold the
+//     same value; coloring them together (a) keeps a loop's back-edge / reuse copy
+//     from landing IN the loop and (b) stops a false E5001 by not counting one value
+//     as two. Hints come from block-arg/branch-arg pairs (collectPhiEdgeHints) and
+//     from reuse-def/input pairs (collectReuseHints).
 //
 // DEFERRED to later M5 chunks (NOT built here): calls / the caller-saved-halving
-// pressure model, idiv/mod fixed registers, function params, immediate operand
-// forms, 3-operand lea, deleting the seed `mov` via `Reuse`, the cold-spill live-
+// pressure model, idiv/mod fixed registers, function params, the cold-spill live-
 // range splitter, and the E5001 diagnostic (`ValueOrigin`). While maxPressure stays
-// within the pool (M5.1 programs: ≤ 3–4), overflow cannot occur; if it somehow did,
-// this PANICS (a placeholder for the real E5001 + splitter).
+// within the pool (current programs: ≤ 3–4), overflow cannot occur; if it somehow did,
+// this PANICS (a placeholder for the real E5001 + splitter). M5.2 DID land: immediate
+// operand forms, 3-operand lea, and the `Reuse`-based seed-`mov` deletion.
 
 // The color column's "not yet colored" sentinel: one past the last real register.
 let Uncolored = RegisterFileSize
@@ -66,6 +69,45 @@ export type Allocation
 		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
 	end 'assign'
 end 'Allocation'
+
+// A reuse-def copy the allocator must MATERIALIZE: `mov destReg, srcReg` spliced in
+// BEFORE op `opIdx`. Recorded when a two-address reuse def (`sub`/`imul`/`neg`) could
+// NOT be colored into its input's register — because the input OUTLIVES the op (its
+// register is still occupied), or because a fixed hint (the R8 return value) claimed
+// the destination first. The input must therefore be preserved in its own register and
+// copied into the destination before the op runs on it. When the input DIES at the op
+// and no fixed hint intervenes, biased coloring lands the destination in the input's
+// register and NO copy is recorded — the common case, and the whole point of the reuse
+// model. `destReg != srcReg` always (a same-register copy is a no-op, never recorded).
+export type ReuseCopy
+	export var opIdx as OpIndex
+	export var destReg as MachineWord
+	export var srcReg as MachineWord
+
+	export static function create(opIdx OpIndex, destReg MachineWord, srcReg MachineWord) returns ReuseCopy
+		return Self{opIdx: opIdx, destReg: destReg, srcReg: srcReg}
+	end 'create'
+end 'ReuseCopy'
+
+export typealias ReuseCopyArray = Array with ReuseCopy
+
+// The reuse copy to splice before op `opIdx`, or `none`. A reuse def coalesced into
+// its input's register records nothing, so the array is SPARSE and a linear scan is
+// cheap (one op carries at most one reuse copy). Mirrors AllocChecker.findPlanIndex's
+// sparse-plan lookup.
+export union ReuseCopyLookup
+	none
+	copy(destReg MachineWord, srcReg MachineWord)
+end 'ReuseCopyLookup'
+
+export function reuseCopyForOp(reuseCopies ReuseCopyArray, opIdx OpIndex) returns ReuseCopyLookup
+	for rc in reuseCopies 'each'
+		if rc.opIdx == opIdx 'match'
+			return ReuseCopyLookup.copy(rc.destReg, srcReg: rc.srcReg)
+		end 'match'
+	end 'each'
+	return ReuseCopyLookup.none
+end 'reuseCopyForOp'
 
 // The sub-phases the timers + counters attribute time to (design §"Stats": v1's
 // "74% of self-compile" figure stood for months with ZERO sub-phase attribution).
@@ -195,8 +237,13 @@ function allocateFunction(module TargetModule, func IrFunction, pool RegMask, st
 		panic("register pressure overflow in '{func.name}': {liveness.maxPressure} values are simultaneously live but the pool has {poolSize} registers. The real E5001 diagnostic and the cold-spill live-range splitter are later M5 chunks; an M5.1 program must fit the pool.")
 	end 'overflow'
 
+	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
+	// op) — consumed by BOTH the checker (which simulates them) and the rewrite (which
+	// splices them). Populated during coloring.
+	var reuseCopies = ReuseCopyArray.create()
+
 	let tColor = Clock.nowMs()
-	let alloc = colorFunction(module, liveness: liveness, pool: pool, stats: stats)
+	let alloc = colorFunction(module, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
 	stats.addPhaseMs(RegAllocPhase.coloring, ms: Clock.elapsedMs(tColor))
 
 	let tPlan = Clock.nowMs()
@@ -204,11 +251,11 @@ function allocateFunction(module TargetModule, func IrFunction, pool RegMask, st
 	stats.addPhaseMs(RegAllocPhase.ssaDestruction, ms: Clock.elapsedMs(tPlan))
 
 	let tCheck = Clock.nowMs()
-	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans)
+	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies)
 	stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
 
 	let tRewrite = Clock.nowMs()
-	applyAllocation(module, func: func, alloc: alloc, plans: plans)
+	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies)
 	stats.addPhaseMs(RegAllocPhase.rewrite, ms: Clock.elapsedMs(tRewrite))
 
 	stats.functionsAllocated = stats.functionsAllocated + 1
@@ -278,6 +325,7 @@ end 'ColorHints'
 // phi is reached.
 function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) returns ColorHints
 	var hints = ColorHints.create(valueCount)
+	var buf = OperandList.create()
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
 
@@ -286,6 +334,7 @@ function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) retu
 		for opIdx in ordered 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeHints: opIdx not in module.ops")
 			collectOpHints(op, hints: hints)
+			collectReuseHints(op, hints: hints, buf: buf)
 		end 'eachOp'
 
 		collectPhiEdgeHints(module, cfg: cfg, predBlock: block, hints: hints)
@@ -293,19 +342,36 @@ function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) retu
 	return hints
 end 'computeHints'
 
-// A `movRegReg`/`movReg32Reg32` is the only op that carries a coloring hint: a copy
-// to a FIXED register hints its virtual source to that register (the R8 return move
-// → the return value elides); a copy between two virtual registers (the two-address
-// seed) hints its dest to its source so it reuses the source's register when it dies.
+// A `movRegReg`/`movReg32Reg32` carries a coloring hint: a copy to a FIXED register
+// hints its virtual source to that register (the R8 return move → the return value
+// elides). (With the two-address seed `mov` retired, no virtual-to-virtual copy op
+// exists at coloring time; the two-address hint now comes from `collectReuseHints`.)
 function collectOpHints(op TargetOp, hints ColorHints)
 	match op 'hint'
 		movRegReg(dst, src) then addCopyHint(dst, src: src, hints: hints)
 		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
 		prologue to jcc then break 'hint'
 		movRegImm to movRegImm32 then break 'hint'
-		addRegReg to iatCall then break 'hint'
+		subRegReg to iatCall then break 'hint'
 	end 'hint'
 end 'collectOpHints'
+
+// The two-address biased-coloring hint (Phase 5, a CORRECTNESS obligation): for each
+// REUSE def, hint the def and its reuse input to each other's register, so the colorer
+// coalesces them and NO copy is materialized when the input dies at the op. Read
+// straight off the operand model, so it covers every reuse op (`sub`/`imul`/`neg`)
+// without a per-op arm.
+function collectReuseHints(op TargetOp, hints ColorHints, buf OperandList)
+	targetOpOperands(op, buf: buf)
+	for o in buf 'eachOperand'
+		if operandIsReuseDef(o) and operandIsVirtual(o) 'reuseDef'
+			let destId = operandValueId(o)
+			let inputId = operandReuseInputValueId(o, buf: buf)
+			hints.setCopyIfUnset(destId, partner: inputId)
+			hints.setCopyIfUnset(inputId, partner: destId)
+		end 'reuseDef'
+	end 'eachOperand'
+end 'collectReuseHints'
 
 function addCopyHint(dst X64VReg, src X64VReg, hints ColorHints)
 	match dst 'd'
@@ -323,7 +389,9 @@ function addFixedFromPhysDst(dReg X64Register, src X64VReg, hints ColorHints)
 end 'addFixedFromPhysDst'
 
 // `mov <virtual dst>, <src>`: dst wants src's register (virtual src) or src's fixed
-// register (physical src).
+// register (physical src). No such op survives to coloring today (the two-address seed
+// `mov` is retired and edge copies are post-coloring), but the handler stays general so
+// a future virtual-to-virtual copy op is hinted correctly.
 function addCopyFromVirtualDst(dId ValueId, src X64VReg, hints ColorHints)
 	match src 's'
 		virtual(sId) then hints.setCopyIfUnset(dId, partner: sId)
@@ -351,7 +419,7 @@ end 'collectPhiEdgeHints'
 // The colorer — a forward sweep over a `u16` in-use mask, per block
 // ==========================================================================
 
-function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats) returns Allocation
+function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns Allocation
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
@@ -375,7 +443,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
-			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, wordsPerRow: wordsPerRow, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf)
+			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, wordsPerRow: wordsPerRow, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf, reuseCopies: reuseCopies)
 		end 'eachOp'
 	end 'eachBlock'
 
@@ -398,13 +466,15 @@ function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, va
 	return mask
 end 'seedInUse'
 
-// Allocate a register for `v` if it is uncolored (an already-colored value is a
-// two-address RMW re-def — no new register). Returns `working` with the assigned
-// register added, so the next def at the same op avoids it.
+// Allocate a register for `v`. Every value has exactly ONE def (RULE 1), so `v` is
+// never already colored here — that would be a double-def bug, which asserts. `blocked`
+// = the currently-in-use registers (minus those DYING at this op, which a def may
+// reuse) ∪ `v`'s forbidden set ∪ the non-pool registers. Returns `working` with the
+// assigned register added, so the next def at the same op avoids it.
 function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats) returns RegMask
-	if alloc.isColored(v) 'rmwRedef'
-		return working
-	end 'rmwRedef'
+	if alloc.isColored(v) 'doubleDef'
+		panic("allocateDef: value {v} is already colored — a value has two defs, violating the single-def SSA invariant (RULE 1)")
+	end 'doubleDef'
 	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not pool)
 	let reg = chooseRegister(v, blocked: blocked, hints: hints, alloc: alloc, stats: stats)
 	alloc.assign(v, regNum: reg)
@@ -447,9 +517,10 @@ function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allo
 end 'chooseRegister'
 
 // Color one op: assert its uses are already colored (dominance), free the operands
-// that die here (so a def may reuse a dying use's register), allocate the def, then
-// return the block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BitWordArray, wordsPerRow ByteCount, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList) returns RegMask
+// that die here (so a def may reuse a dying use's register), allocate the def (a reuse
+// def goes through `allocateReuseDef`, which may record a copy), then return the
+// block's in-use mask for the point AFTER the op.
+function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BitWordArray, wordsPerRow ByteCount, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyArray) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -466,7 +537,11 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse
 	var working = inUse
 	for o in buf 'allocDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
-			working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
+			if operandIsReuseDef(o) 'reuse'
+				working = allocateReuseDef(o, opIdx: opIdx, pos: pos, deaths: deaths, wordsPerRow: wordsPerRow, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
+			end 'reuse' else 'plain'
+				working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
+			end 'plain'
 		end 'vd'
 	end 'allocDefs'
 
@@ -484,6 +559,39 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse
 
 	return (inUse and not dyingRegs) or liveDefRegs
 end 'colorOpForward'
+
+// Allocate a REUSE def and, when it could not coalesce into its input's register,
+// record the `mov dest, input` the encoder needs. The subtlety the whole rework rests
+// on: the copy runs BEFORE the op, at a point where nothing has died yet, so `dest`
+// must be a register that is free THERE. So the dest may reuse ONLY the input's dying
+// register (never another dying operand's — a copy into it would clobber a value the op
+// still reads); when the input OUTLIVES, no operand register is free before the op, so
+// the dest may reuse none. `defDyingRegs` encodes exactly that.
+function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BitWordArray, wordsPerRow ByteCount, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns RegMask
+	let destId = operandValueId(o)
+	let inputId = operandReuseInputValueId(o, buf: buf)
+	let inputReg = alloc.regNumOf(inputId)
+	let inputDies = deathTest(deaths, pos: pos, v: inputId, wordsPerRow: wordsPerRow)
+
+	// The reuse copy (if the coalescing hint misses) runs BEFORE the op, so the dest
+	// must be free at that point: it may reuse ONLY the input's dying register (never
+	// another dying operand's, which the op still reads after the copy), and none at all
+	// when the input outlives.
+	var defDyingRegs = 0 as RegMask
+	if inputDies 'inputDiesHere'
+		defDyingRegs = regMaskAdd(defDyingRegs, regNum: inputReg)
+	end 'inputDiesHere'
+
+	let updated = allocateDef(destId, working: working, dyingRegs: defDyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
+
+	let destReg = alloc.regNumOf(destId)
+	if destReg != inputReg 'needsCopy'
+		reuseCopies.push(ReuseCopy.create(opIdx, destReg: destReg, srcReg: inputReg))
+		stats.copiesInserted = stats.copiesInserted + 1
+	end 'needsCopy'
+
+	return updated
+end 'allocateReuseDef'
 
 // A `(numOps × wordsPerRow)` matrix: bit `v` of row `pos` is set iff value `v`'s
 // live range ENDS at op `pos` (its last use, or a dead def). A backward scan from
@@ -569,11 +677,14 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		movRegImm32(dest, value) then return TargetOp.movRegImm32(colorVRegWith(dest, alloc: alloc), value: value)
 		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
 		movReg32Reg32(destReg, srcReg) then return TargetOp.movReg32Reg32(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
-		addRegReg(destReg, srcReg) then return TargetOp.addRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
-		subRegReg(destReg, srcReg) then return TargetOp.subRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
-		imulRegReg(destReg, srcReg) then return TargetOp.imulRegReg(colorVRegWith(destReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
-		negReg(reg) then return TargetOp.negReg(colorVRegWith(reg, alloc: alloc))
+		subRegReg(dest, lhs, rhs) then return TargetOp.subRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		imulRegReg(dest, lhs, rhs) then return TargetOp.imulRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		negReg(dest, src) then return TargetOp.negReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cmpRegReg(lhsReg, rhsReg) then return TargetOp.cmpRegReg(colorVRegWith(lhsReg, alloc: alloc), rhsReg: colorVRegWith(rhsReg, alloc: alloc))
+		leaRegRegReg(dest, base, index) then return TargetOp.leaRegRegReg(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc))
+		leaRegRegImm32(dest, base, disp) then return TargetOp.leaRegRegImm32(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp)
+		imulRegRegImm32(dest, src, imm) then return TargetOp.imulRegRegImm32(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(colorVRegWith(reg, alloc: alloc), imm: imm)
 		xchgRegReg to iatCall then return op
 	end 'rewrite'
 end 'colorTargetOp'

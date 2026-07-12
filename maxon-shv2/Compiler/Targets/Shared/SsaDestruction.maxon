@@ -235,8 +235,8 @@ end 'rewriteSourcesThroughSwap'
 // Commit: rewrite ops to physical, drop self-moves, splice edge moves, clear phis
 // ==========================================================================
 
-export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray)
-	colorAndDropSelfMoves(module, func: func, alloc: alloc)
+export function applyAllocation(module TargetModule, func IrFunction, alloc Allocation, plans EdgeMovePlanArray, reuseCopies ReuseCopyArray)
+	colorAndDropSelfMoves(module, func: func, alloc: alloc, reuseCopies: reuseCopies)
 
 	for plan in plans 'eachPlan'
 		spliceEdgeMoves(module, plan: plan)
@@ -246,8 +246,10 @@ export function applyAllocation(module TargetModule, func IrFunction, alloc Allo
 end 'applyAllocation'
 
 // Rewrite every op in place at its `module.ops` index (opRefs / terminator indices
-// stay valid), dropping any `mov r, r` self-move biased coloring produced.
-function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation)
+// stay valid), dropping any `mov r, r` self-move biased coloring produced, and
+// splicing each reuse-def copy `mov dest, input` immediately BEFORE its op (the
+// two-address input that outlived, so the destination is a different register).
+function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyArray)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 
@@ -258,6 +260,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			if isPhysicalSelfMove(colored) 'selfMove'
 				continue
 			end 'selfMove'
+			spliceReuseCopyBefore(module, reuseCopies: reuseCopies, opIdx: opIdx, newRefs: newRefs)
 			newRefs.append(opIdx)
 		end 'eachOp'
 		block.opRefs = newRefs
@@ -268,6 +271,24 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		end 'hasTerm'
 	end 'eachBlock'
 end 'colorAndDropSelfMoves'
+
+// If op `opIdx` is a reuse def whose input outlived it, splice the physical
+// `mov dest, input` the allocator recorded into `newRefs` BEFORE the op's own index —
+// so at run time the destination register holds the reuse input when the two-address
+// op executes. A new op index is minted at the end of `module.ops`.
+function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyArray, opIdx OpIndex, newRefs OpIndexList)
+	match reuseCopyForOp(reuseCopies, opIdx: opIdx) 'rc'
+		none then break 'rc'
+		copy(destReg, srcReg) then appendReuseCopyOp(module, destReg: destReg, srcReg: srcReg, newRefs: newRefs)
+	end 'rc'
+end 'spliceReuseCopyBefore'
+
+function appendReuseCopyOp(module TargetModule, destReg MachineWord, srcReg MachineWord, newRefs OpIndexList)
+	let copyOp = TargetOp.movRegReg(X64VReg.physical(regFromNum(destReg)), srcReg: X64VReg.physical(regFromNum(srcReg)))
+	let copyIdx = module.ops.count()
+	module.ops.push(copyOp)
+	newRefs.append(copyIdx)
+end 'appendReuseCopyOp'
 
 // True for a `mov r, r` — a no-op the biased coloring produced (a coalesced seed
 // copy, or the R8 return move when the return value landed in R8).

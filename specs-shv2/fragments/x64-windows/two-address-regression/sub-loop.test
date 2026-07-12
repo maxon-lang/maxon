@@ -1,28 +1,28 @@
-// Test: assignment-in-loop
+// Test: sub-loop
 function main() returns ExitCode
-	var sum = 0
+	var acc = 100
 	var i = 1
-	while i <= 5 'loop'
-		sum = sum + i
+	while i < 5 'loop'
+		acc = acc - i
 		i = i + 1
 	end 'loop'
-	return sum
+	return acc
 end 'main'
 ---
-ExitCode: 15
+ExitCode: 90
 ---
 func @main {
   entry:
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rax, 100
     x64.movRegImm32 rcx, 1
     x64.movRegReg r8, rax
     x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rcx, 5
-    x64.jcc lessEqual, loop
+    x64.jcc less, loop
     x64.jmp whileexit
   loop:
-    x64.leaRegRegReg r8, r8, rcx
+    x64.subRegReg r8, r8, rcx
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.jmp whilehdr
   whileexit:

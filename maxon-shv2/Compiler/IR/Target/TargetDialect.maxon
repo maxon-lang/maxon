@@ -146,36 +146,56 @@ export union TargetOp
 	// `mrt_start` (`mov ecx, r8d`) that hands main's R8 return value to
 	// ExitProcess's ECX argument slot.
 	movReg32Reg32(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
-	// 64-bit register-to-register add (`add dest, src`, i.e. `dest = dest + src`).
-	// x64 ADD is two-operand, so StdToX64Conversion lowers `resultId = lhs + rhs`
-	// to `mov result, lhs` + this `add result, rhs`. `setsFlags` because ADD writes
-	// EFLAGS. Placed with the other reg-operand ops (before the call band) so the
-	// register allocator colors its operands rather than treating it as a
-	// passthrough call op — see RegisterAllocator.colorOp.
-	addRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
-	// 64-bit register-to-register subtract (`sub dest, src`, i.e. `dest = dest - src`).
-	// Same two-operand shape as `add`: `resultId = lhs - rhs` lowers to `mov result,
-	// lhs` + `sub result, rhs`. Order matters — `20 - 8` must compute lhs−rhs, which
-	// this ordering (dest=lhs, then `sub dest, rhs`) gives. `setsFlags` (SUB writes
-	// EFLAGS). Appended with the reg-operand ALU ops, before the call band.
-	subRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
-	// 64-bit register-to-register signed multiply (`imul dest, src`, i.e.
-	// `dest = dest * src`). Two-operand form `imul r64, r/m64` (0F AF /r); unlike
-	// `add`/`sub` its reg field is the DESTINATION (see X64Backend.encodeImulRegReg).
-	// `resultId = lhs * rhs` lowers to `mov result, lhs` + `imul result, rhs`.
-	// `setsFlags` (IMUL writes OF/CF). Appended with the reg-operand ALU ops.
-	imulRegReg(destReg X64VReg, srcReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
-	// 64-bit register negate (`neg reg`, i.e. `reg = -reg`). Group-3 opcode-extension
-	// form (`F7 /3`); one register operand. `resultId = -operand` lowers to `mov
-	// result, operand` + `neg result`. `setsFlags` (NEG writes EFLAGS). Appended with
-	// the reg-operand ALU ops, before the call band.
-	negReg(reg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// 64-bit register-to-register subtract (`sub dest, rhs`, i.e. `dest = lhs - rhs`).
+	// GENUINELY two-address on x64 (SUB has no 3-operand form), so the operand model
+	// declares `dest` a REUSE-of-`lhs` def: the allocator gives `dest` `lhs`'s register
+	// when `lhs` dies here (no copy — the common case), else materializes `mov dest, lhs`
+	// before the op. The encoder emits only `sub dest, rhs` (dest already holds lhs). The
+	// three explicit operands `(dest, lhs, rhs)` let liveness see that `lhs` is read here
+	// even when it also outlives — the old two-field `subRegReg(destReg, srcReg)` hid the
+	// pre-emitted seed `mov` and assumed distinct registers, false under reuse.
+	// `setsFlags` (SUB writes EFLAGS). ALU band; appended before `cmpRegReg`.
+	subRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// 64-bit register-to-register signed multiply (`imul dest, rhs`, i.e.
+	// `dest = lhs * rhs`). Two-operand form `imul r64, r/m64` (0F AF /r), genuinely
+	// two-address, so like `subRegReg` its `dest` is a REUSE-of-`lhs` def. The encoder
+	// emits `imul dest, rhs` (dest already holds lhs; its reg field is the DESTINATION —
+	// see X64Backend.encodeImulRegReg). `setsFlags` (IMUL writes OF/CF).
+	imulRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// 64-bit register negate (`neg dest`, i.e. `dest = -src`). Group-3 opcode-extension
+	// form (`F7 /3`), genuinely two-address (one in-place operand), so `dest` is a
+	// REUSE-of-`src` def. The encoder emits `neg dest` (dest already holds src).
+	// `setsFlags` (NEG writes EFLAGS).
+	negReg(dest X64VReg, src X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// 64-bit register-to-register compare (`cmp lhs, rhs`, 0x39, i.e. `lhs - rhs`
 	// discarding the result, keeping the flags). The `r/m, r` shape shared with
-	// `mov`/`add`/`sub` (reg field = the SUBTRAHEND `rhsReg`, r/m field = `lhsReg`), so
+	// `mov`/`sub` (reg field = the SUBTRAHEND `rhsReg`, r/m field = `lhsReg`), so
 	// after it a signed `jcc` tests `lhs <cond> rhs`. `setsFlags` (CMP writes EFLAGS).
-	// Appended at the END of the reg-operand ALU band, before the call band.
 	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// 64-bit address ADD via `lea dest, [base + index]` (REX.W 8D /r + SIB, scale 1).
+	// The 3-operand form of `+`: `dest`, `base`, `index` are THREE independent operands
+	// (NO reuse), so `+` needs no seed copy at all and — because `lea` computes an
+	// address rather than an arithmetic result — sets NO flags (`setsFlags: false`).
+	// This is what makes `sum = sum + i` in a loop a single copy-free instruction. SIB
+	// base low-3-bits 101 (rbp/r13) and index == rsp are the encoding traps the backend
+	// asserts/handles (see X64Backend.encodeLeaRegRegReg). ALU band, appended after
+	// `cmpRegReg`.
+	leaRegRegReg(dest X64VReg, base X64VReg, index X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
+	// 64-bit `a + imm` / `a - imm` via `lea dest, [base + disp32]` (REX.W 8D /r, signed
+	// disp; `a - imm` uses a negative displacement). `dest` and `base` are independent
+	// (NO reuse), and the immediate needs NO register. Sets no flags, like every `lea`.
+	// Produced from a `binOpImm(add|sub, ...)`. Appended after `leaRegRegReg`.
+	leaRegRegImm32(dest X64VReg, base X64VReg, disp Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
+	// 64-bit `a * imm` via `imul dest, src, imm32` (REX.W 69 /r id) — the THREE-operand
+	// signed multiply: `dest` and `src` are independent (NO reuse), the multiplier is an
+	// immediate needing no register. `setsFlags` (IMUL writes OF/CF). Produced from a
+	// `binOpImm(mul, ...)`. Appended after `leaRegRegImm32`.
+	imulRegRegImm32(dest X64VReg, src X64VReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// 64-bit compare against an immediate (`cmp reg, imm32`, REX.W 81 /7 id — the sign-
+	// extended group-1 form). The literal occupies no register; a following signed `jcc`
+	// tests `reg <cond> imm`. `setsFlags` (CMP writes EFLAGS). Produced from a
+	// `cmpImm(...)`. Appended after `imulRegRegImm32`, at the END of the ALU band.
+	cmpRegImm32(reg X64VReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0, implicitDefs: 0}
 	// Exchange the contents of two physical registers (`xchg a, b`, REX.W 87 /r).
 	// POST-COLORING and physical-only: the register allocator's SSA-destruction step
 	// emits it to break a parallel-copy CYCLE on a CFG edge with no scratch register

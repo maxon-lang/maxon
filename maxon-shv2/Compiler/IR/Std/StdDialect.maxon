@@ -254,6 +254,24 @@ export union StdOp
 	// writes EFLAGS). SPLIT OUT of `binOp` at the END of the arith band because it needs
 	// this different metadata — see StdCmpPred and the StdOp header.
 	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+	// Binary op with a CONSTANT right operand folded to an immediate: `resultId =
+	// lhs <opcode> imm`. Produced by `foldConstOperands` from a `binOp` whose rhs
+	// was a `const` (the const op is then DCE'd), so the literal never occupies a
+	// register. The x64 lowering picks a copy-free 3-operand form per opcode: `add`
+	// to `lea dest, [lhs + imm]`, `sub` to `lea dest, [lhs - imm]`, `mul` to `imul
+	// dest, lhs, imm` — none of which is two-address, so no seed copy is ever
+	// emitted. `isPure` (integer add/sub/mul never trap); `clobbersFlags: true` (the
+	// `imul` lowering writes EFLAGS; the `lea` forms do not, but the flag is a "may
+	// clobber" over-approximation the scheduler treats as a barrier). APPENDED at the
+	// END of the arith band, after `cmp`, honoring the band-append invariant.
+	binOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// Comparison with a CONSTANT right operand folded to an immediate: `resultId =
+	// lhs <pred> imm`, producing an i1. Produced by `foldConstOperands` from a `cmp`
+	// whose rhs was a `const` (canonicalized there so the const lands on the rhs, with
+	// the predicate flipped when the const started on the lhs). Lowers to `cmp reg,
+	// imm32` so the literal needs no register. Same `isCmp`/`isPure`/`clobbersFlags`
+	// profile as `cmp`. APPENDED at the END of the arith band, after `binOpImm`.
+	cmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
 	// --- band: control ---
 	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
 	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a

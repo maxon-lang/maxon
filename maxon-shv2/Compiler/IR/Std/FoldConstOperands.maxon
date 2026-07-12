@@ -1,0 +1,256 @@
+// FoldConstOperands — a Std->Std pass that moves a CONSTANT operand of a `binOp`
+// or `cmp` into an IMMEDIATE, so the literal never occupies a register. It runs
+// after `lowerMaxonToStd` and before the backend lowers Std to Target.
+//
+// The design ("§Phase 2, foldConstOperands") splits this from the const-folding
+// pass `foldConstants` (evaluate `const <op> const`), which is DEFERRED: folding
+// every constant expression to a single `mov` would erase the codegen the spec
+// fragments exist to show. This pass touches ONLY the operand form — a const stays
+// materialized as a value; it just stops occupying a register at the op that reads
+// it — so `10 + 5*2` still lowers to real arithmetic, now `imul`/`lea` with the
+// literals as immediates instead of a register per literal.
+//
+// Three moves, per the design:
+//   1. Canonicalize a COMMUTATIVE op (`add`, `mul`) so the constant lands on the
+//      rhs (swap when it started on the lhs).
+//   2. Rewrite a const-rhs `binOp`/`cmp` into the `binOpImm`/`cmpImm` form. A
+//      const-lhs COMPARISON swaps operands AND flips the predicate (`5 < a` becomes
+//      `a > 5`). A const-lhs NON-COMMUTATIVE arith op (`5 - a`) is LEFT ALONE — it
+//      is NOT `a - 5`, and rewriting it would silently miscompile.
+//   3. DCE the `const` op left with no remaining reference.
+//
+// A const is folded only when it fits the immediate field of the lowered op: the full
+// signed-32-bit range (i32.min..i32.max) for the DIRECT-immediate forms (`add`/`mul`/
+// `cmp`), and that range MINUS i32.min for the `sub` form — which lowers to `lea
+// [base - imm]`, a NEGATED displacement, and -(i32.min) overflows a signed 32-bit field.
+// A wider constant keeps its register operand, which is the correct fallback.
+
+typealias ConstValueMap = Map with (ValueId, ParsedInt)
+typealias ReferencedValueSet = Set with ValueId
+
+// The result of attempting to fold one op: either unchanged, or a replacement op
+// to write back at the same index (never a sentinel op).
+union FoldResult
+	unchanged
+	folded(op StdOp)
+end 'FoldResult'
+
+// Whether a `const` op defines a value, split out so the fold/DCE matches share ONE
+// exhaustive classification of the flat StdOp union.
+union StdConstInfo
+	notConst
+	isConst(resultId ValueId, value ParsedInt)
+end 'StdConstInfo'
+
+function stdConstInfo(op StdOp) returns StdConstInfo
+	return match op 'c'
+		const(resultId, value, _) gives StdConstInfo.isConst(resultId, value: value)
+		binOp to ret gives StdConstInfo.notConst
+	end 'c'
+end 'stdConstInfo'
+
+// Fold constant operands in every function of the module, in place.
+export function foldConstOperands(module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "foldConstOperands: {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		foldConstOperandsInFunc(module, func: func)
+	end 'eachFunc'
+end 'foldConstOperands'
+
+function foldConstOperandsInFunc(module StdModule, func IrFunction)
+	let constMap = collectConstValues(module, func: func)
+	rewriteBinAndCmpOps(module, func: func, constMap: constMap)
+	dceUnreferencedConsts(module, func: func)
+end 'foldConstOperandsInFunc'
+
+// Map each `const` result value id to its constant. Value ids are function-local, so
+// the map is rebuilt per function.
+function collectConstValues(module StdModule, func IrFunction) returns ConstValueMap
+	var constMap = ConstValueMap.create()
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		match stdConstInfo(op) 'c'
+			isConst(resultId, value) then constMap.upsert(resultId, value: value)
+			notConst then break 'c'
+		end 'c'
+	end 'eachOp'
+	return constMap
+end 'collectConstValues'
+
+// Rewrite each `binOp`/`cmp` with a foldable constant operand into its immediate
+// form, in place at the same op index (so block `opRefs`/terminators stay valid).
+function rewriteBinAndCmpOps(module StdModule, func IrFunction, constMap ConstValueMap)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		match tryFold(op, constMap: constMap) 'r'
+			unchanged then break 'r'
+			folded(newOp) then try module.ops.set(opIdx, value: newOp) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
+		end 'r'
+	end 'eachOp'
+end 'rewriteBinAndCmpOps'
+
+// Attempt to fold one op. Only `binOp` and `cmp` are candidates; every other op is
+// unchanged. Exhaustive over StdOp with no bare `default`.
+function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
+	return match op 'f'
+		const gives FoldResult.unchanged
+		binOp(resultId, lhs, rhs, opcode) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, constMap: constMap)
+		unaryOp gives FoldResult.unchanged
+		cmp(resultId, lhs, rhs, pred) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, constMap: constMap)
+		binOpImm to ret gives FoldResult.unchanged
+	end 'f'
+end 'tryFold'
+
+// `resultId = lhs <opcode> rhs`. A const rhs folds directly. For a COMMUTATIVE op a
+// const lhs is swapped onto the rhs (`k + a` becomes `a + k`). A non-commutative op
+// with a const lhs and non-const rhs (`5 - a`) is left alone — it is not `a - 5`.
+function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, constMap ConstValueMap) returns FoldResult
+	let allowI32Min = not binOpcodeNegatesImmediate(opcode)
+	if constFitsImmediate(constMap, id: rhs, allowI32Min: allowI32Min) 'rhsConst'
+		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode))
+	end 'rhsConst'
+	if binOpcodeIsCommutative(opcode) and constFitsImmediate(constMap, id: lhs, allowI32Min: allowI32Min) 'lhsConst'
+		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode))
+	end 'lhsConst'
+	return FoldResult.unchanged
+end 'tryFoldBinOp'
+
+// `resultId = lhs <pred> rhs`. A const rhs folds directly. A const lhs swaps operands
+// AND flips the predicate (`k < a` == `a > k`), which every comparison supports (no
+// silent-miscompile case — unlike arith `sub`).
+function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, constMap ConstValueMap) returns FoldResult
+	// `cmpRegImm32` carries the immediate directly (full Imm32, i32.min included), so a
+	// compare never negates its folded constant — `allowI32Min` is always true here.
+	if constFitsImmediate(constMap, id: rhs, allowI32Min: true) 'rhsConst'
+		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred))
+	end 'rhsConst'
+	if constFitsImmediate(constMap, id: lhs, allowI32Min: true) 'lhsConst'
+		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred)))
+	end 'lhsConst'
+	return FoldResult.unchanged
+end 'tryFoldCmp'
+
+function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
+	return match opcode 'o'
+		add gives true
+		mul gives true
+		sub gives false
+	end 'o'
+end 'binOpcodeIsCommutative'
+
+// True iff `opcode`'s immediate form NEGATES the folded constant: only `sub` does
+// (`a - imm` lowers to `lea [base - imm]`, disp = -imm). `add` (disp = imm) and `mul`
+// (`imul r, r, imm`) carry the constant unchanged. This is what makes i32.min unfoldable
+// for `sub` (its negation overflows a signed 32-bit field) but foldable everywhere else.
+function binOpcodeNegatesImmediate(opcode StdBinOpcode) returns bool
+	return match opcode 'o'
+		add gives false
+		mul gives false
+		sub gives true
+	end 'o'
+end 'binOpcodeNegatesImmediate'
+
+// Flip a comparison predicate for an operand swap: `a <pred> b` == `b <flip(pred)> a`.
+function flipCmpPred(pred StdCmpPred) returns StdCmpPred
+	return match pred 'p'
+		eq gives StdCmpPred.eq
+		ne gives StdCmpPred.ne
+		lt gives StdCmpPred.gt
+		gt gives StdCmpPred.lt
+		le gives StdCmpPred.ge
+		ge gives StdCmpPred.le
+	end 'p'
+end 'flipCmpPred'
+
+// True iff `id` names a `const` whose value fits the immediate field of the op it folds
+// into. add/mul/cmp encode the immediate directly (full Imm32 = i32.min..i32.max); the
+// `sub` lowering emits `lea [base - imm]` (disp = -imm) and so cannot fold i32.min, whose
+// negation overflows a signed 32-bit field — `allowI32Min` is false only on that path.
+function constFitsImmediate(constMap ConstValueMap, id ValueId, allowI32Min bool) returns bool
+	if not constMap.contains(id) 'notConst'
+		return false
+	end 'notConst'
+	let v = try constMap.get(id) otherwise panic("constFitsImmediate: contains true but get failed for {id}")
+	if v > i32.max or v < i32.min 'outOfRange'
+		return false
+	end 'outOfRange'
+	if v == i32.min and not allowI32Min 'negationOverflows'
+		return false
+	end 'negationOverflows'
+	return true
+end 'constFitsImmediate'
+
+// The constant of `id` as an Imm32 — caller must have checked `constFitsImmediate`,
+// so the cast cannot overflow.
+function constAsImmediate(constMap ConstValueMap, id ValueId) returns Imm32
+	let v = try constMap.get(id) otherwise panic("constAsImmediate: id {id} is not a const")
+	return v as Imm32
+end 'constAsImmediate'
+
+// Drop every `const` op whose result no longer appears anywhere — the rhs consts the
+// rewrite just detached from their `binOp`/`cmp`. A const still feeding another op or
+// a phi branch edge is kept.
+function dceUnreferencedConsts(module StdModule, func IrFunction)
+	let referenced = collectReferencedValues(module, func: func)
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
+		var newRefs = OpIndexList.create()
+		for opIdx in block.opRefs 'eachRef'
+			let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
+			if isUnreferencedConst(op, referenced: referenced) 'dead'
+				continue
+			end 'dead'
+			newRefs.append(opIdx)
+		end 'eachRef'
+		block.opRefs = newRefs
+	end 'eachBlock'
+end 'dceUnreferencedConsts'
+
+// Every value id READ by any live op, plus every value passed on a phi branch edge —
+// the reachability roots the const DCE keeps a def alive for.
+function collectReferencedValues(module StdModule, func IrFunction) returns ReferencedValueSet
+	var referenced = ReferencedValueSet.create()
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
+		collectStdOpUses(op, referenced: referenced)
+	end 'eachOp'
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				referenced.insert(argId)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+	return referenced
+end 'collectReferencedValues'
+
+// Add the value ids `op` READS to `referenced` (defs are not uses). Exhaustive over
+// StdOp, no bare `default`.
+function collectStdOpUses(op StdOp, referenced ReferencedValueSet)
+	match op 'u'
+		const then break 'u'
+		binOp(_, lhs, rhs, _) then addReferencedPair(referenced, a: lhs, b: rhs)
+		unaryOp(_, operand, _) then referenced.insert(operand)
+		cmp(_, lhs, rhs, _) then addReferencedPair(referenced, a: lhs, b: rhs)
+		binOpImm(_, lhs, _, _) then referenced.insert(lhs)
+		cmpImm(_, lhs, _, _) then referenced.insert(lhs)
+		condBranch(condId, _, _) then referenced.insert(condId)
+		branch then break 'u'
+		ret(retValId) then referenced.insert(retValId)
+	end 'u'
+end 'collectStdOpUses'
+
+function addReferencedPair(referenced ReferencedValueSet, a ValueId, b ValueId)
+	referenced.insert(a)
+	referenced.insert(b)
+end 'addReferencedPair'
+
+// True for a `const` op whose result appears in no reference set — the dead def the
+// prune drops.
+function isUnreferencedConst(op StdOp, referenced ReferencedValueSet) returns bool
+	return match stdConstInfo(op) 'c'
+		isConst(resultId, _) gives not referenced.contains(resultId)
+		notConst gives false
+	end 'c'
+end 'isUnreferencedConst'

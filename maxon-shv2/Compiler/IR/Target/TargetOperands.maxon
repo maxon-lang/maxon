@@ -140,12 +140,12 @@ export function operandIsDef(op Operand) returns bool
 	return (op and OperandKindBit) != 0
 end 'operandIsDef'
 
-// --- Reuse read-API (consumed by M5.2's Reuse rework) ---
-// The two-address seed `mov` is deleted in M5.2: ISel emits one reuse-def op and the
-// allocator materializes the copy only when the input outlives it. That rework reads
-// the constraint field these accessors decode; `targetOpOperands` already SETS it (via
-// `pushReuseDef`), so the constraint is live in the packing today even though nothing
-// reads it back until then.
+// --- Reuse read-API (consumed by the Reuse rework) ---
+// The two-address seed `mov` is deleted: ISel emits one reuse-def op and the allocator
+// materializes the copy only when the input outlives it. `allocateReuseDef` (the
+// colorer) reads the constraint field these accessors decode to find a reuse def's
+// input operand; the biased-coloring hints (`collectReuseHints`) and the AllocChecker's
+// reuse-invariant check read it too. `targetOpOperands` SETS it via `pushReuseDef`.
 export function operandConstraintTag(op Operand) returns MachineWord
 	return (op shr OperandConstraintTagShift) and OperandConstraintTagMask
 end 'operandConstraintTag'
@@ -185,6 +185,19 @@ export function operandReuseIndex(op Operand) returns OperandIndex
 	return operandConstraintArg(op)
 end 'operandReuseIndex'
 
+// The VALUE ID of a reuse def's input — the operand its reuse index names in `buf`.
+// The one place the "chase the reuse index to its input value" walk lives, shared by
+// the colorer's biased hints, its copy insertion, and the AllocChecker's reuse check.
+// Every reuse op carries a VIRTUAL input at coloring time (a physical one would be a
+// bug the panic surfaces). Caller must have checked `operandIsReuseDef(o)`.
+export function operandReuseInputValueId(o Operand, buf OperandList) returns ValueId
+	let inputOperand = try buf.get(operandReuseIndex(o)) otherwise panic("operandReuseInputValueId: reuse index {operandReuseIndex(o)} out of operand range")
+	if not operandIsVirtual(inputOperand) 'physInput'
+		panic("operandReuseInputValueId: reuse input is a physical operand — no reuse op carries a physical input at coloring time")
+	end 'physInput'
+	return operandValueId(inputOperand)
+end 'operandReuseInputValueId'
+
 // THE operand model: fill `buf` with the register operands of `op`. EXHAUSTIVE
 // over every `TargetOp` — no bare `default`, so a new variant fails to compile
 // here until its operands are declared. `buf` is cleared (capacity kept) and
@@ -205,11 +218,14 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		movRegImm32(dest, _) then pushDef(buf, vreg: dest)
 		movRegReg(destReg, srcReg) then pushCopyOperands(buf, dest: destReg, src: srcReg)
 		movReg32Reg32(destReg, srcReg) then pushCopyOperands(buf, dest: destReg, src: srcReg)
-		addRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
-		subRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
-		imulRegReg(destReg, srcReg) then pushRmwBinOperands(buf, dest: destReg, src: srcReg)
-		negReg(reg) then pushRmwUnaryOperands(buf, reg: reg)
+		subRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		imulRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		negReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
 		cmpRegReg(lhsReg, rhsReg) then pushCmpOperands(buf, lhs: lhsReg, rhs: rhsReg)
+		leaRegRegReg(dest, base, index) then pushLeaBinOperands(buf, dest: dest, base: base, index: index)
+		leaRegRegImm32(dest, base, _) then pushDefFromUse(buf, dest: dest, src: base)
+		imulRegRegImm32(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		cmpRegImm32(reg, _) then pushUse(buf, vreg: reg)
 		xchgRegReg then panic("targetOpOperands: xchgRegReg is a POST-COLORING physical op — it is spliced in after coloring, so it must never reach the operand model")
 		callDirect then break 'operands'
 		iatCall then break 'operands'
@@ -223,22 +239,41 @@ function pushCopyOperands(buf OperandList, dest X64VReg, src X64VReg)
 	pushDef(buf, vreg: dest)
 end 'pushCopyOperands'
 
-// A two-address binary op `dest = dest <op> src`: dest is read (operand 0) and
-// written (a reuse-of-0 def), src is read. The kept two-address lowering seeds
-// `dest` with a preceding `mov dest, lhs`, so at this op `dest` is already colored
-// and its def is a re-def in place — the reuse constraint documents that.
-function pushRmwBinOperands(buf OperandList, dest X64VReg, src X64VReg)
-	pushUse(buf, vreg: dest)
+// A genuinely two-address binary op `dest = lhs <op> rhs` (`sub`/`imul`): `lhs` and
+// `rhs` are read (operands 0 and 1), and `dest` is a fresh REUSE-of-0 def — it must
+// land in `lhs`'s register. Unlike the retired seed-`mov` model, `dest` is a DISTINCT
+// value from `lhs`, so the allocator (not ISel) supplies the copy, and only when `lhs`
+// outlives the op (Phase-1 reuse rework). `lhs` at operand 0 is what the reuse index
+// points at.
+function pushReuseBinOperands(buf OperandList, dest X64VReg, lhs X64VReg, rhs X64VReg)
+	pushUse(buf, vreg: lhs)
+	pushUse(buf, vreg: rhs)
+	pushReuseDef(buf, vreg: dest, reuseIndex: 0)
+end 'pushReuseBinOperands'
+
+// A genuinely two-address unary op `dest = <op> src` (`neg`): `src` is read (operand
+// 0), `dest` is a fresh REUSE-of-0 def landing in `src`'s register.
+function pushReuseUnaryOperands(buf OperandList, dest X64VReg, src X64VReg)
 	pushUse(buf, vreg: src)
 	pushReuseDef(buf, vreg: dest, reuseIndex: 0)
-end 'pushRmwBinOperands'
+end 'pushReuseUnaryOperands'
 
-// A two-address unary op `reg = <op> reg`: reg is read (operand 0) and written
-// (reuse-of-0). Models `neg`.
-function pushRmwUnaryOperands(buf OperandList, reg X64VReg)
-	pushUse(buf, vreg: reg)
-	pushReuseDef(buf, vreg: reg, reuseIndex: 0)
-end 'pushRmwUnaryOperands'
+// A 3-operand address-arithmetic op `dest = base + index` (`lea`): `base` and `index`
+// are read, `dest` is a PLAIN def (NO reuse) — the whole point of the `lea` form is
+// that its destination is independent of its inputs, so no copy is ever needed.
+function pushLeaBinOperands(buf OperandList, dest X64VReg, base X64VReg, index X64VReg)
+	pushUse(buf, vreg: base)
+	pushUse(buf, vreg: index)
+	pushDef(buf, vreg: dest)
+end 'pushLeaBinOperands'
+
+// A 2-operand op with a PLAIN (non-reuse) def and one register source: `dest = f(src,
+// imm)` — the `lea dest, [base + imm]` and `imul dest, src, imm` immediate forms,
+// whose destination is independent of the source.
+function pushDefFromUse(buf OperandList, dest X64VReg, src X64VReg)
+	pushUse(buf, vreg: src)
+	pushDef(buf, vreg: dest)
+end 'pushDefFromUse'
 
 // A compare reads both registers and defines none (it sets flags only).
 function pushCmpOperands(buf OperandList, lhs X64VReg, rhs X64VReg)

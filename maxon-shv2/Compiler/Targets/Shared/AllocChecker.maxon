@@ -8,11 +8,13 @@
 // "phi-copy trampoline" miscompile). It runs on EVERY function of EVERY compile
 // (inside the allocator), so a failure PANICS the build and FAILS the test.
 //
-// It runs on the still-VIRTUAL program plus the coloring + the edge move PLAN —
-// i.e. BEFORE applyAllocation commits them — so it validates the plan before it is
-// shipped. With no live-range splitting (M5.1), each value holds ONE register for
-// its whole range, which makes the abstract state precise: at any point, live value
-// `v` resides in `color[v]`.
+// It runs on the still-VIRTUAL program plus the coloring, the edge move PLAN, and the
+// reuse-copy list — i.e. BEFORE applyAllocation commits them — so it validates the plan
+// before it is shipped. With no live-range splitting yet, each value holds ONE register
+// for its whole range, which makes the abstract state precise: at any point, live value
+// `v` resides in `color[v]`. The only in-block state change beyond an op's own def is a
+// reuse-def copy (`mov dest, input`, simulated by `applyReuseCopy`) — a transient the op
+// immediately overwrites — so the invariant holds at every value's own program points.
 //
 // Two checks, no CFG fixpoint:
 //   A (interference). Per block, seed the abstract state from the live-in values +
@@ -27,7 +29,7 @@
 // checker tracks.
 typealias RegStateRow = Array with CfgIndex
 
-export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray)
+export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyArray)
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let noValue = valueCount
@@ -45,6 +47,10 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
 		for opIdx in ordered 'eachOp'
+			// Simulate any reuse-def copy `mov dest, input` the allocator will splice
+			// before this op (the two-address input outlived), so the op then reads its
+			// input from the destination register — exactly what the machine does.
+			applyReuseCopy(reuseCopies, opIdx: opIdx, regState: regState)
 			let op = try module.ops.get(opIdx) otherwise panic("AllocChecker: opIdx not in module.ops")
 			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: func.name, blockLabel: block.label)
 		end 'eachOp'
@@ -117,9 +123,21 @@ function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf Operan
 		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
 		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
 		prologue to movRegImm32 then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
-		addRegReg to iatCall then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
+		subRegReg to iatCall then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
 	end 'chk'
 end 'checkOp'
+
+// Simulate a reuse-def copy `mov dest, input` before its op: the destination register
+// receives the value currently in the input's register. A no-op when the op has no
+// reuse copy (the coalesced common case). The subsequent generic-op check then verifies
+// the input use still reads its own (undisturbed) register and the def overwrites the
+// destination — so a reuse copy that clobbered a live value surfaces as a later bad use.
+function applyReuseCopy(reuseCopies ReuseCopyArray, opIdx OpIndex, regState RegStateRow)
+	match reuseCopyForOp(reuseCopies, opIdx: opIdx) 'rc'
+		none then break 'rc'
+		copy(destReg, srcReg) then regStateSet(regState, reg: destReg, value: regStateGet(regState, reg: srcReg))
+	end 'rc'
+end 'applyReuseCopy'
 
 // `mov dst, src`: assert src holds its value, then dst receives that value. A
 // virtual dst is a fresh SSA value (its own identity now sits in its register); a
@@ -159,6 +177,9 @@ function checkGenericOp(op TargetOp, regState RegStateRow, alloc Allocation, buf
 
 	for o in buf 'defs'
 		if operandIsDef(o) 'isDef'
+			if operandIsReuseDef(o) and operandIsVirtual(o) 'reuseDef'
+				assertReuseInvariant(o, buf: buf, regState: regState, alloc: alloc, funcName: funcName, blockLabel: blockLabel)
+			end 'reuseDef'
 			applyOperandDef(o, regState: regState, alloc: alloc, noValue: noValue)
 		end 'isDef'
 	end 'defs'
@@ -186,6 +207,22 @@ function assertOperandUse(o Operand, regState RegStateRow, alloc Allocation, noV
 		end 'undefined'
 	end 'phys'
 end 'assertOperandUse'
+
+// THE reuse-copy verification: a two-address reuse def's DESTINATION register must
+// already hold its reuse INPUT's value (by coalescing, or by the materialized
+// `mov dest, input` applyReuseCopy simulated) at the point the op executes — because
+// the encoder emits `<op> dest, rhs`, reading the destination as the input. This is the
+// Early-vs-Late distinction made concrete: the input is read (Early) from the register
+// the Late def then overwrites. A missing or mis-targeted reuse copy is caught right
+// here rather than shipped as a wrong-value miscompile.
+function assertReuseInvariant(o Operand, buf OperandList, regState RegStateRow, alloc Allocation, funcName String, blockLabel String)
+	let inputValue = operandReuseInputValueId(o, buf: buf)
+	let destReg = alloc.regNumOf(operandValueId(o))
+	let held = regStateGet(regState, reg: destReg)
+	if held != inputValue 'brokenReuse'
+		panic("AllocChecker: reuse def value {operandValueId(o)} in '{funcName}' block '{blockLabel}': its destination register {destReg} holds value {held}, not its reuse input {inputValue} — the two-address op would compute on the wrong value (a missing or mis-targeted reuse-def copy `mov dest, input`)")
+	end 'brokenReuse'
+end 'assertReuseInvariant'
 
 function applyOperandDef(o Operand, regState RegStateRow, alloc Allocation, noValue ValueId)
 	if operandIsVirtual(o) 'virt'

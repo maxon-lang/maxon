@@ -144,6 +144,8 @@ type StdToX64Lowering
 			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
 			unaryOp(resultId, operand, opcode) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
 			cmp(resultId, lhs, rhs, pred) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
+			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
+			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
@@ -161,6 +163,8 @@ type StdToX64Lowering
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
 			cmp then panic("lowerStdToX64: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
+			binOpImm then panic("lowerStdToX64: a `binOpImm` op appeared as a block terminator (lowering bug — an arithmetic op is never a terminator)")
+			cmpImm then panic("lowerStdToX64: a `cmpImm` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -174,48 +178,61 @@ type StdToX64Lowering
 		appendIntImmToReg(self.targetModule, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
 	end 'lowerConst'
 
-	// Lower a Std binary op to x64. x64 ALU ops are two-address (`dst = dst <op>
-	// src`), so `result = lhs <op> rhs` lowers to the SEED copy `mov result, lhs`
-	// then the in-place op against `rhs`. This kept two-address shape is described to
-	// the register allocator by the OPERAND MODEL (TargetOperands): `result` is a
-	// fresh value seeded from `lhs`, then read-modify-written by the ALU op. The
-	// allocator's BIASED coloring gives `result` the same register as `lhs` when
-	// `lhs` dies at the seed copy, and its rewrite then drops the resulting
-	// `mov r, r` — so the seed never survives for a loop-carried update like
-	// `sum = sum + i`, with NO Std-level coalescing needed (that is exactly what M5
-	// deletes EliminatePhis for). Operand ORDER matters for the non-commutative
-	// `sub`: dest=lhs then `sub dest, rhs` yields lhs−rhs (e.g. `20 - 8` → 12).
+	// Lower a Std binary op (both operands registers) to x64. NO seed `mov` is emitted
+	// (M5.2 deleted the two-address seed): `+` uses the 3-operand `lea dest, [lhs +
+	// rhs]` (independent dest, no copy, no flags); `-`/`*` use the genuinely two-address
+	// `sub`/`imul` whose operand model declares `dest` a REUSE-of-`lhs` def, so the
+	// ALLOCATOR — not ISel — inserts `mov dest, lhs` only when `lhs` outlives the op. A
+	// loop-carried update like `sum = sum + i` therefore emits ONE instruction. Operand
+	// ORDER matters for the non-commutative `sub`: `subRegReg(dest, lhs, rhs)` computes
+	// lhs − rhs (e.g. `20 - 8` → 12).
 	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
-		self.emitInPlaceCopy(resultId, srcId: lhs, dstBlock: dstBlock)
-		let src = X64VReg.virtual(rhs)
+		let lhsReg = X64VReg.virtual(lhs)
+		let rhsReg = X64VReg.virtual(rhs)
 		match opcode 'op'
-			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addRegReg(dest, srcReg: src))
-			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, srcReg: src))
-			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegReg(dest, srcReg: src))
+			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: lhsReg, index: rhsReg))
+			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 		end 'op'
 	end 'lowerBinOp'
 
-	// Lower a Std unary op to x64. Mirrors lowerBinOp's seed-then-op-in-place shape:
-	// x64 `neg` is one-operand in-place (`reg = -reg`), so `result = -operand` lowers
-	// to the seed `mov result, operand` + `neg result`. The operand model marks
-	// `result` a fresh value seeded from `operand`; the allocator elides the seed when
-	// biased coloring lands both in one register (see lowerBinOp).
+	// Lower a Std unary op to x64. x64 `neg` is genuinely two-address (`dest = -src`,
+	// in place), so `negReg(dest, src)` declares `dest` a REUSE-of-`src` def and the
+	// allocator supplies the copy only when `src` outlives — no ISel seed `mov`.
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
-		self.emitInPlaceCopy(resultId, srcId: operand, dstBlock: dstBlock)
+		let src = X64VReg.virtual(operand)
 		match opcode 'op'
-			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest))
+			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
 
-	// Emit the `mov dest, src` seeding an in-place ALU op. `dest` (a fresh binOp/
-	// unaryOp result) is a distinct SSA value from `src`, so the seed is ALWAYS
-	// emitted; the register allocator drops it when biased coloring gives `dest` and
-	// `src` the same physical register. Shared by lowerBinOp and lowerUnaryOp.
-	function emitInPlaceCopy(destId ValueId, srcId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(destId), srcReg: X64VReg.virtual(srcId)))
-	end 'emitInPlaceCopy'
+	// Lower a Std `binOpImm` (constant right operand) to a copy-free immediate form:
+	// `add`/`sub` to `lea dest, [lhs + disp]` (disp = imm for add, −imm for sub — the
+	// literal needs no register and the op sets no flags); `mul` to the 3-operand `imul
+	// dest, lhs, imm`. None is two-address, so no reuse copy is ever needed.
+	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstBlock IrBlock)
+		let dest = X64VReg.virtual(resultId)
+		let base = X64VReg.virtual(lhs)
+		match opcode 'op'
+			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: imm))
+			// `a - imm` is `lea dest, [base - imm]`, a NEGATIVE displacement. `foldConstOperands`
+			// only emits a `sub` immediate for |imm| <= i32.max, so `-imm` always fits Imm32; the
+			// checked cast documents that the range-widened `0 - imm` cannot overflow here.
+			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: (0 - imm) as Imm32))
+			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(dest, src: base, imm: imm))
+		end 'op'
+	end 'lowerBinOpImm'
+
+	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32`, recording its
+	// predicate keyed by the value it defines — the same fused compare/branch protocol
+	// `lowerCmp` uses, so the following `condBranch` reads the predicate identically.
+	// The literal occupies no register.
+	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, dstBlock IrBlock)
+		self.cmpPreds.upsert(resultId, value: pred)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(X64VReg.virtual(lhs), imm: imm))
+	end 'lowerCmpImm'
 
 	// Lower a Std `cmp` to an x64 `cmp reg, reg`, and REMEMBER its predicate keyed by
 	// the value it defines. No boolean is materialized here: in the M4 slice a compare

@@ -37,6 +37,10 @@ export union PassKind
 	semanticCheck
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
+	// Phase 3.5: Std → Std machine-form rewrites. `foldConstOperands` moves a const
+	// operand into an immediate so the literal needs no register — the first of the
+	// Std-tier passes the design schedules after lowering (before the backend).
+	foldConstOperands
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
@@ -61,6 +65,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
+		foldConstOperands gives PassClassification.perFunction
 	end 'classify'
 end 'classifyPass'
 
@@ -70,6 +75,7 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
+		foldConstOperands gives "foldConstOperands"
 	end 'name'
 end 'passKindToString'
 
@@ -90,6 +96,7 @@ export function buildDefaultPipeline() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
+	passes.push(PassKind.foldConstOperands)
 	return passes
 end 'buildDefaultPipeline'
 
@@ -154,6 +161,7 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule)
+			foldConstOperands then foldConstOperands(self.stdModule)
 		end 'dispatch'
 	end 'dispatch'
 end 'PassPipeline'

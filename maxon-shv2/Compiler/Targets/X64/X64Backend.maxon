@@ -15,25 +15,33 @@
 //
 // ENCODING FACTORING (pre-empting the duplication review): every instruction is
 // assembled from shared primitives — `emitRex` (REX prefix with W/R/B bits),
+// `emitRexRXB` (its SIB-index sibling that adds REX.X, for `lea [base + index]`),
 // `emitModRmRegReg` / `emitModRmExt` (the mod=11 register-direct ModR/M byte),
 // `encodeModRmDirect` (REX + optional 0F escape + opcode + ModR/M, the one place a
 // register-direct instruction is assembled) and its opcode-extension sibling
-// `encodeModRmExtDirect` (REX + opcode + `/ext` ModR/M), and the `BinaryHelpers`
-// little-endian writers. No REX/ModRM byte is hand-spelled per instruction:
-// `mov`/`add`/`sub` reg-reg all share `encodeRmRegDirect` (only the opcode differs),
-// the two-byte `imul` reuses `encodeModRmDirect`'s escape path (only the
-// operand-to-field mapping is swapped — dest in reg, src in rm), `neg` and the
-// `sub rsp`/`add rsp` frame ops share `encodeModRmExtDirect` (opcode-extension
-// forms), and both reg-reg move widths differ only in the REX.W bit. Opcodes, REX
-// bits, and ModR/M constants are all NAMED below — no bare hex is scattered through
-// the emitters.
+// `encodeModRmExtDirect` (REX + opcode + `/ext` ModR/M), the `[base + disp]` address
+// assembler `emitBaseDispModRm` (ModR/M + optional SIB + disp8/disp32, the one place a
+// base+displacement operand is encoded), and the `BinaryHelpers` little-endian writers.
+// No REX/ModRM/SIB byte is hand-spelled per instruction: `mov`/`sub`/`cmp` reg-reg all
+// share `encodeRmRegDirect` (only the opcode differs), the two-byte `imul` and the
+// 3-operand `imul r, r/m, imm32` reuse `encodeModRmDirect` (only the operand-to-field
+// mapping is swapped — dest in reg, src in rm), `neg` / the `cmp r/m, imm32` group-1
+// form / the `sub rsp`/`add rsp` frame ops share `encodeModRmExtDirect` (opcode-
+// extension forms), and both `lea` forms select their ModR/M mod field through
+// `chooseDispMod` and emit their trailing displacement through `emitTrailingDisp`, so the
+// rbp/r13 zero-disp8 SIB trap is spelled in exactly ONE place for both.
+// Signed immediates/displacements go through `writeImm32Signed` (one two's-complement
+// converter). Opcodes, REX bits, and ModR/M/SIB constants are all NAMED below — no bare
+// hex is scattered through the emitters.
 
 // --- REX prefix (0x40 | W<<3 | R<<2 | X<<1 | B) ---
 // REX.W selects 64-bit operand size; REX.R/B extend the ModR/M reg / rm fields to
-// registers r8-r15. REX.X (SIB index) is unused at M1 (no memory-index operands).
+// registers r8-r15. REX.X extends a SIB INDEX to r8-r15 — needed by `lea dest,
+// [base + index]` (the 3-operand `+`).
 let RexBase = 0x40
 let RexW = 0x08
 let RexR = 0x04
+let RexX = 0x02
 let RexB = 0x01
 
 // Registers r8-r15 (register number >= 8) need a REX.R/REX.B extension bit; their
@@ -41,8 +49,29 @@ let RexB = 0x01
 // number (rax=0 .. r15=15) by the enum's declaration order.
 let ExtendedRegThreshold = 8
 
-// ModR/M mod=11 (register-direct): the r/m field names a register, not memory.
+// ModR/M mod field values (bits 6-7): 00 = no displacement (or, for a memory rm,
+// disp0), 01 = disp8, 10 = disp32, 11 = register-direct (rm names a register).
+let ModRmMod00 = 0x00
+let ModRmMod01 = 0x40
+let ModRmMod10 = 0x80
 let ModRmRegDirect = 0xC0
+
+// ModR/M rm field value 100: a SIB byte follows (for `[base + index]` and for a
+// base register — rsp/r12 — whose low-3-bits are themselves 100).
+let ModRmRmSibFollows = 4
+
+// SIB byte fields: scale in bits 6-7 (00 = scale 1), index in bits 3-5, base in bits
+// 0-2. Index field 100 with REX.X clear means "no index" (only rsp triggers this —
+// see encodeLeaRegRegImm32); base field 101 with mod=00 means "no base, disp32" (so an
+// rbp/r13 base is forced to mod=01) — see RbpR13Low3.
+let SibScaleShift = 6
+let SibScale1 = 0
+let SibNoIndexField = 4
+
+// A base register whose low-3-bits are 101 (rbp / r13): with mod=00 the ModR/M or SIB
+// base field 101 means "no base", so an rbp/r13 base MUST use mod=01 (disp8, zero when
+// there is no real displacement). R13 is x64's silent-lea-miscompile trap.
+let RbpR13Low3 = 5
 
 // ModR/M for `call [rip+disp32]`: mod=00, reg=/2 (the CALL r/m64 extension),
 // rm=101 (the mod=00 rm=101 encoding is RIP-relative on x64) => 0x15.
@@ -51,11 +80,12 @@ let ModRmRipRelCall = 0x15
 // --- Opcodes ---
 let OpcodeRet = 0xC3
 let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
-let OpcodeAddRmReg = 0x01  // add r/m, r  (reg field = source), same shape as mov
-let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as add/mov
+let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as mov
 let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
 let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
+let OpcodeLea = 0x8D  // lea reg, [mem]  (reg field = dest, rm field = the address)
+let OpcodeImulRegImm = 0x69  // imul r, r/m, imm32  (3-operand; reg = dest, rm = source)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
@@ -80,9 +110,14 @@ let OpcodeImul2ndByte = 0xAF
 // Group-1 ALU opcode-extension (ModR/M reg field) values.
 let Grp1ExtAdd = 0  // ADD
 let Grp1ExtSub = 5  // SUB
+let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 
 // Group-3 ALU opcode-extension (ModR/M reg field) value for `neg r/m` (F7 /3).
 let Grp3ExtNeg = 3  // NEG
+
+// 2^32 — used to fold a negative signed 32-bit immediate/displacement into its
+// two's-complement low-32-bit encoding (see imm32Bits).
+let TwoToThe32 = 4294967296
 
 // ==========================================================================
 // Shared REX / ModR/M primitives
@@ -124,6 +159,44 @@ function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Reg
 		code.push(rex)
 	end 'needed'
 end 'emitRex'
+
+// Emit the REX prefix for an instruction with a ModR/M reg field, a SIB INDEX, and a
+// SIB BASE — the `lea dest, [base + index]` shape, the one form that needs REX.X.
+// `emitRex`'s reg/rm split cannot express the index, so this is its three-field
+// sibling. `wide` (REX.W) is always true for the 64-bit `lea`.
+function emitRexRXB(code ByteArray, wide bool, regField X64Register, indexField X64Register, baseField X64Register)
+	var rex = RexBase
+	if wide 'w'
+		rex = rex or RexW
+	end 'w'
+	if regIsExtended(regField) 'r'
+		rex = rex or RexR
+	end 'r'
+	if regIsExtended(indexField) 'x'
+		rex = rex or RexX
+	end 'x'
+	if regIsExtended(baseField) 'b'
+		rex = rex or RexB
+	end 'b'
+	if wide or rex != RexBase 'needed'
+		code.push(rex)
+	end 'needed'
+end 'emitRexRXB'
+
+// The two's-complement low 32 bits of a signed immediate/displacement, as an unsigned
+// word `writeDword` can emit. A negative value wraps by adding 2^32 (the standard
+// modular reduction), giving e.g. -8 -> 0xFFFFFFF8. `writeImm32Signed` is the caller.
+function imm32Bits(value Imm32) returns MachineWord
+	if value >= 0 'nonNeg'
+		return value
+	end 'nonNeg'
+	return TwoToThe32 + value
+end 'imm32Bits'
+
+// Emit a signed 32-bit immediate / displacement field (little-endian two's complement).
+function writeImm32Signed(code ByteArray, value Imm32)
+	writeDword(code, value: imm32Bits(value))
+end 'writeImm32Signed'
 
 // ModR/M byte for a register-direct (mod=11) reg-to-r/m instruction.
 function emitModRmRegReg(code ByteArray, regField X64Register, rmField X64Register)
@@ -214,6 +287,105 @@ end 'encodeCmpRegReg'
 function encodeXchgRegReg(code ByteArray, a X64Register, b X64Register)
 	encodeRmRegDirect(code, opcode: OpcodeXchgRmReg, dest: a, src: b, wide: true)
 end 'encodeXchgRegReg'
+
+// `lea dest, [base + index]` — the 3-operand `+` (REX.W 8D /r + SIB, scale 1). No
+// flags, and — because dest/base/index are independent — no copy. THE two x64 SIB
+// traps live here: RSP cannot be an index (SIB index 100 with REX.X clear means "no
+// index"), and an rbp/r13 base cannot use mod=00 (base 101 means "no base"), so it is
+// forced to mod=01 with a zero disp8.
+function encodeLeaRegRegReg(code ByteArray, dest X64Register, base X64Register, index X64Register)
+	if index == X64Register.rsp 'rspIndex'
+		panic("encodeLeaRegRegReg: RSP cannot be a SIB index (index field 100 with REX.X clear encodes 'no index') — the allocator must never color the index operand of `+` to rsp")
+	end 'rspIndex'
+	emitRexRXB(code, wide: true, regField: dest, indexField: index, baseField: base)
+	code.push(OpcodeLea)
+	// The 3-operand `+` carries no displacement, so its mod field / trailing disp go
+	// through the SAME shared trap as `[base + disp]` (chooseDispMod + emitTrailingDisp):
+	// a zero disp is mod=00 for a normal base, but an rbp/r13 base is forced to mod=01
+	// with a zero disp8 (mod=00 base=101 means "no base"). rm is ALWAYS 100 (SIB follows)
+	// here — unlike `[base + disp]`, the SIB carries the real index.
+	let modField = chooseDispMod(0, baseIsRbpR13: regLow3(base) == RbpR13Low3)
+	code.push(modField or (regLow3(dest) shl 3) or ModRmRmSibFollows)
+	emitSibScale1(code, index: index, base: base)
+	emitTrailingDisp(code, modField: modField, disp: 0)
+end 'encodeLeaRegRegReg'
+
+// The SIB byte for `[base + index*1]`: scale 00 (×1), index and base in their fields.
+function emitSibScale1(code ByteArray, index X64Register, base X64Register)
+	code.push((SibScale1 shl SibScaleShift) or (regLow3(index) shl 3) or regLow3(base))
+end 'emitSibScale1'
+
+// `lea dest, [base + disp]` — `a + imm` / `a - imm` (REX.W 8D /r, signed disp). No
+// index, so no REX.X; the shared `emitBaseDispModRm` writes the ModR/M (+ SIB when the
+// base is rsp/r12) and the displacement.
+function encodeLeaRegRegImm32(code ByteArray, dest X64Register, base X64Register, disp Imm32)
+	emitRex(code, wide: true, regField: dest, rmField: base)
+	code.push(OpcodeLea)
+	emitBaseDispModRm(code, regField: dest, base: base, disp: disp)
+end 'encodeLeaRegRegImm32'
+
+// ModR/M (+ SIB when the base is rsp/r12) + displacement for a `[base + disp]` memory
+// operand. disp8 when it fits a signed byte, else disp32; a zero displacement still
+// needs disp8 for an rbp/r13 base (mod=00 base=101 is RIP-relative, not [rbp]). One
+// place the [base+disp] address form is assembled — no per-op respelling.
+function emitBaseDispModRm(code ByteArray, regField X64Register, base X64Register, disp Imm32)
+	let baseBits = regLow3(base)
+	let baseIsRbpR13 = baseBits == RbpR13Low3
+	let modField = chooseDispMod(disp, baseIsRbpR13: baseIsRbpR13)
+	code.push(modField or (regLow3(regField) shl 3) or baseBits)
+	if baseBits == ModRmRmSibFollows 'sib'
+		emitSibNoIndex(code, base: base)
+	end 'sib'
+	emitTrailingDisp(code, modField: modField, disp: disp)
+end 'emitBaseDispModRm'
+
+// The trailing displacement byte(s) a `[base + disp]` ModR/M needs, keyed by the mod
+// field `chooseDispMod` returned: nothing for mod=00, a signed disp8 for mod=01, a
+// signed disp32 for mod=10 (the only three `chooseDispMod` returns). The one place the
+// rbp/r13 zero-disp8 trap actually emits its byte — shared by BOTH `lea` forms (the
+// `[base + disp]` assembler above and the `[base + index]` encoder).
+function emitTrailingDisp(code ByteArray, modField MachineWord, disp Imm32)
+	if modField == ModRmMod01 'disp8'
+		code.push(imm32Bits(disp) and 0xFF)
+	end 'disp8' else if modField == ModRmMod10 'disp32'
+		writeImm32Signed(code, value: disp)
+	end 'disp32'
+end 'emitTrailingDisp'
+
+// Pick the ModR/M mod field for a `[base + disp]` operand: mod=00 (no disp) only for a
+// zero displacement on a non-rbp/r13 base; mod=01 (disp8) when the disp fits a signed
+// byte; mod=10 (disp32) otherwise.
+function chooseDispMod(disp Imm32, baseIsRbpR13 bool) returns MachineWord
+	if disp == 0 and not baseIsRbpR13 'noDisp'
+		return ModRmMod00
+	end 'noDisp'
+	if disp >= i8.min and disp <= i8.max 'disp8'
+		return ModRmMod01
+	end 'disp8'
+	return ModRmMod10
+end 'chooseDispMod'
+
+// The SIB byte for `[base + disp]` with an rsp/r12 base (rm=100 forces a SIB): scale 1,
+// index field 100 (no index), base in its field.
+function emitSibNoIndex(code ByteArray, base X64Register)
+	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or regLow3(base))
+end 'emitSibNoIndex'
+
+// `imul dest, src, imm32` — the 3-operand signed multiply (REX.W 69 /r id): reg field
+// the DESTINATION, rm field the SOURCE, then a signed imm32. Reuses the shared
+// register-direct assembly; only the opcode + trailing immediate differ.
+function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64Register, imm Imm32)
+	encodeModRmDirect(code, twoByteEscape: false, opcode: OpcodeImulRegImm, regField: dest, rmField: src, wide: true)
+	writeImm32Signed(code, value: imm)
+end 'encodeImulRegRegImm32'
+
+// `cmp reg, imm32` — compare a register to a signed immediate (REX.W 81 /7 id). Shares
+// the group-1 opcode-extension assembly (`encodeModRmExtDirect` + `emitModRmExt`) with
+// the `sub/add rsp` and `neg` forms; only the /ext and the trailing imm32 differ.
+function encodeCmpRegImm32(code ByteArray, reg X64Register, imm Imm32)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: Grp1ExtCmp, rmField: reg)
+	writeImm32Signed(code, value: imm)
+end 'encodeCmpRegImm32'
 
 // --- Intra-function block-branch resolution ---
 //
@@ -370,11 +542,14 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		movRegImm32(dest, value) then encodeMovRegImm32(code, dest: resolvePhysical(dest), value: value)
 		movRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
 		movReg32Reg32(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
-		addRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
-		subRegReg(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: true)
-		imulRegReg(destReg, srcReg) then encodeImulRegReg(code, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg))
-		negReg(reg) then encodeNegReg(code, reg: resolvePhysical(reg))
+		subRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolvePhysical(dest), src: resolvePhysical(rhs), wide: true)
+		imulRegReg(dest, _, rhs) then encodeImulRegReg(code, dest: resolvePhysical(dest), src: resolvePhysical(rhs))
+		negReg(dest, _) then encodeNegReg(code, reg: resolvePhysical(dest))
 		cmpRegReg(lhsReg, rhsReg) then encodeCmpRegReg(code, lhs: resolvePhysical(lhsReg), rhs: resolvePhysical(rhsReg))
+		leaRegRegReg(dest, base, index) then encodeLeaRegRegReg(code, dest: resolvePhysical(dest), base: resolvePhysical(base), index: resolvePhysical(index))
+		leaRegRegImm32(dest, base, disp) then encodeLeaRegRegImm32(code, dest: resolvePhysical(dest), base: resolvePhysical(base), disp: disp)
+		imulRegRegImm32(dest, src, imm) then encodeImulRegRegImm32(code, dest: resolvePhysical(dest), src: resolvePhysical(src), imm: imm)
+		cmpRegImm32(reg, imm) then encodeCmpRegImm32(code, reg: resolvePhysical(reg), imm: imm)
 		xchgRegReg(a, b) then encodeXchgRegReg(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
