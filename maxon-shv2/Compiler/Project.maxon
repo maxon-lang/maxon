@@ -263,6 +263,12 @@ export type Project
 	// Backend rdata/global constant table, threaded to `buildBackend`. Empty for
 	// the `return 42` slice (no floats / string literals / static globals yet).
 	export var globalData as GlobalDataTable
+	// Wall-clock attribution for this compile (see CompileTimings). It lives on
+	// Project because Project is ALREADY threaded through every phase — the frontend
+	// queries, the pass pipeline, and the backend all take it — so no pass needs a new
+	// parameter merely to be timed, and each compile gets its own timings instead of
+	// the per-file fan-out driver contending on a global.
+	export var timings as CompileTimings
 
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
@@ -275,7 +281,8 @@ export type Project
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
-			globalData: GlobalDataTable.create()
+			globalData: GlobalDataTable.create(),
+			timings: CompileTimings.create()
 		}
 	end 'create'
 end 'Project'

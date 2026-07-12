@@ -123,7 +123,22 @@ end 'reuseCopyForOp'
 
 // The sub-phases the timers + counters attribute time to (design §"Stats": v1's
 // "74% of self-compile" figure stood for months with ZERO sub-phase attribution).
+//
+// In EXECUTION order, which is the order the whole-compile report prints them under
+// the `regalloc` phase. They must together account for ALL of that phase's wall time:
+// `criticalEdges` and `blockOrder` exist because they were once un-timed, and the
+// module-wide edge split plus a per-function RPO reorder over thousands of blocks is
+// not free — leaving them out put ~10% of the compile in a nameless remainder, the
+// same "big cost hiding in the wrong bucket" defect this instrumentation exists to
+// catch. Whatever these arms still do not claim surfaces as an explicit
+// `(unattributed)` row (see CompileTimings.regAllocUnattributedMs), never as silence.
+//
+// Ordinals index a per-run array and are persisted nowhere, so this list may be
+// reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunction`,
+// which subtracts liveness back out of the splitter's wall).
 export enum RegAllocPhase
+	criticalEdges
+	blockOrder
 	splitting
 	liveness
 	coloring
@@ -277,14 +292,23 @@ end 'calleeSavedMask'
 export function allocateRegisters(module TargetModule, target Target, project Project) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
 	assertCallClobberConsistent()
-	var stats = RegAllocStats.create()
+
+	// The stats object is the PROJECT's, not a fresh one: its six sub-phase timers are a
+	// breakdown of the `regalloc` phase `buildBackend` measures around this call, and the
+	// whole-compile report nests them under it and reconciles the two (any regalloc time
+	// the six do not claim — splitCriticalEdges, the RPO reordering — surfaces as a
+	// nested `(unattributed)` row rather than vanishing). A locally-created stats object
+	// would be a second, disconnected accounting of the same wall time.
+	let stats = project.timings.regAlloc
 	let pool = allocatablePool(target)
 
 	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
 	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
 	// would forbid).
+	let tEdges = Clock.nowMs()
 	splitCriticalEdges(module)
+	stats.addPhaseMs(RegAllocPhase.criticalEdges, ms: Clock.elapsedMs(tEdges))
 
 	// Index-based (not `for func in ...`) because the loop index IS the function's
 	// Maxon-tier index: function indices are 1:1 across Maxon -> Std -> Target, and
@@ -304,7 +328,9 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
 	// would otherwise misclassify an idle value's post-loop use and false-E5001 (single-loop /
 	// straight-line CFGs are already in RPO, so they are untouched). See reorderFuncBlocksRpo.
+	let tOrder = Clock.nowMs()
 	reorderFuncBlocksRpo(module, func: func)
+	stats.addPhaseMs(RegAllocPhase.blockOrder, ms: Clock.elapsedMs(tOrder))
 
 	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
 	// idle values out (store in a cold, dominating spot and reload at their uses) or
@@ -946,6 +972,11 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
-	msg.append("  phase ms: splitting={stats.phaseMsOf(RegAllocPhase.splitting)} liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
+	// Iterated, not hand-listed: a hand-written line silently omits any phase added
+	// later, which is how an unmeasured cost hides in the first place.
+	msg.append("  phase ms:")
+	for phase in RegAllocPhase.allCases 'eachPhase'
+		msg.append(" {phase.name}={stats.phaseMsOf(phase)}")
+	end 'eachPhase'
 	return msg
 end 'regAllocStatsMessage'

@@ -69,6 +69,20 @@ export function classifyPass(pass PassKind) returns PassClassification
 	end 'classify'
 end 'classifyPass'
 
+// The wall-clock phase each pass is billed to. EXHAUSTIVE by construction: a new
+// PassKind fails to compile until it names its phase, so a pass cannot be added and
+// silently go unmeasured — which is the whole point of the attribution (see
+// CompileTimings' header). The mapping is 1:1 today and is expected to stay so; a
+// pass grouping several phases would defeat the table's purpose.
+export function compilePhaseOfPass(pass PassKind) returns CompilePhase
+	return match pass 'phase'
+		resolveTypes gives CompilePhase.resolveTypes
+		semanticCheck gives CompilePhase.semanticCheck
+		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
+		foldConstOperands gives CompilePhase.foldConstOperands
+	end 'phase'
+end 'compilePhaseOfPass'
+
 // Human-readable pass name for logging (union has no `.name`, unlike an enum).
 export function passKindToString(pass PassKind) returns String
 	return match pass 'name'
@@ -156,12 +170,21 @@ export type PassPipeline
 	// stay free functions (reusable outside the pipeline); dispatch just wires
 	// them up. resolveTypes/semanticCheck operate on the Maxon module + project;
 	// lowerMaxonToStd produces the next tier's module.
+	//
+	// Timing lives at THIS choke point rather than inside each pass body: every pass
+	// runs through here, so no pass can be scheduled and go unmeasured, and the passes
+	// stay free functions that know nothing about the clock. No pass calls another, so
+	// the phases are disjoint with nothing to subtract.
 	function dispatch(pass PassKind)
+		let tPass = Clock.nowMs()
+
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, funcSignatures: self.project.funcSignatures)
 			foldConstOperands then foldConstOperands(self.stdModule)
 		end 'dispatch'
+
+		self.project.timings.addPhaseMs(compilePhaseOfPass(pass), ms: Clock.elapsedMs(tPass))
 	end 'dispatch'
 end 'PassPipeline'

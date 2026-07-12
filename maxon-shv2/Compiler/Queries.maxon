@@ -39,6 +39,12 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	clearDepsFor(project, key: key)
 
 	let content = try querySourceFile(project, path: path)
+
+	// The `lex` phase is timed HERE, around `tokenize` alone — the leaf. `queryParseOps`
+	// calls this query BEFORE it starts its own `parse` timer, so the two phases are
+	// disjoint by construction and neither has to subtract the other out. A cache hit
+	// returned above does no lexing and is correctly billed nothing.
+	let tLex = Clock.nowMs()
 	let tokens = try tokenize(content) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
 		popQuery(project)
@@ -46,6 +52,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 		// the next attempt must re-run against corrected source.
 		return TokenArray.create()
 	end 'lexFail'
+	project.timings.addPhaseMs(CompilePhase.lex, ms: Clock.elapsedMs(tLex))
 
 	popQuery(project)
 
@@ -70,6 +77,15 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 	clearDepsFor(project, key: key)
 
 	let tokens = try queryTokens(project, path: path)
+
+	// The `parse` timer starts only NOW — after the tokens query has returned — so it
+	// bills the parse alone and never absorbs the lexing it depends on. (The alternative,
+	// wrapping the whole query body and subtracting `lex` back out, is what the register
+	// allocator has to do for liveness; here the call order makes it unnecessary.) It
+	// spans everything the parse query itself does: building the parser, the parse
+	// proper, the termination assert, and the memo write.
+	let tParse = Clock.nowMs()
+
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
 	var parser = Parser.create(tokens, filePath: path, namespace: "")
@@ -92,6 +108,7 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: entry.contentHash))
 	end 'cacheOk'
 
+	project.timings.addPhaseMs(CompilePhase.parse, ms: Clock.elapsedMs(tParse))
 	return artifact
 end 'queryParseOps'
 
@@ -114,10 +131,16 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	// reset, since the parser wrote nothing to Project speculatively.
 	resetMergeTargets(project)
 
+	// `merge` is timed around `mergeArtifact` ALONE: `queryParseOps` is called outside
+	// the timer on each iteration, so the fold's cost never absorbs the parse's (the
+	// leaf-timing discipline in CompileTimings' header).
 	var merged = MaxonModule.create()
 	for path in project.db.sourcePaths 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
+
+		let tMerge = Clock.nowMs()
 		mergeArtifact(project, target: merged, artifact: artifact)
+		project.timings.addPhaseMs(CompilePhase.merge, ms: Clock.elapsedMs(tMerge))
 	end 'eachFile'
 
 	popQuery(project)

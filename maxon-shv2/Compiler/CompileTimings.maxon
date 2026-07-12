@@ -1,0 +1,262 @@
+// CompileTimings — wall-clock attribution for the WHOLE compile pipeline.
+//
+// WHY THIS EXISTS, and why the phases must be DISJOINT:
+//
+// v1 carried "the register allocator is 74% of self-compile" for months with ZERO
+// sub-phase attribution inside it, so nobody could act on the number. shv2 then
+// reproduced the same failure inside the instrumentation built to prevent it: the
+// `splitting` timer wrapped the splitter, the splitter owns every liveness
+// computation, so the entire liveness pass was billed to `splitting` while the
+// `liveness` timer read 0.00 ms on every program ever compiled — and liveness was in
+// fact the dominant cost. The numbers said the opposite of the truth.
+//
+// THE RULE THAT FOLLOWS: phases are disjoint intervals that MUST sum to the true
+// total. Where phase X calls phase Y, X's reported time EXCLUDES Y's, by one of two
+// disciplines:
+//
+//   1. TIME THE LEAF. The frontend queries nest (allModule → parseOps → tokens), so
+//      each timer covers only the work its own query does: `lex` is taken inside
+//      `queryTokens`, and `queryParseOps` starts its `parse` timer AFTER the tokens
+//      query has returned. Nothing needs subtracting because nothing overlaps.
+//   2. SUBTRACT THE INNER DELTA. Where the nesting is unavoidable, the outer phase
+//      subtracts the inner phase's delta from its own wall time — see
+//      `allocateFunction`, which takes liveness back out of the splitter's wall.
+//
+// The remainder is never silently absorbed. `unattributedMs` reports what no phase
+// claimed, and PANICS if the phases claim MORE than the total: phases are disjoint
+// sub-intervals of the timed total, so a sum that exceeds it means two timers
+// double-count — precisely the defect above, caught instead of averaged away.
+//
+// COST: the timers are always on, like the allocator's have been since M5. They are
+// per PASS (and per function only inside the allocator, which already paid that),
+// never per op or per block, so a compile takes a few dozen `Clock.nowMs` reads. The
+// REPORT is built lazily behind `logDebug`, so a build without `--log=compiler:debug`
+// never formats a row.
+
+// Column widths for the report table. `RuleWidth` is derived, so the separator can
+// never drift out of step with the columns above it.
+typealias ColumnWidth = int(0 to 128)
+
+let PhaseNameWidth = 22 as ColumnWidth
+let MsWidth = 9 as ColumnWidth
+let PercentWidth = 8 as ColumnWidth
+let RuleWidth = PhaseNameWidth + MsWidth + PercentWidth
+
+// Every row is indented under the report's title line; a sub-phase row is indented
+// once more, under the phase whose wall time it breaks down.
+let RowIndent = "  "
+let SubPhaseIndent = "    "
+
+// A percentage held to one decimal place in integer math: `ms * 1000 / total`, so
+// 1000 = 100.0%. There is no float formatting on this path (and no reason to pull
+// one in for two digits).
+typealias Permille = int(0 to 1000)
+
+let PermilleScale = 1000
+let PermilleTenthsPerPercent = 10
+
+// The phases the compile is attributed to, in EXECUTION order — which is also the
+// order the report prints them, so the table reads as the pipeline runs.
+//
+// Each name matches the function that does the work, so a row points at code:
+//   load             Compiler.loadProject      — discover, read, and hash the sources
+//   lex/parse/merge  Queries.*                 — the query spine, timed at the leaves
+//   resolveTypes …   PassPipeline.dispatch     — one arm per PassKind (compilePhaseOfPass)
+//   sugarGate … link BackendDispatch.buildBackend — the backend's fixed sequence
+//   writeExe/emitIr  Compiler.compile          — the object write + the --emit-ir sidecar
+export enum CompilePhase
+	load
+	lex
+	parse
+	merge
+	resolveTypes
+	semanticCheck
+	lowerMaxonToStd
+	foldConstOperands
+	sugarGate
+	isel
+	regalloc
+	prologueEpilogue
+	runtimeAugment
+	encode
+	link
+	writeExe
+	emitIr
+end 'CompilePhase'
+
+// Per-compile timing state, owned by `Project` (which is already threaded through
+// every phase — the queries, the pass pipeline, and the backend all take it — so no
+// pass needs a new parameter just to be timed, and the per-file fan-out driver gets
+// per-compile timings instead of contending on a global).
+//
+// Mirrors `RegAllocStats`: a dense `phaseMs` column indexed by the phase enum's
+// ordinal, with `addPhaseMs`/`phaseMsOf` as the only accessors.
+export type CompileTimings
+	export var phaseMs as DurationMsArray
+	// Wall time of the whole compile, stamped once by `compile`. Zero until then: the
+	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
+	// zero total means "not a reported build", not "an instant build".
+	export var totalMs as DurationMs
+	// The register allocator's own sub-phase breakdown. Owned HERE (rather than
+	// created per-run inside `allocateRegisters`) so the report can nest it under the
+	// `regalloc` phase and RECONCILE the two. The sub-phases are a breakdown OF that
+	// phase's wall time, never six additional phases — adding them to the phase they
+	// live inside is the double-count this file exists to prevent.
+	export var regAlloc as RegAllocStats
+
+	export static function create() returns CompileTimings
+		var phaseMs = DurationMsArray.create()
+		phaseMs.resize(CompilePhase.allCases.count())
+		return Self{phaseMs: phaseMs, totalMs: 0, regAlloc: RegAllocStats.create()}
+	end 'create'
+
+	export function addPhaseMs(phase CompilePhase, ms DurationMs)
+		let idx = phase.ordinal
+		let cur = try self.phaseMs.get(idx) otherwise panic("CompileTimings.addPhaseMs: phase index OOB for '{phase.name}'")
+		try self.phaseMs.set(idx, value: cur + ms) otherwise panic("CompileTimings.addPhaseMs: phase index OOB for '{phase.name}'")
+	end 'addPhaseMs'
+
+	export function phaseMsOf(phase CompilePhase) returns DurationMs
+		return try self.phaseMs.get(phase.ordinal) otherwise panic("CompileTimings.phaseMsOf: phase index OOB for '{phase.name}'")
+	end 'phaseMsOf'
+
+	// What the instrumentation actually claimed — the sum of every phase.
+	export function attributedMs() returns DurationMs
+		var sum = 0 as DurationMs
+		for ms in self.phaseMs 'eachPhase'
+			sum = sum + ms
+		end 'eachPhase'
+		return sum
+	end 'attributedMs'
+
+	// Compile time no phase claimed: the glue between phases (project construction,
+	// output-path resolution, the query spine's own cache/hash bookkeeping). Visible
+	// as its own row so a growing gap shows up instead of hiding inside a neighbour.
+	//
+	// Phases are disjoint sub-intervals of the timed total, so their sum can NEVER
+	// exceed it. If it does, two timers overlap and are double-counting — the exact
+	// failure this file's header describes, so it panics rather than clamp to zero.
+	export function unattributedMs() returns DurationMs
+		let attributed = self.attributedMs()
+		if attributed > self.totalMs 'overlap'
+			panic("CompileTimings: the phases sum to {attributed} ms but the whole compile took {self.totalMs} ms — two phase timers OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileTimings' header).")
+		end 'overlap'
+		return self.totalMs - attributed
+	end 'unattributedMs'
+end 'CompileTimings'
+
+// Time inside the `regalloc` phase that none of its six sub-phases claimed: the
+// per-module `splitCriticalEdges`, the per-function RPO block reordering, and the
+// driver loop itself. Same disjointness contract as `CompileTimings.unattributedMs`,
+// enforced the same way — the sub-phases are intervals INSIDE the regalloc wall, so
+// exceeding it means a sub-phase timer overlaps another.
+function regAllocUnattributedMs(timings CompileTimings) returns DurationMs
+	let wall = timings.phaseMsOf(CompilePhase.regalloc)
+
+	var claimed = 0 as DurationMs
+	for sub in RegAllocPhase.allCases 'eachSub'
+		claimed = claimed + timings.regAlloc.phaseMsOf(sub)
+	end 'eachSub'
+
+	if claimed > wall 'overlap'
+		panic("CompileTimings: the register allocator's sub-phases sum to {claimed} ms but the regalloc phase took {wall} ms — two sub-phase timers OVERLAP (see RegisterAllocator.allocateFunction, which subtracts liveness out of the splitter's wall precisely to keep them disjoint).")
+	end 'overlap'
+
+	return wall - claimed
+end 'regAllocUnattributedMs'
+
+// The whole-compile attribution table: every phase with its ms and share of the
+// total, the allocator's sub-phases nested under `regalloc`, and a TOTAL /
+// attributed / unattributed footer that makes any gap explicit.
+export function compileTimingsReport(timings CompileTimings) returns String
+	let total = timings.totalMs
+
+	var msg = "compile timings — total {total} ms\n"
+	// The header's label carries the same indent every row's does, so it pads to the
+	// same column width and the three columns line up.
+	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: MsWidth)}{padLeft("%", width: PercentWidth)}\n")
+	msg.append(horizontalRule())
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		msg.append(timingRow("{RowIndent}{phase.name}", ms: timings.phaseMsOf(phase), total: total))
+
+		if phase == CompilePhase.regalloc 'nestRegAlloc'
+			msg.append(regAllocBreakdown(timings, total: total))
+		end 'nestRegAlloc'
+	end 'eachPhase'
+
+	msg.append(horizontalRule())
+	msg.append(timingRow("{RowIndent}TOTAL", ms: total, total: total))
+	msg.append(timingRow("{RowIndent}attributed", ms: timings.attributedMs(), total: total))
+	msg.append(timingRow("{RowIndent}unattributed", ms: timings.unattributedMs(), total: total))
+	return msg
+end 'compileTimingsReport'
+
+// The allocator's six sub-phases, indented under `regalloc`. Their percentages are
+// taken against the WHOLE-COMPILE total (not against the regalloc wall), so a reader
+// can compare "liveness" directly against "parse" — the question the table exists to
+// answer is where the compile's time goes, not where the allocator's does.
+function regAllocBreakdown(timings CompileTimings, total DurationMs) returns String
+	var msg = ""
+	for sub in RegAllocPhase.allCases 'eachSub'
+		msg.append(timingRow("{SubPhaseIndent}{sub.name}", ms: timings.regAlloc.phaseMsOf(sub), total: total))
+	end 'eachSub'
+	msg.append(timingRow("{SubPhaseIndent}(unattributed)", ms: regAllocUnattributedMs(timings), total: total))
+	return msg
+end 'regAllocBreakdown'
+
+function timingRow(label String, ms DurationMs, total DurationMs) returns String
+	return "{padRight(label, width: PhaseNameWidth)}{padLeft("{ms}", width: MsWidth)}{padLeft(percentOfTotal(ms, total: total), width: PercentWidth)}\n"
+end 'timingRow'
+
+// Spans exactly the three columns. A row's own indent is part of its label column, so
+// the rule starts at column 0 and ends where the percent column does.
+function horizontalRule() returns String
+	var out = ""
+	var i = 0
+	while i < RuleWidth 'dash'
+		out.append("-")
+		i = i + 1
+	end 'dash'
+	out.append("\n")
+	return out
+end 'horizontalRule'
+
+// `ms` as a percentage of `total`, to one decimal place, in integer math.
+function percentOfTotal(ms DurationMs, total DurationMs) returns String
+	if total == 0 'noTotal'
+		// Not a reported build (the warm-rebuild gate never stamps a total), so there is
+		// no denominator to divide by and every share is vacuously zero.
+		return "0.0%"
+	end 'noTotal'
+
+	if ms > total 'overlap'
+		panic("percentOfTotal: a phase claims {ms} ms of a {total} ms compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
+	end 'overlap'
+
+	let permille = ((ms * PermilleScale) / total) as Permille
+	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
+end 'percentOfTotal'
+
+// Pad to `width` with spaces. A label longer than its column widens that row rather
+// than being truncated — a phase name must always be readable in full.
+function padRight(text String, width ColumnWidth) returns String
+	var out = "{text}"
+	var i = text.byteLength()
+	while i < width 'pad'
+		out.append(" ")
+		i = i + 1
+	end 'pad'
+	return out
+end 'padRight'
+
+function padLeft(text String, width ColumnWidth) returns String
+	var out = ""
+	var i = text.byteLength()
+	while i < width 'pad'
+		out.append(" ")
+		i = i + 1
+	end 'pad'
+	out.append(text)
+	return out
+end 'padLeft'

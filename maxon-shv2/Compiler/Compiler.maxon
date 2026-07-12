@@ -25,16 +25,39 @@
 // `readError`) carry NO diagnostics and propagate straight to Main, which prints
 // a specific message; (2) reported diagnostics (semantic/lexer) are printed inside
 // `compileToCodeResult` and re-signaled as a FRESH `compileError`.
+// `compile` owns the TOTAL: it is the only entry that spans a whole build, so it is
+// the only one that can measure the denominator every phase's share is taken against
+// (the warm-rebuild gate drives `compileToCodeResult` directly and never reports).
+// Every phase timed below and in the passes/backend is a disjoint sub-interval of the
+// wall time measured here, so they sum to at most the total, and whatever they leave
+// over is printed as `unattributed` rather than absorbed — see CompileTimings.
 export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false) returns FilePath throws CompileError
+	let tTotal = Clock.nowMs()
+
+	// Loading starts the instant the compile does, so `tTotal` is also the `load` phase's
+	// start — a second Clock read here would measure the same moment.
 	var project = try loadProject(inputPath, target: target)
+	project.timings.addPhaseMs(CompilePhase.load, ms: Clock.elapsedMs(tTotal))
+
 	let codeResult = try compileToCodeResult(project)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
+
+	let tWrite = Clock.nowMs()
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
+	project.timings.addPhaseMs(CompilePhase.writeExe, ms: Clock.elapsedMs(tWrite))
 
 	if emitIr 'emitIr'
+		let tEmitIr = Clock.nowMs()
 		writeTargetIr(codeResult, outputPath: outputPath)
+		project.timings.addPhaseMs(CompilePhase.emitIr, ms: Clock.elapsedMs(tEmitIr))
 	end 'emitIr'
+
+	// Stamp the total BEFORE the report reads it (every percentage divides by it), and
+	// build the table lazily behind logDebug so a build without `--log=compiler:debug`
+	// pays only for the handful of Clock reads, never for formatting a row.
+	project.timings.totalMs = Clock.elapsedMs(tTotal)
+	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath
