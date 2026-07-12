@@ -1,0 +1,94 @@
+// Test: used-before-and-after-peak
+function usedBeforeAndAfter(p int) returns int
+	let a1 = p + 1
+	let w = a1 + p
+	let b1 = p + 1
+	let b2 = p + 2
+	let b3 = p + 3
+	let b4 = p + 4
+	let b5 = p + 5
+	let b6 = p + 6
+	let b7 = p + 7
+	let b8 = p + 8
+	let b9 = p + 9
+	let b10 = p + 10
+	let b11 = p + 11
+	let b12 = p + 12
+	let b13 = p + 13
+	let b14 = p + 14
+	let b15 = p + 15
+	let peak = b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13 + b14 + b15 + w
+	let z = a1 + peak
+	return z
+end 'usedBeforeAndAfter'
+
+function main() returns ExitCode
+	return usedBeforeAndAfter(0)
+end 'main'
+---
+ExitCode: 122
+---
+func @usedBeforeAndAfter {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 32
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegReg rdx, rax, rcx
+    x64.storeSlotReg slot1, rdx
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
+    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.leaRegRegImm32 rdi, rcx, 4
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.leaRegRegImm32 r9, rcx, 6
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 r11, rcx, 8
+    x64.leaRegRegImm32 rbx, rcx, 9
+    x64.leaRegRegImm32 r12, rcx, 10
+    x64.leaRegRegImm32 r13, rcx, 11
+    x64.leaRegRegImm32 r14, rcx, 12
+    x64.leaRegRegImm32 r15, rcx, 13
+    x64.storeSlotReg slot2, r15
+    x64.leaRegRegImm32 r15, rcx, 14
+    x64.leaRegRegImm32 rcx, rcx, 15
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot rdx, slot2
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg r8, rcx, rax
+    x64.epilogue 32
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect usedBeforeAndAfter
+    x64.epilogue 40
+    x64.ret
+}

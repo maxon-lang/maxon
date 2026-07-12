@@ -89,6 +89,24 @@ function computeFrameBytes(func IrFunction, makesCall bool, pushCount ByteCount)
 	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
 end 'computeFrameBytes'
 
+// The rsp offset of a function's spill-slot AREA — the base the x64 encoder adds to
+// `slot * SpillSlotBytes` for every spill/reload. The frame the prologue reserves is laid
+// out, from rsp upward: [shadow space + outgoing args] [spill slots] [alignment padding].
+// So spill slots must sit ABOVE the shadow space on a CALLER: at a `call`, the callee may
+// clobber the caller's 32-byte shadow space (`[rsp .. rsp+32)`), which would corrupt a
+// value spilled across a loop whose body makes a call. Placing the slot area at
+// `ShadowSpaceBytes + outgoingArgSize` keeps every slot out of that clobber zone. A LEAF
+// (no call) reserves no shadow space, so its slots start at rsp (base 0) — the simplest
+// form, matching the design's "slot disp = slotIndex*8 from rsp". This is the SINGLE place
+// the shadow-space-vs-slot ordering is decided; `computeFrameBytes` reserves exactly enough
+// (`stackSize + outgoingArgSize + ShadowSpaceBytes`) for a caller to hold both.
+export function spillSlotBaseDisp(module TargetModule, func IrFunction) returns StackSize
+	if functionMakesCall(module, func: func) 'caller'
+		return ShadowSpaceBytes + func.outgoingArgSize
+	end 'caller'
+	return 0
+end 'spillSlotBaseDisp'
+
 // The `sub rsp` size's required residue mod 16 for a caller with `pushCount` callee-saved
 // pushes: 8 when even (entry rsp ≡ 8 stays ≡ 8 after an even number of pushes, so an 8
 // (mod 16) sub reaches ≡ 0), 0 when odd.
@@ -156,6 +174,8 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		idivReg(divisor) gives physRegBit(divisor)
 		pushReg(reg) gives regMaskOf(reg)
 		popReg(reg) gives regMaskOf(reg)
+		storeSlotReg(_, srcReg) gives physRegBit(srcReg)
+		loadRegSlot(destReg, _) gives physRegBit(destReg)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -241,5 +261,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		ret gives true
 		jmp to idivReg gives false
 		pushReg to popReg gives false
+		storeSlotReg to loadRegSlot gives false
 	end 'check'
 end 'blockEndsWithReturn'

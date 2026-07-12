@@ -282,6 +282,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			prologue to jmp then break 'bodyCtrl'
 			movRegImm to idivReg then break 'bodyCtrl'
 			pushReg to popReg then break 'bodyCtrl'
+			storeSlotReg to loadRegSlot then break 'bodyCtrl'
 		end 'bodyCtrl'
 	end 'eachOp'
 
@@ -294,6 +295,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
 			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{block.label}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
+			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{block.label}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -637,6 +639,36 @@ function countDeadPhis(block IrBlock, liveRow BitWordArray) returns RegCount
 	return dead
 end 'countDeadPhis'
 
+// The dead-phi count of a single block, derived from the liveness RESULT (rather than
+// from `computePressureAndForbidden`'s in-flight sweep). Reconstructs the block's live-in
+// VIEW — its live-out folded backward over its own ops, so a block-arg used in the block is
+// present and a truly-dead one is absent — then reuses `countDeadPhis`, the single source of
+// dead-phi truth. Exported so the cold-spill splitter's peak-finder adds the SAME per-block
+// dead-phi correction `maxPressure` carries; without it the peak-finder and the driver guard
+// disagree and the splitter false-panics (see SplitLiveRanges.analyzePressure).
+export function deadPhiCountForBlock(module TargetModule, cfg FuncCfg, liveness LivenessResult, blockLocal CfgIndex) returns RegCount
+	let block = blockAt(module, cfg: cfg, local: blockLocal)
+	if block.blockArgs.count() == 0 'noPhis'
+		return 0
+	end 'noPhis'
+
+	let wordsPerRow = liveness.wordsPerRow
+	var liveRow = makeMatrix(wordsPerRow)
+	bitsetCopyRow(liveRow, dstBase: 0, src: liveness.liveOut, srcBase: blockLocal * wordsPerRow, wordsPerRow: wordsPerRow)
+
+	var ordered = OpIndexArray.create()
+	collectBlockOps(block, out: ordered)
+	var buf = OperandList.create()
+	for ri in 0 upto ordered.count() 'eachOpRev'
+		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("deadPhiCountForBlock: ordered.get OOB")
+		let op = try module.ops.get(opIdx) otherwise panic("deadPhiCountForBlock: opIdx not in module.ops")
+		targetOpOperands(op, buf: buf)
+		stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
+	end 'eachOpRev'
+
+	return countDeadPhis(block, liveRow: liveRow)
+end 'deadPhiCountForBlock'
+
 // ==========================================================================
 // Entry parameter captures + cross-param register forbidding
 // ==========================================================================
@@ -676,6 +708,7 @@ export function collectEntryParamCaptures(module TargetModule, cfg FuncCfg, para
 			movRegReg(dst, src) then recordParamCapture(captures, dst: dst, src: src, paramCount: paramCount)
 			prologue to movRegImm32 then break 'capture'
 			movReg32Reg32 to popReg then break 'capture'
+			storeSlotReg to loadRegSlot then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -787,8 +820,11 @@ end 'stepBackwardOverOp'
 // the op (`allocateReuseDef`), so `dest` co-exists with everything live entering the op.
 // `liveRow` must still be the live-AFTER set (test it BEFORE the backward step, where a
 // live-after input is present and a use has not yet been re-added). Reuse-ness and the
-// input value come from the operand model, never from hardcoded opcodes.
-function reuseInputOutlivesOp(buf OperandList, liveRow BitWordArray) returns bool
+// input value come from the operand model, never from hardcoded opcodes. Exported so the
+// cold-spill splitter's peak-finder counts the SAME reuse-copy transient this pass folds
+// into `maxPressure` — the two must agree or the splitter false-panics (see
+// SplitLiveRanges.analyzePressure).
+export function reuseInputOutlivesOp(buf OperandList, liveRow BitWordArray) returns bool
 	for o in buf 'each'
 		if operandIsReuseDef(o) 'reuseDef'
 			let inputId = operandReuseInputValueId(o, buf: buf)

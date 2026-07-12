@@ -77,6 +77,14 @@ end 'X64CondCode'
 // A full machine word so bit-complement (`not pool`) never overflows the range.
 export typealias RegMask = int(0 to u64.max)
 
+// A spill-slot index: the k-th 8-byte slot the cold-spill live-range splitter
+// (SplitLiveRanges) reserves in a function's frame. It is a dense per-function
+// index — slot 0, 1, 2, … — NOT a byte displacement; the x64 encoder turns it into
+// a `[rsp + disp]` displacement (`spillSlotDisp`) at emit time, so the frame layout
+// (shadow space, alignment) lives in one place. Each spilled value gets its own
+// slot (no slot coalescing yet — a future optimization).
+export typealias SpillSlot = int(0 to u64.max)
+
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
 // consumed by the instruction scheduler + register allocator. The scheduling
 // flags plus the implicit-GPR read/def masks the register allocator's liveness
@@ -263,6 +271,26 @@ export union TargetOp
 	// each `ret`, in REVERSE push order. Physical-only, post-regalloc. APPENDED after
 	// `pushReg`.
 	popReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
+	// Spill a register to a stack slot (`mov [rsp + slotDisp], srcReg`, REX.W 89 /r,
+	// SIB base=rsp). The cold-spill live-range splitter (SplitLiveRanges, M5.3) inserts
+	// it right after a spilled value's def; it USES `srcReg`, so — unlike pushReg/popReg —
+	// it carries a VIRTUAL register the allocator colors. `slot` is a dense per-function
+	// SpillSlot index the encoder turns into a `[rsp + disp]` displacement. `isMemory`/
+	// `isStore` are true (it writes the stack); it sets no flags. APPENDED at the END of
+	// the union, after `popReg`, so no existing `… to popReg` range arm can SILENTLY
+	// swallow it — each such arm instead fails to compile until consciously extended (the
+	// band-append invariant). It is placed after the post-regalloc pushReg/popReg because
+	// it is the newest band; its virtual-carrying, pre-regalloc nature is a property of the
+	// op, not its position (the invariant is about compile-time exhaustiveness, not phase).
+	storeSlotReg(slot SpillSlot, srcReg X64VReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
+	// Reload a stack slot into a register (`mov destReg, [rsp + slotDisp]`, REX.W 8B /r,
+	// SIB base=rsp), the load mirror of `storeSlotReg`. The splitter inserts it before a
+	// spilled value's use, DEFINING a FRESH ValueId (the design's dominating-reload rule):
+	// its uses are rewritten to that fresh value, so the program stays SSA and the colorer
+	// needs no special handling. It carries a VIRTUAL `destReg` the allocator colors.
+	// `isMemory` true, `isStore` FALSE (a pure load); it sets no flags. APPENDED after
+	// `storeSlotReg`, at the END of the union.
+	loadRegSlot(destReg X64VReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, setsFlags: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 export typealias TargetOpArray = Array with TargetOp

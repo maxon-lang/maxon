@@ -232,6 +232,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		cqo then break 'operands'
 		idivReg(divisor) then pushUse(buf, vreg: divisor)
 		pushReg to popReg then panic("targetOpOperands: pushReg/popReg are POST-REGALLOC physical ops (inserted by the prologue/epilogue pass after coloring), so they must never reach the operand model")
+		// The spill/reload ops carry ONE register operand: a store READS `srcReg`, a reload
+		// DEFINES `destReg` (a fresh value). The slot is a memory location, not a register, so
+		// it contributes no operand — the frame layout it names is the encoder's concern.
+		storeSlotReg(_, srcReg) then pushUse(buf, vreg: srcReg)
+		loadRegSlot(destReg, _) then pushDef(buf, vreg: destReg)
 	end 'operands'
 end 'targetOpOperands'
 

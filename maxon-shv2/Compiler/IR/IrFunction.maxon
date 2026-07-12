@@ -1,7 +1,7 @@
 // IrFunction: a named function shared across all IR phases (Maxon, Std,
 // Target). Carries both Maxon-phase types (populated by the parser) and
 // Std-phase types (populated by LowerMaxonToStd); phase-specific backend fields
-// (varSlotCount, spillSize, …) are zero-initialized and filled by the relevant
+// (varSlotCount, stackSize, …) are zero-initialized and filled by the relevant
 // pass.
 //
 // THIN for maxon-shv2 M1 — deliberately NOT a verbatim copy of v1's field-richest
@@ -95,10 +95,9 @@ export type IrFunction
 	// Total number of slot-addressed variables used by ISel; spill slots sit
 	// below the variable area.
 	export var varSlotCount as VarSlot
-	// Spill area size in bytes, computed by the register allocator.
-	export var spillSize as StackSize
 	// Running tally of bytes the function needs on the stack (locals + spills +
-	// callee-save area); the prologue/epilogue pass aligns and emits `sub rsp, N`.
+	// callee-save area); the cold-spill splitter sets it to its spill-slot bytes,
+	// and the prologue/epilogue pass aligns and emits `sub rsp, N`.
 	export var stackSize as StackSize
 	// Bytes reserved at the bottom of the frame for outgoing call args that
 	// overflow the register file.
@@ -131,7 +130,6 @@ export type IrFunction
 			returnType: StdReturnType.void,
 			paramTypes: StdTypeArray.create(),
 			varSlotCount: 0,
-			spillSize: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
 			isPure: true
@@ -161,7 +159,6 @@ export type IrFunction
 			returnType: returnType,
 			paramTypes: paramTypes,
 			varSlotCount: 0,
-			spillSize: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
 			isPure: true
@@ -192,7 +189,6 @@ export type IrFunction
 			returnType: src.returnType,
 			paramTypes: src.paramTypes,
 			varSlotCount: src.varSlotCount,
-			spillSize: src.spillSize,
 			stackSize: src.stackSize,
 			outgoingArgSize: src.outgoingArgSize,
 			isPure: src.isPure

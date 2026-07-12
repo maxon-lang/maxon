@@ -10,26 +10,33 @@
 //
 // It runs on the still-VIRTUAL program plus the coloring, the edge move PLAN, and the
 // reuse-copy list — i.e. BEFORE applyAllocation commits them — so it validates the plan
-// before it is shipped. With no live-range splitting yet, each value holds ONE register
-// for its whole range, which makes the abstract state precise: at any point, live value
-// `v` resides in `color[v]`. The only in-block state change beyond an op's own def is a
-// reuse-def copy (`mov dest, input`, simulated by `applyReuseCopy`) — a transient the op
-// immediately overwrites — so the invariant holds at every value's own program points.
+// before it is shipped. Each ORIGINAL value holds one register for its whole range, and the
+// M5.3 splitter's spills split a live range into memory-across-a-peak + fresh reload ids; the
+// abstract state stays precise because at any point a live value `v` resides in `color[v]` and
+// a spilled value additionally lives in its slot. The only in-block state change beyond an op's
+// own def is a reuse-def copy (`mov dest, input`, simulated by `applyReuseCopy`) — a transient
+// the op immediately overwrites — so the invariant holds at every value's own program points.
 //
-// Two checks, no CFG fixpoint:
+// Three checks, no CFG fixpoint:
 //   A (interference). Per block, seed the abstract state from the live-in values +
 //     phis (each in its color) — distinct colors, or ALIASING — then walk the ops
 //     asserting each use reads its value and each def writes its register.
 //   B (edge copies). Per phi-carrying edge, simulate the parallel copy from the
 //     predecessor's exit state and assert each phi's register ends holding the value
 //     the edge passes and each live-through value flows undisturbed.
+//   C (spill chain). Track `slot → value` alongside `register → value`, and assert the
+//     store→slot→reload chain preserves value identity FROM BOTH ENDS: a store supplies
+//     exactly the value every reload of its slot expects (`recordSpill`), and a reload
+//     reads the slot holding the value its `ReloadOrigin` names (`confirmReload`). This is
+//     what catches a wrong value reaching a use through a slot chain that is internally
+//     self-consistent op-by-op yet does not carry the original value's identity.
 
 // The abstract register state: `regState[r]` is the value id currently in register
 // `r`, or the `noValue` sentinel (= valueCount) when the register holds nothing the
 // checker tracks.
 typealias RegStateRow = Array with CfgIndex
 
-export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyArray)
+export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyArray, spillPlan SpillPlan)
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let noValue = valueCount
@@ -38,6 +45,14 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	// Per-block EXIT states (numBlocks rows of RegisterFileSize registers), so each
 	// edge can be simulated from its predecessor's exit.
 	var exitStates = filledColumn(cfg.numBlocks * RegisterFileSize, value: noValue)
+
+	// SLOT tracking (M5.3): the value currently in each spill slot, or `noValue` (empty). Unlike
+	// `regState`, `slotState` PERSISTS across blocks — a store dominates its reload but may live
+	// in an earlier block (the design's dominating-reload: store in the depth-0 def/preheader,
+	// reload in a later use-block). Blocks are walked in local order, which respects that
+	// dominance for shv2's structured CFG, so a slot is always written before it is read; a
+	// reload of an unwritten slot reads `noValue` and fails `checkReload` (its teeth).
+	var slotState = filledColumn(spillPlan.slotCount, value: noValue)
 
 	var buf = OperandList.create()
 	for local in 0 upto cfg.numBlocks 'eachBlock'
@@ -53,7 +68,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 			// input from the destination register — exactly what the machine does.
 			applyReuseCopy(reuseCopies, opIdx: opIdx, regState: regState)
 			let op = try module.ops.get(opIdx) otherwise panic("AllocChecker: opIdx not in module.ops")
-			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, paramCount: paramCount, funcName: func.name, blockLabel: block.label)
+			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, paramCount: paramCount, funcName: func.name, blockLabel: block.label, slotState: slotState, origins: spillPlan.origins)
 		end 'eachOp'
 
 		copyRegState(exitStates, dstBase: local * RegisterFileSize, src: regState, srcBase: 0)
@@ -138,15 +153,98 @@ end 'placeValueAtColor'
 // A `mov`/`mov32` is a COPY (special-cased): its virtual source must hold its value,
 // and its destination register receives the copied value's identity. Every other op
 // is interpreted generically from the operand model + implicit-register masks.
-function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, paramCount ParamCount, funcName String, blockLabel String)
+function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, paramCount ParamCount, funcName String, blockLabel String, slotState RegStateRow, origins ReloadOriginArray)
 	match op 'chk'
 		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
 		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
 		prologue to movRegImm32 then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
 		subRegReg to idivReg then checkGenericOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, funcName: funcName, blockLabel: blockLabel)
 		pushReg to popReg then panic("AllocChecker.checkOp: pushReg/popReg are inserted by the prologue/epilogue pass AFTER the checker runs, so they must never reach it")
+		storeSlotReg(slot, srcReg) then checkStoreSlot(slot, srcReg: srcReg, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
+		loadRegSlot(destReg, slot) then checkLoadSlot(destReg, slot: slot, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
 	end 'chk'
 end 'checkOp'
+
+// A `storeSlotReg(slot, srcReg)` (spill): its source register must currently hold the spilled
+// value (`srcReg` is the value's own virtual register), and the slot then records that value.
+// The source is untouched (a store does not clobber its source), so `regState` is unchanged.
+function checkStoreSlot(slot SpillSlot, srcReg X64VReg, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+	match srcReg 's'
+		virtual(v) then recordSpill(slot, v: v, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
+		physical then panic("AllocChecker: storeSlotReg in '{funcName}' block '{blockLabel}' has a PHYSICAL source — the splitter always spills a virtual value")
+	end 's'
+end 'checkStoreSlot'
+
+function recordSpill(slot SpillSlot, v ValueId, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+	let reg = alloc.regNumOf(v)
+	let held = regStateGet(regState, reg: reg)
+	if held != v 'wrong'
+		panic("AllocChecker: bad spill in '{funcName}' block '{blockLabel}': value {v} was colored to register {reg}, but that register holds value {held} at its storeSlotReg — a clobber before the spill")
+	end 'wrong'
+
+	// STORE-SIDE identity check (the other half of the slot-chain invariant; the reload side is
+	// `confirmReload`). A store to slot `s` supplies the value that EVERY reload of slot `s` will
+	// later claim to reload — so the value it stores (`v`) MUST equal each such reload's
+	// ReloadOrigin.originalValueId. If it does not, a reload of `s` would hand its uses `v`'s value
+	// while the program treats it as a different value's — the exact "wrong value through a
+	// self-consistent-looking chain" the reload-side check alone catches only at the reload (and
+	// only if that reload's block is reached in the walk). Verifying it HERE catches a mis-targeted
+	// store at its source, with a store-site diagnostic, and flags a store whose split lineage was
+	// corrupted even when its reload is elsewhere. (Every spilled value gets its OWN slot, so all
+	// origins for a slot legitimately share one `originalValueId`; a future slot-coalescing pass
+	// that packs distinct values into one slot must revisit this — noted, not yet reachable.)
+	assertStoreMatchesReloadOrigins(origins, slot: slot, storedValue: v, funcName: funcName, blockLabel: blockLabel)
+
+	slotStateSet(slotState, slot: slot, value: v)
+end 'recordSpill'
+
+// Assert every reload of `slot` reloads exactly `storedValue` — the store-side half of the
+// slot-chain identity invariant (see `recordSpill`).
+function assertStoreMatchesReloadOrigins(origins ReloadOriginArray, slot SpillSlot, storedValue ValueId, funcName String, blockLabel String)
+	for o in origins 'eachOrigin'
+		if o.slot == slot and o.originalValueId != storedValue 'mismatch'
+			panic("AllocChecker: broken split chain in '{funcName}' block '{blockLabel}': the store to slot {slot} writes value {storedValue}, but reload {o.reloadValueId} claims to reload value {o.originalValueId} from that slot — the store→slot→reload chain does not preserve value identity (a mis-targeted store or a reload with the wrong ReloadOrigin)")
+		end 'mismatch'
+	end 'eachOrigin'
+end 'assertStoreMatchesReloadOrigins'
+
+// A `loadRegSlot(destReg, slot)` (reload): the slot must currently hold the ORIGINAL value the
+// reload reloads (from its ReloadOrigin), and the op's slot must be the one the splitter
+// assigned — a wrong-slot reload, or a slot never written by a matching store, fails HERE
+// rather than reading stale bytes at run time. It then DEFINES the fresh reload value in its
+// register (subsequent uses were rewritten to it, so the normal use checks carry from here).
+function checkLoadSlot(destReg X64VReg, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+	match destReg 'd'
+		virtual(freshId) then verifyReload(freshId, slot: slot, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
+		physical then panic("AllocChecker: loadRegSlot in '{funcName}' block '{blockLabel}' has a PHYSICAL destination — the splitter always reloads into a fresh virtual value")
+	end 'd'
+end 'checkLoadSlot'
+
+function verifyReload(freshId ValueId, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+	match reloadOriginOf(origins, reloadValueId: freshId) 'o'
+		none then panic("AllocChecker: loadRegSlot in '{funcName}' block '{blockLabel}' defines value {freshId} with no recorded ReloadOrigin — a splitter bug (every reload must record what it reloads)")
+		origin(expectedSlot, originalValueId) then confirmReload(freshId, slot: slot, expectedSlot: expectedSlot, originalValueId: originalValueId, regState: regState, alloc: alloc, slotState: slotState, funcName: funcName, blockLabel: blockLabel)
+	end 'o'
+end 'verifyReload'
+
+function confirmReload(freshId ValueId, slot SpillSlot, expectedSlot SpillSlot, originalValueId ValueId, regState RegStateRow, alloc Allocation, slotState RegStateRow, funcName String, blockLabel String)
+	if slot != expectedSlot 'wrongSlot'
+		panic("AllocChecker: reload of value {originalValueId} in '{funcName}' block '{blockLabel}' reads slot {slot}, but its ReloadOrigin says slot {expectedSlot} — a wrong-slot reload")
+	end 'wrongSlot'
+	let held = slotStateGet(slotState, slot: slot)
+	if held != originalValueId 'stale'
+		panic("AllocChecker: reload in '{funcName}' block '{blockLabel}': slot {slot} holds value {held}, not the reloaded value {originalValueId} — a missing/mis-targeted store, or a wrong-slot reload")
+	end 'stale'
+	regStateSet(regState, reg: alloc.regNumOf(freshId), value: freshId)
+end 'confirmReload'
+
+function slotStateGet(slotState RegStateRow, slot SpillSlot) returns ValueId
+	return try slotState.get(slot) otherwise panic("AllocChecker.slotStateGet: slot {slot} out of range (a spill/reload used a slot beyond the plan's count)")
+end 'slotStateGet'
+
+function slotStateSet(slotState RegStateRow, slot SpillSlot, value ValueId)
+	try slotState.set(slot, value: value) otherwise panic("AllocChecker.slotStateSet: slot {slot} out of range (a spill/reload used a slot beyond the plan's count)")
+end 'slotStateSet'
 
 // Simulate a reuse-def copy `mov dest, input` before its op: the destination register
 // receives the value currently in the input's register. A no-op when the op has no

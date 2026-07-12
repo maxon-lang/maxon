@@ -30,16 +30,20 @@
 // seed-`mov` deletion (M5.2); idiv/mod FIXED registers (M5.4) — RAX/RDX pinned via
 // implicit masks + `forbidOperandsFromImplicit` + the clobber→forbidden path.
 //
-// DEFERRED to later M5 chunks (NOT built here): calls / the caller-saved-halving
-// pressure model, function params, the cold-spill live-range splitter, and the E5001
-// diagnostic (`ValueOrigin`). CAVEAT for the M5.7 E5001 author — `maxPressure ≤ pool`
-// is a NECESSARY but NOT SUFFICIENT colorability test at a FIXED-REGISTER point: at an
-// `idiv`, values live across it are forbidden {RAX,RDX}, so their effective pool is
-// `pool ∖ {RAX,RDX}` (and at a call it will be the callee-saved subset — REGISTER_
-// ALLOCATOR.md Known-limit #2). The exact E5001 deficit must model each such point as
-// local pressure against its reduced pool, not the full pool. Today maxPressure stays
-// ≤ 3–4 so overflow cannot occur; if it somehow did, this PANICS (a placeholder for the
-// real E5001 + splitter).
+// The COLD-SPILL SPLITTER (M5.3, SplitLiveRanges) runs BEFORE this colorer and relieves
+// every over-pool program point — full-pool overflow at a normal op AND reduced-pool
+// overflow at a FIXED-REGISTER point. `maxPressure ≤ pool` alone is NECESSARY but NOT
+// SUFFICIENT at such a point: at an `idiv`, values live across it are forbidden {RAX,RDX}
+// (effective pool `pool ∖ {RAX,RDX}`); at a call, the callee-saved subset (REGISTER_
+// ALLOCATOR.md Known-limit #2). The splitter's peak-finder checks each op against its OWN
+// reduced pool (`pool ∖ op.implicitDefs`) and splits values live across it, so by the time
+// this colorer runs no point — normal or fixed-register — overflows its pool, and coloring
+// CANNOT fail. If `chooseRegister` still runs out of registers, the splitter left a point
+// unrelieved — a splitter bug, which the panic below names.
+//
+// DEFERRED to a later M5 chunk (NOT built here): the E5001 diagnostic (`ValueOrigin`), which
+// turns a genuine HOT overflow (a loop / fixed-register point the user must restructure) from
+// the splitter's placeholder panic into a positioned, source-mapped compile error.
 
 // The color column's "not yet colored" sentinel: one past the last real register.
 let Uncolored = RegisterFileSize
@@ -120,6 +124,7 @@ end 'reuseCopyForOp'
 // The sub-phases the timers + counters attribute time to (design §"Stats": v1's
 // "74% of self-compile" figure stood for months with ZERO sub-phase attribution).
 export enum RegAllocPhase
+	splitting
 	liveness
 	coloring
 	ssaDestruction
@@ -144,11 +149,16 @@ export type RegAllocStats
 	export var hintsMissed as ByteCount
 	export var valuesColored as ByteCount
 	export var registersUsed as RegMask
+	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
+	// them (one per use-block), and constants rematerialized instead of spilled.
+	export var valuesSplit as ByteCount
+	export var reloadsInserted as ByteCount
+	export var rematerialized as ByteCount
 
 	export static function create() returns RegAllocStats
 		var phaseMs = DurationMsArray.create()
 		phaseMs.resize(RegAllocPhase.allCases.count())
-		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0}
+		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0}
 	end 'create'
 
 	export function addPhaseMs(phase RegAllocPhase, ms DurationMs)
@@ -275,17 +285,21 @@ export function allocateRegisters(module TargetModule, target Target)
 end 'allocateRegisters'
 
 function allocateFunction(module TargetModule, func IrFunction, pool RegMask, stats RegAllocStats)
-	let tLive = Clock.nowMs()
-	let liveness = computeLiveness(module, func: func)
-	stats.addPhaseMs(RegAllocPhase.liveness, ms: Clock.elapsedMs(tLive))
+	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
+	// idle values out (store in a cold, dominating spot and reload at their uses) or
+	// rematerialize constants, so the colorer below always finds `maxPressure ≤ pool`. HOT
+	// pressure a loop genuinely cannot fit is E5001 (an M5.7 placeholder panic inside the
+	// splitter). It runs FIRST because it MUTATES the IR — adding spill/reload/remat ops and
+	// fresh reload values that the liveness, coloring, and checker below then all consume. The
+	// splitter recomputes liveness internally and returns the final result (`maxPressure ≤
+	// pool` guaranteed), so no separate liveness pass is needed here.
+	let tSplit = Clock.nowMs()
+	let outcome = splitLiveRanges(module, func: func, pool: pool, stats: stats)
+	stats.addPhaseMs(RegAllocPhase.splitting, ms: Clock.elapsedMs(tSplit))
+	let liveness = outcome.liveness
 	stats.recordFixpoint(liveness.fixpointIterations)
 	stats.recordPressure(liveness.maxPressure, funcName: func.name)
 	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
-
-	let poolSize = regMaskPopcount(pool)
-	if liveness.maxPressure > poolSize 'overflow'
-		panic("register pressure overflow in '{func.name}': {liveness.maxPressure} values are simultaneously live but the pool has {poolSize} registers. The real E5001 diagnostic and the cold-spill live-range splitter are later M5 chunks; an M5.1 program must fit the pool.")
-	end 'overflow'
 
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by BOTH the checker (which simulates them) and the rewrite (which
@@ -301,7 +315,7 @@ function allocateFunction(module TargetModule, func IrFunction, pool RegMask, st
 	stats.addPhaseMs(RegAllocPhase.ssaDestruction, ms: Clock.elapsedMs(tPlan))
 
 	let tCheck = Clock.nowMs()
-	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies)
+	checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies, spillPlan: outcome.plan)
 	stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
 
 	let tRewrite = Clock.nowMs()
@@ -404,6 +418,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		movRegImm to movRegImm32 then break 'hint'
 		subRegReg to idivReg then break 'hint'
 		pushReg to popReg then break 'hint'
+		storeSlotReg to loadRegSlot then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -562,7 +577,7 @@ function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allo
 
 	let reg = pickPreferredRegister(blocked)
 	if reg == RegisterFileSize 'exhausted'
-		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — the effective pool at a FIXED-REGISTER point is REDUCED below the nominal pool (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands), so the full-pool `maxPressure <= pool` feasibility gate — which already passed for this function — CANNOT catch it. The real diagnosis is the M5.7 E5001 per-point deficit, computed against the reduced pool at each such point, not the nominal pool.")
+		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
@@ -755,6 +770,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		cqo then return op
 		idivReg(divisor) then return TargetOp.idivReg(colorVRegWith(divisor, alloc: alloc))
 		pushReg to popReg then return op
+		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
+		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
 	end 'rewrite'
 end 'colorTargetOp'
 
@@ -765,7 +782,8 @@ end 'colorTargetOp'
 function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = "regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n"
 	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; fixpoint iterations total={stats.fixpointIterationsTotal} max={stats.fixpointIterationsMax}\n")
+	msg.append("  splitter: valuesSplit={stats.valuesSplit}; reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
-	msg.append("  phase ms: liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
+	msg.append("  phase ms: splitting={stats.phaseMsOf(RegAllocPhase.splitting)} liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
 	return msg
 end 'regAllocStatsMessage'

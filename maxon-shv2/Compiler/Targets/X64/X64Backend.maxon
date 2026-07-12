@@ -79,7 +79,8 @@ let ModRmRipRelCall = 0x15
 
 // --- Opcodes ---
 let OpcodeRet = 0xC3
-let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source)
+let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source) — the STORE form (spill)
+let OpcodeMovRegRm = 0x8B  // mov r, r/m  (reg field = dest)   — the LOAD form (reload)
 let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as mov
 let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
 let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
@@ -408,6 +409,28 @@ function encodeCmpRegImm32(code ByteArray, reg X64Register, imm Imm32)
 	writeImm32Signed(code, value: imm)
 end 'encodeCmpRegImm32'
 
+// `mov [rsp + disp], srcReg` — SPILL a register to a stack slot (REX.W 89 /r, the `r/m, r`
+// store form: reg field = source, r/m = the `[rsp + disp]` memory operand). The base is
+// ALWAYS rsp, which — because rsp's low 3 bits are 100 (`ModRmRmSibFollows`) — forces a
+// SIB byte; the shared `emitBaseDispModRm` handles that rsp-base SIB rule and picks the
+// tightest disp form (mod=00 for slot 0, disp8/disp32 otherwise) in the ONE place the
+// `[base + disp]` operand is assembled, so no SIB/ModRM byte is hand-spelled here.
+function encodeStoreSlotReg(code ByteArray, srcReg X64Register, disp Imm32)
+	emitRex(code, wide: true, regField: srcReg, rmField: X64Register.rsp)
+	code.push(OpcodeMovRmReg)
+	emitBaseDispModRm(code, regField: srcReg, base: X64Register.rsp, disp: disp)
+end 'encodeStoreSlotReg'
+
+// `mov destReg, [rsp + disp]` — RELOAD a stack slot into a register (REX.W 8B /r, the
+// `r, r/m` load form: reg field = dest, r/m = the `[rsp + disp]` source), the load mirror
+// of `encodeStoreSlotReg`. Same shared rsp-base `[base + disp]` assembly — only the opcode
+// (load vs store) and the reg-field role (dest vs source) differ.
+function encodeLoadRegSlot(code ByteArray, destReg X64Register, disp Imm32)
+	emitRex(code, wide: true, regField: destReg, rmField: X64Register.rsp)
+	code.push(OpcodeMovRegRm)
+	emitBaseDispModRm(code, regField: destReg, base: X64Register.rsp, disp: disp)
+end 'encodeLoadRegSlot'
+
 // --- Intra-function block-branch resolution ---
 //
 // A function's blocks are laid out contiguously inside its ONE FunctionCodeChunk, so
@@ -564,10 +587,20 @@ function resolvePhysical(vreg X64VReg) returns X64Register
 	end 'resolve'
 end 'resolvePhysical'
 
+// The `[rsp + disp]` displacement of spill slot `slot`: the function's spill-area base
+// (below which sit shadow space + outgoing args on a caller — `spillSlotBaseDisp`) plus
+// `slot * SpillSlotBytes`. Named so the frame-slot arithmetic is spelled once. The cast is
+// safe: shv2's frames are far below i32.max, and the splitter caps slot count at valueCount.
+function slotDisplacement(spillBaseDisp StackSize, slot SpillSlot) returns Imm32
+	return (spillBaseDisp + slot * SpillSlotBytes) as Imm32
+end 'slotDisplacement'
+
 // Encode one TargetOp into `code`, recording call / IAT / block-jump fixups as it
 // goes. `blockJumps` collects intra-function branch fixups the chunk resolves once
-// every block's offset is known (see resolveBlockJumps).
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, blockJumps BlockJumpFixupArray)
+// every block's offset is known (see resolveBlockJumps). `spillBaseDisp` is the
+// function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
+// spill/reload slot displacement.
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, blockJumps BlockJumpFixupArray, spillBaseDisp StackSize)
 	match op 'emit'
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
@@ -593,6 +626,8 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		idivReg(divisor) then encodeIdivReg(code, divisor: resolvePhysical(divisor))
 		pushReg(reg) then encodePushReg(code, reg: reg)
 		popReg(reg) then encodePopReg(code, reg: reg)
+		storeSlotReg(slot, srcReg) then encodeStoreSlotReg(code, srcReg: resolvePhysical(srcReg), disp: slotDisplacement(spillBaseDisp, slot: slot))
+		loadRegSlot(destReg, slot) then encodeLoadRegSlot(code, destReg: resolvePhysical(destReg), disp: slotDisplacement(spillBaseDisp, slot: slot))
 	end 'emit'
 end 'emitTargetOp'
 
@@ -614,6 +649,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 	var blockJumps = BlockJumpFixupArray.create()
 	var blockOffsets = BlockStartOffsetMap.create()
 
+	// The base rsp offset of this function's spill-slot area, computed once (it depends
+	// only on whether the function makes a call — a caller's slots sit ABOVE the Win64
+	// shadow space so a callee never clobbers a spilled value). Every spill/reload adds
+	// `slot * SpillSlotBytes` to it. See spillSlotBaseDisp for the frame-layout rationale.
+	let spillBaseDisp = spillSlotBaseDisp(module, func: func)
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
@@ -623,12 +664,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps, spillBaseDisp: spillBaseDisp)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, blockJumps: blockJumps, spillBaseDisp: spillBaseDisp)
 		end 'hasTerm'
 	end 'eachBlock'
 

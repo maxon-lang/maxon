@@ -133,6 +133,13 @@ end 'popcountWord'
 // The 16 x64 GPRs. A RegMask (TargetDialect) is a bit per register number.
 export let RegisterFileSize = 16
 
+// Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
+// spilled value occupies exactly 8 bytes. The cold-spill splitter (SplitLiveRanges) sets
+// `func.stackSize = slotCount * SpillSlotBytes`, and the x64 encoder turns a SpillSlot
+// index into a `[rsp + slot * SpillSlotBytes + base]` displacement — the ONE definition of
+// the slot stride, so the splitter's frame-size tally and the encoder's slot offsets agree.
+export let SpillSlotBytes = 8 as StackSize
+
 // A number of registers, or of simultaneously-live values (register PRESSURE) — the
 // quantity the E5001 feasibility test compares against the pool size. Distinct in
 // PURPOSE from a byte count or a CFG index even though all are non-negative ints.
