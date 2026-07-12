@@ -585,20 +585,44 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 		panic("allocateDef: value {v} is already colored — a value has two defs, violating the single-def SSA invariant (RULE 1)")
 	end 'doubleDef'
 	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not pool)
-	let reg = chooseRegister(v, blocked: blocked, hints: hints, alloc: alloc, stats: stats)
+	let reg = chooseRegister(v, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, stats: stats)
 	alloc.assign(v, regNum: reg)
 	stats.valuesColored = stats.valuesColored + 1
 	stats.noteRegisterUse(reg)
 	return regMaskAdd(working, regNum: reg)
 end 'allocateDef'
 
-// Pick a register for `v`: the hinted register FIRST (fixed, then the copy
-// partner's), falling back to the lowest free pool register. This one biased choice
-// is what collapses copy-related values so their copy elides.
-function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, stats RegAllocStats) returns MachineWord
+// Pick a register for `v`: the hinted register FIRST (fixed, then the copy partner's), falling back
+// to the lowest free register of `v`'s own preferred class. This one biased choice is what collapses
+// copy-related values so their copy elides.
+//
+// **A hint may not ALLOCATE a register outside `v`'s preferred class while that class still has one
+// free — but it may always TRANSFER one that is being vacated at this very op.** Those are different
+// acts and only the first one is harmful:
+//
+//  • TRANSFER (`hintReg ∈ dyingRegs`) — the partner dies right here, so `v` inherits the register it
+//    was already holding. Total registers used: unchanged. This is the whole point of biased
+//    coloring: a loop-carried accumulator's update takes over the phi's register, so SSA
+//    destruction emits NO back-edge copy and the loop body stays copy-free. Always allow it.
+//
+//  • ALLOCATION (the register is merely idle) — `v` consumes a register nothing was holding. If
+//    that register is CALLEE-SAVED and `v` does not need one (it does not survive a call), it has
+//    taken one of only FIVE registers that are the sole home for values which cross a call. A value
+//    that can live NOWHERE else then finds none, and the colorer dies with every register blocked.
+//    Gate this by `v`'s preferred class.
+//
+// The failure is not a pressure problem and the splitter cannot see it: at the failing point the
+// values FIT (five confined values, five callee-saved registers). It is a COLORING ORDER problem —
+// the place the chordal-exactness argument does not reach. χ = ω is a theorem for the UNCONSTRAINED
+// problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce class
+// is protected. Two sequential loops containing calls were enough to hit it
+// (`while-loops.sequential-loops-across-a-call`).
+function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, stats RegAllocStats) returns MachineWord
+	let takeable = preferredClassMask(blocked) or dyingRegs
+
 	if hints.hasFixed(v) 'fixed'
 		let fr = hints.fixedOf(v)
-		if not regMaskContains(blocked, regNum: fr) 'fixedFree'
+		if hintIsTakeable(fr, blocked: blocked, takeable: takeable) 'fixedFree'
 			stats.hintsHonoured = stats.hintsHonoured + 1
 			return fr
 		end 'fixedFree'
@@ -607,7 +631,7 @@ function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allo
 		let p = hints.copyOf(v)
 		if alloc.isColored(p) 'partnerColored'
 			let cr = alloc.regNumOf(p)
-			if not regMaskContains(blocked, regNum: cr) 'copyFree'
+			if hintIsTakeable(cr, blocked: blocked, takeable: takeable) 'copyFree'
 				stats.hintsHonoured = stats.hintsHonoured + 1
 				return cr
 			end 'copyFree'
@@ -624,6 +648,27 @@ function chooseRegister(v ValueId, blocked RegMask, hints ColorHints, alloc Allo
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
+
+// The class of registers a value with this `blocked` mask should take from: the CALLER-saved half
+// when any of it is free (the value needs no callee-saved register — it does not survive a call),
+// otherwise the whole pool (the value is confined, and the callee-saved half is its only home).
+//
+// This is `pickPreferredRegister`'s choice, named — so a HINT can be held to the same class. The
+// two must agree, or the hint path quietly bypasses the very protection the fallback path provides.
+function preferredClassMask(blocked RegMask) returns RegMask
+	let anyCallerFree = lowestClearRegister(blocked or (fullRegisterMask() and not callerSavedMask())) != RegisterFileSize
+	return callerSavedMask() if anyCallerFree else fullRegisterMask()
+end 'preferredClassMask'
+
+// A hinted register is takeable iff it is free AND either inside the value's preferred class or
+// being VACATED at this op — those are different acts, and only allocating outside the class is
+// harmful (see `chooseRegister`).
+function hintIsTakeable(reg MachineWord, blocked RegMask, takeable RegMask) returns bool
+	if regMaskContains(blocked, regNum: reg) 'notFree'
+		return false
+	end 'notFree'
+	return regMaskContains(takeable, regNum: reg)
+end 'hintIsTakeable'
 
 // Pick a free register, preferring a CALLER-saved one — it needs no prologue push/pop,
 // so a value that does NOT outlive a call stays cheap. A value live ACROSS a call is

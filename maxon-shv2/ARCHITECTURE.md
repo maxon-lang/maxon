@@ -1106,6 +1106,26 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
 
 ### Known limits of the design
 
+0. **Chordal exactness does NOT survive precoloring, and this is the one place the theory runs
+   out.** `χ = ω` is a theorem for the *unconstrained* problem. Forbidden sets (a value live across
+   a call is confined to the 5 callee-saved registers; an `idiv` operand cannot be RAX/RDX) make
+   this **list colouring**, where greedy is exact only if the **scarce class is protected**. It is
+   not a pressure problem and the splitter cannot see it: the values *fit* (five confined values,
+   five callee-saved registers) and yet a greedy order can still fail.
+
+   Concretely: biased coloring would honour a copy hint that handed a **callee-saved** register to a
+   value that did not need one, and a value that could live nowhere else then found none — the
+   colorer died with every register blocked. Two sequential loops containing calls were enough. The
+   guard is `preferredClassMask`: **a hint may never take a register outside a value's preferred
+   class while that class still has one free.** Copy elision is worth a `mov`; it is never worth a
+   register the value cannot otherwise obtain. (`while-loops.sequential-loops-across-a-call`.)
+
+   The remaining exposure is the same shape at a *different* scale: if values confined by
+   *different* calls are simultaneously live at a point that is not itself a call, the peak-finder —
+   which only checks the reduced pool AT clobber ops — will not see the collision. The exact model
+   is Hall's condition on the per-value effective pools (`popcount(pool ∖ forbidden(v))`), which is
+   sound because the forbidden sets here are laminar (`∅ ⊂ {rax,rdx} ⊂ caller-saved`). Not yet built.
+
 1. **The only source of a false `E5001` is a wasted register, and copy-related values are the one
    that bites.** `maxlive` is exact for the program as lowered (chordal ⇒ χ = ω = maxlive), and
    liveness is per-program-point, so values live on disjoint paths correctly do **not** interfere.

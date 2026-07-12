@@ -1,0 +1,104 @@
+// Test: while-loops.sequential-loops-across-a-call
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function big(n int) returns int
+	var total = 0
+	var a = 1
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a = a + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a
+	var b = 1
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b = b + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+---
+ExitCode: 14
+---
+func @work {
+  entry:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.ret
+}
+
+func @big {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 48
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, rcx
+    x64.movRegReg r14, rdx
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg r14, rbx
+    x64.jcc less, L0
+    x64.jmp whileexit
+  L0:
+    x64.movRegReg rcx, r14
+    x64.callDirect work
+    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, r12, r13
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg r12, rax
+    x64.movRegReg rax, r13
+    x64.movRegReg r13, rcx
+    x64.movRegReg r15, rdx
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot0, rax
+    x64.cmpRegReg r15, rbx
+    x64.jcc less, L1
+    x64.jmp whileexit
+  L1:
+    x64.movRegReg rcx, r15
+    x64.callDirect work
+    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.loadRegSlot rax, slot0
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg r8, r12, r13
+    x64.epilogue 48
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.callDirect big
+    x64.epilogue 40
+    x64.ret
+}

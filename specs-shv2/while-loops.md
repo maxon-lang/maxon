@@ -75,6 +75,83 @@ end 'main'
 12
 ```
 
+
+<!-- test: while-loops.sequential-loops -->
+Two loops one after another, each with its own counter. The second loop's blocks are reachable
+only after the first loop's exit, so nothing from one is live in the other. `i0` counts to 3 and
+`i1` counts to 3, so `3 + 3 = 6`.
+```maxon
+function big(n int) returns int
+	var i0 = 0
+	while i0 < n 'L0'
+		i0 = i0 + 1
+	end 'L0'
+	var i1 = 0
+	while i1 < n 'L1'
+		i1 = i1 + 1
+	end 'L1'
+	return i0 + i1
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: while-loops.sequential-loops-across-a-call -->
+**A register-allocator regression test, and the reason it exists is worth stating.** Two sequential
+loops, each CALLING a function and each carrying an accumulator, plus a `total` that is live ACROSS
+both loops. Every loop-carried value here is live across a call, so it is forbidden all nine
+caller-saved registers and can only live in one of the **five callee-saved** ones — while `total`,
+which merely passes through, is not.
+
+The allocator used to die on exactly this shape (`chooseRegister: no free register`). Its biased
+coloring would honour a copy hint that handed a **callee-saved** register to a value that did not
+need one, and a value that could live *nowhere else* then found none. Five values needing the five
+scarce registers is a perfect fit — it is only reachable if nothing wastes one. This is the case the
+chordal-exactness argument does NOT cover: with forbidden sets the problem is LIST colouring, and
+greedy is exact only when the scarce class is protected.
+
+`work(x) = x + 1`, so each loop adds `1+2+3 = 6` to its accumulator over three iterations:
+`a = 1 + 6 = 7`, `b = 1 + 6 = 7`, and `total = 0 + 7 + 7 = 14`.
+```maxon
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function big(n int) returns int
+	var total = 0
+	var a = 1
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a = a + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a
+	var b = 1
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b = b + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+```
+```exitcode
+14
+```
+
+
 ## Deferred
 
 Tests recorded for re-enablement at the milestone that unblocks them. They live in

@@ -402,9 +402,20 @@ export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncC
 	let numBlocks = blockRefByLocal.count()
 
 	// BlockId -> local index; sentinel `numBlocks` marks an id not in this function.
+	//
+	// BlockIds must be UNIQUE within a function. This index is how every edge resolves its target,
+	// so a duplicate id silently makes the LAST block with that id win — every branch to the first
+	// one is then re-pointed at the second, and the CFG the allocator sees is not the CFG the
+	// program has. Liveness, loop depth and pressure all follow it off a cliff, so the failure
+	// surfaces far away (values from one loop appearing live inside another) and looks like an
+	// allocator bug. Assert it here, at the one place the collision would be absorbed.
 	var localByBlockId = filledColumn(maxBlockId + 1, value: numBlocks)
 	for i in 0 upto numBlocks 'mapIds'
 		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncCfg: blockIdByLocal.get OOB")
+		let prior = try localByBlockId.get(bid) otherwise panic("buildFuncCfg: localByBlockId.get(bid) OOB")
+		if prior != numBlocks 'duplicateId'
+			panic("buildFuncCfg: function '{func.name}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
+		end 'duplicateId'
 		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncCfg: localByBlockId.set(bid) OOB")
 	end 'mapIds'
 

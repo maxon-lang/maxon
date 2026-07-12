@@ -1,0 +1,53 @@
+// Test: while-loops.sequential-loops
+function big(n int) returns int
+	var i0 = 0
+	while i0 < n 'L0'
+		i0 = i0 + 1
+	end 'L0'
+	var i1 = 0
+	while i1 < n 'L1'
+		i1 = i1 + 1
+	end 'L1'
+	return i0 + i1
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+---
+ExitCode: 6
+---
+func @big {
+  entry:
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, L0
+    x64.jmp whileexit
+  L0:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc less, L1
+    x64.jmp whileexit
+  L1:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg r8, rax, rdx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.callDirect big
+    x64.epilogue 40
+    x64.ret
+}
