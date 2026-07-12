@@ -126,9 +126,13 @@ export type LivenessResult
 	// peak-finder needs the same number at every op of every block, and recomputing it per block
 	// meant re-sweeping the whole block and heap-allocating two arrays per call.
 	export var deadPhis as CfgIndexArray
+	// The function's per-value index — def sites, use sites, per-value flags, the layout op
+	// numbering. The liveness walk builds it (it needs the use lists), and the cold-spill splitter
+	// answers EVERY per-value question from it rather than re-walking the function per candidate.
+	export var useIndex as UseIndex
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, live LiveSets, forbidden RegMaskColumn, maxPressure RegCount, livenessMarkSteps ByteCount, deadPhis CfgIndexArray) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, live LiveSets, forbidden RegMaskColumn, maxPressure RegCount, livenessMarkSteps ByteCount, deadPhis CfgIndexArray, useIndex UseIndex) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, useIndex: useIndex}
 	end 'create'
 
 	// The dead block-arg count of local block `local`.
@@ -240,22 +244,38 @@ let DfsWhite = 0
 let DfsGray = 1
 let DfsBlack = 2
 
-// Public entry: compute the full liveness result for one function.
+// Public entry: compute the full liveness result for one function, building its CFG.
 export function computeLiveness(module TargetModule, func IrFunction) returns LivenessResult
-	let cfg = buildFuncCfg(module, func: func)
+	return computeLivenessOn(module, cfg: buildFuncCfg(module, func: func), func: func)
+end 'computeLiveness'
+
+// Compute liveness on a CFG the CALLER owns, and whose `valueCount` the caller keeps current.
+//
+// This is what lets the cold-spill splitter recompute liveness after every split without
+// rebuilding the CFG each time: a split inserts only body ops and rewrites operands, so the block
+// set, the successor/predecessor edges and the loop depths are all INVARIANT under it — only the
+// value space grows, and the splitter knows exactly how (it minted the ids). Rebuilding the CFG
+// per split re-scanned the whole function, re-derived both CSR graphs, and re-walked one natural
+// loop per loop header, for an answer that could not have changed.
+export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction) returns LivenessResult
 	let valueCount = cfg.valueCount
 	let wordsPerRow = bitsetWordsFor(valueCount)
 	let numBlocks = cfg.numBlocks
 
-	let walk = solveLivenessSsa(module, cfg: cfg, valueCount: valueCount)
+	if numBlocks != func.blockRefs.count() 'cfgStale'
+		panic("computeLivenessOn: '{func.name}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
+	end 'cfgStale'
+
+	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount)
+	let walk = solveLivenessSsa(cfg, useIndex: useIndex, valueCount: valueCount)
 
 	var forbidden = makeRegMaskColumn(valueCount)
 	var deadPhis = zeroColumn(numBlocks)
 	let maxPressure = computePressureAndForbidden(module, cfg: cfg, live: walk.live, forbidden: forbidden, wordsPerRow: wordsPerRow, deadPhis: deadPhis)
 	forbidEntryParamCrossRegisters(module, cfg: cfg, forbidden: forbidden, paramCount: func.paramCount)
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis)
-end 'computeLiveness'
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, useIndex: useIndex)
+end 'computeLivenessOn'
 
 // A zeroed word matrix of `wordCount` words.
 function makeMatrix(wordCount ByteCount) returns BitWordArray
@@ -646,121 +666,347 @@ end 'bumpNaturalLoopDepth'
 // Returns the number of block-marking steps — the honest cost counter, replacing the fixpoint's
 // iteration count (which no longer exists).
 
-// Every value's USE sites, as a compressed-sparse-row index by value id: `blocks[start[v] ..
-// start[v+1])` are the blocks where `v` is read, and the parallel `onEdge` flags say whether the
-// read is a branch-edge ARG (consumed at the END of that block, on the edge) rather than an op
-// operand. One flat pair of columns — never an array-of-arrays, which would be one heap object per
-// value.
-type UseIndex
-	export var start as CfgIndexArray
-	export var blocks as CfgIndexArray
-	export var onEdge as BoolArray
-	// Each value's DEF BLOCK — the walk's stop test. Collected HERE rather than in its own scan
-	// because it needs the same walk over every operand of every op: a separate pass cost a third
-	// traversal of the function per liveness computation, which the many-small-functions shape (a
-	// real codebase, and this compiler's own source) pays on every function. `numBlocks` is the
-	// "not defined in this function" sentinel — no real block index equals it.
-	export var defBlock as CfgIndexArray
+// What reads a value at a use site.
+//
+//  • `op` — an ordinary operand of an op in the block's body.
+//  • `edge` — a branch-edge ARG (a phi operand). It is read on the EDGE, i.e. after every body op
+//    of the predecessor: SSA destruction materializes it as a parallel copy at the predecessor's
+//    end. An edge arg is therefore a genuine use, and one the cold-spill splitter MUST rewrite — a
+//    reload that fixes up only the op uses leaves the edge still naming the ORIGINAL value, which
+//    keeps that original live to the block's end. It would then STILL be live across the peak, the
+//    spill would not lower the pressure there, and the splitter would re-pick the same value
+//    forever. This is the exact shape of every loop-carried accumulator (`sum = sum + f(i)`), so it
+//    is the common case, not a corner.
+export enum UseKind
+	op
+	edge
+end 'UseKind'
 
-	static function create(start CfgIndexArray, blocks CfgIndexArray, onEdge BoolArray, defBlock CfgIndexArray) returns UseIndex
-		return Self{start: start, blocks: blocks, onEdge: onEdge, defBlock: defBlock}
+// Where a value comes into existence — the ONE lookup unifying the two ways a Target value is
+// defined, so the liveness walk's stop test, the splitter's store anchor, and its spillability gate
+// cannot drift on it.
+//
+//  • `opDef`  — an ordinary operand write, at a known op in a known block.
+//  • `phiDef` — a block-arg. Its def is its block's ENTRY: it arrives in its register via the edge
+//    copies SSA destruction places at the predecessors' ends, so there is no op to point at.
+//
+// Every value in a function is one or the other, so `none` means it is not defined here at all.
+export union ValueDefSite
+	none
+	opDef(opIdx OpIndex, blockLocal CfgIndex)
+	phiDef(blockLocal CfgIndex)
+end 'ValueDefSite'
+
+// THE function's per-value index: every question the allocator asks about a value, answered from a
+// dense column or a CSR range instead of a walk of the function.
+//
+// Built ONCE per liveness computation, in two passes (count, prefix-sum, place — a counting sort:
+// no comparison sort, no hashing, no per-value heap object), and consumed by BOTH clients:
+//
+//  • the SSA liveness walk, which asks which BLOCKS read a value and where its def is;
+//  • the cold-spill splitter, which asks all of that plus the op and the layout SEQUENCE of each
+//    use, and the handful of per-value flags its victim-eligibility gates test.
+//
+// It is ONE index because those are one traversal of the function. The splitter previously answered
+// every one of its questions with its own walk — per candidate value, per split — which made it
+// O(candidates × blocks × ops) per split and 61% of register allocation whenever it ran.
+//
+// USE granularity is per-OP, not per-operand: an op reading a value twice yields ONE use site, and a
+// block passing a value to several phis (or on several edges) yields ONE edge use, emitted LAST for
+// that block at the terminator's sequence number — where the edge is genuinely read. That is the
+// granularity a split's before/after-the-peak partition is stated in, and it is strictly less work
+// for the liveness walk, whose memo would have discarded the duplicates anyway.
+export type UseIndex
+	export var valueCount as ValueId
+	export var numBlocks as CfgIndex
+	// Layout-ordered op count: body ops + terminators, over all blocks.
+	export var totalOps as ByteCount
+
+	// Use sites. The RECORDS are four parallel columns in LAYOUT order; `useCsr` groups them by
+	// value id — `useCsr` node `v`'s neighbours are the record indices of `v`'s uses. `buildCsr`
+	// preserves push order within a key, and the records are pushed in layout order, so a value's
+	// uses come out in ascending SEQUENCE: the order every consumer reads them in, and the order a
+	// split's before/after-the-peak partition depends on.
+	var useCsr as CsrGraph
+	var useBlock as CfgIndexArray
+	var useOpIdx as OpIndexArray
+	var useSeq as CfgIndexArray
+	var useOnEdge as BoolArray
+
+	// Def site: an op def (`hasOpDef` + where), a phi (`isPhi` + its block), or neither.
+	var hasOpDef as BoolArray
+	var defOpIdx as OpIndexArray
+	var defOpBlock as CfgIndexArray
+	var isPhi as BoolArray
+	var phiBlock as CfgIndexArray
+
+	// Passed to a phi on some branch edge.
+	var edgePassed as BoolArray
+	// Some `storeSlotReg` already spills it (an earlier splitter iteration split it).
+	var spillStored as BoolArray
+	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
+	var touchesLoop as BoolArray
+
+	// Global layout sequence -> module op index (the inverse of the numbering above).
+	var opBySeq as OpIndexArray
+
+	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps ByteCount, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
+		return Self{valueCount: valueCount, numBlocks: numBlocks, totalOps: totalOps, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq}
 	end 'create'
 
-	export function defBlockOf(v ValueId) returns CfgIndex
-		return try self.defBlock.get(v) otherwise panic("UseIndex.defBlockOf: value {v} out of range")
+	// How many use sites `valueId` has. Walk them with `useRecordAt(valueId, k)` for k in 0..count.
+	export function useCount(valueId ValueId) returns ByteCount
+		return self.useCsr.degree(valueId)
+	end 'useCount'
+
+	// The record index of `valueId`'s `k`-th use — the key the four `use*At` columns are read with.
+	export function useRecordAt(valueId ValueId, k ByteCount) returns ByteCount
+		return self.useCsr.neighbour(valueId, k: k)
+	end 'useRecordAt'
+
+	export function useBlockAt(record ByteCount) returns CfgIndex
+		return try self.useBlock.get(record) otherwise panic("UseIndex.useBlockAt: use record {record} out of range")
+	end 'useBlockAt'
+
+	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
+	// the edge is read after every body op).
+	export function useOpAt(record ByteCount) returns OpIndex
+		return try self.useOpIdx.get(record) otherwise panic("UseIndex.useOpAt: use record {record} out of range")
+	end 'useOpAt'
+
+	export function useSeqAt(record ByteCount) returns ByteCount
+		return try self.useSeq.get(record) otherwise panic("UseIndex.useSeqAt: use record {record} out of range")
+	end 'useSeqAt'
+
+	export function useKindAt(record ByteCount) returns UseKind
+		let onEdge = try self.useOnEdge.get(record) otherwise panic("UseIndex.useKindAt: use record {record} out of range")
+		return UseKind.edge if onEdge else UseKind.op
+	end 'useKindAt'
+
+	// The module op index at global layout sequence `seq`.
+	export function opAtSequence(seq ByteCount) returns OpIndex
+		return try self.opBySeq.get(seq) otherwise panic("UseIndex.opAtSequence: sequence {seq} past the end of the function")
+	end 'opAtSequence'
+
+	// True iff `valueId` is a block-arg (phi) of any block in the function.
+	export function isPhiValue(valueId ValueId) returns bool
+		return try self.isPhi.get(valueId) otherwise panic("UseIndex.isPhiValue: value {valueId} out of range")
+	end 'isPhiValue'
+
+	// True iff `valueId` is passed to a phi on some branch edge (a use on an edge, not at an op).
+	export function isEdgePassed(valueId ValueId) returns bool
+		return try self.edgePassed.get(valueId) otherwise panic("UseIndex.isEdgePassed: value {valueId} out of range")
+	end 'isEdgePassed'
+
+	// True iff some `storeSlotReg` already spills `valueId`.
+	export function hasSpillStore(valueId ValueId) returns bool
+		return try self.spillStored.get(valueId) otherwise panic("UseIndex.hasSpillStore: value {valueId} out of range")
+	end 'hasSpillStore'
+
+	// True iff `valueId`'s def block and every block that touches it as an op operand are at loop
+	// depth 0 — the shape a COLD spill needs.
+	export function defAndUsesAtDepthZero(valueId ValueId) returns bool
+		return not (try self.touchesLoop.get(valueId) otherwise panic("UseIndex.defAndUsesAtDepthZero: value {valueId} out of range"))
+	end 'defAndUsesAtDepthZero'
+
+	export function defSiteOf(valueId ValueId) returns ValueDefSite
+		let opDefined = try self.hasOpDef.get(valueId) otherwise panic("UseIndex.defSiteOf: value {valueId} out of range")
+		if opDefined 'opDefined'
+			let opIdx = try self.defOpIdx.get(valueId) otherwise panic("UseIndex.defSiteOf: defOpIdx.get OOB")
+			return ValueDefSite.opDef(opIdx, blockLocal: try self.defOpBlock.get(valueId) otherwise panic("UseIndex.defSiteOf: defOpBlock.get OOB"))
+		end 'opDefined'
+
+		if self.isPhiValue(valueId) 'phiDefined'
+			return ValueDefSite.phiDef(try self.phiBlock.get(valueId) otherwise panic("UseIndex.defSiteOf: phiBlock.get OOB"))
+		end 'phiDefined'
+
+		return ValueDefSite.none
+	end 'defSiteOf'
+
+	// The block a value is defined in (an op def's block, or a phi's own block); panics for a value
+	// this function does not define at all.
+	export function defBlockOf(valueId ValueId) returns CfgIndex
+		match self.defSiteOf(valueId) 'site'
+			opDef(_, blockLocal) then return blockLocal
+			phiDef(blockLocal) then return blockLocal
+			none then panic("UseIndex.defBlockOf: value {valueId} has neither an op def nor a phi block")
+		end 'site'
 	end 'defBlockOf'
+
+	// The block a value is defined in, or `numBlocks` when this function does not define it — the
+	// liveness walk's stop test, which must terminate on a value it never sees a def for rather than
+	// panic (an undefined value is simply live all the way up to the entry).
+	export function defBlockOrNone(valueId ValueId) returns CfgIndex
+		match self.defSiteOf(valueId) 'site'
+			opDef(_, blockLocal) then return blockLocal
+			phiDef(blockLocal) then return blockLocal
+			none then return self.numBlocks
+		end 'site'
+	end 'defBlockOrNone'
+
+	// The module op index of the value's def, panicking if absent (callers have already established
+	// the value has an op def).
+	export function requireDefOp(valueId ValueId) returns OpIndex
+		match self.defSiteOf(valueId) 'site'
+			opDef(opIdx, _) then return opIdx
+			phiDef then panic("UseIndex.requireDefOp: value {valueId} is a phi, not an op def")
+			none then panic("UseIndex.requireDefOp: value {valueId} has no op def")
+		end 'site'
+	end 'requireDefOp'
 end 'UseIndex'
 
-// Build the use index AND the def-block column: count uses per value (recording defs on the way),
-// prefix-sum, then fill. Two passes over the function, no sorting, no hashing.
-function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId) returns UseIndex
-	var start = zeroColumn(valueCount + 1)
-	var defBlock = filledColumn(valueCount, value: cfg.numBlocks)
+// A fresh BoolArray of `count` false entries (`resize` zero-fills).
+function falseColumn(count ByteCount) returns BoolArray
+	var col = BoolArray.create()
+	col.resize(count)
+	return col
+end 'falseColumn'
+
+// Build the index in ONE pass over the function: push a flat RECORD per use site (in layout order)
+// alongside its owning value, record every def / flag / layout sequence number on the way, then let
+// the shared `buildCsr` counting sort group the records by value id.
+//
+// `buildCsr` is the SAME counting sort M5.14 hoisted out of this file, the colorer, and
+// PruneDeadBlockArgs; grouping four parallel record columns is exactly the "key -> many values"
+// shape it exists for, once the CSR's `list` holds RECORD INDICES rather than the values themselves.
+// It preserves push order within a key, which is what keeps a value's uses in ascending sequence.
+export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId) returns UseIndex
+	var hasOpDef = falseColumn(valueCount)
+	var defOpIdx = zeroColumn(valueCount)
+	var defOpBlock = zeroColumn(valueCount)
+	var isPhi = falseColumn(valueCount)
+	var phiBlock = zeroColumn(valueCount)
+	var edgePassed = falseColumn(valueCount)
+	var spillStored = falseColumn(valueCount)
+	var touchesLoop = falseColumn(valueCount)
+	var opBySeq = OpIndexArray.create()
+
+	// The use RECORDS, pushed in layout order. `recordValue` is the CSR key column and `recordIndex`
+	// the value column, so the CSR's neighbour lists come out as record indices.
+	var recordValue = CsrColumn.create()
+	var recordIndex = CsrColumn.create()
+	var useBlock = CfgIndexArray.create()
+	var useOpIdx = OpIndexArray.create()
+	var useSeq = CfgIndexArray.create()
+	var useOnEdge = BoolArray.create()
+
+	// "Has this block already recorded an EDGE use of this value?" — a VERSION STAMP holding
+	// `blockLocal + 1`, so it needs no clearing between blocks (clearing would be O(blocks × values),
+	// the very cost this index exists to remove). A block passing one value to several phis, or to
+	// phis on several edges, still yields exactly ONE edge use — the granularity a split's partition
+	// needs.
+	var edgeStamp = zeroColumn(valueCount)
+
 	var buf = OperandList.create()
 	var ordered = OpIndexArray.create()
+	var seq = 0 as ByteCount
 
-	// Pass 1 — degree of each value into start[v+1], and each value's def block.
-	for i in 0 upto cfg.numBlocks 'countBlock'
+	for i in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: i)
+		let inLoop = (try cfg.loopDepth.get(i) otherwise panic("buildUseIndex: loopDepth.get OOB")) != 0
+
 		for arg in block.blockArgs 'eachPhi'
-			try defBlock.set(arg.valueId, value: i) otherwise panic("buildUseIndex: defBlock.set OOB for phi {arg.valueId}")
+			try isPhi.set(arg.valueId, value: true) otherwise panic("buildUseIndex: isPhi.set OOB for phi {arg.valueId}")
+			try phiBlock.set(arg.valueId, value: i) otherwise panic("buildUseIndex: phiBlock.set OOB for phi {arg.valueId}")
 		end 'eachPhi'
 
 		ordered.clear()
 		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
+		let opCount = ordered.count()
+		for pos in 0 upto opCount 'eachOp'
+			let opIdx = try ordered.get(pos) otherwise panic("buildUseIndex: ordered.get OOB")
+			opBySeq.push(opIdx)
+
 			let op = try module.ops.get(opIdx) otherwise panic("buildUseIndex: opIdx not in module.ops")
 			targetOpOperands(op, buf: buf)
-			for o in buf 'eachOperand'
+			let isStore = opIsSpillStore(op)
+
+			for k in 0 upto buf.count() 'eachOperand'
+				let o = try buf.get(k) otherwise panic("buildUseIndex: buf.get OOB")
 				if not operandIsVirtual(o) 'physical'
 					continue
 				end 'physical'
+				let v = operandValueId(o)
+
+				if inLoop 'insideLoop'
+					try touchesLoop.set(v, value: true) otherwise panic("buildUseIndex: touchesLoop.set OOB for value {v}")
+				end 'insideLoop'
+
 				if operandIsDef(o) 'def'
-					try defBlock.set(operandValueId(o), value: i) otherwise panic("buildUseIndex: defBlock.set OOB")
-				end 'def' else 'use'
-					bumpCount(start, at: operandValueId(o) + 1)
-				end 'use'
+					try hasOpDef.set(v, value: true) otherwise panic("buildUseIndex: hasOpDef.set OOB for value {v}")
+					try defOpIdx.set(v, value: opIdx) otherwise panic("buildUseIndex: defOpIdx.set OOB for value {v}")
+					try defOpBlock.set(v, value: i) otherwise panic("buildUseIndex: defOpBlock.set OOB for value {v}")
+					continue
+				end 'def'
+
+				if isStore 'spillStore'
+					try spillStored.set(v, value: true) otherwise panic("buildUseIndex: spillStored.set OOB for value {v}")
+				end 'spillStore'
+
+				if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
+					pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: v, blockLocal: i, opIdx: opIdx, seq: seq + pos, onEdge: false)
+				end 'firstOccurrence'
 			end 'eachOperand'
 		end 'eachOp'
+
+		// The EDGE uses go LAST for this block, at the terminator's sequence — where the edge is
+		// genuinely read (after every body op). That ordering is what lets the reload a split places
+		// before the block's first after-peak use dominate the edge too.
 		for edge in block.branchEdges 'eachEdge'
 			for argId in edge.argIds 'eachArg'
-				bumpCount(start, at: argId + 1)
+				try edgePassed.set(argId, value: true) otherwise panic("buildUseIndex: edgePassed.set OOB for value {argId}")
+				if alreadyStampedForBlock(edgeStamp, valueId: argId, blockLocal: i) 'dedupe'
+					continue
+				end 'dedupe'
+				if opCount == 0 'noTerminator'
+					panic("buildUseIndex: block local {i} ('{block.label}') passes value {argId} on a branch edge but has no ops to branch with")
+				end 'noTerminator'
+				let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("buildUseIndex: ordered.get OOB")
+				pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: argId, blockLocal: i, opIdx: lastOpIdx, seq: seq + opCount - 1, onEdge: true)
 			end 'eachArg'
 		end 'eachEdge'
-	end 'countBlock'
 
-	for v in 0 upto valueCount 'prefix'
-		let a = try start.get(v) otherwise panic("buildUseIndex: prefix start.get(v) OOB")
-		let b = try start.get(v + 1) otherwise panic("buildUseIndex: prefix start.get(v+1) OOB")
-		try start.set(v + 1, value: a + b) otherwise panic("buildUseIndex: prefix start.set OOB")
-	end 'prefix'
+		seq = seq + opCount
+	end 'eachBlock'
 
-	let useCount = try start.get(valueCount) otherwise panic("buildUseIndex: start.get(valueCount) OOB")
-	var blocks = zeroColumn(useCount)
-	var onEdge = BoolArray.create()
-	onEdge.resize(useCount)
-
-	// A running fill cursor per value, seeded from start[v].
-	var fill = zeroColumn(valueCount)
-	for v in 0 upto valueCount 'seedFill'
-		try fill.set(v, value: try start.get(v) otherwise panic("buildUseIndex: seedFill start.get OOB")) otherwise panic("buildUseIndex: seedFill set OOB")
-	end 'seedFill'
-
-	// Pass 2 — place each use.
-	for i in 0 upto cfg.numBlocks 'placeBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		ordered.clear()
-		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("buildUseIndex: opIdx not in module.ops")
-			targetOpOperands(op, buf: buf)
-			for o in buf 'eachOperand'
-				if (not operandIsDef(o)) and operandIsVirtual(o) 'use'
-					placeUse(fill, blocks: blocks, onEdge: onEdge, v: operandValueId(o), blockLocal: i, edge: false)
-				end 'use'
-			end 'eachOperand'
-		end 'eachOp'
-		for edge in block.branchEdges 'eachEdge'
-			for argId in edge.argIds 'eachArg'
-				placeUse(fill, blocks: blocks, onEdge: onEdge, v: argId, blockLocal: i, edge: true)
-			end 'eachArg'
-		end 'eachEdge'
-	end 'placeBlock'
-
-	return UseIndex.create(start, blocks: blocks, onEdge: onEdge, defBlock: defBlock)
+	let useCsr = buildCsr(recordValue, to: recordIndex, nodeCount: valueCount)
+	return UseIndex.create(valueCount, numBlocks: cfg.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq)
 end 'buildUseIndex'
 
-function bumpCount(column CfgIndexArray, at ByteCount)
-	let cur = try column.get(at) otherwise panic("bumpCount: index {at} out of range")
-	try column.set(at, value: cur + 1) otherwise panic("bumpCount: index {at} out of range")
-end 'bumpCount'
+// Append one use record and its CSR key. The record's index IS its position in the four parallel
+// columns, so the CSR built from (value, index) groups the records by value with no extra table.
+function pushUseRecord(recordValue CsrColumn, recordIndex CsrColumn, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, v ValueId, blockLocal CfgIndex, opIdx OpIndex, seq ByteCount, onEdge bool)
+	recordValue.push(v)
+	recordIndex.push(useBlock.count())
+	useBlock.push(blockLocal)
+	useOpIdx.push(opIdx)
+	useSeq.push(seq)
+	useOnEdge.push(onEdge)
+end 'pushUseRecord'
 
-function placeUse(fill CfgIndexArray, blocks CfgIndexArray, onEdge BoolArray, v ValueId, blockLocal CfgIndex, edge bool)
-	let pos = try fill.get(v) otherwise panic("placeUse: fill.get OOB for value {v}")
-	try blocks.set(pos, value: blockLocal) otherwise panic("placeUse: blocks.set OOB")
-	try onEdge.set(pos, value: edge) otherwise panic("placeUse: onEdge.set OOB")
-	try fill.set(v, value: pos + 1) otherwise panic("placeUse: fill.set OOB")
-end 'placeUse'
+// Has `blockLocal` already recorded an edge use of `valueId`? Stamps it if not. The stamp holds
+// `blockLocal + 1` so 0 means "never stamped" and no clearing between blocks is needed.
+function alreadyStampedForBlock(stamp CfgIndexArray, valueId ValueId, blockLocal CfgIndex) returns bool
+	let cur = try stamp.get(valueId) otherwise panic("alreadyStampedForBlock: stamp.get OOB for value {valueId}")
+	if cur == blockLocal + 1 'already'
+		return true
+	end 'already'
+	try stamp.set(valueId, value: blockLocal + 1) otherwise panic("alreadyStampedForBlock: stamp.set OOB for value {valueId}")
+	return false
+end 'alreadyStampedForBlock'
+
+// Is operand `k` the FIRST virtual USE of its value in this op? An op reading one value twice must
+// still yield ONE use site — the per-OP granularity a split's before/after-the-peak partition is
+// stated in. Operand lists are at most four entries, so the inner scan is a constant.
+function isFirstUseOfValueInOp(buf OperandList, upto ByteCount, valueId ValueId) returns bool
+	for j in 0 upto upto 'earlier'
+		let o = try buf.get(j) otherwise panic("isFirstUseOfValueInOp: buf.get OOB")
+		if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'seenAlready'
+			return false
+		end 'seenAlready'
+	end 'earlier'
+	return true
+end 'isFirstUseOfValueInOp'
 
 // A (block, value) membership pair, accumulated flat during the walk and bucketed into CSR at the
 // end — the cheapest way to build a sparse set whose size is not known in advance. Two parallel
@@ -791,9 +1037,7 @@ type LivenessWalk
 end 'LivenessWalk'
 
 // Compute the SPARSE per-block live-in/live-out sets by walking backward from every use to its def.
-function solveLivenessSsa(module TargetModule, cfg FuncCfg, valueCount ValueId) returns LivenessWalk
-	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount)
-
+function solveLivenessSsa(cfg FuncCfg, useIndex UseIndex, valueCount ValueId) returns LivenessWalk
 	// "Is v already marked live-in to (respectively live-out of) block B?" — VERSION STAMPS, not
 	// bitsets. Storing `v + 1` means the memo needs no clearing between values; clearing would be
 	// O(blocks) per value, i.e. the very O(blocks × values) term this algorithm exists to remove.
@@ -807,22 +1051,23 @@ function solveLivenessSsa(module TargetModule, cfg FuncCfg, valueCount ValueId) 
 	var markSteps = 0 as ByteCount
 
 	for v in 0 upto valueCount 'eachValue'
-		let useStart = try useIndex.start.get(v) otherwise panic("solveLivenessSsa: useIndex.start.get OOB")
-		let useEnd = try useIndex.start.get(v + 1) otherwise panic("solveLivenessSsa: useIndex.start.get(v+1) OOB")
-		if useStart == useEnd 'neverUsed'
+		let useCount = useIndex.useCount(v)
+		if useCount == 0 'neverUsed'
 			// A dead value (a def nothing reads). It is live nowhere — no walk to run.
 			continue
 		end 'neverUsed'
 
+		let defBlock = useIndex.defBlockOrNone(v)
 		worklist.clear()
-		for k in useStart upto useEnd 'eachUse'
-			let useBlock = try useIndex.blocks.get(k) otherwise panic("solveLivenessSsa: useIndex.blocks.get OOB")
-			let isEdgeUse = try useIndex.onEdge.get(k) otherwise panic("solveLivenessSsa: useIndex.onEdge.get OOB")
-			if isEdgeUse 'edgeArg'
+		for j in 0 upto useCount 'eachUse'
+			let record = useIndex.useRecordAt(v, k: j)
+			let useBlock = useIndex.useBlockAt(record)
+			match useIndex.useKindAt(record) 'kind'
 				// Read ON the edge, so it is live at the END of this predecessor — and the walk up
 				// starts HERE, not in the phi's block (the phi is a different value).
-				markLiveOut(outPairs, stamp: liveOutStamp, blockLocal: useBlock, v: v)
-			end 'edgeArg'
+				edge then markLiveOut(outPairs, stamp: liveOutStamp, blockLocal: useBlock, v: v)
+				op then break 'kind'
+			end 'kind'
 			worklist.push(useBlock)
 		end 'eachUse'
 
@@ -843,7 +1088,7 @@ function solveLivenessSsa(module TargetModule, cfg FuncCfg, valueCount ValueId) 
 			//     are different values with their own walks.
 			//
 			// One rule covers both, which is why the def's KIND never needs to be recorded.
-			if useIndex.defBlockOf(v) == b 'reachedDef'
+			if defBlock == b 'reachedDef'
 				continue
 			end 'reachedDef'
 
@@ -1240,6 +1485,18 @@ function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, im
 		end 'virt'
 	end 'each'
 end 'forbidOperandsFromImplicit'
+
+// True for a spill STORE. Two consumers, and both need exactly this predicate: `buildUseIndex`
+// marks the value it reads as already-spilled (the splitter's double-spill guard), and the
+// splitter's use-rewriter must leave it alone — a store deliberately reads the ORIGINAL value, so
+// repointing it at the reload would make it read a value defined later.
+export function opIsSpillStore(op TargetOp) returns bool
+	return match op 'k'
+		storeSlotReg gives true
+		prologue to popReg gives false
+		loadRegSlot gives false
+	end 'k'
+end 'opIsSpillStore'
 
 // The block's ops in execution order: body `opRefs` then the terminator op.
 export function collectBlockOps(block IrBlock, out OpIndexArray)

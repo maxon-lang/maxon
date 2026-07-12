@@ -50,14 +50,31 @@ where its own live set fits the pool, so a store never itself overflows.
 
 ### Splitting at the eviction point
 
-A value's live range is split **at the peak**, not shipped whole to memory. The store
-goes after the value's last use *before* the peak (or at its def when it is idle before
-the peak); the reload goes before its next use *after* the peak, and only the after-peak
-uses are rewritten to the reload — the before-peak uses keep the original value in its
-register. This makes the value **dead across the peak**, which is what frees the register
-there and actually lowers peak pressure. A value used both before and after a peak is the
-case that forces this: reloading before its *first* use would leave the reloaded value
-spanning the peak, so pressure would never drop.
+A value's live range is split **at the peak**, not shipped whole to memory. The store goes
+at the value's **def**; the reload goes before its next use *after* the peak, and only the
+after-peak uses are rewritten to the reload — the before-peak uses keep the original value
+in its register. This makes the value **dead across the peak**, which is what frees the
+register there and actually lowers peak pressure. A value used both before and after a peak
+is the case that forces this: reloading before its *first* use would leave the reloaded
+value spanning the peak, so pressure would never drop.
+
+**The store anchors at the DEF because that is the only point guaranteed to DOMINATE every
+reload** (by SSA, Rule 1). Anchoring it after the value's last *before-peak use* — which
+merely *precedes* the peak in layout order — is unsound: layout order is not dominance, so
+that use can sit in a block (the `then` arm of an `if`) that never runs on the path reaching
+the reload, leaving the slot unwritten; and if the use is a branch-edge **arg**, its anchor
+op is the block's terminator, which a store cannot follow at all. Anchoring at the def also
+emits strictly better code — a value defined outside a loop but used inside it before the
+loop's peak stores **once**, rather than every iteration.
+
+### A remat must kill the value at the peak, exactly as a spill must
+
+Rematerialization partitions a value's uses around the peak the same way a spill does: the
+after-peak uses are re-emitted as fresh copies, the before-peak uses keep the original. So
+the original is dead across the peak under precisely the same condition, and remat is gated
+on the same `killsValueAtPeak` test. A constant whose only use *precedes* the peak in layout
+order but which is live across it **around a back edge** re-emits nothing, relieves nothing,
+and would be re-picked forever.
 
 ### Multiple splits across disjoint peaks
 
@@ -209,7 +226,7 @@ end 'main'
 <!-- test: used-before-and-after-peak -->
 `a1` is used BEFORE a high-pressure peak (`w = a1 + p`) and AGAIN after it (`z = a1 + peak`),
 while fifteen other values (`b1`..`b15`) are live at the peak. The splitter splits `a1`'s live
-range AT the peak — storing it after its pre-peak use and reloading it before its post-peak use,
+range AT the peak — storing it at its DEF and reloading it before its post-peak use,
 rewriting only the post-peak use — so `a1` is dead across the peak (freeing its register there)
 and the pre-peak use keeps the original value. (Reloading before the FIRST use instead would
 leave the reloaded value spanning the peak, so pressure would never drop and the splitter could
@@ -538,6 +555,108 @@ end 'f'
 function main() returns ExitCode
 	let r = f(0)
 	if r == 326 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: remat-constant-live-only-around-the-back-edge -->
+A REMAT victim must be killed at the peak, exactly as a spill victim must — and this is the
+program that proves it. The divisor `c` is a constant that needs a register (an `idiv` divisor
+cannot be an immediate), and its ONLY use is the loop header's `i mod c`, which sits BEFORE the
+loop body's call in layout order. But the header is re-entered around the BACK EDGE, so `c` is
+live across the body's peak all the same.
+
+Rematerializing `c` there re-emits it before each use AFTER the peak — and it has none. So the
+old splitter emitted nothing, dropped nothing, relieved nothing, and the next iteration re-picked
+the same value: it spun until the runaway bound panicked ("did not converge after 1416 splits").
+`isRematVictim` now applies the same `killsValueAtPeak` gate the spill path has, so `c` is
+refused and the peak is relieved by a forced bracket on an accumulator instead.
+
+`loopDivisor(1)`: `a1..a6 = 2..7`, and the loop runs for `i = 0, 1, 2` (it exits at `i = 3`,
+where `3 mod 7 = 3` is not `< 3`), leaving `a1..a6 = 8, 19, 40, 76, 133, 218` — a sum of 494.
+```maxon
+function leaf(x int) returns int
+	return x + 1
+end 'leaf'
+
+function loopDivisor(p int) returns int
+	let c = 7
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var a5 = p + 5
+	var a6 = p + 6
+	var i = 0
+	while i mod c < 3 'loop'
+		a1 = a1 + leaf(i)
+		a2 = a2 + a1
+		a3 = a3 + a2
+		a4 = a4 + a3
+		a5 = a5 + a4
+		a6 = a6 + a5
+		i = i + 1
+	end 'loop'
+	return a1 + a2 + a3 + a4 + a5 + a6
+end 'loopDivisor'
+
+function main() returns ExitCode
+	let r = loopDivisor(1)
+	if r == 494 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: forced-spill-with-edge-arg-before-the-peak -->
+THE STORE ANCHOR IS THE DEF, and this program is why. `t` is used once BEFORE the call's peak —
+as the branch-edge ARG the `then` arm passes to `m`'s merge phi — and once after it, in the
+return sum. The old splitter anchored a store "after the value's last before-peak use", which
+here is an EDGE arg whose anchor op is the block's TERMINATOR: a store cannot be spliced after a
+terminator, and the splitter panicked outright (`positionInBlock: op N not in block 'br' opRefs`).
+
+Anchoring at the last before-peak use was unsound even when it did not crash: the `then` block
+does not DOMINATE the merge, so the store would never run on the `else` path and the reload after
+the call would read an unwritten slot. The def dominates every use of a value by SSA (Rule 1), so
+it is the only anchor that always dominates every reload.
+
+`edgeAnchor(1, 2)`: `t = 3`, `a1..a8 = 2..9` (sum 44), `p > 0` so `m = t = 3`, and `r = leaf(1) =
+2` — giving `44 + 3 + 2 + 3 = 52`.
+```maxon
+function leaf(x int) returns int
+	return x + 1
+end 'leaf'
+
+function edgeAnchor(p int, q int) returns int
+	let t = p + q
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var a5 = p + 5
+	var a6 = p + 6
+	var a7 = p + 7
+	var a8 = p + 8
+	var m = 0
+	if p > 0 'br'
+		m = t
+	end 'br'
+	let r = leaf(p)
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + m + r + t
+end 'edgeAnchor'
+
+function main() returns ExitCode
+	let v = edgeAnchor(1, q: 2)
+	if v == 52 'ok'
 		return 0
 	end 'ok'
 	return 99

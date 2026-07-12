@@ -62,14 +62,39 @@
 // x64-specific mask here. `maxPressure ≤ pool` is therefore NECESSARY but NOT SUFFICIENT; the
 // peak-finder (`analyzePressure`) checks each op against its OWN reduced pool.
 //
-// A NECESSARY-simplicity note: unlike the design's single-sweep Braun–Hack MIN, this recomputes
-// liveness once per split. For M5's programs (the splitter fires only on genuinely pressured
-// functions and spills a handful of values) that is correct and cheap; a single-sweep rewrite
-// is the natural Phase-F performance follow-on (documented, not skipped).
+// ==========================================================================
+// PERFORMANCE: EVERY PER-VALUE QUESTION IS ANSWERED FROM AN INDEX, NEVER A SCAN
+// ==========================================================================
+//
+// `chooseVictim` asks the same handful of questions — "where is it defined?", "where is it
+// used?", "is it a phi?", "is it edge-passed?", "is it already stored?", "does it touch a
+// loop?" — of EVERY value crossing the peak. Answering each with its own walk of the function
+// made the splitter O(candidates × blocks × ops) PER SPLIT, and it was 61% of register
+// allocation whenever it ran. The function's `UseIndex` (TargetLiveness) answers all of them in O(1) (or O(uses of the one
+// value)) from dense columns + a CSR use list keyed by value id, built in ONE pass over the
+// function — the same counting-sort idiom as `TargetLiveness.buildUseIndex`, and for the same
+// reason. The general rule that section states holds here too: **a sparse set is never walked
+// by iterating the whole value space** — `chooseVictim`'s candidates come from
+// `bitsetCollectRow` over the peak's live set, not from `for v in 0 upto valueCount`.
+//
+// HOW THE INDEX STAYS CORRECT ACROSS THE SPLITTER'S IR MUTATIONS: it is not maintained — it is
+// a per-iteration SNAPSHOT, rebuilt (with liveness) after every split. Within one iteration the
+// ONE consumer that runs while the IR is being mutated is `spillValue` / `rematerializeConstant`,
+// and it reads only the two fields that are STABLE under the mutations they make: an op's
+// `module.ops` index (the table is append-only, so an existing index never moves) and a use's
+// owning block (insertion never moves an op between blocks). Everything positional — a
+// `block.opRefs` position, a global layout sequence number — is re-derived at the point of use,
+// exactly as the pre-index code did with its own use-site snapshot. So a split cannot read a stale
+// index, because nothing it reads can go stale.
+//
+// A NECESSARY-simplicity note: unlike the design's single-sweep Braun–Hack MIN, this still
+// recomputes LIVENESS once per split (the CFG itself is invariant under splitting and IS hoisted
+// out of the loop — see `splitLiveRanges`). Making liveness incremental would need the per-block
+// live sets to be editable in place, which the CSR representation is deliberately not; that is
+// the remaining super-linear term (O(function × splits)) and the natural next step.
 
 // The fresh value id a `loadRegSlot` defines, paired with the slot it reads and the ORIGINAL
-// spilled value it reloads — the AllocChecker's teeth against a wrong-slot reload. Sparse
-// (one per reload), looked up by the reload's fresh value id, mirroring `reuseCopyForOp`.
+// spilled value it reloads — the AllocChecker's teeth against a wrong-slot reload.
 export type ReloadOrigin
 	export var reloadValueId as ValueId
 	export var slot as SpillSlot
@@ -89,14 +114,60 @@ export union ReloadOriginLookup
 	origin(slot SpillSlot, originalValueId ValueId)
 end 'ReloadOriginLookup'
 
-export function reloadOriginOf(origins ReloadOriginArray, reloadValueId ValueId) returns ReloadOriginLookup
-	for o in origins 'each'
-		if o.reloadValueId == reloadValueId 'match'
-			return ReloadOriginLookup.origin(o.slot, originalValueId: o.originalValueId)
-		end 'match'
-	end 'each'
-	return ReloadOriginLookup.none
-end 'reloadOriginOf'
+// The reload origins, INDEXED — two dense columns, so the AllocChecker's per-op questions are
+// O(1) rather than a scan of every origin. It asks two of them, once per spill op:
+//
+//  • `originOf(freshId)` at every `loadRegSlot` — a linear scan here was O(reloads × origins).
+//  • `storedValueOfSlot(slot)` at every `storeSlotReg` — the store-side half of the slot-chain
+//    identity check, which scanned every origin looking for ones naming this slot. Every spilled
+//    value gets its OWN slot, so all origins for a slot share one `originalValueId` and the
+//    column holds it directly; a future slot-COALESCING pass must revisit this (the invariant it
+//    would break is named in `AllocChecker.recordSpill`).
+//
+// On a spill-heavy program both scans were O(splits²), which is the same shape — and the same
+// mistake — as the per-candidate rescans the splitter itself had.
+export type ReloadOriginIndex
+	// freshValueId -> index into `origins`, or `origins.count()` for "not a reload".
+	var originByValue as CfgIndexArray
+	// slot -> the value stored there, or `noValue` for "nothing stored there yet".
+	var storedBySlot as ValueIdArray
+	var origins as ReloadOriginArray
+	var noValue as ValueId
+
+	export static function build(origins ReloadOriginArray, valueCount ValueId, slotCount SpillSlot) returns ReloadOriginIndex
+		let notAReload = origins.count()
+		var originByValue = filledColumn(valueCount, value: notAReload)
+		var storedBySlot = filledColumn(slotCount, value: valueCount)
+
+		for i in 0 upto origins.count() 'each'
+			let o = try origins.get(i) otherwise panic("ReloadOriginIndex.build: origins.get OOB")
+			try originByValue.set(o.reloadValueId, value: i) otherwise panic("ReloadOriginIndex.build: reload value {o.reloadValueId} is outside the function's value space")
+			try storedBySlot.set(o.slot, value: o.originalValueId) otherwise panic("ReloadOriginIndex.build: slot {o.slot} is outside the spill plan's slot count")
+		end 'each'
+
+		return Self{originByValue: originByValue, storedBySlot: storedBySlot, origins: origins, noValue: valueCount}
+	end 'build'
+
+	export function originOf(reloadValueId ValueId) returns ReloadOriginLookup
+		let i = try self.originByValue.get(reloadValueId) otherwise panic("ReloadOriginIndex.originOf: value {reloadValueId} out of range")
+		if i == self.origins.count() 'notAReload'
+			return ReloadOriginLookup.none
+		end 'notAReload'
+		let o = try self.origins.get(i) otherwise panic("ReloadOriginIndex.originOf: origins.get OOB")
+		return ReloadOriginLookup.origin(o.slot, originalValueId: o.originalValueId)
+	end 'originOf'
+
+	// The value every reload of `slot` claims to reload, or `noValue` when no reload reads it.
+	export function reloadedValueOfSlot(slot SpillSlot) returns ValueId
+		return try self.storedBySlot.get(slot) otherwise panic("ReloadOriginIndex.reloadedValueOfSlot: slot {slot} out of range")
+	end 'reloadedValueOfSlot'
+
+	// The "no reload reads this slot" marker `reloadedValueOfSlot` returns (a spilled value whose
+	// every use preceded the peak has a store but no reload).
+	export function noReloadOfSlot() returns ValueId
+		return self.noValue
+	end 'noReloadOfSlot'
+end 'ReloadOriginIndex'
 
 // The outcome of a lineage lookup: `source(id)` for a splitter-minted fresh value (the
 // value it derives from), `none` for any value the splitter did not mint. A union rather
@@ -116,8 +187,9 @@ end 'SplitLineageLookup'
 // reload, a value spilled then its reload rematerialized), which the diagnostic follows to a
 // value that DOES have a source origin (the original constant / spilled user value / a phi).
 //
-// Two dense scalar columns (fresh id, source id), pushed in lockstep, scanned linearly — the
-// COLD path (only the diagnostic asks), and a function mints a handful of fresh ids.
+// Two dense scalar columns (fresh id, source id), pushed in lockstep, scanned linearly. This
+// one genuinely IS cold and stays a scan: the ONLY caller is the E5001 diagnostic, which runs
+// once per compile and then THROWS — it is not on any path a successful compile takes.
 export type SplitLineage
 	var freshIds as ValueIdArray
 	var sourceIds as ValueIdArray
@@ -248,6 +320,10 @@ union SpillChoice
 	spill(valueId ValueId)
 end 'SpillChoice'
 
+// ==========================================================================
+// The driver
+// ==========================================================================
+
 // Split one function's live ranges so the colorer finds every program point within its pool.
 // Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and
 // returns the final liveness + the spill plan. Called by `allocateFunction` BEFORE coloring.
@@ -265,8 +341,19 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// for the reload SLOT identity `SplitLineage` does not carry).
 	var lineage = SplitLineage.create()
 	var nextSlot = 0 as SpillSlot
-	var liveness = timedLiveness(module, func: func, stats: stats)
-	var nextValueId = liveness.valueCount
+
+	// THE CFG IS INVARIANT UNDER SPLITTING, so it is built ONCE and reused by every liveness
+	// recomputation below. A split only ever inserts `storeSlotReg`/`loadRegSlot`/`movRegImm`
+	// BODY ops, rewrites operands, and repoints branch-edge ARGS — it never adds or removes a
+	// block, never changes a `jcc`/`jmp` target, and so cannot change the block set, the
+	// successor/predecessor edges, or the loop depths. Rebuilding it per split re-scanned the
+	// whole function, re-derived both CSR graphs, and re-ran the natural-loop walk once per loop
+	// header — a per-split cost proportional to the function that bought nothing. `valueCount` is
+	// the ONE thing that changes (fresh reload/remat ids), and the driver knows it exactly: every
+	// minted id is materialized by an op it inserts, so `nextValueId` IS what a rescan would find.
+	var cfg = buildFuncCfg(module, func: func)
+	var nextValueId = cfg.valueCount
+	var liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
 
 	// TERMINATION. Each iteration splits one value at the worst OVER-POOL op: the victim goes to
 	// memory ACROSS that op (dead there), so the op's pressure drops by exactly one, while NO other
@@ -280,8 +367,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// this cannot be reached by correct convergence — it converts a hypothetical non-terminating
 	// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
 	// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
-	let totalOps = totalTargetOpCount(module, cfg: liveness.cfg)
-	let iterationBound = totalOps * (liveness.valueCount + 1) + RegisterFileSize
+	let iterationBound = liveness.useIndex.totalOps * (liveness.valueCount + 1) + RegisterFileSize
 	var iterations = 0 as ByteCount
 
 	// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
@@ -297,21 +383,26 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		end 'runaway'
 		iterations = iterations + 1
 
-		nextValueId = maxOfCount(nextValueId, b: liveness.valueCount)
 		let peak = analysis.peak
 
-		let choice = chooseVictim(module, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, poolSize: poolSize)
+		let index = liveness.useIndex
+		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, poolSize: poolSize)
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
-			remat(v) then rematerializeConstant(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
-			spill(v) then nextSlot = spillValue(module, liveness: liveness, valueId: v, peakSeq: peak.peakSeq, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats, lineage: lineage, placement: placementOf(peak))
+			remat(v) then nextValueId = rematerializeConstant(module, index: index, cfg: cfg, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			spill(v) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats, lineage: lineage)
 		end 'act'
+		match choice 'countSlot'
+			spill then nextSlot = nextSlot + 1
+			none to remat then break 'countSlot'
+		end 'countSlot'
 
-		// The mutators minted fresh value ids beginning at `nextValueId`; the next
-		// `computeLiveness` re-derives the true value count (which now includes them), and the
-		// `maxOfCount` re-seed at the loop top advances `nextValueId` past them — so each
-		// iteration keeps minting fresh with no manual bookkeeping.
-		liveness = timedLiveness(module, func: func, stats: stats)
+		// The mutators minted fresh value ids beginning at `nextValueId` and returned the next free
+		// one; every such id is DEFINED by an op they inserted, so it is exactly what a rescan of the
+		// function would report as the new value count. Publishing it on the (reused) CFG is what
+		// re-sizes every value-indexed column of the next liveness + index build.
+		cfg.valueCount = nextValueId
+		liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
 		analysis = analyzePressure(module, liveness: liveness, pool: pool)
 	end 'relievePressure'
 
@@ -357,25 +448,19 @@ function noVictimAtPeak(project Project, module TargetModule, func IrFunction, f
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 end 'noVictimAtPeak'
 
-// `computeLiveness`, attributed to the LIVENESS phase rather than to SPLITTING.
+// `computeLivenessOn`, attributed to the LIVENESS phase rather than to SPLITTING.
 //
 // The splitter owns every liveness computation (it runs one up front and one after each split, and
 // hands the final result to the colorer), so without this the whole liveness pass was billed to
 // `splitting` — and `liveness` read 0.00ms on every program, which is exactly the "74% of
 // self-compile with ZERO sub-phase attribution" failure the design set out to avoid. On a large
 // function liveness, not splitting, is the dominant cost, and the numbers said the opposite.
-function timedLiveness(module TargetModule, func IrFunction, stats RegAllocStats) returns LivenessResult
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, stats RegAllocStats) returns LivenessResult
 	let t = Clock.nowMs()
-	let liveness = computeLiveness(module, func: func)
+	let liveness = computeLivenessOn(module, cfg: cfg, func: func)
 	stats.addPhaseMs(RegAllocPhase.liveness, ms: Clock.elapsedMs(t))
 	return liveness
 end 'timedLiveness'
-
-// A monotone helper for the fresh-id counter (a value count and a value id share the
-// `int(0 to u64.max)` domain).
-function maxOfCount(a ValueId, b ValueId) returns ValueId
-	return a if a >= b else b
-end 'maxOfCount'
 
 // ==========================================================================
 // The per-iteration pressure sweep (peak + def-point pressures)
@@ -440,8 +525,8 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		collectBlockOps(block, out: ordered)
 		let opCount = ordered.count()
 		// The sweep runs BACKWARD (to fold live-out into live-before). The GLOBAL sequence number
-		// must be the FORWARD layout position so it aligns with `opAtSeq` / `computeNextUseSeqs`
-		// (both forward): op at reverse-index `ri` sits at forward position `opCount - 1 - ri`.
+		// must be the FORWARD layout position so it aligns with `UseIndex`'s numbering (which is
+		// forward): op at reverse-index `ri` sits at forward position `opCount - 1 - ri`.
 		for ri in 0 upto opCount 'eachOpRev'
 			let forwardPos = opCount - 1 - ri
 			let opIdx = try ordered.get(forwardPos) otherwise panic("analyzePressure: ordered.get OOB")
@@ -583,25 +668,36 @@ end 'copyOfRow'
 // store YET — a spilled sibling must free a register first, which a later iteration does (its
 // `defLiveAfter` then drops). Remat has no store, so it carries no such constraint. `none` when
 // no candidate qualifies → HOT overflow (E5001, `raiseRegisterPressure`).
-function chooseVictim(module TargetModule, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, poolSize RegCount) returns SpillChoice
+//
+// The candidates are the SET BITS of the peak's live row, walked with `bitsetCollectRow` (which
+// yields them in ascending id order, so the strict-improvement tie-break below still resolves ties
+// to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
+// O(values) per split for an answer of size O(pressure), and every eligibility question it then
+// asked walked the whole function. That is what the `UseIndex` retires.
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, poolSize RegCount) returns SpillChoice
 	let valueCount = liveness.valueCount
 	let placement = placementOf(peak)
-	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak)
-	let nextUse = computeNextUseSeqs(module, liveness: liveness, peakSeq: peak.peakSeq, valueCount: valueCount)
+	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak)
+	var candidates = ValueIdArray.create()
+	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: candidates)
+
+	// `killsValueAtPeak` walks the CFG forward from the peak, stopping at the candidate's def
+	// block — so the walk depends only on that def block, and the candidates crossing one peak
+	// overwhelmingly share it (a loop's accumulators are all phis of the same header). Memoized
+	// per def block, the whole `chooseVictim` call costs a handful of walks instead of one per
+	// candidate.
+	var reach = ReachCache.create(liveness.cfg.numBlocks)
 
 	var bestRematId = valueCount
 	var bestRematNextUse = 0 as ByteCount
 	var bestSpillId = valueCount
 	var bestSpillNextUse = 0 as ByteCount
 
-	for v in 0 upto valueCount 'eachValue'
-		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
-			continue
-		end 'notLive'
+	for v in candidates 'eachValue'
 		if bitsetTest(usedAtPeak, base: 0, bit: v) 'consumedHere'
 			continue
 		end 'consumedHere'
-		if hasSpillStore(module, cfg: liveness.cfg, valueId: v) 'alreadySpilled'
+		if index.hasSpillStore(v) 'alreadySpilled'
 			// v (this exact id) was already stored in an earlier iteration; after that split its only
 			// remaining "reads" are before-peak uses + its own store, and it is dead across every
 			// later peak — re-picking it would emit a SECOND store of the same id (a double-spill).
@@ -613,13 +709,13 @@ function chooseVictim(module TargetModule, liveness LivenessResult, peak Pressur
 			continue
 		end 'alreadySpilled'
 
-		let nu = try nextUse.get(v) otherwise panic("chooseVictim: nextUse.get OOB")
-		if isRematerializable(module, liveness: liveness, valueId: v) 'const'
+		let nu = nextUseAfterPeak(index, valueId: v, peakSeq: peak.peakSeq)
+		if isRematVictim(module, index: index, cfg: liveness.cfg, valueId: v, peak: peak, reach: reach) 'const'
 			if bestRematId == valueCount or nu > bestRematNextUse 'improve'
 				bestRematId = v
 				bestRematNextUse = nu
 			end 'improve'
-		end 'const' else if isSpillVictim(module, liveness: liveness, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize) 'spillable'
+		end 'const' else if isSpillVictim(index, cfg: liveness.cfg, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize, reach: reach) 'spillable'
 			if bestSpillId == valueCount or nu > bestSpillNextUse 'improve2'
 				bestSpillId = v
 				bestSpillNextUse = nu
@@ -636,6 +732,36 @@ function chooseVictim(module TargetModule, liveness LivenessResult, peak Pressur
 	return SpillChoice.none
 end 'chooseVictim'
 
+// The global sequence number of `valueId`'s FIRST OP use strictly after `peakSeq` (Belady's
+// next-use distance from the peak), or the `totalOps` sentinel for "no later use".
+//
+// EDGE uses are deliberately NOT counted — an edge arg is a use the SPLIT must rewrite, but it is
+// not a next-use DISTANCE the eviction ranks on, and the forward sweep over op OPERANDS this
+// replaces did not see them either.
+//
+// The sentinel is `totalOps`, which is strictly greater than every real sequence number (0 ..
+// totalOps-1), so a value never used again sorts as the FARTHEST next use — the best Belady
+// candidate — while still comparing correctly under `>`. (A `u64.max` sentinel does NOT: on
+// `int(0 to u64.max)` its all-ones pattern compares as negative under `>`, so Belady would collapse
+// to first-fit and evict the lowest id rather than the farthest next use.)
+//
+// The value's use entries are in ascending sequence order (the CSR was filled in layout order), so
+// the FIRST one past the peak is the nearest — O(uses of this one value), never a sweep.
+function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq ByteCount) returns ByteCount
+	for j in 0 upto index.useCount(valueId) 'each'
+		let record = index.useRecordAt(valueId, k: j)
+		match index.useKindAt(record) 'kind'
+			edge then continue
+			op then break 'kind'
+		end 'kind'
+		let seq = index.useSeqAt(record)
+		if seq > peakSeq 'later'
+			return seq
+		end 'later'
+	end 'each'
+	return index.totalOps
+end 'nextUseAfterPeak'
+
 // True iff `valueId`'s def-point live-set fits the pool. A value idle before the peak anchors
 // its store right after its def, so `defLiveAfter[v] ≤ pool` is the store having a register-free
 // anchor. (A value used before the peak anchors its store after that use, at pressure ≤ the peak
@@ -647,45 +773,11 @@ function storeFitsPool(defLiveAfter CfgIndexArray, valueId ValueId, poolSize Reg
 	return after <= poolSize
 end 'storeFitsPool'
 
-// True iff `valueId` is already spilled — some `storeSlotReg` reads it. The splitter spills a
-// value at most once (one store, one reload per after-peak use-block), so this excludes a spilled
-// value from being chosen again (a second store would double-spill it).
-function hasSpillStore(module TargetModule, cfg FuncCfg, valueId ValueId) returns bool
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("hasSpillStore: op not in module.ops")
-			if opStoresValue(op, valueId: valueId) 'match'
-				return true
-			end 'match'
-		end 'eachOp'
-	end 'eachBlock'
-	return false
-end 'hasSpillStore'
-
-// True iff `op` is a `storeSlotReg` spilling `valueId`.
-function opStoresValue(op TargetOp, valueId ValueId) returns bool
-	return match op 'k'
-		storeSlotReg(_, srcReg) gives storeReadsValue(srcReg, valueId: valueId)
-		prologue to popReg gives false
-		loadRegSlot gives false
-	end 'k'
-end 'opStoresValue'
-
-function storeReadsValue(srcReg X64VReg, valueId ValueId) returns bool
-	return match srcReg 's'
-		virtual(id) gives id == valueId
-		physical gives false
-	end 's'
-end 'storeReadsValue'
-
 // The set of values the peak op READS (its virtual uses) — excluded from the candidate pool
 // because they are needed in a register AT the peak, so spilling them across it is impossible.
-function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak PressurePeak) returns BitWordArray
-	let wordsPerRow = liveness.wordsPerRow
-	var row = zeroRow(wordsPerRow)
-	let opIdx = opAtSeq(module, cfg: liveness.cfg, targetSeq: peak.peakSeq)
-	let op = try module.ops.get(opIdx) otherwise panic("usesAtPeakOp: opIdx not in module.ops")
+function usesAtPeakOp(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak) returns BitWordArray
+	var row = zeroRow(liveness.wordsPerRow)
+	let op = try module.ops.get(index.opAtSequence(peak.peakSeq)) otherwise panic("usesAtPeakOp: peak op not in module.ops")
 	var buf = OperandList.create()
 	targetOpOperands(op, buf: buf)
 	for o in buf 'eachOperand'
@@ -696,82 +788,33 @@ function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak Pressur
 	return row
 end 'usesAtPeakOp'
 
-// The module op index at global sequence `targetSeq` (block-layout order, body then
-// terminator). The inverse of the numbering `findPressurePeak` assigns.
-export function opAtSeq(module TargetModule, cfg FuncCfg, targetSeq ByteCount) returns OpIndex
-	var seq = 0 as ByteCount
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for pos in 0 upto ordered.count() 'eachOp'
-			if seq == targetSeq 'found'
-				return try ordered.get(pos) otherwise panic("opAtSeq: ordered.get OOB")
-			end 'found'
-			seq = seq + 1
-		end 'eachOp'
-	end 'eachBlock'
-	panic("opAtSeq: sequence {targetSeq} past the end of the function")
-end 'opAtSeq'
-
-// The total number of layout-ordered ops in the function (body ops + terminators across all
-// blocks) — the same numbering `analyzePressure`/`computeNextUseSeqs` sweep. Used as the
-// "no later use" sentinel: it is strictly greater than every real global sequence number
-// (which range 0..totalOps-1), so a value never used again after the peak sorts as the
-// FARTHEST next use — the best Belady candidate — while still comparing CORRECTLY under `>`.
-// (A `u64.max` sentinel does NOT: on `int(0 to u64.max)` its all-ones bit pattern compares as
-// a negative under `>`, so `sentinel > seq` is always false — every "first use after the peak"
-// update is skipped and Belady collapses to first-fit, evicting whichever value has the lowest
-// id rather than the farthest next use. That silently defeats MIN.)
-function totalTargetOpCount(module TargetModule, cfg FuncCfg) returns ByteCount
-	var total = 0 as ByteCount
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		total = total + ordered.count()
-	end 'eachBlock'
-	return total
-end 'totalTargetOpCount'
-
-// For every value, the global sequence number of its FIRST use strictly after `peakSeq`
-// (Belady's next-use distance from the peak); the `totalOps` sentinel marks "no later use". A
-// single forward pass over the layout-ordered ops (after an O(ops) pre-pass for the sentinel).
-function computeNextUseSeqs(module TargetModule, liveness LivenessResult, peakSeq ByteCount, valueCount ValueId) returns CfgIndexArray
-	let cfg = liveness.cfg
-	let noLaterUse = totalTargetOpCount(module, cfg: cfg)
-	var nextUse = filledColumn(valueCount, value: noLaterUse)
-	var buf = OperandList.create()
-	var seq = 0 as ByteCount
-
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for pos in 0 upto ordered.count() 'eachOp'
-			if seq > peakSeq 'later'
-				let op = try module.ops.get(try ordered.get(pos) otherwise panic("computeNextUseSeqs: ordered.get OOB")) otherwise panic("computeNextUseSeqs: op not in module.ops")
-				targetOpOperands(op, buf: buf)
-				for o in buf 'eachOperand'
-					if (not operandIsDef(o)) and operandIsVirtual(o) 'use'
-						let v = operandValueId(o)
-						let cur = try nextUse.get(v) otherwise panic("computeNextUseSeqs: nextUse.get OOB")
-						if cur > seq 'earlier'
-							try nextUse.set(v, value: seq) otherwise panic("computeNextUseSeqs: nextUse.set OOB")
-						end 'earlier'
-					end 'use'
-				end 'eachOperand'
-			end 'later'
-			seq = seq + 1
-		end 'eachOp'
-	end 'eachBlock'
-
-	return nextUse
-end 'computeNextUseSeqs'
-
 // ==========================================================================
 // Victim eligibility
 // ==========================================================================
+
+// Is `valueId` a legal REMAT victim at this peak? Its def must be a constant materialization, AND
+// re-emitting it must actually KILL it at the peak — the same second gate a spill has, and for the
+// same reason.
+//
+// `killsValueAtPeak` is not a spill-specific test: remat partitions a value's uses around the peak
+// EXACTLY as a spill does (after-peak uses are rewritten to fresh copies, before-peak uses keep the
+// original), so the original is dead across the peak under precisely the same condition. Without
+// this gate a constant whose every use PRECEDES the peak in layout order but which is live across it
+// AROUND A BACK EDGE — `let c = 7` used only in a `while i mod c < 3` header, with the loop's peak
+// in the body below — is chosen, re-emits NOTHING (it has no after-peak use), drops nothing, and
+// relieves nothing. The potential Φ does not decrease, the next iteration re-picks the same value,
+// and the driver spins until the runaway bound panics. That is exactly the failure the spill path's
+// `killsValueAtPeak` was added to prevent; the remat path simply never got it.
+//
+// It needs no `hasSpillStore`-style already-done guard: once a remat KILLS the value at the peak the
+// value is no longer live there, so it cannot be a candidate at that peak again — and a value that
+// does not kill is refused here rather than re-picked forever.
+function isRematVictim(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+	if not isRematerializable(module, index: index, valueId: valueId) 'notConst'
+		return false
+	end 'notConst'
+	return killsValueAtPeak(index, cfg: cfg, valueId: valueId, peak: peak, reach: reach)
+end 'isRematVictim'
 
 // Is `valueId` a legal spill victim at this peak? Three independent gates, all necessary:
 //
@@ -780,14 +823,14 @@ end 'computeNextUseSeqs'
 //  2. `storeFitsPool`    — its store has a register-free anchor point.
 //  3. `killsValueAtPeak` — spilling it actually makes it DEAD at the peak. Without this the
 //                          splitter emits stores that relieve nothing (see `killsValueAtPeak`).
-function isSpillVictim(module TargetModule, liveness LivenessResult, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount) returns bool
-	if not isSpillable(module, liveness: liveness, valueId: valueId, placement: placement) 'wrongShape'
+function isSpillVictim(index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount, reach ReachCache) returns bool
+	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
 		return false
 	end 'wrongShape'
 	if not storeFitsPool(defLiveAfter, valueId: valueId, poolSize: poolSize) 'noStoreAnchor'
 		return false
 	end 'noStoreAnchor'
-	return killsValueAtPeak(module, cfg: liveness.cfg, valueId: valueId, peak: peak)
+	return killsValueAtPeak(index, cfg: cfg, valueId: valueId, peak: peak, reach: reach)
 end 'isSpillVictim'
 
 // The placement a peak's relief is entitled to: a clobber-only overflow gets the FORCED
@@ -798,10 +841,10 @@ end 'placementOf'
 
 // Can `valueId` be relieved at a peak of this kind? The two kinds have DIFFERENT eligibility, and
 // that difference IS the amended Rule 2 (see `SpillPlacement`).
-function isSpillable(module TargetModule, liveness LivenessResult, valueId ValueId, placement SpillPlacement) returns bool
+function isSpillable(index UseIndex, valueId ValueId, placement SpillPlacement) returns bool
 	return match placement 'p'
-		cold gives isColdSpillable(module, liveness: liveness, valueId: valueId)
-		forced gives hasStoreAnchor(module, cfg: liveness.cfg, valueId: valueId)
+		cold gives isColdSpillable(index, valueId: valueId)
+		forced gives hasStoreAnchor(index, valueId: valueId)
 	end 'p'
 end 'isSpillable'
 
@@ -815,15 +858,63 @@ end 'isSpillable'
 // NOTE this is the FULL-POOL gate only. A fixed-register (clobber-only) peak uses
 // `hasStoreAnchor` instead: there the value is NOT over the machine's capacity, so refusing to
 // spill it would be a false E5001 (see `PressurePeak.clobberOnly`).
-function isColdSpillable(module TargetModule, liveness LivenessResult, valueId ValueId) returns bool
-	if isPhiValueInFunc(module, cfg: liveness.cfg, valueId: valueId) 'phi'
+function isColdSpillable(index UseIndex, valueId ValueId) returns bool
+	if index.isPhiValue(valueId) 'phi'
 		return false
 	end 'phi'
-	if isEdgePassed(module, cfg: liveness.cfg, valueId: valueId) 'edge'
+	if index.isEdgePassed(valueId) 'edge'
 		return false
 	end 'edge'
-	return defAndUsesAtDepthZero(module, cfg: liveness.cfg, valueId: valueId)
+	return index.defAndUsesAtDepthZero(valueId)
 end 'isColdSpillable'
+
+// A value can anchor a spill STORE iff it has a point at which it is already in a register and
+// which precedes the peak: an OP DEF (store right after it, or after its last pre-peak use), or a
+// PHI (store at the very top of its own block — a block-arg arrives in its register via the edge
+// copies SSA destruction places at the predecessors' ends, so it is live at block entry, and its
+// block dominates every use of it).
+//
+// This is the WHOLE eligibility test for a FORCED (clobber-only) spill — no loop-depth bar, no
+// phi bar, no edge-passed bar. Phis and edge-passed values are exactly the loop-carried
+// accumulators that dominate the live-across-a-call set in real code (`sum = sum + f(i)` makes
+// `sum` a phi and its update a back-edge arg), so excluding them would leave nothing to spill and
+// turn every such loop into a false E5001. `spillValue` rewrites branch-edge args alongside op
+// uses, which is what makes the edge-passed case sound.
+function hasStoreAnchor(index UseIndex, valueId ValueId) returns bool
+	return match index.defSiteOf(valueId) 'site'
+		none gives false
+		opDef to phiDef gives true
+	end 'site'
+end 'hasStoreAnchor'
+
+// A value is REMATERIALIZABLE iff its single def is an integer-constant materialization
+// (`movRegImm`/`movRegImm32`). Such a value is re-emitted at each use (never spilled), so —
+// unlike a spill — it needs no depth-0 restriction on its uses; but it must still not be a phi
+// or edge-passed value (those have no op-use site to re-emit before), so those are excluded.
+function isRematerializable(module TargetModule, index UseIndex, valueId ValueId) returns bool
+	if index.isPhiValue(valueId) 'phi'
+		return false
+	end 'phi'
+	if index.isEdgePassed(valueId) 'edge'
+		return false
+	end 'edge'
+	match index.defSiteOf(valueId) 'def'
+		opDef(opIdx, _) then return opIsConstMaterialization(module, opIdx: opIdx)
+		none then return false
+		phiDef then return false
+	end 'def'
+end 'isRematerializable'
+
+function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("opIsConstMaterialization: opIdx not in module.ops")
+	return match op 'k'
+		movRegImm gives true
+		movRegImm32 gives true
+		prologue to jcc gives false
+		movRegReg to idivReg gives false
+		pushReg to loadRegSlot gives false
+	end 'k'
+end 'opIsConstMaterialization'
 
 // Would splitting `valueId` at the peak actually KILL it there? Splitting rewrites the uses AFTER
 // the peak to reloads and leaves the uses BEFORE it reading the original — so the value is dead
@@ -846,12 +937,12 @@ end 'isColdSpillable'
 //   `n`   (def outside the loop, used in the header) → header reachable without redef → REFUSED.
 //   `i`   (a header PHI, used in the header)         → header is its own def block    → allowed.
 //   `sum` (a header PHI, used after the call)        → no before-peak use at all      → allowed.
-function killsValueAtPeak(module TargetModule, cfg FuncCfg, valueId ValueId, peak PressurePeak) returns bool
-	let useSites = collectUseSites(module, cfg: cfg, valueId: valueId)
+function killsValueAtPeak(index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+	let useCount = index.useCount(valueId)
 
 	var hasBeforePeakUse = false
-	for u in useSites 'scan'
-		if u.seq < peak.peakSeq 'before'
+	for j in 0 upto useCount 'scan'
+		if index.useSeqAt(index.useRecordAt(valueId, k: j)) < peak.peakSeq 'before'
 			hasBeforePeakUse = true
 		end 'before'
 	end 'scan'
@@ -860,28 +951,62 @@ function killsValueAtPeak(module TargetModule, cfg FuncCfg, valueId ValueId, pea
 		return true
 	end 'allAfter'
 
-	let defBlock = defBlockOfValue(module, cfg: cfg, valueId: valueId)
-	let reachable = blocksReachableFromPeak(cfg, peakBlockLocal: peak.blockLocal, defBlock: defBlock)
-	for u in useSites 'check'
-		if u.seq >= peak.peakSeq 'afterPeak'
+	let defBlock = index.defBlockOf(valueId)
+	for j in 0 upto useCount 'check'
+		let record = index.useRecordAt(valueId, k: j)
+		if index.useSeqAt(record) >= peak.peakSeq 'afterPeak'
 			continue
 		end 'afterPeak'
-		let stillLive = try reachable.get(u.blockLocal) otherwise panic("killsValueAtPeak: reachable.get OOB")
-		if stillLive 'notKilled'
+		if reach.reachableFromPeak(cfg, peakBlockLocal: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
 			return false
 		end 'notKilled'
 	end 'check'
 	return true
 end 'killsValueAtPeak'
 
-// The blocks reachable from `peakBlockLocal` WITHOUT passing through `defBlock` — the blocks in
-// which the value is still carrying its pre-peak definition. The walk starts at the peak block's
-// SUCCESSORS (so the peak's own block is reached only via a genuine cycle) and never expands into
-// `defBlock` (entering it redefines the value; see `killsValueAtPeak`).
-function blocksReachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex) returns BoolArray
-	var visited = BoolArray.create()
-	visited.resize(cfg.numBlocks)
+// Memoized "blocks reachable from the peak without passing through a def block", keyed by that
+// def block. The peak is fixed for one `chooseVictim` call, so the walk is a function of the def
+// block alone — and a loop's candidates are overwhelmingly phis of the SAME header, so one walk
+// serves them all. Rows live in ONE flat `rows × numBlocks` array (never an array of arrays).
+type ReachCache
+	var numBlocks as CfgIndex
+	// defBlock -> its row index in `rows`, or `numBlocks` for "not walked yet" (no row index can
+	// equal numBlocks: there are at most numBlocks distinct def blocks, so rows are 0..numBlocks-1).
+	var rowOf as CfgIndexArray
+	var rows as BoolArray
+	var rowCount as CfgIndex
 
+	static function create(numBlocks CfgIndex) returns ReachCache
+		return Self{numBlocks: numBlocks, rowOf: filledColumn(numBlocks, value: numBlocks), rows: BoolArray.create(), rowCount: 0}
+	end 'create'
+
+	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
+	export function reachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
+		let row = self.rowFor(cfg, peakBlockLocal: peakBlockLocal, defBlock: defBlock)
+		return try self.rows.get(row * self.numBlocks + block) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
+	end 'reachableFromPeak'
+
+	function rowFor(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex) returns CfgIndex
+		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
+		if cached != self.numBlocks 'hit'
+			return cached
+		end 'hit'
+
+		let row = self.rowCount
+		self.rowCount = row + 1
+		self.rows.resize(self.rowCount * self.numBlocks)
+		markBlocksReachableFromPeak(cfg, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: row * self.numBlocks)
+		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
+		return row
+	end 'rowFor'
+end 'ReachCache'
+
+// Mark, into `rows[base .. base+numBlocks)`, the blocks reachable from `peakBlockLocal` WITHOUT
+// passing through `defBlock` — the blocks in which the value is still carrying its pre-peak
+// definition. The walk starts at the peak block's SUCCESSORS (so the peak's own block is reached
+// only via a genuine cycle) and never expands into `defBlock` (entering it redefines the value;
+// see `killsValueAtPeak`). Worklist-driven: no CFG traversal in the allocator may recurse.
+function markBlocksReachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ByteCount)
 	var worklist = CfgIndexArray.create()
 	let deg = cfg.succ.degree(peakBlockLocal)
 	for k in 0 upto deg 'seed'
@@ -889,372 +1014,82 @@ function blocksReachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock 
 	end 'seed'
 
 	while worklist.count() > 0 'bfs'
-		let b = try worklist.pop() otherwise panic("blocksReachableFromPeak: worklist.pop on non-empty failed")
+		let b = try worklist.pop() otherwise panic("markBlocksReachableFromPeak: worklist.pop on non-empty failed")
 		if b == defBlock 'redefined'
 			continue
 		end 'redefined'
-		let seen = try visited.get(b) otherwise panic("blocksReachableFromPeak: visited.get OOB")
+		let seen = try rows.get(base + b) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")
 		if seen 'already'
 			continue
 		end 'already'
-		try visited.set(b, value: true) otherwise panic("blocksReachableFromPeak: visited.set OOB")
+		try rows.set(base + b, value: true) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
 
 		let d = cfg.succ.degree(b)
 		for k in 0 upto d 'eachSucc'
 			worklist.push(cfg.succ.neighbour(b, k: k))
 		end 'eachSucc'
 	end 'bfs'
-
-	return visited
-end 'blocksReachableFromPeak'
-
-// Where a value comes into existence — the ONE lookup unifying the two ways a Target value is
-// defined, so the store anchor, the def block, and the spillability gate cannot drift on it.
-//
-//  • `opDef`  — an ordinary operand write, at a known op in a known block.
-//  • `phiDef` — a block-arg. Its def is its block's ENTRY: it arrives in its register via the edge
-//    copies SSA destruction places at the predecessors' ends, so there is no op to point at.
-//
-// Every value in a function is one or the other, so `none` means it is not defined here at all.
-union ValueDefSite
-	none
-	opDef(opIdx OpIndex, blockLocal CfgIndex)
-	phiDef(blockLocal CfgIndex)
-end 'ValueDefSite'
-
-function valueDefSite(module TargetModule, cfg FuncCfg, valueId ValueId) returns ValueDefSite
-	match defOpOfValue(module, cfg: cfg, valueId: valueId) 'op'
-		found(opIdx, blockLocal) then return ValueDefSite.opDef(opIdx, blockLocal: blockLocal)
-		none then break 'op'
-	end 'op'
-
-	return match phiBlockOfValue(module, cfg: cfg, valueId: valueId) 'phi'
-		block(local) gives ValueDefSite.phiDef(local)
-		none gives ValueDefSite.none
-	end 'phi'
-end 'valueDefSite'
-
-// The block a value is defined in (an op def's block, or a phi's own block).
-function defBlockOfValue(module TargetModule, cfg FuncCfg, valueId ValueId) returns CfgIndex
-	match valueDefSite(module, cfg: cfg, valueId: valueId) 'site'
-		opDef(_, blockLocal) then return blockLocal
-		phiDef(blockLocal) then return blockLocal
-		none then panic("defBlockOfValue: value {valueId} has neither an op def nor a phi block")
-	end 'site'
-end 'defBlockOfValue'
-
-// A value can anchor a spill STORE iff it has a point at which it is already in a register and
-// which precedes the peak: an OP DEF (store right after it, or after its last pre-peak use), or a
-// PHI (store at the very top of its own block — a block-arg arrives in its register via the edge
-// copies SSA destruction places at the predecessors' ends, so it is live at block entry, and its
-// block dominates every use of it).
-//
-// This is the WHOLE eligibility test for a FORCED (clobber-only) spill — no loop-depth bar, no
-// phi bar, no edge-passed bar. Phis and edge-passed values are exactly the loop-carried
-// accumulators that dominate the live-across-a-call set in real code (`sum = sum + f(i)` makes
-// `sum` a phi and its update a back-edge arg), so excluding them would leave nothing to spill and
-// turn every such loop into a false E5001. `spillValue` rewrites branch-edge args alongside op
-// uses, which is what makes the edge-passed case sound.
-function hasStoreAnchor(module TargetModule, cfg FuncCfg, valueId ValueId) returns bool
-	return match valueDefSite(module, cfg: cfg, valueId: valueId) 'site'
-		none gives false
-		opDef to phiDef gives true
-	end 'site'
-end 'hasStoreAnchor'
-
-// A value is REMATERIALIZABLE iff its single def is an integer-constant materialization
-// (`movRegImm`/`movRegImm32`). Such a value is re-emitted at each use (never spilled), so —
-// unlike a spill — it needs no depth-0 restriction on its uses; but it must still not be a phi
-// or edge-passed value (those have no op-use site to re-emit before), so those are excluded.
-function isRematerializable(module TargetModule, liveness LivenessResult, valueId ValueId) returns bool
-	if isPhiValueInFunc(module, cfg: liveness.cfg, valueId: valueId) 'phi'
-		return false
-	end 'phi'
-	if isEdgePassed(module, cfg: liveness.cfg, valueId: valueId) 'edge'
-		return false
-	end 'edge'
-	match defOpOfValue(module, cfg: liveness.cfg, valueId: valueId) 'def'
-		none then return false
-		found(opIdx, _) then return opIsConstMaterialization(module, opIdx: opIdx)
-	end 'def'
-end 'isRematerializable'
-
-function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("opIsConstMaterialization: opIdx not in module.ops")
-	return match op 'k'
-		movRegImm gives true
-		movRegImm32 gives true
-		prologue to jcc gives false
-		movRegReg to idivReg gives false
-		pushReg to loadRegSlot gives false
-	end 'k'
-end 'opIsConstMaterialization'
-
-// The block whose block-args (phis) include `valueId`, or `none` when it is not a phi. A value is
-// a block-arg of at most one block (it is defined there), so the first match is authoritative.
-union PhiBlock
-	none
-	block(local CfgIndex)
-end 'PhiBlock'
-
-function phiBlockOfValue(module TargetModule, cfg FuncCfg, valueId ValueId) returns PhiBlock
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		for arg in block.blockArgs 'eachPhi'
-			if arg.valueId == valueId 'match'
-				return PhiBlock.block(i)
-			end 'match'
-		end 'eachPhi'
-	end 'eachBlock'
-	return PhiBlock.none
-end 'phiBlockOfValue'
-
-// True iff `valueId` is a block-arg (phi) of ANY block in the function.
-function isPhiValueInFunc(module TargetModule, cfg FuncCfg, valueId ValueId) returns bool
-	return match phiBlockOfValue(module, cfg: cfg, valueId: valueId) 'phi'
-		none gives false
-		block gives true
-	end 'phi'
-end 'isPhiValueInFunc'
-
-// True iff `valueId` is passed to a phi on any branch edge (a use on an edge, not at an op).
-function isEdgePassed(module TargetModule, cfg FuncCfg, valueId ValueId) returns bool
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		if blockPassesValueOnEdge(blockAt(module, cfg: cfg, local: i), valueId: valueId) 'match'
-			return true
-		end 'match'
-	end 'eachBlock'
-	return false
-end 'isEdgePassed'
-
-// True iff `valueId`'s def block and every block that USES it are at loop depth 0.
-function defAndUsesAtDepthZero(module TargetModule, cfg FuncCfg, valueId ValueId) returns bool
-	var buf = OperandList.create()
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let depth = try cfg.loopDepth.get(i) otherwise panic("defAndUsesAtDepthZero: loopDepth.get OOB")
-		if depth == 0 'depthZero'
-			continue
-		end 'depthZero'
-		// A non-depth-0 block: if it defines or uses the value, the value is not cold-spillable.
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("defAndUsesAtDepthZero: op not in module.ops")
-			targetOpOperands(op, buf: buf)
-			for o in buf 'eachOperand'
-				if operandIsVirtual(o) and operandValueId(o) == valueId 'touch'
-					return false
-				end 'touch'
-			end 'eachOperand'
-		end 'eachOp'
-	end 'eachBlock'
-	return true
-end 'defAndUsesAtDepthZero'
-
-// ==========================================================================
-// The def / use scans
-// ==========================================================================
-
-// Where a value is defined: its owning local block and its op index in `module.ops`, or `none`
-// (a value with no op def is a phi or a param-incoming — never a splitter victim).
-union DefLocation
-	none
-	found(opIdx OpIndex, blockLocal CfgIndex)
-end 'DefLocation'
-
-function defOpOfValue(module TargetModule, cfg FuncCfg, valueId ValueId) returns DefLocation
-	var buf = OperandList.create()
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("defOpOfValue: op not in module.ops")
-			targetOpOperands(op, buf: buf)
-			for o in buf 'eachOperand'
-				if operandIsDef(o) and operandIsVirtual(o) and operandValueId(o) == valueId 'def'
-					return DefLocation.found(opIdx, blockLocal: i)
-				end 'def'
-			end 'eachOperand'
-		end 'eachOp'
-	end 'eachBlock'
-	return DefLocation.none
-end 'defOpOfValue'
-
-// The module op index of the value's def, panicking if absent (callers have already
-// established the value has an op def).
-function requireDefOp(module TargetModule, cfg FuncCfg, valueId ValueId) returns OpIndex
-	match defOpOfValue(module, cfg: cfg, valueId: valueId) 'def'
-		none then panic("requireDefOp: value {valueId} has no op def")
-		found(opIdx, _) then return opIdx
-	end 'def'
-end 'requireDefOp'
-
-// What reads a value at a use site.
-//
-//  • `op` — an ordinary operand of an op in the block's body.
-//  • `edge` — a branch-edge ARG (a phi operand). It is read on the EDGE, i.e. after every body op
-//    of the predecessor: SSA destruction materializes it as a parallel copy at the predecessor's
-//    end. An edge arg is therefore a genuine use, and one the splitter MUST rewrite — a reload
-//    that fixes up only the op uses leaves the edge still naming the ORIGINAL value, which keeps
-//    that original live all the way to the block's end. It would then STILL be live across the
-//    peak, the spill would not lower the pressure there, and the driver loop would re-pick the
-//    same value forever (until the iteration bound panics). This is the exact shape of every
-//    loop-carried accumulator (`sum = sum + f(i)`), so it is the common case, not a corner.
-enum UseKind
-	op
-	edge
-end 'UseKind'
-
-// A single USE site of a value: the op that reads it (for an EDGE use, the block's terminator —
-// its sequence anchor, since the edge is read after every body op), its owning local block, its
-// GLOBAL sequence number (forward layout order, matching `analyzePressure`'s `peakSeq` and
-// `computeNextUseSeqs`), and which kind of read it is. One entry per use-OP (an op reading the
-// value twice counts once) plus at most one EDGE entry per block — the granularity a split needs
-// to partition uses around the eviction point.
-type UseSite
-	export var blockLocal as CfgIndex
-	export var opIdx as OpIndex
-	export var seq as ByteCount
-	export var kind as UseKind
-
-	static function create(blockLocal CfgIndex, opIdx OpIndex, seq ByteCount, kind UseKind) returns UseSite
-		return Self{blockLocal: blockLocal, opIdx: opIdx, seq: seq, kind: kind}
-	end 'create'
-end 'UseSite'
-
-typealias UseSiteArray = Array with UseSite
-
-// Every use site of `valueId`, in layout order, with global sequence numbers. Collected on the
-// CURRENT IR BEFORE any spill/remat op is inserted; the `opIdx`s stay valid across insertion
-// (`module.ops` is append-only), and each insertion recomputes block positions as it goes.
-//
-// A block's EDGE use is emitted LAST for that block (at the terminator's sequence number), which
-// is where it is genuinely read — so within a block the ordering is `op uses …, edge use`, and
-// the reload a split inserts before the first AFTER-peak use of the block dominates the edge too.
-function collectUseSites(module TargetModule, cfg FuncCfg, valueId ValueId) returns UseSiteArray
-	var result = UseSiteArray.create()
-	var buf = OperandList.create()
-	var seq = 0 as ByteCount
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		let opCount = ordered.count()
-		for pos in 0 upto opCount 'eachOp'
-			let opIdx = try ordered.get(pos) otherwise panic("collectUseSites: ordered.get OOB")
-			let op = try module.ops.get(opIdx) otherwise panic("collectUseSites: op not in module.ops")
-			if opUsesValue(op, valueId: valueId, buf: buf) 'uses'
-				result.push(UseSite.create(i, opIdx: opIdx, seq: seq + pos, kind: UseKind.op))
-			end 'uses'
-		end 'eachOp'
-
-		// The edge use, anchored at the block's LAST op (its terminator). A block that passes the
-		// value on an edge always has a terminator to branch with, so `opCount > 0` holds here.
-		if blockPassesValueOnEdge(block, valueId: valueId) 'edgeUse'
-			if opCount == 0 'noTerminator'
-				panic("collectUseSites: block local {i} passes value {valueId} on a branch edge but has no ops to branch with")
-			end 'noTerminator'
-			let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("collectUseSites: ordered.get OOB")
-			result.push(UseSite.create(i, opIdx: lastOpIdx, seq: seq + opCount - 1, kind: UseKind.edge))
-		end 'edgeUse'
-
-		seq = seq + opCount
-	end 'eachBlock'
-	return result
-end 'collectUseSites'
-
-// True iff any branch edge LEAVING `block` passes `valueId` to a phi.
-function blockPassesValueOnEdge(block IrBlock, valueId ValueId) returns bool
-	for edge in block.branchEdges 'eachEdge'
-		for argId in edge.argIds 'eachArg'
-			if argId == valueId 'match'
-				return true
-			end 'match'
-		end 'eachArg'
-	end 'eachEdge'
-	return false
-end 'blockPassesValueOnEdge'
-
-function opUsesValue(op TargetOp, valueId ValueId, buf OperandList) returns bool
-	targetOpOperands(op, buf: buf)
-	for o in buf 'eachOperand'
-		if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
-			return true
-		end 'use'
-	end 'eachOperand'
-	return false
-end 'opUsesValue'
-
-// Where a spill STORE goes. `afterOp` is the ordinary case. `blockEntry` is the PHI case: a
-// block-arg has NO defining op — it arrives in its register via the edge copies SSA destruction
-// places at the predecessors' ends — so its store goes at the very top of its own block, a point
-// where it is already live and which dominates every use of it.
-union StoreAnchor
-	afterOp(opIdx OpIndex)
-	blockEntry(blockLocal CfgIndex)
-end 'StoreAnchor'
-
-// Resolve the store anchor for `valueId` at a peak: right after its LAST use BEFORE the peak; or,
-// when it is idle before the peak, right after its def (an op) / at the top of its block (a phi).
-// `useSites` is in layout order, so the last entry with `seq < peakSeq` is the last before-peak
-// use. Every anchor keeps `valueId` live at the store and lands the store BEFORE the peak, which
-// is what makes the value dead ACROSS the peak and so lowers the pressure there.
-function resolveStoreAnchor(module TargetModule, cfg FuncCfg, valueId ValueId, useSites UseSiteArray, peakSeq ByteCount) returns StoreAnchor
-	var sawBeforePeakUse = false
-	var lastBeforePeakOpIdx = 0 as OpIndex
-	for u in useSites 'each'
-		if u.seq < peakSeq 'beforePeak'
-			sawBeforePeakUse = true
-			lastBeforePeakOpIdx = u.opIdx
-		end 'beforePeak'
-	end 'each'
-
-	if sawBeforePeakUse 'anchorAtUse'
-		return StoreAnchor.afterOp(lastBeforePeakOpIdx)
-	end 'anchorAtUse'
-
-	match valueDefSite(module, cfg: cfg, valueId: valueId) 'site'
-		opDef(opIdx, _) then return StoreAnchor.afterOp(opIdx)
-		phiDef(blockLocal) then return StoreAnchor.blockEntry(blockLocal)
-		none then panic("resolveStoreAnchor: value {valueId} has neither an op def nor a phi block, so it has no store anchor — `hasStoreAnchor` should have rejected it as a victim")
-	end 'site'
-end 'resolveStoreAnchor'
+end 'markBlocksReachableFromPeak'
 
 // ==========================================================================
 // Materializing a spill (Belady split at the eviction point)
 // ==========================================================================
 
-// Spill `valueId` by SPLITTING its live range AT the peak (`peakSeq`), so it is DEAD across the
-// peak — freeing its register there, which is what lowers peak pressure. The store goes right
-// after the value's LAST use BEFORE the peak (or, when it is idle before the peak, after its def /
-// at the top of its block if it is a phi); a reload (a fresh value id) goes before the first
-// AFTER-peak use in each use-block, and ONLY the after-peak uses in that block are rewritten to
-// it — the before-peak uses keep the original value in its original register. The store dominates
-// every reload (it precedes the peak, they follow it) and each reload dominates the after-peak
-// uses it serves, so no phi is ever needed (the dominating-reload invariant). Returns the next
-// free slot index (`slot + 1`).
+// THE STORE ANCHOR IS THE VALUE'S DEF, ALWAYS — because the def is the only point that is
+// guaranteed to DOMINATE every reload, and a reload reading a slot its store does not dominate is a
+// garbage read.
 //
-// `placement` is the amended Rule 2: `cold` asserts every inserted op lands outside every loop;
-// `forced` permits the store/reload bracket INSIDE a loop, which is the only way to relieve a
+// The store used to be placed after the value's LAST use BEFORE the peak, on the reasoning that "it
+// precedes the peak, the reloads follow it". LAYOUT ORDER IS NOT DOMINANCE, and that reasoning is
+// wrong in two ways at once:
+//
+//  • A before-peak use can sit in a block that does NOT dominate the reload sites — the `then` arm
+//    of an `if`, whose store never runs on the `else` path, leaving the slot unwritten under the
+//    reload that follows the merge.
+//  • A before-peak use can be an EDGE ARG, whose "op" is the block's TERMINATOR. A store cannot be
+//    spliced after a terminator, and `positionInBlock` (body ops only) panicked outright. That is
+//    the crash `register-spill.forced-spill-with-edge-arg-before-the-peak` pins.
+//
+// The def has neither problem: by SSA (Rule 1) it dominates every use of the value, hence every
+// reload, and it is an op (or a phi's block entry) that a store can legally follow. It is also
+// STRICTLY BETTER code: a value defined outside a loop and used inside it before the loop's peak
+// would have anchored its store at that in-loop use and re-executed it every iteration; anchored at
+// the def it runs ONCE. And it is what `storeFitsPool` already measures — that gate reads
+// `defLiveAfter[v]`, the pressure at the DEF point, which is now exactly the point the store lands.
+//
+// Nothing about the SPLIT changes: only the after-peak uses are rewritten to reloads, so the value
+// is still dead across the peak and the pressure there still drops by one. The store merely writes
+// memory; it never kills the value, so anchoring it earlier costs no register and no pressure.
+
+// Spill `valueId` by SPLITTING its live range AT the peak (`peak.peakSeq`), so it is DEAD across
+// the peak — freeing its register there, which is what lowers peak pressure. The store goes at the
+// value's DEF (after the defining op, or at the top of its block if it is a phi — see the note
+// above on why the def is the ONLY sound anchor); a reload (a fresh value id) goes before the first
+// AFTER-peak use in each use-block, and ONLY the after-peak uses in that block are rewritten to
+// it — the before-peak uses keep the original value in its original register. The store DOMINATES
+// every reload (the def dominates every use, by SSA) and each reload dominates the after-peak uses
+// it serves, so no phi is ever needed (the dominating-reload invariant). Returns the next free
+// value id.
+//
+// The peak's placement is the amended Rule 2: `cold` asserts every inserted op lands outside every
+// loop; `forced` permits the store/reload bracket INSIDE a loop, which is the only way to relieve a
 // fixed-register point whose live-across set exceeds the registers the op leaves alone.
 //
 // EDGE ARGS are rewritten alongside op uses. A branch-edge arg is a real use, read at the end of
 // its block; leaving one pointing at the ORIGINAL would keep that original live to the block's end
 // — hence still live across the peak — so the spill would not lower the pressure and the driver
 // would re-pick the same value forever. Loop-carried accumulators are exactly this shape.
-function spillValue(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, slot SpillSlot, origins ReloadOriginArray, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, placement SpillPlacement) returns SpillSlot
-	let cfg = liveness.cfg
+//
+// The index is read ONLY through fields that survive the insertions below: an op's `module.ops`
+// index (the table is append-only) and a use's owning block. Positions inside a block shift as ops
+// are spliced in, and every insertion re-derives its own (see `positionInBlock`).
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, slot SpillSlot, origins ReloadOriginArray, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+	let peakSeq = peak.peakSeq
+	let placement = placementOf(peak)
+	let useCount = index.useCount(valueId)
 
-	// Snapshot use sites BEFORE inserting anything — the store reads `valueId` too but is NOT a
-	// use to rewrite (it legitimately keeps the original value), and the reloads/rewrites below
-	// only ever touch the AFTER-peak uses collected here.
-	let useSites = collectUseSites(module, cfg: cfg, valueId: valueId)
-
-	// STORE: before the peak, so `valueId` is dead across it.
-	let anchor = resolveStoreAnchor(module, cfg: cfg, valueId: valueId, useSites: useSites, peakSeq: peakSeq)
-	insertStore(module, cfg: cfg, valueId: valueId, anchor: anchor, slot: slot, placement: placement)
+	// STORE: at the def, which dominates every reload below.
+	insertStore(module, cfg: cfg, valueId: valueId, defSite: index.defSiteOf(valueId), slot: slot, placement: placement)
 
 	// RELOAD: one per AFTER-peak use-block. Use sites are in layout order, so a block's after-peak
 	// uses are contiguous and follow its before-peak uses; each block boundary among the after-peak
@@ -1262,31 +1097,31 @@ function spillValue(module TargetModule, liveness LivenessResult, valueId ValueI
 	var freshId = nextValueId
 	var reloadCount = 0 as ByteCount
 	var buf = OperandList.create()
-	var idx = 0 as ByteCount
-	while idx < useSites.count() 'eachUse'
-		let u = try useSites.get(idx) otherwise panic("spillValue: useSites.get OOB")
-		if u.seq < peakSeq 'beforePeak'
+	var j = 0 as ByteCount
+	while j < useCount 'eachUse'
+		let record = index.useRecordAt(valueId, k: j)
+		if index.useSeqAt(record) < peakSeq 'beforePeak'
 			// A before-peak use keeps the ORIGINAL value in its register — never rewritten.
-			idx = idx + 1
+			j = j + 1
 			continue
 		end 'beforePeak'
 
 		// The first after-peak use in this block anchors ONE reload, which dominates every later
 		// use in the block — including the edge arg, which is read after all of them.
-		let blockLocal = u.blockLocal
-		insertReloadFor(module, cfg: cfg, firstUse: u, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
+		let blockLocal = index.useBlockAt(record)
+		insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
 		origins.push(ReloadOrigin.create(freshId, slot: slot, originalValueId: valueId))
 		// The reload id derives from the value it reloads — record it so a reload id in an
 		// E5001 blocking set chases back to that value's source origin (see SplitLineage).
 		lineage.record(freshId, sourceId: valueId)
 
-		while idx < useSites.count() and (try useSites.get(idx) otherwise panic("spillValue: useSites.get OOB")).blockLocal == blockLocal 'sameBlock'
-			let uu = try useSites.get(idx) otherwise panic("spillValue: useSites.get OOB")
-			match uu.kind 'kind'
-				op then rewriteOpAt(module, opIdx: uu.opIdx, from: valueId, to: freshId, buf: buf)
+		while j < useCount and index.useBlockAt(index.useRecordAt(valueId, k: j)) == blockLocal 'sameBlock'
+			let r = index.useRecordAt(valueId, k: j)
+			match index.useKindAt(r) 'kind'
+				op then rewriteOpAt(module, opIdx: index.useOpAt(r), from: valueId, to: freshId, buf: buf)
 				edge then rewriteEdgeArgsIn(module, cfg: cfg, blockLocal: blockLocal, from: valueId, to: freshId)
 			end 'kind'
-			idx = idx + 1
+			j = j + 1
 		end 'sameBlock'
 
 		freshId = freshId + 1
@@ -1299,25 +1134,28 @@ function spillValue(module TargetModule, liveness LivenessResult, valueId ValueI
 		forced then stats.forcedSpills = stats.forcedSpills + 1
 		cold then break 'countForced'
 	end 'countForced'
-	return slot + 1
-end 'spillValue'
+	return freshId
+end 'spillOneValue'
 
-// Insert the spill STORE at its resolved anchor.
-function insertStore(module TargetModule, cfg FuncCfg, valueId ValueId, anchor StoreAnchor, slot SpillSlot, placement SpillPlacement)
-	match anchor 'a'
-		afterOp(opIdx) then insertStoreAfter(module, cfg: cfg, valueId: valueId, afterOpIdx: opIdx, slot: slot, placement: placement)
-		blockEntry(blockLocal) then insertStoreAtBlockEntry(module, cfg: cfg, valueId: valueId, blockLocal: blockLocal, slot: slot, placement: placement)
-	end 'a'
+// Insert the spill STORE at the value's def — the one point that dominates every reload (see above).
+function insertStore(module TargetModule, cfg FuncCfg, valueId ValueId, defSite ValueDefSite, slot SpillSlot, placement SpillPlacement)
+	match defSite 'site'
+		opDef(opIdx, blockLocal) then insertStoreAfter(module, cfg: cfg, valueId: valueId, afterOpIdx: opIdx, blockLocal: blockLocal, slot: slot, placement: placement)
+		phiDef(blockLocal) then insertStoreAtBlockEntry(module, cfg: cfg, valueId: valueId, blockLocal: blockLocal, slot: slot, placement: placement)
+		none then panic("insertStore: value {valueId} has neither an op def nor a phi block, so it has no store anchor — `hasStoreAnchor` should have rejected it as a victim")
+	end 'site'
 end 'insertStore'
 
-// Insert the RELOAD serving a block's after-peak uses, anchored on the FIRST of them. An OP use
-// takes the reload immediately before it. An EDGE use means the block has no after-peak op use at
-// all (op uses precede the edge use in `collectUseSites`), so the value is only forwarded to a phi
-// — the reload goes at the END of the block's body, still ahead of the edge that reads it.
-function insertReloadFor(module TargetModule, cfg FuncCfg, firstUse UseSite, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
-	match firstUse.kind 'k'
-		op then insertReloadBefore(module, cfg: cfg, blockLocal: firstUse.blockLocal, beforeOpIdx: firstUse.opIdx, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
-		edge then insertReloadAtBlockEnd(module, cfg: cfg, blockLocal: firstUse.blockLocal, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
+// Insert the RELOAD serving a block's after-peak uses, anchored on the FIRST of them (use entry
+// `useAt`). An OP use takes the reload immediately before it. An EDGE use means the block has no
+// after-peak op use at all (op uses precede the edge use in the index), so the value is only
+// forwarded to a phi — the reload goes at the END of the block's body, still ahead of the edge
+// that reads it.
+function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRecord ByteCount, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
+	let blockLocal = index.useBlockAt(useRecord)
+	match index.useKindAt(useRecord) 'k'
+		op then insertReloadBefore(module, cfg: cfg, blockLocal: blockLocal, beforeOpIdx: index.useOpAt(useRecord), valueId: valueId, freshId: freshId, slot: slot, placement: placement)
+		edge then insertReloadAtBlockEnd(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
 	end 'k'
 end 'insertReloadFor'
 
@@ -1335,10 +1173,9 @@ function rewriteEdgeArgsIn(module TargetModule, cfg FuncCfg, blockLocal CfgIndex
 	end 'eachEdge'
 end 'rewriteEdgeArgsIn'
 
-// Insert `storeSlotReg(slot, valueId)` right after `afterOpIdx` (the value's def or its last
-// before-peak use). `valueId` is live at that op, so the store reads it from its register.
-function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, afterOpIdx OpIndex, slot SpillSlot, placement SpillPlacement)
-	let blockLocal = blockLocalOfOp(module, cfg: cfg, opIdx: afterOpIdx)
+// Insert `storeSlotReg(slot, valueId)` right after `afterOpIdx` — the op that DEFINES the value, so
+// it is live there by construction and the store reads it from its own register.
+function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, afterOpIdx OpIndex, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "store", placement: placement)
 	let block = blockAt(module, cfg: cfg, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
@@ -1376,7 +1213,9 @@ function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal Cfg
 end 'insertReloadAtBlockEnd'
 
 // Append `op` to the module's op table and return its index — the one place a splitter-minted op
-// enters `module.ops`, so the four insertion sites above cannot drift on how they mint.
+// enters `module.ops`, so the insertion sites above cannot drift on how they mint. APPEND-ONLY is
+// load-bearing: it is why every op index the `UseIndex` snapshot holds stays valid while a split
+// is being materialized.
 function appendOp(module TargetModule, op TargetOp) returns OpIndex
 	let idx = module.ops.count()
 	module.ops.push(op)
@@ -1393,30 +1232,28 @@ end 'appendOp'
 // holds no register across the gap and never touches memory, so unlike a spill it needs no
 // depth-0 restriction on its uses (re-emitting a constant even inside a loop is free). The
 // original def is dropped ONLY when no before-peak use still reads it; otherwise it stays live
-// from its def to that last before-peak use (dead across the peak either way).
-function rematerializeConstant(module TargetModule, liveness LivenessResult, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage)
-	let cfg = liveness.cfg
-	let defOpIdx = requireDefOp(module, cfg: cfg, valueId: valueId)
+// from its def to that last before-peak use (dead across the peak either way). Returns the next
+// free value id.
+function rematerializeConstant(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+	let defOpIdx = index.requireDefOp(valueId)
 	let constValue = constValueOfDef(module, opIdx: defOpIdx)
-	let useSites = collectUseSites(module, cfg: cfg, valueId: valueId)
 
 	var freshId = nextValueId
 	var haveBeforePeakUse = false
 	var buf = OperandList.create()
-	for u in useSites 'eachUse'
-		if u.seq < peakSeq 'beforePeak'
+	for j in 0 upto index.useCount(valueId) 'eachUse'
+		let record = index.useRecordAt(valueId, k: j)
+		if index.useSeqAt(record) < peakSeq 'beforePeak'
 			// A before-peak use keeps the ORIGINAL constant; only after-peak uses are re-emitted.
 			haveBeforePeakUse = true
 			continue
 		end 'beforePeak'
 
-		var block = blockAt(module, cfg: cfg, local: u.blockLocal)
-		let usePos = positionInBlock(block, opIdx: u.opIdx)
-		let rematOp = constMaterializationOp(freshId, value: constValue)
-		let rematIdx = module.ops.count()
-		module.ops.push(rematOp)
-		try block.opRefs.insert(usePos, value: rematIdx) otherwise panic("rematerializeConstant: opRefs.insert OOB")
-		rewriteOpAt(module, opIdx: u.opIdx, from: valueId, to: freshId, buf: buf)
+		let useOpIdx = index.useOpAt(record)
+		var block = blockAt(module, cfg: cfg, local: index.useBlockAt(record))
+		let usePos = positionInBlock(block, opIdx: useOpIdx)
+		try block.opRefs.insert(usePos, value: appendOp(module, op: constMaterializationOp(freshId, value: constValue))) otherwise panic("rematerializeConstant: opRefs.insert OOB")
+		rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 		// The re-emitted copy derives from the original constant — record it so a
 		// rematerialized id in an E5001 blocking set chases back to the constant's source
 		// span (the `let`/literal the author wrote), not a Rule-3 panic (see SplitLineage).
@@ -1425,10 +1262,21 @@ function rematerializeConstant(module TargetModule, liveness LivenessResult, val
 	end 'eachUse'
 
 	if not haveBeforePeakUse 'dropDef'
-		dropOriginalDef(module, cfg: cfg, defOpIdx: defOpIdx)
+		dropOriginalDef(module, cfg: cfg, defOpIdx: defOpIdx, blockLocal: index.defBlockOf(valueId))
 	end 'dropDef'
 
+	// A remat that re-emitted NOTHING changed nothing: the potential Φ did not decrease, so the next
+	// iteration finds the same peak and re-picks the same value — the driver spins until the runaway
+	// bound panics thousands of splits later, naming a symptom instead of the cause. `isRematVictim`'s
+	// `killsValueAtPeak` gate makes this unreachable (a value live at the peak that no before-peak use
+	// keeps alive there MUST have an after-peak use); assert it here so a regression in that gate
+	// fails LOUDLY at the split that caused it.
+	if freshId == nextValueId 'relievedNothing'
+		panic("rematerializeConstant: value {valueId} was chosen at the peak (sequence {peakSeq}) but has NO use after it, so nothing was re-emitted and the peak's pressure is unchanged — the next iteration would re-pick it forever. `isRematVictim`'s killsValueAtPeak gate must not admit a value whose only uses precede the peak (it is live there only around a back edge).")
+	end 'relievedNothing'
+
 	stats.rematerialized = stats.rematerialized + 1
+	return freshId
 end 'rematerializeConstant'
 
 // The immediate a `movRegImm`/`movRegImm32` materializes.
@@ -1454,11 +1302,9 @@ end 'constMaterializationOp'
 // Remove the original constant def's op ref from its block (it is now dead — every use was
 // rewritten to a rematerialized copy). The op stays in `module.ops` but unreferenced (harmless,
 // exactly like the reuse-copy/edge-move ops SsaDestruction appends).
-function dropOriginalDef(module TargetModule, cfg FuncCfg, defOpIdx OpIndex)
-	let blockLocal = blockLocalOfOp(module, cfg: cfg, opIdx: defOpIdx)
+function dropOriginalDef(module TargetModule, cfg FuncCfg, defOpIdx OpIndex, blockLocal CfgIndex)
 	var block = blockAt(module, cfg: cfg, local: blockLocal)
-	let pos = positionInBlock(block, opIdx: defOpIdx)
-	_ = try block.opRefs.remove(pos) otherwise panic("dropOriginalDef: opRefs.remove OOB")
+	_ = try block.opRefs.remove(positionInBlock(block, opIdx: defOpIdx)) otherwise panic("dropOriginalDef: opRefs.remove OOB")
 end 'dropOriginalDef'
 
 // ==========================================================================
@@ -1482,15 +1328,15 @@ function rewriteOpAt(module TargetModule, opIdx OpIndex, from ValueId, to ValueI
 	try module.ops.set(opIdx, value: substituteValueInOp(op, from: from, to: to)) otherwise panic("rewriteOpAt: ops.set OOB")
 end 'rewriteOpAt'
 
-// True for the splitter's own spill store — the one op reading a value that keeps reading the
-// ORIGINAL (not a reload), so `rewriteOpAt` must leave it alone.
-function opIsSpillStore(op TargetOp) returns bool
-	return match op 'k'
-		storeSlotReg gives true
-		prologue to popReg gives false
-		loadRegSlot gives false
-	end 'k'
-end 'opIsSpillStore'
+function opUsesValue(op TargetOp, valueId ValueId, buf OperandList) returns bool
+	targetOpOperands(op, buf: buf)
+	for o in buf 'eachOperand'
+		if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
+			return true
+		end 'use'
+	end 'eachOperand'
+	return false
+end 'opUsesValue'
 
 // Replace virtual `from` with virtual `to` in a vreg operand; a physical reg or any other
 // virtual passes through.
@@ -1529,24 +1375,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 	end 'rewrite'
 end 'substituteValueInOp'
 
-// The local block index owning `opIdx` (in its `opRefs` or as its terminator).
-function blockLocalOfOp(module TargetModule, cfg FuncCfg, opIdx OpIndex) returns CfgIndex
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
-		for ref in block.opRefs 'eachOp'
-			if ref == opIdx 'match'
-				return i
-			end 'match'
-		end 'eachOp'
-		if block.hasTerminatorOp() and block.terminatorIndex() == opIdx 'term'
-			return i
-		end 'term'
-	end 'eachBlock'
-	panic("blockLocalOfOp: op {opIdx} not found in any block of the function")
-end 'blockLocalOfOp'
-
 // The position of `opIdx` within `block.opRefs` (body ops only — spill/reload/remat are always
-// body ops, never terminators).
+// body ops, never terminators). Re-derived at every insertion because the positions SHIFT as ops
+// are spliced in, which is exactly why the index does not cache them.
 function positionInBlock(block IrBlock, opIdx OpIndex) returns ByteCount
 	for pos in 0 upto block.opRefs.count() 'each'
 		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
@@ -1561,10 +1392,6 @@ end 'positionInBlock'
 // RegisterPressureDiagnostic.maxon, thrown from the `chooseVictim` -> `none` arm above)
 // ==========================================================================
 
-// Assert an inserted store/reload for `valueId` is COLD per Rule 2: its block is at loop depth
-// 0, so it lies in NO loop, and in particular in no loop the value uses. A depth ≥ 1 placement
-// would be a HOT spill that should have been reported as E5001 — a splitter bug, not a valid
-// spill, so it panics rather than shipping a store/reload inside a loop body.
 // Verify an inserted spill op is where its placement mode allows.
 //
 // A COLD spill must land outside every loop: it relieves a FULL-pool overflow by moving a value

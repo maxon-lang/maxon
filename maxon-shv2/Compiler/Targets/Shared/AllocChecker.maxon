@@ -49,7 +49,7 @@
 // checker tracks.
 typealias RegStateRow = Array with CfgIndex
 
-export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyArray, spillPlan SpillPlan)
+export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan, spillPlan SpillPlan)
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let noValue = valueCount
@@ -67,12 +67,20 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	// reload of an unwritten slot reads `noValue` and fails `checkReload` (its teeth).
 	var slotState = filledColumn(spillPlan.slotCount, value: noValue)
 
+	// The spill plan's reload origins, INDEXED by fresh value id and by slot — the two questions
+	// the spill-chain check asks, once per spill op each. Scanned linearly they were O(spill ops ×
+	// origins), i.e. quadratic in the number of splits, which is precisely what a spill-heavy
+	// program has a lot of.
+	let origins = ReloadOriginIndex.build(spillPlan.origins, valueCount: valueCount, slotCount: spillPlan.slotCount)
+
 	var buf = OperandList.create()
 	// Scratch reused across every block — the live-in walk and the op list would otherwise each
 	// allocate once per block. Worth keeping tight even though the checker is now opt-in on a
 	// `build`: it still runs over every function of every test in the suite, on every run.
 	var liveBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
+	// The op's LAYOUT SEQUENCE — the key the colorer recorded its reuse copies under.
+	var blockBaseSeq = 0 as ByteCount
 
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
@@ -81,17 +89,23 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 
 		ordered.clear()
 		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
+		for pos in 0 upto ordered.count() 'eachOp'
+			let opIdx = try ordered.get(pos) otherwise panic("AllocChecker: ordered.get OOB")
 			// Simulate any reuse-def copy `mov dest, input` the allocator will splice
 			// before this op (the two-address input outlived), so the op then reads its
 			// input from the destination register — exactly what the machine does.
-			applyReuseCopy(reuseCopies, opIdx: opIdx, regState: regState)
+			applyReuseCopy(reuseCopies, seq: blockBaseSeq + pos, regState: regState)
 			let op = try module.ops.get(opIdx) otherwise panic("AllocChecker: opIdx not in module.ops")
-			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, paramCount: paramCount, funcName: func.name, blockLabel: block.label, slotState: slotState, origins: spillPlan.origins)
+			checkOp(op, regState: regState, alloc: alloc, buf: buf, noValue: noValue, paramCount: paramCount, funcName: func.name, blockLabel: block.label, slotState: slotState, origins: origins)
 		end 'eachOp'
 
+		blockBaseSeq = blockBaseSeq + ordered.count()
 		copyRegState(exitStates, dstBase: local * RegisterFileSize, src: regState, srcBase: 0)
 	end 'eachBlock'
+
+	// The move-plan of each CFG edge, indexed by that edge's slot in the successor CSR — so the
+	// per-edge lookup below is a column read, not a scan of every plan (which was O(edges × plans)).
+	let planByEdge = indexPlansByEdge(cfg, plans: plans)
 
 	// Validate EVERY CFG edge, not only the move-producing plans. A fully-coalesced
 	// edge (dstReg == srcReg for every phi → no move, no plan) is otherwise never
@@ -101,12 +115,43 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	// moves if it has one (else none).
 	for predLocal in 0 upto cfg.numBlocks 'eachPred'
 		let deg = cfg.succ.degree(predLocal)
+		let edgeBase = try cfg.succ.start.get(predLocal) otherwise panic("checkFunctionAllocation: succ.start.get OOB")
 		for k in 0 upto deg 'eachSucc'
 			let succLocal = cfg.succ.neighbour(predLocal, k: k)
-			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, noValue: noValue, liveBuf: liveBuf)
+			let planIdx = try planByEdge.get(edgeBase + k) otherwise panic("checkFunctionAllocation: planByEdge.get OOB")
+			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, planIdx: planIdx, noValue: noValue, liveBuf: liveBuf)
 		end 'eachSucc'
 	end 'eachPred'
 end 'checkFunctionAllocation'
+
+// Map each CFG edge — identified by its slot in the successor CSR list — to the index of its move
+// plan, or `plans.count()` for an edge with no plan (a fully-coalesced one, which has no moves).
+//
+// Built by walking the PLANS and locating each one's edge (a block has at most a handful of
+// successors), so this is O(plans + edges) rather than the O(edges × plans) the per-edge scan cost.
+// A predecessor with two edges to the SAME successor gets the plan on both slots, and the FIRST
+// plan for an edge wins — exactly what the scan it replaces did.
+function indexPlansByEdge(cfg FuncCfg, plans EdgeMovePlanArray) returns CfgIndexArray
+	let noPlan = plans.count()
+	var planByEdge = filledColumn(cfg.succ.list.count(), value: noPlan)
+
+	for i in 0 upto plans.count() 'eachPlan'
+		let plan = try plans.get(i) otherwise panic("indexPlansByEdge: plans.get OOB")
+		let base = try cfg.succ.start.get(plan.predLocal) otherwise panic("indexPlansByEdge: succ.start.get OOB for block {plan.predLocal}")
+		for k in 0 upto cfg.succ.degree(plan.predLocal) 'eachSucc'
+			if cfg.succ.neighbour(plan.predLocal, k: k) != plan.succLocal 'otherEdge'
+				continue
+			end 'otherEdge'
+			let cur = try planByEdge.get(base + k) otherwise panic("indexPlansByEdge: planByEdge.get OOB")
+			if cur != noPlan 'firstPlanWins'
+				continue
+			end 'firstPlanWins'
+			try planByEdge.set(base + k, value: i) otherwise panic("indexPlansByEdge: planByEdge.set OOB")
+		end 'eachSucc'
+	end 'eachPlan'
+
+	return planByEdge
+end 'indexPlansByEdge'
 
 function freshRegState(noValue ValueId) returns RegStateRow
 	return filledColumn(RegisterFileSize, value: noValue)
@@ -176,7 +221,7 @@ end 'placeValueAtColor'
 // A `mov`/`mov32` is a COPY (special-cased): its virtual source must hold its value,
 // and its destination register receives the copied value's identity. Every other op
 // is interpreted generically from the operand model + implicit-register masks.
-function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, paramCount ParamCount, funcName String, blockLabel String, slotState RegStateRow, origins ReloadOriginArray)
+function checkOp(op TargetOp, regState RegStateRow, alloc Allocation, buf OperandList, noValue ValueId, paramCount ParamCount, funcName String, blockLabel String, slotState RegStateRow, origins ReloadOriginIndex)
 	match op 'chk'
 		movRegReg(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
 		movReg32Reg32(dst, src) then checkCopyOp(dst, src: src, regState: regState, alloc: alloc, paramCount: paramCount, funcName: funcName, blockLabel: blockLabel)
@@ -191,14 +236,14 @@ end 'checkOp'
 // A `storeSlotReg(slot, srcReg)` (spill): its source register must currently hold the spilled
 // value (`srcReg` is the value's own virtual register), and the slot then records that value.
 // The source is untouched (a store does not clobber its source), so `regState` is unchanged.
-function checkStoreSlot(slot SpillSlot, srcReg X64VReg, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+function checkStoreSlot(slot SpillSlot, srcReg X64VReg, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginIndex, funcName String, blockLabel String)
 	match srcReg 's'
 		virtual(v) then recordSpill(slot, v: v, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
 		physical then panic("AllocChecker: storeSlotReg in '{funcName}' block '{blockLabel}' has a PHYSICAL source — the splitter always spills a virtual value")
 	end 's'
 end 'checkStoreSlot'
 
-function recordSpill(slot SpillSlot, v ValueId, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+function recordSpill(slot SpillSlot, v ValueId, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginIndex, funcName String, blockLabel String)
 	let reg = alloc.regNumOf(v)
 	let held = regStateGet(regState, reg: reg)
 	if held != v 'wrong'
@@ -222,13 +267,17 @@ function recordSpill(slot SpillSlot, v ValueId, regState RegStateRow, alloc Allo
 end 'recordSpill'
 
 // Assert every reload of `slot` reloads exactly `storedValue` — the store-side half of the
-// slot-chain identity invariant (see `recordSpill`).
-function assertStoreMatchesReloadOrigins(origins ReloadOriginArray, slot SpillSlot, storedValue ValueId, funcName String, blockLabel String)
-	for o in origins 'eachOrigin'
-		if o.slot == slot and o.originalValueId != storedValue 'mismatch'
-			panic("AllocChecker: broken split chain in '{funcName}' block '{blockLabel}': the store to slot {slot} writes value {storedValue}, but reload {o.reloadValueId} claims to reload value {o.originalValueId} from that slot — the store→slot→reload chain does not preserve value identity (a mis-targeted store or a reload with the wrong ReloadOrigin)")
-		end 'mismatch'
-	end 'eachOrigin'
+// slot-chain identity invariant (see `recordSpill`). Every spilled value gets its OWN slot, so all
+// of a slot's origins share one `originalValueId` and the index holds it directly; a slot no reload
+// reads (a value whose every use preceded the peak) has nothing to disagree with.
+function assertStoreMatchesReloadOrigins(origins ReloadOriginIndex, slot SpillSlot, storedValue ValueId, funcName String, blockLabel String)
+	let reloaded = origins.reloadedValueOfSlot(slot)
+	if reloaded == origins.noReloadOfSlot() 'neverReloaded'
+		return
+	end 'neverReloaded'
+	if reloaded != storedValue 'mismatch'
+		panic("AllocChecker: broken split chain in '{funcName}' block '{blockLabel}': the store to slot {slot} writes value {storedValue}, but the reloads of that slot claim to reload value {reloaded} — the store→slot→reload chain does not preserve value identity (a mis-targeted store or a reload with the wrong ReloadOrigin)")
+	end 'mismatch'
 end 'assertStoreMatchesReloadOrigins'
 
 // A `loadRegSlot(destReg, slot)` (reload): the slot must currently hold the ORIGINAL value the
@@ -236,15 +285,15 @@ end 'assertStoreMatchesReloadOrigins'
 // assigned — a wrong-slot reload, or a slot never written by a matching store, fails HERE
 // rather than reading stale bytes at run time. It then DEFINES the fresh reload value in its
 // register (subsequent uses were rewritten to it, so the normal use checks carry from here).
-function checkLoadSlot(destReg X64VReg, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
+function checkLoadSlot(destReg X64VReg, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginIndex, funcName String, blockLabel String)
 	match destReg 'd'
 		virtual(freshId) then verifyReload(freshId, slot: slot, regState: regState, alloc: alloc, slotState: slotState, origins: origins, funcName: funcName, blockLabel: blockLabel)
 		physical then panic("AllocChecker: loadRegSlot in '{funcName}' block '{blockLabel}' has a PHYSICAL destination — the splitter always reloads into a fresh virtual value")
 	end 'd'
 end 'checkLoadSlot'
 
-function verifyReload(freshId ValueId, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginArray, funcName String, blockLabel String)
-	match reloadOriginOf(origins, reloadValueId: freshId) 'o'
+function verifyReload(freshId ValueId, slot SpillSlot, regState RegStateRow, alloc Allocation, slotState RegStateRow, origins ReloadOriginIndex, funcName String, blockLabel String)
+	match origins.originOf(freshId) 'o'
 		none then panic("AllocChecker: loadRegSlot in '{funcName}' block '{blockLabel}' defines value {freshId} with no recorded ReloadOrigin — a splitter bug (every reload must record what it reloads)")
 		origin(expectedSlot, originalValueId) then confirmReload(freshId, slot: slot, expectedSlot: expectedSlot, originalValueId: originalValueId, regState: regState, alloc: alloc, slotState: slotState, funcName: funcName, blockLabel: blockLabel)
 	end 'o'
@@ -274,8 +323,8 @@ end 'slotStateSet'
 // reuse copy (the coalesced common case). The subsequent generic-op check then verifies
 // the input use still reads its own (undisturbed) register and the def overwrites the
 // destination — so a reuse copy that clobbered a live value surfaces as a later bad use.
-function applyReuseCopy(reuseCopies ReuseCopyArray, opIdx OpIndex, regState RegStateRow)
-	match reuseCopyForOp(reuseCopies, opIdx: opIdx) 'rc'
+function applyReuseCopy(reuseCopies ReuseCopyPlan, seq ByteCount, regState RegStateRow)
+	match reuseCopies.at(seq) 'rc'
 		none then break 'rc'
 		copy(destReg, srcReg) then regStateSet(regState, reg: destReg, value: regStateGet(regState, reg: srcReg))
 	end 'rc'
@@ -443,11 +492,10 @@ end 'physRegNumOf'
 // O(1) flat FuncCfg index (never `getBlockByIdIn`). The edge's moves come from its plan
 // if it has one; a fully-coalesced edge has none, and the assertions below still catch
 // a predecessor clobber whose only remaining "use" was this edge.
-function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, noValue ValueId, liveBuf ValueIdArray)
+function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, planIdx ByteCount, noValue ValueId, liveBuf ValueIdArray)
 	var sim = freshRegState(noValue)
 	copyRegState(sim, dstBase: 0, src: exitStates, srcBase: predLocal * RegisterFileSize)
 
-	let planIdx = findPlanIndex(plans, predLocal: predLocal, succLocal: succLocal)
 	if planIdx < plans.count() 'hasPlan'
 		applyPlanMoves(sim, plan: try plans.get(planIdx) otherwise panic("checkEdge: plans.get OOB"))
 	end 'hasPlan'
@@ -496,18 +544,6 @@ function applyPlanMoves(sim RegStateRow, plan EdgeMovePlan)
 		end 'copy'
 	end 'applyMoves'
 end 'applyPlanMoves'
-
-// The index of the move-plan for edge `predLocal -> succLocal`, or `plans.count()` when
-// the edge has no plan (fully coalesced — no moves to apply).
-function findPlanIndex(plans EdgeMovePlanArray, predLocal CfgIndex, succLocal CfgIndex) returns ByteCount
-	for i in 0 upto plans.count() 'each'
-		let p = try plans.get(i) otherwise panic("findPlanIndex: plans.get OOB")
-		if p.predLocal == predLocal and p.succLocal == succLocal 'match'
-			return i
-		end 'match'
-	end 'each'
-	return plans.count()
-end 'findPlanIndex'
 
 // The values a predecessor passes on its edge to `succBlockId`.
 function edgeArgIds(predBlock IrBlock, succBlockId BlockId) returns ValueIdArray

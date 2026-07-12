@@ -959,25 +959,42 @@ that ordering is what makes the store-anchor gate sound by the time a clobber pe
   after-peak use rather than spilled — always preferred.
 - Otherwise the **farthest next use** wins, gated on (a) being spillable for the peak's placement —
   **cold** requires def and every use at loop depth 0, **forced** requires only a store anchor (an
-  op def, or a phi's block entry) — and (b) `killsValueAtPeak`.
+  op def, or a phi's block entry).
+- **Both** are additionally gated on `killsValueAtPeak`. It is not a spill-specific test: remat
+  partitions a value's uses around the peak exactly as a spill does, so the original dies across the
+  peak under precisely the same condition. A constant that failed it — `let c = 7` used only in a
+  `while i mod c < 3` header, live across the loop's peak solely around the back edge — re-emitted
+  nothing, relieved nothing, and was re-picked until the runaway bound panicked.
+  (`register-spill.remat-constant-live-only-around-the-back-edge`.)
 
 **A split must actually kill the value at the peak.** After-peak uses become reloads; before-peak
 uses keep the original. So the value dies across the peak only if no before-peak use is still
 reachable *from* the peak without passing its (single, SSA) def. `n` in `while i < n` is the
 cautionary case: its only use is the header compare, which precedes the loop's call in **layout**
-order but follows it around the **back edge** — storing it relieves nothing and leaves a wasted
-store in the header every iteration. A loop-header **phi** is the opposite: every back-edge path
-re-enters its def, so it is relievable. (Without this test the splitter over-spills, and its
-termination potential Φ does not strictly decrease.)
+order but follows it around the **back edge** — storing it relieves nothing. A loop-header **phi**
+is the opposite: every back-edge path re-enters its def, so it is relievable. (Without this test the
+splitter over-spills, and its termination potential Φ does not strictly decrease.)
 
-**Split shape: Belady split at the eviction point + dominating reloads.** Store after the last
-before-peak use (or after the def — or, for a **phi**, at its block's entry, where the edge copies
-have already placed it), then **one reload per after-peak use-block**, placed so it dominates its
-uses — each reload defines a **fresh `ValueId`**, so SSA is preserved and no phi or SSA
-reconstruction is needed. (This is what retires v1's SplitKit failure.) **Branch-edge args are
-rewritten alongside op uses**: an edge arg is a real use, read at the block's end, and one left
-naming the original keeps it live to that point — so the spill would not kill it across the peak
-and the driver would re-pick it forever. Loop-carried accumulators are exactly this shape.
+**Split shape: Belady split at the eviction point + dominating reloads.** Store **at the def** (after
+the defining op — or, for a **phi**, at its block's entry, where the edge copies have already placed
+it), then **one reload per after-peak use-block**, placed so it dominates its uses — each reload
+defines a **fresh `ValueId`**, so SSA is preserved and no phi or SSA reconstruction is needed. (This
+is what retires v1's SplitKit failure.) **Branch-edge args are rewritten alongside op uses**: an edge
+arg is a real use, read at the block's end, and one left naming the original keeps it live to that
+point — so the spill would not kill it across the peak and the driver would re-pick it forever.
+Loop-carried accumulators are exactly this shape.
+
+> **The store anchors at the DEF, and that is a correctness requirement, not a preference.** It used
+> to anchor after the value's last *before-peak* use, on the reasoning that "it precedes the peak, the
+> reloads follow it". **Layout order is not dominance**, and that reasoning fails twice over: a
+> before-peak use can sit in a block that does not dominate the reload sites (the `then` arm of an
+> `if`, whose store never runs on the `else` path, leaving the slot unwritten under the reload after
+> the merge), and a before-peak use can be an **edge arg**, whose anchor op is the block's
+> *terminator* — which a store cannot follow at all, and which crashed the splitter outright. The def
+> dominates every use of the value by Rule 1, so it is the only anchor that always dominates every
+> reload. It also emits strictly better code: a value defined outside a loop but used inside it before
+> the loop's peak now stores **once** instead of every iteration.
+> (`register-spill.forced-spill-with-edge-arg-before-the-peak`.)
 
 For a **cold** split, an assert panics if any inserted op lands at loop depth ≠ 0 — so **a loop
 body that does not use a spilled value is byte-identical to the un-spilled version**. A **forced**
@@ -1159,6 +1176,69 @@ Result: **8.8× on the large function** (5,609 ms → 640 ms of allocator time) 
 call-heavy one** (750 ms → 94 ms), with the call-heavy case now linear. The phase timers are
 **disjoint** — `splitting` no longer silently includes `liveness`, which was hiding the single
 biggest cost in the wrong bucket.
+
+### The splitter: one INDEX, not a scan per candidate
+
+The same mistake, one layer up. `chooseVictim` asks a fixed set of questions — *where is this value
+defined? where is it used? is it a phi? is it edge-passed? is it already stored? does it touch a
+loop?* — of **every value crossing the peak**, and each one was answered by its own walk of the
+function. That is **O(candidates × blocks × ops) per split**, and it was **61% of register
+allocation** whenever the splitter ran.
+
+There is now **one `UseIndex` per function** (`TargetLiveness.maxon`), built in a SINGLE pass and
+hung on `LivenessResult`. It carries, keyed by `ValueId`: the def site (op + block, or phi block),
+the use sites (op index, owning block, layout sequence, and whether the read is an edge arg), and the
+flag columns the eligibility gates test. Liveness needed the use lists anyway; the splitter's
+questions are the same traversal, so they are the same index. Every splitter lookup is now O(1) or
+O(uses of that one value), and `chooseVictim`'s candidates come from `bitsetCollectRow` over the
+peak's live set — never `for v in 0 upto valueCount`.
+
+The use sites are four parallel RECORD columns in layout order, grouped by value with the shared
+`buildCsr` (M5.14) — the CSR's `list` holds **record indices**, not values, which is what lets one
+counting sort group four columns at once. `buildCsr` preserves push order within a key, so a value's
+uses come out in ascending sequence: the order the split's before/after-the-peak partition depends
+on. No fifth hand-rolled counting sort.
+
+It is a per-iteration **snapshot**, not a maintained structure: it is rebuilt with liveness after
+every split, and the only consumer that runs *while* the IR is being mutated reads exclusively the
+fields that are stable under those mutations — an op's `module.ops` index (the table is
+**append-only**, so an index never moves) and a use's owning block (an insertion never moves an op
+between blocks). Everything positional is re-derived at the point of use. So a split cannot read a
+stale index, because nothing it reads *can* go stale.
+
+Three sparse side-tables were the same shape at smaller scale, all quadratic in the number of
+splits or edges, and all now indexed: the reload origins (by fresh value id **and** by slot —
+`ReloadOriginIndex`), the SSA-destruction move plans (by CSR edge slot), and the reuse copies (by
+layout sequence — **not** by `module.ops` index, which is module-global and non-contiguous per
+function, so a column keyed by it would be the size of the whole module, per function).
+
+**The CFG is invariant under splitting**, so it is built once and reused by every liveness
+recomputation: a split inserts only body ops, rewrites operands, and repoints edge args — it never
+adds a block, never changes a branch target. Only `valueCount` grows, and the splitter knows it
+exactly (every id it mints is defined by an op it inserted).
+
+Measured on a spill-heavy benchmark (loops holding 8 accumulators across a call, so ~3 forced
+spills each). The refactor is **byte-identical** — the emitted `.exe` compares equal to the
+pre-index compiler's at every size, up to 1,600 splits — so these are the same allocation decisions,
+reached faster:
+
+| shape | splitting | allocation total |
+|---|---|---|
+| 400 functions, one pressured loop each (1,600 splits) | 358 ms → **109 ms** (3.3×) | 735 ms → **437 ms**, linear |
+| ONE function, 100 pressured loops (400 splits) | 5,530 ms → **623 ms** (8.9×) | 7,906 ms → **2,688 ms** (2.9×) |
+
+The splitter's own growth exponent on the intra-function shape falls from **2.07 to 1.26**.
+
+**What is left, and it is now the whole of it: the driver still recomputes liveness from scratch
+after every split.** That is O(function × splits) — the intra-function shape above is still
+exponent ~1.9, and `liveness` is ~80% of allocation there. Splitting itself is no longer the cost.
+Making it incremental is tractable *in principle* — a split changes the liveness of exactly one
+value plus the fresh reload ids it mints, and nothing else — but the CSR live sets are deliberately
+not editable in place, the per-op layout sequence numbers all shift when an op is inserted, and the
+peak would have to be maintained rather than re-swept. It is a redesign of the allocator's core with
+a silent-miscompile failure mode, not a refactor, and it is not worth doing until a real program
+demands it (the many-small-functions shape — which is what a real codebase, and this compiler's own
+source, looks like — is already linear).
 
 ### Liveness: SSA path exploration, no fixpoint, sparse sets
 

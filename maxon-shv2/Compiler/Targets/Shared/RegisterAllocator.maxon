@@ -82,44 +82,68 @@ export type Allocation
 	end 'assign'
 end 'Allocation'
 
-// A reuse-def copy the allocator must MATERIALIZE: `mov destReg, srcReg` spliced in
-// BEFORE op `opIdx`. Recorded when a two-address reuse def (`sub`/`imul`/`neg`) could
-// NOT be colored into its input's register — because the input OUTLIVES the op (its
-// register is still occupied), or because a fixed hint (the R8 return value) claimed
-// the destination first. The input must therefore be preserved in its own register and
-// copied into the destination before the op runs on it. When the input DIES at the op
-// and no fixed hint intervenes, biased coloring lands the destination in the input's
-// register and NO copy is recorded — the common case, and the whole point of the reuse
-// model. `destReg != srcReg` always (a same-register copy is a no-op, never recorded).
-export type ReuseCopy
-	export var opIdx as OpIndex
-	export var destReg as MachineWord
-	export var srcReg as MachineWord
-
-	export static function create(opIdx OpIndex, destReg MachineWord, srcReg MachineWord) returns ReuseCopy
-		return Self{opIdx: opIdx, destReg: destReg, srcReg: srcReg}
-	end 'create'
-end 'ReuseCopy'
-
-export typealias ReuseCopyArray = Array with ReuseCopy
-
-// The reuse copy to splice before op `opIdx`, or `none`. A reuse def coalesced into
-// its input's register records nothing, so the array is SPARSE and a linear scan is
-// cheap (one op carries at most one reuse copy). Mirrors AllocChecker.findPlanIndex's
-// sparse-plan lookup.
+// The reuse copy to splice before an op, or `none`. A reuse def coalesced into its
+// input's register records nothing, so most ops have none.
 export union ReuseCopyLookup
 	none
 	copy(destReg MachineWord, srcReg MachineWord)
 end 'ReuseCopyLookup'
 
-export function reuseCopyForOp(reuseCopies ReuseCopyArray, opIdx OpIndex) returns ReuseCopyLookup
-	for rc in reuseCopies 'each'
-		if rc.opIdx == opIdx 'match'
-			return ReuseCopyLookup.copy(rc.destReg, srcReg: rc.srcReg)
-		end 'match'
-	end 'each'
-	return ReuseCopyLookup.none
-end 'reuseCopyForOp'
+// The reuse-def copies the allocator must MATERIALIZE: `mov destReg, srcReg` spliced in BEFORE
+// an op. One is recorded when a two-address reuse def (`sub`/`imul`/`neg`) could NOT be colored
+// into its input's register — because the input OUTLIVES the op (its register is still
+// occupied), or because a fixed hint (the R8 return value) claimed the destination first. The
+// input must therefore be preserved in its own register and copied into the destination before
+// the op runs on it. When the input DIES at the op and no fixed hint intervenes, biased coloring
+// lands the destination in the input's register and NO copy is recorded — the common case, and
+// the whole point of the reuse model. `destReg != srcReg` always (a same-register copy is a
+// no-op, never recorded).
+//
+// KEYED BY THE OP'S LAYOUT SEQUENCE within the function (blocks in order, each block's body ops
+// then its terminator — the `collectBlockOps` numbering), so the lookup is a column index rather
+// than a scan. The colorer records at that sequence and the two consumers — the AllocChecker's
+// abstract interpretation and `applyAllocation`'s splice — walk the function in exactly that
+// order and read at exactly that sequence. It cannot be keyed by `module.ops` index instead: op
+// indices are module-global and a function's are not contiguous (the splitter appends its spill
+// ops at the end of the table), so a column keyed by them would be the size of the whole module,
+// per function. A list scanned per op was O(ops × copies) — the same quadratic shape the splitter
+// had.
+export type ReuseCopyPlan
+	var present as BoolArray
+	var destRegs as RegNumColumn
+	var srcRegs as RegNumColumn
+
+	export static function create() returns ReuseCopyPlan
+		return Self{present: BoolArray.create(), destRegs: RegNumColumn.create(), srcRegs: RegNumColumn.create()}
+	end 'create'
+
+	// Record the copy for the op at layout sequence `seq`. The columns grow to fit rather than
+	// being sized up front: a function with no reuse copy at all then allocates nothing.
+	export function record(seq ByteCount, destReg MachineWord, srcReg MachineWord)
+		if seq >= self.present.count() 'grow'
+			self.present.resize(seq + 1)
+			self.destRegs.resize(seq + 1)
+			self.srcRegs.resize(seq + 1)
+		end 'grow'
+		try self.present.set(seq, value: true) otherwise panic("ReuseCopyPlan.record: present.set OOB at sequence {seq}")
+		try self.destRegs.set(seq, value: destReg) otherwise panic("ReuseCopyPlan.record: destRegs.set OOB at sequence {seq}")
+		try self.srcRegs.set(seq, value: srcReg) otherwise panic("ReuseCopyPlan.record: srcRegs.set OOB at sequence {seq}")
+	end 'record'
+
+	// The copy to splice before the op at layout sequence `seq`, or `none`. A sequence past the
+	// last recorded copy carries none by construction (the columns only grow to the last one).
+	export function at(seq ByteCount) returns ReuseCopyLookup
+		if seq >= self.present.count() 'pastLastCopy'
+			return ReuseCopyLookup.none
+		end 'pastLastCopy'
+		let has = try self.present.get(seq) otherwise panic("ReuseCopyPlan.at: present.get OOB at sequence {seq}")
+		if not has 'coalesced'
+			return ReuseCopyLookup.none
+		end 'coalesced'
+		let destReg = try self.destRegs.get(seq) otherwise panic("ReuseCopyPlan.at: destRegs.get OOB at sequence {seq}")
+		return ReuseCopyLookup.copy(destReg, srcReg: try self.srcRegs.get(seq) otherwise panic("ReuseCopyPlan.at: srcRegs.get OOB at sequence {seq}"))
+	end 'at'
+end 'ReuseCopyPlan'
 
 // The sub-phases the timers + counters attribute time to (design §"Stats": v1's
 // "74% of self-compile" figure stood for months with ZERO sub-phase attribution).
@@ -360,7 +384,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by BOTH the checker (which simulates them) and the rewrite (which
 	// splices them). Populated during coloring.
-	var reuseCopies = ReuseCopyArray.create()
+	var reuseCopies = ReuseCopyPlan.create()
 
 	let tColor = Clock.nowMs()
 	let alloc = colorFunction(module, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
@@ -550,7 +574,7 @@ end 'collectPhiEdgeHints'
 // The colorer — a forward sweep over a `u16` in-use mask, per block
 // ==========================================================================
 
-function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns Allocation
+function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns Allocation
 	let cfg = liveness.cfg
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
@@ -565,6 +589,9 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var ordered = OpIndexArray.create()
 	var seenBelow = BitWordArray.create()
 	seenBelow.resize(wordsPerRow)
+	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
+	// under, and the same numbering the checker and the rewrite re-derive from `collectBlockOps`.
+	var blockBaseSeq = 0 as ByteCount
 
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
@@ -582,8 +609,10 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
-			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf, reuseCopies: reuseCopies)
+			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, seq: blockBaseSeq + pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf, reuseCopies: reuseCopies)
 		end 'eachOp'
+
+		blockBaseSeq = blockBaseSeq + ordered.count()
 	end 'eachBlock'
 
 	return alloc
@@ -824,7 +853,7 @@ end 'pickPreferredRegister'
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
 // def goes through `allocateReuseDef`, which may record a copy), then return the
 // block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyArray) returns RegMask
+function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, seq ByteCount, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyPlan) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -842,7 +871,7 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse
 	for o in buf 'allocDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			if operandIsReuseDef(o) 'reuse'
-				working = allocateReuseDef(o, opIdx: opIdx, pos: pos, deaths: deaths, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
+				working = allocateReuseDef(o, seq: seq, pos: pos, deaths: deaths, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
 			end 'reuse' else 'plain'
 				working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
 			end 'plain'
@@ -871,7 +900,7 @@ end 'colorOpForward'
 // register (never another dying operand's — a copy into it would clobber a value the op
 // still reads); when the input OUTLIVES, no operand register is free before the op, so
 // the dest may reuse none. `defDyingRegs` encodes exactly that.
-function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns RegMask
+function allocateReuseDef(o Operand, seq ByteCount, pos ByteCount, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns RegMask
 	let destId = operandValueId(o)
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
@@ -890,7 +919,7 @@ function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BlockD
 
 	let destReg = alloc.regNumOf(destId)
 	if destReg != inputReg 'needsCopy'
-		reuseCopies.push(ReuseCopy.create(opIdx, destReg: destReg, srcReg: inputReg))
+		reuseCopies.record(seq, destReg: destReg, srcReg: inputReg)
 		stats.copiesInserted = stats.copiesInserted + 1
 	end 'needsCopy'
 

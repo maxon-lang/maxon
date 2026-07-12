@@ -79,7 +79,7 @@ end 'raiseRegisterPressure'
 // ranked worklist of blocking values with their source def sites, and the transformation.
 function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
 	let cfg = liveness.cfg
-	let peakOp = try module.ops.get(opAtSeq(module, cfg: cfg, targetSeq: peak.peakSeq)) otherwise panic("buildRegisterPressureMessage: peak op not in module.ops")
+	let peakOp = try module.ops.get(liveness.useIndex.opAtSequence(peak.peakSeq)) otherwise panic("buildRegisterPressureMessage: peak op not in module.ops")
 	let available = reducedPoolSizeAt(peakOp, pool: pool)
 	let filePath = func.sourceFilePath.toString()
 	let loopLine = loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
