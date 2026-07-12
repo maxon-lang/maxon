@@ -96,9 +96,11 @@ export type IrBlock
 	export var opRefs as OpIndexList
 	export var terminator as Terminator
 	export var blockArgs as IrBlockArgArray
-	// Outgoing branch-argument lists, one per successor of this block.
-	// Empty for blocks whose terminator is a return or has no arguments.
-	// Populated only at the Target phase by lowerStdToX64.
+	// Outgoing branch-argument lists — the values each successor edge passes to
+	// that successor's block-args (phis). Populated by the PARSER (M4b on-the-fly
+	// SSA, `recordBranchEdge`), carried verbatim through `lowerMaxonToStd` and
+	// `prepareSkeleton`, and consumed by the register allocator's SSA destruction
+	// (after coloring). Empty for a block whose successors carry no phis.
 	export var branchEdges as BranchEdgeArray
 
 	export static function create(id BlockId, label String) returns IrBlock

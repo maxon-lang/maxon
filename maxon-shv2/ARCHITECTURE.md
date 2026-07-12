@@ -1,736 +1,1069 @@
 # maxon-shv2 — Architecture (living document)
 
 This is the onboarding document for `maxon-shv2`, the ground-up rewrite of the
-Maxon self-hosted compiler. Each section documents the *operation and invariants*
-of one part of the compiler as that part is built, so a future agent can
-understand the design without re-deriving it from the code.
+Maxon self-hosted compiler. It describes **the compiler as it is today** — the
+design of each subsystem, the invariants it holds, and the rationale where a
+choice is not self-evident from the code.
 
 It is **not a changelog** and **not a plan**:
-- [`PLAN.md`](./PLAN.md) — the full plan, milestone sequence, and locked design
+- [`PLAN.md`](./PLAN.md) — the Minimal-Core plan: stage sequence and locked
   decisions (what we intend to build, in what order).
-- [`DEVLOG.md`](./DEVLOG.md) — the dated log: milestone ledger and recon findings
-  (what has actually landed, and what we learned along the way).
-- **This document** — how the thing works, and why it is shaped that way.
+- [`DEVLOG.md`](./DEVLOG.md) — the dated record: milestone ledger, recon
+  findings, bugs found along the way (what happened, and when).
+- **This document** — how the thing works now, and why it is shaped that way.
 
-**Reading order for a new contributor:** Design Pillars → Core invariants → then
-whichever subsystem section is relevant. The subsystem sections are filled in as
-the corresponding code lands (they are stubs until then).
+When a subsystem changes, this document is **edited in place** to describe the new
+design; the story of the change belongs in `DEVLOG.md`.
+
+**Reading order:** Design pillars → Current state → Core invariants → whichever
+subsystem section is relevant.
 
 ---
 
 ## Design pillars (why shv2 exists)
 
-v1 (`maxon-selfhosted`) works but the two *integral* features — static
+v1 (`maxon-selfhosted`) works, but its two *integral* features — static
 ownership/borrowing and parallel incremental compilation — were retrofitted late
-(≈8 shared `Project` sidetables + a 7,755-line refcount inserter), making it
-slow and memory-hungry (5–6 GB). shv2 designs these in from the first commit:
+(≈8 shared `Project` sidetables + a 7,755-line refcount inserter), making it slow
+and memory-hungry (5–6 GB). shv2 designs these in from the first commit:
 
 1. **Static ownership/borrowing** — compile-time move/borrow checking that drops
    values deterministically at scope exit; runtime refcounting only where escape
    analysis proves genuine sharing.
-2. **Parallel incremental compilation** — green-thread fan-out over per-file
-   parse and per-function passes, with the multi-core runtime prerequisites
-   proven *before* the first compiler milestone.
+2. **Parallel incremental compilation** — green-thread fan-out over per-file parse
+   and per-function passes, with the multi-core runtime prerequisites proven
+   *before* the compiler needs them.
 3. **Binary event-log tracing** — DebugStream binary events to shared memory
    (near-zero overhead when off), decoded by `maxon-sharp` as the runner; powers
    `mm-trace` for ownership/memory debugging.
 
-**Final acceptance:** `maxon-shv2.exe` compiling itself in **≤30 s**,
-**≤1.7 GB RAM**, **>90% CPU** across all cores.
+**Final acceptance:** `maxon-shv2.exe` compiling itself in **≤30 s**, **≤1.7 GB
+RAM**, **>90% CPU** across all cores.
 
 ---
 
-## Core invariants (fill in as subsystems land)
+## Current state
 
-These are the load-bearing invariants the plan calls out. Each is documented in
-full in its subsystem section once built; listed here as an index.
+**~16,400 lines. One target: `x64-windows`.** Anything else panics at three
+gates (`allocatablePool`, `augmentWithRuntime`, `writeExecutable`).
 
-- **Three tiers, flat op unions** — `Maxon → Std → Target`; NO MIR tier (v1's
-  added no value model — Std's `ValueId`s already are the virtual registers).
-  Every dialect's op union is FLAT with a required `*OpMeta` struct backing, never
-  nested: Maxon boxes each payload-carrying union case, so nesting costs a heap
-  object per level on the compiler's most numerous object. *(→ Std dialect section)*
-- **Band-append invariant** — `StdOp` variants sit in category-contiguous bands so
-  passes can cover a category with one `match` range arm. **A new variant is
-  appended at the END of its band, never inserted into the middle** — a range arm
-  silently swallows anything inserted between its endpoints, with no missing-case
-  error. This is the ONE place "no silent unhandled cases" has no compiler
-  backstop; reviewers enforce it. *(→ Std dialect section)*
-- **No sugar reaches the backend** — `sugar`-category `StdOp`s are eliminated by
-  the Std→Std `lowerToMachineForm` pass. Guarded by `assertNoSugarOps` in
-  `buildBackend` (the target-neutral entry, so every backend inherits it) + an
-  explicit `panic` arm per sugar variant (never a bare `default`). Replaces the
-  type-level guarantee v1 got from its MIR boundary; spec tests are the real
-  guarantee. *(→ Std dialect section)*
-- **Live ops ≠ `module.ops`** — `IrModule.ops` is append-only; block-rebuilding
-  passes leave the ops they replaced behind as orphans. Any pass asking "what ops
-  are actually here?" must go through `IrModule.liveOpIndices(func)`, the single
-  home of the blockRefs → opRefs+terminator walk. Scanning the flat array sees dead
-  ops from every prior pass. *(→ Std dialect section)*
-- **Ownership-kind lattice** — `trivial` · `owned` · `borrow` · `shared`.
-  Born at the Maxon tier, fully resolved before `lowerMaxonToStd`. Three
-  first-class homes, zero sidetables: (1) `OwnershipKind` attribute on every
-  value/binding, (2) signature ownership modes in the function type
-  (param `consume`/`borrow`/`copy`, return `owned`/`borrow`), (3) explicit
-  `own.*` ops in the block stream. *(→ Own tier section)*
-- **Parse-staging registry set** — the parser writes only into a per-file
-  `FileParseArtifact` (MaxonModule fragment + key-and-value bundle for every
-  registry it would touch); `mergeArtifacts [M]` folds them into `Project` in
-  fixed source-path order, doing all duplicate detection at merge time.
-  *(→ Frontend / parse-staging section)*
-- **Coloring rewrites in place** — the register allocator rebuilds each op with colored
-  operands and writes it back at the SAME `module.ops` index. `block.opRefs` entries and
-  `terminatorIndex` are indices into that array; a pass that appended or compacted instead
-  would invalidate every reference in the function. Virtual registers ARE Std `ValueId`s —
-  there is no second vreg numbering. *(→ Register allocator section)*
-- **rdata deterministic-merge invariant** — the backend captures rdata constants
-  chunk-locally and merges them into the shared `GlobalDataTable`
-  single-threaded in function order (idempotent-by-label dedup). Content-derived
-  keys for all other shared appends (FNV-1a panic labels, `__float_<bits>`).
-  *(→ Backend section)*
-- **DebugStream schema is frozen** — 128-byte header, ticket spinlock, MM
-  `0x01–0x09`, Sched `0x20–0x2C`, Depth `0x40/41`, Dbg `0x50–0x5E`, `MXDS_TAGS`
-  blob. New events get new unused type codes; existing codes are never
-  reinterpreted. *(→ Event-log section)*
-- **1-core-vs-N-core byte identity** — blocking gate for the entire parallel
-  phase. *(→ Parallel driver section)*
+**The language the compiler accepts today** — a scalar core with a real register
+allocator under it:
+
+- `function name(p1 T, p2 T) returns T … end` — **≤6 parameters** (the register-arg
+  ABI cap), no defaults. Parameters are immutable value bindings.
+- **Calls** — first argument positional, every later argument labelled
+  (`f(a, b: x)`); call expressions and bare-call statements; recursion.
+- `let` / `var` bindings, `var` reassignment, integer literals, identifiers.
+- **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
+- **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
+  of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
+  comparison in value position would read stale flags — the parser rejects it).
+- **Control flow** — `if`/`else if`/`else`, `while` with labelled `break`/`continue`,
+  `return`.
+- Types: the `int`/`bool`/`float` keywords and the `ExitCode` builtin alias. No
+  user types.
+
+Everything outside that slice is rejected with a positioned diagnostic (the E-code
+registry lives in `Compiler/Diagnostics.maxon`; `E3010` is the catch-all for
+"unsupported construct").
+
+**Not built yet:** heap/ownership/drops, structs, generics, interfaces,
+strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
+*emit* (Workstream R), the parallel compilation driver, arm64/wasm. See `PLAN.md`.
+
+**The gate battery** (all four must be green before a commit):
+| Gate | What it proves |
+|---|---|
+| `maxon-shv2 spec-test` | **75 passing / 0 failing** over `specs-shv2/*.md` — the functional suite |
+| `AllocChecker` | Every function of **every** compile is symbolically verified for register correctness (a failure panics the build) |
+| `maxon-shv2 verify-warm-rebuild <file>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) |
+| `specs-shv2/fragments/x64-windows/**` | Committed Target-IR goldens — every codegen change shows up in `git diff` |
 
 ---
 
-## Subsystem sections
+## Core invariants
 
-### Frontend (lexer, parser, parse-staging)
+The load-bearing rules. Each is documented in full in its subsystem section; this
+is the index.
 
-**Type layer landed (M1 Chunk A).** `Compiler/Lexer.maxon` is copied verbatim
-(`tokenize(source) -> TokenArray throws LexerError`, table-driven DFA) with its
-two non-stdlib deps brought along: a trimmed `Compiler/Logger.maxon`
-(LogLevel/LogCategory + emit) and the `ByteOffset` typealias in
-`Targets/Shared/BinaryHelpers.maxon`. `NumberParsing.maxon` (parseInt) copied +
-one root-cause fix (a byte-element-type mismatch in `b"…"` vs `.toByteArray()`
-comparison, latent in v1, masked there by the compile cache). IR containers are
-in: `IR/IrValueId.maxon` (zero-dep typealiases), `IR/IrBlock.maxon`,
-`IR/IrModule.maxon` (generic `uses Op`; `MaxonModule = IrModule with MaxonOp`),
-`IR/IrFunction.maxon` (deliberately **thinned** — dropped v1's per-ValueId
-refcount side-tables + 6-way `OwnershipClass` + generics/ABI cone, which the
-static Own tier and later milestones supersede), `IR/Maxon/SourceRange.maxon`,
-`IR/Maxon/Scope.maxon`.
+- **Three tiers, flat op unions** — `Maxon → Std → Target`. There is NO MIR tier:
+  Std's `ValueId`s already *are* the virtual registers. Every dialect's op union is
+  FLAT with a required `*OpMeta` struct backing, never nested — Maxon boxes each
+  payload-carrying union case, so nesting costs a heap object per level on the
+  compiler's most numerous object. *(→ Std dialect)*
+- **Band-append** — op variants sit in category-contiguous bands so a pass can cover
+  a category with one `match` range arm. **A new variant is appended at the END of
+  its band, never inserted into the middle** — a range arm silently swallows anything
+  inserted between its endpoints, with no missing-case error. This is the ONE place
+  "no silent unhandled cases" has no compiler backstop; reviewers enforce it.
+  *(→ Std dialect)*
+- **No sugar reaches the backend** — `sugar`-category `StdOp`s must be eliminated
+  before `buildBackend`, which gates on `assertNoSugarOps`. *(→ Std dialect)*
+- **Live ops ≠ `module.ops`** — `IrModule.ops` is append-only; block-rebuilding passes
+  leave the ops they replaced behind as orphans. Any pass asking "what ops are actually
+  here?" goes through `IrModule.liveOpIndices(func)`, the single home of the blockRefs →
+  opRefs+terminator walk. Scanning the flat array sees dead ops from every prior pass.
+  *(→ Std dialect)*
+- **Source spans live in a table, not on the op** — `SourceRangeTable`'s four dense
+  scalar columns, appended in lockstep with ops through a single choke point.
+  *(→ Maxon dialect)*
+- **The parser writes only into a `FileParseArtifact`** — never into `Project`.
+  `mergeArtifact` is the single writer of every shared registry. A file's parse is a
+  pure function of `(tokens, filePath, namespace)`, which is what makes the per-file
+  fan-out possible with no further parser change. *(→ Frontend)*
+- **Virtual registers ARE Std `ValueId`s** — there is no second vreg numbering anywhere
+  in shv2. *(→ Register allocator)*
+- **Coloring rewrites ops in place** — at the SAME `module.ops` index. `block.opRefs`
+  entries and `terminatorIndex` are indices into that array; a pass that appended or
+  compacted instead would invalidate every reference in the function.
+  *(→ Register allocator)*
+- **The `AllocChecker` runs on every function of every compile** — because spec
+  fragments are *outputs*, not gates: the suite would go green on a wrong-but-
+  self-consistent allocator. *(→ Register allocator)*
+- **Ownership-kind lattice** — `trivial · owned · borrow · shared`, with three
+  first-class homes and zero sidetables. Declared, inert until the ownership stage.
+  *(→ Own tier)*
 
-**Parser + parse-staging landed (M1 Chunk C).** `Compiler/Parser.maxon` is the
-thin `return <int-literal>` slice: `parseModule → dispatchTopLevel(function) →
-parseFunction → parseOptionalReturnType → parseStatements → parseReturnStatement
-→ parseExpression → parsePrimary → parseIntLiteral → emitLiteral`, with a small
-index cursor and a per-function `ValueIdRef` (seeded at `paramCount`). Two
-structural changes from v1. **(1) Value numbering is born here** — every op's
-result gets its dense function-local `ValueId` at emit time, not at the Maxon→Std
-boundary (see the Maxon dialect section). **(2) The parallel-ready seam: it takes
-no `Project` and writes exclusively into a per-file `FileParseArtifact`** — the
-file's own
-`MaxonModule` fragment, its own LOCAL `TypeNameInterner`, and an ordered
-`funcReturnTypes` contribution array. So a file's parse is a pure function of
-`(tokens, filePath, namespace)` with zero shared state (M5's per-file fan-out
-needs no further parser change). Anything outside the current slice is rejected
-with a positioned `ParseError` that `queryParseOps` turns into a project diagnostic
-(rendered `error E<code>: <file>:<line>:<col>: <msg>` when the span is real, or
-prefix-free for whole-program checks whose line is 0) — the parser itself never
-touches `Project` or `project.diagnostics`.
+---
 
-**M2 grew the slice** to `let`/`var` statements, variable references, and a
-left-associative binary `+`. `let`/`var` bind a name to the initializer's SSA
-`ValueId` in `Scope` (`declareValueBinding`); a reference is a `Scope.lookupValue`
-resolved AT PARSE TIME — so `let x = 42; return x` mints no `x` op at all and lowers
-identically to `return 42`. (`var` parses like `let`; mutability + reassignment
-arrive with the mem2reg/slot model when a spec needs them.) `+` emits the one new op
-(`MaxonOp.binOp`).
+## Driver and CLI
 
-**M3 replaced the left-fold with a Pratt precedence climber.** `parseBinary(minPrec)`
-parses an operand then, while the next token is a supported infix op with
-`precedence >= minPrec`, consumes it and recurses the right operand at `prec + 1`
-(the `+1` is what makes it left-associative). `parseUnary` is the climber's leaf:
-a prefix `-` consumes then parses a PRIMARY (not another unary), so unary binds
-tighter than every binary op but does not chain — `- -x` raises **E2004** at the
-second `-`. Precedence table: multiplicative (`*`) above additive (`+`/`-`).
-Deferred operators (`/`/`mod` → M5, comparison → M4) are rejected in operator
-position with a positioned `E3010 … arrives at Mn` note, so the precedence table
-extends cleanly rather than being rewritten. Integer `sub`/`mul` join `add` as
-`binOp` opcodes; unary minus is `MaxonOp.unaryOp`/`StdOp.unaryOp{neg}` (always a
-runtime `neg`, no `-<literal>` const-fold — uniform with `-x`).
+`Main.maxon` → `Compiler.compile`. Three commands:
 
-**`Compiler/ParseStaging.maxon`** owns `FileParseArtifact` + `mergeArtifact(project,
-target, artifact)`, the **single writer** of the shared `Project` derived
-registries. It (1) folds the artifact's local interner into `project.typeNames`
-(via `TypeNameInterner.foldInto`, returning a `TypeNameRemap`), (2) remaps the
-artifact's `named(id)` references when the fold moved ids (M2 multi-file path;
-identity for M1's single file → skipped), (3) offset-merges the `MaxonModule`
-fragment into the accumulator via `IrModule.merge`, and (4) commits the
-`funcReturnTypes` entries. Because the parser wrote nothing to `Project`
-speculatively, there is **no ParseDelta rollback dance** — v1's ~28-registry
-rollback machinery is replaced by "artifacts are the source of truth; rebuild
-the derived registries from them on every `queryAllModule` miss"
-(`resetMergeTargets`). The registry set is one family (`funcReturnTypes`) at M1;
-it grows toward v1's ~28 per milestone, each as an ordered contribution array.
-Interner NOTE: for a *cached* artifact, a non-identity remap must clone before
-rewriting (it must not mutate the cache in place) — a documented M2 refinement,
-never triggered at M1 (single file → identity remap).
+| Command | Purpose |
+|---|---|
+| `maxon-shv2 build <file\|dir> [-o out] [--emit-ir]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. |
+| `maxon-shv2 spec-test [dir]` | Run the spec suite (default `specs-shv2`) and regenerate fragments. |
+| `maxon-shv2 verify-warm-rebuild <file>` | The determinism + incrementality gate. |
 
-`Compiler/Project.maxon` **grew** the `Project` struct (`db`/`funcReturnTypes`/
-`typeNames`/`rootPath`/`target`/`diagnostics`/`globalData`) + `createProject` +
-the diagnostic sink helpers, GROWING (not redefining) the Chunk-A foundation.
+`--log=<category>:<level>` enables the `Logger` categories (`codegen` carries the
+register-allocator stats).
 
-**Scope ownership scaffold:** `Scope.ownedStack` runs parallel to `frameStack`,
-pushed/popped in lockstep by `pushScope`/`popScope` (panic on unmatched pop —
-they must stay parallel). All 4 `declare*` paths funnel through
-`recordInCurrentFrame`, which records into `ownedStack` **only when the binding
-is non-trivial** — inert at M1 (all bindings trivial), drained at M6 to emit
-`own.drop`/`own.release`.
+`Compiler.compile` builds a `Project`, runs the pass pipeline, then goes
+**backend-direct**: `buildBackend(stdModule, target, globalData)` → `writeExecutable`.
+There is no second "backend pipeline" — a `CodeResult` is not an IR module.
 
-### Maxon dialect
+Diagnostics are printed by `compile` on the failure path, and the error is re-signaled
+as a **fresh** `compileError`. (Re-throwing the *caught* error NULL-increfs under the
+C#-emitted refcount runtime; a fresh throw of the same arm is clean. A driver-shape
+gotcha worth remembering.)
 
-**Landed (M1 Chunk A), thin + growable.** `IR/Maxon/MaxonDialect.maxon`:
-- `MaxonOp` union — `literal(result, value, valueType, range)`, `ret(retVal,
-  range)`, `retVoid(range)`, each tagged `= MaxonOpMeta{category}` (v1's
-  invariant: a new op cannot be added without declaring its `OpCategory`).
-  Variants sit in **category-contiguous bands** with the same **append-at-the-end-
-  of-a-band** invariant `StdOp` carries — a range arm silently swallows anything
-  inserted between its endpoints.
-- **Value operands are `ValueId`s, minted by the PARSER** (a correction of v1;
-  landed post-M1). v1 named Maxon values with `ByteArray`s and let
-  `lowerMaxonToStd` assign the "real" ids — but v1's result names were themselves
-  synthetic `$tN` strings off a per-function counter (`mintSynthName`), and the
-  ids were a *second* per-function counter. The mapping was a **bijection between
-  two dense counters**, bought with a heap `String` + heap `ByteArray` per value
-  and a byte-sequence-keyed hash map (O(len) compares; one insert + one lookup per
-  value). It constructed **no SSA**: user variables are `VarSlot`s, and real SSA
-  construction is `mem2reg`'s job at the Std tier. So `lowerMaxonToStd` passes ids
-  through verbatim and `nameToId`/`defineName`/`resolveName` do not exist. What
-  the front end genuinely needs it keeps in better homes: **source spans** on the
-  op (`range` — what the LSP actually maps cursor offsets against; it never needed
-  names) and **name resolution** in `Scope`. Identifier TEXT that is not a value —
-  a field name, a method name — stays a `ByteArray`; the split is "is this operand
-  a VALUE or a NAME?", ~90/10 in favour of values.
-- `retVoid` is a **distinct variant**, not a `ret` carrying an absent-value
-  sentinel: `ValueId` has no empty value, and a sentinel is what the project
-  forbids. (v1 passed an empty `ByteArray`, which only ever "worked" because a
-  void `main` is rejected by E3002 before lowering runs.)
-- **Source spans are NOT a field on the op.** Every Maxon op has one, but it lives
-  in `SourceRangeTable` — an op-parallel store of **four dense scalar columns**
-  (`startBytes`/`endBytes`/`lines`/`columns`), keyed by op index. `SourceRange` is
-  a `type`, so an inline `range` field is a POINTER to a heap-boxed SourceRange:
-  one live heap object per op, on the compiler's most numerous object, retained for
-  the module's lifetime. (Note an `Array with SourceRange` would NOT fix this — it
-  is an array of pointers to the same boxes. The scalar columns are the point.) A
-  `SourceRange` is materialized only by `SourceRangeTable.get`, i.e. only when a
-  diagnostic or an LSP query asks — the cold path. Parsing and lowering never
-  allocate one.
-  - **A MAXON-TIER table.** It lives on `FileParseArtifact` (per file) and
-    `Project` (whole-program, folded by `mergeArtifact` in lockstep with
-    `IrModule.merge`). Std and Target carry no spans — the same reason `StdOp` has
-    no `range` field.
-  - **Parallelism invariant.** Ops and spans are appended together by the single
-    choke point `FileParseArtifact.emitOp`/`emitTerminator` — the only way a Maxon
-    op is created. `SourceRangeTable.record` asserts the op index it is handed
-    equals the table's own count, which IS the invariant, checked on every op: if
-    anything ever appended a Maxon op behind the choke point's back, the next emit
-    panics instead of silently shifting every later span by one.
-  - Per-ARGUMENT spans (v1's `argRanges` on the call ops, M5+) are genuine per-arg
-    payload, not per-op, so they stay inline on the op as a `SourceRangeArray`.
-- `MaxonType` union — `boolean/integer/float/named(TypeNameId)/exitCode/
-  unresolved`. `named` is the parser's interned type reference; `unresolved` its
-  placeholder. **`exitCode` (added M1 Chunk C)** is the RESOLVED form of the
-  `ExitCode` builtin alias — a width-FREE tag like `boolean`/`integer`. Its
-  unsigned-32-bit width is assigned only at the Maxon→Std boundary
-  (`maxonTypeToStdType` → `StdType.u32`), so the "MaxonType carries no width;
-  width collapse happens only in lowering" invariant holds. TypeResolution
-  eliminates `named`/`unresolved` before lowering. Void is not a MaxonType —
-  `MaxonReturnType{void, value}` carries return slots.
-- **`OwnershipKind` lattice** — `trivial | owned | borrow | shared`, the plan's
-  first-class Maxon-tier ownership. Three homes, zero sidetables: (1) the
-  attribute (`VarInfo.ownership`, defaulted `trivial`), (2) signature modes in
-  the function type (M5/M6), (3) explicit `own.*` ops (M6). `isTrivialOwnership`
-  is the shared classifier. Present-but-inert at M1; M6 activates it.
+## Query spine (incremental)
 
-Later milestones GROW `MaxonType` (string/char/function/generic/interface arms),
-`MaxonOp` (var/arith/call/control-flow), and the signature ownership modes.
+`QueryDatabase` / `QueryEngine` / `Queries` implement
+`querySourceFile → queryTokens → queryParseOps → queryAllModule`.
 
-### Std dialect
+**Memo validity is a content-hash compare, not a revision-counter walk.**
+`fileChanged` computes an FNV-1a `ContentHash` per file — there is no shared
+`currentRevision` counter for parallel queries to contend on. Each per-file memo
+stamps the `keyHash` it was derived from and is valid iff that still equals the file's
+current hash; `queryAllModule` keys its merged-module memo on the **composite** hash
+folded over every file's hash in source-path order.
 
-**Landed M1 Chunk A; restructured post-M1 (flat + 3-tier).** `IR/Std/StdDialect.maxon`
-is the mid-level tier — and, since the MIR tier was dropped, also the
-**machine-level** tier. Two invariants define its shape, and both are load-bearing:
+`queryParseOps` produces a `FileParseArtifact` and touches no `Project` state (the
+parser is pure). `queryAllModule` on a miss calls `resetMergeTargets` and re-folds the
+artifacts through `mergeArtifact` — so there is **no rollback machinery**: artifacts are
+the source of truth, and the derived registries are rebuilt from them.
 
-**1. There is NO MIR tier.** Tiers are `Maxon → Std → Target`. v1's `lowerStdToMir`
-was ~90% a mechanical 1:1 rename: Std's `ValueId`s **already are** the infinite
-virtual registers MIR claimed to introduce, so the tier bought no new value model —
-only a whole extra module copy in RSS and a wall that hid dead code (v1's
-`MirOp.movReg` has zero construction sites yet still forces match arms in five
-places). Everything v1 ran *on* MIR (`commuteForCoalescing`, `scheduleInstructions`)
-is a Std-tier pass here, and MIR's one piece of real content — desugaring — becomes
-a **Std→Std** pass, `lowerToMachineForm`.
+Failure is never cached (a failed tokenize/parse, or a parse that merely reported a
+diagnostic, returns an empty result uncached), so a fixed file recompiles cleanly.
+
+The dependency graph (`recordDependency` / `clearDepsFor` / `activeQueryStack`) is
+**recorded but does not yet drive invalidation** — content hashes do. It is maintained
+from day one so that when a query genuinely depends on another file's *derived* state,
+the wiring is already there.
+
+`verify-warm-rebuild` (`Compiler/VerifyWarmRebuild.maxon`) is the standing gate over
+this spine, asserting two properties and exiting 0 iff both hold:
+1. **Determinism** — compile the file to a `CodeResult` twice, each with its OWN fresh
+   `Project`/`QueryDatabase`, and byte-compare all emitted sections.
+2. **Incrementality** — in one `Project`, `queryAllModule` twice (cold miss, then hit)
+   plus `probeRebuildCacheHits` re-querying each file's tokens/parse, asserting via the
+   DB hit/miss counters that the rebuild is a content-hash **hit**.
+
+It sidesteps a real trap: `resolveTypes` mutates the merged module in place and
+`queryAllModule` hands back that same memoized object — so the determinism check must
+use independent projects, and the cache check must run only `queryAllModule` (never the
+mutating pipeline) between its probes. `build` and the gate share one
+`compileToCodeResult(project)`; a determinism gate over a divergent path would prove
+nothing.
+
+## Frontend (lexer, parser, parse-staging)
+
+`Compiler/Lexer.maxon` is a table-driven DFA: `tokenize(source) -> TokenArray throws
+LexerError`. It already lexes far more than the parser accepts (float/string/char
+literals, `and`/`or`/`not`, `as`, all the declaration keywords) — the parser rejects
+what it cannot yet handle, so the lexer needs no gating.
+
+`Compiler/Parser.maxon` is a recursive-descent parser with a **Pratt precedence climber**
+for expressions. `parseBinary(minPrec)` parses an operand, then while the next token is a
+supported infix operator with `precedence >= minPrec`, consumes it and recurses the right
+operand at `prec + 1` — the `+1` is what makes it left-associative. `parseUnary` is the
+climber's leaf: a prefix `-` consumes and then parses a PRIMARY, not another unary, so
+unary binds tighter than every binary operator but does not chain (`- -x` is `E2004`).
+Precedence: comparison < additive < multiplicative.
+
+Two structural properties define the parser's shape:
+
+**1. Value numbering is born here.** Every op's result gets its dense function-local
+`ValueId` at emit time, not at the Maxon→Std boundary. Parameters are pre-bound to the
+reserved ids `0..paramCount-1`.
+
+**2. It takes no `Project`.** The parser writes exclusively into a per-file
+`FileParseArtifact` — the file's own `MaxonModule` fragment, its own `SourceRangeTable`,
+its own LOCAL `TypeNameInterner`, and ordered contribution arrays for each shared
+registry. A file's parse is a pure function of `(tokens, filePath, namespace)` with zero
+shared state, so per-file fan-out needs no further parser change. A rejected construct
+becomes a positioned `ParseError` that `queryParseOps` turns into a project diagnostic
+(rendered `error E<code>: <file>:<line>:<col>: <msg>`) — the parser itself never touches
+`Project` or `project.diagnostics`.
+
+### Names, SSA, and phis — all at parse time
+
+There are **no stack slots and no `mem2reg`**. Name resolution and SSA construction both
+happen in the parser:
+
+- `let`/`var` bind a name to the initializer's SSA `ValueId` in `Scope`
+  (`declareValueBinding`); a reference is a `Scope.lookupValue` resolved AT PARSE TIME.
+  So `let x = 42; return x` mints no `x` op at all and lowers identically to `return 42`.
+- A `var` **reassignment** rebinds the variable's current SSA `ValueId` via
+  `Scope.setValue` — no slot, no `store`/`load` (the Std memory band is still empty).
+- **Phis are `IrBlock.blockArgs` + `branchEdges`**, minted eagerly by the parser at the
+  three merge points it structurally knows: **loop headers** (one per mutable var in
+  scope), **loop exits** that a `break` reaches, and **`if` continuations** (merging the
+  then/else values). Every predecessor records the value it carries per phi on its
+  `branchEdge`, so operands are known at mint time — a single forward pass, no deferred
+  backpatch.
+
+*Rationale:* the alternative was porting v1's IDF `Mem2Reg` (2,327 lines), which needs
+`alloca`/`store`/`load`, a dominance-frontier module, and a dominator-tree rename pass —
+none of which shv2 has. The parser already has full structural knowledge of a *structured*
+CFG and lands phis at the **same blocks** v1's IDF would. v1's mem2reg becomes the port
+target if and when shv2 grows unstructured control flow.
+
+Loop targets come from a **loop-context stack** on the parser (`self.loops`), pushed
+around each `while` body: `LoopContext{label, headerId, exitId, phiVars, hasBreak}`.
+`resolveControlTarget` returns the innermost loop or searches by label — `E2047` (no
+enclosing/matching loop), `E2048` (label names the loop's own header).
+
+### Scope
+
+`Scope` today tracks exactly what the parser uses: value bindings (name → current SSA
+`ValueId` + mutability), via `declareValueBinding` / `setValue` / `lookupValue`.
+
+It also carries a **block-scoping and ownership scaffold** — `frameStack`, `ownedStack`,
+`pushScope`/`popScope` (which panic on unmatched pop, since they must stay parallel), and
+a `recordInCurrentFrame` that records a binding into `ownedStack` only when it is
+non-trivial. **That scaffold is currently unreachable**: nothing calls `pushScope`, so
+there is no lexical block scoping (a `let` inside an `if` body outlives the `if`), and
+`ownedStack` is never touched. It is wired up when block scoping lands, and drained to
+emit `own.drop`/`own.release` at the ownership stage.
+
+### Parse-staging
+
+`Compiler/ParseStaging.maxon` owns `FileParseArtifact` + `mergeArtifact(project, target,
+artifact)`, **the single writer** of the shared `Project` registries. `mergeArtifact`:
+
+1. folds the artifact's local interner into `project.typeNames` (`TypeNameInterner.foldInto`
+   → a `TypeNameRemap`), and if the fold moved ids, `remapArtifact` rewrites the artifact's
+   `named(id)` references;
+2. offset-merges the `MaxonModule` fragment into the accumulator (`IrModule.merge`);
+3. appends the artifact's `SourceRangeTable` in lockstep (asserting the op counts agree);
+4. commits each registry contribution — `funcReturnTypes` (upsert) and `funcSignatures`
+   (which carries the **whole-program duplicate-function check**, `E2001`).
+
+Because the parser wrote nothing to `Project` speculatively, there is no ParseDelta
+rollback dance. Each new registry family arrives the same way: an ordered contribution
+array on the artifact, folded here.
+
+**Interner note:** for a *cached* artifact, a non-identity remap must clone before
+rewriting — it must not mutate the cache in place.
+
+The `Project` registry set today is small: `funcReturnTypes`, `funcSignatures`
+(param names + types), `typeNames`, `opRanges`, plus `diagnostics`, `globalData`, `db`,
+`rootPath`, `target`. It grows toward v1's ~28 as the language does.
+
+## Maxon dialect
+
+`IR/Maxon/MaxonDialect.maxon` — the surface-level IR the parser emits.
+
+**`MaxonOp`** (in band order; `OpCategory` bands `callFree` … `plain`, with
+`callMethod`/`panicking`/`varAccess`/`awaiting`/`closureProducer`/`ownership` declared but
+empty):
+
+| Band | Variants |
+|---|---|
+| `callFree` | `call(result, callee, args, argLabels, argRanges)` |
+| `plain` | `literal`, `ret`, `retVoid`, `binOp`, `unaryOp`, `compare`, `condBranch`, `branch` |
+
+Every variant is tagged `= MaxonOpMeta{category}` — a new op cannot be added without
+declaring its `OpCategory` — and obeys the band-append invariant.
+
+**Value operands are `ValueId`s, minted by the parser.** Identifier TEXT that is *not* a
+value — a callee name, a field name, a method name — stays a `ByteArray`. The split is "is
+this operand a VALUE or a NAME?", roughly 90/10 in favour of values.
+
+*Rationale:* v1 named Maxon values with `ByteArray`s and let `lowerMaxonToStd` assign the
+"real" ids. But v1's result names were themselves synthetic `$tN` strings off a per-function
+counter, and the ids were a *second* per-function counter — so the mapping was a **bijection
+between two dense counters**, bought with a heap `String` + heap `ByteArray` per value and a
+byte-sequence-keyed hash map (O(len) compares; one insert + one lookup per value). It
+constructed no SSA. Here, `lowerMaxonToStd` passes ids through verbatim and there is no
+`nameToId`/`defineName`/`resolveName` at all.
+
+**`retVoid` is a distinct variant**, not a `ret` carrying an absent-value sentinel:
+`ValueId` has no empty value, and sentinels are forbidden.
+
+**Source spans are NOT a field on the op.** Every Maxon op has one, but it lives in
+`SourceRangeTable` — an op-parallel store of **four dense scalar columns**
+(`startBytes`/`endBytes`/`lines`/`columns`), keyed by op index.
+
+*Rationale:* `SourceRange` is a `type`, so an inline `range` field would be a POINTER to a
+heap-boxed SourceRange — one live heap object per op, on the compiler's most numerous
+object, retained for the module's lifetime. (An `Array with SourceRange` would NOT fix
+this; it is an array of pointers to the same boxes. The scalar columns are the point.) A
+`SourceRange` is materialized only by `SourceRangeTable.get`, i.e. only when a diagnostic
+or an LSP query asks — the cold path. Parsing and lowering never allocate one.
+
+- **It is a MAXON-TIER table.** It lives on `FileParseArtifact` (per file) and `Project`
+  (whole-program, folded by `mergeArtifact` in lockstep with `IrModule.merge`). Std and
+  Target carry no spans — the same reason `StdOp` has no `range` field, and why the
+  post-inline peak module will pay nothing for them.
+- **Lockstep invariant.** Ops and spans are appended together by the single choke point
+  `FileParseArtifact.emitOp`/`emitTerminator` — the only way a Maxon op is created.
+  `SourceRangeTable.record` asserts the op index it is handed equals the table's own count:
+  if anything ever appended a Maxon op behind the choke point's back, the next emit panics
+  instead of silently shifting every later span by one.
+- Per-ARGUMENT spans (`argRanges` on `call`) are genuine per-arg payload, not per-op, so
+  they stay inline on the op.
+
+**`MaxonType`** — `boolean | integer | float | named(TypeNameId) | exitCode | unresolved`.
+`named` is the parser's interned type reference. `exitCode` is the RESOLVED form of the
+`ExitCode` builtin alias — a width-FREE tag like `boolean`/`integer`; its unsigned-32-bit
+width is assigned only at the Maxon→Std boundary (`maxonTypeToStdType` → `StdType.u32`), so
+the invariant "MaxonType carries no width; width collapse happens only in lowering" holds.
+Void is not a MaxonType — `MaxonReturnType{void, value}` carries return slots.
+
+`MaxonType` stays a **boxed union**: packing it into an i64 would forfeit compiler-checked
+payload extraction, and the static guarantee is worth more than the allocations.
+
+**`OwnershipKind`** — `trivial | owned | borrow | shared`. Three homes, zero sidetables:
+(1) the attribute (`VarInfo.ownership`), (2) signature ownership modes in the function type,
+(3) explicit `own.*` ops. `isTrivialOwnership` is the shared classifier. Present but inert:
+every binding is `trivial` today.
+
+## Type resolution & semantic check (Maxon tier)
+
+`TypeResolution.resolveTypes(project, module)` replaces every `named`/`unresolved`
+`MaxonType` in the module's function signatures with a concrete one, and re-syncs each
+resolved signature/return type into `project.funcSignatures`/`funcReturnTypes` (SemanticCheck's
+source of truth). The **only** named type it resolves is the `ExitCode` builtin alias,
+recognized by name without loading a stdlib; any other named type panics loudly. The
+typealias registry and user types arrive with the struct/generics stages.
+
+`SemanticCheck.semanticCheck(project)` runs the whole-program checks:
+- **E3001** — no `main`; **E3002** — `main` does not return `ExitCode`.
+- **Call validation** against `funcSignatures` — **E3030** unknown function, **E3031** arity,
+  **E3032** unknown argument label, **E3033** duplicate argument — via the shared
+  `slotCallArgs`, which is the ONE label→position mapping (lowering uses the same function,
+  so a call cannot be validated against one slotting and lowered against another).
+
+Both append a `Diagnostic`; the pipeline's error gate then bails.
+
+## Std dialect
+
+`IR/Std/StdDialect.maxon` is the mid-level tier — and, since there is no MIR tier, also the
+**machine-level** tier. Two invariants define its shape, and both are load-bearing.
+
+**1. There is NO MIR tier.** Tiers are `Maxon → Std → Target`.
+
+*Rationale:* v1's `lowerStdToMir` was ~90% a mechanical 1:1 rename. Std's `ValueId`s
+**already are** the infinite virtual registers MIR claimed to introduce, so the tier bought
+no new value model — only a whole extra module copy in RSS and a wall that hid dead code
+(v1's `MirOp.movReg` has zero construction sites yet still forces match arms in five
+places). Everything v1 ran *on* MIR (`commuteForCoalescing`, `scheduleInstructions`) is a
+Std-tier pass here, and MIR's one piece of real content — desugaring — is a **Std→Std**
+pass, `lowerToMachineForm`.
 
 **2. `StdOp` is FLAT** — one union, no `StdOp.arith(StdArithOp.const(StdArithConst))`
-nesting. Maxon heap-boxes and refcounts every payload-carrying union case, so each
-nesting level is another heap object: nested = **3 boxes per op**, flat = **1**, on
-the most numerous object in the whole compiler. (v1's own StdDialect header admits
-the nesting was a migration artifact kept "so existing pass code that matches on
-these variants keeps working," not a design.) Coarse membership — "is this any kind
-of call?" — is recovered without nesting from the `StdOpMeta` struct backing every
-variant is REQUIRED to carry: `category` (`StdOpCategory`), `role` (`OpRole`:
-plain/ret/errorReturn/param), the two inliner axes (`isPure`,
-`isUnsupportedInInlineBody`), and the scheduler facts (`isMemory`/`isStore`/
-`isCall`/`clobbersFlags`/`isCmp`). A new variant cannot be added without declaring
-all of it.
+nesting.
 
-**Purity is declared PER VARIANT, and that is the flat union's real payoff.** v1
-could only answer "is this op side-effect-free?" by CATEGORY, at the match site:
-`Inliner.isPureOp` reads `arith gives true; control gives true; call(c) gives
-c.rawValue.isPureForInlining; memory/system give false`. A category blanket has no
-way to say a *trapping* op is impure — v1's `arith gives true` calls an integer
-`div` pure even though it faults on divide-by-zero. With per-variant metadata, M3's
-`div` simply declares `isPure: false` and nothing else changes. (`clobbersFlags` is
-a lowering artifact, not a side effect: a flag-clobbering op is still `isPure`.)
+*Rationale:* Maxon heap-boxes and refcounts every payload-carrying union case, so each
+nesting level is another heap object: nested = **3 boxes per op**, flat = **1**, on the most
+numerous object in the whole compiler.
 
-**Bands, and the one rule that has no compiler backstop.** Variants are declared in
-**category-contiguous bands** in `StdOpCategory` order (arith · control · call ·
-memory · system · sugar), so a pass that treats a whole category uniformly covers it
-with ONE `match` range arm instead of one arm per variant. The cost: a range arm
-names its endpoints, so it **silently swallows anything inserted between them** — no
-missing-case error, and the new op is misclassified at every range-arm site at once.
+Coarse membership — "is this any kind of call?" — is recovered without nesting from the
+`StdOpMeta` struct **every variant is required to carry**: `category` (`StdOpCategory`),
+`role` (`OpRole`: plain/ret/errorReturn/param), the two inliner axes (`isPure`,
+`isUnsupportedInInlineBody`), and the scheduler facts (`isMemory`/`isStore`/`isCall`/
+`clobbersFlags`/`isCmp`). A new variant cannot be added without declaring all of it.
 
-> **INVARIANT: append a new variant at the END of its band. Never insert into the
-> middle of one.** This is the single place the project's "no silent unhandled cases"
-> rule is a convention rather than a compiler-enforced property. Reviewers must
-> enforce it by hand.
+**Purity is declared PER VARIANT, and that is the flat union's real payoff.** v1 could only
+answer "is this op side-effect-free?" by CATEGORY, at the match site — and a category blanket
+has no way to say a *trapping* op is impure, so v1's `arith gives true` called integer `div`
+pure even though it faults on divide-by-zero. Here `div`/`mod` simply declare `isPure: false`
+and nothing else changes. (`clobbersFlags` is a lowering artifact, not a side effect: a
+flag-clobbering op is still `isPure`.)
 
-**The sugar band.** v1 enforced "no sugar reaches the backend" with a *type*: sugar
-ops lived in `StdOp` and had no `MirOp` counterpart, so the tier boundary made them
-unrepresentable downstream. Collapsing the tier gives that up; the replacement is
-deliberate, not accidental — (1) `assertNoSugarOps(module)`, a whole-module gate
-run by **`buildBackend`**, the single target-neutral backend entry (NOT inside the
-x64 lowering — sugar is a property of the Std tier, not of x64, so putting it at the
-one shared entry means arm64/wasm inherit it instead of each having to remember to
-re-add it), and (2) an explicit `panic("… must be desugared by lowerToMachineForm")`
-match arm per sugar variant (never a bare `default`, which is exactly what would
-swallow a new case). **Spec tests are the real guarantee.** Both guards are vacuous
-at M1 — no sugar variants exist yet — so `lowerToMachineForm` itself is NOT written;
-it arrives with the first sugar op (M6 `drop`/`free`, M14 descriptors/witness
-tables).
+**The current variant set**, in band order:
 
-`assertNoSugarOps` walks **live** ops via `IrModule.liveOpIndices(func)`, never the
-flat `module.ops` array. That array is append-only: block-rebuilding passes clear a
-block's `opRefs` and re-append fresh ops, leaving the replaced ops behind as orphans.
-`lowerToMachineForm` is exactly such a pass, so the sugar ops it desugars *survive in
-`module.ops`* — scanning the flat array would panic on dead entries and report a
-desugaring failure that never happened. `liveOpIndices` is now the single home of the
-funcs → blockRefs → blocks → opRefs+terminator descent (`liveOpCount` goes through it
-too).
+| Band | Variants |
+|---|---|
+| `arith` | `const`, `binOp(opcode)`, `unaryOp(opcode)`, `cmp(pred)`, `binOpImm(imm)`, `cmpImm(imm)`, `div`, `mod` |
+| `control` | `condBranch`, `branch` |
+| `call` | `ret` (role `ret`), `param` (role `param`), `call` |
+| `memory` · `system` · `sugar` | *(empty)* |
 
 Flat does **not** mean one variant per opcode: a family sharing an operand shape
-(`add`/`sub`/`mul`) stays one variant with an opcode field, but a member needing
-*different metadata* (a compare sets `isCmp`) splits out, because the `StdOpMeta`
-backing attaches per variant and cannot reach an opcode buried in a field. M2
-landed `binOp(… opcode StdBinOpcode)` with the `add` opcode; M3 extends the opcode
-set and splits out a separate `cmp(…)` for exactly that reason.
+(`add`/`sub`/`mul`) stays one variant with an opcode field, but a member needing *different
+metadata* splits out — because the `StdOpMeta` backing attaches per variant and cannot reach
+an opcode buried in a field. That is why `cmp` is its own variant (`isCmp: true`) and
+`div`/`mod` are their own (`isPure: false` — `idiv` traps — plus fixed-register lowering).
+`const` carries a `StdType` rather than v1's `constI64`/`constF64` opcode pair: it subsumes
+MIR's `isFloat` bool and makes i32/u8/f32 representable without new opcodes.
 
-The union holds `const(resultId, value, valueType)`, `ret(retValId)`,
-`binOp(resultId, lhs, rhs, opcode StdBinOpcode)` (M2 `add`; M3 added `sub`/`mul` —
-same variant, opcode field, `StdOpMeta` `isPure: true` since integer add/sub/mul
-never trap / `clobbersFlags: true`), and `unaryOp(resultId, operand, opcode
-StdUnaryOpcode)` (M3, `neg`) — all appended at the END of the arith band. M5's
-`div`/`mod` split out (they need `isPure: false` — `idiv` traps — and fixed-register
-lowering); M4's comparison splits out as `cmp` (`isCmp: true`). `const` carries a
-`StdType` rather than v1's
-`constI64`/`constF64` opcode pair — it subsumes MIR's `isFloat` bool and makes
-i32/u8/f32 representable without new opcodes.
-`StdType`/`StdTypeInfo`/`CastCategory`/`StdReturnType` are unchanged from Chunk A.
+### Bands, and the one rule with no compiler backstop
 
-### Own tier (ownership infer / check / escape / drops)
-_Passes are a stub — filled in at M6. But one structural decision is PINNED now,
-because getting it wrong at M6 is a rewrite and writing it down today is free:_
+Variants are declared in **category-contiguous bands** in `StdOpCategory` order, so a pass
+that treats a whole category uniformly covers it with ONE `match` range arm instead of one
+arm per variant. The cost: a range arm names its endpoints, so it **silently swallows
+anything inserted between them** — no missing-case error, and the new op is misclassified at
+every range-arm site at once.
 
-**`own.*` ops are a BAND OF `MaxonOp` — not a separate dialect, not a tier.**
-"Own tier" names a *pass group* (`OwnershipInfer` → `OwnershipCheck` →
-`EscapeAnalysis` → `InsertDrops`), all of which run over the Maxon module. It is
-not a fourth IR tier: tiers are `Maxon → Std → Target`, full stop.
+> **INVARIANT: append a new variant at the END of its band. Never insert into the middle of
+> one.** This is the single place the project's "no silent unhandled cases" rule is a
+> convention rather than a compiler-enforced property. Reviewers must enforce it by hand.
 
-This follows from the container. `IrModule uses Op` is generic over **exactly one**
-op type (`IrModule with MaxonOp`, `with StdOp`, `with TargetOp`), so an op living
-in the Maxon block stream **is a `MaxonOp`**. There is no `OwnModule` and no
-`lowerMaxonToOwn`. PLAN.md:50's `IR/Own/OwnDialect.maxon` is a FILE — a place to
-group the `own.*` variants, their `OpCategory.ownership` band, and the lifetime
-ids — not a dialect in the tier sense.
+(Appending at the *union* end also makes stale `… to iatCall` range arms fail to compile
+until extended — the invariant working in the reviewer's favour.)
 
-> **Do NOT introduce `union OwnOp { move, borrow, drop, retain, release }` nested
-> as `MaxonOp.own(OwnOp)`.** Maxon heap-boxes every payload-carrying union case, so
-> nesting costs a **second heap object per op** — the exact anti-pattern the 3-tier
-> collapse (`f3b6f99ae`) removed from `StdOp`, on the ops the Own tier touches most.
-> The `own.*` variants go directly into `MaxonOp`, appended at the end of the
-> `ownership` band, exactly like every other variant.
+### The sugar band
+
+v1 enforced "no sugar reaches the backend" with a *type*: sugar ops lived in `StdOp` and had
+no `MirOp` counterpart, so the tier boundary made them unrepresentable downstream. Collapsing
+the tier gives that up; the replacement is deliberate:
+
+1. `assertNoSugarOps(module)` — a whole-module gate run by **`buildBackend`**, the single
+   target-neutral backend entry. It is NOT inside the x64 lowering: sugar is a property of
+   the Std tier, not of x64, so putting it at the one shared entry means arm64/wasm inherit
+   it instead of each having to remember to re-add it.
+2. An explicit `panic("… must be desugared by lowerToMachineForm")` match arm per sugar
+   variant — never a bare `default`, which is exactly what would swallow a new case.
+
+**Spec tests are the real guarantee.** Both guards are **vacuous today** — the sugar band is
+empty, and `lowerToMachineForm` is therefore not written. It arrives with the first sugar op
+(drops/frees at the ownership stage; layout descriptors and witness tables at generics).
+
+`assertNoSugarOps` walks **live** ops via `IrModule.liveOpIndices(func)`, never the flat
+`module.ops` array — that array is append-only, and a block-rebuilding pass (which
+`lowerToMachineForm` will be) leaves the ops it replaced behind as orphans. Scanning the flat
+array would panic on dead entries and report a desugaring failure that never happened.
+`liveOpIndices` is the single home of the funcs → blockRefs → blocks → opRefs+terminator
+descent.
+
+## Pass pipeline
+
+`PassPipeline` owns the two tier modules it drives (`maxonModule` → `stdModule`), a `project`
+handle, and the scheduled `PassKind` list. It owns NO target module — the pipeline's last tier
+is Std, and the backend is backend-direct.
+
+The default pipeline, in order:
+
+| Pass | Tier | What it does |
+|---|---|---|
+| `resolveTypes` | Maxon | named/unresolved types → concrete; re-sync the registries |
+| `semanticCheck` | Maxon | E3001/E3002 + call validation |
+| `lowerMaxonToStd` | Maxon → Std | width/ABI collapse; 1:N desugaring; `blockArgs`/`branchEdges` carried verbatim |
+| `foldConstOperands` | Std → Std | constants into immediate operand forms |
+
+`run()` enforces the **error gate**: after each pass, `projectHasErrors → throw CompileError` —
+so a program that fails `semanticCheck` never reaches lowering or the backend.
+
+`classifyPass` labels each pass `wholeModule` or `perFunction`. The classification is recorded
+but not yet acted on; it is what the per-function fan-out driver will read.
+
+**Everything grows in HERE**, appended after `lowerMaxonToStd`: the Std optimization passes,
+the Own-tier passes, and `lowerToMachineForm`. There is no second pipeline over a machine tier,
+because there is no machine tier.
+
+### `foldConstOperands` (the one Std optimization pass today)
+
+Collects constant defs, then rewrites a `binOp`/`cmp` with a constant operand into
+`binOpImm`/`cmpImm`, then DCEs the now-unreferenced `const` ops. It canonicalizes commutative
+ops so the constant lands on the rhs, and flips the predicate for a const-lhs comparison; a
+const-lhs `sub` is deliberately left alone (there is no `imm - reg` form). Range-gated to the
+i32 immediate range, with `i32.min` excluded only for the `sub`→negated-`lea` path, where
+negating it would overflow. `div`/`mod` are never folded (no immediate `idiv`).
+
+The result is that literals never occupy a register.
+
+Constant *folding* proper (`const ⊕ const` → `const`) is deliberately **not** implemented: it
+would collapse the test programs to `mov r8, k` and erase the codegen the spec fragments exist
+to show. It lands when there is enough real code to justify it.
+
+## Own tier (ownership infer / check / escape / drops)
+
+*Not built. One structural decision is PINNED now, because getting it wrong later is a rewrite
+and writing it down today is free:*
+
+**`own.*` ops are a BAND OF `MaxonOp` — not a separate dialect, not a tier.** "Own tier" names
+a *pass group* (`OwnershipInfer` → `OwnershipCheck` → `EscapeAnalysis` → `InsertDrops`), all of
+which run over the Maxon module. Tiers are `Maxon → Std → Target`, full stop.
+
+This follows from the container. `IrModule uses Op` is generic over **exactly one** op type, so
+an op living in the Maxon block stream **is a `MaxonOp`**. There is no `OwnModule` and no
+`lowerMaxonToOwn`. `IR/Own/OwnDialect.maxon` is a FILE — a place to group the `own.*` variants,
+their `OpCategory.ownership` band, and the lifetime ids — not a dialect in the tier sense.
+
+> **Do NOT introduce `union OwnOp { move, borrow, drop, retain, release }` nested as
+> `MaxonOp.own(OwnOp)`.** Maxon heap-boxes every payload-carrying union case, so nesting costs a
+> **second heap object per op** — the exact anti-pattern the flat-union rule exists to prevent,
+> on the ops the Own tier touches most. The `own.*` variants go directly into `MaxonOp`,
+> appended at the end of the `ownership` band, exactly like every other variant.
 
 `OpCategory.ownership` already exists in `MaxonDialect.maxon` for this band.
 
-### Type resolution & semantic check (Maxon tier)
+## Backend (Std → Target → PE)
 
-**Landed (M1 Chunk C).** `TypeResolution.resolveTypes(project, module)` replaces
-every `named`/`unresolved` `MaxonType` in the module's function signatures with a
-concrete one and re-syncs each resolved return type into `project.funcReturnTypes`
-(SemanticCheck's source of truth). M1 SHORTCUT: the only named type resolved is
-the `ExitCode` builtin alias, recognized **by name** without loading the stdlib
-(→ `MaxonType.exitCode` → u32); any other named type panics loudly (user types +
-the ranged-typealias registry arrive at M9). `SemanticCheck.semanticCheck(project)`
-is the two `basics.md` checks reading the resolved registry: **E3001** (no `main`)
-and **E3002** (`main` does not return ExitCode; the M1-exercised case is a void
-`main`). Both append a `Diagnostic`; the pipeline's error gate then bails.
+`Std → Target` is the **only** tier boundary below Std. `buildBackend`
+(`Targets/BackendDispatch.maxon`) is the target-neutral entry, and its order is:
 
-### Pass pipeline
+```
+assertNoSugarOps(stdModule)
+lowerStdToX64(stdModule)          → TargetModule (virtual registers)
+allocateRegisters(module, target)                 → physical registers
+insertPrologueEpilogue(module, target)            → frames
+augmentWithRuntime(module, target)                → prepend mrt_start
+emitFunctionChunk(...) per function               → machine code
+concatX64FunctionChunks(...)      → CodeResult
+```
 
-**Landed (M1 Chunk C); MIR pass removed post-M1.** `PassPipeline` owns the two tier
-modules it actually drives (`maxonModule` → `stdModule`) + a `project` handle + the
-scheduled `PassKind` list. It owns NO target module — the pipeline's last tier is
-Std, and the backend is backend-direct — so the write-once-read-never `targetModule`
-field (and the `PipelinePhase` enum, which had no callers) went out with `mirModule`
-as the same vestigial-tier residue. `dispatch` wires each pass to its free function:
-`resolveTypes`/`semanticCheck` (read the Maxon module + project), `lowerMaxonToStd`
-(produces the next tier). `run()` gained the **error gate**: after each pass,
-`projectHasErrors → throw CompileError` — so a program that fails semanticCheck
-(e.g. has no `main` for the backend entry stub to call) never reaches
-lowering/backend. The driver (`Compiler.compile`) builds the pipeline with
-`buildDefaultPipeline()`, runs it, then goes backend-direct (`buildBackend` →
-`writeExecutable`; a CodeResult is not an IR module).
+**That order is forced.** Register allocation runs **before** prologue/epilogue because *the
+frame is a function of the allocation* (which callee-saved registers were used, how many spill
+slots). It runs **before** `augmentWithRuntime` because the `mrt_start` entry stub is
+hand-built in physical registers with its own frame — it must not be re-processed.
 
-**The pipeline ends at `StdModule`** — there is no second "backend pipeline" over a
-machine tier, because there is no machine tier (see Std dialect). Everything that
-would have gone there grows in HERE, appended after `lowerMaxonToStd`: the Std opt
-passes (M3+), the Own-tier passes (M6), and `lowerToMachineForm` (M6).
+`lowerStdToX64` (`Targets/X64/StdToX64Conversion.maxon`) clones the block skeleton 1:1 and
+walks each function lowering `StdOp`s to `TargetOp`s with still-virtual registers. The virtual
+registers it emits are Std's own `ValueId`s, unchanged since `lowerMaxonToStd` minted them.
 
-Diagnostics are printed by `compile` on the failure path and the error is
-re-signaled as a FRESH `compileError` (re-throwing the *caught* error NULL-increfs
-under the C#-emitted refcount runtime; a fresh throw of the same arm is clean — a
-driver-shape gotcha worth remembering).
+**Instruction selection quality** (what the ISel produces today):
+- **3-operand `lea`** for `a + b` — no reuse, no copy, no flags. `sum = sum + i` in a loop is
+  *one* instruction.
+- **`lea` with disp32** for `a ± imm` (a subtraction becomes a negative displacement).
+- **Immediate forms** — 3-operand `imul r, r/m, imm32`, `cmp r, imm32`, and a size-choosing
+  `mov` imm32/imm64 — so `foldConstOperands`'s immediates never occupy a register.
+- **Reuse defs** for `sub`/`imul`/`neg`, which is how the two-address seed `mov` is *not*
+  emitted (see the register-allocator section).
 
-### Query spine (incremental)
+> **x64 encoding trap, centralized in `emitBaseDispModRm`.** In a SIB byte, `mod=00` with base
+> low-3-bits `= 101` means *"disp32, no base register"* — so `lea dest, [base + index]` with base in
+> **RBP or R13** must be emitted as `mod=01, disp8=0`. R13 is in the allocatable pool, so this fires
+> in real code. Likewise index `= 100` means *"no index"*, so RSP can never be an index — asserted,
+> not trusted. This is exactly the class of silent miscompile v1 shipped.
 
-**Landed (M1 Chunk C), content-hash-keyed.** `QueryDatabase`/`QueryEngine`/
-`Queries` implement `querySourceFile → queryTokens → queryParseOps →
-queryAllModule`. The load-bearing difference from v1: **memo validity is a
-content-hash compare, not a revision-counter walk** (PLAN.md §78). `fileChanged`
-computes an FNV-1a `ContentHash` per file (no shared `currentRevision` counter to
-contend on — parallel-safe); each per-file memo stamps the `keyHash` it was
-derived from and is valid iff that still equals the file's current hash;
-`queryAllModule` keys its merged-module memo on the COMPOSITE hash folded over
-every file's hash in source-path order. `queryParseOps` produces a
-`FileParseArtifact` and touches no `Project` state (the parser is pure);
-`queryAllModule` on a miss `resetMergeTargets` + re-folds artifacts via
-`mergeArtifact`, so there is no rollback. The dependency graph
-(`recordDependency`/`clearDepsFor`/`activeQueryStack`) is recorded from day one —
-M1's single file never drives an invalidation, but recording it now is what let
-the **M2 warm-rebuild byte-identity gate** join without retrofitting.
+**Intra-function branches are resolved inside `emitFunctionChunk`**, not in `concat` (which
+only rebases cross-function `call`/IAT fixups): a function's blocks are contiguous in its one
+`FunctionCodeChunk`, so each block records a chunk-local start offset, a branch leaves a zero
+rel32 + a `BlockJumpFixup`, and `resolveBlockJumps` patches them through the shared
+`patchChunkRel32` — forward and backward alike, which is why loop back-edges needed no backend
+work.
 
-**Warm-rebuild gate landed (M2).** `maxon-shv2 verify-warm-rebuild <file>`
-(`Compiler/VerifyWarmRebuild.maxon`) is the standing gate that asserts two
-properties of the spine and exits 0 iff both hold: (1) **determinism** — compile
-the file to a `CodeResult` twice, each with its OWN fresh `Project`/`QueryDatabase`
-(two independent cold compiles share no module object), byte-compare all emitted
-sections; (2) **incrementality** — in one `Project`, `queryAllModule` twice
-(cold-miss then hit) plus a `probeRebuildCacheHits` that re-queries each file's
-tokens/parse, asserting via the DB hit/miss counters that the rebuild is a
-content-hash cache HIT. It sidesteps a real trap: `resolveTypes` mutates the merged
-module in place and `queryAllModule` hands back that same memoized object, so the
-determinism check must use independent projects and the cache check must run only
-`queryAllModule` (never the mutating pipeline) between its probes. `build` and the
-gate share one `compileToCodeResult(project)` — a determinism gate over a divergent
-path would prove nothing.
+**Comparisons are fused `cmp`+`jcc`** — there is no `setcc` and no bool materialization.
+`lowerCmp` records `condId → pred` and `lowerCondBranch` emits the `jcc` off it; the `jcc`
+opcode is `OpcodeJccRel32Base | X64CondCode.rawValue` (one table). This is the machinery the
+parser's "a comparison is only valid as the sole top-level operator of an `if`/`while`
+condition" restriction protects: it guarantees the `cmp` is the last flag-setter before the
+branch.
 
-### Parallel driver
+`X64PrologueEpilogue` pushes and pops **exactly** the callee-saved registers the coloring
+actually used, and reserves an aligned frame (32-byte shadow space + spill slots + parity
+padding, so `rsp ≡ 0 mod 16` at a call).
 
-**Runtime multi-core proven (Track 0 / Foundation 1, x64-windows).** The C#
-emitter's green-thread scheduler + sharded allocator run correctly across many
-worker Ps. Empirical: a 32-GT CPU/alloc burst compiled by `maxon.exe`, observed
-under `maxon monitor`, ran on **16 distinct worker Ps** (P0–P15 = ncpu) unclamped
-and **exactly 1 (P0)** under `MAXON_MAX_PROCS=1`, both producing the correct
-deterministic result — so the `__gt_enqueue` worker-spawn gate fires for a
-pure-CPU burst (1a.5), and the `MAXON_MAX_PROCS` clamp is a real single-thread
-knob. Concurrency primitives (`maxon-sharp`-only, no shared-stdlib change):
-`__Builtins.cpuCount()` (`maxon_cpu_count`, `GetSystemInfo`/`sysconf`, valid
-pre-`__gt_init`), `__Builtins.parallelBoundary()` (`maxon_parallel_boundary`,
-empty runtime stub + `IoStubs` entry so CPU-bound `async` passes E3073),
-`MAXON_MAX_PROCS` clamp in `__gt_init` (both backends). Bisection tools:
-`MAXON_SLAB_GLOBAL_LOCK` spinlock + `MAXON_SLAB_STATS` contention counters
-(lock-wait, ownership-gate-miss) + `__Builtins.schedMaxActiveWorkers()`
-high-water mark. **The validation harness (`maxon-shv2/track0/`) closed 1a.3**:
-an allocation-torture program (main allocates managed arrays, hands them to
-`async` tasks without retaining a ref → the arg is freed on the *worker* P → a
-cross-P remote-free push back to P0) drove the remote-free MPSC to **7775
-pushes** and, at high concurrency, surfaced a real **~2.5% NULL crash** in the
-C#-emitted `__gt_spawn` (it passed `gt` to `__gt_enqueue` in R10, a Win64
-caller-saved reg that `LeaveCriticalSection` clobbers on its contended
-wake-a-waiter path; the main-thread spawn path — which main's own `mainThread`
-GT with `stackBase==0` takes — doesn't preserve R10). Fixed by reloading `gt`
-from its stack slot before the enqueue, matching ARM64. This is a latent
-scheduler bug affecting **every** async/multi-core program `maxon.exe` emits
-(including shv2.exe once it exists). The alloc-side ownership gate stayed at 0
-misses throughout (untriggered backstop). The rdata deterministic-merge
-invariant (below) is shv2's own future backend concern, not yet exercised here.
+`CodeResult.stdModule` carries the mid-level module the backend lowered FROM. x64/PE ignore
+it; it exists because the **wasm** backend will consume the machine-level IR directly instead
+of going through a target dialect — and with the MIR tier gone, Std *is* that IR.
 
-_Per-function fan-out enabled at M5._
+`GlobalDataTable` (`.rdata`) is threaded through the backend but **empty today** — there are no
+strings or floats yet. When it fills, the rule is: the backend captures rdata constants
+chunk-locally and merges them into the shared table **single-threaded in function order**
+(idempotent-by-label dedup), with content-derived keys for all other shared appends. That is
+what keeps a parallel backend byte-deterministic.
 
-### Backend (Std → Target, runtime emitters)
-_Thin mov/ret slice landed at M1 (Chunk B2); MM runtime + DebugStream producer at
-M6; GT scheduler at Phase F._ The M1 driver (`Compiler.compile`) feeds the parsed,
-resolved, lowered `StdModule` straight into `buildBackend(stdModule, target,
-globalData)` → `writeExecutable`.
+## Register allocator (Std `ValueId`s → physical GPRs)
 
-`Std → Target` is the **only** tier boundary below Std (there is no MIR — see Std
-dialect). `lowerStdToX64` (`Targets/X64/StdToX64Conversion.maxon`) asserts
-`assertNoSugarOps` on entry, clones the block skeleton 1:1, then walks each function
-lowering `StdOp`s to `TargetOp`s with still-virtual registers; `allocateRegisters` →
-`insertPrologueEpilogue` → `augmentWithRuntime` → `emitFunctionChunk` →
-`concatX64FunctionChunks` finish the job. The virtual registers the allocator colors
-are Std's own `ValueId`s, unchanged since `lowerMaxonToStd` minted them.
+**SSA chordal coloring + cold-spill live-range splitting, with a hard error (`E5001`) where a
+spill would be hot.** This is the most designed part of the compiler, and the section is long
+because every piece of it follows from one contract.
 
-`CodeResult.stdModule` (v1: `mirModule`) carries the mid-level module the backend
-lowered FROM. v1 kept its MIR module here because the **wasm** backend consumes the
-machine-level IR directly instead of going through a target dialect; with the tier
-gone, Std *is* that machine-level IR, so wasm (M17) reads this field. x64/PE ignore
-it.
+**What it colors is Std's own value space:** an `X64VReg` is either `physical(reg)` or
+`virtual(id)`, and that `id` **is the `ValueId` `lowerMaxonToStd` minted**. There is no separate
+virtual-register numbering anywhere in shv2.
 
-The driver CLI is `maxon-shv2 build <file|directory> [-o <output>]`; a single-file
-build writes next to the source (`basic.maxon` → `basic.exe`). **End-to-end
-proven:** `maxon-shv2.exe build examples/basic.maxon` produces a PE that exits
-**42**; a program with no `main` prints exactly `error E3001: No 'main' function
-found` (exit 1); a void-returning `main` prints exactly `error E3002: Function
-'main' must return ExitCode` (exit 1).
+### The contract: spill where it is cold, error where it would be hot
 
-### Register allocator (Std `ValueId`s → physical GPRs)
+**A programmer restructuring a hot loop will beat any spiller.** A spiller can only shuffle
+values between registers and stack slots; the author can change the *data structure* — hoist the
+working set into an array, split the loop, reorder the computation. So when a loop genuinely
+does not fit, the compiler does not quietly emit worse code. It **stops and says so precisely**.
 
-**Landed M5.1 — the real allocator SPINE (pure Design B: SSA chordal coloring), replacing
-the M1 `MinimalColorer` placeholder.** Canonical design in
-[`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md) (read the corrections header
-first). The M5.1 spine covers the current op set (const / binOp / unaryOp / cmp / branch /
-ret); the cold-spill live-range splitter and the `E5001` diagnostic are later M5 chunks
-(the deferred list is at the end of this section).
+- **Cold spilling is free and automatic.** A value with a gap in its uses gets its live range
+  *split*: it lives in memory across the gap and in a register where it is used. Around a loop it
+  does not touch, that is a store in the preheader and a reload after — **zero instructions added
+  to the loop body**.
+- **Hot spilling is `E5001`.** If a value the loop *uses* would have to be evicted and reloaded
+  inside that loop, the compiler reports it instead. No backtracking, no eviction tournament, no
+  spill-cost model.
+- **One shot.** liveness → split → color. There is no reactive spill/color iteration.
 
-**What it colors is Std's own value space.** A `X64VReg` is either `physical(reg)` or
-`virtual(id)` — and that `id` **is the `ValueId` `lowerMaxonToStd` minted**. There is no
-separate virtual-register numbering anywhere in shv2 (the 3-tier collapse cashing out). The
-allocator's input domain is exactly the Std value space, unchanged since SSA construction.
+**And the author is expected to be an AI agent**, which is what makes erroring-instead-of-degrading
+the right trade rather than a hostile one: the cost of an `E5001` is one compile round-trip. It
+also imposes two requirements a human-facing compiler could ignore:
 
-**The pieces** (all in `Targets/Shared/`, plus `IR/Target/TargetOperands.maxon`):
+- **The error must be deterministic — a property of the program, not of a search.** An agent loop
+  needs `same program → same error` or it cannot converge. "Your loop needs 17 registers and has
+  14" is a *theorem*, stable across compiler versions; "my evict/split search gave up" can flip
+  when a heuristic is tuned, and a rewrite loop chasing it may never terminate.
+- **The error must be actionable in ONE step, not by bisection** — the exact deficit, the ranked
+  candidates, and the named transformation.
 
-- **Operand model** (`TargetOperands.maxon`). `targetOpOperands` is ONE exhaustive `match`
-  over every `TargetOp` — no bare `default`, so a new op is a compile error until its
-  operands (`Def`/`Use`, `Early`/`Late` position, `any`/`reuse`/`fixedReg` constraint) are
-  declared. Every consumer — liveness, colorer, checker — reads register facts ONLY here, and
-  `TargetOpMeta` grows `implicitUses`/`implicitDefs` `u16` masks (`ret` implicitly uses `{R8}`).
-  Operands are PACKED into one `MachineWord` in a reusable dense buffer (no heap box per
-  operand — the `SourceRange.maxon` discipline).
-- **Dense liveness + loops** (`TargetLiveness.maxon`, `RegBits.maxon`). A `FuncCfg` built ONCE
-  (CSR succ/pred, `BlockId`→local flat arrays — never a `Map` in a fixpoint), back-edge loop
-  detection → per-block depth, and SSA live-in/out iterated to a **FIXPOINT** (M4b's back
-  edges make a single reverse pass wrong; `fixpointIterations` counts the rounds). A backward
-  sweep yields `maxPressure` (the exact per-point χ = ω) and `forbiddenPhys`. All state is
-  `Array`-indexed columns + a `blocks × words` bitset matrix + `u16` register masks.
-- **Biased forward-sweep colorer** (`RegisterAllocator.maxon`). A forward walk over a `u16`
-  in-use bitmask, seeded per block from `liveIn`; at each op it frees dying operands then
-  picks the def's register with `lowestClearBit(inUse | forbiddenPhys(v) | ~pool)`. **BIASED
-  COLORING is a correctness obligation** (design correction #2): hints from block-arg↔branch-arg
-  pairs and from the two-address seed copies collapse copy-related values into one register, so
-  a loop's back-edge copy elides instead of landing IN the loop, and one loop-carried value is
-  never counted as two. Dominance order is ASSERTED (every use already colored). If
-  `maxPressure` ever exceeds the pool the spine PANICS (a placeholder for the deferred `E5001`
-  + splitter; M5.1 programs have `maxPressure ≤ 3–4`).
-- **SSA destruction** (`SsaDestruction.maxon`), AFTER coloring. `EliminatePhis` is RETIRED —
-  the allocator consumes `blockArgs`/`branchEdges` directly. Per phi-carrying edge it sequences
-  a parallel copy of physical `mov`s, breaking cycles with a new physical-only `xchgRegReg`
-  (`REX.W 87 /r`, invisible to SSA). Placement: at the predecessor's end (single-successor
-  pred) or the successor's start (single-predecessor succ). A **pre-pass splits every
-  phi-carrying CRITICAL edge** before coloring (so a move never runs on a sibling edge) — it
-  runs outside the per-function loop because inserting a block mutates `func.blockRefs`.
-- **`AllocChecker.maxon`** — a symbolic verifier that abstractly interprets the allocated
-  function (per-op `preg → vreg` state; per-edge parallel-copy simulation) and asserts every
-  use reads the register holding its value. It runs on EVERY function of EVERY compile (a
-  failure panics the build → fails the test), because `SpecTestRunner` treats fragments as
-  OUTPUTS, not gates — the suite would otherwise go green on a wrong-but-self-consistent
-  allocator. This is the real correctness gate.
-- **Stats + sub-phase timers** (`RegAllocStats`, `RegAllocPhase`). Per-phase `Clock`-based ms
-  plus the counters that matter more at sub-ms scale: `fixpointIterations`, `maxPressure`,
-  `copiesInserted`, `hintsHonoured`/`hintsMissed`. Logged under `LogCategory.codegen`.
+Three consequences, and they are the reason several things elsewhere in the compiler exist:
+
+1. **A false `E5001` is the worst bug this compiler can have.** It sends an author to restructure
+   code that was fine, and can break an agent's convergence loop. Trust in the diagnostic is the
+   whole product.
+2. **The compiler may therefore never waste a register, because a wasted register *is* a false
+   positive.** This is what promotes 3-operand `lea`/`imul`, immediate operands,
+   `foldConstOperands`, rematerialization, biased coloring, and copy-free ISel from
+   "optimizations" to **contract obligations**. Any of them showing up as the cause of a blocking
+   set is a defect, not a tuning opportunity.
+3. **We can afford to be exact.** Because SSA interference is chordal, per-point `maxlive` *is*
+   the minimum register count for the program as lowered — not an estimate. So `E5001` fires
+   **iff** the loop truly does not fit, and the only way to be wrong is to have wasted a register
+   upstream.
+
+### The three rules
+
+> **RULE 1 (SSA / single live-range start).** Every `ValueId` has exactly one def, and it
+> dominates every point at which the value is live.
+>
+> This is what makes live ranges dominance-closed subtrees, hence the interference graph
+> **chordal**, hence dominance-order greedy coloring **exact**: two values interfere iff one is
+> live at the other's def, so each edge is enforced once at its later endpoint, and layout order
+> is a perfect elimination order. After splitting, `maxlive ≤ pool` everywhere by construction, so
+> **the colorer cannot fail** — a coloring failure is a compiler bug and asserts as one.
+>
+> The `Reuse` operand model is what makes Rule 1 true at the Target tier: without it,
+> `mov dest,lhs; add dest,rhs` writes `dest` twice and the tier is not SSA.
+
+> **RULE 2 (spill placement).** A store or reload may be inserted at a point `q` only if, for
+> every loop containing `q`, the value has **no use or def inside that loop**. Consequently spill
+> code is never added to a loop body for a value that loop uses. Straight-line (depth-0) code has
+> no such loop, so Belady eviction there is unrestricted — the reload executes once.
+>
+> If, after splitting out every value idle across loop `L`, the pressure inside `L` still exceeds
+> the pool → **`E5001`**.
+
+> **RULE 3 (the author always has a move).** There is **no escape hatch** — no attribute, no flag.
+> `E5001` is final. That is only defensible if every value in a blocking set is one the author can
+> actually *see and remove*, which makes the following an invariant rather than a nicety:
+>
+> **No compiler-introduced value may ever appear in an `E5001` blocking set.** Witness tables,
+> layout descriptors (dictionary-passing generics), and refcount temporaries are pressure the
+> author cannot see, did not write, and cannot delete. They are all either loop-invariant constant
+> addresses (→ **rematerialize**) or tiny-lived temporaries. **If one ever blocks an allocation,
+> that is a compiler bug, not author error** — told to delete a value that is not in its source, an
+> agent cannot converge, so it hangs. This is why rematerialization is load-bearing rather than an
+> optimization, and why the diagnostic *panics* rather than emit a misleading location when a
+> blocking value has no source origin.
+
+**Ops emitted *after* coloring — `pushReg`, `popReg`, `xchgRegReg`, SSA-destruction copies — carry
+physical registers only and are invisible to Rule 1.** (`xchgRegReg` has two defs and would
+otherwise violate it; it is legal precisely because the allocator never sees it.)
+
+### Lineage: what is taken from Cranelift's regalloc2, and what is not
+
+**Taken — the operand model** (`Def`/`Use`, `Early`/`Late`, `Any`/`FixedReg`/`Reuse`), because
+`Reuse(i)` deletes the two-address problem at the root and gives fixed-register ops a declarative
+home. **Taken — the checker**, a symbolic verifier that runs on every compile. **Taken — the data
+layout** (below); regalloc2 is fast substantially *because of* its representation.
+
+**Not taken — the algorithm.** Live bundles, spill weights, eviction, the priority queue, iterative
+re-splitting. regalloc2 is engineered so allocation *always succeeds by spilling*; this contract is
+to fail loudly instead — and a heuristic-dependent failure is both unactionable for someone told to
+rewrite their code and unstable across compiler versions.
+
+### Data representation — the part that decides whether this is fast
+
+Not a detail and not deferrable: register allocation was **74% of v1's self-compile**, and the
+budget is ≤30 s for the whole thing.
+
+**In Maxon this matters more than in Rust, and the codebase already knows why.** A `type` has
+*reference* semantics — so `Array with LiveRange` is an array of **pointers to heap-boxed,
+refcounted** LiveRanges: one live heap object per range. That is precisely the trap
+`SourceRange.maxon` documents and dodges with dense scalar columns, and the allocator inherits the
+discipline wholesale. `ValueId`s are dense, function-local integers, which makes them perfect array
+indices:
+
+| Concern | Representation |
+|---|---|
+| Value → color / next-use / `forbiddenPhys` / def point | one flat `Array with int` column each, indexed by `ValueId` — no hashing |
+| Live-in / live-out per block | a **dense bitset** over `ValueId` (`int` words), all blocks in ONE flat `blocks × words` matrix, so the fixpoint's union/diff are word-parallel |
+| Per-op operands | `Operand` **packed into one `MachineWord`**, filled into a **reusable scratch buffer** — no allocation and no heap box per operand |
+| `BlockId` → block | a flat array (`BlockId`s are dense too). `IrModule.getBlockByIdIn` is O(blocks); calling it inside a fixpoint would be O(B² × iters) — v1's trap in miniature |
+| Register sets | `u16` bitmask; picking a register is `lowestClearBit(...)` |
+| Scratch buffers | allocated once, reused across functions |
+
+> **No `Map` and no hashing anywhere in the allocator's hot path.** The `fixpointIterations` and
+> `maxPressure` counters exist to tell us when that stops being true.
+
+### The pipeline
+
+`allocateRegisters` first asserts call-clobber consistency, then runs `splitCriticalEdges`
+across the module (outside the per-function loop, because inserting a block mutates
+`func.blockRefs`), then per function:
+
+| # | Phase | File | What it does |
+|---|---|---|---|
+| 1 | **Split** | `SplitLiveRanges.maxon` | Cold-spill live-range splitting. Mutates the IR and returns the final `LivenessResult`. |
+| 2 | **Color** | `RegisterAllocator.maxon` | Biased forward-sweep coloring. Records the reuse copies it needed. |
+| 3 | **Plan SSA destruction** | `SsaDestruction.maxon` | Builds the per-edge parallel-copy plan; does not commit. |
+| 4 | **Check** | `AllocChecker.maxon` | Symbolically verifies the still-virtual program + coloring + plans. |
+| 5 | **Commit** | `SsaDestruction.maxon` | `applyAllocation` rewrites ops in place, splices copies, clears the phi model. |
 
 > **INVARIANT: coloring rewrites ops IN PLACE, at the same `module.ops` index.**
-> `applyAllocation` reads the op at index *i*, rebuilds it with colored operands, and writes
-> it back at *i* (dropping a `mov r,r` self-move biased coloring produced, e.g. the elided R8
-> return move). Every `block.opRefs` entry and `terminatorIndex` is an index into that array —
-> appending colored ops or compacting would invalidate every reference in the function.
+> `applyAllocation` reads the op at index *i*, rebuilds it with colored operands, and writes it
+> back at *i* (dropping a `mov r,r` self-move that biased coloring produced). Every
+> `block.opRefs` entry and `terminatorIndex` is an index into that array — appending colored ops
+> or compacting would invalidate every reference in the function.
 
-**The pool** is the Maxon caller-saved GPRs INCLUDING R8: `{rax, rcx, rdx, rsi, rdi, r8, r9,
-r10, r11}`. R8 is admitted because the implicit-use mask on `ret` proves nothing is live
-across the `mov r8, retval` return move (so a value colored to R8 cannot clobber an in-flight
-return, and the return move ELIDES when the return value is hinted to R8). Callee-saved
-`{rbx, r12–r15}` are excluded so no prologue push/pop is needed for the current leaf
-functions; `r10`/`r11` become reserved scratch when M5 colors calls. The pool is a property
-of the target (`allocatablePool`); arm64 declares its own.
+### The operand model
 
-**Where it sits in the backend chain, and why that order is forced:**
-`lowerStdToX64` → **`allocateRegisters`** → `insertPrologueEpilogue` → `augmentWithRuntime`.
-Regalloc runs **before** prologue/epilogue because *the frame is a function of the
-allocation*. It runs **before** `augmentWithRuntime` because the `mrt_start` entry stub is
-hand-built in physical registers with its own `sub rsp, 0x28` frame — it must not be
-re-processed. `allocateRegisters` first runs the `splitCriticalEdges` pre-pass, then colors
-each user function (`mrt_start` is prepended AFTER, so the allocator never sees it).
+`IR/Target/TargetOperands.maxon`. `targetOpOperands` is ONE exhaustive `match` over every
+`TargetOp` — no bare `default`, so a new op is a **compile error** until its operands are
+declared. Every consumer — liveness, splitter, colorer, checker — reads register facts ONLY
+from here. Operands are PACKED into one `MachineWord` in a reusable dense buffer (no heap box
+per operand — the same discipline as `SourceRangeTable`).
 
-**Why this shape** (v1 lessons the design is built around): v1's register allocation was
-~74% of self-compile wall time — not because backtracking is inherently slow, but because it
-rebuilt the interference graph from scratch every spill iteration. shv2 builds NO graph
-(availability sweep) and NO reactive spill loop (one shot). v1's "74%" stood for months with
-**zero sub-phase attribution**, so the timers ship in the first commit. And every v1
-miscompile at this boundary — a call-clobber mask listing a callee-saved reg, a phi-copy
-trampoline only one edge routed through — is exactly the class the `AllocChecker` exists to
-catch. `TargetOpMeta` is the extension point (it now carries the implicit-register masks).
+Each operand declares a kind (`Def`/`Use`), a position (`Early`/`Late`), and a constraint:
 
-**Deferred to later M5 chunks** (not built by the M5.1 spine): calls / the caller-saved-halving
-pressure model, `idiv`/`mod` fixed registers, function params, immediate operand forms,
-3-operand `lea`, deleting the two-address seed `mov` via the `Reuse` operand quality-rework,
-the cold-spill live-range splitter, next-use distances (their sole consumer), and the `E5001`
-diagnostic + `ValueOrigin` table.
+- **`any`** — a plain use or def.
+- **`reuse(i)`** — the def must land in operand *i*'s register. **This is what deletes the
+  two-address `mov` at the root.** ISel emits ONE op (`sub dest, lhs, rhs`), never a seed copy;
+  `collectReuseHints` biases dest and input to the same register; `allocateReuseDef`
+  materializes `mov dest, input` **only** when the input outlives the op and the coloring could
+  not coalesce them. The common dies-at-the-op case costs zero copies, so loop bodies are
+  copy-free.
+- **`fixedReg`** — declared, but **not currently used**. Fixed-register requirements are
+  expressed instead through (a) `physical(...)` operands in the IR (the `mov rax, dividend` and
+  `mov argReg[k], arg` pre-moves) and (b) the `implicitUses`/`implicitDefs` register masks on
+  `TargetOpMeta`.
 
-### Event log & mm-trace harness
+The implicit masks are how the allocator learns about registers an instruction touches without
+naming: `ret` implicitly uses `{R8}`; `callDirect` implicitly defs the 9 caller-saved (`0xFC7`);
+`cqo` uses RAX and defs RDX; `idivReg` uses RAX and defs RAX|RDX.
 
-**Producer (maxon-sharp / C# bootstrap) — verified working as of Track 0.**
-Binaries compiled by `maxon.exe` with `--debugstream` emit a binary MM event
-stream (128-byte header + 8-byte packed entry headers + ticket-spinlock reserve;
-schema frozen in `RuntimeEmitter.cs:41-148`). Only four MM codes are produced
-live: `mm_alloc`/`mm_free`/`mm_incref`/`mm_decref` (0x01–0x04) plus depth
-inc/dec (0x40/41) around destructor cascades. The Sched subsystem (0x20–0x2C)
-and several Dbg/raw codes are **dead** (decoder-only); real scheduler tracing
-rides the Dbg events (0x50–0x5E). Type-name resolution is **automatic**: every
-heap allocation flows through `EmitAlloc`→`EnsureTagIndex`, whose names land in
-the PE `.symtab` `MXDS_TAGS` blob (`module.TagNames` →
-`EmitAllMemoryManagerFunctions`) — so `maxon monitor` prints real names
-(`String`, `__ManagedMemory`), no extra wiring needed.
+**Known limit:** the `Early`/`Late` position bit is packed but **never read back**. Def/use
+timing is instead answered operationally (per-op death sets). The consequence is documented in
+`TargetLiveness.maxon`: `forbidOperandsFromImplicit` is *not* correct for a late-clobber op such
+as a call — which is sound today only because `callDirect` carries no explicit operands. An op
+with **both** explicit operands and a late implicit clobber would need this made position-aware.
 
-**Consumer = `maxon monitor [--filter=mm] <exe>`** (`DebugStreamMonitor.cs`) —
-creates the shared segment, spawns the child with `MAXON_DEBUGSTREAM` set, drains
-the ring, decodes via a hand-rolled PE parser, prints
-`[+SSSS.mmm] <indent>mm_<verb> <Tag> #<id> [size=|rc=]<n>` to stdout (summary to
-stderr). It forwards the child's own stdout, so trace lines are identified by the
-`[+…]` timestamp prefix.
+### Liveness
 
-**Two-tier gating (preserve in shv2's own producer at M6):** compile-time
-`Compiler.DebugStream` (zero instructions when off) + runtime `MAXON_DEBUGSTREAM`
-(`__ds_base==0`). Wart to NOT reproduce: MM events pay two real CALLs before the
-runtime-off check, unlike Dbg events which inline the `__ds_base` guard at the
-call site. shv2 should inline the guard for every event family.
+`TargetLiveness.maxon` + `RegBits.maxon`. A `FuncCfg` is built ONCE (CSR succ/pred, `BlockId` →
+local flat arrays — never a `Map` in a fixpoint), with back-edge loop detection giving per-block
+depth. SSA live-in/out is iterated to a **fixpoint** (a single reverse pass is wrong once there
+are back edges). A backward sweep then yields, per program point, the exact live set — from
+which come `maxPressure` (the exact per-point χ = ω) and `forbiddenPhys` (the registers a value
+may not take, accumulated from every clobber mask it is live across). All state is `Array`-indexed
+columns + a `blocks × words` bitset matrix + `u16` register masks.
 
-**mm-trace spec harness (this repo's C# harness).** `<!-- MmTrace -->` +
-`` ```mm-trace `` block ⇒ compile with `DebugStream=true`, run under
-`maxon monitor --filter=mm` (subprocess), **normalize**, compare. Normalization
-(deterministic goldens): keep only `[+…]`-prefixed lines, strip the timestamp
-prefix + indent, dense-renumber `#<id>` in first-appearance order. Verified
-byte-stable across runs for single-green-thread programs. `--max-procs 1`
-(needed only for programs that spawn green threads) does **not exist yet** —
-Foundation 1 dependency; the harness sets `MAXON_MAX_PROCS=1` defensively (no-op
-until F1). mm-trace tests stay off the batched path (per-process ring buffer).
+### Coloring
 
-### Testing / spec-test harness (shv2's own)
+A forward walk over a `u16` in-use bitmask, seeded per block from `liveIn`. At each op it frees
+dying operands, then picks the def's register with `lowestClearBit(inUse | forbiddenPhys(v) |
+~pool)`. Dominance order is ASSERTED (every use is already colored when reached).
 
-**Landed (post-M3).** `maxon-shv2 spec-test [dir]` (default `specs-shv2`) is shv2's
-self-hosting spec runner — `Compiler/Testing/{SpecParser,SpecTestRunner}.maxon`,
-compiled by `maxon.exe` like the rest of shv2, so it can use the full stdlib
-(File, String, `Subprocess`). It replaces the earlier hand-driving.
+**Biased coloring is a correctness obligation, not an optimization.** Hints from
+block-arg↔branch-arg pairs and from reuse defs collapse copy-related values into one register, so
+a loop's back-edge copy elides instead of landing IN the loop, and one loop-carried value is never
+counted as two. Without it, the pressure model would over-count every accumulator loop — and
+over-counting is what produces a FALSE pressure error, the worst bug this compiler can have (it
+sends an author to "fix" correct code). The pressure decision is therefore made on the true
+per-point maxlive **after** biased coloring, never on a cardinality gate.
 
-`SpecParser.parseSpecFile` extracts `<!-- test: NAME -->` markers + the ` ```maxon `
-block + one expected block (` ```exitcode ` or ` ```maxoncstderr `) into
-`SpecTest{name, source, expectation}` (`SpecExpectation` is a union, no sentinel).
-It scans **only the `## Tests` section** (up to the next `## ` heading): deferred
-tests live under a marker-less `## Deferred` section, because **HTML comments do
-not nest** (`<!-- … <!-- test: … --> … -->` closes at the first `-->`), so a
-comment-wrapped deferral would be run. `SpecTestRunner.runSpecDir` writes each
-test's source verbatim (headerless, code at line 1) to a temp fragment, spawns
-`<compiler> build` as a **subprocess** (isolates a compiler crash to one test;
-exercises the real CLI) through the single `runProcess` choke point, and: for a
-`compilerError` test, normalizes the fragment's absolute path to `<fragment>`
-(line/col stay shv2-native — the headerless fragment is why they differ from v1's
-`.test` files, which prepend a header line) and compares; for an `exitCode` test,
-runs the produced exe and compares its exit. `Main` resolves the compiler via
-`Process.executablePath()` (the runner tests itself), prints per-test PASS/FAIL +
-`N passed, M failed`, and **exits non-zero iff any failed** (a real CI gate).
-**Codegen fragments landed.** Every `spec-test` run regenerates
-`specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test source + its
-generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive
-`match` over every `TargetOp`, so a new op is a compile error, never a silent
-`??`) for a passing test, or the normalized diagnostic for an error test. Written
-via `build --emit-ir` (which prints `CodeResult.targetModule` to `<output>.ir`).
-The fragments are byte-deterministic and committed, so `git diff` surfaces every
-codegen change in review (v1's `specs/fragments-*` model). Fragment writing is a
-pure side effect — it never changes `spec-test`'s pass/fail or exit code. mm-trace
-fragments (runtime memory behavior) attach the same way at M6 / Stage 2's 2.4,
-once shv2's emitted runtime (Workstream R1) produces the event stream.
+Register preference is **caller-saved first**, so leaf and call-free code never touches a
+callee-saved register and never pays a prologue push.
 
-### Control flow (M4a — comparison + `if`)
+### Spilling: cold-spill live-range splitting
 
-**Landed (M4a).** Comparison operators are a distinct `cmp` op (Maxon
-`MaxonOp.compare`/`MaxonCmpOp`; Std `StdOp.cmp`/`StdCmpPred` at the arith-band end,
-`isCmp: true`) — not a `binOp` opcode, because they need different metadata and
-lower differently. `if`/`else`/`else-if` introduce **the first multi-block
-functions**: `condBranch`/`branch` terminators (a new **`control` band** in `StdOp`
-between arith and call), then/else/continuation `IrBlock`s laid out in source order,
-and a continuation that is `Terminator.dead` when both arms return (emits nothing).
-Because a function's blocks are contiguous in its one `FunctionCodeChunk`,
-intra-function `jmp`/`jcc` are resolved **inside `emitFunctionChunk`** (not `concat`,
-which only rebases cross-function `call`/IAT fixups): each block records a chunk-local
-start offset; branches leave a zero rel32 + a `BlockJumpFixup`; `resolveBlockJumps`
-patches them via the shared `patchChunkRel32` (forward AND backward — ready for M4b
-loops). x64 is **fused `cmp`+`jcc`** (no `setcc`/bool materialization yet): `lowerCmp`
-records `condId → pred` and `lowerCondBranch` emits `jcc` off it; `jcc`'s opcode is
-`OpcodeJccRel32Base | X64CondCode.rawValue` (one table). **INVARIANT (enforced):** a
-comparison is only valid as the *sole top-level operator of an `if` condition* — so
-its `cmp` is guaranteed the last flag-setter before the branch. A comparison in value
-position (`let b = x==10`) or chained (`x==10==1`) would read stale flags / not
-materialize a result, so the parser rejects it (E3010) via a `permitComparison` flag
-until bool materialization (`setcc`) lands. `var` reassignment, `while`/`break`/
-`continue`, and boolean values are M4b.
+`SplitLiveRanges.maxon` runs *before* coloring and mutates the IR. Its loop is: find the peak →
+choose a victim → remat or spill → recompute liveness → repeat, with a runaway bound and a
+post-condition assert that no point still exceeds its pool.
 
-### Control flow (M4b — `while`/`break`/`continue` + `var` reassignment)
+**A point's pool is its own, not the global one.** `reducedPoolSizeAt(op) = popcount(pool ∖
+op.implicitDefs)` — so a value live across a `callDirect` competes for the **5 callee-saved**
+registers, and one live across an `idiv` for `pool ∖ {rax, rdx}`. Effective pressure at a point
+also corrects for the reuse-copy transient (+1 when the reuse input outlives the op) and for dead
+phis, so the peak-finder and the feasibility guard agree on one number.
 
-**Landed (M4b).** `while` is the first **backward-branching** CFG, built in the parser
-from M4a's terminators (no new `StdOp`/`TargetOp`, no encoder change): the current
-block becomes a **preheader** with a `branch` into a fresh **header**; the header holds
-the condition (fused `cmp`+`jcc` exactly like `if`) and a `condBranch(cond, body,
-exit)`; the **body** ends with a `branch` **back-edge** to the header; **exit** is the
-continuation. `break` → `branch` to the target loop's exit; `continue` → `branch` to
-its header. The backward `jmp`/`jcc` rel32 are patched by the same `resolveBlockJumps`
-M4a already ran forward+backward — zero backend work. Break/continue targets come from a
-**loop-context stack** (`self.loops`, mirroring the block-scope stack): `while` pushes a
-`LoopContext{label, headerId, exitId, phiVars}` around the body; `resolveControlTarget`
-returns the innermost loop or searches by label — E2047 (no enclosing/matching loop),
-E2048 (label names the loop's own header).
+**Victim choice** is remat-first, then Belady/MIN:
+- **Rematerializable** values (a constant def, not a phi, not edge-passed) are re-emitted at each
+  after-peak use rather than spilled — always preferred.
+- Otherwise the **farthest next use** wins, gated on being **cold-spillable**: the def and every
+  use must be at **loop depth 0**.
 
-**`var` reassignment = on-the-fly SSA (not slots + mem2reg).** A reassignment rebinds the
-variable's current SSA `ValueId` via `Scope.setValue` — no stack slot, no `store`/`load`
-(shv2's Std memory band is still empty). **Phis are `IrBlock.blockArgs` +
-`branchEdges`** (the mechanism reserved from M1), minted eagerly by the parser at the
-three merge points it structurally knows: **loop headers** (one per mutable var in
-scope), **loop exits** a `break` reaches, and **`if` continuations** (merging the
-then/else values — this fixed an `if c; x=2; end; return x` that read a stale pre-`if`
-value). Every predecessor records the value it carries per phi on its `branchEdge`, so
-operands are known at mint time — a single forward pass, no deferred backpatch. This was
-chosen over **porting v1's `Mem2Reg.maxon`** (2,327 lines): v1's IDF mem2reg needs
-`alloca`/`store`/`load`, a dominance-frontier module, and a dominator-tree rename pass
-shv2 does not have at M4b, whereas the parser already has full structural knowledge and
-lands phis at the **same blocks** v1's IDF would. v1's mem2reg becomes the port target
-when shv2 reaches unstructured control flow / the full Std optimizer (M5+ — already on
-`PLAN.md`'s Std-pass list).
+**Split shape: Belady split at the eviction point + dominating reloads.** Store after the last
+before-peak use (or after the def), then **one reload per after-peak use-block**, placed so it
+dominates its uses — each reload defines a **fresh `ValueId`**, so SSA is preserved and no phi or
+SSA reconstruction is needed. (This is what retires v1's SplitKit failure.) An assert panics if a
+store or reload would ever land at loop depth ≠ 0 — so **a loop body that does not use a spilled
+value is byte-identical to the un-spilled version**.
 
-**Phi resolution: M4b's `EliminatePhis` Std pass, RETIRED at M5.1.** For M4b, a Std-tier
-`EliminatePhis` pass resolved phis before the phi-free Target tier via conservative
-(liveness-free) coalescing plus `StdOp.copy` moves for the rest. **M5.1 retired it** (the
-pass, the `StdOp.copy` op it produced, and its `X64` lowering are all deleted): the register
-allocator now consumes `blockArgs`/`branchEdges` DIRECTLY and does SSA destruction AFTER
-coloring (see the Register-allocator section). The allocator's biased coloring is strictly
-better than the old use-count coalescing — it collapses induction variables the M4b pass had
-to leave un-coalesced (in `assignment-in-loop` and `while-loops.continue` the loop bodies are
-now copy-free) — so `EliminatePhis` bought nothing the allocator does not do better.
+**Hot overflow — a loop that genuinely uses more values than fit — is `E5001`** (below). An assert
+also fires if a store or reload would ever land at loop depth ≠ 0: that would be a hot spill that
+should have been reported instead, i.e. a splitter bug.
 
-**M5.1 also settled the two deferred M4b hand-offs:** liveness-based coalescing (now the
-allocator's biased forward-sweep coloring) and **critical-edge splitting** (a `splitCriticalEdges`
-pre-pass splits every phi-carrying critical edge before coloring, so an edge copy never runs
-on a sibling edge — `if c; x = …; end; return x` compiles correctly). Still deferred:
-boolean-value conditions for `while true` (E2004 until `setcc`/bool materialization).
+### `E5001` — the register-pressure diagnostic
+
+`Targets/Shared/RegisterPressureDiagnostic.maxon`. **The decision has already been made when this
+runs**: the splitter relieved every idle value and rematerialized every constant, and `chooseVictim`
+still found no value crossing the peak that can be moved. What remains is the loop's true working
+set against the registers available AT that point. This file does not re-decide feasibility — it
+turns an already-exact decision into a source-mapped message, so **it cannot add a false positive**.
+
+The message reports:
+- **The exact deficit** — "remove 3 of these 17 values", not "too many".
+- **The constrained register count that actually applies.** A value live across a **call** can only
+  sit in one of the 5 callee-saved registers, so at a call the effective pool is 5, not 14 — and an
+  `idiv` reserves RAX/RDX. Reporting the nominal 14 would be actively misleading to a consumer that
+  acts on it literally.
+- **Each blocking value's source def site**, ranked cheapest-to-move first (fewest uses inside the
+  loop = fewest reloads after the array rewrite).
+- **The transformation**, named: hold the working set in an array. Array elements are never promoted
+  into registers, so the hand-spill *stays* spilled.
+
+It is **deterministic byte-for-byte** — no map iteration anywhere, values swept in id order,
+candidates sorted by a total order (uses-in-loop, then value id). `specs-shv2/register-pressure.md`
+gates the exact text through a ` ```maxoncstderr ` block.
+
+**`ValueOrigin` is what lets a Target-tier diagnostic point at source.** Source spans die at the
+Maxon→Std boundary by design (`SourceRangeTable` is keyed by Maxon op index and does not survive
+`lowerMaxonToStd`'s fresh module). But two things survive verbatim through all three tiers: a
+value's `ValueId` and a function's INDEX. `IR/Maxon/ValueOrigin.maxon` is the `(funcIndex, ValueId)
+→ Maxon OpIndex` map that closes the loop — **three dense scalar columns**, same discipline and
+same reason as `SourceRangeTable`, recorded inside the same `emitOp`/`emitTerminator` choke points
+(so a value cannot be minted without an origin) and folded whole-program by `mergeArtifact`. A
+loop-carried value is an SSA phi with no defining op, so it is chased to the incoming value it
+copies — the author's declaration. A value that resolves to NO origin is by Rule 3 a compiler
+defect, and `defSiteOf` panics naming it rather than emitting a misleading location.
+
+`allocateRegisters` and `buildBackend` therefore `throw CompileError`, and the diagnostic lands on
+`project.diagnostics` like any other. The ownership checker will want this same table to say "moved
+here, used there" — it is not regalloc-only infrastructure.
+
+### SSA destruction
+
+AFTER coloring. The allocator consumes `blockArgs`/`branchEdges` directly — there is no
+phi-elimination pass. Per phi-carrying edge it sequences a parallel copy of physical `mov`s,
+breaking cycles with a physical-only `xchgRegReg` (`REX.W 87 /r`, invisible to SSA). Placement is
+at the predecessor's end (single-successor pred) or the successor's start (single-predecessor
+succ) — which is why **every phi-carrying critical edge is split by a pre-pass before coloring**,
+so a move never runs on a sibling edge.
+
+### The `AllocChecker`
+
+A symbolic verifier that abstractly interprets the allocated function — per-op `preg → vreg`
+state, per-edge parallel-copy simulation, spill store→slot→reload identity chains, the
+reuse-invariant (dest holds the reuse input at the op), and the incoming ABI registers seeded at
+entry — and asserts that every use reads the register holding its value.
+
+**It runs on EVERY function of EVERY compile** (a failure panics the build → fails the test),
+because `SpecTestRunner` treats fragments as **outputs, not gates**: the suite would otherwise go
+green on a wrong-but-self-consistent allocator. This is the real correctness gate, and it has
+caught real silent miscompiles that the full suite passed.
+
+### The register pool and ABI
+
+| | Registers |
+|---|---|
+| **Allocatable pool** | 14 — every GPR except `rsp`/`rbp` |
+| **Caller-saved** | `rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11` (mask `0xFC7`) |
+| **Callee-saved** | `rbx, r12, r13, r14, r15` |
+| **Argument registers** | `[rcx, rdx, rax, r9, rsi, rdi]` — 6, all caller-saved (the array length IS the parser's param cap) |
+| **Return** | `R8` |
+
+This is Maxon's existing custom ABI, not the Win64 one. `r10`/`r11` are **in** the pool: shv2
+needs no reserved scratch, because SSA destruction breaks copy cycles with `xchg` and the IAT
+call is RIP-relative. (This supersedes the "reserved scratch" note in the design doc's corrections
+header.) The pool is a property of the target (`allocatablePool`); arm64 will declare its own.
+
+**Calls** constrain coloring through three mechanisms, and no fourth:
+1. `callDirect.implicitDefs = 0xFC7` → the backward sweep folds it into the clobber mask → every
+   value **live across** the call is forbidden all 9 caller-saved registers, so its only home is
+   the 5 callee-saved.
+2. Caller-saved-first preference keeps call-free code off the callee-saved registers entirely.
+3. `usedCalleeSavedRegs` scans the **colored** body and pushes/pops exactly what was used.
+
+Call arguments are plain physical pre-moves (`mov argReg[k], arg_k`) followed by `callDirect`,
+with **no parallel-copy sequencer** — each pre-move has a physical *def* that the backward sweep
+already forbids for any value live across it, so forward-order emission can never read a clobbered
+register. `callDirect` carries no explicit operands, which is what sidesteps the late-clobber
+unsoundness in `forbidOperandsFromImplicit`.
+
+Parameter **capture** at entry (`mov v_i, argReg[i]`, a physical *source*) needed its own
+protection, because the arg-setup forbidding is a physical-def mechanism and does not mirror to
+sources: each parameter is forbidden every *other* parameter's incoming register, so a parameter
+can only take its own incoming register or a non-argument register. The `AllocChecker` seeds each
+parameter in its incoming register at entry so it models this and catches violations. (The entry
+move elides whenever the value lands in its own argument register.)
+
+**`idiv`/`mod`** is lowered as `mov rax, dividend; cqo; idivReg divisor; mov result, rax|rdx`, with
+the divisor left VIRTUAL. Two mechanisms keep it out of RAX/RDX: the clobber→forbidden path
+handles values live *across* the `idiv`, and `forbidOperandsFromImplicit` handles the divisor
+itself — which **dies** at the `idiv` and is therefore absent from the live-across set.
+Divide-by-zero and `INT_MIN / -1` raise a raw `#DE`; the fault handler is a runtime deliverable, so
+there is no compiler guard.
+
+### Stats
+
+`RegAllocStats` records per-phase `Clock` milliseconds plus the counters that matter more at
+sub-millisecond scale: `fixpointIterations`, `maxPressure`, `copiesInserted`,
+`hintsHonoured`/`hintsMissed`. Logged under `LogCategory.codegen`.
+
+*Rationale for the whole shape:* v1's register allocation was **~74% of self-compile wall time** —
+not because backtracking is inherently slow, but because it rebuilt the interference graph from
+scratch on every spill iteration. shv2 builds NO graph (an availability sweep) and runs no
+reactive spill loop over coloring. And v1's "74%" stood for months with **zero sub-phase
+attribution**, which is why the timers shipped in the allocator's first commit.
+
+### Known limits of the design
+
+1. **The only source of a false `E5001` is a wasted register, and copy-related values are the one
+   that bites.** `maxlive` is exact for the program as lowered (chordal ⇒ χ = ω = maxlive), and
+   liveness is per-program-point, so values live on disjoint paths correctly do **not** interfere.
+   But two values that are *copies of each other* — a block arg and what the back edge passes it —
+   hold the same value and are still counted twice. **Biased coloring is what collapses them**, and
+   without it a loop would be told it needs one more register than it does. Every other
+   waste-a-register path is likewise a contract bug, not a limitation: a literal in a register (→
+   immediates, `foldConstOperands`), a witness table in a register (→ remat), a redundant
+   two-address copy (→ `lea`, `Reuse`).
+2. **Fixed-register points reduce the effective pool locally, so `maxPressure ≤ pool` is necessary
+   but NOT sufficient.** Both the splitter's peak-finder and the `E5001` deficit are therefore
+   computed per point against the *reduced* pool (`popcount(pool ∖ implicitDefs)`), never the
+   nominal 14.
+3. **There is always a rewrite, but sometimes it is a real restructuring.** Register pressure is
+   always reducible by hand-spilling into memory: twenty accumulators become one array, and pressure
+   collapses to `{base, index, temp}`. The floor is set by the most demanding single operation,
+   which on x64 is 3–4 registers — far below 14. But the honest version is that the fix for a
+   genuinely hot loop (a SHA-256 compression round wants ~24 live values) is the same restructuring
+   a real implementation would already do — not a one-line tweak. Say so, rather than let an author
+   conclude the compiler is being arbitrary.
+
+## Parallel driver
+
+**Not built.** Passes are classified `wholeModule`/`perFunction` and the parser is already a pure
+function of its file, so both fan-out seams exist; nothing drives them yet.
+
+**The runtime underneath it is proven** (x64-windows). The C# emitter's green-thread scheduler and
+sharded allocator run correctly across many worker Ps: a 32-green-thread CPU/alloc burst runs on 16
+distinct worker Ps (P0–P15 = ncpu) unclamped and exactly 1 (P0) under `MAXON_MAX_PROCS=1`, both
+producing the correct deterministic result. The concurrency primitives that made that testable live
+in `maxon-sharp` only (no shared-stdlib change): `__Builtins.cpuCount()`,
+`__Builtins.parallelBoundary()` (an empty runtime stub, so a CPU-bound `async` passes E3073), the
+`MAXON_MAX_PROCS` clamp in `__gt_init`, and the bisection tools `MAXON_SLAB_GLOBAL_LOCK` /
+`MAXON_SLAB_STATS` / `schedMaxActiveWorkers()`. `maxon-shv2/track0/` holds the allocation-torture
+harness that exercises the cross-P remote-free MPSC.
+
+**1-core-vs-N-core byte identity is the blocking gate** for the parallel phase when it starts.
+
+## Event log & mm-trace harness
+
+**The producer is `maxon-sharp`'s.** Binaries compiled by `maxon.exe` with `--debugstream` emit a
+binary MM event stream: a 128-byte header, 8-byte packed entry headers, a ticket-spinlock reserve.
+Four MM codes are produced live — `mm_alloc`/`mm_free`/`mm_incref`/`mm_decref` (`0x01–0x04`) — plus
+depth inc/dec (`0x40/41`) around destructor cascades. The Sched subsystem (`0x20–0x2C`) and several
+Dbg/raw codes are decoder-only; real scheduler tracing rides the Dbg events (`0x50–0x5E`).
+Type-name resolution is automatic: every heap allocation flows through `EmitAlloc`→`EnsureTagIndex`,
+whose names land in the PE `.symtab` `MXDS_TAGS` blob, so the monitor prints real type names with no
+extra wiring.
+
+> **The DebugStream schema is FROZEN.** New events get new unused type codes; existing codes are
+> never reinterpreted.
+
+**The consumer is `maxon monitor [--filter=mm] <exe>`** — it creates the shared segment, spawns the
+child with `MAXON_DEBUGSTREAM` set, drains the ring, decodes via a hand-rolled PE parser, and prints
+`[+SSSS.mmm] <indent>mm_<verb> <Tag> #<id> [size=|rc=]<n>`. It forwards the child's own stdout, so
+trace lines are identified by the `[+…]` prefix.
+
+**The mm-trace spec harness** (in the C# repo): an `<!-- MmTrace -->` marker + an ` ```mm-trace `
+block compiles with `DebugStream=true`, runs under `maxon monitor --filter=mm`, **normalizes**, and
+compares. Normalization is what makes goldens deterministic: keep only `[+…]` lines, strip the
+timestamp and indent, dense-renumber `#<id>` in first-appearance order.
+
+**shv2's own producer is a runtime deliverable (Workstream R)** — it does not exist yet. Two design
+notes for it: keep the two-tier gating (compile-time `DebugStream` = zero instructions when off,
+runtime `MAXON_DEBUGSTREAM` = `__ds_base == 0`), and **inline the `__ds_base` guard for every event
+family** — the C# producer's MM events pay two real CALLs before the runtime-off check, unlike its
+Dbg events, and that wart should not be reproduced.
+
+## Spec-test harness
+
+`maxon-shv2 spec-test [dir]` (default `specs-shv2`) is shv2's own spec runner —
+`Testing/{SpecParser,SpecTestRunner}.maxon`, compiled by `maxon.exe` like the rest of shv2, so it
+can use the full stdlib (File, String, `Subprocess`).
+
+`SpecParser.parseSpecFile` extracts `<!-- test: NAME -->` markers + the ` ```maxon ` block + one
+expected block (` ```exitcode ` or ` ```maxoncstderr `) into a `SpecTest{name, source, expectation}`
+(`SpecExpectation` is a union — no sentinel). It scans **only the `## Tests` section** (up to the
+next `## ` heading): deferred tests live under a marker-less `## Deferred` section, because **HTML
+comments do not nest** — `<!-- … <!-- test: … --> … -->` closes at the first `-->`, so a
+comment-wrapped deferral would still be run.
+
+`SpecTestRunner.runSpecDir` writes each test's source verbatim (headerless, code at line 1) to a
+temp fragment and spawns `<compiler> build` as a **subprocess** through the single `runProcess`
+choke point — which isolates a compiler crash to one test and exercises the real CLI. For a
+`compilerError` test it normalizes the fragment's absolute path to `<fragment>` (line/col stay
+shv2-native) and compares; for an `exitCode` test it runs the produced exe and compares the exit.
+`Main` resolves the compiler via `Process.executablePath()` (the runner tests itself), prints
+per-test PASS/FAIL and `N passed, M failed`, and **exits non-zero iff any failed**.
+
+**Fragments.** Every run regenerates `specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test
+source + its generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `match`
+over every `TargetOp`, so a new op is a compile error, never a silent `??`), written through
+`build --emit-ir`; or the normalized diagnostic for an error test. The fragments are
+byte-deterministic and committed, so `git diff` surfaces every codegen change in review.
+
+**Fragment writing is a pure side effect** — it never changes `spec-test`'s pass/fail or exit code.
+Fragments are outputs, not gates; that is precisely why the `AllocChecker` exists.
+
+## Coverage scaffold
+
+`Compiler/Coverage/CovSiteTable.maxon` carries `BlockSourceInfo` — a per-block source footprint
+(file, opening line, deduped statement lines) that `IrModule` records at every block-creation site
+and preserves through Maxon→Std lowering. The coverage-instrumentation pass and its site table are a
+later deliverable that grows this file; today the metadata is recorded and unused.
+
+---
+
+## Known gaps in the built subsystems
+
+Things that are *implemented but incomplete*, distinct from what simply hasn't been built (for the
+latter, see `PLAN.md`):
+
+- **No lexical block scoping.** `Scope`'s `pushScope`/`popScope`/`ownedStack` are unreachable, so a
+  `let` inside an `if` body outlives the `if`, and a `var` declared on only one branch is not merged
+  at the continuation.
+- **`Early`/`Late` operand position is packed but never read** — sound today only because no op has
+  both explicit operands and a late implicit clobber.
+- **The query dependency graph is recorded but does not drive invalidation** (content hashes do).
+- **No spill-slot coalescing** — every spilled value gets its own slot.
+- **The splitter recomputes liveness once per split**, and several of its helpers are linear scans
+  inside that loop. Correct, but superlinear in a way the rest of the codebase's "no `Map`, no
+  hashing in the hot path" discipline avoids. A performance follow-on, not a correctness one.
+- **A void `return` in a non-`main` function panics the compiler** — `StdOp` has no void-return
+  variant. Currently unreachable, because E3002 rejects a void `main` first.
+</content>
+</invoke>

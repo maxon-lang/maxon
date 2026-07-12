@@ -8,10 +8,15 @@ corrected premises, bugs found along the way).
 - [`PLAN.md`](./PLAN.md) — the plan: milestone sequence and locked design
   decisions (what we intend to build, in what order).
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — **read this first.** The design
-  pillars, the core invariants, and one section per subsystem documenting its
-  *operation and invariants* as it lands, so a future agent onboards without
-  re-deriving the design from the code.
+  pillars, the core invariants, and one section per subsystem documenting the
+  compiler's *current* design and state, so a future agent onboards without
+  re-deriving it from the code.
 - **This document** — the milestone ledger + dated findings.
+
+**Doc convention:** when a subsystem changes, `ARCHITECTURE.md` is **edited in
+place** to describe the new design — it carries no "was X, now Y" narrative and no
+milestone attribution. The story of the change (what landed when, what it replaced,
+what we learned, which premises turned out false) lives **here**.
 
 ---
 
@@ -141,9 +146,14 @@ M5's allocator design was chosen by an **adversarial evaluation** (5 independent
 designs competed: **A** = SSA linear-scan + greedy fallback (always compiles, spills hot
 code); **B** ("mighty-pudding") = SSA chordal coloring + gap splitting that **refuses to
 emit hot spill code and errors (`E5001`)** instead, telling the author which values to
-remove from the loop. **Chosen: pure Design B.** Canonical design in
-[`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md) (adopted mighty-pudding + a
-corrections header — read the header first).
+remove from the loop. **Chosen: pure Design B.**
+
+The adopted design lived in its own `docs/REGISTER_ALLOCATOR.md` (a proposal doc: an
+adoption header, a corrections list, and a Phase 0–8 build plan). Once the allocator was
+built, that document was **folded into `ARCHITECTURE.md`'s register-allocator section** and
+deleted — the enduring content (the E5001 contract, Rules 1–3, the data-representation
+discipline, the regalloc2 lineage, the known limits) is design, and the phase plan had become
+history. **There is no separate allocator design doc; ARCHITECTURE.md is canonical.**
 
 - **Why B's mechanism** (won unanimously): the `Reuse(i)` operand model deletes the
   two-address `mov` at the root; the **`AllocChecker`** (symbolic verifier under
@@ -156,14 +166,17 @@ corrections header — read the header first).
   the compiler's own code forces it within the Stage-5 self-compile budget instead of hiding
   slow spills. The hybrid "spill + warn" was rejected (a warning gets ignored → hidden slow
   code returns). Pure-B is also *simpler* (no greedy fallback, no hot-spill path).
-- **Corrections folded into the doc header:** ABI = the existing custom one (5 callee-saved
-  {rbx,r12-r15}, return R8, rsi/rdi caller-saved) — the doc body's "7 survive a call" / "pool
-  14" are wrong for it; the **specific register count is a tunable, not the crux** (E5001
-  exists at any count). **Make-or-break = eliminate FALSE `E5001`:** a skeptic confirmed the
-  design-as-written over-counts via a used-in-loop cardinality gate that double-counts
-  loop-carried copy pairs; the overflow decision must instead be the true per-point maxlive
-  (χ=ω) after biased coloring collapses copies — verified by the `AllocChecker`. Retire M4b's
-  `EliminatePhis` (consume `blockArgs`/`branchEdges` directly; SSA-destruction after coloring).
+- **Corrections applied to the proposal as adopted** (all now reflected in the built allocator):
+  ABI = the existing custom one (5 callee-saved {rbx,r12-r15}, return R8, rsi/rdi caller-saved) —
+  the proposal's "7 survive a call" was standard-Win64 and wrong for it; the **specific register
+  count is a tunable, not the crux** (E5001 exists at any count). Its "reserve r10/r11 as scratch"
+  was likewise dropped — the pool is all 14 GPRs except rsp/rbp, since SSA destruction breaks copy
+  cycles with `xchg` and the IAT call is RIP-relative. **Make-or-break = eliminate FALSE `E5001`:**
+  a skeptic confirmed the design-as-written over-counts via a used-in-loop cardinality gate that
+  double-counts loop-carried copy pairs, which would fire E5001 on ordinary accumulator loops; the
+  overflow decision is therefore made on the true per-point maxlive (χ=ω) **after** biased coloring
+  collapses copy-related values — never on a cardinality gate. Retire M4b's `EliminatePhis` (consume
+  `blockArgs`/`branchEdges` directly; SSA destruction after coloring).
 
 ## Milestone ledger
 
@@ -262,8 +275,78 @@ The design each milestone establishes is documented in
   small). Specs `specs-shv2/{arithmetic,unary-operators}.md`. **Phase A complete.**
 - **Tooling** — **spec-test runner landed** (`maxon-shv2 spec-test`, `Testing/SpecParser`+`SpecTestRunner`): parses `specs-shv2/*.md`, compiles each active test through shv2 (subprocess), compares exit-code / normalized `maxoncstderr`; deferred tests live under `## Deferred` (HTML comments don't nest). Replaces hand-driving. 27/0.
 - [x] **M4a** control flow (comparison + `if`) — comparison operators (`==`/`!=`/`<`/`>`/`<=`/`>=` as a `cmp` op, fused `cmp`+`jcc`, un-deferred from M3) + `if`/`else`/`else-if` (**first multi-block functions**: intra-function `jmp`/`jcc` rel32 resolved in `emitFunctionChunk` via `BlockStartOffsetMap`/`resolveBlockJumps`, forward+backward-ready for loops) + `return` in branches. New `control` band (`condBranch`/`branch`) between arith and call. Built in a parallel worktree; a review caught a **real miscompile** — a comparison in value position (`let b = x==10; …`) read stale flags after an intervening flag-setter — fixed by restricting comparisons to the sole top-level operator of an `if` condition (E3010 otherwise) until bool materialization/`setcc` lands. Specs `specs-shv2/{comparison-operators,if-statements,return-statement}.md`.
-- [x] **M4b** `while`/`break`/`continue` + `var` reassignment — **first backward-branching CFG**, built in the parser from M4a's terminators (no new `StdOp`/`TargetOp`): preheader → header (fused `cmp`+`jcc`, `condBranch(body, exit)`) → body (back-edge `branch`) → exit; `break`/`continue` → `branch` to a **loop-context stack**'s exit/header (E2047 no-target, E2048 own-label). `var` reassignment is **on-the-fly SSA** (`Scope.setValue` rebinds the SSA `ValueId` — no slot/`store`/`load`); phis are `IrBlock.blockArgs`+`branchEdges`, minted by the parser at loop headers / break-reached exits / `if`-continuations (this fixed an `if c; x=2; end; return x` reading a stale pre-`if` value). New Std-tier pass **`EliminatePhis`** (Phase 4) resolves them: conservative single-use coalescing (union-find, no liveness needed → `sum = sum + i` coalesces to no move) + `StdOp.copy` (arith-band end, `clobbersFlags:false`) for the rest, then clears phi metadata so the backend sees plain M4a-shape multi-block SSA. **Chose on-the-fly SSA over porting v1's `Mem2Reg.maxon` (2,327 L)** — v1's IDF mem2reg needs `alloca`/`store`/`load` + a dominance-frontier module + a rename pass shv2 lacks at M4b, and the parser lands phis at the *same blocks* v1's IDF would (cross-checked against v1's `parseWhileStatement` + `placePhiNodes`); port it at M5+ for unstructured CFG. Gates: shv2 build green, **specs-shv2 34/0**, warm-rebuild determinism (74 bytes identical, so `EliminatePhis`'s `Map`s are order-independent), fragments regenerated (canonical loop → 15, 0 `mrt_start`). **M5 hand-offs (documented in code):** liveness-based coalescing (register-heavy loops + the two cases left un-coalesced here), critical-edge splitting (a copy at a `condBranch` pred runs on both edges — harmless under the exclusive-register placeholder colorer), `while true` booleans (E2004 until `setcc`). Specs `specs-shv2/{assignment,while-loops,break}.md`. · [ ] **M5** functions (fan-out) + **real register allocator**
+- [x] **M4b** `while`/`break`/`continue` + `var` reassignment — **first backward-branching CFG**, built in the parser from M4a's terminators (no new `StdOp`/`TargetOp`): preheader → header (fused `cmp`+`jcc`, `condBranch(body, exit)`) → body (back-edge `branch`) → exit; `break`/`continue` → `branch` to a **loop-context stack**'s exit/header (E2047 no-target, E2048 own-label). `var` reassignment is **on-the-fly SSA** (`Scope.setValue` rebinds the SSA `ValueId` — no slot/`store`/`load`); phis are `IrBlock.blockArgs`+`branchEdges`, minted by the parser at loop headers / break-reached exits / `if`-continuations (this fixed an `if c; x=2; end; return x` reading a stale pre-`if` value). New Std-tier pass **`EliminatePhis`** (Phase 4) resolves them: conservative single-use coalescing (union-find, no liveness needed → `sum = sum + i` coalesces to no move) + `StdOp.copy` (arith-band end, `clobbersFlags:false`) for the rest, then clears phi metadata so the backend sees plain M4a-shape multi-block SSA. **Chose on-the-fly SSA over porting v1's `Mem2Reg.maxon` (2,327 L)** — v1's IDF mem2reg needs `alloca`/`store`/`load` + a dominance-frontier module + a rename pass shv2 lacks at M4b, and the parser lands phis at the *same blocks* v1's IDF would (cross-checked against v1's `parseWhileStatement` + `placePhiNodes`); port it at M5+ for unstructured CFG. Gates: shv2 build green, **specs-shv2 34/0**, warm-rebuild determinism (74 bytes identical, so `EliminatePhis`'s `Map`s are order-independent), fragments regenerated (canonical loop → 15, 0 `mrt_start`). **M5 hand-offs (documented in code):** liveness-based coalescing (register-heavy loops + the two cases left un-coalesced here), critical-edge splitting (a copy at a `condBranch` pred runs on both edges — harmless under the exclusive-register placeholder colorer), `while true` booleans (E2004 until `setcc`). Specs `specs-shv2/{assignment,while-loops,break}.md`.
+- [x] **M5.1** register-allocator SPINE (`b1e748b4d`) — the real allocator (pure Design B: SSA chordal
+  coloring), replacing M1's `MinimalColorer` placeholder. Landed the operand model
+  (`TargetOperands.targetOpOperands`, one exhaustive match; packed operands, `implicitUses`/`implicitDefs`
+  masks), dense liveness (`FuncCfg` built once, back-edge loop depth, live-in/out to a **fixpoint** — M4b's
+  back edges make a single reverse pass wrong), the biased forward-sweep colorer, SSA destruction after
+  coloring, the `AllocChecker`, and sub-phase timers from commit 1 (v1's "regalloc = 74% of self-compile"
+  stood for months with **zero** attribution). **Retired M4b's `EliminatePhis`** — the pass, its `StdOp.copy`
+  op, and its x64 lowering are all deleted; the allocator consumes `blockArgs`/`branchEdges` directly. Biased
+  coloring is strictly better than the old use-count coalescing (it collapses the induction variables M4b had
+  to leave un-coalesced — `assignment-in-loop` and `while-loops.continue` loop bodies became copy-free), so
+  `EliminatePhis` bought nothing the allocator does not do better. Also settled M4b's other hand-off:
+  **critical-edge splitting** (a pre-pass, so an edge copy never runs on a sibling edge). Pool was 9
+  (caller-saved incl. R8); hot overflow panicked.
+- [x] **M5.2** ISel quality rework (`da25d25bf`) — **Reuse model**: delete the pre-emitted two-address seed
+  `mov`; ISel emits one reuse-def op and the allocator materializes `mov dest, input` ONLY when the input
+  outlives (`allocateReuseDef`), so the common dies-case coalesces with zero copies. Plus 3-operand `lea`
+  (`+`, `a±imm`), 3-operand `imul`-imm, `cmp`-imm, the Std-tier `binOpImm`/`cmpImm`, and the
+  **`foldConstOperands`** Std→Std pass (commutative canonicalization + immediate rewrite + DCE; const-lhs
+  `sub` never swapped). `10 + 5*2` dropped from 6 insns/3 regs to 3/2. A 5-finding adversarial review folded
+  in, all codegen-neutral — notably `maxPressure` now counts the reuse-copy `+1` transient (input outlives +
+  another operand dies → `{lhs,rhs,dest}` simultaneously live), keeping the exact-χ the E5001 contract needs
+  (same class as M5.1's dead-phi correction). Deferred `foldConstants` (const⊕const) — it would collapse the
+  test programs to `mov r8,k` and erase the codegen the fragments exist to show. 37/37.
+- [x] **M5.4** integer `/` and `mod` (`ca57bf63b`) — the **first hard fixed-register constraint**. `StdOp.div`/
+  `mod` (own variants, `isPure: false` — `idiv` traps), x64 `mov rax,dividend; cqo; idivReg divisor; mov
+  result, rax|rdx`; new `cqo`/`idivReg` TargetOps carrying implicit RAX/RDX masks. The divisor is kept out of
+  RAX/RDX by TWO mechanisms: the clobber→forbidden path (for values live *across*) plus a new
+  `forbidOperandsFromImplicit` — needed because the divisor **dies** at the `idiv` and is therefore absent
+  from the live-across set. Band-append working as designed: appending at the union END made stale
+  `… to iatCall` range arms fail to compile until extended. Divide-by-zero / `INT_MIN/-1` raise a raw `#DE`
+  (the fault handler is a Workstream-R deliverable). 45/45.
 - [x] **M5.5-M5.6** functions + parameters + calls — first functions that take arguments and call each other, on the M5.1-M5.4 register allocator. **Frontend:** `parseFunctionParameters` (`name type`, `=` default rejected `unsupported`, >6 params rejected — the ABI register-arg cap); parameters bind to their reserved `ValueId` `i` (0..paramCount-1) as immutable value bindings. New **`funcSignatures`** registry (names + types) mirroring `funcReturnTypes` exactly (`FileParseArtifact` contribution → `Project` field → `mergeArtifact` fold → `remapArtifact` named-type remap → `resolveTypes` re-sync). `MaxonOp.call(result, callee ByteArray, args, argLabels, argRanges)` in a NEW `callFree` band BEFORE `plain`. Parse: 1st arg positional, 2nd+ labelled (`consumeArgLabel` → E2052/E2053), call-expr in `parsePrimary`, bare-call statement. SemanticCheck validates each call against its signature (E3030 unknown fn / E3031 arity / E3032 unknown label / E3033 dup) via the shared `slotCallArgs` (the one label→position mapping, also used by lowering). **Lowering:** `lowerCall` reorders labels→positional and emits `StdOp.call`; one `StdOp.param(i, i, type)` per param at entry (both new in the Std call band). **Custom ABI:** args in `[rcx, rdx, rax, r9, rsi, rdi]` (v1's order minus rbx — rbx is CALLEE-saved here), return in R8. **Backend/allocator:** param entry = `mov virtual(i), physical(argReg[i])` (the existing fixed-reg hint elides it when the value lands in its own arg register); call args = plain `mov argReg[k], arg_k` pre-moves + `callDirect` + `mov result, r8` — NO sequencer needed, because `callDirect`'s caller-saved `implicitDefs = 0xFC7` (rbx EXCLUDED, asserted at runtime) forbids each arg register for any value live across the move, so forward-order emission never reads a clobbered register (the `project_call_arg_parallel_copy_fix` class). `callDirect` carries no explicit operands, so `forbidOperandsFromImplicit` is a no-op on it — the position-aware pitfall the M5.4 review flagged is SIDESTEPPED, not patched. Pool GREW to 14 (added callee-saved rbx/r12-r15); values live across a call are forbidden all caller-saved → colored callee-saved. New `TargetOp.pushReg`/`popReg` (post-regalloc, band-appended); `X64PrologueEpilogue` push/pops exactly the callee-saved a function's coloring used and reserves an aligned frame (32B shadow + parity-corrected padding so rsp ≡ 0 at the call — `roundUpToMod`). Gates: shv2 build clean, **specs-shv2 61/0** (45 + new `functions.md`: labelled/multi/nested/0-arg calls, recursion factorial+fib, call-in-loop, value-live-across-call → rbx push/pop, 5 error diagnostics), AllocChecker green on every function (broken-probe confirmed it panics on a live-across value in a clobbered register), warm-rebuild byte-identical, objdump-verified frame (balanced push/pop, `call` rel32, 16-aligned). **M5.7 note (documented in code):** `maxPressure ≤ pool` is necessary-not-sufficient at a call — a value live across is forbidden all 9 caller-saved, so its effective pool is the 5 callee-saved; the exact E5001 deficit must model each call point against that reduced pool. Specs `specs-shv2/functions.md`.
+- [x] **M5.3** cold-spill live-range splitter (`1d81de734` — landed *after* M5.4/M5.5-M5.6; the numbering is
+  the plan's, not the landing order). Replaces the colorer's panic-on-overflow with cold spilling: a value
+  idle across a loop (or a fixed-register point) is split out via **dominating reloads** — each reload placed
+  in the use's block (or the outermost idle loop's preheader) so it dominates its uses and needs **no phi and
+  no SSA reconstruction**, which is what retires v1's SplitKit failure. Each reload defines a fresh `ValueId`
+  (SSA preserved); integer constants are **rematerialized** rather than spilled. **Rule 2:** no store/reload
+  inside a loop that uses the value (asserted) — so a loop body a spilled value doesn't touch is
+  byte-identical to the un-spilled version. New `storeSlotReg`/`loadRegSlot` ops (rsp-base SIB, slots above
+  shadow space); the `AllocChecker` gained slot tracking with a store-side identity cross-check.
+  **HOT overflow still PANICS** — E5001 replaces it at M5.7.
+  Two review rounds hardened it before commit: (1) Belady split at the **eviction point** (not before the
+  block's first use), so a value used both before and after a peak is genuinely relieved — this had been a
+  false "did not converge" panic; (2) `analyzePressure` uses the exact per-point pressure (reuse-copy
+  transient + dead-phi corrections) so the peak-finder and the feasibility guard agree; (3) **reduced-pool
+  modelling** at fixed-register points (`reducedPoolSizeAt(op) = popcount(pool ∖ implicitDefs)`) — a value
+  live across a call competes for the 5 callee-saved, across an `idiv` for `pool ∖ {rax,rdx}`, so 6 values
+  live across a call now spill cleanly instead of panicking in the colorer; (4) proper multi-split (a value
+  crossing K peaks is spilled/reloaded around each), and a degenerate-Belady sentinel bug (`u64.max` compared
+  as signed −1) that had silently collapsed farthest-next-use selection to first-fit. Gates: **specs-shv2
+  72/0**, a 144-case adversarial matrix with zero miscompiles, warm-rebuild byte-deterministic.
+- [x] **M5.7** `E5001` + `ValueOrigin` — the last M5 piece, and the one the whole allocator design exists
+  to serve: a HOT overflow now raises a **source-mapped compile error** instead of the splitter's
+  placeholder panic. New `IR/Maxon/ValueOrigin.maxon` — the `(funcIndex, ValueId) → Maxon OpIndex` table
+  (three dense scalar columns, recorded in the `emitOp`/`emitTerminator` choke points, folded whole-program
+  by `mergeArtifact`) that reconnects a Target-tier value to source, since spans die at the Maxon→Std
+  boundary by design. New `Targets/Shared/RegisterPressureDiagnostic.maxon` renders the message: the exact
+  deficit, the **reduced** register count that actually binds (5 callee-saved across a call, `pool ∖
+  {rax,rdx}` at an `idiv` — never the nominal 14), each blocking value's def site ranked
+  cheapest-to-move-first, and the named transformation. It cannot false-positive: the feasibility decision
+  was already made by the splitter against those same per-point reduced pools; this only maps it to source.
+  A loop-carried value is a phi with no defining op, so it is chased to the incoming value it copies; a
+  value with NO origin is a Rule-3 compiler defect and panics rather than print a misleading location.
+  `allocateRegisters`/`buildBackend` now `throw CompileError`. Gates: **specs-shv2 75/0**, with the new
+  `register-pressure.md` asserting the byte-exact message via `maxoncstderr`.
+  *(In the working tree, not yet committed as of this entry.)*
+- [ ] **per-function fan-out** — carried by M5's original "functions (fan-out)" scope but NOT built by
+  M5.1–M5.6. Both seams exist (`PassPipeline.classifyPass` labels each pass `wholeModule`/`perFunction`;
+  the parser is already a pure function of its file), and the runtime under it is proven (Track 0); nothing
+  drives them. Blocking gate when it starts: **1-core-vs-N-core byte identity**.
 - [ ] **M6** heap+drops · [ ] **M7** moves+borrows · [ ] **M8** escape→refcount
 - [ ] **M9** structs · [ ] **M10** strings · [ ] **M11** arrays
 - [ ] **M12** enums · [ ] **M13** closures · [ ] **M14** interfaces/generics · [ ] **M15** error handling

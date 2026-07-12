@@ -222,7 +222,12 @@ type MaxonArgs
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else 'positional'
+			end 'emitIrFlag' else if arg.startsWith("--log=") 'logFlag'
+				var spec = try CommandLine.optionValue(arg) otherwise ""
+				if not parseLogOption(spec) 'badSpec'
+					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
+				end 'badSpec'
+			end 'logFlag' else 'positional'
 				if path.isEmpty() 'firstPositional'
 					path = arg
 				end 'firstPositional'
