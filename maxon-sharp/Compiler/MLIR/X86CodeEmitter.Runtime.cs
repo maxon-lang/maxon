@@ -68,7 +68,7 @@ public partial class X86CodeEmitter {
     EmitMaxonMemcmp();
     // mm_raw_alloc/free/realloc unified via RuntimeEmitter
     var rawRt = new Runtime.RuntimeEmitter(CreateBackend());
-    rawRt.EmitAllocatorFunctions(Compiler.MmTrace, Compiler.MmDebug);
+    rawRt.EmitAllocatorFunctions(Compiler.MmTrace);
     rawRt.EmitMmRawAlloc(Compiler.MmTrace);
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);

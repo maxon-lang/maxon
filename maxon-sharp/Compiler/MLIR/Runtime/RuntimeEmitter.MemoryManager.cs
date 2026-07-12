@@ -728,13 +728,10 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = user_ptr
     _b.StoreLocal(6, VReg.Scratch0); // slot 6 = user_ptr (reuse packed_id slot)
 
-    // Zero the user area so managed pointers in uninitialized array slots are NULL.
-    // Without this, array.set on fresh capacity slots would decref garbage pointers.
-    _b.LoadLocal(VReg.Scratch0, 6); // ptr = user_ptr
-    _b.LoadLocal(VReg.Scratch1, 6); // end = user_ptr
-    _b.LoadLocal(VReg.Arg0, 0);     // size
-    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // end = user_ptr + size
-    EmitZeroFillLoop("mm_alloc");
+    // NO zero-fill here. __slab_alloc now guarantees zeroed memory, so the user
+    // area is already NULL — which is what array.set on fresh capacity slots
+    // relies on (it decrefs the old occupant, and a garbage pointer there would
+    // fault). Zeroing again would be a second pass over the whole allocation.
 
     // Return user_ptr
     _b.LoadLocal(VReg.Scratch0, 6);
@@ -794,9 +791,16 @@ public partial class RuntimeEmitter {
       EmitTraceDepthInc();
     }
 
-    // Allocate new block via slab allocator
+    // Allocate the new block WITHOUT zeroing (Go's growslice: mallocgc with
+    // needzero=false). Every byte of it is written before anyone can read it —
+    // the maxon_memcpy below fills [0, MmHeaderSize + old_size) and the tail
+    // zero at the end of this function fills [old_size, new_size). Asking the
+    // slab to zero it first would be a wasted full pass over the buffer.
+    //
+    // This is one of only two audited __slab_alloc_raw callers. See the audit
+    // rule on RuntimeEmitter.EmitSlabAllocRaw before adding another.
     _b.LoadLocal(VReg.Arg0, 4); // Arg0 = new_alloc_size
-    _b.Call("__slab_alloc"); // Scratch0 = new_raw_ptr
+    _b.Call("__slab_alloc_raw"); // Scratch0 = new_raw_ptr
     _b.StoreLocal(5, VReg.Scratch0); // slot 5 = new_raw_ptr
 
     if (mmTrace) {
@@ -847,17 +851,26 @@ public partial class RuntimeEmitter {
       _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
     }
 
-    // Zero the new space beyond old_size to prevent use-after-free when
-    // array.set decrefs uninitialized slots after realloc.
+    // Zero the GROWN TAIL [old_size, new_size). This is the other half of the
+    // __slab_alloc_raw bargain above: memcpy filled the prefix, this fills the
+    // rest, and between them every byte of the new buffer is written. It is not
+    // redundant work — it is what MAKES the raw allocation safe.
+    //
+    // It is also load-bearing on its own terms: array.set decrefs the old
+    // occupant of a slot, so fresh capacity must read as NULL, not garbage.
+    //
+    // ptr  = new_user_ptr + old_size
+    // size = new_size - old_size
     _b.LoadLocal(VReg.Scratch0, 5); // new_raw_ptr
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // new_user_ptr
     _b.LoadLocal(VReg.Scratch1, 1); // old_size
-    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // Scratch0 = ptr = new_user_ptr + old_size
-    _b.LoadLocal(VReg.Scratch1, 5); // new_raw_ptr
-    _b.AddRegImm(VReg.Scratch1, MmHeaderSize); // new_user_ptr
-    _b.LoadLocal(VReg.Arg0, 2); // new_size
-    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // Scratch1 = end = new_user_ptr + new_size
-    EmitZeroFillLoop("mm_realloc");
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // ptr
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.LoadLocal(VReg.Scratch0, 2); // new_size
+    _b.LoadLocal(VReg.Scratch1, 1); // old_size
+    _b.SubRegReg(VReg.Scratch0, VReg.Scratch1); // size = new_size - old_size
+    _b.MovRegReg(VReg.Arg1, VReg.Scratch0);
+    _b.Call("__slab_memzero");
 
     // Compute new_user_ptr = new_raw + MmHeaderSize
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = new_raw_ptr
@@ -941,13 +954,9 @@ public partial class RuntimeEmitter {
       _b.Call("__mm_raw_id_insert");
     }
 
-    // Zero the allocated block to prevent use-after-free when managed array
-    // elements in uninitialized capacity slots get decreffed.
-    _b.LoadLocal(VReg.Scratch0, 2); // ptr
-    _b.LoadLocal(VReg.Scratch1, 2); // end = ptr
-    _b.LoadLocal(VReg.Arg0, 0);     // size
-    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // end = ptr + size
-    EmitZeroFillLoop("mm_raw_alloc");
+    // NO zero-fill here. __slab_alloc already returns zeroed memory, which is
+    // what makes it safe for managed array elements in uninitialized capacity
+    // slots to be decref'd (they read as NULL, not garbage).
 
     _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
@@ -2184,18 +2193,4 @@ public partial class RuntimeEmitter {
     _b.FunctionEnd();
   }
 
-  /// Zero-fill memory from Scratch0 (start) to Scratch1 (end) in 8-byte steps.
-  /// Caller must set up Scratch0 and Scratch1 before calling.
-  private void EmitZeroFillLoop(string labelPrefix) {
-    var zeroLoop = UniqueLabel($"{labelPrefix}_zero_loop");
-    var zeroDone = UniqueLabel($"{labelPrefix}_zero_done");
-    _b.DefineLabel(zeroLoop);
-    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, zeroDone);
-    _b.ZeroReg(VReg.Arg0);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Arg0); // *ptr = 0
-    _b.AddRegImm(VReg.Scratch0, 8); // ptr += 8
-    _b.Jump(zeroLoop);
-    _b.DefineLabel(zeroDone);
-  }
 }

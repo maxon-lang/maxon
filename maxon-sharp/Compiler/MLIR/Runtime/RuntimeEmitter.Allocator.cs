@@ -76,11 +76,19 @@ public partial class RuntimeEmitter {
   // same-thread __slab_free local path). 0xFFFFFFFF means "in mcentral / unowned"
   // — see __slab_mcentral_return_span.
   private const int MspanOffOwningP = 0x40;
+  // 0x48 is RESERVED so this layout stays field-for-field identical to the
+  // self-hosted mspan (stdlib/Internals.maxon), where 0x48 is the scavenger's
+  // grace state. The C# runtime has no scavenger, so the word is unused here.
+  //
+  // Go's mspan.freeindex, held as an address rather than an index: slots in
+  // [bump_next, bump_end) have NEVER been handed out, so they still hold the
+  // zeroes the OS gave us and need no memzero on alloc. bump_end is DERIVED,
+  // never stored: base_addr + slot_size * total_slots.
+  private const int MspanOffBumpNext = 0x50;
   // Bump-allocator slot for an mspan header rounded up to 16-byte alignment so
   // successive headers stay 16-byte aligned within the metadata chunk. The
-  // mspan field block currently runs from 0x00..0x48; the trailing 8 bytes are
-  // padding inside the slot.
-  private const int MspanMetaSlotSize = 0x50; // 80 bytes
+  // mspan field block runs from 0x00..0x58; the trailing 8 bytes are padding.
+  private const int MspanMetaSlotSize = 0x60; // 96 bytes
   private const uint MspanOwningPSentinel = 0xFFFFFFFFu; // span in mcentral, no owner
 
   // Arena map: two-level radix tree for pointer -> span lookup
@@ -239,8 +247,20 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitSlabMemzero: __slab_memzero(ptr, size)
   //
-  // Zeroes `size` bytes starting at `ptr`. Size must be a multiple of 8.
-  // On x86: REP STOSQ. On ARM64: tight STR loop.
+  // Zeroes `size` bytes starting at `ptr`, ROUNDED UP to a whole number of
+  // qwords: ceil(size / 8). On x86: REP STOSQ. On ARM64: tight STR loop.
+  //
+  // Rounding UP (rather than truncating) is deliberate, and it is safe:
+  //   * Every slab-internal caller (slot_size, span footprint, chunk run) passes
+  //     a multiple of 8 already, so the rounding is a no-op for them.
+  //   * The one caller that does NOT is mm_realloc's grown-tail zero, whose
+  //     region ends at raw + MmHeaderSize + new_size. The enclosing slot's class
+  //     size is a multiple of 8 and is >= MmHeaderSize + new_size, hence also
+  //     >= roundup8(MmHeaderSize + new_size) — so the overshoot always lands
+  //     inside the same slot and can never touch a neighbour.
+  // Truncating instead would leave up to 7 bytes of that tail holding the
+  // previous occupant's bytes, which is exactly the class of bug this design
+  // exists to eliminate.
   // =========================================================================
   // Stack slots: 0=ptr, 1=size
   public void EmitSlabMemzero() {
@@ -252,7 +272,8 @@ public partial class RuntimeEmitter {
 
     _b.LoadLocal(VReg.Arg5, 0);    // dest ptr (RDI on x86)
     _b.ZeroReg(VReg.Scratch0);     // value = 0 (RAX on x86)
-    _b.ShrRegImm(VReg.Arg0, 3);    // count = size / 8 (RCX on x86)
+    _b.AddRegImm(VReg.Arg0, 7);    // count = ceil(size / 8)
+    _b.ShrRegImm(VReg.Arg0, 3);
     _b.FillMemoryQwords(VReg.Arg5, VReg.Scratch0, VReg.Arg0);
 
     _b.DefineLabel(done);
@@ -860,10 +881,41 @@ public partial class RuntimeEmitter {
   //
   // Sets bitmap bits chunk_index..chunk_index+num_chunks-1 back to 1 (free).
   // Uses qword-level load-OR-store instead of per-bit BTS.
+  //
+  // ZEROES THE CHUNK RUN BEFORE RELEASING IT. This is what upholds the
+  // allocator's central invariant:
+  //
+  //     every chunk run handed out by __slab_arena_alloc_chunks is all-zero.
+  //
+  // Fresh arena address space satisfies that for free — VirtualAlloc(MEM_COMMIT)
+  // and anonymous mmap both hand back zeroed pages (this is exactly Go's
+  // "sysAlloc obtains a large chunk of ZEROED memory from the operating system").
+  // But this runtime RECYCLES chunks: __slab_free's arena-large branch returns a
+  // dead object's chunk run here, so without this memzero __slab_arena_alloc_chunks
+  // could hand a span, a metadata chunk, or an arena-map table a run still holding
+  // the previous occupant's bytes.
+  //
+  // That matters now in a way it did not before: __slab_alloc no longer zeroes
+  // slots it carves from a span's never-used bump region — it TRUSTS them to be
+  // zero. This function is where that trust is paid for. Deleting this memzero
+  // silently hands out garbage.
   // =========================================================================
   // Stack slots: 0=arena_base, 1=chunk_index, 2=num_chunks, 3=qword_idx, 4=end_qword
   public void EmitArenaFreeChunks() {
     _b.FunctionStart("__slab_arena_free_chunks", 3, 0x40);
+
+    // Zero the run BEFORE taking the lock and before the bits say "free": no
+    // other thread can observe these chunks until the bitmap publishes them.
+    // addr = arena_base + (chunk_index << ChunkShift); size = num_chunks << ChunkShift.
+    _b.LoadLocal(VReg.Scratch0, 1); // chunk_index
+    _b.ShlRegImm(VReg.Scratch0, ChunkShift);
+    _b.LoadLocal(VReg.Scratch1, 0); // arena_base
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.LoadLocal(VReg.Scratch1, 2); // num_chunks
+    _b.ShlRegImm(VReg.Scratch1, ChunkShift);
+    _b.MovRegReg(VReg.Arg1, VReg.Scratch1);
+    _b.Call("__slab_memzero");
 
     _b.LockAcquire(MspanPoolLockLabel);
 
@@ -1618,12 +1670,12 @@ public partial class RuntimeEmitter {
   // Allocates a new mspan for the given size class:
   // 1. Allocate an mspan header from metadata slab
   // 2. Allocate span data (slot_size * num_objs) as chunks from arena
-  // 3. Build the intrusive free list through all slots
+  // 3. Leave the slot region PRISTINE (empty free list + bump cursor) — see below
   // 4. Register span in arena map
   // 5. Return the mspan pointer
   // =========================================================================
   // Stack slots: 0=class_index, 1=mspan_ptr, 2=page_base, 3=slot_size,
-  //              4=num_objs, 5=loop_counter, 6=arena_base
+  //              4=num_objs, 6=arena_base
   public void EmitMspanAlloc() {
     _b.FunctionStart("__slab_mspan_alloc", 1, 0x50);
 
@@ -1696,64 +1748,25 @@ public partial class RuntimeEmitter {
     // cross-P free on ARM64 (weak memory) observes a coherent owner, not a stale one.
     _b.StoreRelease(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
 
-    // --- Build intrusive free list ---
-    // free_list = page_base
+    // --- Free list starts EMPTY; the whole span is one virgin bump region ---
+    //
+    // This span's pages came straight from __slab_arena_alloc_chunks, so every
+    // byte in them is zero (see EmitArenaFreeChunks for why that holds even
+    // though chunks are recycled). Leave them that way.
+    //
+    // We deliberately do NOT thread an intrusive free list through the slots
+    // here. Writing a next-pointer into slot[0] of all 1024 slots would dirty
+    // every one of them, and a dirty slot must be memzeroed before it can be
+    // handed to a caller. Building the list is therefore not merely wasted work
+    // — it is what would FORCE a memzero on every first-time allocation. By
+    // leaving the region pristine, __slab_alloc can carve from it with no
+    // zeroing at all (Go's mspan.freeindex; see MspanOffBumpNext).
+    //
+    // free_list is already 0 from the field init above. bump_next = page_base;
+    // bump_end is derived as base_addr + slot_size * total_slots.
     _b.LoadLocal(VReg.Scratch0, 1); // mspan_ptr
     _b.LoadLocal(VReg.Scratch1, 2); // page_base
-    _b.StoreIndirect(VReg.Scratch0, MspanOffFreeList, VReg.Scratch1);
-
-    // Loop: i = 0
-    _b.ZeroReg(VReg.Scratch0);
-    _b.StoreLocal(5, VReg.Scratch0);
-
-    var loopStart = UniqueLabel("mspan_build_freelist");
-    var loopDone = UniqueLabel("mspan_build_done");
-    var lastSlot = UniqueLabel("mspan_last_slot");
-    var afterStore = UniqueLabel("mspan_after_store");
-
-    _b.DefineLabel(loopStart);
-    _b.LoadLocal(VReg.Scratch0, 5); // i
-    _b.LoadLocal(VReg.Scratch1, 4); // num_objs
-    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, loopDone);
-
-    // addr = page_base + i * slot_size
-    _b.LoadLocal(VReg.Scratch0, 5); // i
-    _b.LoadLocal(VReg.Scratch1, 3); // slot_size
-    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1); // i * slot_size
-    _b.LoadLocal(VReg.Scratch1, 2); // page_base
-    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // Scratch0 = addr
-
-    // Check if this is the last slot
-    _b.LoadLocal(VReg.Scratch1, 5); // i
-    _b.AddRegImm(VReg.Scratch1, 1); // i + 1
-    _b.LoadLocal(VReg.Scratch2, 4); // num_objs
-    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.JumpIf(Condition.AboveEqual, lastSlot);
-
-    // Not last: [addr] = page_base + (i+1) * slot_size
-    _b.LoadLocal(VReg.Scratch1, 5); // i
-    _b.AddRegImm(VReg.Scratch1, 1); // i + 1
-    _b.LoadLocal(VReg.Scratch2, 3); // slot_size
-    _b.MulRegReg(VReg.Scratch1, VReg.Scratch2); // (i+1) * slot_size
-    _b.LoadLocal(VReg.Scratch2, 2); // page_base
-    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2); // next_addr
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
-    _b.Jump(afterStore);
-
-    _b.DefineLabel(lastSlot);
-    // Last slot: [addr] = 0
-    _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
-
-    _b.DefineLabel(afterStore);
-    // i++
-    _b.LoadLocal(VReg.Scratch0, 5);
-    _b.AddRegImm(VReg.Scratch0, 1);
-    _b.StoreLocal(5, VReg.Scratch0);
-    _b.Jump(loopStart);
-
-    _b.DefineLabel(loopDone);
+    _b.StoreIndirect(VReg.Scratch0, MspanOffBumpNext, VReg.Scratch1);
 
     // Register span in arena map
     _b.LoadLocal(VReg.Arg0, 1); // mspan_ptr
@@ -1973,6 +1986,11 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, MspanOffFreeCount, VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, MspanOffFreeList, VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, MspanOffNextSpan, VReg.Scratch1);
+    // An arena-large span is never served by the class fast path (free_count is 0
+    // and it never enters an mcache), so its bump cursor is never read. Init it
+    // anyway: mspan headers come from __slab_meta_alloc, which recycles them
+    // through a free list, so an uninitialised field here is stale data, not zero.
+    _b.StoreIndirect(VReg.Scratch0, MspanOffBumpNext, VReg.Scratch1);
 
     _b.MovRegImm(VReg.Scratch1, 1);
     _b.StoreIndirect(VReg.Scratch0, MspanOffTotalSlots, VReg.Scratch1);
@@ -2240,18 +2258,73 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(skip);
   }
 
+  /// <summary>
+  /// span->free_count-- . Shared by the free-list-pop and bump-carve arms of the
+  /// alloc fast path so the two can never drift.
+  ///
+  /// INV-1: free_count == |free_list| + (bump_end - bump_next) / slot_size.
+  /// Exactly four sites may write free_count — this one (-1, on BOTH arms),
+  /// __slab_free's push (+1), __slab_mspan_alloc (= total_slots), and the
+  /// mcentral reclaim (= total_slots). Anything else double-issues a slot.
+  ///
+  /// Reads span_ptr from stack slot 4; clobbers Scratch1, Scratch2.
+  /// </summary>
+  private void EmitSlabAllocFreeCountDec() {
+    _b.LoadLocal(VReg.Scratch1, 4); // span_ptr
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
+    _b.SubRegImm(VReg.Scratch2, 1);
+    _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
+  }
+
   // =========================================================================
-  // EmitSlabAlloc: __slab_alloc(size) -> ptr
+  // EmitSlabAlloc: __slab_alloc(size) -> ptr        — returns ZEROED memory
+  // EmitSlabAllocRaw: __slab_alloc_raw(size) -> ptr — does NOT zero
   //
   // Header-free allocation routing:
   // 1. size > ArenaSize: OS-direct (tracked in dynamic array)
   // 2. size > SlabMaxSmallSize: arena-large (mspan + chunks, freeable)
   // 3. else: slab fast path (mcache -> mcentral -> mspan_alloc)
+  //
+  // This is Go's `mallocgc(size, typ, needzero bool)`: the CALLER declares
+  // whether it needs zeroed memory. Two emitted bodies rather than one body with
+  // a runtime flag — the machine code is a couple of KB and this keeps the hot
+  // path free of an extra argument and an extra branch.
+  //
+  // __slab_alloc_raw is a SHARP TOOL. See the audit rule on EmitSlabAllocRaw.
   // =========================================================================
   // Stack slots: 0=size, 1=class_index, 2=P_id, 3=mcache_slot_addr,
   //              4=span_ptr, 5=alloc_result, 6=arena_base_tmp, 7=scratch
-  public void EmitSlabAlloc(bool mmTrace, bool mmDebug = false) {
-    _b.FunctionStart("__slab_alloc", 1, 0x60);
+  public void EmitSlabAlloc(bool mmTrace)
+    => EmitSlabAllocBody("__slab_alloc", needzero: true, mmTrace);
+
+  /// <summary>
+  /// __slab_alloc_raw(size) — allocation WITHOUT zeroing. Go's needzero=false.
+  ///
+  /// AUDIT RULE — read this before adding a caller:
+  ///
+  ///   __slab_alloc_raw may ONLY be used where the caller provably writes EVERY
+  ///   BYTE of the returned region before anything else can read it, AND the
+  ///   region is never walked as managed pointers.
+  ///
+  ///   A region is "walked as managed pointers" if __destruct___ManagedMemory's
+  ///   element walk, a Map/Set slot-table teardown, or an array.set old-occupant
+  ///   decref will ever run over it. Such a buffer MUST come from __slab_alloc —
+  ///   a non-zeroed slot read as a pointer and decref'd is precisely the bug this
+  ///   whole design exists to prevent (a sparsely-filled Map hash table whose
+  ///   unwritten slots held the previous occupant's garbage).
+  ///
+  ///   When in doubt, use __slab_alloc. It is now cheap: a slot carved from a
+  ///   span's virgin bump region costs NOTHING to zero.
+  ///
+  /// The audited caller set is deliberately tiny, mirroring Go's (rawbyteslice /
+  /// rawstring / growslice): mm_realloc's new buffer, which memcpy's the prefix
+  /// and explicitly zeroes the grown tail — together covering every byte.
+  /// </summary>
+  public void EmitSlabAllocRaw(bool mmTrace)
+    => EmitSlabAllocBody("__slab_alloc_raw", needzero: false, mmTrace);
+
+  private void EmitSlabAllocBody(string symbol, bool needzero, bool mmTrace) {
+    _b.FunctionStart(symbol, 1, 0x60);
 
     // MAXON_SLAB_GLOBAL_LOCK A/B safety net: bracket the entire body. No-op unless
     // enabled; when enabled, serialises alloc against alloc/free so the lock-free
@@ -2384,10 +2457,32 @@ public partial class RuntimeEmitter {
     // only a genuine cross-P ownership mismatch is a "gate miss".
     _b.JumpIf(Condition.NotEqual, gateMiss);
 
-    // Fast path: pop from free list.
+    // Fast path. Two sources of a free slot, and they differ in whether the
+    // memory is dirty:
+    //
+    //   free_list != 0  -> a RECYCLED slot. It still holds the previous
+    //                      occupant's bytes (plus the free-list link we wrote
+    //                      into slot[0] when it was freed), so it MUST be
+    //                      zeroed before the caller sees it.
+    //
+    //   free_list == 0  -> carve from the span's VIRGIN bump region. These
+    //                      slots have never been handed out, and their pages
+    //                      came zeroed from the arena, so they are ALREADY
+    //                      zero. No memzero at all.
+    //
+    // This is Go's mallocgc, with one refinement: Go's needzero is per-SPAN, so
+    // Go re-zeroes even never-used slots in a span that has seen a single free.
+    // Our cursor is per-SLOT, so we never pay for a slot that was never dirtied.
+    //
+    // The free-list pop is the FALL-THROUGH (it is the steady state once a span
+    // has cycled); the bump carve is the out-of-line branch.
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
 
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffFreeList);
+    var bumpCarve = UniqueLabel("slab_alloc_bump");
+    _b.JumpIfZero(VReg.Scratch0, bumpCarve);
+
+    // --- Recycled slot: pop the free list. ---
     _b.StoreLocal(5, VReg.Scratch0); // alloc_result
 
     // span->free_list = [result] (next pointer)
@@ -2395,25 +2490,40 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch1, 4);
     _b.StoreIndirect(VReg.Scratch1, MspanOffFreeList, VReg.Scratch2);
 
-    // span->free_count--
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
-    _b.SubRegImm(VReg.Scratch2, 1);
-    _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
+    EmitSlabAllocFreeCountDec();
 
-    // Clear the free-list next pointer at slot[0]
-    _b.LoadLocal(VReg.Scratch0, 5);
-    _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
-
-    // In mmDebug mode, __slab_free leaves poison (0xDEAD) throughout the slot
-    // so use-after-free detection works. Zero the rest of the slot on alloc
-    // so callers receive clean memory (the usual post-free zeroing contract).
-    if (mmDebug) {
-      _b.LoadLocal(VReg.Arg0, 5); // slot_base
+    // Zero the recycled slot. This subsumes the old slot[0]-clear (the link is
+    // inside the region we are about to wipe) AND the old zero-on-free: memory
+    // is now cleaned when it is handed OUT, not when it is handed back, so a
+    // slot that is freed and never re-allocated is never zeroed at all.
+    //
+    // In mmDebug this also wipes __mm_free's 0xDEAD poison — which is exactly
+    // right: the poison's job is to catch reads BETWEEN free and re-alloc, and
+    // it now survives untouched for that whole window.
+    if (needzero) {
+      _b.LoadLocal(VReg.Arg0, 5);     // slot_base
       _b.LoadLocal(VReg.Scratch0, 4); // span_ptr
       _b.LoadIndirect(VReg.Arg1, VReg.Scratch0, MspanOffSlotSize);
       _b.Call("__slab_memzero");
     }
+
+    var haveSlot = UniqueLabel("slab_alloc_have_slot");
+    _b.Jump(haveSlot);
+
+    // --- Virgin slot: carve from the bump region. Already zero. ---
+    _b.DefineLabel(bumpCarve);
+    _b.LoadLocal(VReg.Scratch1, 4); // span_ptr
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffBumpNext);
+    _b.StoreLocal(5, VReg.Scratch0); // alloc_result = bump_next
+
+    // bump_next += slot_size
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffSlotSize);
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch2);
+    _b.StoreIndirect(VReg.Scratch1, MspanOffBumpNext, VReg.Scratch0);
+
+    EmitSlabAllocFreeCountDec();
+
+    _b.DefineLabel(haveSlot);
 
     if (mmTrace) {
       EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_small_trace"), sizeSlot: 0, classSlot: 1);
@@ -2608,7 +2718,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=slot_base, 1=span_ptr, 2=slot_size, 3=class_index,
   //              4=chunk_index, 5=num_chunks, 6=arena_base
-  public void EmitSlabFree(bool mmTrace, bool mmDebug = false) {
+  public void EmitSlabFree(bool mmTrace) {
     _b.FunctionStart("__slab_free", 1, 0x50);
 
     // MAXON_SLAB_GLOBAL_LOCK A/B safety net: bracket the entire body (mirror of
@@ -2704,17 +2814,20 @@ public partial class RuntimeEmitter {
       EmitInlineTraceSlabFree(UniqueLabel("sl_free_slab_trace"), sizeSlot: 2, classSlot: 3);
     }
 
-    // Zero the slot — unless mmDebug is on. In debug mode, mm_free has already
-    // poisoned the user-data area with 0xDEADDEADDEADDEAD to catch use-after-free
-    // reads; zeroing here would wipe that poison. The freelist push below
-    // overwrites slot[0] with old_head, keeping the freelist itself well-formed,
-    // and __slab_alloc zero-fills the slot on re-allocation to preserve the
-    // contract that callers receive clean memory.
-    if (!mmDebug) {
-      _b.LoadLocal(VReg.Arg0, 0);
-      _b.LoadLocal(VReg.Arg1, 2);
-      _b.Call("__slab_memzero");
-    }
+    // NO zeroing here. Memory is cleaned when it is handed OUT (__slab_alloc's
+    // free-list-pop arm), not when it is handed back. Two reasons:
+    //
+    //   * A slot that is freed and never re-allocated is never zeroed at all —
+    //     and at process exit that is most of the heap.
+    //   * Zeroing on free would dirty the slot, defeating the whole point: the
+    //     alloc side distinguishes recycled slots (dirty, must zero) from virgin
+    //     bump-region slots (already zero, free of charge). It cannot make that
+    //     distinction if free has already touched the memory.
+    //
+    // mmDebug's 0xDEADDEADDEADDEAD poison (written by mm_free) is now simply left
+    // in place, which is strictly better: it survives the entire free->realloc
+    // window it exists to police, and __slab_alloc's memzero wipes it at exactly
+    // the moment the slot legitimately becomes live again.
 
     // Mimalloc-style local-vs-remote routing.
     //
@@ -2858,7 +2971,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitAllocatorFunctions: Emit all allocator functions.
   // =========================================================================
-  public void EmitAllocatorFunctions(bool mmTrace, bool mmDebug = false) {
+  public void EmitAllocatorFunctions(bool mmTrace) {
     EmitAllocatorGlobals();
     EmitSlabMemzero();
     EmitOsAllocPages(mmTrace);
@@ -2879,7 +2992,8 @@ public partial class RuntimeEmitter {
     EmitMcentralGetSpan();
     EmitMcentralReturnSpan();
     EmitSlabDrainRemoteFrees();
-    EmitSlabAlloc(mmTrace, mmDebug);
-    EmitSlabFree(mmTrace, mmDebug);
+    EmitSlabAlloc(mmTrace);
+    EmitSlabAllocRaw(mmTrace);
+    EmitSlabFree(mmTrace);
   }
 }
