@@ -1056,14 +1056,53 @@ call-heavy one** (750 ms → 94 ms), with the call-heavy case now linear. The ph
 **disjoint** — `splitting` no longer silently includes `liveness`, which was hiding the single
 biggest cost in the wrong bucket.
 
-**The remaining bottleneck is the liveness matrix itself**, and it is a *representation* limit, not
-an algorithmic one. `liveIn`/`liveOut` are dense `blocks × ceil(values/64)` bitsets, so a function
-with 9,600 blocks and 6,400 values allocates and sweeps 100 words per block **even when `maxlive`
-is 1** — a ~100× overhead against the information actually present. It is now ~60% of allocation on
-such a function and is the last superlinear term. The fix is the one regalloc2 already took:
-**sparse per-block live sets** (or SSA-based liveness, which needs no fixpoint at all). It only
-bites on a single function with thousands of blocks — the realistic many-medium-functions shape is
-**linear**, and allocation there is ~33% of compile.
+### Liveness: SSA path exploration, no fixpoint, sparse sets
+
+The classic iterative dataflow fixpoint (`liveIn = use ∪ (liveOut ∖ def)`, swept to convergence over
+`blocks × values` bitsets) is the **wrong algorithm for an SSA program**, and it was the last
+superlinear term in allocation.
+
+**In strict SSA the def dominates every use, so liveness needs no iteration at all.** A value is
+live exactly on the CFG paths running backward from each of its uses up to its single def. So walk
+them and stop: `solveLivenessSsa` starts at each use, marks blocks live going up through
+predecessors, and halts at the def. Nothing converges; every block is visited at most once per
+value, and only blocks where the value is genuinely live are visited at all. Cost is O(the liveness
+information itself). Two things make it exact:
+
+- **A back edge needs no special case.** Walking up from a use inside a loop reaches the header's
+  predecessors — including the latch — and marks the value live around the back edge in the same
+  walk. The live-in memo terminates it.
+- **A phi is where a walk STOPS; a phi ARG is where one STARTS.** A block-arg is defined at its
+  block's entry, so the walk halts there and does not enter the predecessors — and `liveIn`
+  *excludes* a block's own phi defs (the colorer seeds from `liveIn` and *then* colors the
+  block-args). A value passed on an edge is live at the END of the **predecessor**, so its walk
+  seeds there. Getting these backwards is the classic phi-liveness bug.
+
+**And the sets are SPARSE** (`LiveSets`, CSR). A dense `blocks × ceil(values/64)` matrix is
+proportional to the value space rather than to the information: a 19,200-block function allocated
+and zeroed **61 MB of live sets even when only one value was ever live**, and every consumer then
+scanned 200 words per block to find it. The CSR lists are proportional to the liveness that actually
+exists — which is exactly what the walk computes, so nothing is thrown away to build them. A dense
+row survives only where it is right: the ONE working row a block's backward sweep mutates, seeded
+and cleared in O(live).
+
+The last O(values/64)-per-op cost went with it: the sweep's live **population is maintained
+incrementally** (a step flips only the op's own operands) rather than recomputed with a popcount
+over the whole row at every op. Likewise the colorer's death record, which was an `ops ×
+values/64` matrix *per block* — but every query is about one of the op's own operands, so it is now
+a per-op list of dying values.
+
+**Result: allocation is LINEAR in program size.**
+
+| shape | before | after |
+|---|---|---|
+| one large function (3,200 `if`s) | 5,609 ms, exponent 1.96, **97% of compile** | **140 ms, exponent ~1.0** (40×) |
+| call-heavy (6,400 chained calls) | 750 ms, exponent ~2.0 | **62 ms, linear** (12×) |
+| 19,200-block function | **SIGSEGV** | 281 ms |
+
+That segfault was its own bug: `dfsBackEdges` and `rpoDfs` recursed once per block ("the CFGs it
+runs on are small"), and overflowed the native stack. **No CFG traversal in the allocator may
+recurse** — block counts are bounded by the program, not by us. All of them are worklist-driven.
 
 ### Known limits of the design
 

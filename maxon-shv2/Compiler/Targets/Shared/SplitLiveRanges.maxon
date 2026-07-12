@@ -411,6 +411,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	var buf = OperandList.create()
 	// Scratch reused across every block — otherwise one allocation per block, per iteration.
 	var ordered = OpIndexArray.create()
+	var seedBuf = ValueIdArray.create()
 	let fullPoolSize = regMaskPopcount(pool)
 
 	var best = PressurePeak.create(false, pressure: 0, blockLocal: 0, liveBefore: zeroRow(wordsPerRow), peakSeq: 0, clobberOnly: false)
@@ -420,9 +421,14 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	var blockBaseSeq = 0 as ByteCount
 
 	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let base = i * wordsPerRow
 		let block = blockAt(module, cfg: cfg, local: i)
-		bitsetCopyRow(liveRow, dstBase: 0, src: liveness.liveOut, srcBase: base, wordsPerRow: wordsPerRow)
+		// Seed the ONE dense working row from the SPARSE live-out list — O(live), not a full
+		// value-space row copy per block. `clearRowAfterSweep` below returns it to zero the same way.
+		liveness.seedRowFromLiveOut(i, row: liveRow, scratch: seedBuf)
+		// The row's live population, maintained INCREMENTALLY across the block's ops. A popcount over
+		// the whole row at every op would be O(values/64) per op — O(ops × values/64) per function,
+		// and on a large function the single biggest cost left in the allocator.
+		var liveCount = seedBuf.count()
 
 		// A per-block constant added to every op's effective pressure — the colorer holds a
 		// register for each dead block-arg across the WHOLE block. Read from the column the
@@ -442,16 +448,17 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 			let op = try module.ops.get(opIdx) otherwise panic("analyzePressure: opIdx not in module.ops")
 			targetOpOperands(op, buf: buf)
 
-			// `liveRow` here is this op's live-AFTER set (the store point for anything it defines).
-			recordDefLiveAfter(defLiveAfter, buf: buf, afterCount: bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow))
+			// `liveRow` here is this op's live-AFTER set (the store point for anything it defines), and
+			// `liveCount` is its population — no popcount needed.
+			recordDefLiveAfter(defLiveAfter, buf: buf, afterCount: liveCount)
 
 			// The reuse-copy transient is decided on the live-AFTER set — BEFORE the backward step
 			// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it.
 			let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
 
-			stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
+			liveCount = stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveCount: liveCount)
 
-			let raw = bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
+			let raw = liveCount
 			let effective = raw + (1 if reuseTransient else 0) + deadPhis
 			let reducedPool = reducedPoolSizeAt(op, pool: pool)
 			let seq = blockBaseSeq + forwardPos
@@ -494,7 +501,10 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		// rejects it forever, and NO loop-carried accumulator could ever be spilled at a call — which
 		// is precisely the false E5001 the amended Rule 2 exists to eliminate (`sum = sum + f(i)`
 		// makes `sum` a phi). `noVictimAtPeak`'s clobber-only panic is what caught this.
-		recordPhiDefLiveAfter(defLiveAfter, block: block, liveInCount: bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow))
+		recordPhiDefLiveAfter(defLiveAfter, block: block, liveInCount: liveCount)
+
+		// Return the working row to zero for the next block, in O(live) — see clearRowAfterSweep.
+		liveness.clearRowAfterSweep(i, block: block, row: liveRow, scratch: seedBuf)
 
 		blockBaseSeq = blockBaseSeq + opCount
 	end 'eachBlock'

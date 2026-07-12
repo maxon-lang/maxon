@@ -127,7 +127,7 @@ function seedRegState(regState RegStateRow, module TargetModule, liveness Livene
 		seedEntryParamIncomingRegs(regState, module: module, cfg: liveness.cfg, paramCount: paramCount)
 	end 'entry'
 
-	bitsetCollectRow(liveness.liveIn, base: local * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+	liveness.liveInInto(local, out: liveBuf)
 	for v in liveBuf 'eachLiveIn'
 		placeValueAtColor(regState, v: v, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "live-in")
 	end 'eachLiveIn'
@@ -456,7 +456,7 @@ function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal 
 
 	// Walk the SET BITS of the successor's live-in row. Testing every value id per edge would be
 	// O(edges × values) — the same quadratic as `seedRegState`, once more.
-	bitsetCollectRow(liveness.liveIn, base: succLocal * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+	liveness.liveInInto(succLocal, out: liveBuf)
 	for v in liveBuf 'liveThrough'
 		if isPhiValue(succBlock, v: v) 'phiNotLiveThrough'
 			continue

@@ -1,12 +1,18 @@
-// RegBits — the dense bit primitives the register allocator is built on: a
-// value-id BITSET (blocks × words matrix as one flat word array) and a physical-
-// register MASK (a `u16`-shaped word, one bit per GPR). Every liveness set, the
-// per-block `inUse` occupancy, and `forbiddenPhys` are these — NO `Set` and NO
-// hashing anywhere in the allocator's hot path (design §"Data representation").
+// RegBits — the bit primitives the register allocator is built on: a value-id BITSET and a
+// physical-register MASK (a `u16`-shaped word, one bit per GPR). NO `Set` and NO hashing anywhere
+// in the allocator's hot path (design §"Data representation").
+//
+// **A bitset is the right shape INSIDE a block, and the wrong shape ACROSS blocks.** Within a
+// block's backward sweep, bits flip at every op, so a dense row is exactly right. But per-block
+// LIVE SETS are sparse — a handful of live values out of thousands of value ids — and storing them
+// as a `blocks × ceil(values/64)` matrix makes every cost proportional to the value space instead
+// of to the information: a 19,200-block function allocated and zeroed 61 MB of live sets even when
+// only ONE value was ever live. Those sets are now CSR lists (`TargetLiveness.LiveSets`), and the
+// matrix — along with the dataflow fixpoint that needed its row union / row difference / row
+// equality primitives — is gone.
 
-// A dense bit-vector: 64-bit words, indexed with an explicit word BASE so many
-// rows (one per block) share one flat backing array — the fixpoint's row union /
-// row copy are then word-parallel over a contiguous slice.
+// A dense bit-vector: 64-bit words, indexed with an explicit word BASE. Used for the ONE working
+// row a block's backward sweep mutates, and for `forbiddenPhys`; never as a per-block matrix.
 export typealias BitWordArray = Array with MachineWord
 
 // 64 bits per word. Naming the divisor/mask keeps the word/bit split in one place.
@@ -48,92 +54,6 @@ export function bitsetRemove(words BitWordArray, base ByteCount, bit ByteCount)
 	let w = try words.get(idx) otherwise panic("bitsetRemove: word index out of range (base={base}, bit={bit}, count={words.count()})")
 	try words.set(idx, value: w and not bitOf(bit)) otherwise panic("bitsetRemove: word index out of range on set")
 end 'bitsetRemove'
-
-// `dst[dstBase..] |= src[srcBase..]` over `wordsPerRow` words. Returns whether any
-// bit of `dst` changed — the liveness fixpoint's convergence signal.
-export function bitsetOrRow(dst BitWordArray, dstBase ByteCount, src BitWordArray, srcBase ByteCount, wordsPerRow ByteCount) returns bool
-	var changed = false
-	for i in 0 upto wordsPerRow 'eachWord'
-		let d = try dst.get(dstBase + i) otherwise panic("bitsetOrRow: dst word out of range")
-		let s = try src.get(srcBase + i) otherwise panic("bitsetOrRow: src word out of range")
-		let merged = d or s
-		if merged != d 'grew'
-			try dst.set(dstBase + i, value: merged) otherwise panic("bitsetOrRow: dst set out of range")
-			changed = true
-		end 'grew'
-	end 'eachWord'
-	return changed
-end 'bitsetOrRow'
-
-// `dst |= a & ~b` over `wordsPerRow` words, in ONE pass.
-//
-// This is the liveness fixpoint's inner step — "add a successor's live-in, minus the phis it
-// defines" — which as three separate row ops (copy, subtract, or) walked the row THREE times
-// through a scratch buffer. The fused form walks it once and needs no scratch. On a function with
-// many blocks the fixpoint is the dominant cost of register allocation, and it is entirely row
-// traffic: every pass saved is a third of it.
-export function bitsetOrAndNotRow(dst BitWordArray, dstBase ByteCount, a BitWordArray, aBase ByteCount, b BitWordArray, bBase ByteCount, wordsPerRow ByteCount)
-	for i in 0 upto wordsPerRow 'eachWord'
-		let av = try a.get(aBase + i) otherwise panic("bitsetOrAndNotRow: a word out of range")
-		let bv = try b.get(bBase + i) otherwise panic("bitsetOrAndNotRow: b word out of range")
-		let contribution = av and not bv
-		if contribution == 0 'nothingToAdd'
-			continue
-		end 'nothingToAdd'
-		let d = try dst.get(dstBase + i) otherwise panic("bitsetOrAndNotRow: dst word out of range")
-		try dst.set(dstBase + i, value: d or contribution) otherwise panic("bitsetOrAndNotRow: dst set out of range")
-	end 'eachWord'
-end 'bitsetOrAndNotRow'
-
-// `dst = use | (out & ~def)` over `wordsPerRow` words, in ONE pass, returning whether `dst`
-// CHANGED. This is the liveness transfer function `liveIn = use ∪ (liveOut ∖ def)` fused with its
-// own convergence test — as separate ops it walked the row five times (copy, subtract, or, compare,
-// copy) through a scratch buffer.
-export function bitsetTransferRow(dst BitWordArray, dstBase ByteCount, use BitWordArray, out BitWordArray, def BitWordArray, srcBase ByteCount, wordsPerRow ByteCount) returns bool
-	var changed = false
-	for i in 0 upto wordsPerRow 'eachWord'
-		let useWord = try use.get(srcBase + i) otherwise panic("bitsetTransferRow: use word out of range")
-		let outWord = try out.get(srcBase + i) otherwise panic("bitsetTransferRow: out word out of range")
-		let defWord = try def.get(srcBase + i) otherwise panic("bitsetTransferRow: def word out of range")
-		let merged = useWord or (outWord and not defWord)
-		let prior = try dst.get(dstBase + i) otherwise panic("bitsetTransferRow: dst word out of range")
-		if merged != prior 'grew'
-			try dst.set(dstBase + i, value: merged) otherwise panic("bitsetTransferRow: dst set out of range")
-			changed = true
-		end 'grew'
-	end 'eachWord'
-	return changed
-end 'bitsetTransferRow'
-
-// `dst[dstBase..] &= ~src[srcBase..]` over `wordsPerRow` words — remove every bit
-// of `src` from `dst`. The liveness fixpoint uses it to strip a successor's phi
-// defs before propagating its live-in to a predecessor.
-export function bitsetSubtractRow(dst BitWordArray, dstBase ByteCount, src BitWordArray, srcBase ByteCount, wordsPerRow ByteCount)
-	for i in 0 upto wordsPerRow 'eachWord'
-		let d = try dst.get(dstBase + i) otherwise panic("bitsetSubtractRow: dst word out of range")
-		let s = try src.get(srcBase + i) otherwise panic("bitsetSubtractRow: src word out of range")
-		try dst.set(dstBase + i, value: d and not s) otherwise panic("bitsetSubtractRow: dst set out of range")
-	end 'eachWord'
-end 'bitsetSubtractRow'
-
-// Zero the row starting at `base` over `wordsPerRow` words.
-export function bitsetClearRow(words BitWordArray, base ByteCount, wordsPerRow ByteCount)
-	for i in 0 upto wordsPerRow 'eachWord'
-		try words.set(base + i, value: 0) otherwise panic("bitsetClearRow: word out of range")
-	end 'eachWord'
-end 'bitsetClearRow'
-
-// Whether rows `a[aBase..]` and `b[bBase..]` are equal over `wordsPerRow` words.
-export function bitsetRowsEqual(a BitWordArray, aBase ByteCount, b BitWordArray, bBase ByteCount, wordsPerRow ByteCount) returns bool
-	for i in 0 upto wordsPerRow 'eachWord'
-		let av = try a.get(aBase + i) otherwise panic("bitsetRowsEqual: a word out of range")
-		let bv = try b.get(bBase + i) otherwise panic("bitsetRowsEqual: b word out of range")
-		if av != bv 'differ'
-			return false
-		end 'differ'
-	end 'eachWord'
-	return true
-end 'bitsetRowsEqual'
 
 // Copy row `src[srcBase..]` into `dst[dstBase..]` over `wordsPerRow` words.
 export function bitsetCopyRow(dst BitWordArray, dstBase ByteCount, src BitWordArray, srcBase ByteCount, wordsPerRow ByteCount)
@@ -202,17 +122,6 @@ function trailingZeroCount(word MachineWord) returns ByteCount
 	end 'hi1'
 	return count
 end 'trailingZeroCount'
-
-// Population count of the row starting at `base` — the number of live values, i.e.
-// the register PRESSURE at a program point.
-export function bitsetPopcountRow(words BitWordArray, base ByteCount, wordsPerRow ByteCount) returns RegCount
-	var total = 0 as RegCount
-	for i in 0 upto wordsPerRow 'eachWord'
-		let w = try words.get(base + i) otherwise panic("bitsetPopcountRow: word out of range")
-		total = total + popcountWord(w)
-	end 'eachWord'
-	return total
-end 'bitsetPopcountRow'
 
 // Bits set in one word (Kernighan's clear-lowest-set loop — fine for the sparse
 // live words M5.1 produces; a table/intrinsic is a later perf refinement).

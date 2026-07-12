@@ -139,8 +139,9 @@ export typealias DurationMsArray = Array with DurationMs
 export type RegAllocStats
 	export var phaseMs as DurationMsArray
 	export var functionsAllocated as ByteCount
-	export var fixpointIterationsTotal as ByteCount
-	export var fixpointIterationsMax as ByteCount
+	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
+	export var livenessMarkStepsTotal as ByteCount
+	export var livenessMarkStepsMax as ByteCount
 	export var maxPressure as RegCount
 	export var maxPressureFunc as String
 	export var maxLoopDepth as CfgIndex
@@ -164,7 +165,7 @@ export type RegAllocStats
 	export static function create() returns RegAllocStats
 		var phaseMs = DurationMsArray.create()
 		phaseMs.resize(RegAllocPhase.allCases.count())
-		return Self{phaseMs: phaseMs, functionsAllocated: 0, fixpointIterationsTotal: 0, fixpointIterationsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
+		return Self{phaseMs: phaseMs, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
 	end 'create'
 
 	export function addPhaseMs(phase RegAllocPhase, ms DurationMs)
@@ -177,12 +178,12 @@ export type RegAllocStats
 		return try self.phaseMs.get(phase.ordinal) otherwise panic("RegAllocStats.phaseMsOf: phase index OOB")
 	end 'phaseMsOf'
 
-	export function recordFixpoint(iterations ByteCount)
-		self.fixpointIterationsTotal = self.fixpointIterationsTotal + iterations
-		if iterations > self.fixpointIterationsMax 'newMax'
-			self.fixpointIterationsMax = iterations
+	export function recordLivenessMarkSteps(steps ByteCount)
+		self.livenessMarkStepsTotal = self.livenessMarkStepsTotal + steps
+		if steps > self.livenessMarkStepsMax 'newMax'
+			self.livenessMarkStepsMax = steps
 		end 'newMax'
-	end 'recordFixpoint'
+	end 'recordLivenessMarkSteps'
 
 	export function recordPressure(pressure RegCount, funcName String)
 		if pressure > self.maxPressure 'newMax'
@@ -326,7 +327,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	let livenessMs = stats.phaseMsOf(RegAllocPhase.liveness) - livenessMsBefore
 	stats.addPhaseMs(RegAllocPhase.splitting, ms: splitWallMs - livenessMs)
 	let liveness = outcome.liveness
-	stats.recordFixpoint(liveness.fixpointIterations)
+	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
 	stats.recordPressure(liveness.maxPressure, funcName: func.name)
 	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
 
@@ -521,10 +522,14 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var alloc = Allocation.create(valueCount)
 	let hints = computeHints(module, cfg: cfg, valueCount: valueCount)
 	var buf = OperandList.create()
-	// Scratch buffers reused across every block — the live-in walk and the block's op list would
-	// otherwise each allocate once per block.
+	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
+	// working row would otherwise each allocate once per block. `seenBelow` is ONE dense row (not a
+	// matrix); `computeBlockDeaths` returns it to zero in O(live) before the next block.
 	var liveBuf = ValueIdArray.create()
+	var seedBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
+	var seenBelow = BitWordArray.create()
+	seenBelow.resize(wordsPerRow)
 
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
@@ -538,11 +543,11 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		ordered.clear()
 		collectBlockOps(block, out: ordered)
-		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, wordsPerRow: wordsPerRow, buf: buf)
+		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf)
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
-			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, wordsPerRow: wordsPerRow, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf, reuseCopies: reuseCopies)
+			inUse = colorOpForward(module, opIdx: opIdx, pos: pos, inUse: inUse, deaths: deaths, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, buf: buf, reuseCopies: reuseCopies)
 		end 'eachOp'
 	end 'eachBlock'
 
@@ -558,7 +563,7 @@ end 'colorFunction'
 // a live set holds a handful of values out of thousands of ids. `liveBuf` is a scratch buffer
 // reused across blocks, so this allocates nothing.
 function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, liveBuf ValueIdArray) returns RegMask
-	bitsetCollectRow(liveness.liveIn, base: local * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+	liveness.liveInInto(local, out: liveBuf)
 
 	var mask = 0 as RegMask
 	for v in liveBuf 'eachLiveIn'
@@ -639,7 +644,7 @@ end 'pickPreferredRegister'
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
 // def goes through `allocateReuseDef`, which may record a copy), then return the
 // block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BitWordArray, wordsPerRow ByteCount, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyArray) returns RegMask
+function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyArray) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -651,13 +656,13 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse
 		end 'vu'
 	end 'assertUses'
 
-	let dyingRegs = dyingRegsAt(deaths, pos: pos, wordsPerRow: wordsPerRow, buf: buf, alloc: alloc)
+	let dyingRegs = deaths.dyingRegsAt(pos, alloc: alloc)
 
 	var working = inUse
 	for o in buf 'allocDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			if operandIsReuseDef(o) 'reuse'
-				working = allocateReuseDef(o, opIdx: opIdx, pos: pos, deaths: deaths, wordsPerRow: wordsPerRow, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
+				working = allocateReuseDef(o, opIdx: opIdx, pos: pos, deaths: deaths, buf: buf, working: working, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
 			end 'reuse' else 'plain'
 				working = allocateDef(operandValueId(o), working: working, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
 			end 'plain'
@@ -670,7 +675,7 @@ function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, inUse
 	for o in buf 'liveDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd2'
 			let v = operandValueId(o)
-			if not deathTest(deaths, pos: pos, v: v, wordsPerRow: wordsPerRow) 'stillLive'
+			if not deaths.dies(pos, v: v) 'stillLive'
 				liveDefRegs = regMaskAdd(liveDefRegs, regNum: alloc.regNumOf(v))
 			end 'stillLive'
 		end 'vd2'
@@ -686,11 +691,11 @@ end 'colorOpForward'
 // register (never another dying operand's — a copy into it would clobber a value the op
 // still reads); when the input OUTLIVES, no operand register is free before the op, so
 // the dest may reuse none. `defDyingRegs` encodes exactly that.
-function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BitWordArray, wordsPerRow ByteCount, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns RegMask
+function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyArray) returns RegMask
 	let destId = operandValueId(o)
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
-	let inputDies = deathTest(deaths, pos: pos, v: inputId, wordsPerRow: wordsPerRow)
+	let inputDies = deaths.dies(pos, v: inputId)
 
 	// The reuse copy (if the coalescing hint misses) runs BEFORE the op, so the dest
 	// must be free at that point: it may reuse ONLY the input's dying register (never
@@ -712,65 +717,139 @@ function allocateReuseDef(o Operand, opIdx OpIndex, pos ByteCount, deaths BitWor
 	return updated
 end 'allocateReuseDef'
 
-// A `(numOps × wordsPerRow)` matrix: bit `v` of row `pos` is set iff value `v`'s
-// live range ENDS at op `pos` (its last use, or a dead def). A backward scan from
-// the block's live-out marks a value dying at an op iff it is an operand there and
-// not live below.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, wordsPerRow ByteCount, buf OperandList) returns BitWordArray
-	let n = ordered.count()
-	var deaths = BitWordArray.create()
-	deaths.resize(n * wordsPerRow)
+// Which values DIE at each op of a block — i.e. whose live range ENDS there (its last use, or a
+// dead def) — as a CSR list keyed by the op's position: `list[start[pos] .. start[pos+1])`.
+//
+// **Not a bitset.** The obvious shape is an `ops × ceil(values/64)` matrix, one row of the whole
+// value space per op — and that is what this was, allocated fresh for EVERY block, costing
+// O(ops × values/64) memory and time per function. It was never needed: a value can only die where
+// it APPEARS, so every query is about one of the op's own operands, of which there are at most a
+// handful. The list is O(operands) per op and answers the same questions.
+type BlockDeaths
+	export var start as CfgIndexArray
+	export var list as ValueIdArray
 
-	var seenBelow = BitWordArray.create()
-	seenBelow.resize(wordsPerRow)
-	bitsetCopyRow(seenBelow, dstBase: 0, src: liveness.liveOut, srcBase: local * wordsPerRow, wordsPerRow: wordsPerRow)
+	static function create(start CfgIndexArray, list ValueIdArray) returns BlockDeaths
+		return Self{start: start, list: list}
+	end 'create'
+
+	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
+	// op's operand count, so this is O(1) in practice.
+	export function dies(pos ByteCount, v ValueId) returns bool
+		let lo = try self.start.get(pos) otherwise panic("BlockDeaths.dies: start.get({pos}) OOB")
+		let hi = try self.start.get(pos + 1) otherwise panic("BlockDeaths.dies: start.get({pos}+1) OOB")
+		for k in lo upto hi 'each'
+			if (try self.list.get(k) otherwise panic("BlockDeaths.dies: list.get OOB")) == v 'match'
+				return true
+			end 'match'
+		end 'each'
+		return false
+	end 'dies'
+
+	// The register mask of every COLORED value dying at op `pos` — the registers a def at this op
+	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
+	export function dyingRegsAt(pos ByteCount, alloc Allocation) returns RegMask
+		var mask = 0 as RegMask
+		let lo = try self.start.get(pos) otherwise panic("BlockDeaths.dyingRegsAt: start.get({pos}) OOB")
+		let hi = try self.start.get(pos + 1) otherwise panic("BlockDeaths.dyingRegsAt: start.get({pos}+1) OOB")
+		for k in lo upto hi 'each'
+			let v = try self.list.get(k) otherwise panic("BlockDeaths.dyingRegsAt: list.get OOB")
+			if alloc.isColored(v) 'colored'
+				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
+			end 'colored'
+		end 'each'
+		return mask
+	end 'dyingRegsAt'
+end 'BlockDeaths'
+
+// A backward scan from the block's live-out: a value dies at an op iff it is an operand there and
+// is not live below it. `seenBelow` is a single dense row (bits flip at every op, so a bitset is the
+// right shape INSIDE a block) — seeded from the SPARSE live-out list and cleared back to zero in
+// O(live) by the caller, never copied a full value-space row at a time.
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitWordArray, seedBuf ValueIdArray) returns BlockDeaths
+	let n = ordered.count()
+
+	liveness.liveOutInto(local, out: seedBuf)
+	for v in seedBuf 'seed'
+		bitsetAdd(seenBelow, base: 0, bit: v)
+	end 'seed'
+	// The death scan does not use the live count, but `stepRowBackwardOverOperands` maintains one and
+	// a count may never go negative — so seed it truthfully from the live-out population.
+	var liveCount = seedBuf.count()
+
+	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
+	// in reverse, and a counting sort restores order in O(pairs + ops).
+	var posOf = CfgIndexArray.create()
+	var valueOf = ValueIdArray.create()
 
 	for ri in 0 upto n 'eachOpRev'
 		let pos = n - 1 - ri
 		let opIdx = try ordered.get(pos) otherwise panic("computeBlockDeaths: ordered.get OOB")
 		let op = try module.ops.get(opIdx) otherwise panic("computeBlockDeaths: opIdx not in module.ops")
 		targetOpOperands(op, buf: buf)
-		let base = pos * wordsPerRow
 
 		for o in buf 'markDeaths'
 			if operandIsVirtual(o) 'virt'
 				let v = operandValueId(o)
 				if not bitsetTest(seenBelow, base: 0, bit: v) 'dies'
-					bitsetAdd(deaths, base: base, bit: v)
+					posOf.push(pos)
+					valueOf.push(v)
+					// Mark it seen, so the SAME value appearing twice in this op (`sub x, x`) is
+					// recorded as dying ONCE.
+					bitsetAdd(seenBelow, base: 0, bit: v)
 				end 'dies'
 			end 'virt'
 		end 'markDeaths'
 
 		// Transform `seenBelow` from live-below-this-op to live-below-the-op-above it —
 		// the same backward SSA transfer the liveness pressure sweep uses.
-		stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf)
+		liveCount = stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf, liveCount: liveCount)
 	end 'eachOpRev'
 
-	return deaths
+	// Return the row to zero for the next block, in O(live + phis): what it holds now is this
+	// block's live-in set plus any of its own block-args an op re-added.
+	liveness.liveInInto(local, out: seedBuf)
+	for v in seedBuf 'clearLiveIn'
+		bitsetRemove(seenBelow, base: 0, bit: v)
+	end 'clearLiveIn'
+	for arg in block.blockArgs 'clearPhis'
+		bitsetRemove(seenBelow, base: 0, bit: arg.valueId)
+	end 'clearPhis'
+
+	return bucketDeathsByPos(posOf, valueOf: valueOf, opCount: n)
 end 'computeBlockDeaths'
 
-// The register mask of every value dying at op `pos`. The dying set is a SUBSET of the
-// op's own operands (a value can only die where it appears), so iterate the operand
-// buffer — O(operands), not O(valueCount) — testing each against the death bitset,
-// which is what the dense-bitset representation is for. Colored values only: an
-// uncolored dead def is handled by the caller's live-def computation, not here.
-function dyingRegsAt(deaths BitWordArray, pos ByteCount, wordsPerRow ByteCount, buf OperandList, alloc Allocation) returns RegMask
-	var mask = 0 as RegMask
-	let base = pos * wordsPerRow
-	for o in buf 'eachOperand'
-		if operandIsVirtual(o) 'virt'
-			let v = operandValueId(o)
-			if bitsetTest(deaths, base: base, bit: v) and alloc.isColored(v) 'diesColored'
-				mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
-			end 'diesColored'
-		end 'virt'
-	end 'eachOperand'
-	return mask
-end 'dyingRegsAt'
+// Counting-sort the (pos, value) death pairs into CSR by op position.
+function bucketDeathsByPos(posOf CfgIndexArray, valueOf ValueIdArray, opCount ByteCount) returns BlockDeaths
+	var start = zeroColumn(opCount + 1)
+	for p in posOf 'count'
+		let cur = try start.get(p + 1) otherwise panic("bucketDeathsByPos: start.get OOB")
+		try start.set(p + 1, value: cur + 1) otherwise panic("bucketDeathsByPos: start.set OOB")
+	end 'count'
+	for p in 0 upto opCount 'prefix'
+		let a = try start.get(p) otherwise panic("bucketDeathsByPos: prefix start.get(p) OOB")
+		let b = try start.get(p + 1) otherwise panic("bucketDeathsByPos: prefix start.get(p+1) OOB")
+		try start.set(p + 1, value: a + b) otherwise panic("bucketDeathsByPos: prefix start.set OOB")
+	end 'prefix'
 
-function deathTest(deaths BitWordArray, pos ByteCount, v ValueId, wordsPerRow ByteCount) returns bool
-	return bitsetTest(deaths, base: pos * wordsPerRow, bit: v)
-end 'deathTest'
+	let total = posOf.count()
+	var list = ValueIdArray.create()
+	list.resize(total)
+	var fill = zeroColumn(opCount)
+	for p in 0 upto opCount 'seedFill'
+		try fill.set(p, value: try start.get(p) otherwise panic("bucketDeathsByPos: seedFill start.get OOB")) otherwise panic("bucketDeathsByPos: seedFill set OOB")
+	end 'seedFill'
+
+	for k in 0 upto total 'place'
+		let p = try posOf.get(k) otherwise panic("bucketDeathsByPos: posOf.get OOB")
+		let v = try valueOf.get(k) otherwise panic("bucketDeathsByPos: valueOf.get OOB")
+		let at = try fill.get(p) otherwise panic("bucketDeathsByPos: fill.get OOB")
+		try list.set(at, value: v) otherwise panic("bucketDeathsByPos: list.set OOB")
+		try fill.set(p, value: at + 1) otherwise panic("bucketDeathsByPos: fill.set OOB")
+	end 'place'
+
+	return BlockDeaths.create(start, list: list)
+end 'bucketDeathsByPos'
 
 // ==========================================================================
 // Applying a coloring to an op (used by the rewrite in SsaDestruction.maxon)
@@ -819,7 +898,7 @@ end 'colorTargetOp'
 
 function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = "regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n"
-	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; fixpoint iterations total={stats.fixpointIterationsTotal} max={stats.fixpointIterationsMax}\n")
+	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 	msg.append("  phase ms: splitting={stats.phaseMsOf(RegAllocPhase.splitting)} liveness={stats.phaseMsOf(RegAllocPhase.liveness)} coloring={stats.phaseMsOf(RegAllocPhase.coloring)} ssaDestruction={stats.phaseMsOf(RegAllocPhase.ssaDestruction)} checking={stats.phaseMsOf(RegAllocPhase.checking)} rewrite={stats.phaseMsOf(RegAllocPhase.rewrite)}")
