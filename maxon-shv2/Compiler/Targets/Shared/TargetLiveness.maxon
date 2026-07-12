@@ -108,10 +108,24 @@ export type LivenessResult
 	export var forbidden as RegMaskColumn
 	export var maxPressure as RegCount
 	export var fixpointIterations as ByteCount
+	// Per-block DEAD block-arg count — a block-arg with no use in the block and not live-out. The
+	// colorer still reserves a register for each across the WHOLE block (a dead phi never appears
+	// as an operand, so it never dies and its register frees only at the block boundary), so it
+	// counts toward the block's true register demand even though it is never "live".
+	//
+	// Recorded HERE, for free, by the backward sweep that already computes it — the splitter's
+	// peak-finder needs the same number at every op of every block, and recomputing it per block
+	// meant re-sweeping the whole block and heap-allocating two arrays per call.
+	export var deadPhis as CfgIndexArray
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, liveIn BitWordArray, liveOut BitWordArray, forbidden RegMaskColumn, maxPressure RegCount, fixpointIterations ByteCount) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: fixpointIterations}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, liveIn BitWordArray, liveOut BitWordArray, forbidden RegMaskColumn, maxPressure RegCount, fixpointIterations ByteCount, deadPhis CfgIndexArray) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: fixpointIterations, deadPhis: deadPhis}
 	end 'create'
+
+	// The dead block-arg count of local block `local`.
+	export function deadPhiCountOf(local CfgIndex) returns RegCount
+		return try self.deadPhis.get(local) otherwise panic("LivenessResult.deadPhiCountOf: block {local} out of range")
+	end 'deadPhiCountOf'
 
 	// True iff value `v` is live on entry to (respectively exit from) local block
 	// `local` — the seeds the colorer and checker read.
@@ -198,10 +212,11 @@ export function computeLiveness(module TargetModule, func IrFunction) returns Li
 	let iters = solveLivenessFixpoint(module, cfg: cfg, defBits: defBits, useBits: useBits, phiDefBits: phiDefBits, liveIn: liveIn, liveOut: liveOut, wordsPerRow: wordsPerRow)
 
 	var forbidden = makeRegMaskColumn(valueCount)
-	let maxPressure = computePressureAndForbidden(module, cfg: cfg, liveOut: liveOut, forbidden: forbidden, wordsPerRow: wordsPerRow, valueCount: valueCount)
+	var deadPhis = filledColumn(numBlocks, value: 0)
+	let maxPressure = computePressureAndForbidden(module, cfg: cfg, liveOut: liveOut, forbidden: forbidden, wordsPerRow: wordsPerRow, deadPhis: deadPhis)
 	forbidEntryParamCrossRegisters(module, cfg: cfg, forbidden: forbidden, paramCount: func.paramCount)
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: iters)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, liveIn: liveIn, liveOut: liveOut, forbidden: forbidden, maxPressure: maxPressure, fixpointIterations: iters, deadPhis: deadPhis)
 end 'computeLiveness'
 
 // A zeroed word matrix of `wordCount` words.
@@ -585,7 +600,6 @@ end 'accumulateOpLocalSets'
 function solveLivenessFixpoint(module TargetModule, cfg FuncCfg, defBits BitWordArray, useBits BitWordArray, phiDefBits BitWordArray, liveIn BitWordArray, liveOut BitWordArray, wordsPerRow ByteCount) returns ByteCount
 	let numBlocks = cfg.numBlocks
 	var tmpOut = makeMatrix(wordsPerRow)
-	var tmpRow = makeMatrix(wordsPerRow)
 	var iters = 0 as ByteCount
 	var changed = true
 
@@ -597,15 +611,16 @@ function solveLivenessFixpoint(module TargetModule, cfg FuncCfg, defBits BitWord
 			let base = i * wordsPerRow
 			let block = blockAt(module, cfg: cfg, local: i)
 
-			// liveOut[i] = ∪_s ( (liveIn[s] \ phiDefs[s]) ∪ phiArgs(i->s) )
+			// liveOut[i] = ∪_s ( (liveIn[s] \ phiDefs[s]) ∪ phiArgs(i->s) ).
+			// One FUSED pass per successor (`dst |= a & ~b`) instead of copy + subtract + or through
+			// a scratch row: the fixpoint is pure row traffic on a big function, so a third of the
+			// passes is a third of the cost.
 			bitsetClearRow(tmpOut, base: 0, wordsPerRow: wordsPerRow)
 			let deg = cfg.succ.degree(i)
 			for k in 0 upto deg 'eachSucc'
 				let j = cfg.succ.neighbour(i, k: k)
 				let sBase = j * wordsPerRow
-				bitsetCopyRow(tmpRow, dstBase: 0, src: liveIn, srcBase: sBase, wordsPerRow: wordsPerRow)
-				bitsetSubtractRow(tmpRow, dstBase: 0, src: phiDefBits, srcBase: sBase, wordsPerRow: wordsPerRow)
-				_ = bitsetOrRow(tmpOut, dstBase: 0, src: tmpRow, srcBase: 0, wordsPerRow: wordsPerRow)
+				bitsetOrAndNotRow(tmpOut, dstBase: 0, a: liveIn, aBase: sBase, b: phiDefBits, bBase: sBase, wordsPerRow: wordsPerRow)
 				let targetBlockId = try cfg.blockIdByLocal.get(j) otherwise panic("solveLivenessFixpoint: blockIdByLocal.get OOB")
 				addPhiArgsOnEdge(block, targetBlockId: targetBlockId, out: tmpOut)
 			end 'eachSucc'
@@ -614,12 +629,9 @@ function solveLivenessFixpoint(module TargetModule, cfg FuncCfg, defBits BitWord
 				changed = true
 			end 'outGrew'
 
-			// liveIn[i] = useBits[i] ∪ (liveOut[i] \ defBits[i])
-			bitsetCopyRow(tmpRow, dstBase: 0, src: liveOut, srcBase: base, wordsPerRow: wordsPerRow)
-			bitsetSubtractRow(tmpRow, dstBase: 0, src: defBits, srcBase: base, wordsPerRow: wordsPerRow)
-			_ = bitsetOrRow(tmpRow, dstBase: 0, src: useBits, srcBase: base, wordsPerRow: wordsPerRow)
-			if not bitsetRowsEqual(tmpRow, aBase: 0, b: liveIn, bBase: base, wordsPerRow: wordsPerRow) 'inGrew'
-				bitsetCopyRow(liveIn, dstBase: base, src: tmpRow, srcBase: 0, wordsPerRow: wordsPerRow)
+			// liveIn[i] = useBits[i] ∪ (liveOut[i] \ defBits[i]) — the transfer function fused with
+			// its own convergence test, one pass instead of five.
+			if bitsetTransferRow(liveIn, dstBase: base, use: useBits, out: liveOut, def: defBits, srcBase: base, wordsPerRow: wordsPerRow) 'inGrew'
 				changed = true
 			end 'inGrew'
 		end 'eachBlockRev'
@@ -648,10 +660,14 @@ end 'addPhiArgsOnEdge'
 // Backward per-op sweep: track the exact live set at each program point, taking
 // `maxPressure` (the χ = ω the feasibility decision needs) and folding each op's
 // physical/implicit register writes into `forbidden` for every value live across.
-function computePressureAndForbidden(module TargetModule, cfg FuncCfg, liveOut BitWordArray, forbidden RegMaskColumn, wordsPerRow ByteCount, valueCount ValueId) returns RegCount
+function computePressureAndForbidden(module TargetModule, cfg FuncCfg, liveOut BitWordArray, forbidden RegMaskColumn, wordsPerRow ByteCount, deadPhis CfgIndexArray) returns RegCount
 	var liveRow = makeMatrix(wordsPerRow)
 	var buf = OperandList.create()
 	var maxPressure = 0 as RegCount
+	// Scratch reused across every block/op — the live-set walk and the op list would otherwise
+	// allocate once per block.
+	var liveBuf = ValueIdArray.create()
+	var ordered = OpIndexArray.create()
 
 	for i in 0 upto cfg.numBlocks 'eachBlock'
 		let base = i * wordsPerRow
@@ -659,11 +675,11 @@ function computePressureAndForbidden(module TargetModule, cfg FuncCfg, liveOut B
 		bitsetCopyRow(liveRow, dstBase: 0, src: liveOut, srcBase: base, wordsPerRow: wordsPerRow)
 		var blockMax = bitsetPopcountRow(liveRow, base: 0, wordsPerRow: wordsPerRow)
 
-		var ordered = OpIndexArray.create()
+		ordered.clear()
 		collectBlockOps(block, out: ordered)
 		for ri in 0 upto ordered.count() 'eachOpRev'
 			let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("computePressureAndForbidden: ordered.get OOB")
-			let after = stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, valueCount: valueCount)
+			let after = stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 			blockMax = maxOf(blockMax, b: after)
 		end 'eachOpRev'
 
@@ -678,8 +694,12 @@ function computePressureAndForbidden(module TargetModule, cfg FuncCfg, liveOut B
 		// pool" invariant — and the future E5001 deficit count — stay sound. After the
 		// backward sweep `liveRow` is the live-in view: a block-arg is present iff it is
 		// live (used here or live-out); a dead phi is absent.
-		let deadPhis = countDeadPhis(block, liveRow: liveRow)
-		maxPressure = maxOf(maxPressure, b: blockMax + deadPhis)
+		// Recorded per block, not just folded into the max: the splitter's peak-finder needs the
+		// same number at every op of this block, and recomputing it there meant re-sweeping the
+		// whole block (and allocating two arrays) once per block.
+		let blockDeadPhis = countDeadPhis(block, liveRow: liveRow)
+		try deadPhis.set(i, value: blockDeadPhis) otherwise panic("computePressureAndForbidden: deadPhis.set OOB")
+		maxPressure = maxOf(maxPressure, b: blockMax + blockDeadPhis)
 	end 'eachBlock'
 
 	return maxPressure
@@ -698,36 +718,6 @@ function countDeadPhis(block IrBlock, liveRow BitWordArray) returns RegCount
 	end 'each'
 	return dead
 end 'countDeadPhis'
-
-// The dead-phi count of a single block, derived from the liveness RESULT (rather than
-// from `computePressureAndForbidden`'s in-flight sweep). Reconstructs the block's live-in
-// VIEW — its live-out folded backward over its own ops, so a block-arg used in the block is
-// present and a truly-dead one is absent — then reuses `countDeadPhis`, the single source of
-// dead-phi truth. Exported so the cold-spill splitter's peak-finder adds the SAME per-block
-// dead-phi correction `maxPressure` carries; without it the peak-finder and the driver guard
-// disagree and the splitter false-panics (see SplitLiveRanges.analyzePressure).
-export function deadPhiCountForBlock(module TargetModule, cfg FuncCfg, liveness LivenessResult, blockLocal CfgIndex) returns RegCount
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
-	if block.blockArgs.count() == 0 'noPhis'
-		return 0
-	end 'noPhis'
-
-	let wordsPerRow = liveness.wordsPerRow
-	var liveRow = makeMatrix(wordsPerRow)
-	bitsetCopyRow(liveRow, dstBase: 0, src: liveness.liveOut, srcBase: blockLocal * wordsPerRow, wordsPerRow: wordsPerRow)
-
-	var ordered = OpIndexArray.create()
-	collectBlockOps(block, out: ordered)
-	var buf = OperandList.create()
-	for ri in 0 upto ordered.count() 'eachOpRev'
-		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("deadPhiCountForBlock: ordered.get OOB")
-		let op = try module.ops.get(opIdx) otherwise panic("deadPhiCountForBlock: opIdx not in module.ops")
-		targetOpOperands(op, buf: buf)
-		stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
-	end 'eachOpRev'
-
-	return countDeadPhis(block, liveRow: liveRow)
-end 'deadPhiCountForBlock'
 
 // ==========================================================================
 // Entry parameter captures + cross-param register forbidding
@@ -826,7 +816,7 @@ end 'forbidEntryParamCrossRegisters'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow ByteCount, valueCount ValueId) returns RegCount
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow ByteCount, liveBuf ValueIdArray) returns RegCount
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -845,7 +835,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 		end 'physDef'
 	end 'physDefs'
 	if clobberMask != 0 'hasClobber'
-		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, valueCount: valueCount)
+		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
 
 	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
@@ -917,17 +907,20 @@ end 'stepRowBackwardOverOperands'
 
 // For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own
 // defs), add `clobberMask` to its forbidden registers.
-function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, valueCount ValueId)
-	for v in 0 upto valueCount 'eachValue'
-		if not bitsetTest(liveRow, base: 0, bit: v) 'notLive'
-			continue
-		end 'notLive'
+//
+// Walks the SET BITS of the live row, not the value space. This runs at every CLOBBER op — every
+// call, every `idiv` — so testing each value id here would be O(clobber-ops × values), which on a
+// call-heavy function (this compiler's own) is a quadratic and measurably the dominant cost of the
+// liveness pass. A live set is sparse; the walk is O(live). `liveBuf` is scratch reused across ops.
+function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow ByteCount, liveBuf ValueIdArray)
+	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
+	for v in liveBuf 'eachLive'
 		if operandDefinesValue(buf, v: v) 'ownDef'
 			continue
 		end 'ownDef'
 		let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
 		try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
-	end 'eachValue'
+	end 'eachLive'
 end 'applyForbidden'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool

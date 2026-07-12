@@ -1030,6 +1030,41 @@ scratch on every spill iteration. shv2 builds NO graph (an availability sweep) a
 reactive spill loop over coloring. And v1's "74%" stood for months with **zero sub-phase
 attribution**, which is why the timers shipped in the allocator's first commit.
 
+### Performance: what the data structures cost
+
+Register allocation was **97% of compile wall time** on a large function (one 3,200-`if` function:
+5.6 s of 5.8 s), growing **quadratically** — the shape that made v1's allocator 74% of self-compile.
+None of it was the colorer. All of it was **iterating the value space where the live set was meant
+to be iterated**:
+
+| site | was | now |
+|---|---|---|
+| `seedInUse` (colorer) | O(blocks × values), once per block | O(live) — `bitsetCollectRow` |
+| `seedRegState`, `checkEdge` (AllocChecker) | O(blocks × values), O(edges × values) | O(live) |
+| `applyForbidden` (liveness) | O(clobber-ops × values × operands) — every call | O(live) |
+| `deadPhiCountForBlock` | re-swept each block + 2 heap allocs per call | recorded once by the sweep that already computes it |
+| liveness fixpoint inner step | 9 row passes per block per iteration | 2 (`bitsetOrAndNotRow`, `bitsetTransferRow`) |
+
+A live set is **sparse** — a handful of live values out of thousands of dense `ValueId`s — so
+walking the set bits (word-parallel, skipping 64 empty ids at a time) is the contract, not a
+preference. **`bitsetCollectRow` is the only way to walk a live set**; a `for v in 0 upto
+valueCount` over one is a quadratic waiting to happen. Scratch buffers are reused across blocks so
+the hot paths allocate nothing.
+
+Result: **8.8× on the large function** (5,609 ms → 640 ms of allocator time) and **8× on a
+call-heavy one** (750 ms → 94 ms), with the call-heavy case now linear. The phase timers are
+**disjoint** — `splitting` no longer silently includes `liveness`, which was hiding the single
+biggest cost in the wrong bucket.
+
+**The remaining bottleneck is the liveness matrix itself**, and it is a *representation* limit, not
+an algorithmic one. `liveIn`/`liveOut` are dense `blocks × ceil(values/64)` bitsets, so a function
+with 9,600 blocks and 6,400 values allocates and sweeps 100 words per block **even when `maxlive`
+is 1** — a ~100× overhead against the information actually present. It is now ~60% of allocation on
+such a function and is the last superlinear term. The fix is the one regalloc2 already took:
+**sparse per-block live sets** (or SSA-based liveness, which needs no fixpoint at all). It only
+bites on a single function with thousands of blocks — the realistic many-medium-functions shape is
+**linear**, and allocation there is ~33% of compile.
+
 ### Known limits of the design
 
 1. **The only source of a false `E5001` is a wasted register, and copy-related values are the one

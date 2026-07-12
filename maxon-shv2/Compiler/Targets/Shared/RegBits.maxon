@@ -65,6 +65,46 @@ export function bitsetOrRow(dst BitWordArray, dstBase ByteCount, src BitWordArra
 	return changed
 end 'bitsetOrRow'
 
+// `dst |= a & ~b` over `wordsPerRow` words, in ONE pass.
+//
+// This is the liveness fixpoint's inner step — "add a successor's live-in, minus the phis it
+// defines" — which as three separate row ops (copy, subtract, or) walked the row THREE times
+// through a scratch buffer. The fused form walks it once and needs no scratch. On a function with
+// many blocks the fixpoint is the dominant cost of register allocation, and it is entirely row
+// traffic: every pass saved is a third of it.
+export function bitsetOrAndNotRow(dst BitWordArray, dstBase ByteCount, a BitWordArray, aBase ByteCount, b BitWordArray, bBase ByteCount, wordsPerRow ByteCount)
+	for i in 0 upto wordsPerRow 'eachWord'
+		let av = try a.get(aBase + i) otherwise panic("bitsetOrAndNotRow: a word out of range")
+		let bv = try b.get(bBase + i) otherwise panic("bitsetOrAndNotRow: b word out of range")
+		let contribution = av and not bv
+		if contribution == 0 'nothingToAdd'
+			continue
+		end 'nothingToAdd'
+		let d = try dst.get(dstBase + i) otherwise panic("bitsetOrAndNotRow: dst word out of range")
+		try dst.set(dstBase + i, value: d or contribution) otherwise panic("bitsetOrAndNotRow: dst set out of range")
+	end 'eachWord'
+end 'bitsetOrAndNotRow'
+
+// `dst = use | (out & ~def)` over `wordsPerRow` words, in ONE pass, returning whether `dst`
+// CHANGED. This is the liveness transfer function `liveIn = use ∪ (liveOut ∖ def)` fused with its
+// own convergence test — as separate ops it walked the row five times (copy, subtract, or, compare,
+// copy) through a scratch buffer.
+export function bitsetTransferRow(dst BitWordArray, dstBase ByteCount, use BitWordArray, out BitWordArray, def BitWordArray, srcBase ByteCount, wordsPerRow ByteCount) returns bool
+	var changed = false
+	for i in 0 upto wordsPerRow 'eachWord'
+		let useWord = try use.get(srcBase + i) otherwise panic("bitsetTransferRow: use word out of range")
+		let outWord = try out.get(srcBase + i) otherwise panic("bitsetTransferRow: out word out of range")
+		let defWord = try def.get(srcBase + i) otherwise panic("bitsetTransferRow: def word out of range")
+		let merged = useWord or (outWord and not defWord)
+		let prior = try dst.get(dstBase + i) otherwise panic("bitsetTransferRow: dst word out of range")
+		if merged != prior 'grew'
+			try dst.set(dstBase + i, value: merged) otherwise panic("bitsetTransferRow: dst set out of range")
+			changed = true
+		end 'grew'
+	end 'eachWord'
+	return changed
+end 'bitsetTransferRow'
+
 // `dst[dstBase..] &= ~src[srcBase..]` over `wordsPerRow` words — remove every bit
 // of `src` from `dst`. The liveness fixpoint uses it to strip a successor's phi
 // defs before propagating its live-in to a predecessor.
@@ -102,6 +142,66 @@ export function bitsetCopyRow(dst BitWordArray, dstBase ByteCount, src BitWordAr
 		try dst.set(dstBase + i, value: s) otherwise panic("bitsetCopyRow: dst set out of range")
 	end 'eachWord'
 end 'bitsetCopyRow'
+
+// The set bits of the row starting at `base`, appended to `out` in ascending order.
+//
+// This is the ONE way to walk a live set, and using it is a performance CONTRACT, not a style
+// preference. A live set is SPARSE — a handful of live values out of thousands of value ids in the
+// function — so a consumer that instead loops `for v in 0 upto valueCount` and tests each bit runs
+// in O(valueCount) where the answer is O(live). Done once per BLOCK (seeding a colorer's in-use
+// mask, seeding the checker's register state) that is O(blocks × values): a QUADRATIC, and
+// measurably the dominant cost of register allocation on a large function. Done once per CLOBBER
+// op (forbidding caller-saved registers for the values live across a call) it is O(calls × values):
+// the same quadratic again.
+//
+// Word-parallel: a word with no live bits costs one compare, so an empty stretch of the value
+// space is skipped 64 ids at a time. `out` is CLEARED first and is meant to be a reusable scratch
+// buffer — pass the same one across blocks so the walk allocates nothing in the hot path.
+export function bitsetCollectRow(words BitWordArray, base ByteCount, wordsPerRow ByteCount, out ValueIdArray)
+	out.clear()
+	for w in 0 upto wordsPerRow 'eachWord'
+		var word = try words.get(base + w) otherwise panic("bitsetCollectRow: word out of range")
+		let bitBase = w shl BitWordShift
+		while word != 0 'eachSetBit'
+			// Isolate the lowest set bit, emit its index, then clear it (Kernighan): the loop body
+			// runs once per LIVE value, never once per value id.
+			let lowest = word and (0 - word)
+			out.push(bitBase + trailingZeroCount(lowest))
+			word = word and (word - 1)
+		end 'eachSetBit'
+	end 'eachWord'
+end 'bitsetCollectRow'
+
+// The index of the single set bit of `word` (a power of two), i.e. its trailing-zero count.
+// Binary search over the word width — 6 compares, no loop over 64 bits.
+function trailingZeroCount(word MachineWord) returns ByteCount
+	var w = word
+	var count = 0 as ByteCount
+	if (w and 0xFFFFFFFF) == 0 'hi32'
+		w = w shr 32
+		count = count + 32
+	end 'hi32'
+	if (w and 0xFFFF) == 0 'hi16'
+		w = w shr 16
+		count = count + 16
+	end 'hi16'
+	if (w and 0xFF) == 0 'hi8'
+		w = w shr 8
+		count = count + 8
+	end 'hi8'
+	if (w and 0xF) == 0 'hi4'
+		w = w shr 4
+		count = count + 4
+	end 'hi4'
+	if (w and 0x3) == 0 'hi2'
+		w = w shr 2
+		count = count + 2
+	end 'hi2'
+	if (w and 0x1) == 0 'hi1'
+		count = count + 1
+	end 'hi1'
+	return count
+end 'trailingZeroCount'
 
 // Population count of the row starting at `base` — the number of live values, i.e.
 // the register PRESSURE at a program point.

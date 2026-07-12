@@ -265,7 +265,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// for the reload SLOT identity `SplitLineage` does not carry).
 	var lineage = SplitLineage.create()
 	var nextSlot = 0 as SpillSlot
-	var liveness = computeLiveness(module, func: func)
+	var liveness = timedLiveness(module, func: func, stats: stats)
 	var nextValueId = liveness.valueCount
 
 	// TERMINATION. Each iteration splits one value at the worst OVER-POOL op: the victim goes to
@@ -311,7 +311,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		// `computeLiveness` re-derives the true value count (which now includes them), and the
 		// `maxOfCount` re-seed at the loop top advances `nextValueId` past them — so each
 		// iteration keeps minting fresh with no manual bookkeeping.
-		liveness = computeLiveness(module, func: func)
+		liveness = timedLiveness(module, func: func, stats: stats)
 		analysis = analyzePressure(module, liveness: liveness, pool: pool)
 	end 'relievePressure'
 
@@ -357,6 +357,20 @@ function noVictimAtPeak(project Project, module TargetModule, func IrFunction, f
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 end 'noVictimAtPeak'
 
+// `computeLiveness`, attributed to the LIVENESS phase rather than to SPLITTING.
+//
+// The splitter owns every liveness computation (it runs one up front and one after each split, and
+// hands the final result to the colorer), so without this the whole liveness pass was billed to
+// `splitting` — and `liveness` read 0.00ms on every program, which is exactly the "74% of
+// self-compile with ZERO sub-phase attribution" failure the design set out to avoid. On a large
+// function liveness, not splitting, is the dominant cost, and the numbers said the opposite.
+function timedLiveness(module TargetModule, func IrFunction, stats RegAllocStats) returns LivenessResult
+	let t = Clock.nowMs()
+	let liveness = computeLiveness(module, func: func)
+	stats.addPhaseMs(RegAllocPhase.liveness, ms: Clock.elapsedMs(t))
+	return liveness
+end 'timedLiveness'
+
 // A monotone helper for the fresh-id counter (a value count and a value id share the
 // `int(0 to u64.max)` domain).
 function maxOfCount(a ValueId, b ValueId) returns ValueId
@@ -395,6 +409,8 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	let valueCount = liveness.valueCount
 	var liveRow = zeroRow(wordsPerRow)
 	var buf = OperandList.create()
+	// Scratch reused across every block — otherwise one allocation per block, per iteration.
+	var ordered = OpIndexArray.create()
 	let fullPoolSize = regMaskPopcount(pool)
 
 	var best = PressurePeak.create(false, pressure: 0, blockLocal: 0, liveBefore: zeroRow(wordsPerRow), peakSeq: 0, clobberOnly: false)
@@ -409,10 +425,12 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		bitsetCopyRow(liveRow, dstBase: 0, src: liveness.liveOut, srcBase: base, wordsPerRow: wordsPerRow)
 
 		// A per-block constant added to every op's effective pressure — the colorer holds a
-		// register for each dead block-arg across the WHOLE block (see deadPhiCountForBlock).
-		let deadPhis = deadPhiCountForBlock(module, cfg: cfg, liveness: liveness, blockLocal: i)
+		// register for each dead block-arg across the WHOLE block. Read from the column the
+		// liveness sweep already filled; recomputing it here meant re-sweeping the whole block and
+		// heap-allocating two arrays, once per block, on every splitter iteration.
+		let deadPhis = liveness.deadPhiCountOf(i)
 
-		var ordered = OpIndexArray.create()
+		ordered.clear()
 		collectBlockOps(block, out: ordered)
 		let opCount = ordered.count()
 		// The sweep runs BACKWARD (to fold live-out into live-before). The GLOBAL sequence number

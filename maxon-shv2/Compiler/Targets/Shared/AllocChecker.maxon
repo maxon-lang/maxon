@@ -55,12 +55,18 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	var slotState = filledColumn(spillPlan.slotCount, value: noValue)
 
 	var buf = OperandList.create()
+	// Scratch reused across every block — the live-in walk and the op list would otherwise each
+	// allocate once per block. The checker runs on EVERY function of EVERY compile, so its cost is
+	// production cost, not test cost.
+	var liveBuf = ValueIdArray.create()
+	var ordered = OpIndexArray.create()
+
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
 		var regState = freshRegState(noValue)
-		seedRegState(regState, module: module, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, paramCount: paramCount, funcName: func.name)
+		seedRegState(regState, module: module, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, paramCount: paramCount, funcName: func.name, liveBuf: liveBuf)
 
-		var ordered = OpIndexArray.create()
+		ordered.clear()
 		collectBlockOps(block, out: ordered)
 		for opIdx in ordered 'eachOp'
 			// Simulate any reuse-def copy `mov dest, input` the allocator will splice
@@ -84,7 +90,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 		let deg = cfg.succ.degree(predLocal)
 		for k in 0 upto deg 'eachSucc'
 			let succLocal = cfg.succ.neighbour(predLocal, k: k)
-			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, noValue: noValue)
+			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, noValue: noValue, liveBuf: liveBuf)
 		end 'eachSucc'
 	end 'eachPred'
 end 'checkFunctionAllocation'
@@ -112,16 +118,20 @@ end 'regStateSet'
 // its color. Two of them sharing a color would be simultaneously live in one
 // register — the aliasing bug, caught right here. The ENTRY block additionally seeds
 // each parameter's INCOMING register (see seedEntryParamIncomingRegs).
-function seedRegState(regState RegStateRow, module TargetModule, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, paramCount ParamCount, funcName String)
+// Walks the SET BITS of the live-in row, not the value space. Testing every value id here would be
+// O(blocks × values) — and since the checker runs on every function of every compile, that
+// quadratic is paid in production, not just under `spec-test`. It was the single largest line item
+// in register allocation on a large function. `liveBuf` is scratch reused across blocks.
+function seedRegState(regState RegStateRow, module TargetModule, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, paramCount ParamCount, funcName String, liveBuf ValueIdArray)
 	if local == 0 'entry'
 		seedEntryParamIncomingRegs(regState, module: module, cfg: liveness.cfg, paramCount: paramCount)
 	end 'entry'
 
-	for v in 0 upto liveness.valueCount 'eachValue'
-		if liveness.isLiveIn(local, v: v) 'liveIn'
-			placeValueAtColor(regState, v: v, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "live-in")
-		end 'liveIn'
-	end 'eachValue'
+	bitsetCollectRow(liveness.liveIn, base: local * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+	for v in liveBuf 'eachLiveIn'
+		placeValueAtColor(regState, v: v, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "live-in")
+	end 'eachLiveIn'
+
 	for arg in block.blockArgs 'eachPhi'
 		placeValueAtColor(regState, v: arg.valueId, alloc: alloc, noValue: noValue, funcName: funcName, blockLabel: block.label, what: "phi")
 	end 'eachPhi'
@@ -420,7 +430,7 @@ end 'physRegNumOf'
 // O(1) flat FuncCfg index (never `getBlockByIdIn`). The edge's moves come from its plan
 // if it has one; a fully-coalesced edge has none, and the assertions below still catch
 // a predecessor clobber whose only remaining "use" was this edge.
-function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, noValue ValueId)
+function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, noValue ValueId, liveBuf ValueIdArray)
 	var sim = freshRegState(noValue)
 	copyRegState(sim, dstBase: 0, src: exitStates, srcBase: predLocal * RegisterFileSize)
 
@@ -444,14 +454,18 @@ function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal 
 		end 'eachPhi'
 	end 'hasPhis'
 
-	for v in 0 upto liveness.valueCount 'liveThrough'
-		if liveness.isLiveIn(succLocal, v: v) and not isPhiValue(succBlock, v: v) 'flowsThrough'
-			let reg = alloc.regNumOf(v)
-			let held = regStateGet(sim, reg: reg)
-			if held != v 'disturbed'
-				panic("AllocChecker: bad edge from '{predBlock.label}' to '{succBlock.label}' in '{func.name}': live-through value {v} (register {reg}) was clobbered by the edge (now holds {held})")
-			end 'disturbed'
-		end 'flowsThrough'
+	// Walk the SET BITS of the successor's live-in row. Testing every value id per edge would be
+	// O(edges × values) — the same quadratic as `seedRegState`, once more.
+	bitsetCollectRow(liveness.liveIn, base: succLocal * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+	for v in liveBuf 'liveThrough'
+		if isPhiValue(succBlock, v: v) 'phiNotLiveThrough'
+			continue
+		end 'phiNotLiveThrough'
+		let reg = alloc.regNumOf(v)
+		let held = regStateGet(sim, reg: reg)
+		if held != v 'disturbed'
+			panic("AllocChecker: bad edge from '{predBlock.label}' to '{succBlock.label}' in '{func.name}': live-through value {v} (register {reg}) was clobbered by the edge (now holds {held})")
+		end 'disturbed'
 	end 'liveThrough'
 end 'checkEdge'
 

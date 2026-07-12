@@ -313,9 +313,18 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// fresh reload values that the liveness, coloring, and checker below then all consume. The
 	// splitter recomputes liveness internally and returns the final result (`maxPressure ≤
 	// pool` guaranteed), so no separate liveness pass is needed here.
+	// The splitter OWNS every liveness computation (one up front, one after each split), and it bills
+	// them to RegAllocPhase.liveness itself. Subtract that from the wall time here so the two phases
+	// are DISJOINT and the six of them sum to the true total — otherwise `splitting` silently
+	// includes `liveness` and the biggest cost in the allocator hides inside the wrong bucket, which
+	// is exactly the "74% with zero sub-phase attribution" failure this instrumentation exists to
+	// prevent.
 	let tSplit = Clock.nowMs()
+	let livenessMsBefore = stats.phaseMsOf(RegAllocPhase.liveness)
 	let outcome = try splitLiveRanges(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
-	stats.addPhaseMs(RegAllocPhase.splitting, ms: Clock.elapsedMs(tSplit))
+	let splitWallMs = Clock.elapsedMs(tSplit)
+	let livenessMs = stats.phaseMsOf(RegAllocPhase.liveness) - livenessMsBefore
+	stats.addPhaseMs(RegAllocPhase.splitting, ms: splitWallMs - livenessMs)
 	let liveness = outcome.liveness
 	stats.recordFixpoint(liveness.fixpointIterations)
 	stats.recordPressure(liveness.maxPressure, funcName: func.name)
@@ -512,18 +521,22 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var alloc = Allocation.create(valueCount)
 	let hints = computeHints(module, cfg: cfg, valueCount: valueCount)
 	var buf = OperandList.create()
+	// Scratch buffers reused across every block — the live-in walk and the block's op list would
+	// otherwise each allocate once per block.
+	var liveBuf = ValueIdArray.create()
+	var ordered = OpIndexArray.create()
 
 	for local in 0 upto cfg.numBlocks 'eachBlock'
 		let block = blockAt(module, cfg: cfg, local: local)
 
 		// Seed occupancy from the non-phi live-ins (each already colored in a
 		// dominator), then allocate the block-arg phis defined at entry.
-		var inUse = seedInUse(liveness, local: local, alloc: alloc, valueCount: valueCount)
+		var inUse = seedInUse(liveness, local: local, alloc: alloc, liveBuf: liveBuf)
 		for arg in block.blockArgs 'eachPhi'
 			inUse = allocateDef(arg.valueId, working: inUse, dyingRegs: 0, hints: hints, alloc: alloc, liveness: liveness, pool: pool, stats: stats)
 		end 'eachPhi'
 
-		var ordered = OpIndexArray.create()
+		ordered.clear()
 		collectBlockOps(block, out: ordered)
 		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, wordsPerRow: wordsPerRow, buf: buf)
 
@@ -539,16 +552,21 @@ end 'colorFunction'
 // The in-use mask at a block's entry: every non-phi live-in value occupies its
 // color. A live-in value must already be colored (its def dominates) — the
 // dominance-order assertion.
-function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, valueCount ValueId) returns RegMask
+//
+// Walks the SET BITS of the live-in row, not the value space. Testing every value id here would be
+// O(blocks × values) — the quadratic that dominated register allocation on a large function — and
+// a live set holds a handful of values out of thousands of ids. `liveBuf` is a scratch buffer
+// reused across blocks, so this allocates nothing.
+function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, liveBuf ValueIdArray) returns RegMask
+	bitsetCollectRow(liveness.liveIn, base: local * liveness.wordsPerRow, wordsPerRow: liveness.wordsPerRow, out: liveBuf)
+
 	var mask = 0 as RegMask
-	for v in 0 upto valueCount 'eachValue'
-		if liveness.isLiveIn(local, v: v) 'liveIn'
-			if not alloc.isColored(v) 'notColored'
-				panic("seedInUse: value {v} is live-in to block {local} but was never colored — a use dominates its def (structured-layout invariant broken)")
-			end 'notColored'
-			mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
-		end 'liveIn'
-	end 'eachValue'
+	for v in liveBuf 'eachLiveIn'
+		if not alloc.isColored(v) 'notColored'
+			panic("seedInUse: value {v} is live-in to block {local} but was never colored — a use dominates its def (structured-layout invariant broken)")
+		end 'notColored'
+		mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
+	end 'eachLiveIn'
 	return mask
 end 'seedInUse'
 
