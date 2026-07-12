@@ -1,0 +1,113 @@
+// Test: clock.now-nanos-monotonic
+function main() returns ExitCode
+		let a = Clock.nowNanos()
+		let b = Clock.nowNanos()
+		let c = Clock.nowNanos()
+		var score = 0
+		if b >= a 'nondecreasing1'
+				score = score + 1
+		end 'nondecreasing1'
+		if c >= b 'nondecreasing2'
+				score = score + 1
+		end 'nondecreasing2'
+		print("score={score}\n")
+		return 0
+end 'main'
+---
+Stdout: ```
+score=2
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call Clock.nowNanos
+    x64.mov rbx, r8
+    x64.call Clock.nowNanos
+    x64.mov r12, r8
+    x64.call Clock.nowNanos
+    x64.xor r9d, r9d
+    x64.cmp r12, rbx
+    x64.jl nondecreasing1_0.after
+  nondecreasing1_0:
+    x64.add r9, 1
+  nondecreasing1_0.after:
+    x64.cmp r8, r12
+    x64.jl __phi_trampoline_2_0
+  nondecreasing2_0:
+    x64.add r9, 1
+    x64.mov rbx, r9
+  nondecreasing2_0.after:
+    x64.mov ecx, 21
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov rcx, rbx
+    x64.mov rdx, r12
+    x64.call mrt_i64_to_string
+    x64.mov rbx, r8
+    x64.mov r13d, 1
+    x64.mov r8, rbx
+    x64.add r8, 6
+    x64.mov r14, r8
+    x64.add r14, 1
+    x64.mov rcx, r14
+    x64.add rcx, 1
+    x64.call mrt_alloc
+    x64.mov r15, r8
+    x64.mov r8d, 6
+    x64.lea r9, [rip+__istr_0]
+    x64.mov [rbp-8], r15
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r8
+    x64.rep_movsb
+    x64.mov r8, r15
+    x64.add r8, 6
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r12
+    x64.mov [rbp-24], rbx
+    x64.rep_movsb
+    x64.lea r9, [rip+__istr_1]
+    x64.add r8, rbx
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov [rbp-24], r13
+    x64.rep_movsb
+    x64.mov rcx, r12
+    x64.call stdlib.__mm_decref
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 48
+    x64.call mrt_alloc_with_dtor
+    x64.mov rbx, r8
+    x64.xor r8d, r8d
+    x64.mov [rbx+40], r8 (8b)
+    x64.mov [rbx+0], r15 (8b)
+    x64.mov [rbx+8], r14 (8b)
+    x64.mov [rbx+16], r14 (8b)
+    x64.mov r8d, 1
+    x64.mov [rbx+24], r8 (8b)
+    x64.mov r8, -1
+    x64.mov [rbx+32], r8 (8b)
+    x64.lea rdx, [rip+__destruct_String]
+    x64.mov ecx, 16
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.mov [r12+0], rbx (8b)
+    x64.xor r8d, r8d
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, [r12+0] (8b)
+    x64.mov rdx, [r8+8] (8b)
+    x64.mov rcx, [r8+0] (8b)
+    x64.call mrt_write_stdout
+    x64.mov rcx, r12
+    x64.call mm_drop
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_2_0:
+    x64.mov rbx, r9
+    x64.jmp nondecreasing2_0.after
+  }
+}
+---

@@ -4,10 +4,17 @@
 /// @category System
 export typealias DurationMs = int(0 to u64.max)
 export typealias InstantMs = int(0 to u64.max)
+export typealias DurationNanos = int(0 to u64.max)
+export typealias InstantNanos = int(0 to u64.max)
 
 export type Clock
 	/// Monotonic time in milliseconds. Differences between two `nowMs()`
 	/// readings are meaningful; the absolute value is not.
+	///
+	/// The underlying source is the platform's COARSE tick counter
+	/// (`GetTickCount64` on Windows), whose period is ~15.6 ms. Anything that
+	/// needs to resolve durations shorter than a scheduler tick — profiling,
+	/// benchmarking, latency accounting — must use `nowNanos()` instead.
 	export static function nowMs() returns InstantMs
 		return __Builtins.currentTimeMs()
 	end 'nowMs'
@@ -22,4 +29,27 @@ export type Clock
 		end 'clockSkew'
 		return now - since
 	end 'elapsedMs'
+
+	/// Monotonic time in nanoseconds, read from the platform's HIGH-RESOLUTION
+	/// counter (`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)`
+	/// on Linux/macOS, `wasi:clocks/monotonic-clock.now` on WASI). Differences
+	/// between two `nowNanos()` readings are meaningful; the absolute value is
+	/// not.
+	///
+	/// The value is always expressed in nanoseconds, but the counter's PERIOD is
+	/// platform-defined — typically 100 ns on Windows and 1 ns elsewhere — so
+	/// successive readings taken back-to-back may compare equal.
+	export static function nowNanos() returns InstantNanos
+		return __Builtins.currentTimeNanos()
+	end 'nowNanos'
+
+	/// Nanoseconds elapsed since a prior `nowNanos()` reading. Clamps to 0 on
+	/// apparent backwards movement, mirroring `elapsedMs`.
+	export static function elapsedNanos(since InstantNanos) returns DurationNanos
+		let now = Clock.nowNanos()
+		if now < since 'clockSkew'
+			return 0
+		end 'clockSkew'
+		return now - since
+	end 'elapsedNanos'
 end 'Clock'

@@ -159,9 +159,15 @@ export let MACHO_IMPORT_SLOT_RAISE = 56
 // madvise(addr, len, advice): slab scavenger page discard (osDecommitPages).
 export let MACHO_IMPORT_SLOT_MADVISE = 57
 
+// clock_gettime(CLOCK_MONOTONIC, &ts): the HIGH-RESOLUTION monotonic clock behind
+// `osClockNanos` / `Clock.nowNanos`. Distinct from the gettimeofday at slot 9 that
+// `osClockMs` uses — gettimeofday tops out at microseconds and is wall-clock (it
+// steps with settimeofday/NTP), neither of which a profiling clock can accept.
+export let MACHO_IMPORT_SLOT_CLOCK_GETTIME = 58
+
 // usleep(microseconds) is already imported at slot 18 (MACHO_IMPORT_SLOT_USLEEP);
 // the wait-collect timeout poll loop reuses it for its inter-poll sleep.
-let MACHO_IMPORT_COUNT = 58
+let MACHO_IMPORT_COUNT = 59
 
 // libSystem symbols imported via dyld chained-fixup binds, in slot order (see
 // MACHO_IMPORT_SLOT_* above). buildChainedFixups iterates this to emit both the
@@ -196,8 +202,10 @@ function machoImportNames() returns StringArray
 	// osSleep → usleep(microseconds) (single-arg libcall; avoids nanosleep's
 	// timespec marshalling). slot 18.
 	names.push("_usleep")
-	// osClockMs → time(NULL) seconds (single-arg libcall; avoids gettimeofday's
-	// timeval struct). slot 19.
+	// slot 19. Reserved: the first arm64 `osClockMs` used time(NULL), but 1-second
+	// resolution was too coarse (two readings inside the same second elapse 0), so
+	// the lowering moved to `_gettimeofday` at slot 9. The import stays to keep every
+	// later slot ordinal stable.
 	names.push("_time")
 	// Directory enumeration (osDirGetdents64). macOS arm64 dropped the usable
 	// `getdirentries`/`getdirentries$INODE64` exports for the 64-bit-inode world
@@ -263,6 +271,8 @@ function machoImportNames() returns StringArray
 	names.push("_raise")
 	// slot 57: slab scavenger page discard (osDecommitPages → madvise(MADV_FREE)).
 	names.push("_madvise")
+	// slot 58: clock_gettime — the high-resolution monotonic source for osClockNanos.
+	names.push("_clock_gettime")
 	return names
 end 'machoImportNames'
 

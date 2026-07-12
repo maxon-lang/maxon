@@ -1006,28 +1006,43 @@ Forgetting `release()` leaks the handle and an OS process slot. Lines longer tha
 
 Monotonic time helpers. Use for measuring elapsed durations — absolute values are platform-defined (e.g. milliseconds since boot) and only meaningful when subtracted.
 
+Two clocks are exposed. They read genuinely different hardware sources, so they differ in resolution: **use `nowNanos()` for anything you intend to measure**, and `nowMs()` only for coarse timeouts and deadlines.
+
 **Type aliases:**
 
-- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the monotonic clock.
+- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the coarse monotonic clock.
 - `Clock.DurationMs` = `int(0 to u64.max)` — a duration in milliseconds.
+- `Clock.InstantNanos` = `int(0 to u64.max)` — an absolute reading from the high-resolution monotonic clock.
+- `Clock.DurationNanos` = `int(0 to u64.max)` — a duration in nanoseconds.
 
 **Static Methods:**
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `nowMs()` | `InstantMs` | Monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
+| `nowMs()` | `InstantMs` | Coarse monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
 | `elapsedMs(since: instant)` | `DurationMs` | Milliseconds elapsed since a prior `nowMs()` reading. Clamps to `0` if the clock moves backwards. |
+| `nowNanos()` | `InstantNanos` | High-resolution monotonic time in nanoseconds. Same "differences only" contract as `nowMs()`. |
+| `elapsedNanos(since: instant)` | `DurationNanos` | Nanoseconds elapsed since a prior `nowNanos()` reading. Clamps to `0` if the clock moves backwards. |
 
 **Example:**
 
 ```maxon
-let start = Clock.nowMs()
+let start = Clock.nowNanos()
 doWork()
-let elapsed = Clock.elapsedMs(since: start)
-print("Took {elapsed}ms\n")
+let elapsed = Clock.elapsedNanos(since: start)
+print("Took {elapsed}ns\n")
 ```
 
-Backed by `GetTickCount64` (Windows) and the WASI `wasi:clocks/monotonic-clock.now` interface (wasm32-wasi). The Linux/macOS lowerings (`clock_gettime(CLOCK_MONOTONIC)`) are not yet implemented.
+**Sources and resolution.**
+
+| Target | `nowMs()` source | `nowNanos()` source | `nowNanos()` period |
+|--------|------------------|---------------------|---------------------|
+| x64-windows | `GetTickCount64` | `QueryPerformanceCounter` scaled by `QueryPerformanceFrequency` | 100 ns (QPF = 10 MHz) |
+| arm64-macos | `gettimeofday` | `clock_gettime(CLOCK_MONOTONIC)` | 1 ns |
+| Linux (x64 / arm64) | *not implemented* | `clock_gettime(CLOCK_MONOTONIC)` syscall | 1 ns |
+| wasm32-wasi | `wasi:clocks/monotonic-clock.now` ÷ 1e6 | `wasi:clocks/monotonic-clock.now` | 1 ns |
+
+`nowMs()` is backed by the platform's coarse tick counter, whose period on Windows is ~15.6 ms — it cannot resolve a duration shorter than a scheduler tick, so a sub-tick operation measures as either 0 ms or 16 ms. `nowNanos()` always reports NANOSECONDS, but its PERIOD is platform-defined (see the table), so two back-to-back readings can legitimately compare equal.
 
 ---
 

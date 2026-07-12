@@ -183,6 +183,17 @@ export enum IatSlot
 	// one (see the `sleep`/`addVectoredExceptionHandler` slots' rationale).
 	MoveFileExW
 
+	// High-resolution monotonic clock (`osClockNanos`, backing `Clock.nowNanos`).
+	// QueryPerformanceCounter reports ticks of a boot-fixed frequency — typically
+	// 10 MHz, i.e. a 100 ns period — so QueryPerformanceFrequency is imported
+	// alongside it to scale those ticks to nanoseconds. GetTickCount64 (above)
+	// stays the source for `osClockMs`: its ~15.6 ms tick is useless for profiling
+	// but it is the cheaper read the green-thread timer heap wants. Appended at the
+	// end of the kernel32 run so existing kernel32 slot ordinals stay stable; only
+	// shell32/ws2_32 shift (by two).
+	QueryPerformanceCounter
+	QueryPerformanceFrequency
+
 	// shell32 — single entry, lives at the end of the IAT in its own
 	// import-directory DLL.
 	CommandLineToArgvW
@@ -223,7 +234,7 @@ end 'iatSlotIndex'
 // last enum case's index + 1. This is the maximum slot NUMBERING; the IAT/ILT
 // table actually emitted is sized from the present-DLL set (see
 // `emittedIatSlotCount`), which drops the ws2_32 run when networking is unused.
-let IAT_SLOT_COUNT = 84
+let IAT_SLOT_COUNT = 86
 
 type ImportSection
 	export var data as ByteArray
@@ -243,13 +254,13 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 72  // exclusive; slots 0..71 are kernel32 (last: MoveFileExW)
-let SHELL32_IAT_START = 72  // slot 72 is shell32 (commandLineToArgvW)
+let KERNEL32_IAT_END = 74  // exclusive; slots 0..73 are kernel32 (last: QueryPerformanceFrequency)
+let SHELL32_IAT_START = 74  // slot 74 is shell32 (commandLineToArgvW)
 
-// ws2_32 run: slots 73..83 (11 imports). Emitted ONLY when a program references
+// ws2_32 run: slots 75..85 (11 imports). Emitted ONLY when a program references
 // a ws2_32 slot (see `usesWs2_32` in `writePe`); otherwise the run, its DLL
 // directory entry, and its hint-name strings are omitted entirely.
-let WS2_32_IAT_START = 73
+let WS2_32_IAT_START = 75
 
 // Number of import-directory entries actually emitted for this build: 2 when
 // ws2_32 is unused (kernel32, shell32), 3 when it is (kernel32, shell32,

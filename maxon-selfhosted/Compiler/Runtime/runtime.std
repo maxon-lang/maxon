@@ -4343,7 +4343,7 @@ end
 //                       missing. Real PATH lookup lands later.
 //   void family      → standard `ret 0` convention.
 
-// maxon_current_time_ms() — monotonic clock helper for stdlib/Clock.maxon.
+// maxon_current_time_ms() — COARSE monotonic clock helper for stdlib/Clock.maxon.
 // Lowers to the target-neutral `osClockMs` op: x64-Windows reads
 // kernel32!GetTickCount64 (ms since boot) via IAT; wasm32-wasi reads
 // wasi:clocks/monotonic-clock.now (nanoseconds, divided to ms at MirToWasm).
@@ -4351,6 +4351,19 @@ end
 func maxon_current_time_ms 0 i64
   block entry:
     v0 = std osClockMs
+    std ret v0
+end
+
+// maxon_current_time_nanos() — HIGH-RESOLUTION monotonic clock helper backing
+// `Clock.nowNanos`. Lowers to the target-neutral `osClockNanos` op, which each
+// backend reads from the platform's performance counter (QueryPerformanceCounter
+// scaled by QueryPerformanceFrequency on Windows, clock_gettime(CLOCK_MONOTONIC)
+// on Linux/macOS, wasi:clocks/monotonic-clock.now on WASI). Distinct from
+// maxon_current_time_ms because GetTickCount64's ~15.6 ms period cannot resolve
+// anything shorter than a scheduler tick.
+func maxon_current_time_nanos 0 i64
+  block entry:
+    v0 = std osClockNanos
     std ret v0
 end
 

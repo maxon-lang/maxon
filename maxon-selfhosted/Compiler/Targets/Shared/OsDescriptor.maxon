@@ -24,6 +24,38 @@ export union SleepStrategy
 	libcall(nanosleepSlot MachineWord)
 end 'SleepStrategy'
 
+// How to read the HIGH-RESOLUTION monotonic clock (`osClockNanos`). Every variant
+// yields nanoseconds, but each names a different primitive and carries whatever
+// per-OS magic number that primitive needs, so the numbers live here rather than
+// scattered across the backends:
+//   * `queryPerformanceCounter(counterSlot, frequencySlot)` — Windows. QPC reports
+//     ticks of a boot-fixed frequency, not nanoseconds, so the lowering must also
+//     call QueryPerformanceFrequency and scale. Both slot indices come from
+//     `iatSlotIndex(IatSlot.QueryPerformance*)` in PeWriter.maxon.
+//   * `syscall(clockGettimeNumber, clockId)` — Linux `clock_gettime(2)`, writing a
+//     `struct timespec { tv_sec, tv_nsec }` through its second argument.
+//   * `libcall(clockGettimeSlot, clockId)` — macOS libc `clock_gettime` (macOS
+//     forbids raw syscalls), same timespec contract via the dyld import slot.
+// `clockId` is the platform's CLOCK_MONOTONIC, whose numeric value differs by OS
+// (1 on Linux, 6 on macOS) — exactly the kind of constant this union exists to pin.
+export union MonotonicClockStrategy
+	queryPerformanceCounter(counterSlot MachineWord, frequencySlot MachineWord)
+	syscall(clockGettimeNumber MachineWord, clockId MachineWord)
+	libcall(clockGettimeSlot MachineWord, clockId MachineWord)
+end 'MonotonicClockStrategy'
+
+// CLOCK_MONOTONIC's numeric value is NOT portable across POSIX implementations.
+let CLOCK_MONOTONIC_LINUX = 1
+let CLOCK_MONOTONIC_MACOS = 6
+
+// Scale factor every `osClockNanos` lowering shares: seconds -> nanoseconds for the
+// POSIX `timespec` fold, and the numerator of the Windows QPC tick scale.
+export let NANOS_PER_SECOND = 1000000000
+
+// `clock_gettime` syscall numbers (Linux only; macOS forbids raw syscalls).
+let CLOCK_GETTIME_SYSCALL_X64 = 228
+let CLOCK_GETTIME_SYSCALL_ARM64 = 113
+
 // How to write to stdout
 export union WriteStrategy
 	syscall(writeNumber MachineWord, fd MachineWord)
@@ -45,15 +77,16 @@ export type OsDescriptor
 	export var writeErr as WriteStrategy
 	export var read as ReadStrategy
 	export var sleep as SleepStrategy
+	export var monotonicClock as MonotonicClockStrategy
 	export var startShadowSpace as MachineWord
 
-	export static function create(os Os, exit ExitStrategy, write WriteStrategy, writeErr WriteStrategy, read ReadStrategy, sleep SleepStrategy, startShadowSpace MachineWord) returns OsDescriptor
-		return Self{os: os, exit: exit, write: write, writeErr: writeErr, read: read, sleep: sleep, startShadowSpace: startShadowSpace}
+	export static function create(os Os, exit ExitStrategy, write WriteStrategy, writeErr WriteStrategy, read ReadStrategy, sleep SleepStrategy, monotonicClock MonotonicClockStrategy, startShadowSpace MachineWord) returns OsDescriptor
+		return Self{os: os, exit: exit, write: write, writeErr: writeErr, read: read, sleep: sleep, monotonicClock: monotonicClock, startShadowSpace: startShadowSpace}
 	end 'create'
 end 'OsDescriptor'
 
 export function makeOsDescriptor(target Target) returns OsDescriptor
-	var result = OsDescriptor.create(target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), sleep: SleepStrategy.syscall(0), startShadowSpace: 0)
+	var result = OsDescriptor.create(target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), sleep: SleepStrategy.syscall(0), monotonicClock: MonotonicClockStrategy.syscall(0, clockId: 0), startShadowSpace: 0)
 
 	match target.os 'pickOs'
 		windows then result = makeWindowsDescriptor()
@@ -76,13 +109,15 @@ function makeWindowsDescriptor() returns OsDescriptor
 	let writeFile = iatSlotIndex(IatSlot.WriteFile)
 	let readFile = iatSlotIndex(IatSlot.ReadFile)
 	let sleepSlot = iatSlotIndex(IatSlot.Sleep)
-	return OsDescriptor.create(Os.windows, exit: ExitStrategy.iatCall(exitSlot), write: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF5, writeFileSlot: writeFile), writeErr: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF4, writeFileSlot: writeFile), read: ReadStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF6, readFileSlot: readFile), sleep: SleepStrategy.iatCall(sleepSlot), startShadowSpace: 0x28)
+	let qpcSlot = iatSlotIndex(IatSlot.QueryPerformanceCounter)
+	let qpfSlot = iatSlotIndex(IatSlot.QueryPerformanceFrequency)
+	return OsDescriptor.create(Os.windows, exit: ExitStrategy.iatCall(exitSlot), write: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF5, writeFileSlot: writeFile), writeErr: WriteStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF4, writeFileSlot: writeFile), read: ReadStrategy.winApi(getStdHandle, handleConstant: 0xFFFFFFF6, readFileSlot: readFile), sleep: SleepStrategy.iatCall(sleepSlot), monotonicClock: MonotonicClockStrategy.queryPerformanceCounter(qpcSlot, frequencySlot: qpfSlot), startShadowSpace: 0x28)
 end 'makeWindowsDescriptor'
 
 function makeMacOsDescriptor() returns OsDescriptor
 	// macOS dyld slot layout: slot 0 = exit, slot 1 = write, slot 2 = read,
 	// slot 3 = nanosleep (libc).
-	return OsDescriptor.create(Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), sleep: SleepStrategy.libcall(3), startShadowSpace: 0)
+	return OsDescriptor.create(Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), sleep: SleepStrategy.libcall(3), monotonicClock: MonotonicClockStrategy.libcall(MACHO_IMPORT_SLOT_CLOCK_GETTIME, clockId: CLOCK_MONOTONIC_MACOS), startShadowSpace: 0)
 end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
@@ -106,6 +141,11 @@ function makeLinuxDescriptor(target Target) returns OsDescriptor
 		arm64 gives 101
 		default panic("Linux descriptor not used for WASM targets")
 	end 'cpuNanosleep'
+	let clockGettimeNum = match target.cpu 'cpuClockGettime'
+		x64 gives CLOCK_GETTIME_SYSCALL_X64
+		arm64 gives CLOCK_GETTIME_SYSCALL_ARM64
+		default panic("Linux descriptor not used for WASM targets")
+	end 'cpuClockGettime'
 
-	return OsDescriptor.create(Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), sleep: SleepStrategy.syscall(nanosleepNum), startShadowSpace: 0)
+	return OsDescriptor.create(Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), sleep: SleepStrategy.syscall(nanosleepNum), monotonicClock: MonotonicClockStrategy.syscall(clockGettimeNum, clockId: CLOCK_MONOTONIC_LINUX), startShadowSpace: 0)
 end 'makeLinuxDescriptor'

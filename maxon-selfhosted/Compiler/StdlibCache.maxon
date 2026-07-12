@@ -302,7 +302,13 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // stdlib source checksum stay identical. Pre-v88 caches predate the token and
 // could be a sanitized stdlib written by an interrupted experiment, so the
 // version gate forces clean regeneration.
-let CACHE_FORMAT_VERSION = 89
+// v89 -> v90: new `osClockNanos` StdSystemOp (the high-resolution monotonic-clock
+// primitive backing `Clock.nowNanos`) inserted directly after `osClockMs`,
+// shifting every later StdSystemOp ordinal. The serialized system-op tag IS the
+// union ordinal, so a pre-v90 cache would mis-deserialize every system op past
+// the insertion point; bump to invalidate. Same reason v69 bumped when
+// `osClockMs` itself was inserted.
+let CACHE_FORMAT_VERSION = 90
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -4976,6 +4982,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then writeStdSysOsGetEnv(buf, resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)
 		osGetArgc(resultId) then writeQword(buf, value: resultId)
 		osClockMs(resultId) then writeQword(buf, value: resultId)
+		osClockNanos(resultId) then writeQword(buf, value: resultId)
 		osGetArgv(resultId, indexId) then writeStdSysOsGetArgv(buf, resultId: resultId, indexId: indexId)
 		osGetExecutablePath(resultId, bufPtrId, bufSizeId) then writeStdSysOsGetExecutablePath(buf, resultId: resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 		loadFramePtr(resultId) then writeQword(buf, value: resultId)
@@ -5279,6 +5286,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osGetEnv gives try readStdSysOsGetEnv(buf, offset: pos)
 		osGetArgc gives try readStdSysOsGetArgc(buf, offset: pos)
 		osClockMs gives try readStdSysOsClockMs(buf, offset: pos)
+		osClockNanos gives try readStdSysOsClockNanos(buf, offset: pos)
 		osGetArgv gives try readStdSysOsGetArgv(buf, offset: pos)
 		osGetExecutablePath gives try readStdSysOsGetExecutablePath(buf, offset: pos)
 		loadFramePtr gives try readStdSysLoadFramePtr(buf, offset: pos)
@@ -5424,6 +5432,11 @@ function readStdSysOsClockMs(buf ByteArray, offset ByteOffset) returns (StdSyste
 	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.osClockMs(resultId), offset + 8)
 end 'readStdSysOsClockMs'
+
+function readStdSysOsClockNanos(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
+	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding
+	return (StdSystemOp.osClockNanos(resultId), offset + 8)
+end 'readStdSysOsClockNanos'
 
 function readStdSysOsGetArgv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let resultId = try readQword(buf, offset: offset) otherwise throw CacheCorruption.invalidEncoding

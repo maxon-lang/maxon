@@ -476,6 +476,10 @@ export type Arm64Backend implements TargetBackend
 			// osClockMs (macOS): 2-slot timeval buffer + &tv + null + gettimeofday
 			// result + ms result. Linux/Windows use fewer; 8 covers the max with headroom.
 			osClockMs gives 8
+			// osClockNanos worst case (Windows): 2 out-param buffers + 2 &buf pointers +
+			// 2 IAT return slots + result = 7. POSIX (timespec + clock id + &ts + call rc +
+			// result) needs 6. 12 covers both with headroom.
+			osClockNanos gives 12
 			osGetArgv gives 8
 			osGetExecutablePath gives 8
 			// Page allocation, atomics, and locks (added with the slab allocator).
@@ -1124,6 +1128,7 @@ export type Arm64Backend implements TargetBackend
 			osGetEnv then panic("osGetEnv not yet implemented for arm64 (Phase 3)")
 			osGetArgc(resultId) then result = lowerOsGetArgcArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osClockMs(resultId) then result = lowerOsClockMsArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osClockNanos(resultId) then result = lowerOsClockNanosArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetArgv(resultId, indexId) then result = lowerOsGetArgvArm64(resultId, indexId: indexId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then result = lowerOsGetExecutablePathArm64(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
@@ -1721,6 +1726,137 @@ export type Arm64Backend implements TargetBackend
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: msSlot))
 		return tempSlot + 1
 	end 'lowerOsClockMsMacosArm64'
+
+	// `osClockNanos` — the HIGH-RESOLUTION monotonic clock. Dispatches on the
+	// descriptor's clock STRATEGY, not on `osDesc.os`, so the per-OS magic numbers
+	// (CLOCK_MONOTONIC's id, the clock_gettime syscall number, the QPC/QPF IAT slots)
+	// stay pinned in OsDescriptor. WASI never reaches this backend (MirToWasm
+	// intercepts) and never builds a descriptor, so it has no shape in the union.
+	function lowerOsClockNanosArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.monotonicClock 'strategy'
+			libcall(clockGettimeSlot, clockId) then return lowerOsClockNanosTimespecArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, clockId: clockId, importSlot: clockGettimeSlot, isSyscall: false)
+			syscall(clockGettimeNumber, clockId) then return lowerOsClockNanosTimespecArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, clockId: clockId, importSlot: clockGettimeNumber, isSyscall: true)
+			queryPerformanceCounter(counterSlot, frequencySlot) then return lowerOsClockNanosWindowsArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, qpcSlotIndex: counterSlot, qpfSlotIndex: frequencySlot)
+		end 'strategy'
+	end 'lowerOsClockNanosArm64'
+
+	// clock_gettime(clockId, &ts) -> nanos = tv_sec * 1e9 + tv_nsec.
+	//
+	// Linux and macOS differ only in HOW the call is made — a raw syscall on Linux, a
+	// libSystem import on macOS (which forbids raw syscalls) — and in CLOCK_MONOTONIC's
+	// numeric value. The timespec contract, the argument shape, and the fold are
+	// identical, so both share this body rather than duplicating it; `isSyscall` picks
+	// the call op and `importSlot` carries either the syscall number or the dyld slot.
+	//
+	// Unlike the Windows counter there is no frequency to divide by: the kernel already
+	// reports nanoseconds. `tv_nsec < 1e9` by the timespec contract, so the sum is exact
+	// in 64 bits (~584 years of uptime before `tv_sec * 1e9` could overflow).
+	function lowerOsClockNanosTimespecArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, clockId MachineWord, importSlot MachineWord, isSyscall bool) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// Two contiguous slots for `struct timespec` (tv_sec @0, tv_nsec @8).
+		let tsSlot = tempSlot
+		tempSlot = tempSlot + 2
+
+		// arg0 = clockId.
+		let clockIdSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: clockId))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(clockIdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// arg1 = &ts.
+		let tsAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(tsAddrSlot, targetSlot: tsSlot))
+		tempSlot = tempSlot + 1
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(clockIdSlot)
+		argSlots.push(tsAddrSlot)
+		let rcSlot = tempSlot
+		if isSyscall 'linux'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(rcSlot, number: importSlot, argSlots: argSlots))
+		end 'linux' else 'macos'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(rcSlot, slotIndex: importSlot, argSlots: argSlots))
+		end 'macos'
+		tempSlot = tempSlot + 1
+
+		// nanos = tv_sec * 1e9 + tv_nsec. `tsAddrSlot` still holds &ts.
+		let base = arm64PhysReg(Arm64Register.x9)
+		let sec = arm64PhysReg(Arm64Register.x10)
+		let nsec = arm64PhysReg(Arm64Register.x11)
+		let billion = arm64PhysReg(Arm64Register.x12)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(base, slotIndex: tsAddrSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(sec, baseReg: base, offset: 0, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(nsec, baseReg: base, offset: 8, width: StoreWidth.qword, signed: false))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(billion, value: NANOS_PER_SECOND))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(sec, src1: sec, src2: billion))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(arm64PhysReg(Arm64Register.x0), src1: sec, src2: nsec))
+
+		let nanosSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nanosSlot, src: arm64PhysReg(Arm64Register.x0)))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: nanosSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: nanosSlot))
+		return tempSlot + 1
+	end 'lowerOsClockNanosTimespecArm64'
+
+	// arm64-Windows: QueryPerformanceFrequency(&freq) + QueryPerformanceCounter(&ticks)
+	// through the PE IAT, then scale ticks -> nanoseconds.
+	//
+	// QPC reports ticks of a boot-fixed frequency, not nanoseconds, hence the QPF read.
+	// The scale is the same SPLIT form the x64 lowering uses —
+	//     secs = ticks / freq ;  rem = ticks - secs * freq
+	//     nanos = secs * 1e9 + (rem * 1e9) / freq
+	// — and for the same reason: the direct `ticks * 1e9` overflows i64 after ~15
+	// minutes of uptime at a 10 MHz QPF. ARM64's SDIV yields only a quotient (no
+	// remainder register, unlike x86's IDIV), so `rem` is recovered with an explicit
+	// multiply-and-subtract.
+	function lowerOsClockNanosWindowsArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, qpcSlotIndex MachineWord, qpfSlotIndex MachineWord) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		let freqSlot = tempSlot
+		let ticksSlot = tempSlot + 1
+		tempSlot = tempSlot + 2
+
+		let freqAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(freqAddrSlot, targetSlot: freqSlot))
+		tempSlot = tempSlot + 1
+		var freqArgs = VarSlotArray.create()
+		freqArgs.push(freqAddrSlot)
+		let freqRcSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(freqRcSlot, slotIndex: qpfSlotIndex, argSlots: freqArgs))
+		tempSlot = tempSlot + 1
+
+		let ticksAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(ticksAddrSlot, targetSlot: ticksSlot))
+		tempSlot = tempSlot + 1
+		var ticksArgs = VarSlotArray.create()
+		ticksArgs.push(ticksAddrSlot)
+		let ticksRcSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(ticksRcSlot, slotIndex: qpcSlotIndex, argSlots: ticksArgs))
+		tempSlot = tempSlot + 1
+
+		let ticks = arm64PhysReg(Arm64Register.x9)
+		let freq = arm64PhysReg(Arm64Register.x10)
+		let secs = arm64PhysReg(Arm64Register.x11)
+		let billion = arm64PhysReg(Arm64Register.x12)
+		let rem = arm64PhysReg(Arm64Register.x13)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(ticks, slotIndex: ticksSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(freq, slotIndex: freqSlot))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(billion, value: NANOS_PER_SECOND))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.sdivRegs(secs, src1: ticks, src2: freq))    // secs = ticks / freq
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(rem, src1: secs, src2: freq))       // rem = secs * freq
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.subRegs(rem, src1: ticks, src2: rem))       // rem = ticks - secs*freq
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(rem, src1: rem, src2: billion))     // rem *= 1e9
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.sdivRegs(rem, src1: rem, src2: freq))       // rem /= freq
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.mulRegs(secs, src1: secs, src2: billion))   // secs *= 1e9
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.addRegs(arm64PhysReg(Arm64Register.x0), src1: secs, src2: rem))
+
+		let nanosSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nanosSlot, src: arm64PhysReg(Arm64Register.x0)))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: nanosSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: nanosSlot))
+		return tempSlot + 1
+	end 'lowerOsClockNanosWindowsArm64'
 
 	function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
 		// fd constant -> temp slot

@@ -241,6 +241,10 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osGetArgc gives 8
 		// osClockMs: zero-arg GetTickCount64 IAT call (Windows) + result slot.
 		osClockMs gives 4
+		// osClockNanos worst case (Windows): 2 out-param buffers + 2 &buf pointers +
+		// 2 IAT return slots + 2 arithmetic spills + result = 9. Linux (timespec + clock
+		// id + &ts + syscall rc + result) needs 6. 12 covers both with headroom.
+		osClockNanos gives 12
 		osGetArgv gives 8
 		osGetExecutablePath gives 8
 		// osAllocPages on Windows: VirtualAlloc(NULL, size, 0x3000, 0x04) — 4 iatCall args + result slot.
@@ -1520,6 +1524,7 @@ type X64FunctionLowering
 			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
 			osGetArgc(resultId) then lowerOsGetArgc(resultId, dstBlock: dstBlock)
 			osClockMs(resultId) then lowerOsClockMs(resultId, dstBlock: dstBlock)
+			osClockNanos(resultId) then lowerOsClockNanos(resultId, dstBlock: dstBlock)
 			osGetArgv(resultId, indexId) then lowerOsGetArgv(resultId, indexId: indexId, dstBlock: dstBlock)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then lowerOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
@@ -2546,6 +2551,152 @@ type X64FunctionLowering
 			wasi then panic("osClockMs op should not reach the X64 backend on wasi — MirToWasm intercepts")
 		end 'os'
 	end 'lowerOsClockMs'
+
+	// `osClockNanos` — the HIGH-RESOLUTION monotonic clock. Dispatches on the
+	// descriptor's clock STRATEGY rather than on `osDesc.os`, which keeps every
+	// per-OS magic number (CLOCK_MONOTONIC's id, the clock_gettime syscall number,
+	// the QPC/QPF IAT slots) pinned in OsDescriptor instead of scattered here.
+	// WASI never reaches this backend — MirToWasm intercepts the op — and its
+	// descriptor is never built, so the strategy union has no `wasi` shape to match.
+	function lowerOsClockNanos(resultId ValueId, dstBlock IrBlock)
+		match osDesc.monotonicClock 'strategy'
+			queryPerformanceCounter(counterSlot, frequencySlot) then lowerOsClockNanosWindows(resultId, qpcSlotIndex: counterSlot, qpfSlotIndex: frequencySlot, dstBlock: dstBlock)
+			syscall(clockGettimeNumber, clockId) then lowerOsClockNanosLinux(resultId, syscallNumber: clockGettimeNumber, clockId: clockId, dstBlock: dstBlock)
+			libcall then panic("x64-macos osClockNanos not supported: x64 Mach-O writer not implemented")
+		end 'strategy'
+	end 'lowerOsClockNanos'
+
+	// `osClockNanos` on Windows: QueryPerformanceFrequency(&freq), then
+	// QueryPerformanceCounter(&ticks), both zero-return-value-of-interest IAT calls
+	// taking a single LARGE_INTEGER out-param, then scale ticks -> nanoseconds.
+	//
+	// QPC does NOT report nanoseconds: it reports ticks of a boot-fixed frequency
+	// (10 MHz on every current Windows, i.e. a 100 ns period), which is exactly why
+	// QPF has to be read as well. QPF is re-read per call rather than memoized in a
+	// global — it is a user-mode read of KUSER_SHARED_DATA with no syscall, and a
+	// cache would buy a few nanoseconds at the price of a lazily-initialized global
+	// with a cross-thread init race.
+	//
+	// The scale is `ticks * 1e9 / freq`, computed in the SPLIT form
+	//     secs = ticks / freq ;  rem = ticks % freq
+	//     nanos = secs * 1e9 + (rem * 1e9) / freq
+	// and not as the direct product, because `ticks * 1e9` overflows i64 after only
+	// ~15 minutes of uptime at a 10 MHz QPF — a plain IMUL would silently wrap. Both
+	// terms of the split stay in range: `rem < freq` (~1e7), so `rem * 1e9` peaks near
+	// 1e16, and `secs * 1e9` is nanoseconds-since-boot, which needs ~584 years to
+	// overflow. IDIV hands back the quotient in RAX and the remainder in RDX from ONE
+	// division, so the split costs a second IDIV, not a second division of the input.
+	//
+	// The arithmetic runs entirely in caller-saved physical registers (rax/rcx/rdx/r8).
+	// That is safe precisely because it sits after two `isCall` ops: any vreg live
+	// across this sequence is by construction live across those calls, so the allocator
+	// has already given it a callee-saved home or spilled it. The intermediates that
+	// must survive an IDIV (which clobbers RAX and RDX) are parked in stack slots
+	// rather than in more physical registers.
+	function lowerOsClockNanosWindows(resultId ValueId, qpcSlotIndex MachineWord, qpfSlotIndex MachineWord, dstBlock IrBlock)
+		let rax = physReg(X64Register.rax)
+		let rcx = physReg(X64Register.rcx)
+		let rdx = physReg(X64Register.rdx)
+		let r8 = physReg(X64Register.r8)
+
+		// The two LARGE_INTEGER out-param buffers.
+		let freqSlot = nextTempSlot
+		let ticksSlot = nextTempSlot + 1
+		nextTempSlot = nextTempSlot + 2
+
+		let freqAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(freqAddrSlot, targetSlot: freqSlot))
+		nextTempSlot = nextTempSlot + 1
+		var freqArgs = VarSlotArray.create()
+		freqArgs.push(freqAddrSlot)
+		let freqRcSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(freqRcSlot, slotIndex: qpfSlotIndex, argSlots: freqArgs))
+		nextTempSlot = nextTempSlot + 1
+
+		let ticksAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(ticksAddrSlot, targetSlot: ticksSlot))
+		nextTempSlot = nextTempSlot + 1
+		var ticksArgs = VarSlotArray.create()
+		ticksArgs.push(ticksAddrSlot)
+		let ticksRcSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(ticksRcSlot, slotIndex: qpcSlotIndex, argSlots: ticksArgs))
+		nextTempSlot = nextTempSlot + 1
+
+		let secsSlot = nextTempSlot
+		let fracSlot = nextTempSlot + 1
+		nextTempSlot = nextTempSlot + 2
+
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(rax, slotIndex: ticksSlot))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(rcx, slotIndex: freqSlot))
+		appendX64Op(target, block: dstBlock, op: X64Op.cqo)
+		appendX64Op(target, block: dstBlock, op: X64Op.idivReg(rcx))              // rax = secs, rdx = rem
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(secsSlot, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(rax, srcReg: rdx))
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(r8, value: NANOS_PER_SECOND))
+		appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(rax, srcReg: r8)) // rax = rem * 1e9
+		appendX64Op(target, block: dstBlock, op: X64Op.cqo)
+		appendX64Op(target, block: dstBlock, op: X64Op.idivReg(rcx))              // rax = (rem * 1e9) / freq
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(fracSlot, srcReg: rax))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(rax, slotIndex: secsSlot))
+		appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(rax, srcReg: r8)) // rax = secs * 1e9
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(rdx, slotIndex: fracSlot))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: rdx))
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(resultSlot, srcReg: rax))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsClockNanosWindows'
+
+	// `osClockNanos` on Linux: clock_gettime(CLOCK_MONOTONIC, &ts), then fold the
+	// timespec. Unlike Windows there is no frequency to divide by — the kernel already
+	// reports nanoseconds — so the whole scale is `tv_sec * 1e9 + tv_nsec`, exact in
+	// 64 bits because `tv_nsec < 1e9` by the timespec contract.
+	//
+	// This is the raw syscall, not the vDSO fast path glibc would take, so a reading
+	// costs a kernel entry (tens of ns) rather than a few ns. The RESOLUTION is the
+	// kernel's, and unaffected.
+	function lowerOsClockNanosLinux(resultId ValueId, syscallNumber MachineWord, clockId MachineWord, dstBlock IrBlock)
+		let rax = physReg(X64Register.rax)
+		let rcx = physReg(X64Register.rcx)
+		let r8 = physReg(X64Register.r8)
+
+		// struct timespec { tv_sec @0, tv_nsec @8 } — two contiguous slots.
+		let tsSlot = nextTempSlot
+		nextTempSlot = nextTempSlot + 2
+
+		let clockIdSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(rax, value: clockId))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(clockIdSlot, srcReg: rax))
+		nextTempSlot = nextTempSlot + 1
+
+		let tsAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(tsAddrSlot, targetSlot: tsSlot))
+		nextTempSlot = nextTempSlot + 1
+
+		var args = VarSlotArray.create()
+		args.push(clockIdSlot)
+		args.push(tsAddrSlot)
+		let rcSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(rcSlot, number: syscallNumber, argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+
+		// Reload &ts rather than keeping it live across the syscall: the `syscall`
+		// instruction itself clobbers RCX (and R11).
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(rcx, slotIndex: tsAddrSlot))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(rax, baseReg: rcx, offset: 0, width: StoreWidth.qword, signed: false))
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(r8, value: NANOS_PER_SECOND))
+		appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(rax, srcReg: r8))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(r8, baseReg: rcx, offset: 8, width: StoreWidth.qword, signed: false))
+		appendX64Op(target, block: dstBlock, op: X64Op.addRegReg(rax, srcReg: r8))
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(resultSlot, srcReg: rax))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsClockNanosLinux'
 
 	function lowerOsGetArgv(resultId ValueId, indexId ValueId, dstBlock IrBlock)
 		match osDesc.os 'os'

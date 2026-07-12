@@ -587,6 +587,10 @@ public partial class ARM64CodeEmitter {
     // ---- Scheduler platform helpers ----
 
     private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
+    private const int CLOCK_MONOTONIC = 0x06;  // macOS _CLOCK_MONOTONIC (POSIX-standard monotonic)
+
+    /// <summary>Nanoseconds in a second: the tv_sec -> nanosecond scale of a `struct timespec`.</summary>
+    private const long NanosPerSecond = 1_000_000_000L;
 
     public void GetCurrentTimeMs(VReg dest, int scratchSlot) {
       // clock_gettime(CLOCK_UPTIME_RAW, &timespec) using stack slots scratchSlot and scratchSlot+1
@@ -604,6 +608,28 @@ public partial class ARM64CodeEmitter {
       _e.EmitWord(0x9AC30884); // UDIV X4, X4, X3
       _e.EmitWord(0x8B040042); // ADD X2, X2, X4 → now_ms in X2
       // Move result to dest
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X2)
+        _e.EmitMovRegReg(destReg, ARM64Register.X2);
+    }
+
+    public void GetCurrentTimeNanos(VReg dest, int scratchSlot) {
+      // clock_gettime(CLOCK_MONOTONIC, &timespec). Same shape as GetCurrentTimeMs, but it
+      // reads the POSIX-standard monotonic clock rather than CLOCK_UPTIME_RAW, and it keeps
+      // the timespec's native nanosecond precision instead of dividing it away.
+      int tsOff = 16 + scratchSlot * 8; // timespec occupies slots scratchSlot, scratchSlot+1
+      _e.EmitMovRegImm(ARM64Register.X0, CLOCK_MONOTONIC);
+      _e.EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, tsOff, isAdd: true);
+      _e.EmitCallImport("clock_gettime");
+
+      // nanos = tv_sec * 1e9 + tv_nsec. tv_nsec is < 1e9 by the timespec contract, so the
+      // sum is exact in 64 bits (it only overflows after ~584 years of uptime).
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, tsOff, 8); // tv_sec
+      _e.EmitMovRegImm(ARM64Register.X3, NanosPerSecond);
+      _e.EmitWord(0x9B037C42); // MUL X2, X2, X3
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, tsOff + 8, 8); // tv_nsec
+      _e.EmitWord(0x8B040042); // ADD X2, X2, X4
+
       var destReg = R(dest);
       if (destReg != ARM64Register.X2)
         _e.EmitMovRegReg(destReg, ARM64Register.X2);

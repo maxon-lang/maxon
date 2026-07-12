@@ -1249,6 +1249,27 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_current_time_nanos() -> i64 (monotonic nanoseconds)
+  //
+  // The high-resolution sibling of maxon_current_time_ms. Both exist: the ms
+  // clock reads the coarse OS tick (15.6 ms on Windows), which is all the
+  // green-thread timer heap needs and is cheaper to read; this one reads the
+  // performance counter, which is what any measurement shorter than a
+  // scheduler tick requires.
+  //
+  // The frame carries 0x40 bytes rather than the ms clock's 0x20: the POSIX and
+  // Win32 entry points both write their result through an out-parameter, so
+  // slots 0 and 1 are reserved as that buffer (see IEmitterBackend's
+  // GetCurrentTimeNanos scratchSlot contract) on top of the 0x20 call shadow
+  // space Windows requires.
+  // =========================================================================
+  public void EmitCurrentTimeNanos() {
+    _b.FunctionStart("maxon_current_time_nanos", 0, 0x40);
+    _b.GetCurrentTimeNanos(VReg.Scratch0, scratchSlot: 0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // maxon_current_process_id() -> i64 (OS process ID, zero-extended)
   //
   // Windows: GetCurrentProcessId. POSIX: getpid. The returned value is

@@ -9510,6 +9510,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["currentTimeMs"] = RuntimeCallIntrinsic(
       "Returns monotonic time in milliseconds.\n\n`__Builtins.currentTimeMs() returns int`",
       "maxon_current_time_ms", [], true),
+    ["currentTimeNanos"] = RuntimeCallIntrinsic(
+      "Returns monotonic time in nanoseconds, read from the platform's high-resolution "
+      + "counter (QueryPerformanceCounter on Windows, clock_gettime(CLOCK_MONOTONIC) on "
+      + "POSIX). Unlike currentTimeMs — whose Windows source is the ~15.6 ms GetTickCount64 "
+      + "tick — this resolves sub-microsecond durations, so it is the one to use for "
+      + "profiling and benchmarking.\n\n`__Builtins.currentTimeNanos() returns int`",
+      "maxon_current_time_nanos", [], true),
     ["currentProcessId"] = RuntimeCallIntrinsic(
       "Returns the OS-assigned process ID of the currently-running process. "
       + "Stable for the process's lifetime; differs across concurrent processes. "

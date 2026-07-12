@@ -269,6 +269,23 @@ public interface IEmitterBackend {
   void GetCurrentTimeMs(VReg dest, int scratchSlot);
 
   /// <summary>
+  /// Get the current monotonic HIGH-RESOLUTION time, in nanoseconds, into dest.
+  /// Windows: QueryPerformanceFrequency + QueryPerformanceCounter, scaling the
+  ///          counter's ticks to nanoseconds (its period is typically 100 ns).
+  /// macOS:   clock_gettime(CLOCK_MONOTONIC) -> tv_sec * 1e9 + tv_nsec.
+  /// This is a separate entry point from <see cref="GetCurrentTimeMs"/> rather than a
+  /// finer-grained replacement for it, because the two read genuinely different counters:
+  /// the ms clock is the coarse scheduler tick (GetTickCount64, ~15.6 ms granularity),
+  /// which is cheaper and is what the green-thread timer heap wants, while this one is
+  /// the performance counter a profiler wants. Callers pick by what they measure.
+  /// The <paramref name="scratchSlot"/> parameter provides the first of TWO consecutive
+  /// stack slots used as the API's out-parameter buffer (the two LARGE_INTEGERs on
+  /// Windows, a timespec on POSIX).
+  /// Clobbers Arg0..Arg4 and Scratch0..Scratch2.
+  /// </summary>
+  void GetCurrentTimeNanos(VReg dest, int scratchSlot);
+
+  /// <summary>
   /// Get current process ID into dest register (zero-extended).
   /// Windows: GetCurrentProcessId.
   /// macOS / POSIX: getpid.

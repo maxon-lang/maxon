@@ -424,10 +424,47 @@ public partial class X86CodeEmitter {
 
     // ---- Scheduler platform helpers ----
 
+    /// <summary>Nanoseconds in a second: the numerator of the performance-counter tick scale.</summary>
+    private const long NanosPerSecond = 1_000_000_000L;
+
     public void GetCurrentTimeMs(VReg dest, int scratchSlot) {
       // GetTickCount64() returns milliseconds since boot
       _e.EmitCallImportOnSystemStack("kernel32.dll", "GetTickCount64");
       // Result in RAX; move to dest if needed
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
+    public void GetCurrentTimeNanos(VReg dest, int scratchSlot) {
+      // QueryPerformanceFrequency(&freq) / QueryPerformanceCounter(&ticks): both take a
+      // LARGE_INTEGER out-param in RCX, so the two scratch slots are the out-buffers.
+      // Slot N lives at [rbp-(N+1)*8] (see LoadLocal).
+      int ticksDisp = -(scratchSlot + 1) * 0x08;
+      int freqDisp = -(scratchSlot + 2) * 0x08;
+
+      // QPF is fixed for the lifetime of the boot, but it is re-read per call rather than
+      // memoized in a global: on every supported Windows it is a user-mode read of
+      // KUSER_SHARED_DATA (no syscall), and caching it would buy a few nanoseconds at the
+      // cost of a lazily-initialized global with a cross-thread init race. The counter's
+      // own period (100 ns in practice) dominates the error budget either way.
+      _e.EmitLeaRegMem(X86Register.Rcx, freqDisp);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "QueryPerformanceFrequency");
+
+      _e.EmitLeaRegMem(X86Register.Rcx, ticksDisp);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "QueryPerformanceCounter");
+
+      // nanos = ticks * 1e9 / freq, via the FULL 128-bit MUL/DIV pair. A 64-bit IMUL would
+      // silently wrap: at the usual 10 MHz QPF, `ticks * 1e9` exceeds 2^64 after ~15 minutes
+      // of uptime. MUL leaves the 128-bit product in RDX:RAX, which is exactly the dividend
+      // DIV consumes, so the scale is exact; the quotient is nanoseconds-since-boot and
+      // cannot overflow 64 bits for ~584 years, so DIV cannot raise #DE.
+      _e.EmitMovRegMem(X86Register.Rax, ticksDisp, 8);
+      _e.EmitMovRegImm(X86Register.R8, NanosPerSecond);
+      _e.EmitBytes(0x49, 0xF7, 0xE0);                  // MUL R8   => RDX:RAX = ticks * 1e9
+      _e.EmitMovRegMem(X86Register.Rcx, freqDisp, 8);  // RCX = ticks per second
+      _e.EmitBytes(0x48, 0xF7, 0xF1);                  // DIV RCX  => RAX = nanoseconds
+
       var destReg = R(dest);
       if (destReg != X86Register.Rax)
         _e.EmitMovRegReg(destReg, X86Register.Rax);

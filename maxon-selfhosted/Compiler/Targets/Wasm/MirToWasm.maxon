@@ -2255,6 +2255,7 @@ type WasmFunctionLowering
 			osGetEnv then panic("wasm: osGetEnv not yet implemented (Phase 3)")
 			osGetArgc(resultId) then emitOsGetArgc(resultId)
 			osClockMs(resultId) then emitOsClockMs(resultId)
+			osClockNanos(resultId) then emitOsClockNanos(resultId)
 			osGetArgv(resultId, indexId) then emitOsGetArgv(resultId, indexId: indexId)
 			osGetExecutablePath(resultId, bufPtrId, bufSizeId) then emitOsGetExecutablePath(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
 			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId, srcId: srcId, lenId: lenId)
@@ -2753,6 +2754,17 @@ type WasmFunctionLowering
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitOsClockMs'
+
+	// `osClockNanos` on WASI: wasi:clocks/monotonic-clock.now() ALREADY reports the
+	// monotonic instant in nanoseconds, so — unlike `osClockMs`, which has to divide
+	// it down to milliseconds — this is the bare import call. WASI is the one target
+	// where the high-resolution clock is strictly cheaper than the coarse one.
+	function emitOsClockNanos(resultId ValueId)
+		body.push(opCall)
+		writeUleb128(body, value: wasiMonotonicNow as Wasm32Index)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsClockNanos'
 
 	function emitOsWrite(ptrId ValueId, lenId ValueId, fd MachineWord)
 		// Preview2 write: get the stdout/stderr output-stream handle, then
@@ -3551,7 +3563,7 @@ type WasmFunctionLowering
 				let found = match op 'check'
 					movImm to osGetEnv gives false
 					osGetArgc gives true
-					osClockMs gives false
+					osClockMs to osClockNanos gives false
 					osGetArgv gives true
 					osGetExecutablePath gives true
 					memcpy to errorReturn gives false

@@ -202,9 +202,10 @@ function classifyByDef(defOp MirOp) returns OperandCategory
 		// helpers (Windows IAT helpers, Linux syscalls) — classify the same
 		// as the file-I/O band below.
 		osGetArgc gives OperandCategory.fixedBound
-		// osClockMs lowers to a fixed-arg helper (GetTickCount64 IAT on
-		// Windows, wasi:clocks monotonic-clock.now on wasm) — same band.
-		osClockMs gives OperandCategory.fixedBound
+		// Both clock ops lower to fixed-arg helpers (GetTickCount64 /
+		// QueryPerformanceCounter through the IAT on Windows, clock_gettime on
+		// POSIX, wasi:clocks monotonic-clock.now on wasm) — same band.
+		osClockMs to osClockNanos gives OperandCategory.fixedBound
 		osGetArgv gives OperandCategory.fixedBound
 		osGetExecutablePath gives OperandCategory.fixedBound
 		memcpy to loadByte gives OperandCategory.flexible
@@ -313,6 +314,7 @@ function mirDefValueId(op MirOp) returns DefMapIndex
 		osGetEnv(resultId, _, _, _, _) gives resultId
 		osGetArgc(resultId) gives resultId
 		osClockMs(resultId) gives resultId
+		osClockNanos(resultId) gives resultId
 		osGetArgv(resultId, _) gives resultId
 		osGetExecutablePath(resultId, _, _) gives resultId
 		memcpy to storeByte gives DEF_NONE

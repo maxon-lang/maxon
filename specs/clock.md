@@ -9,11 +9,13 @@ category: system
 
 ## Documentation
 
-The `Clock` type exposes a monotonic millisecond clock. `Clock.nowMs()` returns
-the current value of a monotonic source; the absolute value is platform-defined
-(milliseconds since boot on Windows via `GetTickCount64`, the monotonic clock's
-instant on WASI via `wasi:clocks/monotonic-clock.now`) and is only meaningful
-when two readings are subtracted.
+The `Clock` type exposes two monotonic clocks. Both return a reading whose
+absolute value is platform-defined and only meaningful when two readings are
+subtracted; they differ in the hardware source they read, and therefore in
+resolution.
+
+`Clock.nowMs()` reads the platform's COARSE tick counter (`GetTickCount64` on
+Windows, `wasi:clocks/monotonic-clock.now` on WASI).
 
 ```text
 let start = Clock.nowMs()
@@ -21,9 +23,31 @@ let start = Clock.nowMs()
 let elapsed = Clock.elapsedMs(start)  // milliseconds since `start`
 ```
 
-`Clock.elapsedMs(since)` returns the milliseconds elapsed since a prior
-`nowMs()` reading, clamping to 0 if the source somehow moves backwards (it never
-does on a monotonic clock, but the guard protects against bugs).
+`Clock.nowNanos()` reads the platform's HIGH-RESOLUTION counter
+(`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on
+Linux/macOS, `wasi:clocks/monotonic-clock.now` on WASI) and reports nanoseconds.
+
+```text
+let start = Clock.nowNanos()
+// ... work ...
+let elapsed = Clock.elapsedNanos(start)  // nanoseconds since `start`
+```
+
+Prefer `nowNanos()` for anything you intend to measure. `GetTickCount64`'s period
+is ~15.6 ms, so `nowMs()` cannot resolve a duration shorter than a scheduler
+tick: every reading is a multiple of the tick, and a sub-tick operation measures
+as either 0 ms or 16 ms depending on where the tick happened to fall. `nowMs()`
+remains the cheaper read and is the right choice for coarse timeouts and
+deadlines.
+
+Note that `nowNanos()`'s UNIT is nanoseconds but its PERIOD is platform-defined —
+100 ns on a typical Windows machine, 1 ns elsewhere — so two back-to-back
+readings can legitimately compare equal.
+
+`Clock.elapsedMs(since)` / `Clock.elapsedNanos(since)` return the time elapsed
+since a prior reading from the matching clock, clamping to 0 if the source
+somehow moves backwards (it never does on a monotonic clock, but the guard
+protects against bugs).
 
 ## Tests
 
@@ -96,4 +120,105 @@ end 'main'
 ```
 ```stdout
 ok=1
+```
+
+<!-- test: clock.now-nanos-monotonic -->
+The high-resolution clock is monotonic too: each successive reading is `>=` the
+previous one. As with `nowMs`, the epoch is target-dependent, so only ordering is
+asserted — never a particular magnitude.
+
+```maxon
+function main() returns ExitCode
+		let a = Clock.nowNanos()
+		let b = Clock.nowNanos()
+		let c = Clock.nowNanos()
+		var score = 0
+		if b >= a 'nondecreasing1'
+				score = score + 1
+		end 'nondecreasing1'
+		if c >= b 'nondecreasing2'
+				score = score + 1
+		end 'nondecreasing2'
+		print("score={score}\n")
+		return 0
+end 'main'
+```
+```stdout
+score=2
+```
+
+<!-- test: clock.nanos-resolves-sub-millisecond -->
+The whole point of `nowNanos`: it must actually resolve durations shorter than the
+coarse clock's tick. This walks a tight loop, records the SMALLEST non-zero delta
+between two successive readings — which is precisely the counter's period — and
+asserts it is under 1 ms.
+
+A clock backed by the Windows tick counter would fail this: `GetTickCount64`
+advances in ~15.6 ms steps, so its smallest observable non-zero delta is
+~15,600,000 ns. Passing therefore proves the reading comes from the performance
+counter and not from a coarse fallback — the regression this test exists to catch
+is exactly a silent downgrade to the tick source.
+
+```maxon
+function main() returns ExitCode
+		var smallest = 0
+		var prev = Clock.nowNanos()
+		var i = 0
+		while i < 200000 'sample'
+				let now = Clock.nowNanos()
+				let delta = now - prev
+				if delta > 0 'advanced'
+						if smallest == 0 or delta < smallest 'newMin'
+								smallest = delta
+						end 'newMin'
+						prev = now
+				end 'advanced'
+				i = i + 1
+		end 'sample'
+		var ok = 0
+		if smallest > 0 and smallest < 1000000 'subMillisecond'
+				ok = 1
+		end 'subMillisecond'
+		print("subMs={ok}\n")
+		return 0
+end 'main'
+```
+```stdout
+subMs=1
+```
+
+<!-- test: clock.elapsed-nanos-after-sleep -->
+After sleeping ~30 ms the nanosecond clock reports an elapsed time that is well
+within a band only a correctly-scaled nanosecond counter can land in — proving it
+measures real wall time in the UNITS it claims, rather than returning a constant,
+raw counter ticks, or milliseconds.
+
+The lower bound is 5 ms and not the 30 ms that was asked for, because the sleep
+itself is not that precise: the green-thread scheduler's wake deadline is computed
+from the COARSE tick clock, whose ~15.6 ms period means a `sleep(30)` can return
+after as little as ~16 ms of real time. That imprecision is the sleep's, not the
+clock's — and it is exactly the sort of thing only a high-resolution clock can
+see. 5 ms still pins the scale from below: had the reading been raw
+`QueryPerformanceCounter` ticks (~300,000 for 30 ms at a 10 MHz counter),
+microseconds (~30,000), or milliseconds (~30), every one of those falls far short
+of 5,000,000 and the test fails.
+
+```maxon
+function main() returns ExitCode
+		let start = Clock.nowNanos()
+		sleep(30)
+		let elapsed = Clock.elapsedNanos(start)
+		var score = 0
+		if elapsed > 5000000 'nanosecondScale'
+				score = score + 1
+		end 'nanosecondScale'
+		if elapsed < 10000000000 'bounded'
+				score = score + 1
+		end 'bounded'
+		print("score={score}\n")
+		return 0
+end 'main'
+```
+```stdout
+score=2
 ```

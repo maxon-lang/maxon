@@ -1118,11 +1118,15 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// path as UTF-8 bytes (length excludes trailing NUL). The stdlib's
 	// `Process.executablePath()` wraps the result in a `FilePath`.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.executablePath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
-	// Phase 3.4: monotonic clock primitive used by `stdlib/Clock.maxon`.
-	// Routes through the runtime's per-target time source — Windows
-	// QueryPerformanceCounter, POSIX clock_gettime(CLOCK_MONOTONIC), WASI
-	// `monotonic-clock` — and returns the result in milliseconds.
+	// Phase 3.4: monotonic clock primitives used by `stdlib/Clock.maxon`.
+	// `currentTimeMs` reads the COARSE OS tick (kernel32!GetTickCount64 on
+	// Windows, ~15.6 ms period); `currentTimeNanos` reads the platform's
+	// HIGH-RESOLUTION performance counter (QueryPerformanceCounter on Windows,
+	// clock_gettime(CLOCK_MONOTONIC) on POSIX, `monotonic-clock` on WASI) and
+	// reports nanoseconds. Both are monotonic; only the nanos one can resolve
+	// durations shorter than a scheduler tick.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.currentTimeMs", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.currentTimeNanos", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 	// Deliberately dereferences address 0 to trigger a CPU access-violation fault,
 	// exercising the VEH fault-recovery path (clean `panic: nil pointer ...`
 	// diagnostic + exit 1). Zero-arg, void return (no `result not used` diagnostic).
@@ -7789,6 +7793,9 @@ type MaxonToStdLowering
 		if methodName == "currentTimeMs" 'isCurrentTimeMs'
 			return self.lowerBuiltinsCurrentTimeMs(result, args: args, dstBlock: dstBlock)
 		end 'isCurrentTimeMs'
+		if methodName == "currentTimeNanos" 'isCurrentTimeNanos'
+			return self.lowerBuiltinsCurrentTimeNanos(result, args: args, dstBlock: dstBlock)
+		end 'isCurrentTimeNanos'
 		if methodName == "forceSegfault" 'isForceSegfault'
 			return self.lowerBuiltinsForceSegfault(result, args: args, dstBlock: dstBlock)
 		end 'isForceSegfault'
@@ -8445,15 +8452,7 @@ type MaxonToStdLowering
 	// Phase 15b: zero-arg `commandLineCount` lowers to a direct call into the
 	// runtime helper, which performs the per-target argc retrieval.
 	function lowerBuiltinsCommandLineCount(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		if args.count() != 0 'badArity'
-			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.commandLineCount: expected 0 args, got {args.count()}")
-			return true
-		end 'badArity'
-		let argIds = ValueIdArray.create()
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_command_line_count", argIds: argIds)))
-		self.setValueType(resultId, t: MaxonType.integer)
-		return true
+		return self.lowerIntZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.commandLineCount", callee: "mrt_command_line_count")
 	end 'lowerBuiltinsCommandLineCount'
 
 	// Phase 15b: `commandLineArg(index)` is a single-arg call. The runtime
@@ -8574,17 +8573,27 @@ type MaxonToStdLowering
 		return true
 	end 'lowerBuiltinsGtIsComplete'
 
-	function lowerBuiltinsCurrentTimeMs(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+	// Shared lowering for an int-returning, zero-arg `__Builtins.X()` that maps to a
+	// no-arg runtime call: arity-check, then bind the Maxon-level result directly to
+	// the call's result. The void-returning sibling is `lowerVoidZeroArgBuiltin`.
+	function lowerIntZeroArgBuiltin(result ByteArray, args ByteArrayArray, dstBlock IrBlock, builtinName String, callee String) returns bool
 		if args.count() != 0 'badArity'
-			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.currentTimeMs: expected 0 args, got {args.count()}")
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{builtinName}: expected 0 args, got {args.count()}")
 			return true
 		end 'badArity'
-		let argIds = ValueIdArray.create()
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "maxon_current_time_ms", argIds: argIds)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: ValueIdArray.create())))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
+	end 'lowerIntZeroArgBuiltin'
+
+	function lowerBuiltinsCurrentTimeMs(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		return self.lowerIntZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.currentTimeMs", callee: "maxon_current_time_ms")
 	end 'lowerBuiltinsCurrentTimeMs'
+
+	function lowerBuiltinsCurrentTimeNanos(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		return self.lowerIntZeroArgBuiltin(result, args: args, dstBlock: dstBlock, builtinName: "__Builtins.currentTimeNanos", callee: "maxon_current_time_nanos")
+	end 'lowerBuiltinsCurrentTimeNanos'
 
 	// Common shape for `__Builtins.writeStdout` / `__Builtins.writeStderr`:
 	// arg 0 is a `__ManagedMemory` pointer; load the buffer at offset 0

@@ -527,7 +527,23 @@ export union StdSystemOp
 	// backend: Windows uses kernel32!GetTickCount64 via IAT; WASI reads
 	// wasi:clocks/monotonic-clock.now (nanoseconds, divided to ms);
 	// Linux/macOS lowerings are not yet implemented (panic).
+	//
+	// This is the COARSE clock: GetTickCount64's period is ~15.6 ms, so it
+	// cannot resolve anything shorter than a scheduler tick. `osClockNanos`
+	// is the high-resolution counterpart; the two are separate ops because
+	// they read genuinely different hardware sources.
 	osClockMs(resultId ValueId)
+	// OS-neutral monotonic HIGH-RESOLUTION clock, in nanoseconds. Same
+	// contract as `osClockMs` — absolute value platform-defined, differences
+	// meaningful — but sourced from the platform's performance counter, so it
+	// resolves sub-microsecond durations (backs `Clock.nowNanos`). Lowered
+	// per-OS from `OsDescriptor.monotonicClock`: Windows scales
+	// QueryPerformanceCounter by QueryPerformanceFrequency; Linux/macOS read
+	// clock_gettime(CLOCK_MONOTONIC) and fold the timespec to nanoseconds;
+	// WASI reads wasi:clocks/monotonic-clock.now, which is already nanoseconds.
+	// The value is always NANOSECONDS, but the counter's period is not: it is
+	// typically 100 ns on Windows and 1 ns elsewhere.
+	osClockNanos(resultId ValueId)
 	// Returns a NUL-terminated C-string pointer to argv[index], or 0 if
 	// out of bounds. The pointer is owned by the runtime (kernel-supplied
 	// argv block on Linux/macOS, lazily-allocated UTF-8 cache on Windows,
@@ -836,6 +852,7 @@ function sysOpToString(op StdSystemOp) returns String
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		osGetArgc(resultId) gives "%{resultId} = sys.os_get_argc"
 		osClockMs(resultId) gives "%{resultId} = sys.os_clock_ms"
+		osClockNanos(resultId) gives "%{resultId} = sys.os_clock_nanos"
 		osGetArgv(resultId, indexId) gives "%{resultId} = sys.os_get_argv %{indexId}"
 		osGetExecutablePath(resultId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_get_executable_path %{bufPtrId}, %{bufSizeId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
