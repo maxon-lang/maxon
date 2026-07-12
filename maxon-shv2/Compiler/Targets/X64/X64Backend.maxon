@@ -89,6 +89,7 @@ let OpcodeImulRegImm = 0x69  // imul r, r/m, imm32  (3-operand; reg = dest, rm =
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
+let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
 let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
@@ -112,8 +113,9 @@ let Grp1ExtAdd = 0  // ADD
 let Grp1ExtSub = 5  // SUB
 let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 
-// Group-3 ALU opcode-extension (ModR/M reg field) value for `neg r/m` (F7 /3).
-let Grp3ExtNeg = 3  // NEG
+// Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
+let Grp3ExtNeg = 3  // NEG r/m
+let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 
 // 2^32 — used to fold a negative signed 32-bit immediate/displacement into its
 // two's-complement low-32-bit encoding (see imm32Bits).
@@ -271,6 +273,23 @@ end 'encodeImulRegReg'
 function encodeNegReg(code ByteArray, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtNeg, rmField: reg)
 end 'encodeNegReg'
+
+// `cqo` — sign-extend RAX into RDX:RAX (REX.W 99), so the following `idiv` divides the
+// full 128-bit RDX:RAX. No ModR/M — both operands (RAX, RDX) are implicit — so it is
+// just the REX.W prefix (emitted through the shared `emitRex`, which produces exactly
+// 0x48 for a 64-bit op naming no extended register) followed by the one opcode byte.
+function encodeCqo(code ByteArray)
+	emitRex(code, wide: true, regField: X64Register.rax, rmField: X64Register.rax)
+	code.push(OpcodeCqo)
+end 'encodeCqo'
+
+// `idiv divisor` — signed divide RDX:RAX by `divisor` (`F7 /7`, always 64-bit):
+// quotient → RAX, remainder → RDX. Another group-3 opcode-extension form (the /7 rides
+// the ModR/M reg field), so it shares `encodeModRmExtDirect` with `neg` and the
+// `sub/add rsp` frame ops — only the extension differs.
+function encodeIdivReg(code ByteArray, divisor X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtIdiv, rmField: divisor)
+end 'encodeIdivReg'
 
 // `cmp lhs, rhs` — register-direct 64-bit compare (`39 /r`, `lhs - rhs` discarding
 // the difference, keeping EFLAGS). Same `r/m, r` byte shape as mov/add/sub, so it
@@ -553,6 +572,8 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		xchgRegReg(a, b) then encodeXchgRegReg(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+		cqo then encodeCqo(code)
+		idivReg(divisor) then encodeIdivReg(code, divisor: resolvePhysical(divisor))
 	end 'emit'
 end 'emitTargetOp'
 

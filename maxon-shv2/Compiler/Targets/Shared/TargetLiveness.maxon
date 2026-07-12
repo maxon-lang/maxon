@@ -279,7 +279,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 		match op 'bodyCtrl'
 			jcc(_, target) then out.push(target)
 			prologue to jmp then break 'bodyCtrl'
-			movRegImm to iatCall then break 'bodyCtrl'
+			movRegImm to idivReg then break 'bodyCtrl'
 		end 'bodyCtrl'
 	end 'eachOp'
 
@@ -290,7 +290,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			ret then break 'termCtrl'
 			prologue to epilogue then panic("collectBlockSuccessorIds: block '{block.label}' terminator is a frame op, not a branch/return")
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
-			movRegImm to iatCall then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
+			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -648,7 +648,8 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
 
 	// Registers this op writes without being a virtual def: physical def operands +
-	// the implicit-def mask (a call's clobbers, M5). Values live across must avoid them.
+	// the implicit-def mask (a call's clobbers, M5; `idiv`'s RAX/RDX). Values live
+	// across must avoid them.
 	var clobberMask = op.rawValue.implicitDefs
 	for o in buf 'physDefs'
 		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
@@ -658,6 +659,19 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	if clobberMask != 0 'hasClobber'
 		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, valueCount: valueCount)
 	end 'hasClobber'
+
+	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
+	// registers (its implicit reads AND writes). `applyForbidden` above only covers
+	// values LIVE ACROSS the op (present in the live-after set); an operand that DIES at
+	// the op — the common case for `idiv`'s divisor — is absent from that set, so it
+	// would otherwise be free to color into RAX/RDX. But at the `idiv` the divisor cannot
+	// be RAX (holds the dividend) or RDX (the cqo sign-extension, then the remainder), so
+	// it must avoid implicitUses ∪ implicitDefs = {RAX, RDX}. This mask is 0 for every op
+	// without implicit registers, so the loop is a no-op except at `idiv`.
+	let implicitTouch = op.rawValue.implicitUses or op.rawValue.implicitDefs
+	if implicitTouch != 0 'hasImplicit'
+		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
+	end 'hasImplicit'
 
 	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf)
 
@@ -733,6 +747,31 @@ function operandDefinesValue(buf OperandList, v ValueId) returns bool
 	end 'each'
 	return false
 end 'operandDefinesValue'
+
+// Add `implicitMask` (the op's implicit reads ∪ writes) to the forbidden set of every
+// EXPLICIT VIRTUAL operand of the op. Unlike `applyForbidden` (which forbids values live
+// ACROSS the op), this forbids the op's OWN operands regardless of whether they outlive
+// it — so `idiv`'s divisor, which dies at the op and is thus absent from the live-across
+// set, is still kept out of the implicit RAX/RDX pair.
+//
+// CORRECT ONLY for ops whose implicit registers conflict SIMULTANEOUSLY with the operand —
+// `idiv` reads RAX/RDX in the SAME instruction that reads the divisor, so the divisor
+// genuinely cannot occupy them. It is NOT correct for a LATE-clobber op such as a call:
+// a call's `implicitDefs` clobber AFTER its args are consumed, so an arg (an EARLY use)
+// may legally sit in a caller-saved (clobbered) arg register. M5.6 must therefore make
+// this position-aware before adding the call op — skip `FixedReg`-pinned operands, and
+// forbid only EARLY uses from `implicitUses`, never the LATE `implicitDefs` clobber set.
+// Today the only caller is `idiv`/`cqo` (simultaneous-conflict), so the simple form is
+// sound. Reads the operand model rather than hardcoding opcodes.
+function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, implicitMask RegMask)
+	for o in buf 'each'
+		if operandIsVirtual(o) 'virt'
+			let v = operandValueId(o)
+			let cur = try forbidden.get(v) otherwise panic("forbidOperandsFromImplicit: forbidden.get OOB")
+			try forbidden.set(v, value: cur or implicitMask) otherwise panic("forbidOperandsFromImplicit: forbidden.set OOB")
+		end 'virt'
+	end 'each'
+end 'forbidOperandsFromImplicit'
 
 // The block's ops in execution order: body `opRefs` then the terminator op.
 export function collectBlockOps(block IrBlock, out OpIndexArray)

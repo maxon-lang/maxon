@@ -296,7 +296,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 	match op 'sm'
 		movRegReg(dst, src) then return vregsSamePhysical(dst, b: src)
 		prologue to movRegImm32 then return false
-		movReg32Reg32 to iatCall then return false
+		movReg32Reg32 to idivReg then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -485,7 +485,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 		match op 'body'
 			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
 			prologue to jmp then break 'body'
-			movRegImm to iatCall then break 'body'
+			movRegImm to idivReg then break 'body'
 		end 'body'
 	end 'eachOp'
 
@@ -497,7 +497,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			ret then break 'term'
 			prologue to epilogue then panic("retargetControlOp: pred terminator is a frame op")
 			jcc then panic("retargetControlOp: jcc reached as a terminator")
-			movRegImm to iatCall then panic("retargetControlOp: non-terminator op as terminator")
+			movRegImm to idivReg then panic("retargetControlOp: non-terminator op as terminator")
 		end 'term'
 	end 'hasTerm'
 

@@ -213,6 +213,31 @@ export union TargetOp
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
 	// this to `call ExitProcess`. Full call-barrier semantics.
 	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0}
+	// Sign-extend RAX into RDX:RAX (`cqo`, REX.W 99) so the following `idiv` divides the
+	// full 128-bit RDX:RAX by its operand. Both registers are IMPLICIT (no explicit
+	// operand): implicitUses = 0x1 (the RAX bit — `X64Register.rax.rawValue` == 0, so
+	// 1<<0 — it READS RAX), implicitDefs = 0x4 (the RDX bit — `rdx.rawValue` == 2, so
+	// 1<<2 — it WRITES RDX). Liveness folds implicitDefs into `forbiddenPhys` (a value
+	// live across `cqo` must avoid RDX); the AllocChecker asserts RAX holds a value here
+	// (the dividend the div lowering moved in). setsFlags is false — `cqo` leaves EFLAGS
+	// untouched. (A union-backing literal cannot reference a named `let`, so the masks
+	// are written inline.) APPENDED at the END of the union (after the call band) so no
+	// existing `… to iatCall` range arm can SILENTLY swallow it — each such arm instead
+	// fails to compile until it is consciously extended (the band-append invariant).
+	cqo = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0x1, implicitDefs: 0x4}
+	// Signed divide RDX:RAX by `divisor` (`idiv r/m64`, REX.W F7 /7): QUOTIENT → RAX,
+	// REMAINDER → RDX. `divisor` is the ONE explicit virtual USE (any GPR the allocator
+	// keeps out of RAX/RDX). implicitUses = 0x1 (reads RAX — the dividend low half; it
+	// also reads RDX, but that is EXCLUDED from implicitUses because `cqo` set RDX to the
+	// AllocChecker's untracked `noValue`, so asserting a tracked value there would false-
+	// positive — RDX's role is captured entirely by implicitDefs). implicitDefs = 0x5
+	// (the RAX bit 0x1 OR the RDX bit 0x4 — it WRITES both), which the clobber→forbidden
+	// path uses to keep every value live across the idiv, AND the divisor operand itself,
+	// out of RAX/RDX. idiv TRAPS (#DE) on divide-by-zero and INT_MIN / -1; the trap is a
+	// runtime-fault-handler concern (Workstream-R / M6), so there is no compiler guard.
+	// `setsFlags: true` (idiv leaves EFLAGS undefined — a "may clobber" barrier).
+	// APPENDED at the END of the union, after `cqo`.
+	idivReg(divisor X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: true, implicitUses: 0x1, implicitDefs: 0x5}
 end 'TargetOp'
 
 export typealias TargetOpArray = Array with TargetOp

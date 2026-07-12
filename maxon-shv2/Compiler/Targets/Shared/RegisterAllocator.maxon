@@ -26,12 +26,20 @@
 //     as two. Hints come from block-arg/branch-arg pairs (collectPhiEdgeHints) and
 //     from reuse-def/input pairs (collectReuseHints).
 //
+// BUILT through M5.4: immediate operand forms + 3-operand lea + the `Reuse`-based
+// seed-`mov` deletion (M5.2); idiv/mod FIXED registers (M5.4) — RAX/RDX pinned via
+// implicit masks + `forbidOperandsFromImplicit` + the clobber→forbidden path.
+//
 // DEFERRED to later M5 chunks (NOT built here): calls / the caller-saved-halving
-// pressure model, idiv/mod fixed registers, function params, the cold-spill live-
-// range splitter, and the E5001 diagnostic (`ValueOrigin`). While maxPressure stays
-// within the pool (current programs: ≤ 3–4), overflow cannot occur; if it somehow did,
-// this PANICS (a placeholder for the real E5001 + splitter). M5.2 DID land: immediate
-// operand forms, 3-operand lea, and the `Reuse`-based seed-`mov` deletion.
+// pressure model, function params, the cold-spill live-range splitter, and the E5001
+// diagnostic (`ValueOrigin`). CAVEAT for the M5.7 E5001 author — `maxPressure ≤ pool`
+// is a NECESSARY but NOT SUFFICIENT colorability test at a FIXED-REGISTER point: at an
+// `idiv`, values live across it are forbidden {RAX,RDX}, so their effective pool is
+// `pool ∖ {RAX,RDX}` (and at a call it will be the callee-saved subset — REGISTER_
+// ALLOCATOR.md Known-limit #2). The exact E5001 deficit must model each such point as
+// local pressure against its reduced pool, not the full pool. Today maxPressure stays
+// ≤ 3–4 so overflow cannot occur; if it somehow did, this PANICS (a placeholder for the
+// real E5001 + splitter).
 
 // The color column's "not yet colored" sentinel: one past the last real register.
 let Uncolored = RegisterFileSize
@@ -352,7 +360,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
 		prologue to jcc then break 'hint'
 		movRegImm to movRegImm32 then break 'hint'
-		subRegReg to iatCall then break 'hint'
+		subRegReg to idivReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -686,6 +694,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		imulRegRegImm32(dest, src, imm) then return TargetOp.imulRegRegImm32(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
 		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(colorVRegWith(reg, alloc: alloc), imm: imm)
 		xchgRegReg to iatCall then return op
+		cqo then return op
+		idivReg(divisor) then return TargetOp.idivReg(colorVRegWith(divisor, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

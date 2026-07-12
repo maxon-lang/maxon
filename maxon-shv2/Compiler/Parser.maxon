@@ -88,9 +88,9 @@ let AdditivePrecedence = 2 as InfixPrecedence
 let MultiplicativePrecedence = 3 as InfixPrecedence
 
 // The precedence of a binary-operator token, or NotAnInfixOperator for any token
-// that does not begin a binary operation in the grammar. A DEFERRED operator
-// (`/`/`mod`) is rejected by `rejectDeferredOperator` BEFORE this is consulted, so it
-// never reaches the climber's precedence compare.
+// that does not begin a binary operation in the grammar. `*`, `/`, and `mod` all
+// bind at the multiplicative level (M5.4 joined the division family here), so
+// `2 * 6 mod 4` is left-associative `((2 * 6) mod 4)`.
 function infixPrecedence(kind TokenKind) returns InfixPrecedence
 	if comparisonOperator(kind) 'comparison'
 		return ComparisonPrecedence
@@ -100,7 +100,7 @@ function infixPrecedence(kind TokenKind) returns InfixPrecedence
 		return AdditivePrecedence
 	end 'additive'
 
-	if kind == TokenKind.star 'multiplicative'
+	if kind == TokenKind.star or kind == TokenKind.slash or kind == TokenKind.mod 'multiplicative'
 		return MultiplicativePrecedence
 	end 'multiplicative'
 
@@ -122,6 +122,14 @@ function infixMaxonOp(kind TokenKind) returns MaxonBinOp
 	if kind == TokenKind.star 'mul'
 		return MaxonBinOp.mul
 	end 'mul'
+
+	if kind == TokenKind.slash 'div'
+		return MaxonBinOp.div
+	end 'div'
+
+	if kind == TokenKind.mod 'mod'
+		return MaxonBinOp.mod
+	end 'mod'
 
 	panic("infixMaxonOp: token '{kind.rawValue}' is not a supported binary operator — infixPrecedence must gate this call")
 end 'infixMaxonOp'
@@ -157,14 +165,6 @@ function infixCmpOp(kind TokenKind) returns MaxonCmpOp
 
 	panic("infixCmpOp: token '{kind.rawValue}' is not a comparison operator — comparisonOperator must gate this call")
 end 'infixCmpOp'
-
-// The division family (`/`, `mod`) is DEFERRED to M5: x64 `idiv` pins its operands
-// to the fixed RAX/RDX pair, which needs the real register allocator (the M1
-// placeholder gives every value a fresh pool register and cannot honor fixed-reg
-// constraints).
-function divisionFamilyOperator(kind TokenKind) returns bool
-	return kind == TokenKind.slash or kind == TokenKind.mod
-end 'divisionFamilyOperator'
 
 // The comparison operators (M4). Each maps to a `MaxonOp.compare` and, since it
 // feeds an `if`, fuses with the branch at the x64 tier. Classifier shared by the
@@ -898,8 +898,8 @@ export type Parser
 	// and recurse for the right operand at `precedence + 1` (which makes the operator
 	// LEFT-associative). A supported operator below `minPrec`, a non-operator, or the
 	// end of the expression stops the climb. A comparison operator emits the distinct
-	// `compare` op (not a `binOp`); everything else emits `binOp`. A DEFERRED operator
-	// (`/`/`mod`) is rejected in operator position (loud positioned error).
+	// `compare` op (not a `binOp`); everything else (arithmetic, including `/` and `mod`)
+	// emits `binOp`.
 	function parseBinary(block IrBlock, minPrec InfixPrecedence, permitComparison bool) returns ValueId throws ParseError
 		var left = try self.parseUnary(block)
 
@@ -917,7 +917,6 @@ export type Parser
 
 		while true 'climb'
 			let opTok = self.current()
-			try self.rejectDeferredOperator(opTok)
 
 			let prec = infixPrecedence(opTok.kind)
 			if prec == NotAnInfixOperator or prec < minPrec 'stop'
@@ -940,17 +939,6 @@ export type Parser
 
 		return left
 	end 'parseBinary'
-
-	// Reject an operator whose lowering is deferred to a later milestone, so a test
-	// that uses one fails LOUDLY (a positioned E3010) rather than silently dropping
-	// the operator. Called with the token in operator position (after an operand);
-	// a non-deferred token falls through untouched. Comparison joined the grammar at
-	// M4; only the division family (`/`/`mod`) remains deferred (see divisionFamilyOperator).
-	function rejectDeferredOperator(opTok Token) throws ParseError
-		if divisionFamilyOperator(opTok.kind) 'divFamily'
-			throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — arrives at M5 (x64 idiv's fixed RAX/RDX pair needs the real register allocator)", line: opTok.line, column: opTok.column)
-		end 'divFamily'
-	end 'rejectDeferredOperator'
 
 	// A prefix-operator operand — the climber's leaf. M3 handles prefix `-` (negate).
 	// Its operand is a PRIMARY, not another unary: `- -x` therefore fails at the

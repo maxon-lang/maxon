@@ -90,7 +90,11 @@ function rewriteBinAndCmpOps(module StdModule, func IrFunction, constMap ConstVa
 end 'rewriteBinAndCmpOps'
 
 // Attempt to fold one op. Only `binOp` and `cmp` are candidates; every other op is
-// unchanged. Exhaustive over StdOp with no bare `default`.
+// unchanged. In particular `div`/`mod` are DELIBERATELY left alone (covered by the
+// `binOpImm to ret` range below): x64 `idiv` has no immediate divisor form, and the
+// division family is non-commutative, so there is nothing to canonicalize or fold to
+// an immediate — both operands stay register values. Exhaustive over StdOp, no bare
+// `default`.
 function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 	return match op 'f'
 		const gives FoldResult.unchanged
@@ -235,6 +239,8 @@ function collectStdOpUses(op StdOp, referenced ReferencedValueSet)
 		cmp(_, lhs, rhs, _) then addReferencedPair(referenced, a: lhs, b: rhs)
 		binOpImm(_, lhs, _, _) then referenced.insert(lhs)
 		cmpImm(_, lhs, _, _) then referenced.insert(lhs)
+		div(_, lhs, rhs) then addReferencedPair(referenced, a: lhs, b: rhs)
+		mod(_, lhs, rhs) then addReferencedPair(referenced, a: lhs, b: rhs)
 		condBranch(condId, _, _) then referenced.insert(condId)
 		branch then break 'u'
 		ret(retValId) then referenced.insert(retValId)

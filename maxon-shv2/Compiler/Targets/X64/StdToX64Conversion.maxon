@@ -146,6 +146,8 @@ type StdToX64Lowering
 			cmp(resultId, lhs, rhs, pred) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
 			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
+			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
+			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rdx, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
@@ -165,6 +167,8 @@ type StdToX64Lowering
 			cmp then panic("lowerStdToX64: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
 			binOpImm then panic("lowerStdToX64: a `binOpImm` op appeared as a block terminator (lowering bug — an arithmetic op is never a terminator)")
 			cmpImm then panic("lowerStdToX64: a `cmpImm` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
+			div then panic("lowerStdToX64: a `div` op appeared as a block terminator (lowering bug — a division is never a terminator)")
+			mod then panic("lowerStdToX64: a `mod` op appeared as a block terminator (lowering bug — a modulo is never a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -224,6 +228,30 @@ type StdToX64Lowering
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(dest, src: base, imm: imm))
 		end 'op'
 	end 'lowerBinOpImm'
+
+	// Lower a Std `div`/`mod` to the x64 `idiv` sequence. x64 `idiv r/m64` divides the
+	// 128-bit RDX:RAX by the divisor, leaving the QUOTIENT in RAX and the REMAINDER in
+	// RDX — RAX and RDX are FIXED registers the instruction pins. So the sequence is:
+	//   mov rax, dividend   ; dividend (lhs) into RAX's low half
+	//   cqo                 ; sign-extend RAX into RDX:RAX (fills the high half)
+	//   idiv divisor        ; RDX:RAX / divisor -> quotient in RAX, remainder in RDX
+	//   mov result, resultReg ; copy RAX (div) or RDX (mod) out to the result vreg
+	// The divisor stays a VIRTUAL register — the allocator keeps it out of RAX/RDX
+	// (idivReg's implicit RAX/RDX masks forbid it, see TargetLiveness), so it survives
+	// both the `mov rax, dividend` and the `cqo` to be read by the `idiv`. `resultReg`
+	// selects which fixed register the answer is read from: RAX for `/` (quotient), RDX
+	// for `mod` (remainder) — the ONLY difference between the two, so they share this one
+	// lowering rather than duplicating the four-op emit.
+	//
+	// idiv TRAPS (#DE) on divide-by-zero and on INT_MIN / -1 overflow. That trap is
+	// delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
+	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, resultReg X64Register, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rax), srcReg: X64VReg.virtual(lhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.idivReg(X64VReg.virtual(rhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(resultReg)))
+	end 'lowerDivMod'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32`, recording its
 	// predicate keyed by the value it defines — the same fused compare/branch protocol

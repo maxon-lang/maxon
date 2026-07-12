@@ -61,15 +61,19 @@ export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdR
 	end 'collapse'
 end 'maxonReturnTypeToStdReturnType'
 
-// Map a source-level binary operator to its width/ABI-resolved Std opcode. M3
-// carries the 1:1 integer arithmetic set (`add`/`sub`/`mul`); the mapping GROWS in
-// lockstep as MaxonBinOp/StdBinOpcode gain arms (comparison at M4, `/`/`mod` at
-// M5). Exhaustive by construction (every MaxonBinOp arm is named).
+// Map a source-level binary operator to its width/ABI-resolved Std `binOp` opcode.
+// Only the non-trapping arithmetic set (`add`/`sub`/`mul`) maps to a `StdBinOpcode`;
+// `div`/`mod` do NOT (they lower to the OWN Std variants `StdOp.div`/`mod` because
+// idiv traps — see `lowerBinOp`), so this is called ONLY for `add`/`sub`/`mul` and
+// panics on the division family rather than inventing a bogus opcode. Exhaustive over
+// MaxonBinOp (every arm is named).
 export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
-	return match op 'map'
-		add gives StdBinOpcode.add
-		sub gives StdBinOpcode.sub
-		mul gives StdBinOpcode.mul
+	match op 'map'
+		add then return StdBinOpcode.add
+		sub then return StdBinOpcode.sub
+		mul then return StdBinOpcode.mul
+		div then panic("maxonBinOpToStdOpcode: `/` (div) lowers to StdOp.div — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
+		mod then panic("maxonBinOpToStdOpcode: `mod` lowers to StdOp.mod — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
@@ -225,10 +229,18 @@ type MaxonToStdLowering
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);
-	// only the source-level operator maps to a width/ABI-resolved Std opcode.
+	// only the source-level operator maps to a width/ABI-resolved Std op. The
+	// non-trapping arithmetic set (`add`/`sub`/`mul`) becomes a `StdOp.binOp` carrying
+	// the mapped opcode; the TRAPPING division family (`div`/`mod`) becomes its OWN Std
+	// variant (`StdOp.div`/`mod`) — a dedicated arm, NOT routed through the binOp-opcode
+	// helper — because idiv can fault and so needs `isPure: false` metadata a shared
+	// opcode field cannot carry (mirrors why `compare` split into `StdOp.cmp`).
 	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
-		let opcode = maxonBinOpToStdOpcode(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode))
+		match op 'op'
+			add to mul then self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op)))
+			div then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs))
+			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs))
+		end 'op'
 	end 'lowerBinOp'
 
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand

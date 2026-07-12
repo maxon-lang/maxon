@@ -1,0 +1,25 @@
+// Test: div-mod-variables
+function main() returns ExitCode
+	var a = 100
+	var b = 7
+	let q = a / b
+	let r = a mod b
+	return q + r
+end 'main'
+---
+ExitCode: 16
+---
+func @main {
+  entry:
+    x64.movRegImm32 rcx, 100
+    x64.movRegImm32 rsi, 7
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg rdi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.leaRegRegReg r8, rdi, rdx
+    x64.ret
+}

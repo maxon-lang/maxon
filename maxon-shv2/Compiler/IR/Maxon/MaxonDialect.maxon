@@ -171,16 +171,21 @@ export type MaxonOpMeta
 end 'MaxonOpMeta'
 
 // The binary operators the Maxon tier represents. M2 landed `add` (`+`); M3 grew
-// the rest of the integer ALU set — `sub` (`-`) and `mul` (`*`) — when the Pratt
-// precedence climber replaced M2's `+`-only expression parser. All three share
-// the two-operand `binOp` shape. The comparison operators are still deferred: they
-// feed a branch and need different Std metadata, so a comparison op splits out (it
-// arrives with `if` at M4, exactly as `StdBinOpcode`/`cmp` split at the Std tier).
-// `/`/`mod` wait for M5 (x64 `idiv`'s fixed RAX/RDX + the real register allocator).
+// the non-trapping integer ALU set — `sub` (`-`) and `mul` (`*`) — when the Pratt
+// precedence climber replaced M2's `+`-only expression parser. M5.4 grew the
+// TRAPPING division family — `div` (`/`) and `mod` — now that x64 `idiv`'s fixed
+// RAX/RDX pair has the real register allocator to honor it. `add`/`sub`/`mul` share
+// the two-operand `binOp` shape AND lower to a `StdOp.binOp` opcode; `div`/`mod`
+// share the `binOp` shape here but lower to their OWN Std variants (`StdOp.div`/`mod`)
+// because idiv traps and needs `isPure: false` metadata a shared opcode cannot carry
+// — the same reason a comparison splits into `StdOp.cmp`. Appended at the END of the
+// enum (band-append) so `add to mul` still names the non-trapping arithmetic set.
 export enum MaxonBinOp
 	add
 	sub
 	mul
+	div
+	mod
 end 'MaxonBinOp'
 
 // The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the
