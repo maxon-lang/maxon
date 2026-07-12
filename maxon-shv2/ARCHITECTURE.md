@@ -503,6 +503,20 @@ found` (exit 1); a void-returning `main` prints exactly `error E3002: Function
 
 **Landed M1 (Chunk B2) as a deliberate placeholder — `Targets/Shared/RegisterAllocator.maxon`.**
 
+> **M5 replaces it with the real allocator: PURE Design B (SSA chordal coloring + `E5001`).**
+> The design is canonical in [`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md)
+> (read the corrections header first). Unlike a conventional spiller, it **refuses to emit
+> hot spill code** — a loop that *uses* more values than fit is a compile error (`E5001`)
+> naming the values to remove, on the premise that the (AI) author restructures. Cold spills
+> (values idle across a loop) are free via dominating reloads. Key pieces: the `Reuse` operand
+> model (deletes the two-address `mov`), dense `ProgPoint`/bitset liveness, a forward
+> biased-coloring sweep, an **`AllocChecker`** symbolic verifier under `spec-test` (the only
+> catch for a self-consistent miscompile, since fragments are outputs not gates), and — the
+> make-or-break — **no false `E5001`** (overflow is decided on true per-point maxlive after
+> biased coloring, never a used-in-loop cardinality gate). M5 also retires `EliminatePhis`:
+> the allocator consumes `blockArgs`/`branchEdges` directly and does SSA-destruction after
+> coloring. This section is rewritten in full when the allocator lands.
+
 **What it colors is Std's own value space.** A `X64VReg` is either `physical(reg)` or
 `virtual(id)` — and that `id` **is the `ValueId` `lowerMaxonToStd` minted**. There is no
 separate virtual-register numbering anywhere in shv2; that is the 3-tier collapse cashing

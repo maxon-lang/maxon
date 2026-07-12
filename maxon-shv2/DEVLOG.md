@@ -134,6 +134,37 @@ header**. What changed:
   1 `Set`) to rewrite so it stays in "core" (Stage-0 gap 0.5).
 - x64-windows only through self-host.
 
+## Register allocator design adopted — PURE Design B (2026-07-11)
+
+M5's allocator design was chosen by an **adversarial evaluation** (5 independent lenses +
+3 skeptics, over both candidate designs, verified against the real shv2/v1 source). Two
+designs competed: **A** = SSA linear-scan + greedy fallback (always compiles, spills hot
+code); **B** ("mighty-pudding") = SSA chordal coloring + gap splitting that **refuses to
+emit hot spill code and errors (`E5001`)** instead, telling the author which values to
+remove from the loop. **Chosen: pure Design B.** Canonical design in
+[`docs/REGISTER_ALLOCATOR.md`](./docs/REGISTER_ALLOCATOR.md) (adopted mighty-pudding + a
+corrections header — read the header first).
+
+- **Why B's mechanism** (won unanimously): the `Reuse(i)` operand model deletes the
+  two-address `mov` at the root; the **`AllocChecker`** (symbolic verifier under
+  `spec-test`) is the only thing that catches a self-consistent miscompile — decisive
+  because *fragments are outputs, not gates*; the dense representation (ProgPoint / bitset
+  liveness / no `Map` in the hot path) dodges the heap-box trap; and the **dominating-reload**
+  spill placement retires v1's SplitKit failure (survived every refutation attempt).
+- **Why B's contract** (`E5001`, not always-spill): Maxon is written by AI agents, for whom
+  a deterministic one-round-trip error is a feature, not friction; and dogfooding `E5001` on
+  the compiler's own code forces it within the Stage-5 self-compile budget instead of hiding
+  slow spills. The hybrid "spill + warn" was rejected (a warning gets ignored → hidden slow
+  code returns). Pure-B is also *simpler* (no greedy fallback, no hot-spill path).
+- **Corrections folded into the doc header:** ABI = the existing custom one (5 callee-saved
+  {rbx,r12-r15}, return R8, rsi/rdi caller-saved) — the doc body's "7 survive a call" / "pool
+  14" are wrong for it; the **specific register count is a tunable, not the crux** (E5001
+  exists at any count). **Make-or-break = eliminate FALSE `E5001`:** a skeptic confirmed the
+  design-as-written over-counts via a used-in-loop cardinality gate that double-counts
+  loop-carried copy pairs; the overflow decision must instead be the true per-point maxlive
+  (χ=ω) after biased coloring collapses copies — verified by the `AllocChecker`. Retire M4b's
+  `EliminatePhis` (consume `blockArgs`/`branchEdges` directly; SSA-destruction after coloring).
+
 ## Milestone ledger
 
 Checkboxes track landing against `PLAN.md`. Correctness-only gate through
