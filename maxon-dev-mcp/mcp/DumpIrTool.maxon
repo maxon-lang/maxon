@@ -3,7 +3,7 @@
 // produced .ir artifact(s) inline.
 //
 // Inputs (JSON):
-//   compiler: "csharp" | "selfhosted" | "shv2"  — which compiler to use (required)
+//   compiler: "csharp" | "shv2"  — which compiler to use (required)
 //   source: { kind: "file", path } | { kind: "snippet", code }
 //   dumpStages?: bool   — when true, also returns per-stage .N-maxon.ir files
 //                         (rejected for shv2, which emits none)
@@ -14,10 +14,10 @@
 // into the per-call `temp/` scratch dir, which is deleted once the tool
 // returns, so the snippet `path` is informational only.
 //
-// Asm emission and `-O` toggling were originally on the wish-list, but
-// neither the C# bootstrap nor the self-hosted compiler exposes them yet.
-// The shape of this tool intentionally tracks only the flags the compiler
-// actually supports today; adding asm/optimization is a straight extension.
+// Asm emission and `-O` toggling were originally on the wish-list, but neither
+// compiler exposes them yet. The shape of this tool intentionally tracks only the
+// flags the compiler actually supports today; adding asm/optimization is a straight
+// extension.
 
 // IR can be large (single-pass IR for a non-trivial file is easily 10s of
 // KB). Cap at 200 KiB per artifact so MCP clients don't get a megabyte of
@@ -29,7 +29,9 @@ let irMaxBytes = 204800
 let dumpIrTimeoutMs = 30000
 
 /// Entry point called by Server.maxon's dispatch table. The caller picks the
-/// compiler (`compiler` is required) and may set `dumpStages`.
+/// compiler (`compiler` is required) and may set `dumpStages`: resolve the source,
+/// locate that compiler's binary, run `build --emit-ir` (with `--dump-stages` when
+/// asked), and package the produced .ir artifact(s).
 export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
 	let compiler = try requiredCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {compilerArgErrorReason(err)}")
@@ -40,31 +42,16 @@ export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOu
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {unsupportedFlagReason(flag, compiler: compiler)}")
 	end 'unsupported'
 
-	return emitIr(argsDoc, argsId: argsId, toolName: "dump_ir", snippetPrefix: "dump-ir", compiler: compiler, dumpStages: dumpStages)
-end 'dumpIrHandler'
-
-/// Entry point for the `dump_stages` tool. Always uses the self-hosted
-/// compiler and always passes `--dump-stages`; the caller supplies only
-/// the source. Returns every stage artifact plus the final .ir.
-export function dumpStagesHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	return emitIr(argsDoc, argsId: argsId, toolName: "dump_stages", snippetPrefix: "dump-stages", compiler: Compiler.selfhosted, dumpStages: true)
-end 'dumpStagesHandler'
-
-// Shared body of `dump_ir` / `dump_stages`: resolve the source, locate the
-// chosen compiler binary, run `build --emit-ir` (with `--dump-stages` when
-// requested), and package the produced .ir artifact(s). `toolName` only colours
-// the error messages so each tool reports under its own name.
-function emitIr(argsDoc JsonDoc, argsId JsonNodeId, toolName String, snippetPrefix String, compiler Compiler, dumpStages bool) returns ToolOutcome
 	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome(toolName)
+		return repoRootErrorOutcome("dump_ir")
 	end 'noRoot'
-	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: snippetPrefix, repoRoot: repoRoot) otherwise (err) 'badSrc'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "{toolName}: {sourceArgErrorReason(err)}")
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "dump-ir", repoRoot: repoRoot) otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{toolName}: the {compiler.name} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler.name}\").")
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "dump_ir: the {compiler.name} compiler binary does not exist. Build it first via the `build` tool (target: \"{compiler.name}\").")
 	end 'noBin'
 
 	var argv = StringArray.create()
@@ -77,13 +64,13 @@ function emitIr(argsDoc JsonDoc, argsId JsonNodeId, toolName String, snippetPref
 
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: dumpIrTimeoutMs) otherwise (err) 'spawn'
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
-		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "{toolName}: {err.displayReason()}")
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "dump_ir: {err.displayReason()}")
 	end 'spawn'
 
 	let outcome = buildOutcome(mainFile, result: result, dumpStages: dumpStages)
 	cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 	return outcome
-end 'emitIr'
+end 'dumpIrHandler'
 
 // =============================================================================
 // Artifact collection

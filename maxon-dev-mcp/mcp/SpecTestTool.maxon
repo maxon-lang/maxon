@@ -4,12 +4,12 @@
 // memoryLeak}` output.
 //
 // Inputs (JSON):
-//   compiler?: "csharp" | "selfhosted" | "shv2"   (default "csharp")
+//   compiler?: "csharp" | "shv2"         (default "csharp")
 //   filter?: String                      → --filter=<pat>
 //   updateRequired?: bool                → --update-required
 //   log?: String                         → --log=<value>
 //   mmTrace?: bool                       → --mm-trace  (not shv2)
-//   target?: String                      → --target=<value> (self-hosted only)
+//   target?: String                      → --target=<value> (not shv2)
 //
 // `mmTrace` and `target` are REJECTED for shv2 rather than dropped — see
 // `checkSpecTestFlags` in Compilers.maxon.
@@ -22,9 +22,9 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias TestCount = int(0 to u64.max)
 
-// Spec runs can take a while when nothing is filtered: a full self-hosted
-// run is ~30s today, but cold-cache compiles can spike past that. 10 min
-// timeout gives plenty of head room without making a runaway run silent.
+// Spec runs can take a while when nothing is filtered: a full bootstrap run is
+// ~30s today, but cold-cache compiles can spike past that. 10 min timeout gives
+// plenty of head room without making a runaway run silent.
 let defaultSpecTestTimeoutMs = 600000
 
 // `rawTail` cap: enough to include the summary plus a handful of failure
@@ -42,17 +42,6 @@ export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Tool
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {compilerArgErrorReason(err)}")
 	end 'badCompiler'
 
-	return specTestWith(compiler, argsDoc: argsDoc, argsId: argsId)
-end 'specTestHandler'
-
-/// Self-hosted variant exposed as its own MCP tool so clients can discover
-/// it without knowing about the `compiler` argument. Delegates to the same
-/// machinery as `specTestHandler` with `compiler` pinned to "selfhosted".
-export function selfHostedSpecTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	return specTestWith(Compiler.selfhosted, argsDoc: argsDoc, argsId: argsId)
-end 'selfHostedSpecTestHandler'
-
-function specTestWith(compiler Compiler, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
 	// Refuse a flag this compiler cannot honour BEFORE spawning it, so the caller
 	// gets "shv2 has no --mm-trace" rather than a compiler usage dump.
 	try checkSpecTestFlags(argsDoc, argsId: argsId, compiler: compiler) otherwise (flag) 'unsupported'
@@ -75,7 +64,7 @@ function specTestWith(compiler Compiler, argsDoc JsonDoc, argsId JsonNodeId) ret
 	let elapsed = Clock.elapsedMs(timing)
 
 	return buildOutcome(compiler, command: displayCommand, result: result, durationMs: elapsed)
-end 'specTestWith'
+end 'specTestHandler'
 
 // =============================================================================
 // Argument parsing
@@ -154,21 +143,20 @@ type SpecSummary
 	end 'withCounts'
 end 'SpecSummary'
 
-// Parse the runner's final summary line. The v1 compilers and shv2 report in
-// different shapes, so the compiler picks the parser.
+// Parse the runner's final summary line. The two runners report in different
+// shapes, so the compiler picks the parser.
 function parseSummary(combined String, compiler Compiler) returns SpecSummary
-	if compiler == Compiler.shv2 'shv2'
-		return parseShv2Summary(combined)
-	end 'shv2'
-
-	return parseV1Summary(combined)
+	return match compiler 'pick'
+		csharp gives parseBootstrapSummary(combined)
+		shv2 gives parseShv2Summary(combined)
+	end 'pick'
 end 'parseSummary'
 
-// The v1 runners' summary. Two shapes are accepted:
-//   `[TST] Tests: 39 passed (total: 39) in 1126ms`    (C# bootstrap)
-//   `[TST] INFO: Tests: 19 passed (total: 19) in 1547ms`  (self-hosted)
-// Returns a zero-filled struct with `parsed: false` if neither is found.
-function parseV1Summary(combined String) returns SpecSummary
+// The C# bootstrap runner's summary: `[TST] Tests: 39 passed (total: 39) in
+// 1126ms`. Located by the `Tests: ` marker, so an optional severity prefix
+// (`[TST] INFO: ...`) parses identically. Returns a zero-filled struct with
+// `parsed: false` if the marker is absent.
+function parseBootstrapSummary(combined String) returns SpecSummary
 	let bytes = combined.toByteArray()
 	let marker = "Tests: "
 	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noTests'
@@ -178,7 +166,7 @@ function parseV1Summary(combined String) returns SpecSummary
 	let lineEnd = findEndOfLine(bytes, from: lineStart)
 	let line = sliceBytes(bytes, from: lineStart, until: lineEnd)
 	return parseSummaryLine(line)
-end 'parseV1Summary'
+end 'parseBootstrapSummary'
 
 // shv2's runner closes with a bare `83 passed, 0 failed` — no `[TST]` prefix, no
 // total, no wall-clock. Scanned from the END of the output: a FAILING test's reason

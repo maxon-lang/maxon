@@ -1,19 +1,20 @@
 // `build` MCP tool. Invokes the canonical Maxon build commands so MCP clients can
-// drive `dotnet build`, `./bin/maxon build maxon-selfhosted`, and `./bin/maxon
-// build maxon-shv2` through one structured tool call — no more re-deriving the
-// commands each session.
+// drive `dotnet build` and `./bin/maxon build maxon-shv2` through one structured
+// tool call — no more re-deriving the commands each session.
 //
-// `target` names either one compiler or a chain: `both` = csharp then selfhosted,
-// `all` = csharp, selfhosted, then shv2. A chain stops at the first FAILED build.
+// `target` names exactly ONE compiler. The old `both` / `all` chains existed to
+// sequence the bootstrap ahead of the deprecated v1 self-hosted compiler; with two
+// compilers left, a caller who wants both makes two calls and sees each verdict on
+// its own, rather than a chain that silently stops at the first failure.
 
 // Local byte alias — kept file-private so byte arithmetic in the error
 // parsers below doesn't have to qualify Util's exported aliases.
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
-// Default per-target timeout: 5 minutes. dotnet build on a clean cache plus
-// the self-hosted bootstrap can take a couple of minutes each, so a 5-minute
-// ceiling per step is generous but not infinite.
+// Default per-target timeout: 5 minutes. dotnet build on a clean cache plus the
+// bootstrapped shv2 build can take a couple of minutes each, so a 5-minute ceiling
+// is generous but not infinite.
 let defaultBuildTimeoutMs = 300000
 
 // Tail of captured output we surface in `rawTail`. Long enough to include
@@ -21,142 +22,54 @@ let defaultBuildTimeoutMs = 300000
 // the MCP response. ~4 KiB.
 let rawTailMaxBytes = 4096
 
-// The two multi-compiler `target` values. `both` keeps its established meaning
-// (csharp then selfhosted); `all` extends the chain to shv2. Named rather than
-// spelled inline because `buildTargetTokens` renders them into the schema and into
-// the "unknown target" message, and those must not drift from what `buildStepsFor`
-// actually accepts.
-let BothTarget = "both"
-let AllTarget = "all"
-
 /// Entry point called by Server.maxon's dispatch table.
 export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
 	let target = try argsDoc.getString(argsId, key: "target") otherwise 'noTarget'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of {buildTargetList()})")
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of {compilerChoiceList()})")
 	end 'noTarget'
 
-	let steps = try buildStepsFor(target) otherwise 'unknownTarget'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: unknown target `{target}` (expected {buildTargetList()})")
+	let compiler = try compilerFromToken(target) otherwise 'unknownTarget'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: unknown target `{target}` (expected {compilerChoiceList()})")
 	end 'unknownTarget'
 
 	let repoRoot = try repoRootPath() otherwise 'noRoot'
 		return repoRootErrorOutcome("build")
 	end 'noRoot'
 
-	let lastStep = steps.count() - 1
-	for (iter, compiler) in steps.withIterator() 'chain'
-		let step = runBuildStep(repoRoot, compiler: compiler)
-
-		// Stop at the first FAILED build, and report it — every later step is built
-		// BY the compiler this step was supposed to produce, so continuing would
-		// compile the next one with the stale binary left over from a previous run
-		// and report that as a success.
-		if not step.succeeded 'failed'
-			return step.outcome
-		end 'failed'
-
-		if iter.index() == lastStep 'chainComplete'
-			return step.outcome
-		end 'chainComplete'
-	end 'chain'
-
-	panic("buildToolHandler: buildStepsFor('{target}') returned an empty chain")
+	return match compiler 'pick'
+		csharp gives runCsharpBuild(repoRoot)
+		shv2 gives runBootstrappedBuild(repoRoot, compiler: compiler, project: "maxon-shv2")
+	end 'pick'
 end 'buildToolHandler'
-
-/// The build steps a `target` token selects, in the order they must run.
-function buildStepsFor(target String) returns CompilerArray throws CompilerArgError
-	var steps = CompilerArray.create()
-
-	if target.equals(BothTarget) or target.equals(AllTarget) 'chained'
-		steps.push(Compiler.csharp)
-		steps.push(Compiler.selfhosted)
-
-		if target.equals(AllTarget) 'includeShv2'
-			steps.push(Compiler.shv2)
-		end 'includeShv2'
-
-		return steps
-	end 'chained'
-
-	steps.push(try compilerFromToken(target))
-	return steps
-end 'buildStepsFor'
-
-// `"csharp" | "selfhosted" | "shv2" | "both" | "all"` — every accepted `target`,
-// for the schema and the rejection message.
-function buildTargetList() returns String
-	var out = compilerChoiceList()
-	out.append(" | \"{BothTarget}\" | \"{AllTarget}\"")
-	return out
-end 'buildTargetList'
-
-/// The accepted `target` tokens as a list, for the JSON-Schema `enum`.
-export function buildTargetTokens() returns StringArray
-	var tokens = compilerTokens()
-	tokens.push(BothTarget)
-	tokens.push(AllTarget)
-	return tokens
-end 'buildTargetTokens'
 
 // =============================================================================
 // Build steps
 // =============================================================================
 
-// One step of a build chain: the JSON envelope to hand back, plus whether the
-// build it describes actually SUCCEEDED.
-//
-// Those are NOT the same thing, and conflating them was a live bug. A failed
-// compile still produces a perfectly well-formed envelope — exit code 2, a
-// populated `errors` array, and `ToolOutcome.success`, because the tool call itself
-// worked fine. `both` matched on the ToolOutcome alone, so a C# bootstrap that
-// failed to compile still let the self-hosted build proceed, against the stale
-// `bin/maxon.exe` from the previous run.
-type BuildStep
-	export let outcome as ToolOutcome
-	export let succeeded as bool
-
-	export static function create(outcome ToolOutcome, succeeded bool) returns BuildStep
-		return Self{outcome: outcome, succeeded: succeeded}
-	end 'create'
-
-	// A step that never got as far as an exit code (spawn failure, timeout, or a
-	// missing prerequisite): there is no build envelope to report, only the error.
-	export static function aborted(outcome ToolOutcome) returns BuildStep
-		return Self{outcome: outcome, succeeded: false}
-	end 'aborted'
-end 'BuildStep'
-
-function runBuildStep(repoRoot FilePath, compiler Compiler) returns BuildStep
-	return match compiler 'pick'
-		csharp gives runCsharpBuild(repoRoot)
-		selfhosted gives runBootstrappedBuild(repoRoot, compiler: compiler, project: "maxon-selfhosted")
-		shv2 gives runBootstrappedBuild(repoRoot, compiler: compiler, project: "maxon-shv2")
-	end 'pick'
-end 'runBuildStep'
-
 // The C# bootstrap is the one compiler not built by a Maxon compiler — MSBuild
 // builds it, from `maxon-sharp/`.
-function runCsharpBuild(repoRoot FilePath) returns BuildStep
+function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
 	let cwd = childPath(repoRoot, segment: "maxon-sharp")
 	let timing = Clock.nowMs()
 	var argv = StringArray.create()
 	argv.push("build")
 	let result = try Subprocess.run(Executable.name("dotnet"), arguments: argv, workingDirectory: cwd, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return BuildStep.aborted(subprocessErrorOutcome("csharp", err: err, durationMs: Clock.elapsedMs(timing)))
+		return subprocessErrorOutcome("csharp", err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
 	let binaryPath = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
-	return BuildStep.create(buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath), succeeded: result.succeeded())
+	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runCsharpBuild'
 
-// `selfhosted` and `shv2` are both compiled BY the C# bootstrap from a project
-// directory — same command, same prerequisite, same failure modes. Only the project
-// name and the binary it should leave behind differ, so they share one body.
-function runBootstrappedBuild(repoRoot FilePath, compiler Compiler, project String) returns BuildStep
+// shv2 is compiled BY the C# bootstrap from its project directory. Kept as its own
+// function (rather than folded into the dispatch above) because the prerequisite
+// check — the bootstrap binary must already exist — belongs with the command that
+// needs it, and any future bootstrapped compiler builds the same way.
+function runBootstrappedBuild(repoRoot FilePath, compiler Compiler, project String) returns ToolOutcome
 	let csharpBinary = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
 	if not File.exists(csharpBinary) 'noCsharp'
-		return BuildStep.aborted(ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build {compiler.name}: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp."))
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build {compiler.name}: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
 	end 'noCsharp'
 
 	let timing = Clock.nowMs()
@@ -164,20 +77,20 @@ function runBootstrappedBuild(repoRoot FilePath, compiler Compiler, project Stri
 	argv.push("build")
 	argv.push(project)
 	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return BuildStep.aborted(subprocessErrorOutcome(compiler.name, err: err, durationMs: Clock.elapsedMs(timing)))
+		return subprocessErrorOutcome(compiler.name, err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
 	let binaryPath = compilerBinaryPath(repoRoot, compiler: compiler)
-	return BuildStep.create(buildOutcome(compiler.name, result: result, durationMs: elapsed, expectedBinary: binaryPath), succeeded: result.succeeded())
+	return buildOutcome(compiler.name, result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runBootstrappedBuild'
 
 // =============================================================================
 // Outcome construction
 // =============================================================================
 
-// Build the success/error JSON envelope for one build invocation. Shared
-// between csharp and selfhosted because the shape is identical.
+// Build the success/error JSON envelope for one build invocation. Shared by every
+// target because the shape is identical.
 function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath) returns ToolOutcome
 	var doc = JsonDoc.create()
 	let targetId = doc.add(JsonNode.stringNode(target))

@@ -1,11 +1,18 @@
 // The compilers this server can drive, where their binaries live, and — the part
 // that actually matters — what each one can and cannot be asked to do.
 //
-// Three compilers now live in this repo and they do NOT share a command line:
+// Two compilers are driveable and they do NOT share a command line:
 //
-//   csharp      the C# bootstrap (maxon-sharp), built by `dotnet build`
-//   selfhosted  the v1 self-hosted compiler, built by the bootstrap
-//   shv2        the ground-up rewrite, built by the bootstrap
+//   csharp  the C# bootstrap (maxon-sharp), built by `dotnet build`
+//   shv2    the ground-up rewrite, built by the bootstrap
+//
+// The v1 self-hosted compiler (maxon-selfhosted) is DEPRECATED and no longer
+// driveable from here — no `selfhosted` token, no build target, no spec-test
+// runner. Its source tree remains in the checkout, and `lookup_error_code` still
+// reads `maxon-selfhosted/Compiler/ErrorCode.maxon`: that is a data read of the
+// only complete 4-digit registry (shv2's Diagnostics.maxon carries a deliberately
+// thin subset, and the bootstrap's ErrorCode.cs has no per-code doc comments), not
+// an invocation of the compiler.
 //
 // shv2's spec-test runner implements `--filter`, `--update-required`, and `--log`,
 // and NOTHING else: no `--mm-trace`, no `--target`, no `--verbose`. Its driver has
@@ -19,11 +26,8 @@
 /// messages are all derived from this one list and cannot drift apart.
 export enum Compiler
 	csharp
-	selfhosted
 	shv2
 end 'Compiler'
-
-export typealias CompilerArray = Array with Compiler
 
 /// Why a `compiler` argument was rejected. `missing` => the key was absent
 /// entirely; `unrecognized` => a value was given but it names no compiler we
@@ -61,7 +65,7 @@ export function compilerTokens() returns StringArray
 	return tokens
 end 'compilerTokens'
 
-/// The token list rendered for prose: `"csharp" | "selfhosted" | "shv2"`. Spliced
+/// The token list rendered for prose: `"csharp" | "shv2"`. Spliced
 /// into schema descriptions and into every compiler-argument error message, so a
 /// rejected call names exactly the values that would have been accepted.
 export function compilerChoiceList() returns String
@@ -83,7 +87,7 @@ export function compilerFromToken(raw String) returns Compiler throws CompilerAr
 end 'compilerFromToken'
 
 /// Read a `compiler` argument the tool cannot proceed without. `run_program` and
-/// `dump_ir` force an explicit choice rather than defaulting: the three compilers
+/// `dump_ir` force an explicit choice rather than defaulting: the two compilers
 /// disagree — that is the whole reason to have more than one — so a silent default
 /// would answer a question the caller never asked.
 export function requiredCompiler(argsDoc JsonDoc, argsId JsonNodeId) returns Compiler throws CompilerArgError
@@ -137,7 +141,6 @@ export function compilerBinaryPath(repoRoot FilePath, compiler Compiler) returns
 	let suffix = exeSuffix()
 	let relative = match compiler 'pick'
 		csharp gives "bin/maxon{suffix}"
-		selfhosted gives "maxon-selfhosted/.maxon/maxon-selfhosted{suffix}"
 		shv2 gives "maxon-shv2/.maxon/maxon-shv2{suffix}"
 	end 'pick'
 
@@ -160,10 +163,14 @@ end 'compilerBinary'
 // =============================================================================
 
 /// Does this compiler's spec-test runner print a line per test only when asked?
-/// The v1 runners stay quiet without `--verbose`; shv2's always reports every
-/// verdict and rejects the flag outright.
+/// The bootstrap's runner stays quiet without `--verbose`; shv2's always reports
+/// every verdict and rejects the flag outright. Matched rather than compared so a
+/// third compiler cannot be added without answering the question.
 export function specTestNeedsVerbose(compiler Compiler) returns bool
-	return compiler != Compiler.shv2
+	return match compiler 'pick'
+		csharp gives true
+		shv2 gives false
+	end 'pick'
 end 'specTestNeedsVerbose'
 
 /// Reject the spec-test flags the chosen compiler cannot honour, BEFORE spawning

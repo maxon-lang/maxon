@@ -4,7 +4,7 @@
 // without re-scraping the rawTail itself.
 //
 // The two runners report differently and each gets its own parser:
-//   v1 (csharp, selfhosted): needs `--verbose` to print a line per test, emits
+//   csharp: needs `--verbose` to print a line per test, emits
 //     `[TST] [W1] [PASS] spec/test (820ms)`, and groups failures into
 //     `[TST] [FAIL] <spec> (P/T)` blocks.
 //   shv2: always prints every verdict (it has no `--verbose` and rejects the
@@ -13,8 +13,8 @@
 //
 // Inputs (JSON):
 //   filter: String          — required; passed to `--filter=<filter>`
-//   compiler?: "csharp" | "selfhosted" | "shv2"   (default "csharp")
-//   target?: String         — passed to `--target=<value>` (self-hosted only)
+//   compiler?: "csharp" | "shv2"   (default "csharp")
+//   target?: String         — passed to `--target=<value>` (not shv2)
 //
 // Output (JSON):
 //   compiler, filter, total, passed, failed, durationMs, memoryLeak,
@@ -56,7 +56,7 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 	argv.push("--filter={filter}")
 
 	// shv2 reports every verdict unconditionally and rejects `--verbose` outright;
-	// the v1 runners stay silent without it.
+	// the bootstrap runner stays silent without it.
 	if specTestNeedsVerbose(compiler) 'needsVerbose'
 		argv.push("--verbose")
 	end 'needsVerbose'
@@ -94,11 +94,10 @@ type SpecReport
 end 'SpecReport'
 
 function parseReport(combined String, compiler Compiler) returns SpecReport
-	if compiler == Compiler.shv2 'shv2'
-		return parseShv2Report(combined)
-	end 'shv2'
-
-	return SpecReport.create(parseTests(combined), failures: parseFailureBlocks(combined))
+	return match compiler 'pick'
+		csharp gives SpecReport.create(parseTests(combined), failures: parseFailureBlocks(combined))
+		shv2 gives parseShv2Report(combined)
+	end 'pick'
 end 'parseReport'
 
 // =============================================================================

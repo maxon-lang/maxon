@@ -6,31 +6,31 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 
 ## maxon-dev MCP tools (PREFER THESE)
 
-When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` or `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` should only be used when no MCP tool covers the case.
+When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` should only be used when no MCP tool covers the case.
 
-Three compilers live in this repo, and every tool that drives one takes a `compiler`
-(or `target`) naming which: `"csharp"` (the C# bootstrap), `"selfhosted"` (v1), or
-`"shv2"` (the ground-up rewrite, whose suite is `specs-shv2`).
+Two compilers are driveable, and every tool that drives one takes a `compiler`
+(or `target`) naming which: `"csharp"` (the C# bootstrap) or `"shv2"` (the
+ground-up rewrite, whose suite is `specs-shv2`). **The v1 self-hosted compiler
+(`maxon-selfhosted`) is DEPRECATED and no longer reachable from the MCP** — no
+`selfhosted` token, no build target, no spec-test runner. Drive it by hand if you
+must (see Building and Testing below).
 
 | Task | Use this tool |
 |------|---------------|
 | Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
-| Build the self-hosted compiler | `mcp__maxon-dev__build` with `target: "selfhosted"` |
-| Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` |
-| Build csharp then selfhosted | `mcp__maxon-dev__build` with `target: "both"` |
-| Build all three, in order | `mcp__maxon-dev__build` with `target: "all"` |
+| Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` (built BY the bootstrap — build `csharp` first if it is stale) |
 | Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
 | Gate compile-time + memory SCALING (shv2) | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
-| Run self-hosted spec tests | `mcp__maxon-dev__run_self_hosted_test` |
-| Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; any compiler) |
+| Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; either compiler) |
 | Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler`) |
-| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler`; `dumpStages: true` for stage-by-stage artifacts — not shv2) |
-| Dump all per-stage IR (self-hosted) | `mcp__maxon-dev__dump_stages` (self-hosted, always emits every stage artifact + the final `.ir`) |
+| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler`; `dumpStages: true` for stage-by-stage artifacts — csharp only) |
 | Format a Maxon file or snippet | `mcp__maxon-dev__fmt` (csharp `maxon fmt`) |
 | Look up a 4-digit error code | `mcp__maxon-dev__lookup_error_code` |
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
 
-Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test detail. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`.
+`build` takes ONE compiler per call — the old `both` / `all` chains sequenced the bootstrap ahead of the retired self-hosted compiler and are gone.
+
+Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test` or use `spec_test_outcome` for per-test detail. `target` cross-compiles to what the CHOSEN compiler can emit — the bootstrap has x64 and arm64 emitters (`"x64-windows"`, `"arm64-macos"`), and shv2 rejects the flag outright. **The wasm backend was only ever in `maxon-selfhosted`, so `target: "wasm32-wasi"` is no longer reachable through the MCP** — run it by hand against that compiler's binary if you need it.
 
 ### `run_scale_test` — the scaling gate (shv2 only)
 
@@ -57,7 +57,7 @@ There is **no `maxon clean` command** — it prints usage and exits 1. To force 
 
 ## Building and Testing
 
-Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-selfhosted.exe`, Linux and macOS produce `maxon` / `maxon-selfhosted` (no extension). Commands below show the Windows form; drop the `.exe` on Linux/macOS.
+Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-shv2.exe`, Linux and macOS produce `maxon` / `maxon-shv2` (no extension). Commands below show the Windows form; drop the `.exe` on Linux/macOS.
 
 ### C# bootstrap compiler (maxon-sharp)
 
@@ -66,7 +66,16 @@ Binary names differ by host OS: Windows produces `maxon.exe` / `maxon-selfhosted
 
 The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux/macOS).
 
-### Self-hosted compiler (maxon-selfhosted)
+### shv2 compiler (maxon-shv2)
+
+- **Build:** `./bin/maxon.exe build maxon-shv2` (requires C# compiler already built)
+- **Spec tests:** `./maxon-shv2/.maxon/maxon-shv2.exe spec-test` (the `specs-shv2` suite)
+
+The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
+
+### Self-hosted compiler (maxon-selfhosted) — DEPRECATED
+
+Not driveable from the `maxon-dev` MCP any more. The source tree is still in the checkout and still builds, so drive it by hand when you need something only it has (notably the wasm backend, and the complete 4-digit `ErrorCode.maxon` registry that `lookup_error_code` reads):
 
 - **Build:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
 - **Spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
@@ -79,7 +88,7 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--update-required` — regenerate RequiredIR blocks
 - `--log=CATEGORY:LEVEL` — enable detailed logging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)
-- `--target=ARCH-OS` — test a specific target (self-hosted only, e.g. `x64-windows`, `arm64-macos`, `wasm32-wasi`)
+- `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`; `wasm32-wasi` is self-hosted only)
 
 Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
 

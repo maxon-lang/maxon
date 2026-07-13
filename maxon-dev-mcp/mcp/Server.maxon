@@ -191,20 +191,14 @@ function toolSchema(doc JsonDoc, name String) returns JsonNodeId
 		return schemaForLookupErrorCode(doc)
 	end 'lec'
 	if name.equals("dump_ir") 'di'
-		return schemaForSourceOnly(doc, withDumpStages: true, withCompiler: true)
+		return schemaForDumpIr(doc)
 	end 'di'
-	if name.equals("dump_stages") 'ds'
-		return schemaForSourceOnly(doc, withDumpStages: false, withCompiler: false)
-	end 'ds'
 	if name.equals("run_program") 'rp'
 		return schemaForRunProgram(doc)
 	end 'rp'
 	if name.equals("fmt") 'fm'
-		return schemaForSourceOnly(doc, withDumpStages: false, withCompiler: false)
+		return schemaForFmt(doc)
 	end 'fm'
-	if name.equals("run_self_hosted_test") 'rsht'
-		return schemaForSelfHostedSpecTest(doc)
-	end 'rsht'
 	if name.equals("spec_test_outcome") 'sto'
 		return schemaForSpecTestOutcome(doc)
 	end 'sto'
@@ -224,7 +218,7 @@ end 'toolSchema'
 // -----------------------------------------------------------------------------
 //
 // NO `compiler` FIELD. Only shv2 has a `scale-test` command, so the tool is fixed to it — exactly
-// as `dump_stages` is fixed to selfhosted. Offering the field would invite `compiler: "csharp"`
+// as `fmt` is fixed to the C# bootstrap. Offering the field would invite `compiler: "csharp"`
 // and answer it with a usage dump; see Compilers.maxon's header on never handing a compiler a flag
 // it has never heard of.
 function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
@@ -256,22 +250,22 @@ end 'schemaEmptyObject'
 // build
 // -----------------------------------------------------------------------------
 function schemaForBuild(doc JsonDoc) returns JsonNodeId
-	let targetSchema = schemaStringEnum(doc, choices: buildTargetTokens(), description: "Which compiler to build. `both` chains csharp then selfhosted; `all` adds shv2. A chain stops at the first failed build.")
+	let targetSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build. One per call: csharp is built by `dotnet build`; shv2 is built BY the csharp bootstrap, so build csharp first if it is stale.")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
 	return schemaObject(doc, fields: fields, description: "Build the Maxon compiler.")
 end 'schemaForBuild'
 
 // -----------------------------------------------------------------------------
-// run_spec_test (and self-hosted alias)
+// run_spec_test
 // -----------------------------------------------------------------------------
 function schemaForRunSpecTest(doc JsonDoc) returns JsonNodeId
 	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler's spec-test runner to invoke. Default csharp. `shv2` runs the specs-shv2 suite.")
 	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>; matches test names. For shv2 it is a substring of the `<spec>/<test>` label.")
-	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks (csharp/selfhosted) or the committed .test goldens (shv2) in place. Pair it with `filter` — unfiltered, it rewrites the whole suite.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks (csharp) or the committed .test goldens (shv2) in place. Pair it with `filter` — unfiltered, it rewrites the whole suite.")
 	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
 	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output. Not supported by shv2.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (self-hosted only; not supported by shv2). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
@@ -282,29 +276,13 @@ function schemaForRunSpecTest(doc JsonDoc) returns JsonNodeId
 	return schemaObject(doc, fields: fields, description: "Run the spec-test suite and return structured pass/fail counts.")
 end 'schemaForRunSpecTest'
 
-function schemaForSelfHostedSpecTest(doc JsonDoc) returns JsonNodeId
-	// Same shape as run_spec_test minus the `compiler` field — fixed to selfhosted.
-	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>.")
-	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required.")
-	let logSchema = schemaString(doc, description: "Optional logging spec.")
-	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value>. Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
-	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
-	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
-	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
-	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Run the self-hosted compiler's spec-test suite.")
-end 'schemaForSelfHostedSpecTest'
-
 // -----------------------------------------------------------------------------
 // spec_test_outcome
 // -----------------------------------------------------------------------------
 function schemaForSpecTestOutcome(doc JsonDoc) returns JsonNodeId
 	let filterSchema = schemaString(doc, description: "Pattern passed to --filter=<pattern>. Typically a single test name like `arithmetic/addition`.")
 	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler. Default csharp.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (self-hosted only; not supported by shv2). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
@@ -330,21 +308,26 @@ end 'schemaForLookupErrorCode'
 // -----------------------------------------------------------------------------
 // dump_ir / fmt — both take a `source` block; dump_ir adds compiler + dumpStages
 // -----------------------------------------------------------------------------
-function schemaForSourceOnly(doc JsonDoc, withDumpStages bool, withCompiler bool) returns JsonNodeId
-	var fields = SchemaFieldArray.create()
-	if withCompiler 'comp'
-		let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build with. Required — there is no default.")
-		fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
-	end 'comp'
+function schemaForDumpIr(doc JsonDoc) returns JsonNodeId
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build with. Required — there is no default.")
 	let sourceSchema = schemaSource(doc)
+	let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.). Not supported by shv2.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
 	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
-	if withDumpStages 'stages'
-		let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.). Not supported by shv2.")
-		fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
-	end 'stages'
-	let description = "Compile a Maxon source with the chosen compiler and emit IR." if withDumpStages else "Format a Maxon source: either a file/project or an inline snippet."
-	return schemaObject(doc, fields: fields, description: description)
-end 'schemaForSourceOnly'
+	fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Compile a Maxon source with the chosen compiler and emit IR.")
+end 'schemaForDumpIr'
+
+// NO `compiler` FIELD — `maxon fmt` is a C# bootstrap command and shv2 has no
+// formatter, so the tool is fixed to the bootstrap rather than offering a choice
+// one of the two answers with a usage dump.
+function schemaForFmt(doc JsonDoc) returns JsonNodeId
+	let sourceSchema = schemaSource(doc)
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	return schemaObject(doc, fields: fields, description: "Format a Maxon source: either a file/project or an inline snippet.")
+end 'schemaForFmt'
 
 // -----------------------------------------------------------------------------
 // run_program
@@ -384,7 +367,7 @@ end 'schemaForMmTraceAnalyze'
 
 function toolDescription(name String) returns String
 	if name.equals("build") 'b'
-		return "Build a Maxon compiler. Target is csharp | selfhosted | shv2 | both (csharp then selfhosted) | all (adds shv2)."
+		return "Build a Maxon compiler. Target is csharp (the bootstrap, via dotnet build) or shv2 (built by the bootstrap). One compiler per call."
 	end 'b'
 	if name.equals("run_spec_test") 'rst'
 		return "Run a Maxon spec-test suite, optionally filtered, returning structured pass/fail counts. compiler=shv2 runs the specs-shv2 suite."
@@ -393,22 +376,16 @@ function toolDescription(name String) returns String
 		return "Look up a 4-digit Maxon error code (e.g. E3014) by its numeric value, returning the source-of-truth doc comment and the spec files that exercise it."
 	end 'lec'
 	if name.equals("dump_ir") 'di'
-		return "Compile a snippet or file with --emit-ir using the chosen compiler (csharp | selfhosted | shv2) and return the resulting .ir text (optionally per-stage when dumpStages=true; shv2 emits no stages)."
+		return "Compile a snippet or file with --emit-ir using the chosen compiler (csharp | shv2) and return the resulting .ir text (optionally per-stage when dumpStages=true; shv2 emits no stages)."
 	end 'di'
-	if name.equals("dump_stages") 'ds'
-		return "Compile a snippet or file with the self-hosted compiler using --dump-stages and return all per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.) plus the final .ir."
-	end 'ds'
 	if name.equals("run_program") 'rp'
-		return "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | selfhosted | shv2), returning build + run exit codes, durations, and stdout/stderr."
+		return "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | shv2), returning build + run exit codes, durations, and stdout/stderr."
 	end 'rp'
 	if name.equals("fmt") 'fm'
-		return "Format a Maxon snippet or file via `maxon fmt`. Files are formatted in-place; snippets return the formatted text."
+		return "Format a Maxon snippet or file via `maxon fmt` (C# bootstrap). Files are formatted in-place; snippets return the formatted text."
 	end 'fm'
-	if name.equals("run_self_hosted_test") 'rsht'
-		return "Run the self-hosted compiler's spec-test suite (equivalent to run_spec_test with compiler=selfhosted)."
-	end 'rsht'
 	if name.equals("spec_test_outcome") 'sto'
-		return "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a per-spec failure summary. Works against csharp, selfhosted, or shv2."
+		return "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a per-spec failure summary. Works against csharp or shv2."
 	end 'sto'
 	if name.equals("mm_trace_analyze") 'mta'
 		return "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
@@ -478,18 +455,12 @@ function invokeTool(name String, argsDoc JsonDoc, argsId JsonNodeId) returns Too
 	if name.equals("dump_ir") 'di'
 		return dumpIrHandler(argsDoc, argsId: argsId)
 	end 'di'
-	if name.equals("dump_stages") 'ds'
-		return dumpStagesHandler(argsDoc, argsId: argsId)
-	end 'ds'
 	if name.equals("run_program") 'rp'
 		return runProgramHandler(argsDoc, argsId: argsId)
 	end 'rp'
 	if name.equals("fmt") 'fm'
 		return fmtHandler(argsDoc, argsId: argsId)
 	end 'fm'
-	if name.equals("run_self_hosted_test") 'rsht'
-		return selfHostedSpecTestHandler(argsDoc, argsId: argsId)
-	end 'rsht'
 	if name.equals("spec_test_outcome") 'sto'
 		return specOutcomeHandler(argsDoc, argsId: argsId)
 	end 'sto'
@@ -595,20 +566,10 @@ function toolRegistry() returns ToolNameArray
 	names.push("run_spec_test")
 	names.push("lookup_error_code")
 	names.push("dump_ir")
-	names.push("dump_stages")
 	names.push("run_program")
 	names.push("fmt")
-	names.push("run_self_hosted_test")
 	names.push("spec_test_outcome")
 	names.push("mm_trace_analyze")
 	names.push("run_scale_test")
 	return names
 end 'toolRegistry'
-
-// Phase 1 placeholder. Each tool returns a structured "not implemented"
-// error so the wire protocol round-trip can be verified without Phase 2's
-// machinery in place yet.
-function notYetImplemented(doc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let argsNode = doc.get(argsId)
-	return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "tool not yet implemented (received args kind: {argsNode.kind.name})")
-end 'notYetImplemented'
