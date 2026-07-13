@@ -1,12 +1,13 @@
 // Test: clock.elapsed-nanos-after-sleep
 function main() returns ExitCode
+		let requestedNanos = 30000000
 		let start = Clock.nowNanos()
 		sleep(30)
 		let elapsed = Clock.elapsedNanos(start)
 		var score = 0
-		if elapsed > 5000000 'nanosecondScale'
+		if elapsed >= requestedNanos 'neverEarly'
 				score = score + 1
-		end 'nanosecondScale'
+		end 'neverEarly'
 		if elapsed < 10000000000 'bounded'
 				score = score + 1
 		end 'bounded'
@@ -30,11 +31,11 @@ module {
     x64.mov rcx, rbx
     x64.call Clock.elapsedNanos
     x64.xor r9d, r9d
-    x64.cmp r8, 5000000
-    x64.jle nanosecondScale_0.after
-  nanosecondScale_0:
+    x64.cmp r8, 30000000
+    x64.jl neverEarly_0.after
+  neverEarly_0:
     x64.add r9, 1
-  nanosecondScale_0.after:
+  neverEarly_0.after:
     x64.mov rsi, 10000000000
     x64.cmp r8, rsi
     x64.jge __phi_trampoline_2_0

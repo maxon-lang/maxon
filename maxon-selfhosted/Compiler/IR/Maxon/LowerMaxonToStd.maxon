@@ -844,10 +844,14 @@ function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable, asyn
 	// entries (16 bytes each, capacity 256) backing `maxon_sleep`, so a sleeping GT
 	// yields its thread to other GTs and wakes cooperatively. The two backends
 	// interpret it differently: x64-Windows is multi-threaded and uses a min-heap of
-	// ABSOLUTE GetTickCount64 deadlines, drained by `__gt_timer_check` (driven from
-	// the worker loop / `__gt_await` / the sleep park) under the `__gt_timer_cs`
-	// CRITICAL_SECTION. Single-threaded wasm uses a flat array of RELATIVE remaining
-	// milliseconds, decremented by `__sched_run`'s idle poll, and ignores the lock.
+	// ABSOLUTE MONOTONIC-NANOSECOND deadlines (`maxon_current_time_nanos`), drained by
+	// `__gt_timer_check` (driven from the worker loop / `__gt_await` / the sleep park)
+	// under the `__gt_timer_cs` CRITICAL_SECTION. Nanoseconds and not the coarse
+	// GetTickCount64 tick because a ~15.6 ms quantized deadline can expire BEFORE the
+	// requested duration has elapsed — that made `sleep(30)` return in 16 ms.
+	// Single-threaded wasm uses a flat array of RELATIVE remaining milliseconds,
+	// decremented by `__sched_run`'s idle poll, and ignores the lock; it never reads a
+	// clock, so it cannot fire early and needs no deadline unit.
 	// Reserved unconditionally so the .data layout is uniform across targets (the
 	// wasm runtime reads `__gt_timer_heap`/`__gt_timer_count` from linear memory too).
 	addDataSectionEntry(globalData, name: "__gt_timer_heap", initialBytes: zeroBytesOfSize(256 * 16))

@@ -581,11 +581,12 @@ public partial class RuntimeEmitter {
   // =========================================================================
   //
   // Stack slots:
-  //   0 = now_ms
+  //   0 = now_nanos
   //   1 = heap_base address
   //   2 = saved gt (to enqueue)
   //   3 = sift-down loop variable i
-  //   4,5 = scratch for timespec (ARM64 only, used by GetCurrentTimeMs)
+  //   4,5 = out-param buffer for GetCurrentTimeNanos (QPC ticks + QPF frequency
+  //         on Windows, struct timespec on POSIX -- two slots on both)
   //
   // Frame size: 0x50
   // =========================================================================
@@ -604,9 +605,12 @@ public partial class RuntimeEmitter {
     _b.LoadGlobal(VReg.Scratch0, "__gt_timer_count");
     _b.JumpIfZero(VReg.Scratch0, "__gt_timer_check_unlock");
 
-    // Get current time in ms
-    _b.GetCurrentTimeMs(VReg.Scratch0, 4);    // result in Scratch0, uses slots 4-5 on ARM64
-    _b.StoreLocal(0, VReg.Scratch0);          // save now_ms
+    // Deadlines are absolute nanoseconds (see GtLayout.TimerNanosPerMilli): read the
+    // same high-resolution clock maxon_sleep anchored them to. Reading the coarse tick
+    // here instead is what let a deadline compare "expired" up to 15.6 ms early.
+    // Only paid when the heap is non-empty -- the count==0 fast path returns above.
+    _b.GetCurrentTimeNanos(VReg.Scratch0, 4); // result in Scratch0, uses slots 4-5
+    _b.StoreLocal(0, VReg.Scratch0);          // save now_nanos
 
     // Cache heap base address
     _b.LeaGlobal(VReg.Scratch0, "__gt_timer_heap");
@@ -620,10 +624,10 @@ public partial class RuntimeEmitter {
     // Load heap[0].deadline
     _b.LoadLocal(VReg.Scratch0, 1);           // heap_base
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, TimerOffDeadline);
-    // Compare deadline vs now
-    _b.LoadLocal(VReg.Scratch2, 0);           // now_ms
+    // Compare deadline vs now (both absolute nanoseconds)
+    _b.LoadLocal(VReg.Scratch2, 0);           // now_nanos
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.JumpIf(Condition.Above, "__gt_timer_check_unlock"); // deadline > now
+    _b.JumpIf(Condition.Above, "__gt_timer_check_unlock"); // deadline > now -> not yet due
 
     // Save gt from heap[0]
     _b.LoadLocal(VReg.Scratch0, 1);
@@ -783,6 +787,11 @@ public partial class RuntimeEmitter {
 
   // =========================================================================
   // __gt_timer_add(gt, deadline): Add a GT to the timer min-heap.
+  //
+  // `deadline` is an absolute nanosecond instant on the monotonic clock (see
+  // GtLayout.TimerNanosPerMilli). This function only ever compares deadlines
+  // against each other for the sift-up, so it is agnostic to the unit -- but
+  // every caller must agree with __gt_timer_check on what it is.
   // =========================================================================
   //
   // Stack slots:

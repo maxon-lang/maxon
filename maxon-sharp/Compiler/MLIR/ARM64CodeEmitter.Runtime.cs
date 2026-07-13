@@ -33,7 +33,6 @@ public partial class ARM64CodeEmitter {
   private const int EVFILT_WRITE = -2;
   private const int EV_ADD = 0x0001;
   private const int EV_ONESHOT = 0x0010;
-  private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
 
   // Internal KqCtx filter for async connect completion (not a real kqueue filter)
   private const int KQCTX_CONNECT = -3;
@@ -6187,30 +6186,6 @@ public partial class ARM64CodeEmitter {
   }
 
   // ===========================================================================================
-  // Inline code-gen helpers (not standalone functions — emit instructions inline)
-  // ===========================================================================================
-
-  /// <summary>
-  /// Emit clock_gettime(CLOCK_UPTIME_RAW) and convert result to milliseconds.
-  /// Uses stack at [x29+timespecOffset] and [x29+timespecOffset+8] for the timespec struct.
-  /// Result: X2 = monotonic milliseconds. Clobbers X0, X1, X2, X3, X4.
-  /// </summary>
-  private void EmitClockGetTimeMs(int timespecOffset) {
-    EmitMovRegImm(ARM64Register.X0, CLOCK_UPTIME_RAW);
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, timespecOffset, isAdd: true);
-    EmitCallImport("clock_gettime");
-
-    // Convert timespec to ms: tv_sec * 1000 + tv_nsec / 1000000
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, timespecOffset, 8); // tv_sec
-    EmitMovRegImm(ARM64Register.X3, 1000);
-    EmitWord(0x9B037C42); // MUL X2, X2, X3
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, timespecOffset + 8, 8); // tv_nsec
-    EmitMovRegImm(ARM64Register.X3, 1000000);
-    EmitWord(0x9AC30884); // UDIV X4, X4, X3
-    EmitWord(0x8B040042); // ADD X2, X2, X4 → now_ms
-  }
-
-  // ===========================================================================================
   // Trivial runtime functions
   // ===========================================================================================
 
@@ -6237,20 +6212,27 @@ public partial class ARM64CodeEmitter {
 
   /// <summary>
   /// maxon_sleep(ms_x0): Suspends the current green thread for the given duration.
-  /// Uses clock_gettime(CLOCK_UPTIME_RAW) for monotonic millisecond timestamps.
-  /// Adds (deadline, gt) to the timer array, then yields.
+  /// Computes deadline = now_nanos + ms*1e6, adds (deadline, gt) to the timer heap,
+  /// then yields. __gt_timer_check re-enqueues the GT once the deadline has passed.
+  ///
+  /// The deadline is anchored to the monotonic HIGH-RESOLUTION clock (CLOCK_MONOTONIC via
+  /// maxon_current_time_nanos), matching __gt_timer_check. A coarse tick-derived deadline
+  /// could expire before `ms` of real time had elapsed -- see GtLayout.TimerNanosPerMilli.
   /// </summary>
   private void EmitMaxonSleep() {
     // Stack: [x29+16] = ms, [x29+24] = deadline, [x29+32] = dequeued GT
     EmitRuntimeFunctionStart("maxon_sleep", 1, 0x50);
 
-    // Get monotonic time in ms → X2
-    EmitClockGetTimeMs(40);
+    // deadline = maxon_current_time_nanos() + ms * 1e6. Calling the runtime function rather
+    // than re-emitting clock_gettime keeps this in lockstep with __gt_timer_check, which
+    // reads the clock through the same backend hook.
+    EmitBranchLink("maxon_current_time_nanos");
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X0); // X2 = now_nanos
 
-    // deadline = now_ms + sleep_ms
     EmitReloadArg(0); // X0 = ms
-    // ADD X0, X2, X0
-    EmitWord(0x8B000040);
+    EmitMovRegImm(ARM64Register.X3, TimerNanosPerMilli);
+    EmitWord(0x9B037C00); // MUL X0, X0, X3  → X0 = ms * 1e6
+    EmitWord(0x8B000040); // ADD X0, X2, X0  → X0 = now_nanos + ms*1e6
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save deadline
 
     // Set current GT status = waiting

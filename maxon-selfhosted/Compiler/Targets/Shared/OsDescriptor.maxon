@@ -52,6 +52,18 @@ let CLOCK_MONOTONIC_MACOS = 6
 // POSIX `timespec` fold, and the numerator of the Windows QPC tick scale.
 export let NANOS_PER_SECOND = 1000000000
 
+// Scale between `sleep(ms)`'s argument and the green-thread timer heap's deadline unit.
+//
+// Timer-heap deadlines are absolute NANOSECONDS on the monotonic high-resolution clock
+// (`maxon_current_time_nanos` -> `osClockNanos`), NOT the coarse OS tick. They used to be
+// GetTickCount64 milliseconds, and that made `sleep(N)` return EARLY: GetTickCount64 only
+// advances every ~15.6 ms, so `GetTickCount64() + N` is anchored to a tick edge that may
+// already lie up to a full tick in the past, and `__gt_timer_check` compares against the
+// same quantized counter — so the deadline could read "expired" before N ms of real time
+// had passed. `sleep(30)` was observed returning in 16 ms. A 15.6 ms error is invisible to
+// a 15.6 ms clock, which is why this survived until a nanosecond clock existed to see it.
+export let NANOS_PER_MILLISECOND = 1000000
+
 // `clock_gettime` syscall numbers (Linux only; macOS forbids raw syscalls).
 let CLOCK_GETTIME_SYSCALL_X64 = 228
 let CLOCK_GETTIME_SYSCALL_ARM64 = 113

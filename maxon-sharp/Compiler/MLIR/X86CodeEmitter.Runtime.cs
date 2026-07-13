@@ -3700,20 +3700,30 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_sleep(milliseconds): Suspends the current green thread for the given duration.
-  /// Uses the scheduler timer heap: computes deadline = GetTickCount64() + ms,
-  /// adds (deadline, gt) to the timer min-heap, then yields. The scheduler's
-  /// __gt_timer_check() re-enqueues the GT when the deadline expires.
+  /// Uses the scheduler timer heap: computes deadline = now_nanos + ms*1e6, adds
+  /// (deadline, gt) to the timer min-heap, then yields. The scheduler's
+  /// __gt_timer_check() re-enqueues the GT once the deadline has actually passed.
+  ///
+  /// The deadline is anchored to the monotonic HIGH-RESOLUTION clock, not GetTickCount64:
+  /// the coarse tick only advances every ~15.6 ms, so a tick-derived deadline could expire
+  /// a full tick before `ms` of real time had elapsed and sleep(30) would return in 16 ms.
+  /// See GtLayout.TimerNanosPerMilli.
+  ///
   /// Stack: [rbp-8]=milliseconds
   /// </summary>
   private void EmitSleep() {
     EmitRuntimeFunctionStart("maxon_sleep", 1, 0x30);
     // [rbp-0x08] = milliseconds, [rbp-0x10] = deadline, [rbp-0x18] = dequeued GT (mainthread path)
 
-    // deadline = GetTickCount64() + milliseconds
-    EmitCallImport("kernel32.dll", "GetTickCount64");
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // load ms
-    EmitAddRegReg(X86Register.Rax, X86Register.Rcx); // RAX = now + ms
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save deadline
+    // deadline = maxon_current_time_nanos() + milliseconds * 1e6.
+    // Calling the runtime function rather than re-emitting the QPC/QPF sequence keeps this
+    // in lockstep with __gt_timer_check, which reads the clock through the same backend hook.
+    EmitCallRuntimeLabel("maxon_current_time_nanos"); // RAX = now_nanos
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // RCX = ms
+    EmitMovRegImm(X86Register.Rdx, TimerNanosPerMilli);
+    EmitImulRegReg(X86Register.Rcx, X86Register.Rdx); // RCX = ms * 1e6
+    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);  // RAX = now_nanos + ms*1e6
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);         // save deadline
 
     // Set current GT status = waiting
     EmitLoadCurrentGtInline(X86Register.R10);

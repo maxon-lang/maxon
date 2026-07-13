@@ -168,6 +168,24 @@ public static class GtLayout {
   // ---- Per-P GT free-list cap (returned to mm_raw_alloc once exceeded) ----
   public const int MaxFreeListLen = 64;
 
+  // ---- Timer-heap deadline unit ----
+  // Timer-heap deadlines are absolute NANOSECONDS read from the monotonic
+  // high-resolution clock (maxon_current_time_nanos -> QPC / CLOCK_MONOTONIC),
+  // NOT the coarse OS tick.
+  //
+  // They used to be GetTickCount64 milliseconds, and that made sleep(N) return
+  // EARLY. GetTickCount64 only advances every ~15.6 ms, so a deadline computed
+  // as `GetTickCount64() + N` is anchored to a tick edge that may already be up
+  // to a full tick in the past. The comparison in __gt_timer_check reads the
+  // same quantized counter, so the deadline can compare "expired" up to 15.6 ms
+  // before N ms of real time has actually passed -- sleep(30) was observed
+  // returning in 16 ms. You cannot see a 15.6 ms error with a 15.6 ms clock,
+  // which is why this survived until a nanosecond clock existed to catch it.
+  //
+  // Both the deadline computation (maxon_sleep) and the comparison against it
+  // (__gt_timer_check) must therefore use the nanosecond clock.
+  public const long TimerNanosPerMilli = 1_000_000L;
+
   // ---- Fault codes ----
   // Platform-neutral codes that the per-backend fault-handler prolog maps from
   // OS-specific exception/signal codes, then passes to the shared __gt_fault_handler

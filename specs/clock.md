@@ -188,30 +188,38 @@ subMs=1
 ```
 
 <!-- test: clock.elapsed-nanos-after-sleep -->
-After sleeping ~30 ms the nanosecond clock reports an elapsed time that is well
-within a band only a correctly-scaled nanosecond counter can land in — proving it
-measures real wall time in the UNITS it claims, rather than returning a constant,
-raw counter ticks, or milliseconds.
+`sleep(N)` NEVER returns early: after `sleep(30)` the nanosecond clock must report
+at least 30 ms of elapsed real time. This is the sleep's actual contract — a
+duration is a floor, not an estimate — and asserting it here also proves the clock
+measures real wall time in the UNITS it claims.
 
-The lower bound is 5 ms and not the 30 ms that was asked for, because the sleep
-itself is not that precise: the green-thread scheduler's wake deadline is computed
-from the COARSE tick clock, whose ~15.6 ms period means a `sleep(30)` can return
-after as little as ~16 ms of real time. That imprecision is the sleep's, not the
-clock's — and it is exactly the sort of thing only a high-resolution clock can
-see. 5 ms still pins the scale from below: had the reading been raw
+The lower bound doubles as a scale check. Had the reading been raw
 `QueryPerformanceCounter` ticks (~300,000 for 30 ms at a 10 MHz counter),
 microseconds (~30,000), or milliseconds (~30), every one of those falls far short
-of 5,000,000 and the test fails.
+of 30,000,000 and the test fails.
+
+Only the LOWER bound is tight, because only the lower bound is a correctness
+property. A loaded machine can make any sleep run arbitrarily long — the scheduler
+just doesn't get to the timer promptly — so a tight upper bound would be a flaky
+assertion about the host, not about the compiler. The 10 s ceiling exists solely to
+catch a grossly mis-scaled counter, not to police wake latency.
+
+This test previously asserted a 5 ms lower bound, because `sleep(30)` genuinely
+returned after as little as ~16 ms: the scheduler computed its wake deadline from
+the COARSE ~15.6 ms tick (`GetTickCount64`), so the deadline could expire a full
+tick before the requested duration had actually elapsed. The deadline is now
+anchored to the monotonic nanosecond clock, so the real bound holds.
 
 ```maxon
 function main() returns ExitCode
+		let requestedNanos = 30000000
 		let start = Clock.nowNanos()
 		sleep(30)
 		let elapsed = Clock.elapsedNanos(start)
 		var score = 0
-		if elapsed > 5000000 'nanosecondScale'
+		if elapsed >= requestedNanos 'neverEarly'
 				score = score + 1
-		end 'nanosecondScale'
+		end 'neverEarly'
 		if elapsed < 10000000000 'bounded'
 				score = score + 1
 		end 'bounded'

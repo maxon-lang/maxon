@@ -91,9 +91,9 @@ export enum IatSlot
 	// async-I/O slots). All kernel32. CreateThread spawns worker OS threads; the
 	// event + wait + TLS APIs drive parking/waking; GetSystemInfo sizes the P
 	// array. The IOCP APIs (createIoCompletionPort / get+postQueuedCompletionStatus),
-	// GetTickCount64 (timer heap), WaitForMultipleObjects, ResetEvent and
-	// DeleteCriticalSection are imported ahead of the async-I/O specs but are not
-	// yet referenced by emitted code.
+	// GetTickCount64 (`osClockMs`; the timer heap uses the nanosecond clock instead),
+	// WaitForMultipleObjects, ResetEvent and DeleteCriticalSection are imported ahead
+	// of the async-I/O specs but are not yet referenced by emitted code.
 	CreateThread
 	CreateEventA
 	SetEvent
@@ -186,9 +186,12 @@ export enum IatSlot
 	// High-resolution monotonic clock (`osClockNanos`, backing `Clock.nowNanos`).
 	// QueryPerformanceCounter reports ticks of a boot-fixed frequency — typically
 	// 10 MHz, i.e. a 100 ns period — so QueryPerformanceFrequency is imported
-	// alongside it to scale those ticks to nanoseconds. GetTickCount64 (above)
-	// stays the source for `osClockMs`: its ~15.6 ms tick is useless for profiling
-	// but it is the cheaper read the green-thread timer heap wants. Appended at the
+	// alongside it to scale those ticks to nanoseconds. GetTickCount64 (above) stays
+	// the source for `osClockMs` ONLY — the coarse tick is a legal answer to "what
+	// time is it, roughly", but it is NOT a legal deadline: a ~15.6 ms quantized
+	// deadline can expire before the requested duration has elapsed, which made
+	// `sleep(30)` return in 16 ms. The green-thread timer heap therefore reads THIS
+	// clock (via `maxon_current_time_nanos`), not GetTickCount64. Appended at the
 	// end of the kernel32 run so existing kernel32 slot ordinals stay stable; only
 	// shell32/ws2_32 shift (by two).
 	QueryPerformanceCounter

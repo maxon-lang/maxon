@@ -964,6 +964,12 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, ta
 		// the async-trace helpers above, so seed them here for the cache-off leg.
 		seedRuntimeReachName("mrt_write_cstr_stderr", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		seedRuntimeReachName("__diag_print_hex", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		// The hand-rolled `maxon_sleep` / `__gt_timer_check` call this to read the
+		// monotonic nanosecond clock the timer heap's deadlines are expressed in. A
+		// program that never calls `Clock.nowNanos()` has no IR call edge reaching it,
+		// so — same late-emission invisibility as the helpers above — seed it here or
+		// the fixup resolves to .text+0.
+		seedRuntimeReachName("maxon_current_time_nanos", runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		// `patchMrtStartCallGtInit` (in `augmentWithRuntime`) injects `call __gt_init`
 		// into `mrt_start` AFTER this reachability walk, so the call edge is invisible
 		// here. Seed the `__gt_init` signature-only stub so its (arity, return-type) is

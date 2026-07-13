@@ -361,6 +361,12 @@ function appendX64Win32RuntimeSeeds(seeds StringArray, os Os)
 	seeds.push("__slab_alloc")
 	seeds.push("__slab_free")
 	seeds.push("__managed_mem_create")
+	// The green-thread runtime is emitted unconditionally on x64-Windows, and its
+	// hand-rolled `maxon_sleep` / `__gt_timer_check` call this to read the monotonic
+	// nanosecond clock for the timer heap's deadlines. A program that never calls
+	// `Clock.nowNanos()` has no IR call edge reaching it, so without this seed the
+	// fixup resolves to .text+0.
+	seeds.push("maxon_current_time_nanos")
 end 'appendX64Win32RuntimeSeeds'
 
 // The v80 eager-floor seed set: a SUPERSET of the link-path seeds that also
@@ -7970,7 +7976,9 @@ end 'helperLoadTimerEntryAddr'
 
 // __gt_timer_add(gt=rcx, deadline=rdx): insert (deadline, gt) into the cooperative
 // sleep timer min-heap under `__gt_timer_cs`, keyed by `deadline` (an absolute
-// GetTickCount64 millisecond value). Sift-up restores the min-heap property. Ports
+// monotonic NANOSECOND instant — see NANOS_PER_MILLISECOND). Sift-up restores the
+// min-heap property; this function only compares deadlines against each other, so it
+// is agnostic to the unit, but every caller must agree with `__gt_timer_check`. Ports
 // the C# bootstrap's RuntimeEmitter.EmitGtTimerAdd. No result. Slots: 0=gt,
 // 1=deadline, 2=i, 3=heap_base, 4=parent.
 function emitX64GtTimerAdd(code ByteArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
@@ -8038,12 +8046,16 @@ function emitX64GtTimerAdd(code ByteArray, relocations RelocationArray, rdataRel
 	helperEpilogue(code)
 end 'emitX64GtTimerAdd'
 
-// __gt_timer_check(): pop every timer whose deadline has passed (now = GetTickCount64)
+// __gt_timer_check(): pop every timer whose deadline has passed (now = maxon_current_time_nanos)
 // and re-ready its GT — setting status=ready and, for a non-main GT, __gt_enqueue'ing
 // it. Sift-down restores the min-heap after each pop. Driven from the worker loop,
 // `__gt_await`, and the sleep park so a sleeping GT wakes cooperatively. Ports the C#
 // bootstrap's RuntimeEmitter.EmitGtTimerCheck. No args, no result. Slots: 0=now,
 // 1=heap_base, 2=gt, 3=i, 4=smallest, 5=left, 6=right.
+//
+// `now` is read from the monotonic HIGH-RESOLUTION clock, matching the unit maxon_sleep
+// anchors its deadlines to (NANOS_PER_MILLISECOND). Reading GetTickCount64 here is what
+// let a deadline compare "expired" up to a full 15.6 ms tick early.
 function emitX64GtTimerCheck(code ByteArray, relocations RelocationArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcLabelNames StringArray, funcLabelOffsets CodeOffsetArray, funcLabelOffsetMap CodeLabelOffsetMap)
 	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: "__gt_timer_check", offset: code.count())
 	var state = Win32HelperState.create(8, outgoingBytes: 32, localBytes: 56)
@@ -8059,7 +8071,7 @@ function emitX64GtTimerCheck(code ByteArray, relocations RelocationArray, callFi
 	helperLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, name: "__gt_timer_count")
 	helperTestReg(code, reg: X64Register.rax)
 	helperEmitCondJump(code, state: state, opcode: 0x84, targetBlock: 6)  // jz unlock
-	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.GetTickCount64))  // rax = now
+	helperEmitDirectCall(code, callFixups: callFixups, target: "maxon_current_time_nanos")  // rax = now (ns)
 	helperStoreSlot(code, slotIndex: 0, src: X64Register.rax)
 	emitLeaRipRelOp(code, dest: X64Register.rax, rdataLabel: "__gt_timer_heap", rdataRelocs: rdataRelocs)
 	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)
@@ -8174,8 +8186,10 @@ function emitX64GtTimerCheck(code ByteArray, relocations RelocationArray, callFi
 end 'emitX64GtTimerCheck'
 
 // maxon_sleep(ms=rcx): suspend the current green thread for `ms` milliseconds as a
-// cooperative yield. Computes deadline = GetTickCount64() + ms, marks self waiting,
-// adds (deadline, self) to the timer heap, then yields to the scheduler until
+// cooperative yield. Computes deadline = maxon_current_time_nanos() + ms*1e6 — the
+// monotonic HIGH-RESOLUTION clock, matching __gt_timer_check's unit, so the deadline
+// cannot expire before `ms` of real time has actually passed (see NANOS_PER_MILLISECOND).
+// Marks self waiting, adds (deadline, self) to the timer heap, then yields until
 // __gt_timer_check re-readies self. The main thread runs an inline scheduler loop
 // (run other GTs / park on its wake event); a worker GT context-switches to its P's
 // mainThread (the worker loop) and resumes when re-enqueued. Ports the C# bootstrap's
@@ -8190,9 +8204,11 @@ function emitX64MaxonSleep(code ByteArray, relocations RelocationArray, callFixu
 	helperStoreSlot(code, slotIndex: 0, src: X64Register.rcx)  // ms
 	// Lazy scheduler init so sleep works even with no `async` in the program.
 	helperEmitDirectCall(code, callFixups: callFixups, target: "__gt_init")
-	// deadline = GetTickCount64() + ms
-	helperEmitIatCall(code, relocations: relocations, slotIndex: iatSlotIndex(IatSlot.GetTickCount64))
+	// deadline = maxon_current_time_nanos() + ms * 1e6
+	helperEmitDirectCall(code, callFixups: callFixups, target: "maxon_current_time_nanos")
 	helperLoadSlot(code, slotIndex: 0, dest: X64Register.rcx)
+	helperMovRegImm(code, dest: X64Register.rdx, value: NANOS_PER_MILLISECOND)
+	emitImulRegRegParam(code, dest: X64Register.rcx, src: X64Register.rdx)  // rcx = ms * 1e6
 	emitAddRegRegParam(code, dest: X64Register.rax, src: X64Register.rcx)
 	helperStoreSlot(code, slotIndex: 1, src: X64Register.rax)  // deadline
 	// self = P.currentGt ; self.status = waiting

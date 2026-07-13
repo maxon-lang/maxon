@@ -187,10 +187,12 @@ let GtCondLt = 11
 let GtCondGt = 12
 let GtCondLe = 13
 
-// ADD/SUB/AND register-register opcodes (64-bit).
+// ADD/SUB/AND/MUL register-register opcodes (64-bit).
 let GtAluAdd = 0x8B000000
 let GtAluSub = 0xCB000000
 let GtAluAnd = 0x8A000000  // AND Xd, Xn, Xm (used to 16-align the redirect SP)
+// MUL Xd, Xn, Xm is MADD Xd, Xn, Xm, XZR — the Ra=31 (XZR) field is baked into 0x7C00.
+let GtAluMul = 0x9B007C00
 
 // --- kqueue async-I/O context (KqCtx) + macOS kqueue constants. Byte-identical to
 //     the C# arm64 reference (ARM64CodeEmitter.Runtime.cs KqCtx*/EVFILT_*). The
@@ -1096,7 +1098,6 @@ export function emitArm64MacosGreenThread(code ByteArray, relocations Relocation
 	emitArm64GtCleanup(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTimerAdd(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64GtTimerCheck(code, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
-	emitArm64GtNowMs(code, relocations: relocations, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64MaxonSleep(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64IoSubmitRead(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
 	emitArm64IoPollKqueue(code, relocations: relocations, callFixups: callFixups, rdataRelocs: rdataRelocs, labelNames: labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap)
@@ -1110,7 +1111,7 @@ end 'emitArm64MacosGreenThread'
 // compiled). Only names with a runtime.std stub are listed — the internal
 // helper-to-helper labels (__gt_context_switch / __gt_enqueue / __gt_dequeue /
 // __gt_trampoline / __gt_process_pending_waiter / __gt_timer_add / __gt_timer_check
-// / __gt_now_ms / __io_check_completions) have NO runtime.std stub: they are emitted
+// / __io_check_completions) have NO runtime.std stub: they are emitted
 // unconditionally by this backend, so their labels always exist and their BL fixups
 // resolve regardless of reachability (seeding a non-stub name is a no-op in
 // seedRuntimeReachName / lazyNeededClosure anyway). `__gt_init` / `__slab_current_p_id`
@@ -1135,6 +1136,10 @@ export function arm64MacosGreenThreadRuntimeNames() returns StringArray
 	names.push("__slab_current_p_id")
 	names.push("__gt_trace_emit")
 	names.push("__gt_current_trace_id")
+	// maxon_sleep / __gt_timer_check BL this to read the monotonic nanosecond clock the
+	// timer heap's deadlines are expressed in; a program that sleeps but never calls
+	// `Clock.nowNanos()` has no other call edge reaching it.
+	names.push("maxon_current_time_nanos")
 	return names
 end 'arm64MacosGreenThreadRuntimeNames'
 
@@ -3154,38 +3159,6 @@ function emitArm64GtCleanup(code ByteArray, relocations RelocationArray, callFix
 	arm64GtFinalize(code, state: state)
 end 'emitArm64GtCleanup'
 
-// =============================================================================
-// __gt_now_ms() -> x0: wall-clock milliseconds via gettimeofday(&tv, NULL), then
-// ms = tv.tv_sec*1000 + tv.tv_usec/1000. arm64-macOS `struct timeval` is
-// {tv_sec @0 (8B), tv_usec @8 (4B, signed)}. Mirrors lowerOsClockMsMacosArm64.
-// Used by the timer heap for absolute deadlines. Frame: tv@0x10 (16 bytes).
-// =============================================================================
-function emitArm64GtNowMs(code ByteArray, relocations RelocationArray, labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap)
-	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, labelOffsetMap: labelOffsetMap, name: "__gt_now_ms", offset: code.count())
-	let frameSize = 0x30
-	var state = Arm64MacosGtState.create(1)
-	arm64GtPrologue(code, frameSize: frameSize, argCount: 0)
-
-	// gettimeofday(&tv, NULL): x0 = &tv (frame local 0x10), x1 = NULL.
-	arm64GtLeaFrame(code, rd: 0, disp: 0x10)
-	arm64EmitMovImm(code, rd: 1, value: 0)
-	arm64GtCallImport(code, relocations: relocations, slotIndex: MACHO_IMPORT_SLOT_GETTIMEOFDAY)
-	// x9 = tv.tv_sec ; x10 = tv.tv_usec (LDRSW, 4-byte signed). ms = sec*1000 + usec/1000.
-	arm64GtLeaFrame(code, rd: 11, disp: 0x10)
-	arm64EmitLdrRegOffset(code, rt: 9, baseReg: 11, offset: 0)  // tv_sec
-	// LDRSW X10, [X11, #8] (tv_usec, 4-byte signed; imm12 = offset/4 = 2). Reading a
-	// full 8-byte LDR here would pull in the 4 padding bytes at +12 (stack garbage),
-	// corrupting `now` and the sleep-timer deadline ordering.
-	arm64EmitInsn(code, insn: 0xB9800000 or (2 shl 10) or (11 shl 5) or 10)  // LDRSW X10, [X11, #8]
-	arm64EmitMovImm(code, rd: 12, value: 1000)
-	arm64GtAlu(code, opcode: 0x9B007C00, rd: 9, rn: 9, rm: 12)  // MUL x9, x9, x12 (sec*1000)
-	arm64GtAlu(code, opcode: 0x9AC00C00, rd: 10, rn: 10, rm: 12)  // SDIV x10, x10, x12 (usec/1000)
-	arm64GtAlu(code, opcode: GtAluAdd, rd: 0, rn: 9, rm: 10)  // ms
-
-	arm64GtEpilogue(code, frameSize: frameSize)
-	arm64GtFinalize(code, state: state)
-end 'emitArm64GtNowMs'
-
 // dest = &__gt_timer_heap[idx] (16-byte entries). idxReg holds the index; scratch
 // gets the heap base. Computes base + idx*16.
 function arm64GtTimerEntryAddr(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, idxReg MachineWord, scratch MachineWord)
@@ -3265,7 +3238,7 @@ function emitArm64GtTimerAdd(code ByteArray, callFixups Arm64CallFixupArray, rda
 end 'emitArm64GtTimerAdd'
 
 // =============================================================================
-// __gt_timer_check(): pop every timer whose deadline has passed (now = __gt_now_ms)
+// __gt_timer_check(): pop every timer whose deadline has passed (now = maxon_current_time_nanos)
 // and re-ready its GT (status=ready; enqueue unless it's the main thread). Sift
 // down after each pop. Runs under `__gt_timer_cs` (the recursive spinlock that
 // serializes timer-heap mutation across every M) — the lock is held across the
@@ -3298,9 +3271,10 @@ function emitArm64GtTimerCheck(code ByteArray, callFixups Arm64CallFixupArray, r
 	arm64GtLockAcquire(code, rdataRelocs: rdataRelocs, callFixups: callFixups, name: "__gt_timer_cs")
 	arm64GtLoadGlobal(code, rdataRelocs: rdataRelocs, dest: 0, name: "__gt_timer_count")
 	arm64GtCbz(code, state: state, rn: 0, targetBlock: doneBlock)  // emptied → unlock + ret
-	// now = __gt_now_ms().
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_now_ms")
-	arm64GtStore(code, disp: 0x10, src: 0)  // now
+	// now = maxon_current_time_nanos(): the same monotonic high-resolution clock
+	// maxon_sleep anchors its deadlines to (see NANOS_PER_MILLISECOND).
+	arm64GtBranchLink(code, callFixups: callFixups, name: "maxon_current_time_nanos")
+	arm64GtStore(code, disp: 0x10, src: 0)  // now (ns)
 
 	// pop loop: if count == 0 stop; if heap[0].deadline > now stop; else pop root.
 	arm64GtMarkBlock(state, code: code, blockId: popLoop)
@@ -3405,7 +3379,9 @@ end 'emitArm64GtTimerCheck'
 
 // =============================================================================
 // maxon_sleep(ms=x0): suspend the current GT for `ms` ms as a cooperative yield.
-// Lazy-init the scheduler ; deadline = __gt_now_ms() + ms ; self.status = waiting ;
+// Lazy-init the scheduler ; deadline = maxon_current_time_nanos() + ms*1e6 — the monotonic
+// HIGH-RESOLUTION clock, matching __gt_timer_check's unit, so the deadline cannot expire
+// before `ms` of real time has passed (see NANOS_PER_MILLISECOND) ; self.status = waiting ;
 // __gt_timer_add(self, deadline). A worker GT (self.stackBase != 0) context-switches
 // to P.mainThread (the await/cleanup driver loop) and resumes when its timer fires
 // and re-enqueues it. The main thread runs an inline scheduler loop (run other GTs;
@@ -3426,11 +3402,13 @@ function emitArm64MaxonSleep(code ByteArray, relocations RelocationArray, callFi
 
 	// Lazy scheduler init so sleep works with no `async` in the program.
 	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_init")
-	// deadline = __gt_now_ms() + ms.
-	arm64GtBranchLink(code, callFixups: callFixups, name: "__gt_now_ms")  // x0 = now
+	// deadline = maxon_current_time_nanos() + ms * 1e6.
+	arm64GtBranchLink(code, callFixups: callFixups, name: "maxon_current_time_nanos")  // x0 = now (ns)
 	arm64GtReloadArg(code, dest: 9, argIndex: 0)  // ms
+	arm64EmitMovImm(code, rd: 10, value: NANOS_PER_MILLISECOND)
+	arm64GtAlu(code, opcode: GtAluMul, rd: 9, rn: 9, rm: 10)  // x9 = ms * 1e6
 	arm64GtAlu(code, opcode: GtAluAdd, rd: 0, rn: 0, rm: 9)
-	arm64GtStore(code, disp: 0x18, src: 0)  // deadline
+	arm64GtStore(code, disp: 0x18, src: 0)  // deadline (ns)
 	// self = P.currentGt ; self.status = waiting.
 	arm64GtLoadCurrentP(code, rdataRelocs: rdataRelocs, dest: 11)
 	arm64GtLoadField(code, dest: 11, baseReg: 11, disp: GtPOffCurrentGt)

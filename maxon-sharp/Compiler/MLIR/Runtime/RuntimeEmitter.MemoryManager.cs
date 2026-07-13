@@ -1260,11 +1260,16 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // maxon_current_time_nanos() -> i64 (monotonic nanoseconds)
   //
-  // The high-resolution sibling of maxon_current_time_ms. Both exist: the ms
-  // clock reads the coarse OS tick (15.6 ms on Windows), which is all the
-  // green-thread timer heap needs and is cheaper to read; this one reads the
-  // performance counter, which is what any measurement shorter than a
-  // scheduler tick requires.
+  // The high-resolution sibling of maxon_current_time_ms. Both exist: the ms clock
+  // reads the coarse OS tick (15.6 ms on Windows), which is the cheaper read and a
+  // fine answer to "what time is it, roughly"; this one reads the performance
+  // counter, which is what any measurement shorter than a scheduler tick requires.
+  //
+  // The green-thread timer heap calls THIS one. A coarse tick is not a legal
+  // deadline: quantized to ~15.6 ms, a deadline can expire before the requested
+  // duration has actually elapsed, which made sleep(30) return in 16 ms. Both
+  // maxon_sleep and __gt_timer_check therefore anchor to this clock, so it is a
+  // hard dependency of the scheduler, not just of Clock.nowNanos().
   //
   // The frame carries 0x40 bytes rather than the ms clock's 0x20: the POSIX and
   // Win32 entry points both write their result through an out-parameter, so
