@@ -209,6 +209,7 @@ private record SourceComment(string Text, bool WholeLine);
     string? prevNonNewlineValue = null;
     bool prevWasDot = false;
     bool prevWasUnary = false; // true when prev '-' or '+' was unary (no space after)
+    bool prevBeganLine = false; // true when the previous token was the FIRST on its line (see ModIsCasePattern)
     int braceDepth = 0;
     int lastEmittedSourceLine = -1;
     var consumedCommentLines = new HashSet<int>();
@@ -502,7 +503,7 @@ private record SourceComment(string Text, bool WholeLine);
         for (int k = 0; k < indentLevel; k++) sb.Append(indentStr);
         atLineStart = false;
       } else {
-        if (NeedsSpaceBefore(tok.Type, prevNonNewline, prevWasDot, InDataBlock(), prevWasUnary)) sb.Append(' ');
+        if (NeedsSpaceBefore(tok.Type, prevNonNewline, prevWasDot, InDataBlock(), prevWasUnary, prevBeganLine)) sb.Append(' ');
       }
 
       // Emit token text
@@ -597,6 +598,7 @@ private record SourceComment(string Text, bool WholeLine);
       var prevTokenValue = prevNonNewlineValue;
       prevNonNewline = tok.Type;
       prevNonNewlineValue = tok.Value;
+      prevBeganLine = wasAtLineStart;
 
       // Inside an enum/union body the same keyword token can be either a bare case name
       // (e.g. `function`, `type`, `match` as TokenKind variants) or a real nested declaration
@@ -694,9 +696,28 @@ private record SourceComment(string Text, bool WholeLine);
     // 'default' is used as a function name: `static function default()` / `ValueInfo.default()`.
     // (The match-arm `default` appears alone, never followed by '(' in current code.)
     TokenType.Default,
+    // 'of' is used as a function NAME: `static function of(...)` / `EffectivePools.of(...)`. As a
+    // keyword it only ever appears in `array of int`, where a TYPE NAME follows — never '(' — so it
+    // is unconditionally callable here.
+    TokenType.Of,
+    // NOTE: 'mod' is deliberately NOT in this set. It is context-dependent and is handled in
+    // NeedsSpaceBefore — see ModStartsLine there.
   ];
 
-  private static bool NeedsSpaceBefore(TokenType cur, TokenType prev, bool prevWasDot = false, bool inDataBlock = false, bool prevWasUnary = false) {
+  // `mod` is BOTH an infix operator (`x mod (y + 1)`) and a union case name destructured in a match
+  // arm (`mod(result, lhs, rhs) then ...` — StdOp and MaxonOp each carry a `mod` case). The two want
+  // opposite spacing before '(', so the token alone cannot decide it.
+  //
+  // What separates them is position: a match-arm pattern is the FIRST token on its line, while infix
+  // `mod` always has its left operand before it on the same line. So `mod` suppresses the space only
+  // when it began its line.
+  //
+  // Getting this wrong is not cosmetic in one direction: formatting `mod(a, b)` to `mod (a, b)` is
+  // what a naive keyword rule does, and it silently rewrites source on every `maxon fmt`.
+  private static bool ModIsCasePattern(TokenType prev, bool prevBeganLine) =>
+    prev == TokenType.Mod && prevBeganLine;
+
+  private static bool NeedsSpaceBefore(TokenType cur, TokenType prev, bool prevWasDot = false, bool inDataBlock = false, bool prevWasUnary = false, bool prevBeganLine = false) {
     if (NoSpaceBefore.Contains(cur)) return false;
     if (NoSpaceAfter.Contains(prev)) return false;
     if (cur == TokenType.Colon) return false;
@@ -706,6 +727,8 @@ private record SourceComment(string Text, bool WholeLine);
     if (cur == TokenType.LeftParen && prevWasDot) return false;
     // Inside a data block (enum/union body), case values look like 'name(...)' — no space.
     if (cur == TokenType.LeftParen && inDataBlock) return false;
+    // A match-arm `mod(a, b)` pattern — but NOT infix `x mod (y + 1)`. See ModIsCasePattern.
+    if (cur == TokenType.LeftParen && ModIsCasePattern(prev, prevBeganLine)) return false;
     // Suppress space before '(' only when the previous token is a genuine callable.
     // Non-callable keywords (for, if, while, match, or, and, not, return, in, ...) get a space.
     if (cur == TokenType.LeftParen && !CallableBeforeLeftParen.Contains(prev)) return true;
