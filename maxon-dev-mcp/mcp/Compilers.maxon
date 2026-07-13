@@ -1,0 +1,194 @@
+// The compilers this server can drive, where their binaries live, and — the part
+// that actually matters — what each one can and cannot be asked to do.
+//
+// Three compilers now live in this repo and they do NOT share a command line:
+//
+//   csharp      the C# bootstrap (maxon-sharp), built by `dotnet build`
+//   selfhosted  the v1 self-hosted compiler, built by the bootstrap
+//   shv2        the ground-up rewrite, built by the bootstrap
+//
+// shv2's spec-test runner implements `--filter`, `--update-required`, and `--log`,
+// and NOTHING else: no `--mm-trace`, no `--target`, no `--verbose`. Its driver has
+// no `fmt` and no `--dump-stages`. Every tool used to carry the chosen compiler
+// around as a bare String and re-derive "which binary, which flags" inline, which
+// is precisely how a flag one compiler has never heard of ends up being handed to
+// it anyway. This file is the single place that knows.
+
+/// The compilers the tools can drive. Case names ARE the wire tokens accepted in
+/// every tool's `compiler` argument, so the schema, the parser, and the error
+/// messages are all derived from this one list and cannot drift apart.
+export enum Compiler
+	csharp
+	selfhosted
+	shv2
+end 'Compiler'
+
+export typealias CompilerArray = Array with Compiler
+
+/// Why a `compiler` argument was rejected. `missing` => the key was absent
+/// entirely; `unrecognized` => a value was given but it names no compiler we
+/// drive. Kept distinct so the message can point the caller at the right fix.
+export union CompilerArgError
+	missing
+	unrecognized(value String)
+end 'CompilerArgError'
+
+/// A flag the caller asked for that the chosen compiler does not implement.
+///
+/// These are REJECTED rather than dropped. Silently ignoring a flag the caller
+/// explicitly set is the worse failure: an `mmTrace: true` run that never traced,
+/// reported back as a clean success, is indistinguishable from a leak-free run.
+/// And shv2 would not accept the flag anyway — its driver exits non-zero on an
+/// option it doesn't know.
+export enum UnsupportedFlag implements Error
+	mmTrace
+	crossTarget
+	dumpStages
+end 'UnsupportedFlag'
+
+// =============================================================================
+// Tokens
+// =============================================================================
+
+/// The accepted `compiler` tokens, in declaration order. Feeds the JSON-Schema
+/// `enum` for every tool's `compiler` field.
+export function compilerTokens() returns StringArray
+	var tokens = StringArray.create()
+	for compiler in Compiler.allCases 'each'
+		tokens.push(compiler.name)
+	end 'each'
+
+	return tokens
+end 'compilerTokens'
+
+/// The token list rendered for prose: `"csharp" | "selfhosted" | "shv2"`. Spliced
+/// into schema descriptions and into every compiler-argument error message, so a
+/// rejected call names exactly the values that would have been accepted.
+export function compilerChoiceList() returns String
+	var out = ""
+	for compiler in Compiler.allCases 'each'
+		if not out.isEmpty() 'separator'
+			out.append(" | ")
+		end 'separator'
+
+		out.append("\"{compiler.name}\"")
+	end 'each'
+
+	return out
+end 'compilerChoiceList'
+
+/// Parse a wire token into a `Compiler`.
+export function compilerFromToken(raw String) returns Compiler throws CompilerArgError
+	return try Compiler.fromName(raw) otherwise throw CompilerArgError.unrecognized(raw)
+end 'compilerFromToken'
+
+/// Read a `compiler` argument the tool cannot proceed without. `run_program` and
+/// `dump_ir` force an explicit choice rather than defaulting: the three compilers
+/// disagree — that is the whole reason to have more than one — so a silent default
+/// would answer a question the caller never asked.
+export function requiredCompiler(argsDoc JsonDoc, argsId JsonNodeId) returns Compiler throws CompilerArgError
+	let raw = try argsDoc.getString(argsId, key: "compiler") otherwise 'absent'
+		throw CompilerArgError.missing
+	end 'absent'
+
+	return try compilerFromToken(raw)
+end 'requiredCompiler'
+
+/// Read an optional `compiler` argument, defaulting to the C# bootstrap. An
+/// unrecognized value still THROWS: it used to fall back to csharp, so a typo'd
+/// `compiler: "shv-2"` ran the wrong compiler and reported its results under the
+/// wrong name.
+export function optionalCompiler(argsDoc JsonDoc, argsId JsonNodeId) returns Compiler throws CompilerArgError
+	let raw = try argsDoc.getString(argsId, key: "compiler") otherwise 'absent'
+		return Compiler.csharp
+	end 'absent'
+
+	return try compilerFromToken(raw)
+end 'optionalCompiler'
+
+/// Human-readable explanation for a `CompilerArgError`, spliced into the
+/// `invalidParams` message returned to the MCP client.
+export function compilerArgErrorReason(err CompilerArgError) returns String
+	return match err 'e'
+		missing gives "`compiler` is required — pass one of {compilerChoiceList()}."
+		unrecognized(value) gives "`compiler` must be one of {compilerChoiceList()}, got \"{value}\"."
+	end 'e'
+end 'compilerArgErrorReason'
+
+/// Human-readable explanation for an `UnsupportedFlag`, naming both the flag and
+/// the compiler that refused it.
+export function unsupportedFlagReason(flag UnsupportedFlag, compiler Compiler) returns String
+	let capability = match flag 'f'
+		mmTrace gives "`mmTrace` (--mm-trace) — it has no memory-manager trace"
+		crossTarget gives "`target` (--target) — it only builds for the host"
+		dumpStages gives "`dumpStages` (--dump-stages) — it emits no per-stage IR artifacts"
+	end 'f'
+
+	return "the {compiler.name} compiler does not support {capability}."
+end 'unsupportedFlagReason'
+
+// =============================================================================
+// Binaries
+// =============================================================================
+
+/// Where a compiler's binary lives, whether or not it has been built. Use
+/// `compilerBinary` when the binary must actually exist.
+export function compilerBinaryPath(repoRoot FilePath, compiler Compiler) returns FilePath
+	let suffix = exeSuffix()
+	let relative = match compiler 'pick'
+		csharp gives "bin/maxon{suffix}"
+		selfhosted gives "maxon-selfhosted/.maxon/maxon-selfhosted{suffix}"
+		shv2 gives "maxon-shv2/.maxon/maxon-shv2{suffix}"
+	end 'pick'
+
+	return childPath(repoRoot, segment: relative)
+end 'compilerBinaryPath'
+
+/// Resolve a compiler's binary, throwing when it hasn't been built yet. Callers
+/// translate that into an `invalidRequest` pointing the user at the `build` tool.
+export function compilerBinary(repoRoot FilePath, compiler Compiler) returns FilePath throws NotFound
+	let path = compilerBinaryPath(repoRoot, compiler: compiler)
+	if not File.exists(path) 'missing'
+		throw NotFound.notFound
+	end 'missing'
+
+	return path
+end 'compilerBinary'
+
+// =============================================================================
+// Capabilities
+// =============================================================================
+
+/// Does this compiler's spec-test runner print a line per test only when asked?
+/// The v1 runners stay quiet without `--verbose`; shv2's always reports every
+/// verdict and rejects the flag outright.
+export function specTestNeedsVerbose(compiler Compiler) returns bool
+	return compiler != Compiler.shv2
+end 'specTestNeedsVerbose'
+
+/// Reject the spec-test flags the chosen compiler cannot honour, BEFORE spawning
+/// it. shv2 is the only constrained one today — see this file's header.
+export function checkSpecTestFlags(argsDoc JsonDoc, argsId JsonNodeId, compiler Compiler) throws UnsupportedFlag
+	if compiler != Compiler.shv2 'unconstrained'
+		return
+	end 'unconstrained'
+
+	let mmTrace = try argsDoc.getBool(argsId, key: "mmTrace") otherwise false
+	if mmTrace 'wantsMmTrace'
+		throw UnsupportedFlag.mmTrace
+	end 'wantsMmTrace'
+
+	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
+	if not target.isEmpty() 'wantsCrossTarget'
+		throw UnsupportedFlag.crossTarget
+	end 'wantsCrossTarget'
+end 'checkSpecTestFlags'
+
+/// Reject `dumpStages: true` against a compiler with no per-stage IR emission.
+/// shv2's driver knows `--emit-ir` and nothing more, so `dump_ir` with stages on
+/// would make it exit non-zero on an unknown option.
+export function checkDumpStagesSupported(compiler Compiler, dumpStages bool) throws UnsupportedFlag
+	if dumpStages and compiler == Compiler.shv2 'unsupported'
+		throw UnsupportedFlag.dumpStages
+	end 'unsupported'
+end 'checkDumpStagesSupported'

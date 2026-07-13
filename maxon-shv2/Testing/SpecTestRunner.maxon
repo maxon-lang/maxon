@@ -9,9 +9,10 @@
 // build non-zero, which surfaces as a FAILED test rather than a dead runner.
 //
 // Trimmed HARD from v1's SpecTestRunner: no fragment cache, no parallel worker
-// pool / IPC, no RequiredIR/lowering capture, no `--update-required`, no per-
-// target run-command building, no wasm/wasmtime path. Those return when a
-// milestone needs them.
+// pool / IPC, no per-target run-command building, no wasm/wasmtime path. Those
+// return when a milestone needs them. What IS here: the committed `.test` goldens
+// (`checkTestFragment`), `--update-required` to regenerate them, and `--filter` to
+// scope a run to one spec or one test.
 
 let SpecFileExtension = ".md"
 let MaxonFragmentExtension = ".maxon"
@@ -108,12 +109,12 @@ function runProcess(exe FilePath, argv StringArray) returns ProcessCapture throw
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
-// Run every active test in every `*.md` spec under `specDir` through
-// `compilerExe`, returning one result per test (draft specs skipped). Throws
-// only on a spec-directory / spec-file IO failure; a per-test compile or run
-// failure is captured as a FAIL result, never thrown, so one bad test can't
-// abort the suite.
-export function runSpecDir(compilerExe FilePath, specDir FilePath, updateRequired bool) returns SpecTestResultArray throws CompileError
+// Run the active tests in every `*.md` spec under `specDir` through `compilerExe`,
+// returning one result per test that `filter` selects (draft specs skipped; an
+// empty filter selects everything). Throws only on a spec-directory / spec-file IO
+// failure; a per-test compile or run failure is captured as a FAIL result, never
+// thrown, so one bad test can't abort the suite.
+export function runSpecDir(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool) returns SpecTestResultArray throws CompileError
 	var results = SpecTestResultArray.create()
 
 	// Build the temp path through a FilePath component (not the String overload):
@@ -145,6 +146,10 @@ export function runSpecDir(compilerExe FilePath, specDir FilePath, updateRequire
 		_ = Directory.create(fragmentDir)
 
 		for test in specFile.tests 'eachTest'
+			if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
+				continue
+			end 'notSelected'
+
 			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
 			results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 		end 'eachTest'
@@ -152,6 +157,20 @@ export function runSpecDir(compilerExe FilePath, specDir FilePath, updateRequire
 
 	return results
 end 'runSpecDir'
+
+// Does `--filter=<pattern>` select this test? The pattern is matched as a
+// SUBSTRING of the `<spec>/<test>` label the runner reports — the same string a
+// reader sees in a PASS/FAIL line — so one rule covers every way you would want to
+// narrow a run: a bare spec name takes that whole spec, a bare test name takes that
+// test wherever it lives, and `spec/test` takes exactly one. An empty pattern
+// (no `--filter` given) selects everything.
+function selectedByFilter(specName String, testName String, filter String) returns bool
+	if filter.isEmpty() 'wholeSuite'
+		return true
+	end 'wholeSuite'
+
+	return "{specName}/{testName}".contains(filter)
+end 'selectedByFilter'
 
 // The committed-fragment root for this host target: `<specDir>/fragments/<target>`
 // (e.g. `specs-shv2/fragments/x64-windows`). Each spec's `.test` files hang off a

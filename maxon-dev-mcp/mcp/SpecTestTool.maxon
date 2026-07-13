@@ -4,12 +4,15 @@
 // memoryLeak}` output.
 //
 // Inputs (JSON):
-//   compiler?: "csharp" | "selfhosted"   (default "csharp")
+//   compiler?: "csharp" | "selfhosted" | "shv2"   (default "csharp")
 //   filter?: String                      → --filter=<pat>
 //   updateRequired?: bool                → --update-required
 //   log?: String                         → --log=<value>
-//   mmTrace?: bool                       → --mm-trace
+//   mmTrace?: bool                       → --mm-trace  (not shv2)
 //   target?: String                      → --target=<value> (self-hosted only)
+//
+// `mmTrace` and `target` are REJECTED for shv2 rather than dropped — see
+// `checkSpecTestFlags` in Compilers.maxon.
 //
 // Output (JSON):
 //   compiler, passed, failed, total, durationMs, memoryLeak (exit code 101),
@@ -35,7 +38,10 @@ let memoryLeakExitCode = 101
 
 /// Entry point called by Server.maxon's dispatch table.
 export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
+	let compiler = try optionalCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {compilerArgErrorReason(err)}")
+	end 'badCompiler'
+
 	return specTestWith(compiler, argsDoc: argsDoc, argsId: argsId)
 end 'specTestHandler'
 
@@ -43,22 +49,28 @@ end 'specTestHandler'
 /// it without knowing about the `compiler` argument. Delegates to the same
 /// machinery as `specTestHandler` with `compiler` pinned to "selfhosted".
 export function selfHostedSpecTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	return specTestWith("selfhosted", argsDoc: argsDoc, argsId: argsId)
+	return specTestWith(Compiler.selfhosted, argsDoc: argsDoc, argsId: argsId)
 end 'selfHostedSpecTestHandler'
 
-function specTestWith(compiler String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+function specTestWith(compiler Compiler, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	// Refuse a flag this compiler cannot honour BEFORE spawning it, so the caller
+	// gets "shv2 has no --mm-trace" rather than a compiler usage dump.
+	try checkSpecTestFlags(argsDoc, argsId: argsId, compiler: compiler) otherwise (flag) 'unsupported'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {unsupportedFlagReason(flag, compiler: compiler)}")
+	end 'unsupported'
+
 	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("spec-test {compiler}")
+		return repoRootErrorOutcome("spec-test {compiler.name}")
 	end 'noRoot'
-	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise (err) 'noBin'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler}: required binary missing. Build it first via the `build` tool.")
+	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler.name}: required binary missing. Build it first via the `build` tool (target: \"{compiler.name}\").")
 	end 'noBin'
 
 	let argv = buildSpecTestArgv(argsDoc, argsId: argsId)
 	let displayCommand = displayCommandFor(binary, argv: argv)
 	let timing = Clock.nowMs()
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultSpecTestTimeoutMs) otherwise (err) 'spawn'
-		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test {compiler}: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test {compiler.name}: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
 	end 'spawn'
 	let elapsed = Clock.elapsedMs(timing)
 
@@ -69,37 +81,14 @@ end 'specTestWith'
 // Argument parsing
 // =============================================================================
 
-/// Normalize the `compiler` arg into a canonical token. Recognised values
-/// are `"csharp"` (default) and `"selfhosted"`; anything else falls back to
-/// `"csharp"` since that's the only compiler required for spec-tests today.
-/// Shared with `SpecOutcomeTool` so the two stay in lockstep.
-export function compilerFromArgs(argsDoc JsonDoc, argsId JsonNodeId) returns String
-	let raw = try argsDoc.getString(argsId, key: "compiler") otherwise "csharp"
-	if raw.equals("selfhosted") 'sh'
-		return raw
-	end 'sh'
-	return "csharp"
-end 'compilerFromArgs'
-
-/// Resolve the on-disk path for the requested compiler binary. Throws when
-/// the binary doesn't exist — callers translate that into an
-/// `invalidRequest` error pointing the user at the `build` tool.
-export function compilerBinary(repoRoot FilePath, compiler String) returns FilePath throws NotFound
-	let suffix = exeSuffix()
-	let path = match compiler 'pick'
-		"csharp" gives childPath(repoRoot, segment: "bin/maxon{suffix}")
-		"selfhosted" gives childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted{suffix}")
-		default panic("compilerBinary: unknown compiler `{compiler}` — compilerFromArgs should have normalized")
-	end 'pick'
-	if not File.exists(path) 'missing'
-		throw NotFound.notFound
-	end 'missing'
-	return path
-end 'compilerBinary'
-
 // Construct the argv passed to `<compiler>.exe spec-test`. The argv0 (the
 // binary path itself) is handled separately by Subprocess.run, so this list
 // starts at the `spec-test` subcommand.
+//
+// No compiler branch is needed here: every runner accepts `--filter`,
+// `--update-required`, and `--log`, and `checkSpecTestFlags` has already rejected
+// the call if the caller asked for `mmTrace`/`target` against a compiler that has
+// neither — so those keys can only be set here when the compiler supports them.
 function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArray
 	var argv = StringArray.create()
 	argv.push("spec-test")
@@ -165,11 +154,21 @@ type SpecSummary
 	end 'withCounts'
 end 'SpecSummary'
 
-// Parse the runner's final summary line. Two shapes are accepted:
+// Parse the runner's final summary line. The v1 compilers and shv2 report in
+// different shapes, so the compiler picks the parser.
+function parseSummary(combined String, compiler Compiler) returns SpecSummary
+	if compiler == Compiler.shv2 'shv2'
+		return parseShv2Summary(combined)
+	end 'shv2'
+
+	return parseV1Summary(combined)
+end 'parseSummary'
+
+// The v1 runners' summary. Two shapes are accepted:
 //   `[TST] Tests: 39 passed (total: 39) in 1126ms`    (C# bootstrap)
 //   `[TST] INFO: Tests: 19 passed (total: 19) in 1547ms`  (self-hosted)
 // Returns a zero-filled struct with `parsed: false` if neither is found.
-function parseSummary(combined String) returns SpecSummary
+function parseV1Summary(combined String) returns SpecSummary
 	let bytes = combined.toByteArray()
 	let marker = "Tests: "
 	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noTests'
@@ -179,7 +178,48 @@ function parseSummary(combined String) returns SpecSummary
 	let lineEnd = findEndOfLine(bytes, from: lineStart)
 	let line = sliceBytes(bytes, from: lineStart, until: lineEnd)
 	return parseSummaryLine(line)
-end 'parseSummary'
+end 'parseV1Summary'
+
+// shv2's runner closes with a bare `83 passed, 0 failed` — no `[TST]` prefix, no
+// total, no wall-clock. Scanned from the END of the output: a FAILING test's reason
+// is echoed verbatim and could contain that phrase, and the last one is always the
+// real summary.
+function parseShv2Summary(combined String) returns SpecSummary
+	let lines = combined.split("\n")
+	var i = lines.count()
+	while i > 0 'scanBackwards'
+		i = i - 1
+		let line = try lines.get(i) otherwise panic("parseShv2Summary: lines.get OOB — i bounded by count")
+		let summary = try parseShv2SummaryLine(line.trim()) otherwise 'notTheSummary'
+			continue
+		end 'notTheSummary'
+
+		return summary
+	end 'scanBackwards'
+
+	return SpecSummary.empty()
+end 'parseShv2Summary'
+
+// `83 passed, 0 failed` → a SpecSummary. shv2's runner prints no wall-clock time,
+// so `durationMs` stays 0 here; the envelope reports the subprocess's own measured
+// elapsed time regardless, which is what a caller actually wants.
+function parseShv2SummaryLine(line String) returns SpecSummary throws NotFound
+	let passedMarker = " passed, "
+	let failedMarker = " failed"
+
+	let passed = try parseLeadingInt(line)
+	if not passed.rest.startsWith(passedMarker) 'notASummary'
+		throw NotFound.notFound
+	end 'notASummary'
+
+	let afterPassed = try sliceAfter(passed.rest, marker: passedMarker)
+	let failed = try parseLeadingInt(afterPassed)
+	if not failed.rest.startsWith(failedMarker) 'notASummary'
+		throw NotFound.notFound
+	end 'notASummary'
+
+	return SpecSummary.withCounts(passed.value, total: passed.value + failed.value, durationMs: 0)
+end 'parseShv2SummaryLine'
 
 function findEndOfLine(bytes ByteArray, from BytePos) returns BytePos
 	let n = bytes.count()
@@ -264,9 +304,9 @@ end 'sliceAfter'
 // Outcome construction
 // =============================================================================
 
-function buildOutcome(compiler String, command String, result CollectedOutput, durationMs DurationMs) returns ToolOutcome
+function buildOutcome(compiler Compiler, command String, result CollectedOutput, durationMs DurationMs) returns ToolOutcome
 	let combined = combineStreams(result.stdout, stderr: result.stderr)
-	let summary = parseSummary(combined)
+	let summary = parseSummary(combined, compiler: compiler)
 	let memoryLeak = result.exitCode() == memoryLeakExitCode
 
 	// Failed count = total - passed when we have a successful parse.
@@ -279,7 +319,7 @@ function buildOutcome(compiler String, command String, result CollectedOutput, d
 	end 'okMath'
 
 	var doc = JsonDoc.create()
-	let compilerId = doc.add(JsonNode.stringNode(compiler))
+	let compilerId = doc.add(JsonNode.stringNode(compiler.name))
 	let commandId = doc.add(JsonNode.stringNode(command))
 	let passedId = doc.add(JsonNode.numberNode(summary.passed as JsonFloat))
 	let failedId = doc.add(JsonNode.numberNode(failed as JsonFloat))

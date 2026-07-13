@@ -12,7 +12,7 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]
 //   maxon-shv2 verify-warm-rebuild <file>
-//   maxon-shv2 spec-test [dir]
+//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required]
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
@@ -20,6 +20,16 @@ let DefaultSpecDir = "specs-shv2"
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
+
+	// An option the driver does not implement aborts BEFORE any command runs. Every
+	// command below would otherwise proceed as though the flag had been honoured,
+	// which is the one outcome a caller can neither see nor recover from.
+	if not args.badOption.isEmpty() 'badOption'
+		printError("error: unknown option: {args.badOption}\n")
+		printUsage()
+		return 1
+	end 'badOption'
+
 	return match args.command 'cmd'
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
@@ -93,13 +103,33 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noExe'
 
-	let results = try runSpecDir(compilerExe, specDir: specDir, updateRequired: args.updateRequired) otherwise (e) 'runErr'
+	let results = try runSpecDir(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
 
+	// A run that selected NOTHING is a failure, not a pass. A mistyped `--filter`
+	// would otherwise report "0 passed, 0 failed" and exit 0 — a green suite that
+	// tested nothing, which is the most expensive kind of lie a test runner can
+	// tell. It is worse still under `--update-required`, where an empty selection
+	// silently regenerates no goldens while looking like it did the work.
+	if results.count() == 0 'selectedNothing'
+		printError("error: no tests selected{filterSuffix(args.filter)}\n")
+		return 1
+	end 'selectedNothing'
+
 	return reportResults(results)
 end 'runSpecTest'
+
+// The trailing ` matching --filter=<pattern>` clause of the "no tests selected"
+// message, omitted entirely when no filter was given (an empty spec directory and
+// a filter that matched nothing are different failures and read differently).
+function filterSuffix(filter String) returns String
+	if filter.isEmpty() 'noFilter'
+		return ""
+	end 'noFilter'
+	return " matching --filter={filter}"
+end 'filterSuffix'
 
 // Resolve the spec directory: an explicit positional argument wins; otherwise
 // the default `specs-shv2`, anchored at the current working directory so the
@@ -176,10 +206,13 @@ function printUsage()
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
+	print("  --filter=<pattern>            (spec-test) Run only tests whose `<spec>/<test>` label contains\n")
+	print("                                <pattern>. A bare spec name selects that whole spec.\n")
 	print("  --update-required             (spec-test) Rewrite the committed .test goldens instead of\n")
 	print("                                checking against them. Running a test proves its allocation\n")
 	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
-	print("                                WORSE. REVIEW THE RESULTING DIFF.\n")
+	print("                                WORSE. REVIEW THE RESULTING DIFF. Pair it with --filter: an\n")
+	print("                                unfiltered run rewrites EVERY golden in the suite.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -198,24 +231,38 @@ type MaxonArgs
 	export let path as String
 	export let outputOverride as String
 	export let emitIr as bool
+	// `--filter=<pattern>` (spec-test only): run only the tests whose `<spec>/<test>` label
+	// contains <pattern>. Empty selects the whole suite.
+	export let filter as String
 	// `--update-required` (spec-test only): REWRITE the committed `.test` goldens instead of
 	// checking the emitted IR against them. The goldens are a code-quality gate — running a test
 	// proves its allocation is CORRECT, but only the pinned IR can say the code did not get WORSE
 	// (an extra spill still computes the right answer). So regenerating them is the one way a
 	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
 	export let updateRequired as bool
+	// Set when an argument could not be understood. The driver refuses to run rather
+	// than proceed on a command line it only partly parsed — see `parse`.
+	export let badOption as String
 
 	// Parse the process command line. argv[0] is the executable path (skipped).
 	// The first `build` token selects the command; the first bare (non-flag)
 	// argument is the input path; `-o <path>` / `--output=<path>` set the output;
-	// `--emit-ir` requests the Target-IR sidecar; `--update-required` regenerates the
-	// spec-test goldens.
+	// `--emit-ir` requests the Target-IR sidecar; `--filter=<pattern>` narrows the
+	// spec-test selection; `--update-required` regenerates the spec-test goldens.
+	//
+	// An unrecognized `-`-leading argument is RECORDED, not ignored. It used to fall
+	// through to the positional branch and become the input path, so `spec-test
+	// --mm-trace` quietly looked for a spec directory literally named `--mm-trace`
+	// and reported an empty suite. A flag the driver does not implement must fail
+	// loudly, not be absorbed into an unrelated slot.
 	export static function parse() returns MaxonArgs
 		var command = MaxonCommand.unknown
 		var path = ""
 		var outputOverride = ""
 		var emitIr = false
+		var filter = ""
 		var updateRequired = false
+		var badOption = ""
 
 		let args = CommandLine.args()
 		var i = 1
@@ -234,14 +281,20 @@ type MaxonArgs
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else if arg == "--update-required" 'updateRequiredFlag'
+			end 'emitIrFlag' else if arg.startsWith("--filter=") 'filterFlag'
+				filter = try CommandLine.optionValue(arg) otherwise ""
+			end 'filterFlag' else if arg == "--update-required" 'updateRequiredFlag'
 				updateRequired = true
 			end 'updateRequiredFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
 				end 'badSpec'
-			end 'logFlag' else 'positional'
+			end 'logFlag' else if arg.startsWith("-") 'unknownFlag'
+				if badOption.isEmpty() 'firstBad'
+					badOption = arg
+				end 'firstBad'
+			end 'unknownFlag' else 'positional'
 				if path.isEmpty() 'firstPositional'
 					path = arg
 				end 'firstPositional'
@@ -249,6 +302,6 @@ type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, updateRequired: updateRequired}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

@@ -1,18 +1,25 @@
-// `spec_test_outcome` MCP tool. Runs the spec-test suite with a filter and
-// `--verbose`, then parses the per-test PASS/FAIL lines and the
-// `[FAIL] <spec> (P/T)` summary block into structured output. Useful when
-// the LLM wants "did test X pass? if not, what was the message?" without
-// re-scraping the rawTail itself.
+// `spec_test_outcome` MCP tool. Runs the spec-test suite with a filter, then parses
+// the per-test PASS/FAIL lines and each failure's message into structured output.
+// Useful when the LLM wants "did test X pass? if not, what was the message?"
+// without re-scraping the rawTail itself.
+//
+// The two runners report differently and each gets its own parser:
+//   v1 (csharp, selfhosted): needs `--verbose` to print a line per test, emits
+//     `[TST] [W1] [PASS] spec/test (820ms)`, and groups failures into
+//     `[TST] [FAIL] <spec> (P/T)` blocks.
+//   shv2: always prints every verdict (it has no `--verbose` and rejects the
+//     flag), emits `PASS spec/test` / `FAIL spec/test: <reason>`, and reports no
+//     per-test duration.
 //
 // Inputs (JSON):
 //   filter: String          — required; passed to `--filter=<filter>`
-//   compiler?: "csharp" | "selfhosted"   (default "csharp")
+//   compiler?: "csharp" | "selfhosted" | "shv2"   (default "csharp")
 //   target?: String         — passed to `--target=<value>` (self-hosted only)
 //
 // Output (JSON):
 //   compiler, filter, total, passed, failed, durationMs, memoryLeak,
-//   tests: [{spec, test, status, durationMs}],
-//   failures: [{spec, message}],   // grouped per spec from the [FAIL] block
+//   tests: [{spec, test, status, durationMs?}],
+//   failures: [{spec, message}],
 //   rawTail.
 
 typealias Byte = int(0 to u8.max)
@@ -29,18 +36,33 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: missing required `filter` argument (a pattern matching test names)")
 	end 'noFilter'
 
-	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
+	let compiler = try optionalCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: {compilerArgErrorReason(err)}")
+	end 'badCompiler'
+
+	try checkSpecTestFlags(argsDoc, argsId: argsId, compiler: compiler) otherwise (flag) 'unsupported'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: {unsupportedFlagReason(flag, compiler: compiler)}")
+	end 'unsupported'
+
 	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("spec_test_outcome {compiler}")
+		return repoRootErrorOutcome("spec_test_outcome {compiler.name}")
 	end 'noRoot'
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler}: required binary missing. Build it first via the `build` tool.")
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler.name}: required binary missing. Build it first via the `build` tool (target: \"{compiler.name}\").")
 	end 'noBin'
 
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("--filter={filter}")
-	argv.push("--verbose")
+
+	// shv2 reports every verdict unconditionally and rejects `--verbose` outright;
+	// the v1 runners stay silent without it.
+	if specTestNeedsVerbose(compiler) 'needsVerbose'
+		argv.push("--verbose")
+	end 'needsVerbose'
+
+	// `checkSpecTestFlags` has already rejected `target` for the compiler that
+	// cannot cross-compile, so reaching here with one set means it is supported.
 	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
 	if not target.isEmpty() 'haveTarget'
 		argv.push("--target={target}")
@@ -54,11 +76,30 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 
 	let combined = combineStreams(result.stdout, stderr: result.stderr)
 	let memoryLeak = result.exitCode() == memoryLeakExitCode
-	let parsed = parseTests(combined)
-	let failureSummaries = parseFailureBlocks(combined)
+	let report = parseReport(combined, compiler: compiler)
 
-	return buildOutcome(compiler, filter: filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: parsed, failures: failureSummaries, combined: combined)
+	return buildOutcome(compiler, filter: filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: report.tests, failures: report.failures, combined: combined)
 end 'specOutcomeHandler'
+
+// The per-test verdicts plus the failure messages scraped from one spec-test run.
+// The two are produced together (shv2's failure message is a continuation of the
+// same FAIL line that carries the verdict), so they are returned together.
+type SpecReport
+	export let tests as SpecTestEntryArray
+	export let failures as SpecFailureSummaryArray
+
+	export static function create(tests SpecTestEntryArray, failures SpecFailureSummaryArray) returns SpecReport
+		return Self{tests: tests, failures: failures}
+	end 'create'
+end 'SpecReport'
+
+function parseReport(combined String, compiler Compiler) returns SpecReport
+	if compiler == Compiler.shv2 'shv2'
+		return parseShv2Report(combined)
+	end 'shv2'
+
+	return SpecReport.create(parseTests(combined), failures: parseFailureBlocks(combined))
+end 'parseReport'
 
 // =============================================================================
 // Per-test parsing
@@ -69,10 +110,19 @@ type SpecTestEntry
 	export var name as String
 	export var passed as bool
 	export var durationMs as TestDurationMs
+	// shv2's runner times no individual test. `durationMs` is omitted from that
+	// compiler's JSON rather than reported as 0 — a test that took no measurable
+	// time and a test that was never timed are different claims, and only one of
+	// them is true.
+	export var durationReported as bool
 
-	export static function create(spec String, name String, passed bool, durationMs TestDurationMs) returns SpecTestEntry
-		return Self{spec: spec, name: name, passed: passed, durationMs: durationMs}
-	end 'create'
+	export static function timed(spec String, name String, passed bool, durationMs TestDurationMs) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed, durationMs: durationMs, durationReported: true}
+	end 'timed'
+
+	export static function untimed(spec String, name String, passed bool) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed, durationMs: 0, durationReported: false}
+	end 'untimed'
 end 'SpecTestEntry'
 
 typealias SpecTestEntryArray = Array with SpecTestEntry
@@ -172,8 +222,161 @@ function parseTestLine(line String) returns SpecTestEntry throws NotFound
 		j = j + 1
 	end 'durDigits'
 
-	return SpecTestEntry.create(spec, name: name, passed: passed, durationMs: dur as TestDurationMs)
+	return SpecTestEntry.timed(spec, name: name, passed: passed, durationMs: dur as TestDurationMs)
 end 'parseTestLine'
+
+// =============================================================================
+// shv2 parsing
+// =============================================================================
+
+// shv2's runner prints one line per test, unconditionally:
+//   `PASS arithmetic/addition`
+//   `FAIL arithmetic/division: exit code mismatch: expected 3, got 4`
+// and closes with `N passed, M failed`.
+//
+// A FAIL's reason is interpolated VERBATIM and routinely spans lines — a golden
+// mismatch renders a three-line diff, and a failed compile embeds the compiler's
+// whole stderr. So the reason is not "the rest of the line": it runs on until the
+// next verdict or the summary. Column position can't be the terminator either,
+// since captured stderr is itself unindented.
+let Shv2PassPrefix = "PASS "
+let Shv2FailPrefix = "FAIL "
+
+function parseShv2Report(combined String) returns SpecReport
+	var tests = SpecTestEntryArray.create()
+	var failures = SpecFailureSummaryArray.create()
+
+	let lines = combined.split("\n")
+	let n = lines.count()
+	var i = 0
+	while i < n 'eachLine'
+		let line = try lines.get(i) otherwise panic("parseShv2Report: lines.get OOB — i bounded by n")
+		i = i + 1
+
+		if line.startsWith(Shv2PassPrefix) 'passed'
+			let label = try parseShv2Label(line, prefix: Shv2PassPrefix) otherwise 'notALabel'
+				continue
+			end 'notALabel'
+			tests.push(SpecTestEntry.untimed(label.spec, name: label.name, passed: true))
+			continue
+		end 'passed'
+
+		if not line.startsWith(Shv2FailPrefix) 'notAVerdict'
+			continue
+		end 'notAVerdict'
+
+		let label = try parseShv2Label(line, prefix: Shv2FailPrefix) otherwise 'notALabel'
+			continue
+		end 'notALabel'
+		tests.push(SpecTestEntry.untimed(label.spec, name: label.name, passed: false))
+
+		var reason = StringArray.create()
+		reason.push(label.rest)
+
+		// Absorb the reason's continuation lines, stopping at the next verdict or
+		// the trailing summary.
+		while i < n 'reasonLines'
+			let next = try lines.get(i) otherwise panic("parseShv2Report: lines.get OOB (reason) — i bounded by n")
+			if next.startsWith(Shv2PassPrefix) or next.startsWith(Shv2FailPrefix) 'nextVerdict'
+				break
+			end 'nextVerdict'
+
+			if isShv2SummaryLine(next.trim()) 'summary'
+				break
+			end 'summary'
+
+			reason.push(next)
+			i = i + 1
+		end 'reasonLines'
+
+		failures.push(SpecFailureSummary.create(label.spec, message: "{label.name}: {joinLines(reason).trim()}"))
+	end 'eachLine'
+
+	return SpecReport.create(tests, failures: failures)
+end 'parseShv2Report'
+
+// A shv2 verdict line split into its `<spec>`, `<test>`, and whatever trailed the
+// label (a FAIL's `: <reason>`, empty for a PASS).
+type Shv2Label
+	export let spec as String
+	export let name as String
+	export let rest as String
+
+	export static function create(spec String, name String, rest String) returns Shv2Label
+		return Self{spec: spec, name: name, rest: rest}
+	end 'create'
+end 'Shv2Label'
+
+// Split `PASS spec/test` or `FAIL spec/test: reason` after the verdict prefix. A
+// line with no `/` in its label did not come from the runner's verdict printer
+// (compiler output echoed into a reason can start with anything) — it is skipped,
+// not guessed at.
+function parseShv2Label(line String, prefix String) returns Shv2Label throws NotFound
+	let bytes = line.toByteArray()
+	let body = sliceBytes(bytes, from: prefix.byteLength(), until: bytes.count())
+	let bodyBytes = body.toByteArray()
+
+	let slash = firstSlash(body)
+	if slash < 0 'noSlash'
+		throw NotFound.notFound
+	end 'noSlash'
+	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
+
+	// The test name runs to the `:` that opens a FAIL's reason, or to end-of-line
+	// for a PASS. Test names never contain `:`.
+	let nameStart = (slash + 1) as BytePos
+	let total = bodyBytes.count()
+	var colon = nameStart
+	while colon < total 'findColon'
+		let b = try bodyBytes.get(colon) otherwise panic("parseShv2Label: get OOB — colon bounded by total")
+		if b == 0x3A 'foundColon'
+			break
+		end 'foundColon'
+		colon = colon + 1
+	end 'findColon'
+
+	let name = sliceBytes(bodyBytes, from: nameStart, until: colon).trim()
+	if name.isEmpty() 'noName'
+		throw NotFound.notFound
+	end 'noName'
+
+	// `colon` sits on the `:` opening a FAIL's reason, or at end-of-line for a PASS
+	// (which carries no reason at all).
+	let reasonStart = colon + 1 if colon < total else total
+	let rest = sliceBytes(bodyBytes, from: reasonStart, until: total).trim()
+	return Shv2Label.create(spec, name: name, rest: rest)
+end 'parseShv2Label'
+
+// Is this shv2's closing `N passed, M failed`? Used only to stop a multi-line
+// failure reason from swallowing the summary.
+function isShv2SummaryLine(line String) returns bool
+	let digits = try parseLeadingShv2Int(line) otherwise 'notANumber'
+		return false
+	end 'notANumber'
+
+	return digits.startsWith(" passed, ")
+end 'isShv2SummaryLine'
+
+// The remainder of `line` after its leading run of ASCII digits; throws when it
+// does not start with one.
+function parseLeadingShv2Int(line String) returns String throws NotFound
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	while i < n 'digits'
+		let b = try bytes.get(i) otherwise panic("parseLeadingShv2Int: get OOB — i bounded by n")
+		if not isAsciiDigit(b) 'endOfDigits'
+			break
+		end 'endOfDigits'
+		i = i + 1
+	end 'digits'
+
+	if i == 0 'noDigits'
+		throw NotFound.notFound
+	end 'noDigits'
+
+	return sliceBytes(bytes, from: i, until: n)
+end 'parseLeadingShv2Int'
 
 // Sentinel typealias for "no match" — kept in this file so the parser
 // helpers stay self-contained.
@@ -310,7 +513,7 @@ end 'joinLines'
 // Outcome construction
 // =============================================================================
 
-function buildOutcome(compiler String, filter String, exitCode ExitInt, durationMs DurationMs, memoryLeak bool, tests SpecTestEntryArray, failures SpecFailureSummaryArray, combined String) returns ToolOutcome
+function buildOutcome(compiler Compiler, filter String, exitCode ExitInt, durationMs DurationMs, memoryLeak bool, tests SpecTestEntryArray, failures SpecFailureSummaryArray, combined String) returns ToolOutcome
 	var passed = 0
 	var failed = 0
 	let testCount = tests.count()
@@ -324,7 +527,7 @@ function buildOutcome(compiler String, filter String, exitCode ExitInt, duration
 	end 'tally'
 
 	var doc = JsonDoc.create()
-	let compilerId = doc.add(JsonNode.stringNode(compiler))
+	let compilerId = doc.add(JsonNode.stringNode(compiler.name))
 	let filterId = doc.add(JsonNode.stringNode(filter))
 	let exitCodeId = doc.add(JsonNode.numberNode(exitCode))
 	let durId = doc.add(JsonNode.numberNode(durationMs))
@@ -373,7 +576,6 @@ function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeI
 		let specId = doc.add(JsonNode.stringNode(t.spec))
 		let testId = doc.add(JsonNode.stringNode(t.name))
 		let statusId = doc.add(JsonNode.stringNode("PASS" if t.passed else "FAIL"))
-		let durId = doc.add(JsonNode.numberNode(t.durationMs as JsonFloat))
 		var keys = StringArray.create()
 		var children = JsonNodeIdArray.create()
 		keys.push("spec")
@@ -382,8 +584,15 @@ function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeI
 		children.push(testId)
 		keys.push("status")
 		children.push(statusId)
-		keys.push("durationMs")
-		children.push(durId)
+
+		// Omitted entirely when the runner never timed the test — see
+		// `SpecTestEntry.untimed`.
+		if t.durationReported 'timed'
+			let durId = doc.add(JsonNode.numberNode(t.durationMs as JsonFloat))
+			keys.push("durationMs")
+			children.push(durId)
+		end 'timed'
+
 		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
 	end 'each'
 	return doc.add(JsonNode.arrayNode(ids))

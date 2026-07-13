@@ -8,22 +8,32 @@ There are no time constraints. Complexity doesn't matter. If you are fixing an i
 
 When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` or `./maxon-selfhosted/.maxon/maxon-selfhosted.exe` should only be used when no MCP tool covers the case.
 
+Three compilers live in this repo, and every tool that drives one takes a `compiler`
+(or `target`) naming which: `"csharp"` (the C# bootstrap), `"selfhosted"` (v1), or
+`"shv2"` (the ground-up rewrite, whose suite is `specs-shv2`).
+
 | Task | Use this tool |
 |------|---------------|
 | Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
 | Build the self-hosted compiler | `mcp__maxon-dev__build` with `target: "selfhosted"` |
-| Build both, in order | `mcp__maxon-dev__build` with `target: "both"` |
-| Run the full spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler: "selfhosted"` for the self-hosted runner) |
+| Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` |
+| Build csharp then selfhosted | `mcp__maxon-dev__build` with `target: "both"` |
+| Build all three, in order | `mcp__maxon-dev__build` with `target: "all"` |
+| Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
 | Run self-hosted spec tests | `mcp__maxon-dev__run_self_hosted_test` |
-| Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`) |
-| Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler: "csharp"` or `"selfhosted"`) |
-| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler: "csharp"` or `"selfhosted"`; set `dumpStages: true` for stage-by-stage artifacts) |
+| Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; any compiler) |
+| Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler`) |
+| Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler`; `dumpStages: true` for stage-by-stage artifacts — not shv2) |
 | Dump all per-stage IR (self-hosted) | `mcp__maxon-dev__dump_stages` (self-hosted, always emits every stage artifact + the final `.ir`) |
-| Format a Maxon file or snippet | `mcp__maxon-dev__fmt` |
+| Format a Maxon file or snippet | `mcp__maxon-dev__fmt` (csharp `maxon fmt`) |
 | Look up a 4-digit error code | `mcp__maxon-dev__lookup_error_code` |
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
 
-Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test verbose output. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`. To force a from-source stdlib rebuild, run `maxon clean` (deletes every `stdlib/.maxon/cache/*.mxc` + stray `*.tmp`) then build; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
+Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test detail. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`.
+
+There is **no `maxon clean` command** — it prints usage and exits 1. To force a from-source stdlib rebuild, delete `stdlib/.maxon/cache/*.mxc` yourself; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
+
+**shv2 does less, and the tools say so rather than pretending.** Its runner implements only `--filter`, `--update-required`, and `--log`; `mmTrace`, `target`, and `dumpStages` are REJECTED with an `invalidParams` error naming the gap, never silently dropped. It has no `fmt` and no `--dump-stages`. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
 ## Building and Testing
 
