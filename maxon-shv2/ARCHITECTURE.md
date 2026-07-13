@@ -1344,6 +1344,53 @@ a silent-miscompile failure mode, not a refactor, and it is not worth doing unti
 demands it (the many-small-functions shape — which is what a real codebase, and this compiler's own
 source, looks like — is already linear).
 
+### The per-split re-analysis: what it is allowed to ALLOCATE
+
+The driver re-analyses after every split, so anything the sweep does per CALL is paid K times for a
+function needing K splits. Three such costs were superlinear, and **not one of them was a traversal** —
+they were allocations and a row copy, hiding inside an algorithm whose *asymptotics* everyone had
+already agreed were fine. `SplitScratch` (one set of buffers per function) and `HallScratch` (the
+exact confirmation's five columns) hold them now.
+
+| site | was | why it mattered |
+|---|---|---|
+| `hallVerdictAt` | heap-allocated 5 columns per call, **2 of them per live value** inside `augmentValue` | Confinement is a property of a value's **whole live range**, not of the clobber op. N accumulators live across a call in a loop are confined at **every op of that loop**, so for N=8 the screen's O(1) early-out (`constrained ≤ smallestPool` = `8 ≤ 5`) does **not** fire and the exact matching runs at every op, on every iteration. "Bounded by 16×16" bounds ONE call and says nothing about the call COUNT. |
+| `betterPeak` | a fresh row + a `wordsPerRow` copy on every **tie** | `peakOutranks` **replaces on an exact tie** — that IS the tie-break. In a pressured loop every op carries the same confined pressure, so **every op is a tie**. The peak now carries scalars only (`PeakRank`); the row is re-derived once for the winner (`fillLiveBeforeOp`) from the same backward transfer the sweep steps with. |
+| `EffectivePools` / `defLiveAfter` | rebuilt over the whole **value space** per split — and the value space GROWS with every split | Θ(K × values) of allocation for columns whose contents are recomputed anyway. `popcountWord` was also Kernighan's clear-lowest-set loop, i.e. one iteration **per set bit** — its worst case on its commonest input (an unconstrained value's mask is the whole 14-register pool). It is SWAR now. |
+
+`ReachCache` additionally **outlives the split**: its rows are a pure function of `(peak block, def
+block)` over a CFG splitting cannot change, and the peak block does not move across the splits of one
+pressured loop, so K BFS walks collapse to one. `retargetTo` is the sole invalidator and
+`reachableFromPeak` **asserts** it was called — a row walked from a different peak would flip
+`killsValueAtPeak` and silently pick a different victim.
+
+**None of this changes a decision, and the gate proves it rather than the argument doing so:** the
+`specs-shv2` goldens are byte-identical, and the `E5001` cliff (accept/reject boundary AND exact
+diagnostic text, swept over N accumulators across a call in a loop) is unmoved against a
+parent-commit build. The exponent does **not** move, and no design in this space moves it: Belady
+ranks by farthest-next-use, so the victim is the value whose range is *widest* at the peak — on a
+loop-carried accumulator that range **is** the function, and any "dirty region" is the whole of it.
+
+> **⚠ REUSED SCRATCH IS NOT ZEROED SCRATCH. `Array.resize` DOES NOT ZERO A BUFFER IT DID NOT
+> ALLOCATE** — and its doc comment says it does ("New elements are zero-initialized"). It is
+> `reserve()` + `setLength()`, so the zeroing you get is the ALLOCATOR's, and only on a fresh
+> allocation. Measured: push 77 eight times, `clear()`, `resize(8)` — **all eight entries read back
+> 77**. Every buffer in `HallScratch` / `SplitScratch` / `ReachCache` is therefore explicitly
+> re-initialized over the extent it will be read (`refillColumn` writes `[0, count)`; `resetRow`
+> zeroes; `bitsetCollectRow` and `targetOpOperands` `clear()` their outputs). That is LOAD-BEARING,
+> not defensive: this is the whole hazard of hoisting per-call allocation out to per-function scratch,
+> and skipping it hands the next split the previous split's answers.
+>
+> **⚠ A NARROW RANGED ELEMENT TRUNCATES SILENTLY THROUGH A WIDE PARAMETER.** A narrower ranged alias
+> **unifies silently** with the wider one, so passing an `Array with int(0 to 16)` to a parameter
+> typed `Array with int(0 to u64.max)` compiles clean. Element width is dictionary-passed WITH THE
+> VALUE, so the stride stays correct and neighbouring memory is safe — measured: writing 300 through
+> the wide parameter smashes **nothing**. What it does is **truncate**: the value reads back **44**
+> (300 mod 256), and a 44 now lives inside an `int(0 to 16)`, violating the very range invariant the
+> narrow type exists to state. The range is checked at the narrow `set` sites, NOT at the wide one.
+> So a narrow column is safe to *store* through its own type and unsafe to *write* through a wide
+> alias — and nothing warns you.
+
 ### Liveness: SSA path exploration, no fixpoint, sparse sets
 
 The classic iterative dataflow fixpoint (`liveIn = use ∪ (liveOut ∖ def)`, swept to convergence over

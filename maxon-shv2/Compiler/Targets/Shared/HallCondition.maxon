@@ -59,6 +59,18 @@
 // pool — so `|live| <= |pool| <= RegisterFileSize` there, and the whole search is bounded by 16
 // values × 16 registers. Everything else on the per-op path is the O(16) prefix scan, behind a
 // zero-constrained-values gate.
+//
+// THAT BOUND IS ON ONE CALL, AND IT SAYS NOTHING ABOUT HOW OFTEN THE CALL HAPPENS — which is where
+// the cost actually was. Confinement is a property of a value's WHOLE LIVE RANGE, not of the clobber
+// op: N accumulators live across a call in a loop are confined to the 5 callee-saved registers at
+// EVERY op of that loop. So for N = 8 the screen's O(1) early-out (`constrained <= smallestPool`, i.e.
+// `8 <= 5`) does NOT fire, the prefix scan reports `C(5) = 8 > 5`, and the exact matching runs at
+// every op of the loop — on every one of the splitter's iterations. The search being small does not
+// make it free when it is entered thousands of times, and the matching used to HEAP-ALLOCATE its five
+// working columns on every entry (two of them PER VALUE, inside `augmentValue`). `HallScratch` is
+// those five buffers, allocated once per function and reused — the discipline ARCHITECTURE.md states
+// for the whole allocator ("scratch buffers: allocated once, reused across functions") and that this
+// file was the last place not to follow.
 
 // A value's position in ONE PROGRAM POINT's live-value list — the "values" side of the bipartite
 // matching below, and the key its two inverse maps are stated in. It is NOT a ValueId (the matching
@@ -101,14 +113,18 @@ export type EffectivePools
 	export var sizes as RegCountColumn
 	export var anyConstrained as bool
 
-	export static function of(liveness LivenessResult, pool RegMask) returns EffectivePools
+	// Fill a column the CALLER owns. The splitter runs one of these per split, and the value space it
+	// spans grows with every split, so allocating the column here made it Θ(splits × values) of
+	// allocation on top of the Θ(splits × values) of arithmetic. Every entry in [0, valueCount) is
+	// written below, so a longer previous life cannot leak a stale size (see `refillColumn`).
+	export static function fill(sizes RegCountColumn, liveness LivenessResult, pool RegMask) returns EffectivePools
 		let fullPoolSize = regMaskPopcount(pool)
-		var sizes = zeroColumn(liveness.valueCount)
+		sizes.resize(liveness.valueCount)
 		var anyConstrained = false
 
 		for v in 0 upto liveness.valueCount 'eachValue'
 			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
-			try sizes.set(v, value: size) otherwise panic("EffectivePools.of: sizes.set OOB for value {v}")
+			try sizes.set(v, value: size) otherwise panic("EffectivePools.fill: sizes.set OOB for value {v}")
 
 			if size < fullPoolSize 'constrained'
 				anyConstrained = true
@@ -116,7 +132,7 @@ export type EffectivePools
 		end 'eachValue'
 
 		return Self{sizes: sizes, anyConstrained: anyConstrained}
-	end 'of'
+	end 'fill'
 end 'EffectivePools'
 
 // ==========================================================================
@@ -295,6 +311,52 @@ end 'valueIdListContains'
 // Stage 2 — the exact confirmation (maximum bipartite matching)
 // ==========================================================================
 
+// The exact confirmation's five working columns, allocated ONCE and reused at every point it runs at.
+//
+// They used to be allocated PER CALL — and `parentOfReg` + `queue` PER VALUE, inside `augmentValue` —
+// so one verdict over `L` live values cost `2L + 4` heap arrays. See the file header for why the call
+// count is the problem: a confined value is confined at every op it is live at, so on the shape that
+// spills (accumulators across a call in a loop) this runs at EVERY op of the loop, on EVERY splitter
+// iteration.
+//
+// Reusing them changes NO arithmetic: every column is fully re-initialized over the extent this
+// point's live list actually reads (`hallVerdictAt` refills both matching maps, `augmentValue` refills
+// its parent links, and both walks `clear()` the shared queue), so the augmenting searches run in the
+// same order, over the same edges, and land on the same matching. `queue` is shared by the two graph
+// walks because they never overlap — `tightRegisterSet` runs only after the last `augmentValue`
+// returns.
+//
+// EVERY COLUMN HERE IS A `DenseColumn`-WIDTH COLUMN, AND `regOfValue` IS THE ONE THAT HAD TO BE SAID
+// OUT LOUD. It holds register numbers, so the name that fits it is `RegNumColumn` — and that is
+// exactly what it must NOT be. `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a
+// narrow ELEMENT: `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. But the
+// columns below are refilled through `refillColumn`, whose parameter is a `DenseColumn` — an 8-byte
+// element — and the type checker ACCEPTS the substitution silently, because a `typealias` over a
+// narrower range unifies with the wider one. Declaring this field `RegNumColumn` therefore handed a
+// 1-byte-per-element array to code that addresses it 8 bytes per element, and the result was memory
+// corruption whose SYMPTOM was a false `E5001` on a program that fits the machine — and whose failure
+// set MOVED when unrelated allocations elsewhere changed the heap layout.
+//
+// The other four columns are `int(0 to u64.max)` aliases already, so they are 8-byte and agree. This
+// one is `DenseColumn` because it is refilled as one; `RegNum`'s range still guards every value that
+// goes IN, at the `set` sites that use it.
+export type HallScratch
+	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
+	export var allowed as RegMaskColumn
+	// The matching, as its two inverse maps (positions in `live`, not ValueIds). `regOfValue` holds
+	// register numbers (`RegNum`), but at `DenseColumn` WIDTH — see the note above.
+	export var regOfValue as DenseColumn
+	export var valueOfReg as LiveIndexColumn
+	// One augmenting search's parent links: register -> the value position that offered it.
+	export var parentOfReg as LiveIndexColumn
+	// The worklist both alternating-path walks drive off.
+	export var queue as LiveIndexColumn
+
+	export static function create() returns HallScratch
+		return Self{allowed: RegMaskColumn.create(), regOfValue: DenseColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create()}
+	end 'create'
+end 'HallScratch'
+
 // What the exact test says about one program point.
 export union HallVerdict
 	// Every live value can be given a DISTINCT register it is allowed to take. The point colours,
@@ -324,13 +386,13 @@ end 'HallVerdict'
 // value never takes a callee-saved one while a caller-saved one is free) and because a copy hint may
 // never take a register outside a value's preferred class while that class still has one free
 // (`preferredClassMask`, M5.12). A point this call declares feasible is one the colorer can colour.
-export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask) returns HallVerdict
+export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 	// "No register" / "no value" markers, each one past the last valid index of its side.
 	let noRegister = RegisterFileSize as RegNum
 	let noValue = valueCount
 
-	var allowed = RegMaskColumn.create()
+	var allowed = scratch.allowed
 	allowed.resize(valueCount)
 	for i in 0 upto valueCount 'eachValue'
 		let v = try live.get(i) otherwise panic("hallVerdictAt: live.get OOB at {i}")
@@ -338,13 +400,16 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	end 'eachValue'
 
 	// The matching, as its two inverse maps. Positions in `live`, not ValueIds — the search is over
-	// this point's live set alone, so a dense 0..valueCount numbering is the right one.
-	var regOfValue = filledColumn(valueCount, value: noRegister)
-	var valueOfReg = filledColumn(RegisterFileSize, value: noValue)
+	// this point's live set alone, so a dense 0..valueCount numbering is the right one. `noValue` IS
+	// `valueCount`, so `valueOfReg` must be re-filled on every call, not merely on a resize.
+	var regOfValue = scratch.regOfValue
+	refillColumn(regOfValue, count: valueCount, value: noRegister)
+	var valueOfReg = scratch.valueOfReg
+	refillColumn(valueOfReg, count: RegisterFileSize, value: noValue)
 
 	var matched = 0 as RegCount
 	for i in 0 upto valueCount 'augment'
-		if augmentValue(i, allowed: allowed, regOfValue: regOfValue, valueOfReg: valueOfReg, noRegister: noRegister, noValue: noValue) 'grew'
+		if augmentValue(i, scratch: scratch, noRegister: noRegister, noValue: noValue) 'grew'
 			matched = matched + 1
 		end 'grew'
 	end 'augment'
@@ -353,7 +418,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		return HallVerdict.feasible
 	end 'saturated'
 
-	let witness = tightRegisterSet(allowed, regOfValue: regOfValue, valueOfReg: valueOfReg, valueCount: valueCount, noRegister: noRegister, noValue: noValue)
+	let witness = tightRegisterSet(scratch, valueCount: valueCount, noRegister: noRegister, noValue: noValue)
 	let tight = countConfinedTo(allowed, witness: witness, valueCount: valueCount)
 
 	// The tight set is exactly the unmatched values plus the holders of the witness registers — every
@@ -378,12 +443,18 @@ end 'hallVerdictAt'
 // ITERATIVE — a worklist plus one parent link per register — like every other graph walk in the
 // allocator. The parent links are not just an anti-recursion device: they ARE the path the
 // augmentation walks back along.
-function augmentValue(start LiveIndex, allowed RegMaskColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, noRegister RegNum, noValue LiveIndex) returns bool
+function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, noValue LiveIndex) returns bool
+	var allowed = scratch.allowed
+	var valueOfReg = scratch.valueOfReg
 	// register -> the value position that offered it during THIS search (its predecessor on the
-	// alternating path). Only registers in `visited` have a meaningful entry.
-	var parentOfReg = filledColumn(RegisterFileSize, value: noValue)
+	// alternating path). Only registers in `visited` have a meaningful entry, and `visited` is local to
+	// this search — but the column is re-filled anyway, so a stale link can never be read even if that
+	// reasoning is ever broken by an edit.
+	var parentOfReg = scratch.parentOfReg
+	refillColumn(parentOfReg, count: RegisterFileSize, value: noValue)
 	var visited = 0 as RegMask
-	var queue = LiveIndexColumn.create()
+	var queue = scratch.queue
+	queue.clear()
 	queue.push(start)
 
 	var head = 0 as ColumnLength
@@ -405,7 +476,7 @@ function augmentValue(start LiveIndex, allowed RegMaskColumn, regOfValue RegNumC
 
 			let holder = try valueOfReg.get(r) otherwise panic("augmentValue: valueOfReg.get OOB at {r}")
 			if holder == noValue 'freeRegister'
-				applyAugmentingPath(r, start: start, parentOfReg: parentOfReg, regOfValue: regOfValue, valueOfReg: valueOfReg, noRegister: noRegister)
+				applyAugmentingPath(r, start: start, scratch: scratch, noRegister: noRegister)
 				return true
 			end 'freeRegister'
 
@@ -420,7 +491,10 @@ end 'augmentValue'
 // register on it is re-assigned to the value that offered it, and THAT value's previous register —
 // vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
 // register, so the matching finishes one edge larger.
-function applyAugmentingPath(freeReg RegNum, start LiveIndex, parentOfReg LiveIndexColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, noRegister RegNum)
+function applyAugmentingPath(freeReg RegNum, start LiveIndex, scratch HallScratch, noRegister RegNum)
+	var parentOfReg = scratch.parentOfReg
+	var regOfValue = scratch.regOfValue
+	var valueOfReg = scratch.valueOfReg
 	var reg = freeReg
 	var reachedStart = false
 	while not reachedStart 'walkBack'
@@ -446,9 +520,15 @@ end 'applyAugmentingPath'
 // set and outnumber it by the deficiency. That is the set Hall's condition fails on, and it is why
 // removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
 // unmatched value augment into the chain.
-function tightRegisterSet(allowed RegMaskColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, valueCount LiveIndex, noRegister RegNum, noValue LiveIndex) returns RegMask
+function tightRegisterSet(scratch HallScratch, valueCount LiveIndex, noRegister RegNum, noValue LiveIndex) returns RegMask
+	var allowed = scratch.allowed
+	var regOfValue = scratch.regOfValue
+	var valueOfReg = scratch.valueOfReg
 	var reachable = 0 as RegMask
-	var queue = LiveIndexColumn.create()
+	// The queue is shared with `augmentValue`, which has finished by the time this runs (the matching
+	// must be MAXIMUM before its tight set means anything).
+	var queue = scratch.queue
+	queue.clear()
 	for i in 0 upto valueCount 'seedUnmatched'
 		if (try regOfValue.get(i) otherwise panic("tightRegisterSet: regOfValue.get OOB at {i}")) == noRegister 'unmatched'
 			queue.push(i)

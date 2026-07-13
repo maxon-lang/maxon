@@ -105,18 +105,49 @@ export typealias RegCountColumn = Array with RegCount
 // matching's two inverse maps all share. The result unifies with every purpose-named column above.
 export function filledColumn(count ColumnLength, value DenseInt) returns DenseColumn
 	var col = DenseColumn.create()
-	col.resize(count)
-	for i in 0 upto count 'fill'
-		try col.set(i, value: value) otherwise panic("filledColumn: set OOB")
-	end 'fill'
+	refillColumn(col, count: count, value: value)
 	return col
 end 'filledColumn'
 
-// A dense column of `count` ZEROES. `resize` already zero-fills (every bitset in the allocator
-// depends on that), so this is just the resize — whereas `filledColumn(n, 0)` would walk the whole
-// column doing bounds-checked writes to store zeroes over zeroes. The counting sorts and version
-// stamps allocate several of these per function, so on the many-small-functions shape (which is what
-// a real codebase, and this compiler's own source, looks like) that redundant pass is pure loss.
+// `filledColumn` WITHOUT the allocation: re-fill a column the caller already owns.
+//
+// This is what lets a per-iteration buffer become a per-FUNCTION one. The splitter rebuilds several
+// value-space columns on every split — and the value space itself grows with every split — so
+// allocating them per iteration was Θ(splits × values) of pure allocator traffic for columns whose
+// contents are recomputed from scratch each time anyway. Only the STORAGE is reused; never a value.
+//
+// EVERY entry in [0, count) is written, which is the whole safety argument: `resize` is NOT relied on
+// to zero. On a REUSED array it keeps its capacity, so growing the length back after a `clear()` hands
+// back the previous occupant's bytes, not zeroes — the trap that makes "just resize it" wrong here.
+//
+// ⚠ THE COLUMN YOU PASS MUST BE A `DenseColumn`-WIDTH COLUMN — one whose element alias is over the
+// FULL `int(0 to u64.max)` range. Every alias at the top of this file is, with ONE exception:
+// `RegNumColumn`, whose element `RegNum` is `int(0 to 16)`. A narrow range is a narrow ELEMENT
+// (`sizeof(int(0 to 16)) == 1`, against 8), so such a column is addressed one byte per entry — while
+// this function, compiled for `DenseColumn`, addresses it eight. The type checker does NOT stop you:
+// a narrower ranged alias unifies with the wider one, so the substitution is silent, and what you get
+// is memory corruption. It cost a day here (`HallCondition.HallScratch.regOfValue`, which reads as a
+// `RegNumColumn` and must not be one). Build register-number columns with `filledColumn` and keep them
+// at `DenseColumn` width.
+export function refillColumn(col DenseColumn, count ColumnLength, value DenseInt)
+	col.resize(count)
+	for i in 0 upto count 'fill'
+		try col.set(i, value: value) otherwise panic("refillColumn: set OOB")
+	end 'fill'
+end 'refillColumn'
+
+// A dense column of `count` ZEROES. Growing a FRESH column zero-fills it, so this is just the resize —
+// whereas `filledColumn(n, 0)` would walk the whole column doing bounds-checked writes to store zeroes
+// over zeroes. The counting sorts and version stamps allocate several of these per function, so on the
+// many-small-functions shape (which is what a real codebase, and this compiler's own source, looks
+// like) that redundant pass is pure loss.
+//
+// **"FRESH" IS LOAD-BEARING, and this is the sharp edge of the whole column API.** `resize` zero-fills
+// only where it has to ALLOCATE. On a column that has already lived — one that was `clear()`ed, or
+// shrunk and regrown — the capacity survives, and `resize` hands the new length straight back over the
+// previous occupant's bytes. (Measured: after `clear()` then `resize(8)`, all 8 entries still held
+// their old values.) So this function is correct because it OWNS the allocation; anything reusing a
+// column must re-initialize it explicitly — `refillColumn`, never `resize` alone.
 export function zeroColumn(count ColumnLength) returns DenseColumn
 	var col = DenseColumn.create()
 	col.resize(count)

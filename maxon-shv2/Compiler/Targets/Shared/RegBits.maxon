@@ -41,6 +41,14 @@ let BitsPerWord = 64
 let BitIndexMask = 0x3F
 let BitWordShift = 6
 
+// The SWAR popcount's field masks (`popcountWord`). Each selects the LOW half of every field of a
+// given width, which is what lets one add sum the pairs of that width in parallel across the word.
+let PopcountPairMask = 0x5555555555555555
+let PopcountNibbleMask = 0x3333333333333333
+let PopcountByteMask = 0x0F0F0F0F0F0F0F0F
+// The final fold leaves the whole count in byte 0 (it is at most 64, so it cannot carry out of a byte).
+let PopcountByteSelect = 0xFF
+
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
 export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
@@ -75,14 +83,6 @@ export function bitsetRemove(words BitWordArray, base BitWordIndex, bit BitIndex
 	let w = try words.get(idx) otherwise panic("bitsetRemove: word index out of range (base={base}, bit={bit}, count={words.count()})")
 	try words.set(idx, value: w and not bitOf(bit)) otherwise panic("bitsetRemove: word index out of range on set")
 end 'bitsetRemove'
-
-// Copy row `src[srcBase..]` into `dst[dstBase..]` over `wordsPerRow` words.
-export function bitsetCopyRow(dst BitWordArray, dstBase BitWordIndex, src BitWordArray, srcBase BitWordIndex, wordsPerRow BitWordCount)
-	for i in 0 upto wordsPerRow 'eachWord'
-		let s = try src.get(srcBase + i) otherwise panic("bitsetCopyRow: src word out of range")
-		try dst.set(dstBase + i, value: s) otherwise panic("bitsetCopyRow: dst set out of range")
-	end 'eachWord'
-end 'bitsetCopyRow'
 
 // The set bits of the row starting at `base`, appended to `out` in ascending order.
 //
@@ -147,16 +147,28 @@ export function trailingZeroCount(word MachineWord) returns WordBitIndex
 	return count
 end 'trailingZeroCount'
 
-// Bits set in one word (Kernighan's clear-lowest-set loop — fine for the sparse
-// live words M5.1 produces; a table/intrinsic is a later perf refinement).
+// Bits set in one word — SWAR, so the cost is a fixed handful of word ops rather than ONE ITERATION
+// PER SET BIT.
+//
+// It was Kernighan's clear-lowest-set loop, which is right for a SPARSE word and wrong for a DENSE
+// one — and the word this is actually called on is dense. `regMaskPopcount` is the only caller, and
+// its hottest site is `EffectivePools`: `popcount(pool ∖ forbidden(v))` for EVERY value of the
+// function, on EVERY splitter iteration. An UNCONSTRAINED value's mask is the whole pool — 14 bits —
+// so the loop ran its worst case on the overwhelmingly common input, over a value space that itself
+// grows with every split.
 function popcountWord(word MachineWord) returns WordBitCount
-	var w = word
-	var count = 0 as WordBitCount
-	while w != 0 'clearLowest'
-		w = w and (w - 1)
-		count = count + 1
-	end 'clearLowest'
-	return count
+	// Each 2-bit field becomes the count of the bits it held.
+	var w = word - ((word shr 1) and PopcountPairMask)
+	// Sum adjacent pairs into 4-bit fields.
+	w = (w and PopcountNibbleMask) + ((w shr 2) and PopcountNibbleMask)
+	// Sum adjacent nibbles into BYTE fields. Each byte now holds 0..8.
+	w = (w + (w shr 4)) and PopcountByteMask
+	// Fold the eight byte counts down into byte 0. Their total is at most 64, so no field can carry
+	// out of its byte and the low byte is the whole popcount.
+	w = w + (w shr 8)
+	w = w + (w shr 16)
+	w = w + (w shr 32)
+	return w and PopcountByteSelect
 end 'popcountWord'
 
 // ==========================================================================

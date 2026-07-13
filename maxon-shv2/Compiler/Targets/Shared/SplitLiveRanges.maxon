@@ -108,6 +108,35 @@
 // out of the loop — see `splitLiveRanges`). Making liveness incremental would need the per-block
 // live sets to be editable in place, which the CSR representation is deliberately not; that is
 // the remaining super-linear term (O(function × splits)) and the natural next step.
+//
+// ==========================================================================
+// WHAT THE PER-SPLIT RE-ANALYSIS IS ALLOWED TO COST — `SplitScratch`
+// ==========================================================================
+//
+// The driver runs a full `analyzePressure` per split, so ANY per-call cost in that sweep is paid K
+// times for a function needing K splits. Three of them were superlinear and none of them was the
+// traversal:
+//
+//  • `hallVerdictAt` HEAP-ALLOCATED its five working columns on every call, two of them PER LIVE VALUE
+//    — and it is called at nearly every op of a pressured loop, because a value confined by a call is
+//    confined at EVERY op it is live at. (`HallScratch`; see `HallCondition`'s header.)
+//  • `betterPeak` SNAPSHOTTED the live row on every TIE, because `peakOutranks` replaces on an exact
+//    tie — and in a loop whose ops all carry the same confined pressure, every op is a tie. That is an
+//    allocation plus a `wordsPerRow` copy per OP, per split. (`PeakRank` + `fillLiveBeforeOp`.)
+//  • `EffectivePools`, `defLiveAfter` and the sweep's working row are all sized by the VALUE SPACE,
+//    which itself grows with every split — so allocating them per iteration is Θ(splits × values).
+//
+// None of it changes a decision: the buffers are re-initialized over everything the iteration reads,
+// so every quantity is computed from scratch exactly as before. Only the storage survives.
+//
+// What is NOT attempted here, and deliberately: making `forbidden` / the live sets / the `UseIndex`
+// incremental across a split. Belady picks the value whose next use is FARTHEST from the peak
+// (`chooseVictim`), so on the shape that spills — a loop-carried accumulator — the victim's live range
+// IS the loop and the "dirty region" a smarter invalidation would recompute is the whole function.
+// The exponent does not move, and the failure mode of a wrong invalidation set is a value that loses a
+// clobber bit it should carry, hence a caller-saved register across a call: a silent miscompile. The
+// costs above are constants that can be removed with no invariant to preserve at all, and they are
+// removed first for exactly that reason.
 
 // One memoized reachability ROW of `ReachCache` — one per distinct DEF BLOCK the peak's candidates
 // have, so there are at most `numBlocks` of them and `numBlocks` is the "not walked yet" sentinel.
@@ -216,6 +245,35 @@ export type PressurePeak
 	end 'create'
 end 'PressurePeak'
 
+// The peak's RANK and LOCATION — everything the sweep's argmax is actually over, and NOTHING it is
+// not. It carries no live row, and that omission is the point.
+//
+// `peakOutranks` REPLACES on an exact tie (it is how the tie-break is implemented), so every op that
+// merely MATCHES the running best becomes a new best. In a loop holding N accumulators across a call
+// those values are confined at every op of the loop, so Hall reports the same `tight` everywhere and
+// EVERY op of the loop ties — and the old code took a fresh heap row plus a `wordsPerRow` copy at each
+// one, on every splitter iteration, to hold a snapshot all but the last of them would discard.
+//
+// The row is derived ONCE, for the winner, by `fillLiveBeforeOp` — from the same backward transfer
+// function the sweep steps with, so it is bit-for-bit the row the snapshot would have taken.
+type PeakRank
+	export var found as bool
+	export var pressure as RegCount
+	export var blockLocal as CfgIndex
+	// The winner's FORWARD position within its block. `peakSeq` cannot stand in for it: that is a
+	// function-GLOBAL number, and recovering a position from it would need the block's base sequence
+	// carried back out of the sweep.
+	export var forwardPos as BlockOpPos
+	export var peakSeq as OpSeq
+	export var clobberOnly as bool
+	export var witness as RegMask
+	export var atFixedRegisterOp as bool
+
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PeakRank
+		return Self{found: found, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
+	end 'create'
+end 'PeakRank'
+
 // How a spill's store/reload placement is constrained — the amended Rule 2 in one type.
 //
 //  • `cold` — the classic shape: every inserted op must land at loop depth 0 (asserted by
@@ -300,6 +358,42 @@ union SpillChoice
 	spill(valueId ValueId, scope SplitScope)
 end 'SpillChoice'
 
+// Every buffer the per-split pressure sweep and victim choice need, allocated ONCE per FUNCTION and
+// reused by every iteration of the driver's loop. See the file header for why per-iteration
+// allocation was the cost.
+//
+// The ONE rule that makes reuse safe, and it is not "resize will zero it": `Array.resize` keeps its
+// capacity across a `clear()`, so growing the length back hands the previous occupant's bytes to the
+// next reader. Every buffer here is therefore either fully re-filled over the extent that iteration
+// reads (`refillColumn`, `resetRow`, `EffectivePools.fill`) or `clear()`ed before its first push.
+type SplitScratch
+	// The pressure sweep's ONE dense working row, and the operand/op buffers it steps with.
+	export var liveRow as BitWordArray
+	export var buf as OperandList
+	export var ordered as OpIndexArray
+	export var seedBuf as ValueIdArray
+	// Hall's machinery: the per-value effective-pool sizes, the running census of the live set by that
+	// size, the census's observed-delta scratch, and the exact confirmation's five columns.
+	export var effPoolSizes as RegCountColumn
+	export var census as RegPoolCensus
+	export var censusIds as ValueIdArray
+	export var censusWasLive as BoolArray
+	export var liveAtOp as ValueIdArray
+	export var hall as HallScratch
+	// Per-value def-point pressure — the gate `storeFitsPool` reads. Sized by the value space, and the
+	// value space grows with every split.
+	export var defLiveAfter as RegCountColumn
+	// `chooseVictim`'s two buffers, plus the reachability memo — which, unlike everything else here,
+	// keeps its CONTENTS across iterations (see `ReachCache`).
+	export var usedAtPeak as BitWordArray
+	export var candidates as ValueIdArray
+	export var reach as ReachCache
+
+	static function create(numBlocks CfgIndex) returns SplitScratch
+		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), ordered: OpIndexArray.create(), seedBuf: ValueIdArray.create(), effPoolSizes: RegCountColumn.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks)}
+	end 'create'
+end 'SplitScratch'
+
 // ==========================================================================
 // The driver
 // ==========================================================================
@@ -338,6 +432,9 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	var cfg = buildFuncCfg(module, func: func, topo: topo)
 	var nextValueId = cfg.valueCount
 	var liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
+	// One set of working buffers for every iteration below — the sweep and the victim choice allocate
+	// nothing per split (see `SplitScratch`). It is sized off the CFG, which splitting cannot change.
+	var scratch = SplitScratch.create(cfg.topo.numBlocks)
 
 	// TERMINATION. Each iteration splits one value at the worst OVER-POOL op: the victim goes to
 	// memory ACROSS that op (dead there), so the op's pressure drops by exactly one, while NO other
@@ -360,7 +457,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// so the peak-finder and this driver agree. `peak.found == false` means NO point overflows —
 	// the colorer will succeed. It is recomputed each iteration because a prior spill lowers a
 	// later def's live-after (an earlier-stored sibling frees a register before this def).
-	var analysis = analyzePressure(module, liveness: liveness, pool: pool)
+	var analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch)
 	while analysis.peak.found 'relievePressure'
 		if iterations >= iterationBound 'runaway'
 			panic("splitLiveRanges: '{func.name}' did not converge after {iterations} splits (peak effective pressure {analysis.peak.pressure} still over its pool) — a splitter bug")
@@ -370,7 +467,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let peak = analysis.peak
 
 		let index = liveness.useIndex
-		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, poolSize: poolSize)
+		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, poolSize: poolSize, scratch: scratch)
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage)
@@ -391,7 +488,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		// re-sizes every value-indexed column of the next liveness + index build.
 		cfg.valueCount = nextValueId
 		liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
-		analysis = analyzePressure(module, liveness: liveness, pool: pool)
+		analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch)
 	end 'relievePressure'
 
 	func.stackSize = nextSlot * SpillSlotBytes
@@ -511,36 +608,39 @@ end 'timedLiveness'
 // Every quantity comes from the operand model + the liveness `forbidden` column, never a hardcoded
 // opcode, so calls, `idiv`, `cqo` and argument pre-moves are handled uniformly. Mirrors
 // TargetLiveness's pressure sweep.
-function analyzePressure(module TargetModule, liveness LivenessResult, pool RegMask) returns PressureAnalysis
+function analyzePressure(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch) returns PressureAnalysis
 	let topo = liveness.cfg.topo
 	let wordsPerRow = liveness.wordsPerRow
 	let valueCount = liveness.valueCount
-	var liveRow = zeroRow(wordsPerRow)
-	var buf = OperandList.create()
-	// Scratch reused across every block — otherwise one allocation per block, per iteration.
-	var ordered = OpIndexArray.create()
-	var seedBuf = ValueIdArray.create()
+	// Every buffer below is the FUNCTION's, not this call's (see `SplitScratch`), so each is reset over
+	// exactly the extent this sweep reads before anything reads it.
+	var liveRow = scratch.liveRow
+	resetRow(liveRow, wordsPerRow: wordsPerRow)
+	var buf = scratch.buf
+	var ordered = scratch.ordered
+	var seedBuf = scratch.seedBuf
 	let fullPoolSize = regMaskPopcount(pool)
 
 	// The Hall machinery: one dense `value -> popcount(pool ∖ forbidden(v))` column, the running
 	// census of the live set by that size, and the scratch its incremental maintenance + its (rare)
-	// exact confirmation need. All allocated ONCE per sweep and reused across every block and op.
-	let effPools = EffectivePools.of(liveness, pool: pool)
+	// exact confirmation need.
+	let effPools = EffectivePools.fill(scratch.effPoolSizes, liveness: liveness, pool: pool)
 	let effPoolSizes = effPools.sizes
 	// Nothing in this function is confined to a register subset (no call, no idiv, no argument
 	// pre-move), so Hall's condition cannot fail against a proper subset of the pool and the census
 	// would be bookkeeping for a question whose answer is already known. Skipping it takes the census
 	// off the per-operand path entirely — see `EffectivePools`.
 	let censusNeeded = effPools.anyConstrained
-	var census = RegPoolCensus.create()
-	var censusIds = ValueIdArray.create()
-	var censusWasLive = BoolArray.create()
-	var liveAtOp = ValueIdArray.create()
+	var census = scratch.census
+	var censusIds = scratch.censusIds
+	var censusWasLive = scratch.censusWasLive
+	var liveAtOp = scratch.liveAtOp
 
-	var best = PressurePeak.create(false, pressure: 0, blockLocal: 0, liveBefore: zeroRow(wordsPerRow), peakSeq: 0, clobberOnly: false, witness: pool, atFixedRegisterOp: false)
+	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, atFixedRegisterOp: false)
 	// A value with no op-def (a phi / a value never defined by an op) keeps this sentinel
 	// (`valueCount + 1`, above any real count) so it is never mistaken for store-safe.
-	var defLiveAfter = filledColumn(valueCount, value: valueCount + 1)
+	var defLiveAfter = scratch.defLiveAfter
+	refillColumn(defLiveAfter, count: valueCount, value: valueCount + 1)
 	var blockBaseSeq = 0 as OpSeq
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
@@ -618,10 +718,10 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 			// pressure fits and a store anchor is always available.
 			let atFixedRegisterOp = opIsFixedRegisterPoint(op)
 			if effective > fullPoolSize 'fullPoolOverflow'
-				best = betterPeak(best, pressure: effective, blockLocal: i, liveBefore: liveRow, peakSeq: seq, clobberOnly: false, witness: pool, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+				best = betterPeak(best, pressure: effective, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: pool, atFixedRegisterOp: atFixedRegisterOp)
 			end 'fullPoolOverflow' else if censusNeeded and census.screenViolates(fullPoolSize) 'maybeConfined'
 				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
-				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, liveBefore: liveRow, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
 			end 'maybeConfined'
 		end 'eachOpRev'
 
@@ -643,30 +743,66 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		blockBaseSeq = blockBaseSeq + opCount
 	end 'eachBlock'
 
-	return PressureAnalysis.create(best, defLiveAfter: defLiveAfter)
+	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: best, scratch: scratch), defLiveAfter: defLiveAfter)
 end 'analyzePressure'
+
+// The winning rank, with its live-before row attached — the `PressurePeak` the driver, `chooseVictim`
+// and the E5001 diagnostic all read. Built ONCE per sweep, for the winner alone.
+function materializePeak(module TargetModule, liveness LivenessResult, rank PeakRank, scratch SplitScratch) returns PressurePeak
+	var liveBefore = zeroRow(liveness.wordsPerRow)
+	if rank.found 'derivePeakRow'
+		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
+	end 'derivePeakRow'
+	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, clobberOnly: rank.clobberOnly, witness: rank.witness, atFixedRegisterOp: rank.atFixedRegisterOp)
+end 'materializePeak'
+
+// The live-BEFORE set at ONE op, re-derived by re-walking its block backward from the block's live-out
+// set down to that op. `row` must be zero on entry.
+//
+// This is the SAME seed (`seedRowFromLiveOut`) and the SAME backward transfer
+// (`stepRowBackwardOverOperands`) the sweep itself steps with — not a second implementation of either
+// — so it lands on exactly the row the sweep held there. There is no transfer function here to drift
+// out of step with the one that found the peak.
+//
+// It costs ONE partial block sweep per pressure analysis, and it is what buys the removal of a heap
+// row plus a full `wordsPerRow` copy at EVERY tying op of EVERY block (see `PeakRank`).
+function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLocal CfgIndex, forwardPos BlockOpPos, row BitWordArray, scratch SplitScratch)
+	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
+	liveness.seedRowFromLiveOut(blockLocal, row: row, scratch: scratch.seedBuf)
+	var liveCount = scratch.seedBuf.count()
+
+	scratch.ordered.clear()
+	collectBlockOps(block, out: scratch.ordered)
+	let opCount = scratch.ordered.count()
+	// Step back over the ops at forward positions `opCount-1` down to `forwardPos` INCLUSIVE: after the
+	// step over the op AT `forwardPos`, the row is that op's live-BEFORE set.
+	for ri in 0 upto opCount - forwardPos 'stepBackToPeak'
+		let opIdx = try scratch.ordered.get(opCount - 1 - ri) otherwise panic("fillLiveBeforeOp: ordered.get OOB")
+		let op = try module.ops.get(opIdx) otherwise panic("fillLiveBeforeOp: opIdx not in module.ops")
+		targetOpOperands(op, buf: scratch.buf)
+		liveCount = stepRowBackwardOverOperands(row, base: 0, buf: scratch.buf, liveCount: liveCount)
+	end 'stepBackToPeak'
+end 'fillLiveBeforeOp'
 
 // The better of `best` and a CONFINED overflow at this op — but only if there IS one. The
 // cardinality screen that got us here NEVER MISSES a real violation and is not exact about the rest
 // (the forbidden masks are not laminar — see `HallCondition`), so the exact verdict decides. A false
 // peak here would spill a value the program could have coloured, which is the same class of harm as
 // a false E5001 in a smaller key: pressure relief added to code that was already fine.
-function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PressurePeak, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, atFixedRegisterOp bool, wordsPerRow BitWordCount) returns PressurePeak
-	return match hallVerdictAt(liveness, live: live, pool: pool) 'verdict'
+function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PeakRank, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, atFixedRegisterOp bool, hall HallScratch) returns PeakRank
+	return match hallVerdictAt(liveness, live: live, pool: pool, scratch: hall) 'verdict'
 		feasible gives best
-		overflow(witness, tight) gives betterPeak(best, pressure: tight, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: true, witness: witness, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+		overflow(witness, tight) gives betterPeak(best, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
 	end 'verdict'
 end 'confinedPeakAt'
 
-// `best`, replaced by the candidate peak iff the candidate outranks it. The ONE place a
-// `PressurePeak` is minted from a candidate, so both overflow kinds agree on the ranking and on
-// snapshotting the live row (which only the WINNER pays for — `copyOfRow` is a full row copy, and
-// doing it before the rank test would cost one per overflowing op rather than one per new peak).
-function betterPeak(best PressurePeak, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool, wordsPerRow BitWordCount) returns PressurePeak
+// `best`, replaced by the candidate peak iff the candidate outranks it. The ONE place a `PeakRank` is
+// minted from a candidate, so both overflow kinds agree on the ranking.
+function betterPeak(best PeakRank, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PeakRank
 	if not peakOutranks(not clobberOnly, atFixedRegisterOp: atFixedRegisterOp, pressure: pressure, best: best) 'keepBest'
 		return best
 	end 'keepBest'
-	return PressurePeak.create(true, pressure: pressure, blockLocal: blockLocal, liveBefore: copyOfRow(liveBefore, wordsPerRow: wordsPerRow), peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
+	return PeakRank.create(true, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
 end 'betterPeak'
 
 // Is `op` itself a FIXED-REGISTER point — does it clobber registers implicitly (a call's 9
@@ -694,9 +830,19 @@ end 'opIsFixedRegisterPoint'
 // DIFFERENT calls, converging where none of them is — has no such op, and is relieved where it is
 // seen. That is the case this whole test exists to find.
 //
-// Otherwise ties resolve toward the EARLIER op: the sweep visits ops in DECREASING forward sequence,
-// so the last update at a given pressure is the earliest one.
-function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCount, best PressurePeak) returns bool
+// OTHERWISE THE LAST CANDIDATE OFFERED WINS — this function returns `true` on an EXACT tie, so a tying
+// candidate REPLACES the incumbent. Read with the sweep's visit order (`analyzePressure` walks blocks
+// in ASCENDING local index and, within a block, ops in DECREASING forward position), that resolves an
+// exact tie to **the EARLIEST op of the HIGHEST-INDEXED tying block**.
+//
+// This comment used to say "ties resolve toward the EARLIER op", which is true WITHIN ONE BLOCK and
+// false across blocks — and it is not a harmless imprecision. A confined value is confined at every op
+// it is live at, so in a pressured loop Hall reports the same `tight` at every op the confined values
+// span, across several blocks: nearly every op is an exact tie, and a peak-finder rewritten from the
+// old wording (an argmax over descending GLOBAL sequence, say) would pick a different op, hence a
+// different victim, hence different slots — in most spill-heavy programs there are. Anything that
+// re-derives this ranking must reproduce the ORDER, not the sentence.
+function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCount, best PeakRank) returns bool
 	if not best.found 'firstPeak'
 		return true
 	end 'firstPeak'
@@ -741,11 +887,15 @@ function zeroRow(wordsPerRow BitWordCount) returns BitWordArray
 	return row
 end 'zeroRow'
 
-function copyOfRow(src BitWordArray, wordsPerRow BitWordCount) returns BitWordArray
-	var row = zeroRow(wordsPerRow)
-	bitsetCopyRow(row, dstBase: 0, src: src, srcBase: 0, wordsPerRow: wordsPerRow)
-	return row
-end 'copyOfRow'
+// Bring a REUSED row to `wordsPerRow` zeroed words. `resize` alone will not do it: the array keeps its
+// capacity, so widening it back to a value space that has grown since the last split hands the reader
+// the previous iteration's words rather than zeroes.
+function resetRow(row BitWordArray, wordsPerRow BitWordCount)
+	row.resize(wordsPerRow)
+	for w in 0 upto wordsPerRow 'zero'
+		try row.set(w, value: 0) otherwise panic("resetRow: set OOB at word {w}")
+	end 'zero'
+end 'resetRow'
 
 // ==========================================================================
 // Choosing a victim (Belady/MIN, with remat preferred)
@@ -791,19 +941,22 @@ end 'copyOfRow'
 // to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
-function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, poolSize RegCount) returns SpillChoice
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, poolSize RegCount, scratch SplitScratch) returns SpillChoice
 	let topo = liveness.cfg.topo
 	let placement = placementOf(peak)
-	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak)
-	var candidates = ValueIdArray.create()
+	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak, scratch: scratch)
+	var candidates = scratch.candidates
 	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: candidates)
 
 	// `killsValueAtPeak` walks the CFG forward from the peak, stopping at the candidate's def
 	// block — so the walk depends only on that def block, and the candidates crossing one peak
 	// overwhelmingly share it (a loop's accumulators are all phis of the same header). Memoized
 	// per def block, the whole `chooseVictim` call costs a handful of walks instead of one per
-	// candidate.
-	var reach = ReachCache.create(topo.numBlocks)
+	// candidate — and the memo SURVIVES the split, because the rows depend only on the CFG (which
+	// splitting cannot change) and on the peak block (which it usually does not move: N accumulators
+	// across ONE call in a loop peak at that same call for every one of their splits).
+	var reach = scratch.reach
+	reach.retargetTo(peak.blockLocal)
 
 	var bestRemat = BeladyBest.create()
 	var bestSpill = BeladyBest.create()
@@ -933,10 +1086,11 @@ end 'storeFitsPool'
 // invariant `noVictimAtPeak` asserts: an op names at most TWO virtual registers, while the tight set
 // outnumbers the witness and any witness a clobber produces holds at least the five callee-saved
 // registers — so at least four confined values survive this cut.
-function usesAtPeakOp(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak) returns BitWordArray
-	var row = zeroRow(liveness.wordsPerRow)
+function usesAtPeakOp(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, scratch SplitScratch) returns BitWordArray
+	var row = scratch.usedAtPeak
+	resetRow(row, wordsPerRow: liveness.wordsPerRow)
 	let op = try module.ops.get(index.opAtSequence(peak.peakSeq)) otherwise panic("usesAtPeakOp: peak op not in module.ops")
-	var buf = OperandList.create()
+	var buf = scratch.buf
 	targetOpOperands(op, buf: buf)
 	for o in buf 'eachOperand'
 		if (not operandIsDef(o)) and operandIsVirtual(o) 'use'
@@ -1180,7 +1334,7 @@ function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, pe
 		if index.useSeqAt(record) >= peak.peakSeq 'afterPeak'
 			continue
 		end 'afterPeak'
-		if reach.reachableFromPeak(topo, peakBlockLocal: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
+		if reach.reachableFromPeak(topo, peakBlock: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
 			return false
 		end 'notKilled'
 	end 'check'
@@ -1191,21 +1345,60 @@ end 'killsValueAtPeak'
 // def block. The peak is fixed for one `chooseVictim` call, so the walk is a function of the def
 // block alone — and a loop's candidates are overwhelmingly phis of the SAME header, so one walk
 // serves them all. Rows live in ONE flat `rows × numBlocks` array (never an array of arrays).
+//
+// IT OUTLIVES THE SPLIT, and that is worth more than the memo within one call. A row is a pure
+// function of `(peak block, def block)` over the CFG, and the CFG is INVARIANT under splitting (a
+// split inserts body ops, rewrites operands and repoints edge args — it never adds a block or moves an
+// edge). So a row walked for one splitter iteration is still exact for the next one, PROVIDED the peak
+// block is the same — which on the shape that spills it is: N accumulators across ONE call in a loop
+// peak at that same call for every one of their splits. Rebuilding the cache per split cost an O(blocks)
+// allocation and fill plus a fresh BFS per def block, K times, for rows that had not changed.
+//
+// `retargetTo` is the one thing that invalidates them, and `reachableFromPeak` ASSERTS it was called:
+// serving a row walked from a DIFFERENT peak would flip `killsValueAtPeak`, change the victim's tier,
+// and silently emit a different split.
 type ReachCache
 	var numBlocks as CfgIndex
+	// The peak block every row in `rows` was walked FROM. `hasPeak` is false until the first
+	// `retargetTo`, which is the state in which no row exists to be misread.
+	var hasPeak as bool
+	var peakBlockLocal as CfgIndex
 	// defBlock -> its row index in `rows`, or `numBlocks` for "not walked yet" (no row index can
 	// equal numBlocks: there are at most numBlocks distinct def blocks, so rows are 0..numBlocks-1).
 	var rowOf as ReachRowColumn
 	var rows as BoolArray
 	var rowCount as ReachRow
 
+	// `rowOf` is left EMPTY here and sized by the first `retargetTo` (`refillColumn` resizes as well
+	// as fills). The overwhelmingly common function needs no split at all — 1202 of 1202 in the
+	// call-heavy benchmark — and so never reaches `chooseVictim` and never retargets. Sizing the
+	// column eagerly would put a per-function allocation, proportional to the block count, on every
+	// function in the program to serve the few that spill.
 	static function create(numBlocks CfgIndex) returns ReachCache
-		return Self{numBlocks: numBlocks, rowOf: filledColumn(numBlocks, value: numBlocks), rows: BoolArray.create(), rowCount: 0}
+		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, rowOf: ReachRowColumn.create(), rows: BoolArray.create(), rowCount: 0}
 	end 'create'
 
+	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
+	// different peak is forgotten; a repeat of the same peak block keeps every row it already has.
+	export function retargetTo(peakBlock CfgIndex)
+		if self.hasPeak and self.peakBlockLocal == peakBlock 'samePeakBlock'
+			return
+		end 'samePeakBlock'
+
+		self.hasPeak = true
+		self.peakBlockLocal = peakBlock
+		self.rowCount = 0
+		self.rows.clear()
+		refillColumn(self.rowOf, count: self.numBlocks, value: self.numBlocks)
+	end 'retargetTo'
+
 	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
-	export function reachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
-		let row = self.rowFor(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock)
+	export function reachableFromPeak(topo FuncTopology, peakBlock CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
+		if (not self.hasPeak) or self.peakBlockLocal != peakBlock 'staleTarget'
+			panic("ReachCache.reachableFromPeak: the cached walks start at peak block {self.peakBlockLocal} but the caller is asking about peak block {peakBlock} — `retargetTo` must run once per peak, before any query. A row walked from a different peak would flip `killsValueAtPeak`, pick a different victim, and emit a different split.")
+		end 'staleTarget'
+
+		let row = self.rowFor(topo, defBlock: defBlock)
 		return try self.rows.get(self.slotOf(row, block: block)) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
 	end 'reachableFromPeak'
 
@@ -1215,7 +1408,7 @@ type ReachCache
 		return row * self.numBlocks + block
 	end 'slotOf'
 
-	function rowFor(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex) returns ReachRow
+	function rowFor(topo FuncTopology, defBlock CfgIndex) returns ReachRow
 		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
 		if cached != self.numBlocks 'hit'
 			return cached
@@ -1224,7 +1417,14 @@ type ReachCache
 		let row = self.rowCount
 		self.rowCount = row + 1
 		self.rows.resize(self.rowCount * self.numBlocks)
-		markBlocksReachableFromPeak(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: self.slotOf(row, block: 0))
+		let base = self.slotOf(row, block: 0)
+		// The walk below only ever SETS marks, so the row must arrive all-false — and `resize` does not
+		// deliver that on a REUSED `rows`: after `retargetTo`'s `clear()` the capacity survives, so
+		// growing the length back would hand this walk the PREVIOUS peak's marks.
+		for b in 0 upto self.numBlocks 'clearRow'
+			try self.rows.set(base + b, value: false) otherwise panic("ReachCache.rowFor: rows.set OOB")
+		end 'clearRow'
+		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row
 	end 'rowFor'
