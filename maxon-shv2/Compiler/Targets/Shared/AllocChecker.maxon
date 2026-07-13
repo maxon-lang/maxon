@@ -50,14 +50,14 @@
 typealias RegStateRow = Array with CfgIndex
 
 export function checkFunctionAllocation(module TargetModule, func IrFunction, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, reuseCopies ReuseCopyPlan, spillPlan SpillPlan)
-	let cfg = liveness.cfg
+	let topo = liveness.cfg.topo
 	let valueCount = liveness.valueCount
 	let noValue = valueCount
 	let paramCount = func.paramCount
 
 	// Per-block EXIT states (numBlocks rows of RegisterFileSize registers), so each
 	// edge can be simulated from its predecessor's exit.
-	var exitStates = filledColumn(cfg.numBlocks * RegisterFileSize, value: noValue)
+	var exitStates = filledColumn(topo.numBlocks * RegisterFileSize, value: noValue)
 
 	// SLOT tracking (M5.3): the value currently in each spill slot, or `noValue` (empty). Unlike
 	// `regState`, `slotState` PERSISTS across blocks — a store dominates its reload but may live
@@ -82,8 +82,8 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	// The op's LAYOUT SEQUENCE — the key the colorer recorded its reuse copies under.
 	var blockBaseSeq = 0 as ByteCount
 
-	for local in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: local)
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: local)
 		var regState = freshRegState(noValue)
 		seedRegState(regState, module: module, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, paramCount: paramCount, funcName: func.name, liveBuf: liveBuf)
 
@@ -105,7 +105,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 
 	// The move-plan of each CFG edge, indexed by that edge's slot in the successor CSR — so the
 	// per-edge lookup below is a column read, not a scan of every plan (which was O(edges × plans)).
-	let planByEdge = indexPlansByEdge(cfg, plans: plans)
+	let planByEdge = indexPlansByEdge(topo, plans: plans)
 
 	// Validate EVERY CFG edge, not only the move-producing plans. A fully-coalesced
 	// edge (dstReg == srcReg for every phi → no move, no plan) is otherwise never
@@ -113,13 +113,13 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 	// edge — the coalesced loop back-edge this design relies on most — would slip
 	// through. Each edge is simulated from its predecessor's exit, applying its plan's
 	// moves if it has one (else none).
-	for predLocal in 0 upto cfg.numBlocks 'eachPred'
-		let deg = cfg.succ.degree(predLocal)
-		let edgeBase = try cfg.succ.start.get(predLocal) otherwise panic("checkFunctionAllocation: succ.start.get OOB")
+	for predLocal in 0 upto topo.numBlocks 'eachPred'
+		let deg = topo.succ.degree(predLocal)
+		let edgeBase = try topo.succ.start.get(predLocal) otherwise panic("checkFunctionAllocation: succ.start.get OOB")
 		for k in 0 upto deg 'eachSucc'
-			let succLocal = cfg.succ.neighbour(predLocal, k: k)
+			let succLocal = topo.succ.neighbour(predLocal, k: k)
 			let planIdx = try planByEdge.get(edgeBase + k) otherwise panic("checkFunctionAllocation: planByEdge.get OOB")
-			checkEdge(module, func: func, cfg: cfg, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, planIdx: planIdx, noValue: noValue, liveBuf: liveBuf)
+			checkEdge(module, func: func, topo: topo, predLocal: predLocal, succLocal: succLocal, exitStates: exitStates, alloc: alloc, liveness: liveness, plans: plans, planIdx: planIdx, noValue: noValue, liveBuf: liveBuf)
 		end 'eachSucc'
 	end 'eachPred'
 end 'checkFunctionAllocation'
@@ -131,15 +131,15 @@ end 'checkFunctionAllocation'
 // successors), so this is O(plans + edges) rather than the O(edges × plans) the per-edge scan cost.
 // A predecessor with two edges to the SAME successor gets the plan on both slots, and the FIRST
 // plan for an edge wins — exactly what the scan it replaces did.
-function indexPlansByEdge(cfg FuncCfg, plans EdgeMovePlanArray) returns CfgIndexArray
+function indexPlansByEdge(topo FuncTopology, plans EdgeMovePlanArray) returns CfgIndexArray
 	let noPlan = plans.count()
-	var planByEdge = filledColumn(cfg.succ.list.count(), value: noPlan)
+	var planByEdge = filledColumn(topo.succ.list.count(), value: noPlan)
 
 	for i in 0 upto plans.count() 'eachPlan'
 		let plan = try plans.get(i) otherwise panic("indexPlansByEdge: plans.get OOB")
-		let base = try cfg.succ.start.get(plan.predLocal) otherwise panic("indexPlansByEdge: succ.start.get OOB for block {plan.predLocal}")
-		for k in 0 upto cfg.succ.degree(plan.predLocal) 'eachSucc'
-			if cfg.succ.neighbour(plan.predLocal, k: k) != plan.succLocal 'otherEdge'
+		let base = try topo.succ.start.get(plan.predLocal) otherwise panic("indexPlansByEdge: succ.start.get OOB for block {plan.predLocal}")
+		for k in 0 upto topo.succ.degree(plan.predLocal) 'eachSucc'
+			if topo.succ.neighbour(plan.predLocal, k: k) != plan.succLocal 'otherEdge'
 				continue
 			end 'otherEdge'
 			let cur = try planByEdge.get(base + k) otherwise panic("indexPlansByEdge: planByEdge.get OOB")
@@ -182,7 +182,7 @@ end 'regStateSet'
 // the suite pays this cost on every test of every run. `liveBuf` is scratch reused across blocks.
 function seedRegState(regState RegStateRow, module TargetModule, liveness LivenessResult, local CfgIndex, alloc Allocation, block IrBlock, noValue ValueId, paramCount ParamCount, funcName String, liveBuf ValueIdArray)
 	if local == 0 'entry'
-		seedEntryParamIncomingRegs(regState, module: module, cfg: liveness.cfg, paramCount: paramCount)
+		seedEntryParamIncomingRegs(regState, module: module, topo: liveness.cfg.topo, paramCount: paramCount)
 	end 'entry'
 
 	liveness.liveInInto(local, out: liveBuf)
@@ -202,8 +202,8 @@ end 'seedRegState'
 // checker knows holds its parameter and VERIFIES it (checkCopyOp), so if an earlier
 // capture's destination clobbered that incoming register, the checker sees the wrong value
 // and PANICS instead of shipping a silent miscompile.
-function seedEntryParamIncomingRegs(regState RegStateRow, module TargetModule, cfg FuncCfg, paramCount ParamCount)
-	let captures = collectEntryParamCaptures(module, cfg: cfg, paramCount: paramCount)
+function seedEntryParamIncomingRegs(regState RegStateRow, module TargetModule, topo FuncTopology, paramCount ParamCount)
+	let captures = collectEntryParamCaptures(module, topo: topo, paramCount: paramCount)
 	for cap in captures 'eachParam'
 		regStateSet(regState, reg: cap.incomingReg, value: cap.valueId)
 	end 'eachParam'
@@ -492,7 +492,7 @@ end 'physRegNumOf'
 // O(1) flat FuncCfg index (never `getBlockByIdIn`). The edge's moves come from its plan
 // if it has one; a fully-coalesced edge has none, and the assertions below still catch
 // a predecessor clobber whose only remaining "use" was this edge.
-function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, planIdx ByteCount, noValue ValueId, liveBuf ValueIdArray)
+function checkEdge(module TargetModule, func IrFunction, topo FuncTopology, predLocal CfgIndex, succLocal CfgIndex, exitStates RegStateRow, alloc Allocation, liveness LivenessResult, plans EdgeMovePlanArray, planIdx ByteCount, noValue ValueId, liveBuf ValueIdArray)
 	var sim = freshRegState(noValue)
 	copyRegState(sim, dstBase: 0, src: exitStates, srcBase: predLocal * RegisterFileSize)
 
@@ -500,8 +500,8 @@ function checkEdge(module TargetModule, func IrFunction, cfg FuncCfg, predLocal 
 		applyPlanMoves(sim, plan: try plans.get(planIdx) otherwise panic("checkEdge: plans.get OOB"))
 	end 'hasPlan'
 
-	let predBlock = blockAt(module, cfg: cfg, local: predLocal)
-	let succBlock = blockAt(module, cfg: cfg, local: succLocal)
+	let predBlock = blockAt(module, topo: topo, local: predLocal)
+	let succBlock = blockAt(module, topo: topo, local: succLocal)
 
 	if succBlock.blockArgs.count() > 0 'hasPhis'
 		let view = PhiEdgeView.resolve(succBlock, argIds: edgeArgIds(predBlock, succBlockId: succBlock.id), context: "(edge check)")

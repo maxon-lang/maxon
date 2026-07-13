@@ -332,7 +332,7 @@ end 'SpillChoice'
 // crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
 // panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
 // diagnostic maps each blocking Target ValueId back to its source span through.
-export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, stats RegAllocStats, project Project) returns SplitOutcome throws CompileError
+export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, stats RegAllocStats, project Project) returns SplitOutcome throws CompileError
 	let poolSize = regMaskPopcount(pool)
 	var origins = ReloadOriginArray.create()
 	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
@@ -351,7 +351,12 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// header — a per-split cost proportional to the function that bought nothing. `valueCount` is
 	// the ONE thing that changes (fresh reload/remat ids), and the driver knows it exactly: every
 	// minted id is materialized by an op it inserts, so `nextValueId` IS what a rescan would find.
-	var cfg = buildFuncCfg(module, func: func)
+	//
+	// The SKELETON is not even built here: `reorderFuncBlocksRpo` just built it (and it is the
+	// caller's `topo` argument), and it has been valid ever since — the reorder is the last pass
+	// that touches the block list. So all that is added on top is the loop depths and the value
+	// count, which the reorder had no use for and therefore never paid for.
+	var cfg = buildFuncCfg(module, func: func, topo: topo)
 	var nextValueId = cfg.valueCount
 	var liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
 
@@ -389,7 +394,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, poolSize: poolSize)
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
-			remat(v) then nextValueId = rematerializeConstant(module, index: index, cfg: cfg, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			remat(v) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
 			spill(v) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats, lineage: lineage)
 		end 'act'
 		match choice 'countSlot'
@@ -489,7 +494,7 @@ end 'timedLiveness'
 // Both quantities come from the operand model + op metadata, never hardcoded opcodes, so calls,
 // `idiv`, and `cqo` need no special-casing. Mirrors TargetLiveness's pressure sweep.
 function analyzePressure(module TargetModule, liveness LivenessResult, pool RegMask) returns PressureAnalysis
-	let cfg = liveness.cfg
+	let topo = liveness.cfg.topo
 	let wordsPerRow = liveness.wordsPerRow
 	let valueCount = liveness.valueCount
 	var liveRow = zeroRow(wordsPerRow)
@@ -505,8 +510,8 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	var defLiveAfter = filledColumn(valueCount, value: valueCount + 1)
 	var blockBaseSeq = 0 as ByteCount
 
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
 		// Seed the ONE dense working row from the SPARSE live-out list — O(live), not a full
 		// value-space row copy per block. `clearRowAfterSweep` below returns it to zero the same way.
 		liveness.seedRowFromLiveOut(i, row: liveRow, scratch: seedBuf)
@@ -686,7 +691,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	// overwhelmingly share it (a loop's accumulators are all phis of the same header). Memoized
 	// per def block, the whole `chooseVictim` call costs a handful of walks instead of one per
 	// candidate.
-	var reach = ReachCache.create(liveness.cfg.numBlocks)
+	var reach = ReachCache.create(liveness.cfg.topo.numBlocks)
 
 	var bestRematId = valueCount
 	var bestRematNextUse = 0 as ByteCount
@@ -710,12 +715,12 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		end 'alreadySpilled'
 
 		let nu = nextUseAfterPeak(index, valueId: v, peakSeq: peak.peakSeq)
-		if isRematVictim(module, index: index, cfg: liveness.cfg, valueId: v, peak: peak, reach: reach) 'const'
+		if isRematVictim(module, index: index, topo: liveness.cfg.topo, valueId: v, peak: peak, reach: reach) 'const'
 			if bestRematId == valueCount or nu > bestRematNextUse 'improve'
 				bestRematId = v
 				bestRematNextUse = nu
 			end 'improve'
-		end 'const' else if isSpillVictim(index, cfg: liveness.cfg, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize, reach: reach) 'spillable'
+		end 'const' else if isSpillVictim(index, topo: liveness.cfg.topo, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize, reach: reach) 'spillable'
 			if bestSpillId == valueCount or nu > bestSpillNextUse 'improve2'
 				bestSpillId = v
 				bestSpillNextUse = nu
@@ -809,11 +814,11 @@ end 'usesAtPeakOp'
 // It needs no `hasSpillStore`-style already-done guard: once a remat KILLS the value at the peak the
 // value is no longer live there, so it cannot be a candidate at that peak again — and a value that
 // does not kill is refused here rather than re-picked forever.
-function isRematVictim(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+function isRematVictim(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
 	if not isRematerializable(module, index: index, valueId: valueId) 'notConst'
 		return false
 	end 'notConst'
-	return killsValueAtPeak(index, cfg: cfg, valueId: valueId, peak: peak, reach: reach)
+	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
 end 'isRematVictim'
 
 // Is `valueId` a legal spill victim at this peak? Three independent gates, all necessary:
@@ -823,14 +828,14 @@ end 'isRematVictim'
 //  2. `storeFitsPool`    — its store has a register-free anchor point.
 //  3. `killsValueAtPeak` — spilling it actually makes it DEAD at the peak. Without this the
 //                          splitter emits stores that relieve nothing (see `killsValueAtPeak`).
-function isSpillVictim(index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount, reach ReachCache) returns bool
+function isSpillVictim(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount, reach ReachCache) returns bool
 	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
 		return false
 	end 'wrongShape'
 	if not storeFitsPool(defLiveAfter, valueId: valueId, poolSize: poolSize) 'noStoreAnchor'
 		return false
 	end 'noStoreAnchor'
-	return killsValueAtPeak(index, cfg: cfg, valueId: valueId, peak: peak, reach: reach)
+	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
 end 'isSpillVictim'
 
 // The placement a peak's relief is entitled to: a clobber-only overflow gets the FORCED
@@ -937,7 +942,7 @@ end 'opIsConstMaterialization'
 //   `n`   (def outside the loop, used in the header) → header reachable without redef → REFUSED.
 //   `i`   (a header PHI, used in the header)         → header is its own def block    → allowed.
 //   `sum` (a header PHI, used after the call)        → no before-peak use at all      → allowed.
-function killsValueAtPeak(index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
 	let useCount = index.useCount(valueId)
 
 	var hasBeforePeakUse = false
@@ -957,7 +962,7 @@ function killsValueAtPeak(index UseIndex, cfg FuncCfg, valueId ValueId, peak Pre
 		if index.useSeqAt(record) >= peak.peakSeq 'afterPeak'
 			continue
 		end 'afterPeak'
-		if reach.reachableFromPeak(cfg, peakBlockLocal: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
+		if reach.reachableFromPeak(topo, peakBlockLocal: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
 			return false
 		end 'notKilled'
 	end 'check'
@@ -981,12 +986,12 @@ type ReachCache
 	end 'create'
 
 	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
-	export function reachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
-		let row = self.rowFor(cfg, peakBlockLocal: peakBlockLocal, defBlock: defBlock)
+	export function reachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
+		let row = self.rowFor(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock)
 		return try self.rows.get(row * self.numBlocks + block) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
 	end 'reachableFromPeak'
 
-	function rowFor(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex) returns CfgIndex
+	function rowFor(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex) returns CfgIndex
 		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
 		if cached != self.numBlocks 'hit'
 			return cached
@@ -995,7 +1000,7 @@ type ReachCache
 		let row = self.rowCount
 		self.rowCount = row + 1
 		self.rows.resize(self.rowCount * self.numBlocks)
-		markBlocksReachableFromPeak(cfg, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: row * self.numBlocks)
+		markBlocksReachableFromPeak(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: row * self.numBlocks)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row
 	end 'rowFor'
@@ -1006,11 +1011,11 @@ end 'ReachCache'
 // definition. The walk starts at the peak block's SUCCESSORS (so the peak's own block is reached
 // only via a genuine cycle) and never expands into `defBlock` (entering it redefines the value;
 // see `killsValueAtPeak`). Worklist-driven: no CFG traversal in the allocator may recurse.
-function markBlocksReachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ByteCount)
+function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ByteCount)
 	var worklist = CfgIndexArray.create()
-	let deg = cfg.succ.degree(peakBlockLocal)
+	let deg = topo.succ.degree(peakBlockLocal)
 	for k in 0 upto deg 'seed'
-		worklist.push(cfg.succ.neighbour(peakBlockLocal, k: k))
+		worklist.push(topo.succ.neighbour(peakBlockLocal, k: k))
 	end 'seed'
 
 	while worklist.count() > 0 'bfs'
@@ -1024,9 +1029,9 @@ function markBlocksReachableFromPeak(cfg FuncCfg, peakBlockLocal CfgIndex, defBl
 		end 'already'
 		try rows.set(base + b, value: true) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
 
-		let d = cfg.succ.degree(b)
+		let d = topo.succ.degree(b)
 		for k in 0 upto d 'eachSucc'
-			worklist.push(cfg.succ.neighbour(b, k: k))
+			worklist.push(topo.succ.neighbour(b, k: k))
 		end 'eachSucc'
 	end 'bfs'
 end 'markBlocksReachableFromPeak'
@@ -1119,7 +1124,7 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 			let r = index.useRecordAt(valueId, k: j)
 			match index.useKindAt(r) 'kind'
 				op then rewriteOpAt(module, opIdx: index.useOpAt(r), from: valueId, to: freshId, buf: buf)
-				edge then rewriteEdgeArgsIn(module, cfg: cfg, blockLocal: blockLocal, from: valueId, to: freshId)
+				edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
 			end 'kind'
 			j = j + 1
 		end 'sameBlock'
@@ -1161,8 +1166,8 @@ end 'insertReloadFor'
 
 // Repoint every branch-edge arg of `blockLocal` naming `from` at `to` (the reload that now holds
 // the value). The reload precedes the block's terminator, so it dominates the edge.
-function rewriteEdgeArgsIn(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, from ValueId, to ValueId)
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
+function rewriteEdgeArgsIn(module TargetModule, topo FuncTopology, blockLocal CfgIndex, from ValueId, to ValueId)
+	let block = blockAt(module, topo: topo, local: blockLocal)
 	for edge in block.branchEdges 'eachEdge'
 		for k in 0 upto edge.argIds.count() 'eachArg'
 			let argId = try edge.argIds.get(k) otherwise panic("rewriteEdgeArgsIn: argIds.get OOB")
@@ -1177,7 +1182,7 @@ end 'rewriteEdgeArgsIn'
 // it is live there by construction and the store reads it from its own register.
 function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, afterOpIdx OpIndex, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "store", placement: placement)
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
+	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
 	try block.opRefs.insert(anchorPos + 1, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAfter: opRefs.insert OOB")
 end 'insertStoreAfter'
@@ -1188,7 +1193,7 @@ end 'insertStoreAfter'
 // correctly. Its block dominates every use of it, so this store dominates every reload.
 function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId ValueId, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "store", placement: placement)
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
+	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	try block.opRefs.insert(0, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAtBlockEntry: opRefs.insert OOB")
 end 'insertStoreAtBlockEntry'
 
@@ -1197,7 +1202,7 @@ end 'insertStoreAtBlockEntry'
 // one, and the edge arg is read after them all). The caller rewrites those uses.
 function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, beforeOpIdx OpIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "reload", placement: placement)
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
+	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = positionInBlock(block, opIdx: beforeOpIdx)
 	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadBefore: opRefs.insert OOB")
 end 'insertReloadBefore'
@@ -1208,7 +1213,7 @@ end 'insertReloadBefore'
 // a phi, so the reload exists purely to hand the edge a live register.
 function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "reload", placement: placement)
-	let block = blockAt(module, cfg: cfg, local: blockLocal)
+	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	try block.opRefs.insert(block.opRefs.count(), value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadAtBlockEnd: opRefs.insert OOB")
 end 'insertReloadAtBlockEnd'
 
@@ -1234,7 +1239,7 @@ end 'appendOp'
 // original def is dropped ONLY when no before-peak use still reads it; otherwise it stays live
 // from its def to that last before-peak use (dead across the peak either way). Returns the next
 // free value id.
-function rematerializeConstant(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	let constValue = constValueOfDef(module, opIdx: defOpIdx)
 
@@ -1250,7 +1255,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, cfg FuncCfg,
 		end 'beforePeak'
 
 		let useOpIdx = index.useOpAt(record)
-		var block = blockAt(module, cfg: cfg, local: index.useBlockAt(record))
+		var block = blockAt(module, topo: topo, local: index.useBlockAt(record))
 		let usePos = positionInBlock(block, opIdx: useOpIdx)
 		try block.opRefs.insert(usePos, value: appendOp(module, op: constMaterializationOp(freshId, value: constValue))) otherwise panic("rematerializeConstant: opRefs.insert OOB")
 		rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
@@ -1262,7 +1267,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, cfg FuncCfg,
 	end 'eachUse'
 
 	if not haveBeforePeakUse 'dropDef'
-		dropOriginalDef(module, cfg: cfg, defOpIdx: defOpIdx, blockLocal: index.defBlockOf(valueId))
+		dropOriginalDef(module, topo: topo, defOpIdx: defOpIdx, blockLocal: index.defBlockOf(valueId))
 	end 'dropDef'
 
 	// A remat that re-emitted NOTHING changed nothing: the potential Φ did not decrease, so the next
@@ -1302,8 +1307,8 @@ end 'constMaterializationOp'
 // Remove the original constant def's op ref from its block (it is now dead — every use was
 // rewritten to a rematerialized copy). The op stays in `module.ops` but unreferenced (harmless,
 // exactly like the reuse-copy/edge-move ops SsaDestruction appends).
-function dropOriginalDef(module TargetModule, cfg FuncCfg, defOpIdx OpIndex, blockLocal CfgIndex)
-	var block = blockAt(module, cfg: cfg, local: blockLocal)
+function dropOriginalDef(module TargetModule, topo FuncTopology, defOpIdx OpIndex, blockLocal CfgIndex)
+	var block = blockAt(module, topo: topo, local: blockLocal)
 	_ = try block.opRefs.remove(positionInBlock(block, opIdx: defOpIdx)) otherwise panic("dropOriginalDef: opRefs.remove OOB")
 end 'dropOriginalDef'
 

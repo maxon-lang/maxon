@@ -352,8 +352,14 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
 	// would otherwise misclassify an idle value's post-loop use and false-E5001 (single-loop /
 	// straight-line CFGs are already in RPO, so they are untouched). See reorderFuncBlocksRpo.
+	//
+	// It hands back the REORDERED skeleton, which the splitter completes into its `FuncCfg`
+	// rather than re-deriving from the IR. Nothing runs between the two, and the splitter never
+	// adds or removes a block, so the skeleton stays exactly this function's for the whole of
+	// allocation. (`splitCriticalEdges` DID add blocks — which is why it runs before this, and
+	// why its own skeleton cannot be carried forward.)
 	let tOrder = Clock.nowNanos()
-	reorderFuncBlocksRpo(module, func: func)
+	let topo = reorderFuncBlocksRpo(module, func: func)
 	stats.addPhaseNanos(RegAllocPhase.blockOrder, nanos: Clock.elapsedNanos(tOrder))
 
 	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
@@ -372,7 +378,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// prevent.
 	let tSplit = Clock.nowNanos()
 	let livenessNanosBefore = stats.phaseNanosOf(RegAllocPhase.liveness)
-	let outcome = try splitLiveRanges(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
+	let outcome = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, stats: stats, project: project)
 	let splitWallNanos = Clock.elapsedNanos(tSplit)
 	let livenessNanos = stats.phaseNanosOf(RegAllocPhase.liveness) - livenessNanosBefore
 	stats.addPhaseNanos(RegAllocPhase.splitting, nanos: splitWallNanos - livenessNanos)
@@ -476,11 +482,11 @@ end 'ColorHints'
 // Blocks are scanned in layout order so a phi's stored copy partner is its
 // FORWARD-edge incoming (defined in a dominator) — the one already colored when the
 // phi is reached.
-function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) returns ColorHints
+function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId) returns ColorHints
 	var hints = ColorHints.create(valueCount)
 	var buf = OperandList.create()
-	for local in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: local)
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: local)
 
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
@@ -490,7 +496,7 @@ function computeHints(module TargetModule, cfg FuncCfg, valueCount ValueId) retu
 			collectReuseHints(op, hints: hints, buf: buf)
 		end 'eachOp'
 
-		collectPhiEdgeHints(module, cfg: cfg, predBlock: block, hints: hints)
+		collectPhiEdgeHints(module, topo: topo, predBlock: block, hints: hints)
 	end 'eachBlock'
 	return hints
 end 'computeHints'
@@ -557,9 +563,9 @@ end 'addCopyFromVirtualDst'
 // Each phi and the value a predecessor passes it on an edge are copy-related — hint
 // them to each other so the parallel edge copy elides (the loop back edge especially,
 // where a surviving copy would land inside the loop body).
-function collectPhiEdgeHints(module TargetModule, cfg FuncCfg, predBlock IrBlock, hints ColorHints)
+function collectPhiEdgeHints(module TargetModule, topo FuncTopology, predBlock IrBlock, hints ColorHints)
 	for edge in predBlock.branchEdges 'eachEdge'
-		let targetBlock = blockAt(module, cfg: cfg, local: localOfBlockId(cfg, blockId: edge.targetBlockId))
+		let targetBlock = blockAt(module, topo: topo, local: localOfBlockId(topo, blockId: edge.targetBlockId))
 		let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(coloring hints)")
 		for k in 0 upto view.count 'eachPhi'
 			let phi = view.phiValueIdAt(k)
@@ -575,11 +581,11 @@ end 'collectPhiEdgeHints'
 // ==========================================================================
 
 function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns Allocation
-	let cfg = liveness.cfg
+	let topo = liveness.cfg.topo
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
 	var alloc = Allocation.create(valueCount)
-	let hints = computeHints(module, cfg: cfg, valueCount: valueCount)
+	let hints = computeHints(module, topo: topo, valueCount: valueCount)
 	var buf = OperandList.create()
 	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
 	// working row would otherwise each allocate once per block. `seenBelow` is ONE dense row (not a
@@ -593,8 +599,8 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	// under, and the same numbering the checker and the rewrite re-derive from `collectBlockOps`.
 	var blockBaseSeq = 0 as ByteCount
 
-	for local in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: local)
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: local)
 
 		// Seed occupancy from the non-phi live-ins (each already colored in a
 		// dominator), then allocate the block-arg phis defined at entry.

@@ -50,22 +50,52 @@ end 'zeroColumn'
 // may NOT be colored into because an op writes them while the value is live across.
 export typealias RegMaskColumn = Array with RegMask
 
-// The per-function CFG + loop structure, built ONCE. Local block indices are dense
+// The CFG SKELETON of one function: the block set, the dense local numbering, and the
+// successor/predecessor edges — and NOTHING derived from them. Local block indices are dense
 // (0..numBlocks-1); `blockRefByLocal` maps them to flat `module.blocks` indices and
-// `localByBlockId` maps a function-local `BlockId` back to a local index — both
-// flat arrays, never a `Map` in a fixpoint (the O(B²·iters) trap v1 fell into).
-export type FuncCfg
+// `localByBlockId` maps a function-local `BlockId` back to a local index — both flat arrays,
+// never a `Map` in a fixpoint (the O(B²·iters) trap v1 fell into).
+//
+// This is a TYPE, and not merely a `FuncCfg` with two columns left empty, because the two
+// passes that run BEFORE allocation — the RPO block reorder and the critical-edge split —
+// read only the skeleton, and building the rest for them cost 12% of the WHOLE COMPILE:
+// `valueCount` walks every operand of every op, and `loopDepth` is a DFS plus a BFS per
+// natural loop, once per function, for an answer neither pass ever looks at.
+//
+// Handing those passes a `FuncCfg` with `valueCount = 0` and a zeroed `loopDepth` column
+// would be the cheaper edit and the wrong one: nothing would stop a later consumer from
+// reading `loopDepth` off it, every block would then look like straight-line code, and the
+// splitter's Rule 2 would place spills inside loops it could not see — silently, with no
+// error anywhere. Separating the types is what makes "read what was not computed"
+// unspellable rather than merely unlikely.
+// `blockIdByLocal` (local -> BlockId) is deliberately NOT a field. It is scaffolding the build
+// needs to derive `localByBlockId`, and nothing outside the build ever read it back — carrying
+// it meant allocating and filling a column per topology build, and permuting it on every
+// reorder, for a column with no reader. The one direction consumers do need is the inverse
+// (`localByBlockId`), and a local index's BlockId is one hop away via `blockAt`.
+export type FuncTopology
 	export var numBlocks as CfgIndex
 	export var blockRefByLocal as BlockRefArray
-	export var blockIdByLocal as CfgIndexArray
 	export var localByBlockId as CfgIndexArray
 	export var succ as CsrGraph
 	export var pred as CsrGraph
+
+	export static function create(numBlocks CfgIndex, blockRefByLocal BlockRefArray, localByBlockId CfgIndexArray, succ CsrGraph, pred CsrGraph) returns FuncTopology
+		return Self{numBlocks: numBlocks, blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred}
+	end 'create'
+end 'FuncTopology'
+
+// The full per-function CFG the ALLOCATOR consumes: the skeleton (`topo`) plus the two
+// analyses derived from it that only the allocator needs — per-block loop nesting depth and
+// the function's value-space size. Built ONCE per function and reused across every split
+// iteration (see `splitLiveRanges`).
+export type FuncCfg
+	export var topo as FuncTopology
 	export var loopDepth as CfgIndexArray
 	export var valueCount as ValueId
 
-	export static function create(numBlocks CfgIndex, blockRefByLocal BlockRefArray, blockIdByLocal CfgIndexArray, localByBlockId CfgIndexArray, succ CsrGraph, pred CsrGraph, loopDepth CfgIndexArray, valueCount ValueId) returns FuncCfg
-		return Self{numBlocks: numBlocks, blockRefByLocal: blockRefByLocal, blockIdByLocal: blockIdByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred, loopDepth: loopDepth, valueCount: valueCount}
+	export static function create(topo FuncTopology, loopDepth CfgIndexArray, valueCount ValueId) returns FuncCfg
+		return Self{topo: topo, loopDepth: loopDepth, valueCount: valueCount}
 	end 'create'
 
 	// The maximum loop nesting depth over all blocks (a stat + a health check that
@@ -194,12 +224,16 @@ function copyCsrRange(start CfgIndexArray, list ValueIdArray, node CfgIndex, out
 	end 'each'
 end 'copyCsrRange'
 
-// The local index of a function-local `BlockId`, via the O(1) flat `FuncCfg` index —
+// The local index of a function-local `BlockId`, via the O(1) flat `FuncTopology` index —
 // NEVER `IrModule.getBlockByIdIn` (an O(blocks) scan, the O(B²) trap the design
 // forbids inside per-block/per-edge loops). Panics if the id is not in this function.
-export function localOfBlockId(cfg FuncCfg, blockId BlockId) returns CfgIndex
-	let local = try cfg.localByBlockId.get(blockId) otherwise panic("localOfBlockId: block id {blockId} out of id range")
-	if local == cfg.numBlocks 'notInFunc'
+//
+// Takes the TOPOLOGY, not the `FuncCfg`: it resolves a block id, which is a question about
+// the skeleton alone. That is what lets the critical-edge split — which has no loop depths
+// and no value count — call the same one implementation the allocator calls.
+export function localOfBlockId(topo FuncTopology, blockId BlockId) returns CfgIndex
+	let local = try topo.localByBlockId.get(blockId) otherwise panic("localOfBlockId: block id {blockId} out of id range")
+	if local == topo.numBlocks 'notInFunc'
 		panic("localOfBlockId: block id {blockId} is not in this function")
 	end 'notInFunc'
 	return local
@@ -244,11 +278,6 @@ let DfsWhite = 0
 let DfsGray = 1
 let DfsBlack = 2
 
-// Public entry: compute the full liveness result for one function, building its CFG.
-export function computeLiveness(module TargetModule, func IrFunction) returns LivenessResult
-	return computeLivenessOn(module, cfg: buildFuncCfg(module, func: func), func: func)
-end 'computeLiveness'
-
 // Compute liveness on a CFG the CALLER owns, and whose `valueCount` the caller keeps current.
 //
 // This is what lets the cold-spill splitter recompute liveness after every split without
@@ -260,19 +289,19 @@ end 'computeLiveness'
 export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction) returns LivenessResult
 	let valueCount = cfg.valueCount
 	let wordsPerRow = bitsetWordsFor(valueCount)
-	let numBlocks = cfg.numBlocks
+	let numBlocks = cfg.topo.numBlocks
 
 	if numBlocks != func.blockRefs.count() 'cfgStale'
 		panic("computeLivenessOn: '{func.name}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
 	end 'cfgStale'
 
 	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount)
-	let walk = solveLivenessSsa(cfg, useIndex: useIndex, valueCount: valueCount)
+	let walk = solveLivenessSsa(cfg.topo, useIndex: useIndex, valueCount: valueCount)
 
 	var forbidden = makeRegMaskColumn(valueCount)
 	var deadPhis = zeroColumn(numBlocks)
-	let maxPressure = computePressureAndForbidden(module, cfg: cfg, live: walk.live, forbidden: forbidden, wordsPerRow: wordsPerRow, deadPhis: deadPhis)
-	forbidEntryParamCrossRegisters(module, cfg: cfg, forbidden: forbidden, paramCount: func.paramCount)
+	let maxPressure = computePressureAndForbidden(module, topo: cfg.topo, live: walk.live, forbidden: forbidden, wordsPerRow: wordsPerRow, deadPhis: deadPhis)
+	forbidEntryParamCrossRegisters(module, topo: cfg.topo, forbidden: forbidden, paramCount: func.paramCount)
 
 	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, useIndex: useIndex)
 end 'computeLivenessOn'
@@ -315,30 +344,106 @@ end 'makeRegMaskColumn'
 // the DFS, so they are appended in their original relative order to preserve them (they still
 // hold ops that get emitted). Entry (local 0) is the DFS root, so it stays first (its prologue
 // must lead `.text`). Runs before the splitter in `allocateFunction`.
-export function reorderFuncBlocksRpo(module TargetModule, func IrFunction)
-	let cfg = buildFuncCfg(module, func: func)
-	if cfg.numBlocks == 0 'empty'
-		return
+//
+// RETURNS the reordered topology, which the splitter then completes into its `FuncCfg` — the
+// only pass between the two is nothing, so the skeleton this built is still exactly the
+// function's. Throwing it away meant the very next thing the allocator did was re-derive the
+// same graph from the IR, and finding a block's successors means walking its OPS (they come
+// from the `jcc`/`jmp` ops themselves, the ground truth), so that rebuild was a second full
+// pass over every op of every block for a graph already in hand.
+export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) returns FuncTopology
+	let topo = buildFuncTopology(module, func: func)
+	if topo.numBlocks == 0 'empty'
+		return topo
 	end 'empty'
 
 	var visited = BoolArray.create()
-	visited.resize(cfg.numBlocks)
+	visited.resize(topo.numBlocks)
 	var postorder = CfgIndexArray.create()
-	rpoDfs(cfg, root: 0, visited: visited, postorder: postorder)
+	rpoDfs(topo, root: 0, visited: visited, postorder: postorder)
 
+	// `oldByNew[i]` — the OLD local index of the block that lands at NEW local index `i`. Built
+	// in lockstep with `newRefs`, so it IS the permutation the block list just underwent, and
+	// `permuteTopology` re-indexes the skeleton by it rather than rebuilding it.
+	var oldByNew = CfgIndexArray.create()
 	var newRefs = BlockRefList.create()
 	for ri in 0 upto postorder.count() 'reverse'
 		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
-		newRefs.append(try cfg.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
+		oldByNew.push(local)
+		newRefs.append(try topo.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
 	end 'reverse'
-	for i in 0 upto cfg.numBlocks 'appendUnreachable'
+	for i in 0 upto topo.numBlocks 'appendUnreachable'
 		if not (try visited.get(i) otherwise panic("reorderFuncBlocksRpo: visited.get OOB")) 'unreached'
-			newRefs.append(try cfg.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
+			oldByNew.push(i)
+			newRefs.append(try topo.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
 		end 'unreached'
 	end 'appendUnreachable'
 
 	func.blockRefs = newRefs
+	return permuteTopology(topo, oldByNew: oldByNew)
 end 'reorderFuncBlocksRpo'
+
+// Re-index a topology whose blocks were REORDERED — not added to, not removed. It is the same
+// graph under a new dense numbering, so nothing has to be re-read from the IR: `oldByNew[i]`
+// is the old local index of the block now at new local index `i`, and every column and both
+// CSR graphs are permuted through it in O(blocks + edges).
+//
+// The result is IDENTICAL to `buildFuncTopology` on the reordered function — including the
+// ORDER of every node's neighbour list, which is load-bearing and easy to lose here:
+//
+//  • SUCCESSORS keep their block's own op order, because they are copied out of one old node's
+//    list in order. `rpoDfs` explores successors in REVERSE add-order to land a loop's exit
+//    after its body, so a permutation that reshuffled them would silently change the RPO — and
+//    with it the splitter's before/after-peak classification.
+//  • PREDECESSORS come out in ascending NEW predecessor index, because the edges are pushed in
+//    ascending new-source order and `buildCsr` preserves push order within a key — which is
+//    exactly the order a fresh scan of the reordered block list produces.
+function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncTopology
+	let numBlocks = old.numBlocks
+
+	// The inverse permutation. Every old local appears exactly once in `oldByNew` (the DFS
+	// covers the reachable blocks and the unreachable sweep covers the rest), so this is total.
+	var newByOld = zeroColumn(numBlocks)
+	for i in 0 upto numBlocks 'invert'
+		let o = try oldByNew.get(i) otherwise panic("permuteTopology: oldByNew.get OOB")
+		try newByOld.set(o, value: i) otherwise panic("permuteTopology: newByOld.set OOB")
+	end 'invert'
+
+	var blockRefByLocal = BlockRefArray.create()
+	for i in 0 upto numBlocks 'permuteColumns'
+		let o = try oldByNew.get(i) otherwise panic("permuteTopology: oldByNew.get OOB")
+		blockRefByLocal.push(try old.blockRefByLocal.get(o) otherwise panic("permuteTopology: blockRefByLocal.get OOB"))
+	end 'permuteColumns'
+
+	// BlockId -> new local. The id space is unchanged (the same blocks are present), and
+	// `numBlocks` stays the "not in this function" sentinel, so only real entries are remapped.
+	let idSpace = old.localByBlockId.count()
+	var localByBlockId = filledColumn(idSpace, value: numBlocks)
+	for bid in 0 upto idSpace 'remapIds'
+		let oldLocal = try old.localByBlockId.get(bid) otherwise panic("permuteTopology: localByBlockId.get OOB")
+		if oldLocal == numBlocks 'notInFunc'
+			continue
+		end 'notInFunc'
+		let newLocal = try newByOld.get(oldLocal) otherwise panic("permuteTopology: newByOld.get OOB")
+		try localByBlockId.set(bid, value: newLocal) otherwise panic("permuteTopology: localByBlockId.set OOB")
+	end 'remapIds'
+
+	var edgeFrom = CfgIndexArray.create()
+	var edgeTo = CfgIndexArray.create()
+	for u in 0 upto numBlocks 'eachNewBlock'
+		let oldU = try oldByNew.get(u) otherwise panic("permuteTopology: oldByNew.get OOB")
+		for k in 0 upto old.succ.degree(oldU) 'eachSucc'
+			let oldV = old.succ.neighbour(oldU, k: k)
+			edgeFrom.push(u)
+			edgeTo.push(try newByOld.get(oldV) otherwise panic("permuteTopology: newByOld.get OOB"))
+		end 'eachSucc'
+	end 'eachNewBlock'
+
+	let succ = buildCsr(edgeFrom, to: edgeTo, nodeCount: numBlocks)
+	let pred = buildCsr(edgeTo, to: edgeFrom, nodeCount: numBlocks)
+
+	return FuncTopology.create(numBlocks, blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred)
+end 'permuteTopology'
 
 // Postorder DFS from `root`, pushing each block AFTER its whole subtree. Successors are explored in
 // REVERSE add-order (see `reorderFuncBlocksRpo`).
@@ -349,7 +454,7 @@ end 'reorderFuncBlocksRpo'
 // program, not by anything we control, so no traversal here may recurse. The stack holds a
 // (node, next-successor-index) pair per open node — the explicit form of a recursive call's resume
 // point — so a node is emitted to the postorder only once its whole subtree is done.
-function rpoDfs(cfg FuncCfg, root CfgIndex, visited BoolArray, postorder CfgIndexArray)
+function rpoDfs(topo FuncTopology, root CfgIndex, visited BoolArray, postorder CfgIndexArray)
 	var stackNode = CfgIndexArray.create()
 	var stackNextSucc = CfgIndexArray.create()
 
@@ -361,7 +466,7 @@ function rpoDfs(cfg FuncCfg, root CfgIndex, visited BoolArray, postorder CfgInde
 		let top = stackNode.count() - 1
 		let u = try stackNode.get(top) otherwise panic("rpoDfs: stackNode.get OOB")
 		let k = try stackNextSucc.get(top) otherwise panic("rpoDfs: stackNextSucc.get OOB")
-		let deg = cfg.succ.degree(u)
+		let deg = topo.succ.degree(u)
 
 		if k >= deg 'subtreeDone'
 			postorder.push(u)
@@ -372,7 +477,7 @@ function rpoDfs(cfg FuncCfg, root CfgIndex, visited BoolArray, postorder CfgInde
 
 		try stackNextSucc.set(top, value: k + 1) otherwise panic("rpoDfs: stackNextSucc.set OOB")
 
-		let s = cfg.succ.neighbour(u, k: deg - 1 - k)
+		let s = topo.succ.neighbour(u, k: deg - 1 - k)
 		if not (try visited.get(s) otherwise panic("rpoDfs: visited.get OOB")) 'unvisited'
 			try visited.set(s, value: true) otherwise panic("rpoDfs: visited.set OOB")
 			stackNode.push(s)
@@ -381,12 +486,15 @@ function rpoDfs(cfg FuncCfg, root CfgIndex, visited BoolArray, postorder CfgInde
 	end 'dfs'
 end 'rpoDfs'
 
-export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncCfg
+// Build the CFG SKELETON: the block set, the dense numbering, and the edges. This is all the
+// RPO reorder and the critical-edge split need, and it is deliberately all they can get — see
+// `FuncTopology`. The allocator's `buildFuncCfg` adds the two analyses on top.
+export function buildFuncTopology(module TargetModule, func IrFunction) returns FuncTopology
 	var blockRefByLocal = BlockRefArray.create()
 	var blockIdByLocal = CfgIndexArray.create()
 	var maxBlockId = 0 as CfgIndex
 	for blockRef in func.blockRefs 'eachRef'
-		let block = try module.blocks.get(blockRef) otherwise panic("buildFuncCfg: blockRef {blockRef} from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("buildFuncTopology: blockRef {blockRef} from func.blockRefs not in module.blocks")
 		blockRefByLocal.push(blockRef)
 		blockIdByLocal.push(block.id)
 		if block.id > maxBlockId 'higher'
@@ -406,25 +514,30 @@ export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncC
 	// allocator bug. Assert it here, at the one place the collision would be absorbed.
 	var localByBlockId = filledColumn(maxBlockId + 1, value: numBlocks)
 	for i in 0 upto numBlocks 'mapIds'
-		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncCfg: blockIdByLocal.get OOB")
-		let prior = try localByBlockId.get(bid) otherwise panic("buildFuncCfg: localByBlockId.get(bid) OOB")
+		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncTopology: blockIdByLocal.get OOB")
+		let prior = try localByBlockId.get(bid) otherwise panic("buildFuncTopology: localByBlockId.get(bid) OOB")
 		if prior != numBlocks 'duplicateId'
-			panic("buildFuncCfg: function '{func.name}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
+			panic("buildFuncTopology: function '{func.name}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
 		end 'duplicateId'
-		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncCfg: localByBlockId.set(bid) OOB")
+		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncTopology: localByBlockId.set(bid) OOB")
 	end 'mapIds'
 
 	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
 	var edgeFrom = CfgIndexArray.create()
 	var edgeTo = CfgIndexArray.create()
+	// Scratch reused across every block. Created per block, this was one heap allocation per
+	// block of every function — and the skeleton is built twice per function (the critical-edge
+	// split, then the RPO reorder), so it was two per block per compile for a buffer that never
+	// outlives its iteration. Same hoist-and-clear the pressure sweep's `ordered` uses.
+	var succIds = BlockIdArray.create()
 	for i in 0 upto numBlocks 'eachBlock'
-		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncCfg: blockRefByLocal.get OOB")) otherwise panic("buildFuncCfg: block ref not in blocks")
-		var succIds = BlockIdArray.create()
+		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncTopology: blockRefByLocal.get OOB")) otherwise panic("buildFuncTopology: block ref not in blocks")
+		succIds.clear()
 		collectBlockSuccessorIds(module, block: block, out: succIds)
 		for sid in succIds 'eachSucc'
-			let j = try localByBlockId.get(sid) otherwise panic("buildFuncCfg: successor block id {sid} out of id range")
+			let j = try localByBlockId.get(sid) otherwise panic("buildFuncTopology: successor block id {sid} out of id range")
 			if j == numBlocks 'notInFunc'
-				panic("buildFuncCfg: block '{block.label}' branches to block id {sid} which is not in function '{func.name}'")
+				panic("buildFuncTopology: block '{block.label}' branches to block id {sid} which is not in function '{func.name}'")
 			end 'notInFunc'
 			edgeFrom.push(i)
 			edgeTo.push(j)
@@ -434,10 +547,20 @@ export function buildFuncCfg(module TargetModule, func IrFunction) returns FuncC
 	let succ = buildCsr(edgeFrom, to: edgeTo, nodeCount: numBlocks)
 	let pred = buildCsr(edgeTo, to: edgeFrom, nodeCount: numBlocks)
 
-	let valueCount = scanFunctionValueCount(module, func: func)
-	let loopDepth = computeLoopDepth(succ, pred: pred, numBlocks: numBlocks)
+	return FuncTopology.create(numBlocks, blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred)
+end 'buildFuncTopology'
 
-	return FuncCfg.create(numBlocks, blockRefByLocal: blockRefByLocal, blockIdByLocal: blockIdByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred, loopDepth: loopDepth, valueCount: valueCount)
+// Complete a topology into the CFG the ALLOCATOR consumes, by adding the two analyses only it
+// needs: the function's value-space size (an operand scan of every op) and the per-block loop
+// nesting depth (a DFS plus a BFS per natural loop).
+//
+// The topology is an ARGUMENT rather than something built here, so that the caller must have
+// one already — which is the point: the RPO reorder has just built one, and its skeleton is
+// still exactly this function's, so the allocator completes it instead of re-deriving it.
+export function buildFuncCfg(module TargetModule, func IrFunction, topo FuncTopology) returns FuncCfg
+	let valueCount = scanFunctionValueCount(module, func: func)
+	let loopDepth = computeLoopDepth(topo.succ, pred: topo.pred, numBlocks: topo.numBlocks)
+	return FuncCfg.create(topo, loopDepth: loopDepth, valueCount: valueCount)
 end 'buildFuncCfg'
 
 // A block's successor BlockIds: a `jcc` body op names the then-target; the `jmp`
@@ -901,8 +1024,8 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	var ordered = OpIndexArray.create()
 	var seq = 0 as ByteCount
 
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
+	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: cfg.topo, local: i)
 		let inLoop = (try cfg.loopDepth.get(i) otherwise panic("buildUseIndex: loopDepth.get OOB")) != 0
 
 		for arg in block.blockArgs 'eachPhi'
@@ -970,7 +1093,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	end 'eachBlock'
 
 	let useCsr = buildCsr(recordValue, to: recordIndex, nodeCount: valueCount)
-	return UseIndex.create(valueCount, numBlocks: cfg.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq)
+	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq)
 end 'buildUseIndex'
 
 // Append one use record and its CSR key. The record's index IS its position in the four parallel
@@ -1037,14 +1160,14 @@ type LivenessWalk
 end 'LivenessWalk'
 
 // Compute the SPARSE per-block live-in/live-out sets by walking backward from every use to its def.
-function solveLivenessSsa(cfg FuncCfg, useIndex UseIndex, valueCount ValueId) returns LivenessWalk
+function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount ValueId) returns LivenessWalk
 	// "Is v already marked live-in to (respectively live-out of) block B?" — VERSION STAMPS, not
 	// bitsets. Storing `v + 1` means the memo needs no clearing between values; clearing would be
 	// O(blocks) per value, i.e. the very O(blocks × values) term this algorithm exists to remove.
 	// 0 means "never marked". The live-out stamp also DEDUPES: a block that is a predecessor of
 	// several blocks in which `v` is live would otherwise record `v` in its live-out set repeatedly.
-	var liveInStamp = zeroColumn(cfg.numBlocks)
-	var liveOutStamp = zeroColumn(cfg.numBlocks)
+	var liveInStamp = zeroColumn(topo.numBlocks)
+	var liveOutStamp = zeroColumn(topo.numBlocks)
 	var inPairs = LivePairs.create()
 	var outPairs = LivePairs.create()
 	var worklist = CfgIndexArray.create()
@@ -1100,9 +1223,9 @@ function solveLivenessSsa(cfg FuncCfg, useIndex UseIndex, valueCount ValueId) re
 			try liveInStamp.set(b, value: v + 1) otherwise panic("solveLivenessSsa: liveInStamp.set OOB")
 			inPairs.add(b, v: v)
 
-			let deg = cfg.pred.degree(b)
+			let deg = topo.pred.degree(b)
 			for k in 0 upto deg 'eachPred'
-				let p = cfg.pred.neighbour(b, k: k)
+				let p = topo.pred.neighbour(b, k: k)
 				markLiveOut(outPairs, stamp: liveOutStamp, blockLocal: p, v: v)
 				worklist.push(p)
 			end 'eachPred'
@@ -1112,8 +1235,8 @@ function solveLivenessSsa(cfg FuncCfg, useIndex UseIndex, valueCount ValueId) re
 	// The walk discovers (block, value) memberships in walk order; `buildCsr`'s counting sort
 	// buckets each direction by block in O(pairs + blocks) — no comparison sort, no hashing, and no
 	// per-block heap object.
-	let liveInCsr = buildCsr(inPairs.blocks, to: inPairs.values, nodeCount: cfg.numBlocks)
-	let liveOutCsr = buildCsr(outPairs.blocks, to: outPairs.values, nodeCount: cfg.numBlocks)
+	let liveInCsr = buildCsr(inPairs.blocks, to: inPairs.values, nodeCount: topo.numBlocks)
+	let liveOutCsr = buildCsr(outPairs.blocks, to: outPairs.values, nodeCount: topo.numBlocks)
 	return LivenessWalk.create(LiveSets.create(liveInCsr.start, inList: liveInCsr.list, outStart: liveOutCsr.start, outList: liveOutCsr.list), markSteps: markSteps)
 end 'solveLivenessSsa'
 
@@ -1134,7 +1257,7 @@ end 'markLiveOut'
 // Backward per-op sweep: track the exact live set at each program point, taking
 // `maxPressure` (the χ = ω the feasibility decision needs) and folding each op's
 // physical/implicit register writes into `forbidden` for every value live across.
-function computePressureAndForbidden(module TargetModule, cfg FuncCfg, live LiveSets, forbidden RegMaskColumn, wordsPerRow ByteCount, deadPhis CfgIndexArray) returns RegCount
+function computePressureAndForbidden(module TargetModule, topo FuncTopology, live LiveSets, forbidden RegMaskColumn, wordsPerRow ByteCount, deadPhis CfgIndexArray) returns RegCount
 	// ONE dense working row (not a matrix) — bits flip at every op, so a bitset is the right shape
 	// INSIDE a block. It is seeded from the sparse live-out list and cleared back to zero in
 	// O(live) at the end of the block, never copied or cleared a full value-space row at a time.
@@ -1146,8 +1269,8 @@ function computePressureAndForbidden(module TargetModule, cfg FuncCfg, live Live
 	var seedBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
 
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
 		copyCsrRange(live.outStart, list: live.outList, node: i, out: seedBuf)
 		for v in seedBuf 'seedLiveOut'
 			bitsetAdd(liveRow, base: 0, bit: v)
@@ -1238,13 +1361,13 @@ export typealias ParamCaptureArray = Array with ParamCapture
 // ONLY by its capture, so this matches every capture exactly and excludes the call- and
 // idiv-result `mov`s (whose destinations are >= paramCount). The incoming register is read
 // straight from the IR — the copy's physical source — so this needs no target ABI table.
-export function collectEntryParamCaptures(module TargetModule, cfg FuncCfg, paramCount ParamCount) returns ParamCaptureArray
+export function collectEntryParamCaptures(module TargetModule, topo FuncTopology, paramCount ParamCount) returns ParamCaptureArray
 	var captures = ParamCaptureArray.create()
 	if paramCount == 0 'noParams'
 		return captures
 	end 'noParams'
 
-	let entry = blockAt(module, cfg: cfg, local: 0)
+	let entry = blockAt(module, topo: topo, local: 0)
 	for opIdx in entry.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("collectEntryParamCaptures: opIdx not in module.ops")
 		match op 'capture'
@@ -1287,8 +1410,8 @@ end 'recordParamCaptureFromPhysSource'
 // capture reads it. Forbidding the sibling incoming registers forces v_i into its OWN
 // argReg[i] (the capture self-move then elides) or a non-parameter register (whose write
 // clobbers no sibling source) — so the in-order emit is safe regardless of coloring order.
-function forbidEntryParamCrossRegisters(module TargetModule, cfg FuncCfg, forbidden RegMaskColumn, paramCount ParamCount)
-	let captures = collectEntryParamCaptures(module, cfg: cfg, paramCount: paramCount)
+function forbidEntryParamCrossRegisters(module TargetModule, topo FuncTopology, forbidden RegMaskColumn, paramCount ParamCount)
+	let captures = collectEntryParamCaptures(module, topo: topo, paramCount: paramCount)
 	if captures.count() < 2 'nothingToCross'
 		return
 	end 'nothingToCross'
@@ -1514,8 +1637,9 @@ function maxOf(a ByteCount, b ByteCount) returns ByteCount
 	return a if a >= b else b
 end 'maxOf'
 
-// Fetch the IrBlock for a local block index.
-export function blockAt(module TargetModule, cfg FuncCfg, local CfgIndex) returns IrBlock
-	let blockRef = try cfg.blockRefByLocal.get(local) otherwise panic("blockAt: local {local} out of range")
+// Fetch the IrBlock for a local block index. Takes the TOPOLOGY (see `localOfBlockId`), so
+// the pre-allocation passes and the allocator share the one implementation.
+export function blockAt(module TargetModule, topo FuncTopology, local CfgIndex) returns IrBlock
+	let blockRef = try topo.blockRefByLocal.get(local) otherwise panic("blockAt: local {local} out of range")
 	return try module.blocks.get(blockRef) otherwise panic("blockAt: blockRef {blockRef} not in module.blocks")
 end 'blockAt'

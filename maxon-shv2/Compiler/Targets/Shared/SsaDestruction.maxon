@@ -89,13 +89,13 @@ end 'MoveSequence'
 // Build the per-edge SSA-destruction plan for a function. A fully-coalesced edge
 // (every phi shares its incoming value's register) produces no moves and no plan.
 export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns EdgeMovePlanArray
-	let cfg = liveness.cfg
+	let topo = liveness.cfg.topo
 	var plans = EdgeMovePlanArray.create()
 
-	for predLocal in 0 upto cfg.numBlocks 'eachPred'
-		let predBlock = blockAt(module, cfg: cfg, local: predLocal)
+	for predLocal in 0 upto topo.numBlocks 'eachPred'
+		let predBlock = blockAt(module, topo: topo, local: predLocal)
 		for edge in predBlock.branchEdges 'eachEdge'
-			let plan = buildEdgePlan(module, cfg: cfg, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
+			let plan = buildEdgePlan(module, topo: topo, predBlock: predBlock, predLocal: predLocal, edge: edge, alloc: alloc)
 			if plan.moveCount() > 0 'hasMoves'
 				stats.copiesInserted = stats.copiesInserted + plan.moveCount()
 				plans.push(plan)
@@ -106,9 +106,9 @@ export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, l
 	return plans
 end 'buildSsaDestructionPlan'
 
-function buildEdgePlan(module TargetModule, cfg FuncCfg, predBlock IrBlock, predLocal CfgIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
-	let succLocal = localOfBlockId(cfg, blockId: edge.targetBlockId)
-	let targetBlock = blockAt(module, cfg: cfg, local: succLocal)
+function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock, predLocal CfgIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
+	let succLocal = localOfBlockId(topo, blockId: edge.targetBlockId)
+	let targetBlock = blockAt(module, topo: topo, local: succLocal)
 	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(SSA destruction)")
 
 	var dsts = RegNumColumn.create()
@@ -123,20 +123,20 @@ function buildEdgePlan(module TargetModule, cfg FuncCfg, predBlock IrBlock, pred
 	end 'eachPhi'
 
 	let moves = sequenceParallelCopy(dsts, srcs: srcs)
-	let placement = classifyPlacement(cfg, predLocal: predLocal, succLocal: succLocal)
-	let predBlockRef = try cfg.blockRefByLocal.get(predLocal) otherwise panic("buildEdgePlan: predLocal out of range")
-	let succBlockRef = try cfg.blockRefByLocal.get(succLocal) otherwise panic("buildEdgePlan: succLocal out of range")
+	let placement = classifyPlacement(topo, predLocal: predLocal, succLocal: succLocal)
+	let predBlockRef = try topo.blockRefByLocal.get(predLocal) otherwise panic("buildEdgePlan: predLocal out of range")
+	let succBlockRef = try topo.blockRefByLocal.get(succLocal) otherwise panic("buildEdgePlan: succLocal out of range")
 	return EdgeMovePlan.create(predLocal, succLocal: succLocal, predBlockId: predBlock.id, succBlockId: edge.targetBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moves: moves, placement: placement)
 end 'buildEdgePlan'
 
 // Where the edge's moves may go: at the predecessor's end when it has one
 // successor; at the successor's start when it has one predecessor; otherwise the
 // edge is CRITICAL and gets its own split block.
-function classifyPlacement(cfg FuncCfg, predLocal CfgIndex, succLocal CfgIndex) returns EdgePlacement
-	if cfg.succ.degree(predLocal) == 1 'predSingleSucc'
+function classifyPlacement(topo FuncTopology, predLocal CfgIndex, succLocal CfgIndex) returns EdgePlacement
+	if topo.succ.degree(predLocal) == 1 'predSingleSucc'
 		return EdgePlacement.predEnd
 	end 'predSingleSucc'
-	if cfg.pred.degree(succLocal) == 1 'succSinglePred'
+	if topo.pred.degree(succLocal) == 1 'succSinglePred'
 		return EdgePlacement.succStart
 	end 'succSinglePred'
 	return EdgePlacement.split
@@ -386,25 +386,30 @@ export function splitCriticalEdges(module TargetModule)
 end 'splitCriticalEdges'
 
 function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex)
-	// The CFG is built through a helper so `func`'s borrow is scoped to it — the
+	// The SKELETON is built through a helper so `func`'s borrow is scoped to it — the
 	// split loop below mutates `module.functions[funcIdx]` (adding block refs), which
 	// must not overlap a live borrow of that function.
-	let cfg = buildFuncCfgByIndex(module, funcIdx: funcIdx)
+	//
+	// A `FuncTopology`, not a `FuncCfg`: classifying a critical edge asks only for the
+	// successor and predecessor DEGREES. It has no use for the loop depths or the value count,
+	// and building them here — an operand scan of every op, plus a DFS and a BFS per natural
+	// loop, per function — was most of this pass's cost.
+	let topo = buildFuncTopologyByIndex(module, funcIdx: funcIdx)
 
 	// Collect the critical phi edges first (reads), then split them (writes) — the
 	// splits are independent (each only redirects its own edge through a new block),
 	// so the original CFG's classification stays valid across all of them.
 	var predRefs = BlockRefArray.create()
 	var succIds = BlockIdArray.create()
-	for predLocal in 0 upto cfg.numBlocks 'eachPred'
-		if cfg.succ.degree(predLocal) <= 1 'singleSucc'
+	for predLocal in 0 upto topo.numBlocks 'eachPred'
+		if topo.succ.degree(predLocal) <= 1 'singleSucc'
 			continue
 		end 'singleSucc'
-		let predBlock = blockAt(module, cfg: cfg, local: predLocal)
+		let predBlock = blockAt(module, topo: topo, local: predLocal)
 		for edge in predBlock.branchEdges 'eachEdge'
-			let succLocal = try cfg.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
-			if cfg.pred.degree(succLocal) > 1 'critical'
-				predRefs.push(try cfg.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
+			let succLocal = try topo.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
+			if topo.pred.degree(succLocal) > 1 'critical'
+				predRefs.push(try topo.blockRefByLocal.get(predLocal) otherwise panic("splitCriticalEdgesInFunc: predLocal out of range"))
 				succIds.push(edge.targetBlockId)
 			end 'critical'
 		end 'eachEdge'
@@ -478,12 +483,12 @@ function addSplitEdge(module TargetModule, splitRef BlockRef, succId BlockId, ar
 	splitBlock.branchEdges.push(BranchEdge.create(succId, argIds: argIds))
 end 'addSplitEdge'
 
-// Build a function's CFG by INDEX, so the `func` borrow it needs is scoped to this
+// Build a function's CFG skeleton by INDEX, so the `func` borrow it needs is scoped to this
 // helper and never held across the caller's mutation of the same function.
-function buildFuncCfgByIndex(module TargetModule, funcIdx FuncIndex) returns FuncCfg
+function buildFuncTopologyByIndex(module TargetModule, funcIdx FuncIndex) returns FuncTopology
 	let func = module.getFunc(funcIdx)
-	return buildFuncCfg(module, func: func)
-end 'buildFuncCfgByIndex'
+	return buildFuncTopology(module, func: func)
+end 'buildFuncTopologyByIndex'
 
 // Redirect the predecessor's branch to `oldTarget` (a `jcc` body op or the `jmp`
 // terminator) so it targets `newTarget` instead. Exactly one control op matches.

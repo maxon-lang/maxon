@@ -159,12 +159,12 @@ function loopAnchorLine(module TargetModule, cfg FuncCfg, project Project, funcI
 	var best = 0 as LineNumber
 	var found = false
 	var buf = OperandList.create()
-	for i in 0 upto cfg.numBlocks 'eachBlock'
+	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let depth = try cfg.loopDepth.get(i) otherwise panic("loopAnchorLine: loopDepth.get OOB")
 		if depth == 0 'notInLoop'
 			continue
 		end 'notInLoop'
-		let block = blockAt(module, cfg: cfg, local: i)
+		let block = blockAt(module, topo: cfg.topo, local: i)
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
 		for opIdx in ordered 'eachOp'
@@ -231,7 +231,7 @@ function collectCandidates(project Project, module TargetModule, cfg FuncCfg, fu
 		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
 			continue
 		end 'notLive'
-		let range = defRangeOf(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
+		let range = defRangeOf(project, module: module, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
 		let useCount = usesInLoop(module, cfg: cfg, valueId: v)
 		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInLoop: useCount))
 	end 'eachValue'
@@ -282,12 +282,12 @@ end 'candidateAtGreater'
 function usesInLoop(module TargetModule, cfg FuncCfg, valueId ValueId) returns LoopUseCount
 	var count = 0 as LoopUseCount
 	var buf = OperandList.create()
-	for i in 0 upto cfg.numBlocks 'eachBlock'
+	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let depth = try cfg.loopDepth.get(i) otherwise panic("usesInLoop: loopDepth.get OOB")
 		if depth == 0 'notInLoop'
 			continue
 		end 'notInLoop'
-		let block = blockAt(module, cfg: cfg, local: i)
+		let block = blockAt(module, topo: cfg.topo, local: i)
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
 		for opIdx in ordered 'eachOp'
@@ -354,14 +354,14 @@ end 'classifyValue'
 // forbids from blocking an allocation. This PANICS naming it rather than emitting a location
 // the user cannot act on. At M5 it is unreachable (the four routes cover every blocking value);
 // it is the backstop guarding the E5001 contract.
-function defRangeOf(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, valueId ValueId, wordsPerRow ByteCount, lineage SplitLineage) returns SourceRange
+function defRangeOf(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow ByteCount, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
 	var visited = BitWordArray.create()
 	visited.resize(wordsPerRow)
-	collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
+	collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
 
 	if ranges.count() == 0 'ruleThree'
-		panic("register-pressure E5001: value {valueId} in '{cfg.numBlocks}'-block function {funcIndex} is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code.")
+		panic("register-pressure E5001: value {valueId} in '{topo.numBlocks}'-block function {funcIndex} is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code.")
 	end 'ruleThree'
 
 	return earliestRange(ranges)
@@ -371,7 +371,7 @@ end 'defRangeOf'
 // a phi's incoming spans transitively, a split-derived value's source span transitively.
 // `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
 // a lineage chase is acyclic but shares the guard), so each value is explored once.
-function collectReachableRanges(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
 	if bitsetTest(visited, base: 0, bit: valueId) 'seen'
 		return
 	end 'seen'
@@ -379,9 +379,9 @@ function collectReachableRanges(project Project, module TargetModule, cfg FuncCf
 
 	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
 		param(range) then out.push(range)
-		derived(sourceId) then collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: sourceId, lineage: lineage, visited: visited, out: out)
+		derived(sourceId) then collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: sourceId, lineage: lineage, visited: visited, out: out)
 		opDefined(opIndex) then out.push(project.opRanges.get(opIndex))
-		phi then chasePhiIncomings(project, module: module, cfg: cfg, funcIndex: funcIndex, phiValueId: valueId, lineage: lineage, visited: visited, out: out)
+		phi then chasePhiIncomings(project, module: module, topo: topo, funcIndex: funcIndex, phiValueId: valueId, lineage: lineage, visited: visited, out: out)
 	end 'src'
 end 'collectReachableRanges'
 
@@ -389,24 +389,24 @@ end 'collectReachableRanges'
 // nothing when the value is not a block-arg of any block — that leaves the caller's `out` free
 // of a span from this value, and only a value with no other route contributes none at all
 // (Rule 3).
-function chasePhiIncomings(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
-	for incoming in phiIncomingValues(module, cfg: cfg, phiValueId: phiValueId) 'each'
-		collectReachableRanges(project, module: module, cfg: cfg, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
+function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+	for incoming in phiIncomingValues(module, topo: topo, phiValueId: phiValueId) 'each'
+		collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
 	end 'each'
 end 'chasePhiIncomings'
 
 // Every value passed to `phiValueId` on a branch edge: locate the block where it is a block-arg
 // and its position there, then gather the positionally-corresponding arg from every edge that
 // targets that block. Empty when `phiValueId` is not a block-arg of any block.
-function phiIncomingValues(module TargetModule, cfg FuncCfg, phiValueId ValueId) returns ValueIdArray
+function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId ValueId) returns ValueIdArray
 	var result = ValueIdArray.create()
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
 		let pos = blockArgPosition(block, valueId: phiValueId)
 		if pos == block.blockArgs.count() 'notHere'
 			continue
 		end 'notHere'
-		gatherIncomingAtPosition(module, cfg: cfg, targetBlockId: block.id, position: pos, out: result)
+		gatherIncomingAtPosition(module, topo: topo, targetBlockId: block.id, position: pos, out: result)
 	end 'eachBlock'
 	return result
 end 'phiIncomingValues'
@@ -425,9 +425,9 @@ end 'blockArgPosition'
 
 // Gather the `position`-th argument of every branch edge targeting `targetBlockId` into `out`
 // (the values predecessors pass to that phi). Uses `PhiEdgeView` only for its arity check.
-function gatherIncomingAtPosition(module TargetModule, cfg FuncCfg, targetBlockId BlockId, position ByteCount, out ValueIdArray)
-	for i in 0 upto cfg.numBlocks 'eachBlock'
-		let block = blockAt(module, cfg: cfg, local: i)
+function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlockId BlockId, position ByteCount, out ValueIdArray)
+	for i in 0 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: i)
 		for edge in block.branchEdges 'eachEdge'
 			if edge.targetBlockId != targetBlockId 'notThisEdge'
 				continue
