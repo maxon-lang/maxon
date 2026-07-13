@@ -1,18 +1,28 @@
 // Test: conditional-return
-function main() returns ExitCode
-	let x = 5
+function firstOver(x int) returns int
 	if x > 3 'check'
 		return 1
 	end 'check'
 	return 0
+end 'firstOver'
+
+function main() returns ExitCode
+	if firstOver(5) != 1 'branchTaken'
+		return 2
+	end 'branchTaken'
+
+	if firstOver(1) != 0 'branchNotTaken'
+		return 3
+	end 'branchNotTaken'
+
+	return 0
 end 'main'
 ---
-ExitCode: 1
+ExitCode: 0
 ---
-func @main {
+func @firstOver {
   entry:
-    x64.movRegImm32 rax, 5
-    x64.cmpRegImm32 rax, 3
+    x64.cmpRegImm32 rcx, 3
     x64.jcc greater, check
     x64.jmp ifcont
   check:
@@ -20,5 +30,33 @@ func @main {
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 5
+    x64.callDirect firstOver
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, branchTaken
+    x64.jmp ifcont
+  branchTaken:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect firstOver
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, branchNotTaken
+    x64.jmp ifcont
+  branchNotTaken:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
     x64.ret
 }

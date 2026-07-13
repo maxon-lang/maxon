@@ -22,11 +22,13 @@ function edgeAnchor(p int, q int) returns int
 end 'edgeAnchor'
 
 function main() returns ExitCode
-	let v = edgeAnchor(1, q: 2)
-	if v == 52 'ok'
-		return 0
-	end 'ok'
-	return 99
+	if edgeAnchor(1, q: 2) != 52 'taken'
+		return 1
+	end 'taken'
+	if edgeAnchor(0, q: 2) != 39 'skipped'
+		return 2
+	end 'skipped'
+	return 0
 end 'main'
 ---
 ExitCode: 0
@@ -101,14 +103,25 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.callDirect edgeAnchor
     x64.cmpRegImm32 r8, 52
-    x64.jcc equal, ok
+    x64.jcc notEqual, taken
     x64.jmp ifcont
-  ok:
-    x64.movRegImm32 r8, 0
+  taken:
+    x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.ret
   ifcont:
-    x64.movRegImm32 r8, 99
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 2
+    x64.callDirect edgeAnchor
+    x64.cmpRegImm32 r8, 39
+    x64.jcc notEqual, skipped
+    x64.jmp ifcont
+  skipped:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.ret
 }

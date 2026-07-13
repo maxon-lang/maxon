@@ -54,11 +54,15 @@ unreachable and emits no code.
 
 The M4a slice of `specs/if-statements.md`: simple if, if-else (taken and not taken),
 the else-if chain, and a nested if. Every test uses a comparison condition and
-returns on all reachable paths. The tests needing function parameters + calls
+returns on all reachable paths. The tests needing top-level `typealias` + calls
 (`else-if-in-helper`, `nested-if-with-multiple-returns`), strings + calls
 (`nested-if-with-scoped-string`), or a bool literal + the "newline after block
 label" reject (`single-line-block-rejected`) are DEFERRED and recorded under
 `## Deferred` below.
+
+Each of those four ported tests runs with a single `x`, so only ONE arm of a chain is
+ever entered. `else-if-chain-every-arm` is the shv2-native test that closes that: it
+puts the chain in a helper and calls it once per arm, so every arm executes.
 
 <!-- test: if-statements.simple -->
 ```maxon
@@ -140,6 +144,56 @@ end 'main'
 3
 ```
 
+<!-- test: else-if-chain-every-arm -->
+`if-statements.else-if-chain` and `if-statements.nested` each run with ONE `x`, so exactly
+one arm of the chain is ever entered — the other arms are compiled and never executed, and a
+miscompiled arm among them (a wrong constant, a branch to the wrong block) is invisible to the
+exit code. Here the chain sits in a helper called once per arm, so EVERY arm returns on some
+executed path.
+
+Each arm is checked **on its own exit code**, not folded into one number. A weighted sum is
+tempting and it is a trap: with results 0..3 and weights 1/3/9/27 the digits OVERFLOW the base,
+so the encoding is not injective — `classify(0)` wrongly returning 3 and `classify(5)` wrongly
+returning 0 gives `3·1 + 0·3 + 2·9 + 3·27 = 102`, the expected total, and the test reports PASS
+on two miscompiled arms. Any combining arithmetic has some cancellation; a separate check has
+none, and the failing exit code names the arm that broke.
+```maxon
+function classify(x int) returns int
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	if classify(0) != 0 'zeroArm'
+		return 1
+	end 'zeroArm'
+
+	if classify(5) != 1 'smallArm'
+		return 2
+	end 'smallArm'
+
+	if classify(50) != 2 'mediumArm'
+		return 3
+	end 'mediumArm'
+
+	if classify(200) != 3 'largeArm'
+		return 4
+	end 'largeArm'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 ## Deferred
 
 Tests recorded for re-enablement at the milestone that unblocks them. They live
@@ -150,8 +204,11 @@ they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 
 ### if-statements.else-if-in-helper
 
-Re-enable once its prerequisites land: function parameters + calls with named
-args (M5).
+Its original prerequisite — function parameters + calls with named args — LANDED at
+M5; what still blocks the port verbatim is its top-level `typealias`, which shv2
+rejects (`E3010: Unsupported: top-level typealias`). Re-enable once that lands. Its
+COVERAGE (every arm of a chain executed) is already held by `else-if-chain-every-arm`
+above, which is this program with `int` in place of the alias.
 
 ```maxon
 
@@ -210,8 +267,9 @@ end 'main'
 
 ### if-statements.nested-if-with-multiple-returns
 
-Re-enable once its prerequisites land: function parameters + calls with named
-args (M5).
+Its original prerequisite — function parameters + calls with named args — LANDED at
+M5; what still blocks the port verbatim is its top-level `typealias`, which shv2
+rejects (`E3010: Unsupported: top-level typealias`). Re-enable once that lands.
 
 ```maxon
 

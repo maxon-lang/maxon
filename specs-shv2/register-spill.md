@@ -132,6 +132,29 @@ committed `.test` goldens carry the other half: they pin *how many* stores and r
 each function emits and *where*, so a spill that leaks into a loop body, or a reload
 that reappears at every use, fails as a golden mismatch even though the answer is still
 right.
+### What the RUN proves, and what the GOLDEN proves
+
+Every test below is checked twice, and the two halves prove different things — neither substitutes
+for the other.
+
+**The run proves the allocation is CORRECT.** A store→slot→reload chain that does not preserve value
+identity — a mis-targeted store, a wrong-slot reload, a reload of a slot nothing wrote, a value left
+in a register the call it crosses clobbers — hands a use the wrong value, so the program computes the
+wrong answer and the exit-code assertion fails. But the run only checks the code it actually EXECUTES:
+a branch the single execution never enters is allocated, and its allocation is never tested. So each
+`main` below drives **every path** through the function under test — all six arms of `pick`, both arms
+of `edgeAnchor`'s `if` — and checks each path's result **alone**, on its own exit code, rather than
+folding the paths into one number where two errors can cancel. (They can: in
+`values-confined-by-different-calls` a *permuted* register assignment, the exact bug that test guards,
+leaves the SUM of the six arms exactly correct.)
+
+**The golden proves the allocation did not get WORSE.** The committed `.test` fragment pins *how many*
+stores and reloads each function emits and *where*, so a spill that leaks into a loop body, or a reload
+that reappears at every use, fails as a golden mismatch even though the answer is still right — a
+regression the run cannot see, because slower code still computes the right value. The golden is also
+the only check on code no run reaches (a compile-error path, an assertion's `return` arm). What it
+cannot do is tell right from wrong: it pins what the compiler emitted, not what the program means. Only
+the run does that, which is why the run must reach every branch it can.
 
 ## Tests
 
@@ -651,8 +674,16 @@ does not DOMINATE the merge, so the store would never run on the `else` path and
 the call would read an unwritten slot. The def dominates every use of a value by SSA (Rule 1), so
 it is the only anchor that always dominates every reload.
 
-`edgeAnchor(1, 2)`: `t = 3`, `a1..a8 = 2..9` (sum 44), `p > 0` so `m = t = 3`, and `r = leaf(1) =
-2` — giving `44 + 3 + 2 + 3 = 52`.
+So `main` calls `edgeAnchor` on BOTH paths, because the path that does NOT take the branch is the one
+the unsound anchor actually breaks: with `p <= 0` the `br` block never runs, so a store placed there
+never executes, and the reload after the call reads a slot nothing wrote — a garbage `t` in the return
+sum. A run that only ever passes `p > 0` executes the store and gets the right answer no matter where
+the store sits, so it cannot see the bug at all; the `p <= 0` call is the one that can.
+
+`edgeAnchor(1, q: 2)` TAKES the branch: `t = 3`, `a1..a8 = 2..9` (sum 44), `m = t = 3`, `r = leaf(1) =
+2` — giving `44 + 3 + 2 + 3 = 52`. `edgeAnchor(0, q: 2)` SKIPS it: `t = 2`, `a1..a8 = 1..8` (sum 36),
+`m` keeps its `0`, `r = leaf(0) = 1` — giving `36 + 0 + 1 + 2 = 39`. Each is checked alone, on its own
+exit code, so either path can fail on its own.
 ```maxon
 function leaf(x int) returns int
 	return x + 1
@@ -677,11 +708,13 @@ function edgeAnchor(p int, q int) returns int
 end 'edgeAnchor'
 
 function main() returns ExitCode
-	let v = edgeAnchor(1, q: 2)
-	if v == 52 'ok'
-		return 0
-	end 'ok'
-	return 99
+	if edgeAnchor(1, q: 2) != 52 'taken'
+		return 1
+	end 'taken'
+	if edgeAnchor(0, q: 2) != 39 'skipped'
+		return 2
+	end 'skipped'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -710,8 +743,17 @@ and the bracket is the placement the ABI forces.
 Before the Hall test the splitter relieved nothing here and the colorer died with every register
 blocked (`chooseRegister: no free register for value 12 (blocked mask 65535)`).
 
-`pick(k) = (k + 11k) + sink(k) = k + 12k`, so the six arms give 13, 26, 39, 52, 65, 78 — every one
-of the six confined values is read on some path, and all six must survive.
+`pick(k) = (k + 11k) + sink(k) = 13k`, so the six arms give 13, 26, 39, 52, 65, 78. `main` calls all
+six and checks each result **alone**, returning that arm's index if it disagrees — so every arm runs,
+every one of `v1`..`v6` is read on an executed path, and a wrong register in any single arm changes
+the exit code and names the arm that broke.
+
+Checking the SUM of the six would not do, and the reason is exactly the bug this test guards. If the
+colorer hands arm `k` the register holding `v_j` instead of `v_k`, that arm computes `k + 11j + k`.
+Sum that over any bijection σ from arms to values and the total is `Σ (2k + 11·σ(k))` = `2·21 + 11·21`
+= 273 — the correct total, for **every** σ. A permuted colouring is precisely what a broken assignment
+of six confined values to five callee-saved registers produces, and it is invisible to the sum while
+being caught by any one of the six separate checks.
 ```maxon
 function sink(x int) returns int
 	return x
@@ -748,11 +790,25 @@ function pick(k int) returns int
 end 'pick'
 
 function main() returns ExitCode
-	let total = pick(1) + pick(2) + pick(3) + pick(4) + pick(5) + pick(6)
-	if total == 273 'ok'
-		return 0
-	end 'ok'
-	return 99
+	if pick(1) != 13 'a1'
+		return 1
+	end 'a1'
+	if pick(2) != 26 'a2'
+		return 2
+	end 'a2'
+	if pick(3) != 39 'a3'
+		return 3
+	end 'a3'
+	if pick(4) != 52 'a4'
+		return 4
+	end 'a4'
+	if pick(5) != 65 'a5'
+		return 5
+	end 'a5'
+	if pick(6) != 78 'a6'
+		return 6
+	end 'a6'
+	return 0
 end 'main'
 ```
 ```exitcode

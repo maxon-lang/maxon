@@ -51,17 +51,34 @@ end 'main'
 ```
 
 <!-- test: conditional-return -->
+A function with two exits must have BOTH of them executed. Written as `let x = 5; if x > 3 then
+return 1; return 0`, the condition is a constant the run always takes, so the tail `return 0` is
+compiled and never entered — its return lowering (the R8 move, the epilogue) is checked by the
+golden but never by an actual execution. Putting the branch in a helper and calling it on both
+sides of the condition makes each exit an executed path, and each is checked alone so neither can
+mask the other.
 ```maxon
-function main() returns ExitCode
-	let x = 5
+function firstOver(x int) returns int
 	if x > 3 'check'
 		return 1
 	end 'check'
 	return 0
+end 'firstOver'
+
+function main() returns ExitCode
+	if firstOver(5) != 1 'branchTaken'
+		return 2
+	end 'branchTaken'
+
+	if firstOver(1) != 0 'branchNotTaken'
+		return 3
+	end 'branchNotTaken'
+
+	return 0
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
 
 <!-- test: tail-return-is-last -->
