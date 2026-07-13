@@ -120,17 +120,28 @@ section.
 The original M1–M18 `PLAN.md` was **replaced** by the Minimal-Core plan (user-adopted).
 The M-numbered ledger below stays valid via the **Stage ↔ M mapping in PLAN.md's
 header**. What changed:
-- **Generics BEFORE ownership** (Stage 2): ownership's `own.drop` on a type-parameter
-  value needs the runtime layout descriptor, and `String`/`Array` are themselves
-  generic — so generics can't come after ownership. Order is now structs → generics →
-  interfaces → **heap+ownership+drops** → moves/borrows → escape → Array → String → Map.
+- **Generics before `Array`** (Stage 2): `own.drop` on a type-parameter value needs the
+  runtime layout descriptor, so a container of *managed* elements can't precede generics.
   (Original had ownership at M6, generics at M14 — reversed.)
-- **Self-host = compass, not gate.** A `selfhost-distance` ratchet (`stageUnits` over
-  shv2's own source; the ranked "TOP UNSUPPORTED" table IS the roadmap; per-unit
-  non-regression CI). Not yet built (Stage-0 gap 0.4).
-- **`stdlib-shv2/` pruned fork** + `MAXON_STDLIB` override (Stage-0 gaps 0.2/0.3) — the
-  only per-build stdlib lever (no `.mxc` cache until Stage 5). Leaf dir name MUST be
-  `stdlib` (namespace/monomorphization trap).
+  **REFINED 2026-07-13:** that intent binds **`Array`**, not **`String`**. `String` is a
+  **BUILTIN gated on the RUNTIME, not on generics** — v1's `__ManagedMemory` is a hardcoded
+  40-byte struct whose `element_size` is a *runtime field*
+  ([LowerMaxonToStd.maxon:1523](../maxon-selfhosted/Compiler/IR/Maxon/LowerMaxonToStd.maxon#L1523)),
+  which is why v1 shipped String in Phase 7 and generics in Phase 11. Order is now
+  structs → **heap+ownership+drops+String** → moves/borrows+errors → closures+escape →
+  generics → interfaces → Array → conditional conformance → **GATE H** → owned payloads →
+  Map+Set → ranged typealias. `own.drop` declares BOTH arms at 2.2; the descriptor arm goes
+  live at 2.5, so it is never retrofitted.
+- **Closures and conditional conformance are IN core** (reversed 2026-07-13). Rewriting
+  shv2's source to dodge a *hard* mechanism is a scope cut, not a simplification — and it
+  discards a free in-tree test. The `LazyMessage` sites are closure dogfood; `GlobalDedupMap`
+  is the conditional-conformance acceptance test.
+- **Self-host = a Stage-3 milestone.** The `selfhost-distance` compass is **CUT**;
+  **GATE H** (shv2 compiles its own 704-line spec harness, with a `maxon.exe`-built
+  differential oracle) is the near proxy, and it lands mid-Stage-2.
+- **`stdlib-shv2/` pruned fork** + `MAXON_STDLIB` override (Stage-0 gaps 0.2/0.3) —
+  **DEFERRED.** A cold shv2 build measures 4.2 s; the fork removes ~1 s and gates nothing.
+  Whenever revived: leaf dir name MUST be `stdlib` (namespace/monomorphization trap).
 - **Workstream R** = the runtime shv2's backend must *emit* (~5–7k lines: slab, refcount,
   `__destruct`, `__ManagedMemory`, DebugStream producer, GT scheduler), sliced into
   Stage 2 (R1@2.4 gates mm-trace; R2@2.8; R3@Stage 5). shv2 excludes `Internals.maxon`
@@ -453,22 +464,97 @@ opt-out machinery in `Testing/SpecParser.maxon`). It was not wrong; **its premis
   M5.1–M5.6. Both seams exist (`PassPipeline.classifyPass` labels each pass `wholeModule`/`perFunction`;
   the parser is already a pure function of its file), and the runtime under it is proven (Track 0); nothing
   drives them. Blocking gate when it starts: **1-core-vs-N-core byte identity**.
-**The remaining ledger follows the ADOPTED plan's order — generics BEFORE ownership** (see "Plan adopted"
-above). The original list here was the pre-adoption M6–M18 numbering, which had ownership at M6 and generics
-at M14 — *reversed*, because `own.drop` on a type-parameter value needs the runtime layout descriptor, and
-`String`/`Array` are themselves generic.
+**The remaining ledger follows the ADOPTED plan's order** (see "Plan adopted" above). The original list here
+was the pre-adoption M6–M18 numbering, which had ownership at M6 and generics at M14 — *reversed*, because
+`own.drop` on a type-parameter value needs the runtime layout descriptor. **Re-ordered again 2026-07-13:**
+`String` is a builtin gated on the *runtime*, not on generics, so it leads Stage 2 as the first heap value.
 
 - [x] **Stage 0 tooling** — **CLOSED 2026-07-13, mostly by deletion.** `0.1 spec-test` shipped and is the
   gate. The `selfhost-distance` **compass is CUT** (PLAN.md → "The compass, and why it is gone"): we know
   what to implement, so its ranked table bought nothing, and its real price was making `panic()` recoverable
   at **626** sites. The `stdlib-shv2` fork + `MAXON_STDLIB` are **deferred** — a cold shv2 build measures
-  4.2 s and the fork removes ~1 s. The core-violating rewrites move to **Stage 3**, where shv2 compiling
-  shv2 names them for free. **Nothing in Stage 0 gates Stage 2 any more.**
-- [ ] **Stage 2** — 2.1 structs · 2.2 **generics** (dictionary-passing + layout descriptors + witness
-  tables) · 2.3 interfaces · 2.4 **heap + ownership + drops** (Workstream **R1** — the emitted runtime:
-  slab / refcount / `__destruct` / DebugStream producer; also what gates mm-trace) · 2.5 moves+borrows ·
-  2.6 escape→refcount · 2.7 Array · 2.8 String (R2) · 2.9 owned payloads · 2.10 **Map + Set** · 2.11 for-in ·
-  2.12 error handling · 2.13 ranged typealias
+  4.2 s and the fork removes ~1 s. The core-violating rewrites are **VOID** — closures and conditional
+  conformance are now *in core*, so there is nothing left to rewrite. **Nothing in Stage 0 gates the ladder.**
+  *(RE-OPENED 2026-07-13: the `stdlib-shv2/` fork is **UN-DEFERRED** — see "the stdlib cone" below. Its value
+  is a BOUNDARY on Phase 1's language surface, not a ~1 s speedup.)*
+
+**The plan is now TWO PHASES (user-set 2026-07-13).** PHASE 1 = **shv2 runs its own spec tests** — shv2
+compiles its own spec harness, and the shv2-compiled harness runs `specs-shv2/` **IN PARALLEL, on a
+green-thread worker pool**, the way `maxon-selfhosted` does. PHASE 2 = **full self-host** (3-stage fixpoint).
+Milestones are `P1.x`/`P2.x`.
+
+**⚠ `async` / GREEN THREADS ARE IN CORE, AT P1.5 — reversed 2026-07-13 (were "Beyond").** Running the spec
+suite *means running it in parallel*: v1's `runAllSpecTestsParallel` (`SpecTestRunner.maxon:3401`) is a
+persistent worker-subprocess pool on `async`/`await` + Promises over the green-thread runtime. shv2's harness
+is serial only by deliberate omission (`SpecTestRunner.maxon:11`: *"Trimmed HARD from v1's… no parallel worker
+pool"*). **So Workstream R3 (the GT scheduler) is UN-DEFERRED into Phase 1**, and — load-bearing — **`async`
+CO-LANDS with closures + escape at P1.5**: a green-thread capture **IS** an escape, exactly like a closure
+capturing into a heap env. Ship `EscapeAnalysis` single-threaded and `async` later bolts a *second capture
+channel* onto it = v1's `sys.dropTypeParam` split-brain mistake.
+
+**REJECTED (and do not re-derive it): the "cheap parallel runner."** `stdlib/Subprocess.maxon` has a split
+spawn/wait API (`spawn()` → `StreamingSubprocess`, `wait()`), so you *can* parallelize the suite with **zero
+green threads**: spawn N children over disjoint shards, each writing results to a FILE (no pipe to deadlock),
+then blocking-`wait()` each — wall time = max, not sum. ~80 lines, no new mechanisms. **It is a SCOPE CUT.**
+It buys a fast test run and defers the most retrofit-hostile mechanism left in the language. *Do the hard
+things early.* The parallel harness is `async`'s **dogfood + acceptance test**, not a task to be completed by
+the cheapest route. *(Calibration, not an excuse: the serial suite is **3.0 s / 126 tests** today. Parallelism
+is in Phase 1 for the mechanism, not the seconds.)*
+
+- [ ] **P1.0a grow the harness's parallel worker pool back** — port v1's `runAllSpecTestsParallel`
+  worker-subprocess pool into `maxon-shv2/Testing/`. Maxon, compiled by **`maxon.exe`**, green under today's
+  gates. **The acceptance target must exist before it can be a target** — every later rung is then measured
+  against the real Phase-1 harness instead of the serial stub.
+- [ ] **P1.0b measure the stdlib cone** (against the UPGRADED harness) — compile it with `maxon.exe`, list which stdlib functions
+  actually get codegen'd. **⚠ This sets Phase 1's real boundary.** shv2 parses all 48 stdlib files, and the
+  stdlib *declares* things the harness never dispatches through: `Subprocess.maxon:120
+  typealias EnvMap = Map with String, String` (the harness needs Subprocess to spawn the compiler, but never
+  the env-map overload); `Array.maxon:406` conditional conformance; `extension` blocks in
+  Array/Interfaces/PrimitiveExtensions. **The rule: Phase 1 = EMIT(what the harness uses) ∪ DECLARE(what the
+  stdlib cone declares)** — parse+resolve is far cheaper than emit, and it is all `Map` / conditional
+  conformance / interfaces / extensions need until Phase 2. **The obligation that makes the rule hold: shv2
+  must lower only the stdlib bodies a program transitively REACHES.** Not an optimization — if shv2 lowers
+  whole files, `EnvMap` drags in `Map` → the `Hashable` constraint → interfaces + witness tables, and Phase 2
+  collapses back into Phase 1. Backstop: the pruned fork.
+- [ ] **P1.1 structs · enums · unions · `match`** — concrete, trivial-ownership only. **← NEXT**
+- [ ] **P1.2 heap + ownership + drops + `String`** ⭐ THE CRUX. String is the FIRST heap value — a **builtin
+  gated on the RUNTIME, not on generics** (`__ManagedMemory` is a hardcoded 40-byte struct whose
+  `element_size@24` is a *runtime field*, which is why v1 shipped String in Phase 7 and generics in Phase 11).
+  Workstream **R1** lands here (slab / refcount / `__destruct` / string runtime / DebugStream producer) — and
+  mm-trace cannot gate without it. `own.drop` declares BOTH arms; the descriptor arm is unreachable until P1.6.
+- [ ] **P1.3 owned payloads in enums/unions** — *moved into Phase 1:* `SpecExpectation.compilerError(text
+  String)` and `TestOutcome.fail(reason String)` each carry a **managed String payload**.
+- [ ] **P1.4 moves + borrows (NLL) · errors** — `throws`/`try`/`otherwise`, v1's dual-register
+  `(value, errorFlag)` verbatim + drops on the error edge. **36 harness sites.**
+- [ ] **P1.5 closures + `async` + escape → `shared`** ⭐⭐ **THE THREE ARE ONE MECHANISM.** Capture-into-heap
+  IS escape: a closure captures into an env block, a green thread captures into a task frame. Escape analysis
+  is needed for heap correctness regardless — so build all three together and `EscapeAnalysis` gets **both**
+  capture channels from birth. **Workstream R3 lands here** (GT scheduler + async subprocess stdio — v1's pool
+  `await`s worker-stdout drains, so the pipes must be non-blocking/IOCP). Track **`% values promoted to
+  shared`**. ⚠ R1's zeroing contract is load-bearing here: two of the three bugs it was written for were
+  green-thread bugs (`__gt_spawn`'s `cancel_flag` deadlock; the socket `OVERLAPPED.hEvent` IOCP hang).
+- [ ] **P1.6 generics + layout descriptors** ⭐ ⇒ `own.drop`'s descriptor arm goes **LIVE**.
+- [ ] **P1.7 `Array`** — = P1.6 ∘ P1.2, the first real integration proof (managed elements → element-destroy
+  through the descriptor). ⇒ unlocks `b"…"` byte-string literals.
+- [ ] **P1.8 `String` methods · `for-in`** — real `String.equals` body; hardcoded for-in (5 harness sites). R2.
+- [ ] **P1.9 ranged typealiases** — *moved into Phase 1:* `LineIndex = int(0 to u64.max)`,
+  `ExitCodeValue = int(i64.min to i64.max)`. Cheap (wide ranges ⇒ near-vacuous checks) but the mechanism
+  must exist.
+- [ ] 🚩 **PHASE 1 GATE — the differential oracle.** Build the **parallel** harness with **BOTH** `maxon.exe`
+  and `maxon-shv2.exe`; run both over `specs-shv2/` on an N-worker pool, both driving `maxon-shv2.exe` as
+  compiler-under-test; demand **identical results**. **Without the `maxon.exe` reference build this gate could
+  pass while silently broken** — a shv2 miscompile of the harness makes the harness's own verdicts
+  untrustworthy. **Plus two gates the pool brings, and they are a feature:** *worker-count invariance*
+  (`-j1` == `-jN` — same shape as P2.6's 1-core-vs-N-core byte identity, and the sharpest `async` test there
+  is: a dropped or double-freed capture shows up as a flake, and a flake is a bug), and a **clean `mm-trace`
+  under the pool**. Then the circle closes: the shv2-compiled, shv2-parallel harness runs the suite that tests
+  shv2. ~30× smaller than the compiler, so a miscompile surfaces at 1/30th the debugging cost.
+- [ ] **PHASE 2** — P2.1 interfaces + witness tables · P2.2 **conditional conformance** (per-gid thunks ⇒
+  `GlobalDedupMap` compiles — its acceptance test) · P2.3 **Map + Set** · P2.4 extensions · P2.5 closure
+  dogfood (`LazyMessage` compiles) · P2.6 per-function fan-out (gate: 1-core-vs-N-core byte identity)
+- [ ] 🚩 **PHASE 2 GATE — self-host.** 3-stage bootstrap fixpoint: stage-2 == stage-3 **byte-identical**, and
+  stage-2 shv2 passes the whole suite. Budget a core-drift rewrite pass here; watch for a violation that is
+  NOT mechanical (that is the signal to re-open the compass decision).
 - [ ] **spec: a spilled value forwarded to a phi** — `rewriteEdgeArgsIn` is the compiler's one in-place
   write to the shared phi model, guarded by its one remaining `.clone()`, and it is reached by **none** of
   the 126 specs (including the five allocator stress specs). Unexercised, and a missing copy-on-write there
