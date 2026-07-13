@@ -9,16 +9,12 @@ echo "=== Running C# Spec Tests ==="
 bin/maxon spec-test
 
 echo ""
-echo "=== Building Self-Hosted Compiler ==="
-bin/maxon build maxon-selfhosted
+echo "=== Building shv2 Compiler ==="
+bin/maxon build maxon-shv2
 
 echo ""
-echo "=== Running Self-Hosted Spec Tests ==="
-maxon-selfhosted/.maxon/maxon-selfhosted spec-test
-
-echo ""
-echo "=== Running Self-Hosted WASM Spec Tests ==="
-maxon-selfhosted/.maxon/maxon-selfhosted spec-test --target=wasm32-wasi
+echo "=== Running shv2 Spec Tests ==="
+maxon-shv2/.maxon/maxon-shv2 spec-test
 
 echo ""
 echo "=== Building maxon-dev MCP Server ==="
