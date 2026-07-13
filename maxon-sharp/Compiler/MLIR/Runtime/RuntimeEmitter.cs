@@ -53,6 +53,29 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int MmOffDestructor = -16;
   public const int MmOffRefcount = -8;
 
+  // __ManagedMemory RECORD layout, relative to the record pointer. This is the
+  // container header the array/string builtins operate on — not to be confused
+  // with the allocation header above, which lives at NEGATIVE offsets from a user
+  // pointer. Mirrors ManagedField* in MaxonToStandardConversion.Helpers.cs (the
+  // conversion layer's view of the same record) and MM_OFFSET_* in
+  // stdlib/Internals.maxon (the self-hosted runtime's).
+  public const int MmemOffBuffer = 0;
+  public const int MmemOffLength = 8;
+  public const int MmemOffCapacity = 16;
+  public const int MmemOffElementSize = 24;
+
+  // element_size == 0 is the SUB-BYTE BIT-PACKED sentinel (`Array with bool`):
+  // capacity and length stay element counts, but the buffer is (count + 7) / 8
+  // bytes and an element is addressed by bit, not by byte offset.
+  public const int MmemBitPackedElementSize = 0;
+
+  // A managed element is always an 8-byte refcounted heap pointer, so the element
+  // walks (incref / decref / vacate) have a fixed stride.
+  public const int MmemManagedElementSize = 8;
+
+  // Bytes per machine word — the bulk stride of the byte-exact zero loop.
+  public const int MachineWordBytes = 8;
+
   // Debug canary value written after user data when MmDebug is enabled
   public const long MmDebugCanaryValue = unchecked((long)0xCAFEBABEDEADC0DE);
 

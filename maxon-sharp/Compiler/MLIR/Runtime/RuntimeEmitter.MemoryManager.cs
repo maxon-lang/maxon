@@ -1044,10 +1044,10 @@ public partial class RuntimeEmitter {
     _b.StoreLocal(3, VReg.Scratch0); // slot 3 = new_ptr
 
     // Step 2: Compute old_byte_size from managedPtr->capacity and managedPtr->element_size.
-    // When element_size == 0 (bit-packed bool sentinel), use (capacity + 7) >> 3 instead.
+    // At MmemBitPackedElementSize (0), use (capacity + 7) >> 3 instead.
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = managedPtr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // Scratch1 = capacity
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 24); // Scratch2 = element_size
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffCapacity);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, MmemOffElementSize);
     var notBitPacked = UniqueLabel("mm_raw_realloc_not_bit_packed");
     _b.JumpIfNonZero(VReg.Scratch2, notBitPacked);
     // Bit-packed path: old_byte_size = (capacity + 7) >> 3
@@ -1535,7 +1535,6 @@ public partial class RuntimeEmitter {
 
   /// <summary>mm_decref_managed_elements(managed_ptr): Decref each element pointer in buffer.</summary>
   public void EmitMmDecrefManagedElements(bool mmTrace) {
-    // ManagedMemory: [+0]=buf, [+8]=len, [+16]=capacity, [+24]=element_size
     // Slots: 0=managed_ptr, 1=buf, 2=len, 3=idx
     _b.FunctionStart("mm_decref_managed_elements", 1, 0x60);
 
@@ -1544,8 +1543,8 @@ public partial class RuntimeEmitter {
     // destructor was generated incorrectly. Panic early instead of decrefing
     // integer values as pointers (which causes use-after-free / segfaults).
     _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 24); // element_size
-    _b.CmpRegImm(VReg.Scratch1, 8);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffElementSize);
+    _b.CmpRegImm(VReg.Scratch1, MmemManagedElementSize);
     var elemSizeOk = UniqueLabel("mm_decref_elems_size_ok");
     _b.JumpIf(Condition.Equal, elemSizeOk);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_elems_bad_elemsize");
@@ -1553,9 +1552,9 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(elemSizeOk);
 
     _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
     _b.StoreLocal(1, VReg.Scratch1);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffLength);
     _b.StoreLocal(2, VReg.Scratch1);
     _b.ZeroReg(VReg.Scratch0);
     _b.StoreLocal(3, VReg.Scratch0); // idx = 0
@@ -1598,9 +1597,9 @@ public partial class RuntimeEmitter {
   public void EmitMmIncrefManagedElements(bool mmTrace) {
     _b.FunctionStart("mm_incref_managed_elements", 1, 0x60);
     _b.LoadLocal(VReg.Scratch0, 0);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
     _b.StoreLocal(1, VReg.Scratch1);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffLength);
     _b.StoreLocal(2, VReg.Scratch1);
     _b.ZeroReg(VReg.Scratch0);
     _b.StoreLocal(3, VReg.Scratch0);
@@ -1637,35 +1636,77 @@ public partial class RuntimeEmitter {
     _b.FunctionEnd();
   }
 
-  /// <summary>mm_clear_managed_elements(managed_ptr): Decref and zero each element slot.</summary>
-  public void EmitMmClearManagedElements(bool mmTrace) {
-    _b.FunctionStart("mm_clear_managed_elements", 1, 0x60);
-    _b.LoadLocal(VReg.Scratch0, 0);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
-    _b.StoreLocal(1, VReg.Scratch1);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
-    _b.StoreLocal(2, VReg.Scratch1);
-    _b.ZeroReg(VReg.Scratch0);
-    _b.StoreLocal(3, VReg.Scratch0);
+  // =========================================================================
+  // THE CAPACITY-SLOT INVARIANT
+  //
+  //     Every slot in [length, capacity) of an owned buffer reads as ZERO.
+  //
+  // This is what makes lengthening the live range safe. setLength (and so
+  // Array.resize) does not — CANNOT — initialize the slots it exposes: every
+  // caller that lengthens the buffer STAGES the value FIRST and publishes it
+  // with setLength SECOND (push = set-then-setLength; insert = shiftRight +
+  // set-then-setLength; string building = create + setByte-then-setLength). A
+  // setLength that zeroed [oldLength, newLength) on the way up would erase every
+  // one of those values. So the slots must ALREADY be zero when exposed, which
+  // means zeroing them on the way OUT — in the operations that VACATE a slot:
+  // clear, the shrink path of setLength, and remove.
+  //
+  // Zero is the right value for BOTH element classes, which is why one
+  // byte-level, type-agnostic primitive serves both: 0 for a scalar element (the
+  // documented "new elements are zero-initialized") and NULL for a managed
+  // pointer — the element walks skip a null slot and LowerManagedMemGet reports
+  // it as an empty slot rather than dereferencing it.
+  //
+  // Fresh capacity is NEVER re-zeroed, because it is already zero at birth:
+  // mm_raw_alloc hands back zeroed slab memory, and mm_raw_realloc memcpy's only
+  // the live prefix into such a buffer, leaving the grown tail zero. A resize
+  // that grows into fresh memory therefore pays nothing here — only slots that
+  // were actually occupied are ever zeroed.
+  //
+  // The self-hosted twin of these two helpers is __managed_mem_vacate_range /
+  // __managed_mem_zero_elements_range in stdlib/Internals.maxon (a file this
+  // bootstrap excludes — it lowers the __managed_mem_* builtins itself).
+  // =========================================================================
 
-    var loopLabel = UniqueLabel("mm_clear_elems_loop");
-    var doneLabel = UniqueLabel("mm_clear_elems_done");
-    var zeroLabel = UniqueLabel("mm_clear_elems_zero");
+  /// <summary>
+  /// mm_vacate_managed_elements(managed_ptr, start, end): release each managed
+  /// element in the half-open slot range, then erase the slots it left behind.
+  ///
+  /// The two halves belong together. A release without the erase leaves a
+  /// dangling pointer above `length` for the next regrow to hand back, and the
+  /// teardown walk then decrefs it a second time (double-free). An erase without
+  /// the release leaks the element. Callers: clear (0, length) and the shrink
+  /// path of setLength (newLength, oldLength).
+  ///
+  /// Managed elements are always 8-byte heap pointers, so the stride is fixed.
+  /// </summary>
+  // Stack slots: 0=managed_ptr, 1=start, 2=end, 3=buf, 4=idx
+  public void EmitMmVacateManagedElements(bool mmTrace) {
+    _b.FunctionStart("mm_vacate_managed_elements", 3, 0x60);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
+    _b.StoreLocal(3, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch0, 1); // start
+    _b.StoreLocal(4, VReg.Scratch0); // idx = start
+
+    var loopLabel = UniqueLabel("mm_vacate_elems_loop");
+    var doneLabel = UniqueLabel("mm_vacate_elems_done");
+    var zeroLabel = UniqueLabel("mm_vacate_elems_zero");
 
     _b.DefineLabel(loopLabel);
-    _b.LoadLocal(VReg.Scratch0, 3);
-    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.LoadLocal(VReg.Scratch0, 4); // idx
+    _b.LoadLocal(VReg.Scratch1, 2); // end
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
     _b.JumpIf(Condition.AboveEqual, doneLabel);
 
     // Compute element address = buf + idx*8
-    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch0, 4);
     _b.ShlRegImm(VReg.Scratch0, 3);
-    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.LoadLocal(VReg.Scratch1, 3);
     _b.AddRegReg(VReg.Scratch1, VReg.Scratch0); // elem_addr
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 0); // elem
 
-    // Null guard: skip decref, go to zero
+    // Null guard: an already-empty slot still gets (re-)zeroed, never decref'd.
     _b.JumpIfZero(VReg.Arg0, zeroLabel);
 
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_elements");
@@ -1673,28 +1714,150 @@ public partial class RuntimeEmitter {
     _b.Call("mm_decref");
 
     _b.DefineLabel(zeroLabel);
-    // Zero the slot: [buf + idx*8] = 0
-    _b.LoadLocal(VReg.Scratch0, 3);
+    // Zero the slot: [buf + idx*8] = 0. Recomputed rather than kept live across
+    // the mm_decref call, which clobbers the scratch registers.
+    _b.LoadLocal(VReg.Scratch0, 4);
     _b.ShlRegImm(VReg.Scratch0, 3);
-    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.LoadLocal(VReg.Scratch1, 3);
     _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);
     _b.ZeroReg(VReg.Scratch0);
     _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
 
-    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch0, 4);
     _b.AddRegImm(VReg.Scratch0, 1);
-    _b.StoreLocal(3, VReg.Scratch0);
+    _b.StoreLocal(4, VReg.Scratch0);
     _b.Jump(loopLabel);
 
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
   }
 
-  /// <summary>Emit all three managed-elements functions.</summary>
+  /// <summary>
+  /// mm_zero_element_range(managed_ptr, start, end): erase the slots in the
+  /// half-open range. The primitive-element counterpart of
+  /// mm_vacate_managed_elements — there is no element to release, only a slot to
+  /// clear, so that a later regrow of the length reads back 0 rather than the
+  /// previous occupant's value.
+  ///
+  /// SKIPPED for a buffer this record does not own (capacity &lt; 0: an
+  /// rdata-backed array literal, or a read-only view). Writing there would fault
+  /// on read-only memory — and the invariant needs no help: setLength compares
+  /// the new length against a NEGATIVE capacity and so rejects every value,
+  /// meaning such a record cannot lengthen without first going through grow,
+  /// whose COW copies the live elements into a fresh ZEROED heap buffer. The
+  /// mandatory COW re-establishes the invariant by construction.
+  /// </summary>
+  // Stack slots: 0=managed_ptr, 1=start, 2=end, 3=buf, 4=element_size,
+  //              5=cursor (idx, or the byte cursor), 6=bytes_remaining
+  public void EmitMmZeroElementRange() {
+    _b.FunctionStart("mm_zero_element_range", 3, 0x60);
+
+    var doneLabel = UniqueLabel("mm_zero_range_done");
+    var packedLabel = UniqueLabel("mm_zero_range_packed");
+    var packedLoopLabel = UniqueLabel("mm_zero_range_packed_loop");
+    var qwordLoopLabel = UniqueLabel("mm_zero_range_qword");
+    var byteLoopLabel = UniqueLabel("mm_zero_range_byte");
+
+    // capacity < 0 => rdata / read-only view: not ours to write.
+    _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffCapacity);
+    _b.CmpRegImm(VReg.Scratch1, 0);
+    _b.JumpIf(Condition.Less, doneLabel);
+
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
+    _b.JumpIfZero(VReg.Scratch1, doneLabel); // never-allocated buffer
+    _b.StoreLocal(3, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffElementSize);
+    _b.StoreLocal(4, VReg.Scratch1);
+    // MmemBitPackedElementSize (0) routes to the per-bit clear below.
+    _b.JumpIfZero(VReg.Scratch1, packedLabel);
+
+    // --- byte-strided elements: zero [buf + start*es, buf + end*es) ---
+    // bytes_remaining = (end - start) * element_size
+    _b.LoadLocal(VReg.Scratch0, 2); // end
+    _b.LoadLocal(VReg.Scratch1, 1); // start
+    _b.SubRegReg(VReg.Scratch0, VReg.Scratch1); // count = end - start
+    _b.LoadLocal(VReg.Scratch1, 4); // element_size
+    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.StoreLocal(6, VReg.Scratch0);
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+
+    // cursor = buf + start * element_size
+    _b.LoadLocal(VReg.Scratch0, 1); // start
+    _b.LoadLocal(VReg.Scratch1, 4); // element_size
+    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 3); // buf
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);
+    _b.StoreLocal(5, VReg.Scratch1);
+
+    // Zero BYTE-EXACTLY: qwords while at least 8 remain, then a byte tail.
+    //
+    // NOT __slab_memzero — it rounds the length UP to a whole qword, which is
+    // sound only for a region that ENDS at the end of its allocation (mm_realloc's
+    // grown tail). This range ends at `end`, which is a partial, unaligned offset
+    // into the buffer: rounding up would write as many as 7 bytes past it, and when
+    // `end` sits at the buffer's end that lands OUTSIDE the slab slot, corrupting
+    // the next object. (It did: a String's `setLength(len+1)` / `setLength(len)`
+    // NUL-terminator dance in File.readText shrinks by one byte at an arbitrary
+    // offset, and the rounded-up zero scribbled over the following allocation.)
+    _b.DefineLabel(qwordLoopLabel);
+    _b.LoadLocal(VReg.Scratch0, 6); // bytes_remaining
+    _b.CmpRegImm(VReg.Scratch0, MachineWordBytes);
+    _b.JumpIf(Condition.Below, byteLoopLabel);
+    _b.LoadLocal(VReg.Scratch1, 5); // cursor
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
+    _b.AddRegImm(VReg.Scratch1, MachineWordBytes);
+    _b.StoreLocal(5, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch0, 6);
+    _b.SubRegImm(VReg.Scratch0, MachineWordBytes);
+    _b.StoreLocal(6, VReg.Scratch0);
+    _b.Jump(qwordLoopLabel);
+
+    _b.DefineLabel(byteLoopLabel);
+    _b.LoadLocal(VReg.Scratch0, 6); // bytes_remaining
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    _b.LoadLocal(VReg.Scratch1, 5); // cursor
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreIndirectByte(VReg.Scratch1, 0, VReg.Scratch0);
+    _b.AddRegImm(VReg.Scratch1, 1);
+    _b.StoreLocal(5, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch0, 6);
+    _b.SubRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(6, VReg.Scratch0);
+    _b.Jump(byteLoopLabel);
+
+    // --- bit-packed elements: clear one bit per element ---
+    // A packed field is not byte-aligned, so a byte-range zero would flatten the
+    // live neighbours sharing the boundary bytes. Clear the bits individually.
+    _b.DefineLabel(packedLabel);
+    _b.LoadLocal(VReg.Scratch0, 1); // start
+    _b.StoreLocal(5, VReg.Scratch0); // idx = start
+
+    _b.DefineLabel(packedLoopLabel);
+    _b.LoadLocal(VReg.Scratch0, 5); // idx
+    _b.LoadLocal(VReg.Scratch1, 2); // end
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, doneLabel);
+
+    _b.LoadLocal(VReg.Scratch1, 3); // buf
+    _b.BitTestAndReset(VReg.Scratch1, 0, VReg.Scratch0); // buf[idx] = false
+
+    _b.LoadLocal(VReg.Scratch0, 5);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(5, VReg.Scratch0);
+    _b.Jump(packedLoopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>Emit the managed-element walk helpers plus the slot-erase primitive.</summary>
   public void EmitMmManagedElementsFunctions(bool mmTrace) {
     EmitMmDecrefManagedElements(mmTrace);
     EmitMmIncrefManagedElements(mmTrace);
-    EmitMmClearManagedElements(mmTrace);
+    EmitMmVacateManagedElements(mmTrace);
+    EmitMmZeroElementRange();
   }
 
   // =========================================================================

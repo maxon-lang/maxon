@@ -2894,20 +2894,18 @@ function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 	return 0
 end '__destruct___ManagedMemory'
 
-// Walk the live elements [0, length) of a ROOT record and run the per-element
-// teardown (`element_destroy@40`, &__mm_decref for managed-pointer elements) on each
-// non-null slot. Shared by the record's destructor (teardown) and `__managed_mem_clear`
-// (truncate-to-empty): each live slot carries exactly +1 (push moved the caller's ref
-// in without an incref), so one decref nets to zero and cascades into the element's
-// own destructor. A 0 `element_destroy` (raw/primitive elements) makes this a no-op —
-// decref-ing a raw int would fault. Does NOT touch the buffer or length; callers do.
 // Run the per-element teardown (`element_destroy@40`, &__mm_decref for
 // managed-pointer elements) on every live slot in the half-open range
-// [start, end). The single source of truth for partial element teardown:
-// full-record teardown (`__managed_mem_walk_elements`), clear, and the
-// shrink path of setLength all funnel through here so the element_destroy==0
-// raw-buffer gate and the per-slot null check live in one place. Caller
-// guarantees 0 <= start <= end <= length.
+// [start, end). Each live slot carries exactly +1 (push moved the caller's ref
+// in without an incref), so one decref nets to zero and cascades into the
+// element's own destructor. A 0 `element_destroy` (raw/primitive elements) makes
+// this a no-op — decref-ing a raw int would fault.
+//
+// The single source of truth for partial element teardown: full-record teardown
+// (`__managed_mem_walk_elements`), clear, and the shrink path of setLength all
+// funnel through here so the element_destroy==0 raw-buffer gate and the per-slot
+// null check live in one place. Does NOT touch the buffer or length; callers do.
+// Caller guarantees 0 <= start <= end <= length.
 function __managed_mem_walk_elements_range(self MachineWord, start MachineWord, end MachineWord)
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	if elementDestroy == 0 'rawElems'
@@ -2938,14 +2936,98 @@ function __managed_mem_walk_elements(self MachineWord)
 	__managed_mem_walk_elements_range(self, start: 0, end: length)
 end '__managed_mem_walk_elements'
 
-// clear(self) — drop every live managed element, then truncate to empty (length=0).
-// `Array.clear()` formerly lowered to a bare `length = 0`, which leaked every managed
-// element (the slots' +1 refs were orphaned with no walk). Walk-then-truncate frees
-// them; the backing buffer + capacity are retained for reuse. For a raw-element record
-// the walk is inert, so this stays correct (and a no-op beyond the length store) for
-// `Array with Integer`/`Byte`. Returns 0 (the void result the lowering binds).
+// ============================================================================
+// THE CAPACITY-SLOT INVARIANT
+//
+//     Every slot in [length, capacity) of an owned buffer reads as ZERO.
+//
+// This is what makes lengthening the live range safe. `setLength` (and so
+// `Array.resize`) does not — CANNOT — initialize the slots it exposes: every
+// caller that lengthens the buffer STAGES the value FIRST and publishes it with
+// `setLength` SECOND (`push` = set-then-setLength; `insert` = shiftRight +
+// set-then-setLength; `Character.fromCodepoint` / string building =
+// create + setByte-then-setLength). A `setLength` that zeroed [oldLength,
+// newLength) on the way up would erase every one of those values. So the slots
+// must ALREADY be zero when they are exposed, and the way to guarantee that is
+// to zero them on the way OUT — in the three operations that VACATE a slot
+// (`clear`, the shrink path of `setLength`, and `remove`).
+//
+// Zero is the right value for BOTH element classes, which is why one byte-level,
+// type-agnostic primitive serves both: `0` for a scalar (the documented
+// "new elements are zero-initialized") and NULL for a managed pointer — the
+// element walk's `if slot != 0` skips a null slot, `__mm_decref_maybenull_helper`
+// tolerates it, and `__managed_mem_get` reports it as `emptySlot`.
+//
+// Fresh capacity is NEVER re-zeroed, because it is already zero at birth:
+// `__managed_mem_create` / `__managed_mem_alloc_buffer` allocate from the
+// always-zeroing slab; `__managed_mem_grow` goes through `mm_realloc`, which
+// memcpy's the live prefix and memzeroes the grown tail; `__managed_mem_cow_check`
+// copies the live bytes into a fresh zeroed buffer. A `resize` that grows into
+// fresh memory therefore pays NOTHING here — only slots that were actually
+// occupied are ever zeroed.
+// ============================================================================
+
+// Erase the slots [start, end) of `self`'s buffer. The other half of the vacate
+// contract: `__managed_mem_walk_elements_range` RELEASES a departing element,
+// this ERASES the slot it left behind — so a later regrow of the length can only
+// expose a zeroed slot, never a stale (already-decref'd) pointer.
+//
+// SKIPPED for a buffer this record does not own (capacity < 0: an rdata-backed
+// array literal, or a read-only view). Writing there would fault on read-only
+// memory — and the invariant needs no help: `setLength` compares n against a
+// NEGATIVE capacity and so rejects every n, meaning such a record cannot
+// lengthen without first going through `grow` -> `cow_check`, which copies the
+// live elements into a fresh ZEROED buffer sized to `length` and then mmReallocs
+// (zeroing the grown tail). The mandatory COW re-establishes the invariant by
+// construction. Caller guarantees 0 <= start <= end <= capacity.
+function __managed_mem_zero_elements_range(self MachineWord, start MachineWord, end MachineWord)
+	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
+	if capacity < 0 'notOwned'
+		return
+	end 'notOwned'
+	let buffer = __Internals.loadIndirect(self)
+	if buffer == 0 'noBuf'
+		return
+	end 'noBuf'
+	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
+	// element_size < 0 is the sub-byte-packed sentinel: `start`/`end` are FIELD
+	// indices, and a field is not generally byte-aligned, so a byte-range memzero
+	// would flatten the live neighbours sharing the boundary bytes. Clear the
+	// fields one at a time through the shared packed writer instead.
+	if __managed_mem_is_packed(elemSize) 'packed'
+		var i = start
+		while i < end 'clearFields'
+			__managed_mem_write_packed(buffer, idx: i, elemSize: elemSize, value: 0)
+			i = i + 1
+		end 'clearFields'
+		return
+	end 'packed'
+	// Byte-level and type-agnostic — exactly why it is correct for a scalar
+	// element and a managed pointer alike.
+	__Internals.memzero(buffer + start * elemSize, size: (end -start) * elemSize)
+end '__managed_mem_zero_elements_range'
+
+// Vacate the slots [start, end): release each departing managed element, THEN
+// erase the slots it leaves behind. The two halves belong together — a release
+// without the erase leaves a dangling pointer above `length` for the next regrow
+// to hand back (double-free); an erase without the release leaks the element.
+// The teardown must run first: it reads the slots this then zeroes.
+// Caller guarantees 0 <= start <= end <= length.
+function __managed_mem_vacate_range(self MachineWord, start MachineWord, end MachineWord)
+	__managed_mem_walk_elements_range(self, start: start, end: end)
+	__managed_mem_zero_elements_range(self, start: start, end: end)
+end '__managed_mem_vacate_range'
+
+// clear(self) — drop every live managed element, erase the slots, then truncate
+// to empty (length=0). `Array.clear()` formerly lowered to a bare `length = 0`,
+// which leaked every managed element (the slots' +1 refs were orphaned with no
+// walk). Vacate-then-truncate frees them AND leaves [0, capacity) zeroed, so a
+// following `resize` back over the same slots re-exposes zeros rather than the
+// pointers clear just released. The backing buffer + capacity are retained for
+// reuse. Returns 0 (the void result the lowering binds).
 function __managed_mem_clear(self MachineWord) returns MachineWord
-	__managed_mem_walk_elements(self)
+	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
+	__managed_mem_vacate_range(self, start: 0, end: length)
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: 0)
 	return 0
 end '__managed_mem_clear'
@@ -2972,14 +3054,20 @@ end '__destruct___ManagedMemoryCursor'
 // setLength(self, n) — bounds-check n against capacity, then write to
 // self.length. Throws invalidLength (wire 4) on n > capacity.
 //
-// SHRINK frees dropped elements: when n < the current length, the slots
-// [n, oldLength) are about to leave the live range, so their per-element
-// teardown must run or every managed element in them leaks (the slot's +1
-// ref is orphaned). Walk-then-store mirrors `__managed_mem_clear` (which is
-// just the full-range shrink to 0). For raw/primitive-element records the
-// walk is inert (element_destroy==0 gate), so grow and primitive shrink stay
-// a bare length store. The walk must precede the length store: it reads
-// [n, oldLength) off the OLD length's live range.
+// GROW is a bare length store, and MUST stay one: every caller that lengthens
+// the buffer has already STAGED the new elements into [oldLength, n) and is
+// using this call to PUBLISH them (`push` = set-then-setLength; `insert` =
+// shiftRight + set-then-setLength; `Character.fromCodepoint` / string building =
+// create + setByte-then-setLength). Zeroing the exposed range here would erase
+// exactly those values. The slots are safe to expose because they are already
+// zero — see THE CAPACITY-SLOT INVARIANT above.
+//
+// SHRINK vacates the dropped slots: [n, oldLength) is leaving the live range, so
+// each managed element there is released (or its +1 ref is orphaned — a leak)
+// and the slot is then erased (or the next regrow past `n` hands the caller a
+// pointer that has already been freed — a double-free on teardown). Both halves
+// live in `__managed_mem_vacate_range`. It must precede the length store: it
+// reads [n, oldLength) off the OLD live range.
 function __managed_mem_set_length(self MachineWord, n MachineWord) returns MachineWord throws __ManagedMemoryError
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if n > capacity 'tooLong'
@@ -2987,16 +3075,7 @@ function __managed_mem_set_length(self MachineWord, n MachineWord) returns Machi
 	end 'tooLong'
 	let oldLength = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if n < oldLength 'shrink'
-		// SHRINK frees the dropped elements: the slots [n, oldLength) are
-		// leaving the live range, so their per-element teardown must run or
-		// every managed element in them leaks (the slot's +1 ref is orphaned).
-		// Mirrors `__managed_mem_clear` (the full-range shrink to 0). For
-		// raw/primitive-element records the walk is inert (element_destroy==0
-		// gate). The walk must precede the length store: it reads [n, oldLength)
-		// off the OLD live range. The vacated slots stay as-is — freshly-grown
-		// capacity is zeroed at buffer-grow time (ensureCapacity), so a later
-		// regrow over these slots never re-exposes the decref'd pointers.
-		__managed_mem_walk_elements_range(self, start: n, end: oldLength)
+		__managed_mem_vacate_range(self, start: n, end: oldLength)
 	end 'shrink'
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: n)
 	return 0
@@ -3460,8 +3539,19 @@ function __managed_mem_set_byte(self MachineWord, i MachineWord, value MachineWo
 end '__managed_mem_set_byte'
 
 // remove(self, idx) — load the element at idx, shift the tail left by one
-// element via a byte-by-byte ascending loop (overlap-safe), decrement
-// length, and return the loaded value. Throws indexOutOfBounds (wire 1).
+// element via a byte-by-byte ascending loop (overlap-safe), erase the slot the
+// shift vacated at the top, decrement length, and return the loaded value.
+// Throws indexOutOfBounds (wire 1).
+//
+// NO element teardown runs here: the removed element is HANDED OUT to the caller
+// (`Array.remove` / `Array.pop` return it), so its +1 moves with it. But the
+// tail-shift leaves the OLD last slot holding a duplicate of the element now at
+// length-2 — and a `pop` (idx == length-1) leaves it holding the very pointer it
+// just gave away. Either way the slot sits above the new length holding a pointer
+// this record no longer owns, so it must be erased: without that, a `resize` back
+// over it re-adopts a pointer that is already owned elsewhere (or already freed),
+// and the teardown walk decrefs it a second time. This is the same
+// zero-the-vacated-slot rule as clear/shrink — see THE CAPACITY-SLOT INVARIANT.
 function __managed_mem_remove(self MachineWord, idx MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
@@ -3496,6 +3586,7 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 			__managed_mem_write_packed(buffer, idx: j - 1, elemSize: elemSize, value: bit)
 			j = j + 1
 		end 'shiftBits'
+		__managed_mem_zero_elements_range(self, start: length - 1, end: length)
 		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 		return removed
 	end 'packed'
@@ -3526,6 +3617,7 @@ function __managed_mem_remove(self MachineWord, idx MachineWord) returns Machine
 		__Internals.storeByte(buffer, offset: i - elemSize, value: byte)
 		i = i + 1
 	end 'shiftLoop'
+	__managed_mem_zero_elements_range(self, start: length - 1, end: length)
 	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: length - 1)
 	return result
 end '__managed_mem_remove'

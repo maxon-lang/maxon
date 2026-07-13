@@ -1184,12 +1184,18 @@ public sealed class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue n
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
 }
 
-// Set length of managed memory with capacity validation
+// Set length of managed memory with capacity validation.
+// A SHRINK vacates the dropped slots, so the lowering needs the element class to
+// know whether those slots hold refcounted pointers (release them) or raw values
+// (just erase them). A GROW needs neither: it only publishes slots the caller has
+// already staged.
 public sealed class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue newLength) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.ManagedMemSetLength;
   public override string Mnemonic => "maxon.managed_mem_set_length";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewLength { get; } = newLength;
+  /// True when elements are refcounted heap pointers (struct / string / union / array).
+  public bool IsStructElement { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewLength.ToString()];
 }
 

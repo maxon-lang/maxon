@@ -16,7 +16,7 @@ ExitCode: 1
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=112
+    x64.prologue stack_size=128
     x64.call StrArray.create
     x64.mov [rbp-8], rax
     x64.lea_rdata rax, [__str_0]
@@ -192,6 +192,20 @@ module {
     x64.jmp main.__setlen_merge_0
   __setlen_ok_0:
     x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, 1
+    x64.cmp rdx, rcx
+    x64.mov [rbp-112], rcx
+    x64.jae main.__setlen_store_0
+  __setlen_shrink_0:
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.mov r8, [rbp-112]
+    x64.mov rdx, 1
+    x64.call mm_vacate_managed_elements
+    x64.jmp main.__setlen_store_0
+  __setlen_store_0:
+    x64.mov rax, [rbp-64]
     x64.mov rcx, 1
     x64.mov [rax+8], rcx
     x64.jmp main.__setlen_merge_0
@@ -235,7 +249,7 @@ module {
     x64.call mrt_panic
   __range_ok_1:
     x64.mov rdx, [rbp-48]
-    x64.mov [rbp-112], rbx
+    x64.mov [rbp-120], rbx
     x64.test rdx, rdx
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-48]
@@ -258,7 +272,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-112]
+    x64.mov rax, [rbp-120]
     x64.epilogue
     x64.ret
   }

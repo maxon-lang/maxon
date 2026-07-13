@@ -2772,6 +2772,14 @@ buffer.resize(100)               // Length is now 100
 buffer.set(0, value: 42)         // Can set any index 0-99
 ```
 
+The zero-initialization holds for slots the array has used *before*, not just for
+freshly allocated ones — growing back over slots given up by `clear()`, `remove()`,
+`pop()`, or a shrinking `resize()` also reads back zeros. Those operations erase each
+slot as they vacate it, so the slots between `count()` and `capacity()` are always
+zero. For an array of a managed element type (e.g. `Array with String`) a regrown slot
+is EMPTY rather than zero-valued, and `get` on it throws instead of handing back an
+element the array no longer owns.
+
 To preallocate capacity without changing length (for performance):
 ```maxon
 typealias Integer = int(i64.min to i64.max)

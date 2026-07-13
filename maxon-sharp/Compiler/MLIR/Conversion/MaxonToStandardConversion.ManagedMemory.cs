@@ -513,6 +513,15 @@ public static partial class MaxonToStandardConversion {
 
       block = func.Body.AddBlock(loopExitLabel);
       var finalNewLen = (StdI64)EmitLoad(block, newLenVar, varTypes);
+      // Clear the bit the shift vacated at the top — a bool array's slots above
+      // `length` must read false, same capacity-slot invariant as every other
+      // element width.
+      var oneSlotPastBit = new StdConstI64Op(1);
+      block.AddOp(oneSlotPastBit);
+      var bitRangeEnd = new StdAddI64Op(finalNewLen, oneSlotPastBit.Result);
+      block.AddOp(bitRangeEnd);
+      EmitVacateElementRange(block, managedVarName, finalNewLen, bitRangeEnd.Result,
+        isStructElement: false, varTypes);
       EmitStructFieldStore(block, finalNewLen, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
     } else {
       var addr = ComputeElementAddress(block, buffer, index, elemSize);
@@ -564,12 +573,23 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(bytesToMove);
       block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesToMove.Result));
 
-      // Zero the last slot (now a stale duplicate from the shift)
+      // Erase the last slot, which the shift left holding a stale duplicate of
+      // the element now at newLength-1 (and, for a pop — idx == length-1 — the
+      // very pointer that was just handed to the caller). It sits above the new
+      // length, so a later regrow would re-adopt an element this record no longer
+      // owns and the teardown walk would decref it a second time. Zeroing it also
+      // gives the scalar case its documented "resize exposes zeros" behaviour.
+      // See the capacity-slot invariant on EmitMmVacateManagedElements.
       if (op.IsStructElement) {
         var lastAddr = ComputeElementAddress(block, buffer, newLength.Result, elemSize);
         var zeroOp2 = new StdConstI64Op(0);
         block.AddOp(zeroOp2);
         block.AddOp(new StdStoreIndirectOp(zeroOp2.Result, lastAddr, 0, IrType.I64));
+      } else {
+        var oneSlotPast = new StdAddI64Op(newLength.Result, oneConst.Result);
+        block.AddOp(oneSlotPast);
+        EmitVacateElementRange(block, managedVarName, newLength.Result, oneSlotPast.Result,
+          isStructElement: false, varTypes);
       }
 
       // Update length
@@ -1452,7 +1472,41 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Vacate the slots [start, end): release each departing managed element and
+  /// erase the slots it left behind, so the range reads back as zero. The single
+  /// point where the capacity-slot invariant (see the header comment on
+  /// EmitMmVacateManagedElements) is re-established after slots leave the live
+  /// range — shared by clear and the shrink path of setLength.
+  ///
+  /// Managed elements route through mm_vacate_managed_elements (decref + erase);
+  /// primitive elements have nothing to release, so they only need the erase.
+  /// </summary>
+  private static void EmitVacateElementRange(
+    IrBlock<StandardOp> block,
+    string managedVarName,
+    StdI64 start,
+    StdI64 end,
+    bool isStructElement,
+    Dictionary<string, string> varTypes) {
+    var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
+    var runtimeFn = isStructElement ? "mm_vacate_managed_elements" : "mm_zero_element_range";
+    block.AddOp(new StdCallRuntimeOp(runtimeFn, [managedPtr, start, end], null));
+  }
+
+  /// <summary>
   /// Set length with capacity validation: panics if newLength > capacity.
+  ///
+  /// A SHRINK vacates the dropped slots [newLength, oldLength) before the store:
+  /// each managed element there is released (or its reference is orphaned — a
+  /// leak) and the slot is erased (or a later regrow past newLength hands the
+  /// caller a pointer this record no longer owns, which the teardown walk then
+  /// decrefs a second time — a double-free).
+  ///
+  /// A GROW stores the length and nothing else, and must keep doing so: its
+  /// caller has already staged the new elements into [oldLength, newLength) and
+  /// is using this call to publish them (push = set-then-setLength). The exposed
+  /// slots are safe because they are already zero — see the capacity-slot
+  /// invariant on EmitMmVacateManagedElements.
   /// </summary>
   private static void LowerManagedMemSetLength(
     MaxonManagedMemSetLengthOp op,
@@ -1489,7 +1543,22 @@ public static partial class MaxonToStandardConversion {
     } else {
       EmitBoundsCheck(block, newLength, capPlusOne.Result, "__mm_panic_setlength_oob");
     }
-    // Store the new length
+
+    // Shrink? Vacate [newLength, oldLength) first — it reads the slots off the
+    // OLD live range, so it has to run before the length store.
+    var oldLength = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    var isShrink = new StdCmpU64Op("ult", newLength, oldLength);
+    block.AddOp(isShrink);
+    var shrinkUid = IrContext.Current.NextId();
+    var shrinkLabel = $"__setlen_shrink_{shrinkUid}";
+    var storeLabel = $"__setlen_store_{shrinkUid}";
+    block.AddOp(new StdCondBrOp(isShrink.Result, shrinkLabel, storeLabel));
+
+    var shrinkBlock = func.Body.AddBlock(shrinkLabel);
+    EmitVacateElementRange(shrinkBlock, managedVarName, newLength, oldLength, op.IsStructElement, varTypes);
+    shrinkBlock.AddOp(new StdBrOp(storeLabel));
+
+    block = func.Body.AddBlock(storeLabel);
     EmitStructFieldStore(block, newLength, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 
     if (slMergeLabel != null) {
@@ -1499,8 +1568,11 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Clear all elements: decref each struct element, then set length to 0.
-  /// For primitive elements, simply sets length to 0.
+  /// Clear all elements: vacate every live slot, then set length to 0. Clearing
+  /// is just the full-range shrink, so it vacates through the same path — the
+  /// managed elements are released AND their slots erased, leaving [0, capacity)
+  /// zeroed so a following resize back over them re-exposes zeros rather than the
+  /// pointers clear just freed.
   /// </summary>
   private static void LowerManagedMemClear(
     MaxonManagedMemClearOp op,
@@ -1509,13 +1581,10 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 
-    if (op.IsStructElement) {
-      // Decref each struct element and zero the buffer slots — uses the runtime
-      // loop that walks the buffer, decrefs each non-null 8-byte heap pointer,
-      // and zeroes the slot to prevent stale-pointer double-decref on reuse.
-      var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_clear_managed_elements", [managedPtr], null));
-    }
+    var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    var zeroStart = new StdConstI64Op(0);
+    block.AddOp(zeroStart);
+    EmitVacateElementRange(block, managedVarName, zeroStart.Result, length, op.IsStructElement, varTypes);
 
     // Mark array as empty after element cleanup
     var zeroConst = new StdConstI64Op(0);
@@ -1986,7 +2055,12 @@ public static partial class MaxonToStandardConversion {
         return true;
       }
       case "__managed_mem_set_length": {
-        var setLenOp = new MaxonManagedMemSetLengthOp(args[0], args[1]);
+        // The element class decides how a SHRINK vacates the dropped slots:
+        // refcounted pointers must be released before the slot is erased.
+        var (_, _, _, isSetLenStructElem, _, _) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        var setLenOp = new MaxonManagedMemSetLengthOp(args[0], args[1]) {
+          IsStructElement = isSetLenStructElem
+        };
         LowerManagedMemSetLength(setLenOp, func, ref block, valueMap, varTypes, errorFlagValue: errorFlagValue);
         return true;
       }

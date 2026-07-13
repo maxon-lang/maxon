@@ -224,8 +224,17 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		end 'grow'
 	end 'reserve'
 
-	/// Resize array to newLength elements, allocating if needed
-	/// New elements are zero-initialized
+	/// Resize array to newLength elements, allocating if needed.
+	/// 
+	/// Growing exposes ZERO-INITIALIZED elements — `0` for a scalar element type,
+	/// and an EMPTY slot for a managed one (`get` on it throws rather than handing
+	/// back a pointer). That holds whether the new slots are fresh capacity or
+	/// slots this array used before and gave up: the buffer's slots above `length`
+	/// are always zero, because every operation that vacates a slot (`clear`,
+	/// `remove`/`pop`, and a shrinking `resize`) erases it on the way out. See THE
+	/// CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon.
+	/// 
+	/// Shrinking releases the elements that leave the live range.
 	export function resize(newLength ElementCount)
 		reserve(newLength)
 		try managed.setLength(newLength) otherwise 'lenErr'

@@ -16,7 +16,7 @@ category: dev
 - `length()` returns int
 - `capacity()` returns int
 - `elementSize()` returns int
-- `setLength(n)` — set element count (panics if n > capacity). Shrinking (n < current length) tears down the dropped elements [n, length) — each managed element is released — so a shrink never leaks. Growing leaves the new slots as they were last initialized (fresh capacity reads as empty/null).
+- `setLength(n)` — set element count (panics if n > capacity). Shrinking (n < current length) VACATES the dropped slots [n, length): each managed element is released (so a shrink never leaks) and the slot is then erased. Growing exposes the slots [length, n) as-is, and they are always ZERO — every operation that vacates a slot (`clear`, `remove`, a shrinking `setLength`) erases it on the way out, and fresh capacity comes zeroed from the allocator. A grown slot therefore reads `0` for a scalar element and empty/null for a managed one, never a stale value or an already-released pointer. Growing must NOT initialize the exposed slots itself: its callers (`push`, `insert`, string building) stage the new elements FIRST and use `setLength` to publish them.
 - `get(index)` returns Element (panics if index >= length)
 - `set(index, value)` (panics if index >= capacity)
 - `grow(newCapacity)` (panics if newCapacity < current capacity)
@@ -462,4 +462,222 @@ end 'main'
 ```
 ```exitcode
 62
+```
+
+### Regrowing exposes ZEROED slots
+
+THE CAPACITY-SLOT INVARIANT: the slots in `[length, capacity)` are always zero. So
+growing the length — `resize`, or `setLength` directly — can only ever expose zeroed
+slots, whether they are fresh capacity or slots the array used before and gave up.
+
+Every operation that VACATES a slot erases it on the way out: `clear`, `remove`/`pop`,
+and a shrinking `resize`. Without that, growing back over a vacated slot re-exposes
+whatever it held — a stale scalar (silent garbage), or, far worse, a pointer the array
+has already released, which its destructor then decrefs a SECOND time (a double free
+reachable from ordinary, non-unsafe API).
+
+The tests below drive each vacate site and then grow back over it. The managed ones
+also run under the leak gate, so a slot that is erased without releasing its element
+fails just as loudly as one released without being erased.
+
+<!-- test: clear-then-resize-scalar-reads-zeros -->
+`clear()` then `resize()` back over the SAME slots. Every slot must read 0, not the
+value it held before the clear.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var i = 0
+	while i < 8 'fill'
+		a.push(77)
+		i = i + 1
+	end 'fill'
+	a.clear()
+	a.resize(8)
+
+	var stale = 0
+	var j = 0
+	while j < 8 'read'
+		let v = try a.get(j) otherwise -1
+		print("{v}\n")
+		if v != 0 'garbage'
+			stale = stale + 1
+		end 'garbage'
+		j = j + 1
+	end 'read'
+	return stale as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+0
+0
+0
+0
+0
+0
+0
+```
+
+<!-- test: clear-then-resize-managed-no-double-free -->
+`clear()` RELEASES the elements; `resize()` back over those slots must not restore the
+length over the dead pointers, or the array's destructor decrefs each of them a second
+time. Every regrown slot must read as EMPTY.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	for i in 0 upto 4 'fill'
+		a.push("value-{i} padded out so this string needs a heap allocation")
+	end 'fill'
+	a.clear()
+	a.resize(4)
+
+	var empties = 0
+	for j in 0 upto 4 'read'
+		let v = try a.get(j) otherwise ""
+		if v.count() == 0 'empty'
+			empties = empties + 1
+		end 'empty'
+	end 'read'
+	return empties as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: shrink-then-resize-managed-no-double-free -->
+The same shape through the SHRINK path rather than `clear`: `resize(1)` releases the
+two dropped strings, `resize(3)` grows back over their slots. The dropped pointers must
+not reappear.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha payload long enough to need a heap allocation here")
+	a.push("beta payload long enough to need a heap allocation here")
+	a.push("gamma payload long enough to need a heap allocation here")
+	a.resize(1)
+	a.resize(3)
+
+	var empties = 0
+	for j in 1 upto 3 'read'
+		let v = try a.get(j) otherwise ""
+		if v.count() == 0 'empty'
+			empties = empties + 1
+		end 'empty'
+	end 'read'
+	let kept = try a.get(0) otherwise ""
+	print("kept={kept.count()} empties={empties}\n")
+	return empties as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+kept=56 empties=2
+```
+
+<!-- test: pop-then-resize-managed-no-double-free -->
+`pop()` hands its element to the caller — the array no longer owns it — but the slot
+still holds the pointer. Growing back over that slot must not re-adopt an element the
+caller now owns, or it is freed twice.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("one payload long enough to need a heap allocation here")
+	a.push("two payload long enough to need a heap allocation here")
+	let popped = try a.pop() otherwise ""
+	a.resize(2)
+
+	let regrown = try a.get(1) otherwise ""
+	print("popped={popped.count()} regrown={regrown.count()}\n")
+	return regrown.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+popped=54 regrown=0
+```
+
+<!-- test: remove-then-resize-scalar-reads-zero -->
+`remove()` shifts the tail down, which leaves the old last slot holding a stale
+duplicate of the element now one position lower. Growing back over it must read 0.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(11)
+	a.push(22)
+	a.push(33)
+	let removed = try a.remove(0) otherwise -1
+	a.resize(3)
+
+	var i = 0
+	while i < 3 'read'
+		let v = try a.get(i) otherwise -1
+		print("{v}\n")
+		i = i + 1
+	end 'read'
+	return removed as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+```stdout
+22
+33
+0
+```
+
+<!-- test: clear-then-resize-bool-reads-false -->
+Sub-byte-packed elements take the same invariant: a `bool` array's vacated bits are
+cleared, so regrown slots read `false`.
+```maxon
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var b = BoolArray.create()
+	b.push(true)
+	b.push(true)
+	b.push(true)
+	b.clear()
+	b.resize(3)
+
+	var stale = 0
+	var i = 0
+	while i < 3 'read'
+		let v = try b.get(i) otherwise true
+		print("{v}\n")
+		if v 'set'
+			stale = stale + 1
+		end 'set'
+		i = i + 1
+	end 'read'
+	return stale as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+false
+false
 ```
