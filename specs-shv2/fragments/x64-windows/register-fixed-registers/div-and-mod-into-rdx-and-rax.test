@@ -1,0 +1,55 @@
+// Test: div-and-mod-into-rdx-and-rax
+function take3(p1 int, p2 int, p3 int) returns int
+	return p1 * 10000 + p2 * 100 + p3
+end 'take3'
+
+function main() returns ExitCode
+	var n = 97
+	var d = 5
+	let r = take3(1, p2: n / d, p3: n mod d)
+	if r == 11902 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @take3 {
+  entry:
+    x64.imulRegRegImm32 rcx, rcx, 10000
+    x64.imulRegRegImm32 rdx, rdx, 100
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rcx, rax
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 97
+    x64.movRegImm32 rsi, 5
+    x64.movRegImm32 rdi, 1
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg r8, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg rax, rdx
+    x64.movRegReg rcx, rdi
+    x64.movRegReg rdx, r8
+    x64.callDirect take3
+    x64.cmpRegImm32 r8, 11902
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.ret
+}

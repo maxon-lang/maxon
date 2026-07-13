@@ -1,0 +1,43 @@
+// Test: nested-div-both-sides
+function main() returns ExitCode
+	var a = 1000
+	var b = 7
+	var c = 60
+	var d = 4
+	let q1 = a / b
+	let q2 = c / d
+	let r = q1 / q2
+	if r == 9 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 1000
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rsi, 60
+    x64.movRegImm32 rdi, 4
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg rcx, rax
+    x64.movRegReg rax, rsi
+    x64.cqo
+    x64.idivReg rdi
+    x64.movRegReg rsi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.cmpRegImm32 rax, 9
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.ret
+}

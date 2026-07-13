@@ -1,0 +1,54 @@
+// Test: divisor-live-across-call
+function bump(x int) returns int
+	return x + 1
+end 'bump'
+
+function main() returns ExitCode
+	var n = 500
+	var d = 6
+	let t = bump(d)
+	let q = n / d
+	let r = q + t
+	if r == 90 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @bump {
+  entry:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 40
+    x64.movRegImm32 rbx, 500
+    x64.movRegImm32 r12, 6
+    x64.movRegReg rcx, r12
+    x64.callDirect bump
+    x64.movRegReg rax, rbx
+    x64.cqo
+    x64.idivReg r12
+    x64.leaRegRegReg rax, rax, r8
+    x64.cmpRegImm32 rax, 90
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
