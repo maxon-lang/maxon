@@ -59,6 +59,9 @@ class Program {
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR, stderr, and mm-trace blocks");
     Console.WriteLine("  --verbose                Show per-test PASS/FAIL timing logs");
     Console.WriteLine("  --no-batch               Disable per-spec compile batching (each test compiled individually)");
+    Console.WriteLine("  --network                Include 'category: network' specs. They reach the public internet,");
+    Console.WriteLine("                           so they are excluded from the default gate: they fail on someone");
+    Console.WriteLine("                           else's outage or rate limit, not on our code.");
     Console.WriteLine();
     Console.WriteLine("Logging (all commands):");
     Console.WriteLine("  --log=LEVEL              Set all log categories to LEVEL");
@@ -623,7 +626,7 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose", "--no-batch" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose", "--no-batch", "--network" };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
@@ -632,6 +635,7 @@ class Program {
     bool updateRequired = false;
     bool verbose = false;
     bool noBatch = false;
+    bool includeNetwork = false;
     Compiler.CompileTarget? target = null;
 
     foreach (var arg in args) {
@@ -649,6 +653,8 @@ class Program {
         verbose = true;
       } else if (arg == "--no-batch") {
         noBatch = true;
+      } else if (arg == "--network") {
+        includeNetwork = true;
       } else if (arg.StartsWith("--target=")) {
         target = Compiler.CompileTarget.Parse(arg["--target=".Length..]);
       }
@@ -668,7 +674,7 @@ class Program {
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
-    var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose, noBatch);
+    var runner = new TestRunner(specDir, fragmentDir, tempDir, projectDir, filter, workers, updateRequired, target, verbose, noBatch, includeNetwork);
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");

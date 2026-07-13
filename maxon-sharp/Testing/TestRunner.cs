@@ -10,7 +10,7 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string projectRoot, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false, bool noBatch = false) {
+public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string projectRoot, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false, bool noBatch = false, bool includeNetwork = false) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
@@ -24,6 +24,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
   private readonly bool _verbose = verbose;
   private readonly bool _noBatch = noBatch;
+  // Include `category: network` specs, which reach the public internet and so cannot be part of a
+  // deterministic gate (SpecParser.ParseDirectory explains why). Off by default; --network opts in.
+  private readonly bool _includeNetwork = includeNetwork;
   private static long _totalCompileMs;
 
   /// <summary>
@@ -60,7 +63,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     // Prepare work items from specs (sequential — parses specs, partitions
     // into batched + per-fragment, ensures directories exist).
-    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _filter, _target, _noBatch);
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _filter, _target, _noBatch, _includeNetwork);
 
     // Abort on errors (e.g., duplicate test names)
     if (prepResult.Errors.Count > 0) {
@@ -1672,7 +1675,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private void UpdateRequiredInSpecFiles() {
     var targetKey = $"{_target.Arch}-{_target.Os}";
     // Parse with targetKey so success.RequiredIR contains the current target's block (or unqualified fallback)
-    var specs = SpecParser.ParseDirectory(_specDir, targetKey);
+    var specs = SpecParser.ParseDirectory(_specDir, targetKey, _includeNetwork);
     var updatedSpecs = 0;
 
     Directory.CreateDirectory(_tempDir);

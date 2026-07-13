@@ -83,7 +83,7 @@ public static partial class FragmentGenerator {
   /// staleness against the .spec-cache, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string? filter = null, Compiler.CompileTarget? target = null, bool noBatch = false) {
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, string? filter = null, Compiler.CompileTarget? target = null, bool noBatch = false, bool includeNetwork = false) {
     var errors = new List<string>();
 
     if (!Directory.Exists(specDir)) {
@@ -94,7 +94,7 @@ public static partial class FragmentGenerator {
     Directory.CreateDirectory(fragmentDir);
 
     var targetKey = target != null ? $"{target.Arch}-{target.Os}" : null;
-    var specs = SpecParser.ParseDirectory(specDir, targetKey);
+    var specs = SpecParser.ParseDirectory(specDir, targetKey, includeNetwork);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
     // Directory under fragmentDir where compiled exes go. Persisted on disk

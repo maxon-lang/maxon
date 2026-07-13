@@ -7,6 +7,12 @@ namespace MaxonSharp.Testing;
 /// </summary>
 public static partial class SpecParser {
   /// <summary>
+  /// Frontmatter `category` marking a spec that requires the public internet. Excluded from the
+  /// default gate; `--network` opts back in. See ParseDirectory.
+  /// </summary>
+  public const string NetworkCategory = "network";
+
+  /// <summary>
   /// Parse a spec file and extract all tests.
   /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
@@ -33,7 +39,7 @@ public static partial class SpecParser {
   /// runners, so the spec is owned by the self-hosted suite).
   /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
-  public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null) {
+  public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null, bool includeNetwork = false) {
     var specs = new List<SpecFile>();
 
     foreach (var file in Directory.GetFiles(specDir, "*.md")) {
@@ -45,6 +51,18 @@ public static partial class SpecParser {
         }
         if (spec.Status == "selfhosted") {
           Logger.Debug(LogCategory.Testing, $"Skipping selfhosted-only spec: {Path.GetFileName(file)}");
+          continue;
+        }
+        // A `category: network` spec talks to a real server on the public internet. That makes it
+        // a coin toss on somebody else's uptime, not a gate on our compiler: httpbin.org has been
+        // observed returning 503, and it rate-limits under the runner's parallelism, so the suite
+        // goes red for reasons no change of ours caused. A gate that fails for reasons unrelated to
+        // the code under test trains you to ignore it, which is worse than not having it.
+        //
+        // They are still real tests and they still run — `--network` opts in. They are just not part
+        // of the default gate.
+        if (!includeNetwork && spec.Category == NetworkCategory) {
+          Logger.Debug(LogCategory.Testing, $"Skipping network spec (pass --network to include): {Path.GetFileName(file)}");
           continue;
         }
         specs.Add(spec);
