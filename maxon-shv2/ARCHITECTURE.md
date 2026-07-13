@@ -1381,15 +1381,28 @@ loop-carried accumulator that range **is** the function, and any "dirty region" 
 > not defensive: this is the whole hazard of hoisting per-call allocation out to per-function scratch,
 > and skipping it hands the next split the previous split's answers.
 >
-> **⚠ A NARROW RANGED ELEMENT TRUNCATES SILENTLY THROUGH A WIDE PARAMETER.** A narrower ranged alias
-> **unifies silently** with the wider one, so passing an `Array with int(0 to 16)` to a parameter
-> typed `Array with int(0 to u64.max)` compiles clean. Element width is dictionary-passed WITH THE
-> VALUE, so the stride stays correct and neighbouring memory is safe — measured: writing 300 through
-> the wide parameter smashes **nothing**. What it does is **truncate**: the value reads back **44**
-> (300 mod 256), and a 44 now lives inside an `int(0 to 16)`, violating the very range invariant the
-> narrow type exists to state. The range is checked at the narrow `set` sites, NOT at the wide one.
-> So a narrow column is safe to *store* through its own type and unsafe to *write* through a wide
-> alias — and nothing warns you.
+> **⚠ TWO ARRAY ALIASES WITH DIFFERENT RANGED ELEMENTS UNIFY SILENTLY.** An `Array`'s element must be
+> a typealias, so the two sides are always named:
+>
+> ```
+> typealias Narrow = int(0 to 16)      typealias NarrowCol = Array with Narrow
+> typealias Wide   = int(0 to u64.max) typealias WideCol   = Array with Wide
+> ```
+>
+> Passing a `NarrowCol` to a parameter typed `WideCol` **compiles clean**, because
+> `HaveMatchingTypeParams` (`maxon-sharp/Compiler/2-Parser.cs:12537`) NORMALIZES a ranged element to
+> its BASE TYPE before comparing — which throws the range away, so `Narrow` and `Wide` compare equal.
+>
+> Memory stays safe: element width is dictionary-passed WITH THE VALUE, so the stride is correct and
+> neighbours are untouched (measured — writing 300 through the wide parameter smashes nothing). What
+> you get is **silent TRUNCATION**: the value reads back **44** (300 mod 256), and a 44 now lives
+> inside a `Narrow`, violating the very invariant the ranged type exists to state. The range is
+> checked at the narrow `set` sites, NOT at the wide one.
+>
+> This is the SAME root cause as `specs/array-clone-element-size.md` — "for a RANGED element type that
+> resolution used to throw the range away" — which produced a real miscompile (`Array.clone()` reading
+> 8 bytes at a 1-byte stride) and was fixed (`d16aeb62c`) only on the `Self`-returning-call path. The
+> ARGUMENT-PASSING path is the same class, still open.
 
 ### Liveness: SSA path exploration, no fixpoint, sparse sets
 

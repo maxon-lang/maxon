@@ -12534,12 +12534,42 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     foreach (var (key, valueA) in structA.TypeParams) {
       if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
       if (valueA is IrTypeParameterType || valueB is IrTypeParameterType) continue;
-      // Normalize ranged primitives to base type for comparison (e.g., Byte → i8)
+      // TWO RANGED ELEMENTS ARE THE SAME TYPE ONLY IF THEIR RANGES MATCH.
+      //
+      // Normalizing both to their BASE would erase the range — and the base is the DECLARED one, so
+      // `int(0 to 16)` and `int(0 to u64.max)` BOTH declare base `int` (i64) and compared EQUAL.
+      // That let `Array with Narrow` be passed to a parameter typed `Array with Wide`, where a store
+      // is range-checked against the WIDE alias and then truncated into the narrow element: 300 came
+      // back as 44, leaving a value outside the very range its type declares.
+      //
+      // They are not the same type in either sense that matters. Their INVARIANTS differ, and so does
+      // their STORAGE WIDTH — the monomorphized names are `Array_i8` (1 byte) and `Array_u64` (8) —
+      // which is the same root cause as specs/array-clone-element-size.md, where the range was thrown
+      // away resolving a `Self` return and `Array.clone()` read 8 bytes at a 1-byte stride.
+      if (valueA is IrRangedPrimitiveType rangedA && valueB is IrRangedPrimitiveType rangedB) {
+        if (!RangedTypesIdentical(rangedA, rangedB)) return false;
+        continue;
+      }
+      // A ranged alias still matches its own BASE primitive (the `Byte` -> `i8` case this normalize
+      // was written for): only ONE side is ranged there, so no range is being silently discarded.
       var nameA = valueA is IrRangedPrimitiveType rptA ? rptA.BaseType.Name : valueA.Name;
       var nameB = valueB is IrRangedPrimitiveType rptB ? rptB.BaseType.Name : valueB.Name;
       if (nameA != nameB) return false;
     }
     return true;
+  }
+
+  /// <summary>
+  /// Two ranged primitive types denote the same type iff they share a base AND the same bounds.
+  /// Structural, not nominal: two aliases spelling the same range are interchangeable, because they
+  /// carry the same invariant and the same storage width. Differing bounds mean neither.
+  /// </summary>
+  private static bool RangedTypesIdentical(IrRangedPrimitiveType a, IrRangedPrimitiveType b) {
+    if (a.BaseType.Name != b.BaseType.Name) return false;
+    if (a.IsFloatBased != b.IsFloatBased) return false;
+    if (a.UpperInclusive != b.UpperInclusive) return false;
+    if (a.IsFloatBased) return a.FloatLower == b.FloatLower && a.FloatUpper == b.FloatUpper;
+    return a.IntLower == b.IntLower && a.IntUpper == b.IntUpper;
   }
 
   /// <summary>
