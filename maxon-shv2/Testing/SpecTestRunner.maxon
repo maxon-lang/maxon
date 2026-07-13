@@ -32,19 +32,25 @@ let IrFileExtension = ".ir"
 // on this path, and the reason the flag has to be passed HERE: each test is compiled by a
 // SUBPROCESS (`<compilerExe> build ...`), so the checker cannot be switched on from inside
 // the runner — only on that command line. A plain `build` leaves it off (it is a ~10%
-// verification tax), but the suite is exactly the place it must never be off:
-// `writeTestFragment` REGENERATES the committed `.test` fragments on every run, so they are
-// OUTPUTS, not gates — they re-record whatever the allocator just did and agree with it. A
-// wrong-but-self-consistent allocator therefore produces a self-consistent fragment and a
-// GREEN suite. The AllocChecker is the one thing in this path that can say "no"; drop this
-// flag and the allocator has no gate at all.
+// verification tax).
 let CheckAllocFlag = "--check-alloc"
 
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
-// These `.test` files are OUTPUTS regenerated on every `spec-test` run and
-// committed, so codegen evolution shows up as a reviewable diff (v1's
-// `specs/fragments-*` model). Named, not inline, because the layout + the
-// section punctuation below are a format contract shared with spec review.
+//
+// These `.test` files are GATES, not outputs (see `checkTestFragment`): the emitted Target IR is
+// compared against the committed golden and a mismatch FAILS the test. `--update-required`
+// regenerates them, and that diff is the review.
+//
+// The suite needs this AND the run, because they answer different questions:
+//   * RUNNING the test proves the allocation is CORRECT — a value left in the wrong register
+//     computes the wrong answer, and the exit-code assertion catches it.
+//   * The GOLDEN proves the code did not get WORSE. An extra spill, a lost coalesce, a live range
+//     needlessly widened: every one of those still returns the right answer, so a suite that only
+//     runs the program stays green while the codegen quietly rots. The golden also reaches where the
+//     run cannot — a test executes ONE path, but the golden pins every block of the function.
+//
+// Named, not inline, because the layout + the section punctuation below are a format contract
+// shared with spec review.
 let FragmentsSubdir = "fragments"
 let FragmentExtension = ".test"
 let FragmentTestPrefix = "// Test: "
@@ -114,7 +120,7 @@ end 'runProcess'
 // only on a spec-directory / spec-file IO failure; a per-test compile or run
 // failure is captured as a FAIL result, never thrown, so one bad test can't
 // abort the suite.
-export function runSpecDir(compilerExe FilePath, specDir FilePath) returns SpecTestResultArray throws CompileError
+export function runSpecDir(compilerExe FilePath, specDir FilePath, updateRequired bool) returns SpecTestResultArray throws CompileError
 	var results = SpecTestResultArray.create()
 
 	// Build the temp path through a FilePath component (not the String overload):
@@ -146,7 +152,7 @@ export function runSpecDir(compilerExe FilePath, specDir FilePath) returns SpecT
 		_ = Directory.create(fragmentDir)
 
 		for test in specFile.tests 'eachTest'
-			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir)
+			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
 			results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 		end 'eachTest'
 	end 'eachSpec'
@@ -178,10 +184,10 @@ function specFilePaths(specDir FilePath) returns FilePathArray throws CompileErr
 end 'specFilePaths'
 
 // Compile one test's fragment via a subprocess build (with `--emit-ir` so the
-// Target-IR sidecar is produced), check its expectation, then regenerate the
-// committed `.test` fragment. The temp fragment / exe / IR sidecar are cleaned up
-// before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String, fragmentDir FilePath) returns TestOutcome
+// Target-IR sidecar is produced), check its expectation, then check the emitted IR
+// against the committed `.test` golden. The temp fragment / exe / IR sidecar are
+// cleaned up before returning.
+function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool) returns TestOutcome
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
@@ -219,29 +225,88 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 
 	let outcome = checkExpectation(test.expectation, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
 
-	// Fragment regeneration is a SIDE EFFECT of the run, not a gate: it runs after
-	// the outcome is already decided and cannot change it. Do it before cleanup so
-	// the just-produced IR sidecar is still on disk.
-	writeTestFragment(fragmentDir, test: test, compile: compile, fragmentPath: fragmentPath, irPath: irPath)
+	// The BEHAVIOUR gate ran above: the program compiled, ran, and returned what it should. The
+	// fragment is the CODE-QUALITY gate, and it only makes sense to ask "is this still the code we
+	// agreed on?" of a test whose behaviour is already right — a failing test's IR is noise, and
+	// reporting a golden mismatch on top of it would bury the real failure. Run it before cleanup,
+	// while the `--emit-ir` sidecar is still on disk.
+	if not outcome.isPass() 'behaviourAlreadyFailed'
+		cleanup(fragmentPath, exePath: exePath, irPath: irPath)
+		return outcome
+	end 'behaviourAlreadyFailed'
+
+	let fragmentOutcome = checkTestFragment(fragmentDir, test: test, compile: compile, fragmentPath: fragmentPath, irPath: irPath, updateRequired: updateRequired)
 
 	cleanup(fragmentPath, exePath: exePath, irPath: irPath)
-	return outcome
+	return fragmentOutcome
 end 'runOneTest'
 
-// Regenerate the committed `.test` fragment for one test: its source plus either
-// the generated Target IR (exitCode tests) or the normalized compiler error
-// (compilerError tests). A write failure is swallowed — fragment output is never
-// a test gate. Deterministic: the IR is byte-stable across runs, and the error's
-// absolute fragment path is normalized to `<fragment>`.
-function writeTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, fragmentPath FilePath, irPath FilePath)
+// The committed `.test` fragment for one test — its source plus either the generated Target IR
+// (exitCode tests) or the normalized compiler error (compilerError tests) — checked AS A GATE
+// against what the compiler just produced.
+//
+// THIS IS THE CODE-QUALITY GATE, and it is the reason the fragments are committed. Running the test
+// proves the allocation is CORRECT (a value in the wrong register computes the wrong answer and the
+// exit-code assertion fails). It cannot prove the allocation is still GOOD: an extra spill, a lost
+// coalesce, a wider live range — all of them still compute the right answer, and a suite that only
+// runs the program reports green while the code silently gets worse. Pinning the IR turns every such
+// change into a FAILING TEST that has to be looked at and either justified or fixed.
+//
+// It also reaches where the run cannot. A test executes ONE path; a function's other blocks are never
+// entered, so a bad allocation in them is invisible to the exit code. The fragment pins the WHOLE
+// function, every block, taken or not.
+//
+// `--update-required` regenerates instead of comparing. That is the one door through which a change
+// enters, and it is deliberately a door you have to open: the diff is the review.
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, fragmentPath FilePath, irPath FilePath, updateRequired bool) returns TestOutcome
 	let content = match test.expectation 'e'
 		exitCode(expected) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
 		compilerError gives buildErrorFragment(test, compile: compile, fragmentPath: fragmentPath)
 	end 'e'
 
 	let outPath = fragmentDir.join("{test.name}{FragmentExtension}")
-	try File.writeText(outPath, content: content) otherwise ignore
-end 'writeTestFragment'
+
+	// No committed fragment yet — a NEW test. Record it; there is nothing to compare against, and a
+	// first run that failed for want of a golden it cannot have would be a rite, not a gate.
+	let committed = try File.readText(outPath) otherwise 'noGolden'
+		try File.writeText(outPath, content: content) otherwise 'writeFailed'
+			return TestOutcome.fail("could not write new golden fragment {outPath.toString()}")
+		end 'writeFailed'
+		return TestOutcome.pass
+	end 'noGolden'
+
+	if updateRequired 'regenerate'
+		try File.writeText(outPath, content: content) otherwise 'updateFailed'
+			return TestOutcome.fail("could not update golden fragment {outPath.toString()}")
+		end 'updateFailed'
+		return TestOutcome.pass
+	end 'regenerate'
+
+	if committed == content 'unchanged'
+		return TestOutcome.pass
+	end 'unchanged'
+
+	return TestOutcome.fail("codegen changed — golden fragment mismatch\n{firstDifference(committed, actual: content)}\n    If the new output is INTENDED, re-run with --update-required and REVIEW the diff:\n    {outPath.toString()}")
+end 'checkTestFragment'
+
+// The first line at which the committed golden and the freshly generated fragment diverge, rendered
+// for a test failure. A whole-fragment dump would bury the one line that matters under a hundred that
+// did not move.
+function firstDifference(committed String, actual String) returns String
+	let oldLines = committed.split("\n")
+	let newLines = actual.split("\n")
+	let shared = oldLines.count() if oldLines.count() < newLines.count() else newLines.count()
+
+	for i in 0 upto shared 'eachLine'
+		let o = try oldLines.get(i) otherwise panic("firstDifference: oldLines.get OOB at {i}")
+		let n = try newLines.get(i) otherwise panic("firstDifference: newLines.get OOB at {i}")
+		if o != n 'diverged'
+			return "    line {i + 1}:\n      golden: {o}\n      actual: {n}"
+		end 'diverged'
+	end 'eachLine'
+
+	return "    golden has {oldLines.count()} lines, actual has {newLines.count()} — one is a prefix of the other"
+end 'firstDifference'
 
 // The shared fragment head both expectation kinds carry: the test name, its
 // source verbatim, and the section separator that closes the source block.

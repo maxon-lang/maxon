@@ -93,7 +93,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noExe'
 
-	let results = try runSpecDir(compilerExe, specDir: specDir) otherwise (e) 'runErr'
+	let results = try runSpecDir(compilerExe, specDir: specDir, updateRequired: args.updateRequired) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
@@ -180,6 +180,10 @@ function printUsage()
 	print("  --check-alloc                 Verify every function's register allocation (AllocChecker).\n")
 	print("                                A dev/verification pass, off by default; spec-test and\n")
 	print("                                verify-warm-rebuild always run it.\n")
+	print("  --update-required             (spec-test) Rewrite the committed .test goldens instead of\n")
+	print("                                checking against them. Running a test proves its allocation\n")
+	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
+	print("                                WORSE. REVIEW THE RESULTING DIFF.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -203,17 +207,25 @@ type MaxonArgs
 	// tax. `spec-test` does not read this: it enables the checker on the per-test
 	// subprocess build it spawns, and `verify-warm-rebuild` forces it on unconditionally.
 	export let checkAlloc as bool
+	// `--update-required` (spec-test only): REWRITE the committed `.test` goldens instead of
+	// checking the emitted IR against them. The goldens are a code-quality gate — running a test
+	// proves its allocation is CORRECT, but only the pinned IR can say the code did not get WORSE
+	// (an extra spill still computes the right answer). So regenerating them is the one way a
+	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
+	export let updateRequired as bool
 
 	// Parse the process command line. argv[0] is the executable path (skipped).
 	// The first `build` token selects the command; the first bare (non-flag)
 	// argument is the input path; `-o <path>` / `--output=<path>` set the output;
-	// `--emit-ir` requests the Target-IR sidecar; `--check-alloc` runs the AllocChecker.
+	// `--emit-ir` requests the Target-IR sidecar; `--check-alloc` runs the AllocChecker;
+	// `--update-required` regenerates the spec-test goldens.
 	export static function parse() returns MaxonArgs
 		var command = MaxonCommand.unknown
 		var path = ""
 		var outputOverride = ""
 		var emitIr = false
 		var checkAlloc = false
+		var updateRequired = false
 
 		let args = CommandLine.args()
 		var i = 1
@@ -234,7 +246,9 @@ type MaxonArgs
 				emitIr = true
 			end 'emitIrFlag' else if arg == "--check-alloc" 'checkAllocFlag'
 				checkAlloc = true
-			end 'checkAllocFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'checkAllocFlag' else if arg == "--update-required" 'updateRequiredFlag'
+				updateRequired = true
+			end 'updateRequiredFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
@@ -247,6 +261,6 @@ type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, checkAlloc: checkAlloc}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, checkAlloc: checkAlloc, updateRequired: updateRequired}
 	end 'parse'
 end 'MaxonArgs'
