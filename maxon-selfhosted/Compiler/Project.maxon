@@ -394,6 +394,18 @@ export type Project
 	// structural fact "calls the load chokepoint".
 	export var funcIsElementLoader as FuncReturnsBorrowSet
 
+	// GREEN-THREAD YIELD registry (E3073's cross-library half). Qualified names of
+	// LIBRARY functions whose call suspends the calling green thread — i.e. that
+	// transitively reach an I/O leaf builtin (`__ManagedSocket.tcpConnect`,
+	// `__ManagedFile.read`, `__Builtins.sleep`, …). Computed by the library
+	// pipeline's `analyzeAsyncYields` over the library's OWN full call graph and
+	// persisted in its cache, because the user pipeline's module holds no library
+	// bodies: without the published fact, `async doGet()` where `doGet` calls
+	// `HttpClient.get` sees an edge to a body it cannot follow and wrongly reports
+	// "function never yields". The C# bootstrap needs no such registry — it compiles
+	// the stdlib into the same module it checks.
+	export var funcYields as YieldingFuncSet
+
 	// Argument-CONSUME registry (Concept C — the structural replacement for the
 	// inserter's hand-synced callee allowlists). For each function NAME, a bool per
 	// parameter index: true iff the callee TAKES OWNERSHIP of that argument (moves
@@ -1192,6 +1204,7 @@ export type Project
 			funcReturnsParamBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
+			funcYields: YieldingFuncSet.create(),
 			funcParamConsumes: FuncParamConsumesMap.create(),
 			funcMayReturnArg: MayReturnArgMap.create(),
 			asyncSpawnedFuncs: FuncReturnsBorrowSet.create(),
@@ -3687,6 +3700,10 @@ export typealias DiscardedCallResultSet = Set with String
 // `Project.funcReturnsBorrow`. Also reused for `Project.funcReturnsConsumedArg`
 // (the transparent-wrapper return-side fact), which is likewise a name set.
 export typealias FuncReturnsBorrowSet = Set with String
+
+// Qualified names of functions whose call suspends the calling green thread. See
+// `Project.funcYields`.
+export typealias YieldingFuncSet = Set with String
 
 // Per-parameter argument-consume bits, keyed by qualified function name. Entry `i`
 // is true iff the callee takes ownership of parameter `i` (see

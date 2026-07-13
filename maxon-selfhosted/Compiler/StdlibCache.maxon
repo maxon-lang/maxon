@@ -315,7 +315,14 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // to v90 independently on separate branches; with both variants present the ordinals
 // match NEITHER v90, so a v90 cache written by either branch alone would mis-decode
 // here. Bump again.
-let CACHE_FORMAT_VERSION = 91
+//
+// v91 -> v92: persisted GREEN-THREAD YIELD facts (`funcYields`), computed by
+// `analyzeAsyncYields` over the library's own call graph, so a user build's E3073
+// check knows that `HttpClient.get` (-> `HttpClient.send` -> `TcpClient.connect` ->
+// the socket builtin) yields WITHOUT a hand-maintained list of stdlib entry points
+// inside SemanticCheck. New trailing table; a v91 reader lacks it, so the version
+// gate forces clean regeneration.
+let CACHE_FORMAT_VERSION = 92
 
 // Byte offset of the total-file-length integrity dword in the fixed header, and
 // the resulting header size. The length field is stamped with the final
@@ -516,6 +523,14 @@ export type StdlibCacheData
 	// wrapper-retain boundary fires exactly once without a hardcoded loader-name list.
 	// Same `Set<String>` shape; names round-trip verbatim.
 	export var funcIsElementLoader as FuncReturnsBorrowSet
+	// Cache v90: persisted GREEN-THREAD YIELD facts (`funcYields`) computed by
+	// `analyzeAsyncYields` over this library's own call graph — the qualified names
+	// whose call parks the calling green thread on an I/O completion. The user
+	// build's E3073 check (`checkAsyncYielding`) reads them for every call that
+	// leaves the user module: those callees are signature-only stubs there, so
+	// their yield-reaching bodies cannot be re-walked. Same `Set<String>` shape;
+	// names round-trip verbatim.
+	export var funcYields as YieldingFuncSet
 	// Cache v47: persisted throws-clause per qualified function name so
 	// `try X.method() otherwise (e)` can recover the bare-enum / union
 	// throws type at parse time even when stdlib was loaded from cache
@@ -680,6 +695,7 @@ export type StdlibCacheData
 			funcReturnsBorrow: FuncReturnsBorrowSet.create(),
 			funcReturnsReceiverInterior: FuncReturnsBorrowSet.create(),
 			funcIsElementLoader: FuncReturnsBorrowSet.create(),
+			funcYields: YieldingFuncSet.create(),
 			funcThrowsTypes: FuncThrowsTypeMap.create(),
 			structTypes: StructTypeMap.create(),
 			enumTypes: EnumTypeMap.create(),
@@ -1454,6 +1470,12 @@ function encodeLibraryTierAB(buf ByteArray, data StdlibCacheData, writeTables Ma
 		try writeString(buf, s: loaderName)
 	end 'eachLoader'
 
+	// Cache v90: green-thread yield function-name set (same shape).
+	writeDword(buf, value: data.funcYields.count())
+	for yieldName in data.funcYields 'eachYield'
+		try writeString(buf, s: yieldName)
+	end 'eachYield'
+
 	// Cache v47: per-function throws-clause. Mirrors the funcReturnTypes
 	// layout — string key + ThrowsClause field via the absent/throwing codec.
 	writeDword(buf, value: data.funcThrowsTypes.count())
@@ -2177,6 +2199,15 @@ function decodeLibraryMeta(project Project, buf ByteArray, expectedChecksum Cach
 		pos = pL0
 		data.funcIsElementLoader.insert(loaderName)
 	end 'eachLoader'
+
+	// Cache v90: green-thread yield function-name set (read in write order).
+	let yieldCount = try readDword(buf, offset: pos) otherwise throw CacheCorruption.invalidEncoding
+	pos = pos + 4
+	for _ in 0 upto yieldCount 'eachYield'
+		let (yieldName, pY0) = try readString(buf, offset: pos)
+		pos = pY0
+		data.funcYields.insert(yieldName)
+	end 'eachYield'
 
 	// Cache v47: function throws-clause entries. Mirrors the
 	// funcReturnTypes loop above — string key + ThrowsClause value.
@@ -2911,6 +2942,13 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		data.funcIsElementLoader.insert(loaderName)
 	end 'copyLoaders'
 
+	// Cache v90: snapshot the green-thread yield facts (`analyzeAsyncYields` walked
+	// this library's full call graph down to the I/O leaf builtins). The user build
+	// has no library body to walk, so E3073 depends on this round-trip.
+	for yieldName in project.funcYields 'copyYields'
+		data.funcYields.insert(yieldName)
+	end 'copyYields'
+
 	// Cache v47: snapshot per-callee throws-clause so a cached-stdlib run
 	// of `try map.insert(...) otherwise (e) ... match e ...` recovers the
 	// MapError-typed binding instead of falling back to `integer`.
@@ -3194,6 +3232,13 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	for loaderName in data.funcIsElementLoader 'restoreLoaders'
 		project.funcIsElementLoader.insert(loaderName)
 	end 'restoreLoaders'
+
+	// Cache v90: replay the green-thread yield facts so the user build's E3073
+	// check sees `async` over a library callee that reaches an I/O leaf (e.g.
+	// `HttpClient.get`) as yielding, exactly as a from-source stdlib build does.
+	for yieldName in data.funcYields 'restoreYields'
+		project.funcYields.insert(yieldName)
+	end 'restoreYields'
 
 	// Cache v47: replay per-callee throws-clause so `funcThrowsTypes.get`
 	// at parse time of user code returns the stdlib method's declared

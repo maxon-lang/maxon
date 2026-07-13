@@ -408,9 +408,11 @@ let whitelist = ["basics",
 	//         (errorFlagId) — there is no union value to match. Needs an
 	//         error-value ABI/model change (surfaces as E3005 today).
 	//       * stdin-bytes: needs the feed-stdin path (minimal spawn wires NUL stdin).
-	//       * async-await / -multi / -parallel: need subprocess wait/spawn added to
-	//         SemanticCheck.isAsyncYieldStub (E3073) plus the heavy Win32 calls
-	//         moved onto the per-P system stack for green-thread execution.
+	//       * async-await / -multi / -parallel: need subprocess wait/spawn seen as
+	//         yield points by E3073 (today: SemanticCheck.ioYieldBuiltinSet's
+	//         `__Builtins.subprocess*` leaves, reached transitively via the stdlib's
+	//         published `funcYields` facts) plus the heavy Win32 calls moved onto
+	//         the per-P system stack for green-thread execution.
 	//   It is enabled (`subprocessSpecEnabled`) at Phase 7 once all subprocess
 	//   fragments pass.
 	// managed-socket / tcp-client / async-tcp / http-client are now HOST-ONLY

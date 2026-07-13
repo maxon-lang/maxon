@@ -1360,6 +1360,16 @@ function buildAndWriteLibraryCache(project Project, allModule MaxonModule, metaP
 	// so lowerMaxonToStd can look up named types successfully.
 	// Skip semanticCheck — it requires main() which stdlib doesn't have
 	pipeline.addPass(PassKind.resolveTypes)
+	// Green-thread yield facts (E3073). The library's own call graph is the ONLY
+	// place `HttpClient.get -> HttpClient.send -> TcpClient.connect ->
+	// __ManagedSocket.tcpConnect` is visible: a user build sees library callees as
+	// bodyless signatures, so it cannot re-derive which of them park the green
+	// thread. Compute them here on the full module and publish them via
+	// `project.funcYields`, which `captureStdlibMetadata` persists into the cache.
+	// Must run after resolveTypes (method-call edges read `resolvedReceiverTypes`)
+	// and before lowerMaxonToStd (which rewrites callees to runtime helper names
+	// the user tier never sees).
+	pipeline.addPass(PassKind.analyzeAsyncYields)
 	// Splice `__field_init_<field>` calls for every defaulted field a stdlib
 	// `Self{...}` literal omits, exactly as the user pipeline does. Without
 	// this, a stdlib container's `Self{}` (e.g. `Map.create`'s empty literal)

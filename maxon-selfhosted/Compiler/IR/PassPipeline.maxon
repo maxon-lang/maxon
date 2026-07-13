@@ -24,6 +24,15 @@
 export union PassKind
 	// Phase 2: Memory Safety (operates on MaxonModule)
 	resolveTypes
+	// Green-thread yield analysis (E3073's cross-library half). Publishes the
+	// module's yielding functions on `project.funcYields` so a LATER user
+	// pipeline — which holds no library bodies — can classify a call into this
+	// library as a yield. Scheduled by the LIBRARY pipeline only: the user
+	// pipeline derives its own module's yields inside `semanticCheck`, which is
+	// where E3073 is reported. Runs after resolveTypes (needs
+	// `resolvedReceiverTypes` for method-call edges) and before any lowering
+	// (the Maxon tier is where callee names still match the user tier's).
+	analyzeAsyncYields
 	semanticCheck
 	// Cross-file unused-export check. Runs after semanticCheck so it sees
 	// every declared symbol and every resolved reference; emits E3092
@@ -302,6 +311,7 @@ export type PassPipeline
 		match pass 'dispatch'
 			// Phase 2: Maxon-level passes
 			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath, isStdlib: isStdlib)
+			analyzeAsyncYields then analyzeAsyncYields(project, module: maxonModule)
 			semanticCheck then runSemanticChecks(project, module: maxonModule, isStdlib: isStdlib)
 			// Stdlib pipeline skips the cross-file unused-export audit. Every
 			// stdlib API is reachable from user code only via `import`/visibility
@@ -739,6 +749,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		// run as whole-module passes.
 		inliner gives PassClassification.wholeModule
 		dceFunctions gives PassClassification.wholeModule
+		analyzeAsyncYields gives PassClassification.wholeModule
 		analyzeParamConsumes gives PassClassification.wholeModule
 		analyzeReturnBorrows gives PassClassification.wholeModule
 		insertRangeChecks gives PassClassification.perFunction
@@ -936,6 +947,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 	// Similarly for lowerStdToMir.
 	return match pass 'phase'
 		resolveTypes gives PipelinePhase.maxon
+		analyzeAsyncYields gives PipelinePhase.maxon
 		semanticCheck gives PipelinePhase.maxon
 		checkUnusedExports gives PipelinePhase.maxon
 		rejectWasmSubprocess gives PipelinePhase.maxon
@@ -1175,6 +1187,7 @@ end 'dumpPassCounters'
 function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		resolveTypes gives "resolve-types"
+		analyzeAsyncYields gives "analyze-async-yields"
 		semanticCheck gives "semantic-check"
 		checkUnusedExports gives "check-unused-exports"
 		rejectWasmSubprocess gives "reject-wasm-subprocess"

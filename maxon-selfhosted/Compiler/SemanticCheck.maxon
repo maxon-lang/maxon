@@ -1025,50 +1025,94 @@ function checkErrorHandlingRules(project Project, module MaxonModule)
 end 'checkErrorHandlingRules'
 
 // Tier 4 (E3073): every `async f()` must target a function that yields. A
-// function yields if it contains an await / try-await / async-call op, calls a
-// known I/O yield stub, or transitively calls a function that yields. Mirrors
-// the C# bootstrap's CheckAsyncYielding (fixed-point over the call graph).
+// function yields if it contains an await / try-await / async-call op, calls an
+// I/O leaf builtin (`ioYieldBuiltinSet`), or transitively calls a function that
+// yields. Mirrors the C# bootstrap's CheckAsyncYielding (fixed-point over the
+// call graph).
 //
-// At the Maxon-IR level the spec's yield point is a `call File.exists(...)` —
-// `isAsyncYieldStub` recognizes the user-facing stdlib yield functions (and the
-// underlying runtime primitives) directly, so a caller of `File.exists` is
-// classified as yielding without needing the stdlib body's runtime call to be
-// visible to this pass.
+// The bootstrap compiles the stdlib into the SAME IrModule as user code, so its
+// fixed-point walks straight from `HttpClient.get` down to the socket builtin.
+// The self-hosted user pipeline's `module` holds user functions only — every
+// library body is behind the cache — so the cross-library half of the call graph
+// arrives as a FACT: each library's own pipeline runs `analyzeAsyncYields` over
+// its full module and publishes the yielding names into `project.funcYields`
+// (persisted by the library cache, restored on a cache hit). A user call into a
+// library is then a yield iff the callee is in that published set, which is what
+// makes `async doGet()` — user → `HttpClient.get` → `HttpClient.send` →
+// `TcpClient.connect` → `__ManagedSocket.tcpConnect` — classify exactly as the
+// bootstrap classifies it, with no hand-maintained list of stdlib entry points.
 function checkAsyncYielding(project Project, module MaxonModule)
 	// Fast path: no async-call sites → nothing to validate.
 	if not moduleHasAsyncCall(module) 'noAsync'
 		return
 	end 'noAsync'
 
-	// Build the per-function "yields" set and the callee call-graph in one walk.
+	let ioLeaves = ioYieldBuiltinSet()
+	let yields = computeYieldingFunctions(project, module: module, ioLeaves: ioLeaves)
+
+	// Report: each async-call whose (qualified) callee neither yields nor always
+	// yields (I/O leaf builtin / library-published fact).
+	for func in module.functions 'reportFunc'
+		for blockRef in func.blockRefs 'reportBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: report blockRef OOB")
+			for opIdx in block.opRefs 'reportOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: report opIdx OOB")
+				maybeReportNonYieldingAsync(project, opIdx: opIdx, op: op, func: func, yields: yields, ioLeaves: ioLeaves)
+			end 'reportOp'
+		end 'reportBlock'
+	end 'reportFunc'
+end 'checkAsyncYielding'
+
+// Library-pipeline pass (`PassKind.analyzeAsyncYields`): publish this library's
+// yielding functions on the project so a later USER pipeline — whose module holds
+// none of these bodies — can classify a call INTO the library without re-deriving
+// the fact from a name allowlist. The library cache persists the published set
+// (`captureStdlibMetadata` → `restoreStdlibMetadata`), so a cache hit, where no
+// library body is ever re-analyzed, restores the same facts.
+//
+// Runs on the full library module (every body present, nothing inlined away yet),
+// mirroring how `analyzeParamConsumes` / `analyzeReturnBorrows` compute their
+// cross-library facts.
+module function analyzeAsyncYields(project Project, module MaxonModule)
+	let yields = computeYieldingFunctions(project, module: module, ioLeaves: ioYieldBuiltinSet())
+	for name in yields 'publish'
+		project.funcYields.insert(name)
+	end 'publish'
+end 'analyzeAsyncYields'
+
+// The transitive "yields" closure over one module's call graph: walk every
+// function once to seed the directly-yielding ones and collect qualified callee
+// edges, then propagate to a fixed point.
+function computeYieldingFunctions(project Project, module MaxonModule, ioLeaves StringSet) returns StringSet
 	var yields = StringSet.create()
 	var edges = CallerEdgeMap.create()
 	for func in module.functions 'eachFunc'
 		var callees = FuncNameArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: blockRef OOB")
+			let block = try module.blocks.get(blockRef) otherwise panic("computeYieldingFunctions: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: opIdx OOB")
-				classifyYieldOp(project, opIdx: opIdx, op: op, func: func, yields: yields, callees: callees)
+				let op = try module.ops.get(opIdx) otherwise panic("computeYieldingFunctions: opIdx OOB")
+				classifyYieldOp(project, opIdx: opIdx, op: op, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
 				let termIdx = block.terminatorIndex()
-				let termOp = try module.ops.get(termIdx) otherwise panic("checkAsyncYielding: termIdx OOB")
-				classifyYieldOp(project, opIdx: termIdx, op: termOp, func: func, yields: yields, callees: callees)
+				let termOp = try module.ops.get(termIdx) otherwise panic("computeYieldingFunctions: termIdx OOB")
+				classifyYieldOp(project, opIdx: termIdx, op: termOp, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
 			end 'hasTerm'
 		end 'eachBlock'
 		edges.upsert(func.name, value: callees)
 	end 'eachFunc'
 
 	// Fixed-point: a function yields if any of its (already-qualified) callees
-	// yields.
+	// yields. Callees that ALWAYS yield were already folded into `yields` at
+	// classify time, so only same-module edges need propagating here.
 	let funcCount = module.functions.count()
 	var changed = true
 	while changed 'propagate'
 		changed = false
 		var i = 0
 		while i < funcCount 'eachCaller'
-			let caller = try module.functions.get(i) otherwise panic("checkAsyncYielding: caller.get OOB")
+			let caller = try module.functions.get(i) otherwise panic("computeYieldingFunctions: caller.get OOB")
 			if yields.contains(caller.name) 'already'
 				i = i + 1
 				continue
@@ -1085,18 +1129,8 @@ function checkAsyncYielding(project Project, module MaxonModule)
 		end 'eachCaller'
 	end 'propagate'
 
-	// Report: each async-call whose (qualified) callee neither yields nor is a
-	// known yield stub.
-	for func in module.functions 'reportFunc'
-		for blockRef in func.blockRefs 'reportBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: report blockRef OOB")
-			for opIdx in block.opRefs 'reportOp'
-				let op = try module.ops.get(opIdx) otherwise panic("checkAsyncYielding: report opIdx OOB")
-				maybeReportNonYieldingAsync(project, op: op, func: func, yields: yields)
-			end 'reportOp'
-		end 'reportBlock'
-	end 'reportFunc'
-end 'checkAsyncYielding'
+	return yields
+end 'computeYieldingFunctions'
 
 function moduleHasAsyncCall(module MaxonModule) returns bool
 	for func in module.functions 'eachFunc'
@@ -1116,26 +1150,26 @@ function moduleHasAsyncCall(module MaxonModule) returns bool
 end 'moduleHasAsyncCall'
 
 // Classify one op for the yields walk: async/await ops make the containing
-// function yield; call/tryCall ops either mark a yield (I/O stub callee) or
-// contribute a qualified callee edge for the fixed-point.
-function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray)
+// function yield; call/tryCall ops either mark a yield (always-yielding callee)
+// or contribute a qualified callee edge for the fixed-point.
+function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunction, yields StringSet, callees FuncNameArray, ioLeaves StringSet)
 	if op.rawValue.category == OpCategory.awaiting 'isAwait'
 		yields.insert(func.name)
 		return
 	end 'isAwait'
 	// A `recv.method(...)` / `try recv.method(...)` call: at the Maxon tier the
 	// callee is still a `methodCall`/`tryMethodCall` (not yet lowered to a
-	// qualified `call`), so resolve `{ReceiverType}.{methodName}` from
-	// `resolvedReceiverTypes` and route it through the same edge handler. Without
-	// this the yield walk can't see `child.readStdoutLine()` reach the
-	// `__Builtins.subprocessReadStdoutLine` I/O stub inside the method body, so an
-	// `async`-spawned thunk that yields only via a method call wrongly trips E3073.
+	// qualified `call`), so its edge name comes from the resolver (or, failing
+	// that, from `{ReceiverType}.{methodName}`). Without it the yield walk can't
+	// see `socket.sendFrom(...)` reach the `__ManagedSocket.sendFrom` I/O builtin,
+	// so a function that yields only via a method call is wrongly classified
+	// non-yielding.
 	match op 'dispatch'
-		call(_, callee, callContext, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
-		methodCall(_, _, methodName, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
-		tryCall(_, callee, callContext, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
-		tryMethodCall(_, _, methodName, _, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees)
-		asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then handleYieldCallEdge(project, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees)
+		call(_, callee, callContext, _, _, _, _, _) then handleYieldCallEdge(project, opIdx: opIdx, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
+		methodCall(_, _, methodName, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
+		tryCall(_, callee, callContext, _, _, _, _, _, _) then handleYieldCallEdge(project, opIdx: opIdx, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
+		tryMethodCall(_, _, methodName, _, _, _, _, _, _) then handleYieldMethodEdge(project, opIdx: opIdx, methodName: methodName, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
+		asyncCall(_, callee, callContext, _, _, _, _, _, _, _, _) then handleYieldCallEdge(project, opIdx: opIdx, callee: callee, callContext: callContext, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
 		literal to br then noOp()
 		ret to throw then noOp()
 		rethrow to forInIterable then noOp()
@@ -1143,74 +1177,155 @@ function classifyYieldOp(project Project, opIdx OpIndex, op MaxonOp, func IrFunc
 	end 'dispatch'
 end 'classifyYieldOp'
 
-// Method-call yield edge: resolve the receiver's type from `resolvedReceiverTypes`
-// (keyed by opIdx) to `{ReceiverTypeName}.{methodName}`. If that qualified method
-// is a known yield stub, mark the caller yielding directly — the method body
-// lives in the stdlib, which the user-pipeline yield walk doesn't have in
-// `module.functions`, so the transitive edge alone can't reach the I/O stub the
-// method ultimately calls (e.g. `StreamingSubprocess.readStdoutLine` →
-// `__Builtins.subprocessReadStdoutLine`). Always push the edge too, so a method
-// whose body IS in the module still propagates via the fixed-point. No-ops when
-// the receiver type isn't recorded — an unresolved method can't be a known edge.
-function handleYieldMethodEdge(project Project, opIdx OpIndex, methodName ByteArray, func IrFunction, yields StringSet, callees FuncNameArray)
+// Method-call yield edge. `resolveAllCalls` already picked the exact callee for
+// this site, so prefer `resolvedCallees`; fall back to `{ReceiverTypeName}.{methodName}`
+// rebuilt from `resolvedReceiverTypes` when the resolver recorded nothing. No-ops
+// when neither is known — an unresolved method can't be a known edge.
+function handleYieldMethodEdge(project Project, opIdx OpIndex, methodName ByteArray, func IrFunction, yields StringSet, callees FuncNameArray, ioLeaves StringSet)
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise ""
+	if not resolved.isEmpty() 'haveResolved'
+		recordYieldEdge(project, qualified: resolved, func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
+		return
+	end 'haveResolved'
 	if let receiverType = try project.resolvedReceiverTypes.get(opIdx) 'haveReceiver'
 		let typeName = receiverType.nameOrEmpty(project)
 		if not typeName.isEmpty() 'haveName'
-			let qualified = "{typeName}.{String.from(methodName)}"
-			if isAsyncYieldStub(qualified) 'isStub'
-				yields.insert(func.name)
-				return
-			end 'isStub'
-			callees.push(qualified)
+			recordYieldEdge(project, qualified: "{typeName}.{String.from(methodName)}", func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
 		end 'haveName'
 	end 'haveReceiver'
 end 'handleYieldMethodEdge'
 
-// An async-call op also makes its containing function yield (it awaits the
-// spawned promise's completion implicitly), so route the spawn-site callee
-// through the same edge handler while marking the caller as yielding.
-function handleYieldCallEdge(project Project, callee ByteArray, callContext CallContext, func IrFunction, yields StringSet, callees FuncNameArray)
-	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath)
-	if isAsyncYieldStub(qualified) 'isStub'
-		yields.insert(func.name)
-		return
-	end 'isStub'
-	callees.push(qualified)
+// Static-call yield edge. An async-call op routes here too: its spawn site is an
+// edge to the spawned callee like any other call, so a function that spawns a
+// yielding function is itself yielding (it awaits that promise's completion). A
+// spawn of a NON-yielding callee gains no edge to a yield — which is exactly the
+// E3073 the report pass then raises.
+function handleYieldCallEdge(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, func IrFunction, yields StringSet, callees FuncNameArray, ioLeaves StringSet)
+	recordYieldEdge(project, qualified: yieldEdgeCalleeName(project, opIdx: opIdx, callee: callee, callContext: callContext, func: func), func: func, yields: yields, callees: callees, ioLeaves: ioLeaves)
 end 'handleYieldCallEdge'
 
-function maybeReportNonYieldingAsync(project Project, op MaxonOp, func IrFunction, yields StringSet)
+// The name a call-shaped op's yield edge is keyed by. `resolveAllCalls` stamped
+// `resolvedCallees[opIdx]` with the OVERLOAD-DISAMBIGUATED callee, and that is the
+// name the callee's IrFunction actually carries: an overload bucket re-keys each
+// member under a mangled name (`Subprocess.run` has three, so NO function is named
+// plain `Subprocess.run`), while `qualifyCalleeForContext` can only return the bare
+// bucket name. Keying the edge off the bare name would miss every published
+// `funcYields` fact for an overloaded stdlib entry point. The qualify fallback
+// still covers sites the resolver left alone (e.g. bodyless builtin intrinsics).
+function yieldEdgeCalleeName(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, func IrFunction) returns String
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise ""
+	if not resolved.isEmpty() 'haveResolved'
+		return resolved
+	end 'haveResolved'
+	return qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath)
+end 'yieldEdgeCalleeName'
+
+// One call edge, from either the static-call or the method-call shape: an
+// always-yielding callee marks the caller yielding outright (its body is not in
+// this module, so no edge could ever reach it); anything else becomes a
+// same-module edge for the fixed-point.
+function recordYieldEdge(project Project, qualified String, func IrFunction, yields StringSet, callees FuncNameArray, ioLeaves StringSet)
+	if calleeAlwaysYields(project, qualified: qualified, ioLeaves: ioLeaves) 'alwaysYields'
+		yields.insert(func.name)
+		return
+	end 'alwaysYields'
+	callees.push(qualified)
+end 'recordYieldEdge'
+
+function maybeReportNonYieldingAsync(project Project, opIdx OpIndex, op MaxonOp, func IrFunction, yields StringSet, ioLeaves StringSet)
 	match op 'k'
-		asyncCall(_, callee, callContext, _, _, _, _, _, _, callSourceText, range) then reportIfNonYielding(project, callee: callee, callContext: callContext, callSourceText: callSourceText, range: range, func: func, yields: yields)
+		asyncCall(_, callee, callContext, _, _, _, _, _, _, callSourceText, range) then reportIfNonYielding(project, opIdx: opIdx, callee: callee, callContext: callContext, callSourceText: callSourceText, range: range, func: func, yields: yields, ioLeaves: ioLeaves)
 		literal to forInIterable then return
 		awaitPromise to sizeofType then return
 	end 'k'
 end 'maybeReportNonYieldingAsync'
 
-function reportIfNonYielding(project Project, callee ByteArray, callContext CallContext, callSourceText String, range SourceRange, func IrFunction, yields StringSet)
-	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath)
-	if yields.contains(qualified) or isAsyncYieldStub(qualified) 'yields'
+// Keyed by the SAME name the walk built its edges from (`yieldEdgeCalleeName`), so
+// a spawn site can never look up a different callee than the one whose yields were
+// computed.
+function reportIfNonYielding(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, callSourceText String, range SourceRange, func IrFunction, yields StringSet, ioLeaves StringSet)
+	let qualified = yieldEdgeCalleeName(project, opIdx: opIdx, callee: callee, callContext: callContext, func: func)
+	if yields.contains(qualified) or calleeAlwaysYields(project, qualified: qualified, ioLeaves: ioLeaves) 'yields'
 		return
 	end 'yields'
 	reportCompileError(project, code: ErrorCode.asyncNonYielding, message: "'{callSourceText}' — function never yields; 'async' is for I/O-concurrent work only", line: range.line, column: range.column, filePath: func.sourceFilePath)
 end 'reportIfNonYielding'
 
-// The set of callee names (user-facing stdlib yield functions + underlying
-// runtime primitives) whose call suspends the green thread. Mirrors the C#
-// bootstrap's IoStubs, expressed at the Maxon-IR call-callee granularity.
-function isAsyncYieldStub(name String) returns bool
-	// Networking ops yield the green thread via overlapped IOCP (ConnectEx /
-	// WSASend / WSARecv) and DNS-resolve on the sync worker, so `async` over them
-	// is legitimate. `TcpClient.connect/send/recv` are the user-facing yield
-	// functions; the `mrt_managed_socket_*` runtime helpers are the lowered
-	// targets a transitive walk may reach.
-	let stubs = ["File.exists", "File.read", "File.delete", "maxon_file_exists", "maxon_file_read", "maxon_file_delete", "maxon_sleep", "stdlib.sleep", "Subprocess.run", "maxon_subprocess_wait_collect", "TcpClient.connect", "TcpClient.send", "TcpClient.recv", "mrt_managed_socket_tcp_connect", "mrt_managed_socket_send", "mrt_managed_socket_recv", "__Builtins.subprocessReadStdoutLine", "__Builtins.subprocessReadStderrLine", "__Builtins.subprocessWriteStdinAll", "__Builtins.subprocessWaitExit", "__Builtins.subprocessSpawnStreaming", "StreamingSubprocess.readStdoutLine", "StreamingSubprocess.readStdoutLineCapped", "StreamingSubprocess.readStderrLine", "StreamingSubprocess.readStderrLineCapped", "StreamingSubprocess.writeStdinAll", "StreamingSubprocess.waitExit"]
-	for s in stubs 'each'
-		if name == s 'hit'
-			return true
-		end 'hit'
-	end 'each'
-	return false
-end 'isAsyncYieldStub'
+// A callee whose call yields regardless of the module being walked: an I/O leaf
+// builtin, or a function a LIBRARY published as yielding (`project.funcYields` —
+// computed by that library's `analyzeAsyncYields` and restored from its cache).
+// The library case is what lets a user-module walk cross the library boundary its
+// own `module.functions` cannot.
+function calleeAlwaysYields(project Project, qualified String, ioLeaves StringSet) returns bool
+	return ioLeaves.contains(qualified) or project.funcYields.contains(qualified)
+end 'calleeAlwaysYields'
+
+// The I/O LEAF builtins: bodyless compiler intrinsics whose runtime helper parks
+// the calling green thread on the I/O completion port (`__io_submit_*`) instead of
+// returning inline. These are the only seeds of the yield closure — every yielding
+// stdlib entry point (`File.exists`, `TcpClient.connect`, `HttpClient.get`,
+// `Subprocess.run`, …) is DERIVED by `analyzeAsyncYields` walking the stdlib's own
+// call graph down to one of them.
+//
+// Mirrors the C# bootstrap's `IoStubs` one-for-one, mapped from its lowered
+// runtime/synthetic names (`__managed_socket_send`, `maxon_sleep`, …) onto the
+// Maxon-tier callee names this walk actually sees. The exclusions are the
+// bootstrap's and are deliberate: `__ManagedFile.rename` / `.statField` / `.statFree`,
+// `__Builtins.subprocessResolveOnPath` / the `subprocessResult*` accessors and
+// `__Builtins.writeStdout` / `.writeStderr` / `.readStdin` all complete inline on
+// the calling thread, so `async` over one of them would spawn a green thread that
+// never yields.
+function ioYieldBuiltinSet() returns StringSet
+	var leaves = StringSet.create()
+
+	// Overlapped file I/O (ReadFile / WriteFile via __io_submit_read/_write) and the
+	// metadata calls the sync worker serializes through __io_submit_sync.
+	leaves.insert("__ManagedFile.size")
+	leaves.insert("__ManagedFile.read")
+	leaves.insert("__ManagedFile.write")
+	leaves.insert("__ManagedFile.close")
+	leaves.insert("__ManagedFile.openRead")
+	leaves.insert("__ManagedFile.openWrite")
+	leaves.insert("__ManagedFile.openWriteExecutable")
+	leaves.insert("__ManagedFile.exists")
+	leaves.insert("__ManagedFile.delete")
+	leaves.insert("__ManagedFile.stat")
+
+	// Directory enumeration / creation — same sync-worker submit path.
+	leaves.insert("__ManagedDirectory.openSearch")
+	leaves.insert("__ManagedDirectory.create")
+	leaves.insert("__ManagedDirectory.currentPath")
+	leaves.insert("__ManagedDirectory.next")
+	leaves.insert("__ManagedDirectory.filename")
+	leaves.insert("__ManagedDirectory.close")
+	leaves.insert("__ManagedDirectory.exists")
+
+	// Sockets: overlapped IOCP (ConnectEx / WSASend / WSARecv), with the DNS
+	// resolve inside `tcpConnect` serialized onto the sync worker.
+	leaves.insert("__ManagedSocket.tcpConnect")
+	leaves.insert("__ManagedSocket.sendFrom")
+	leaves.insert("__ManagedSocket.recv")
+	leaves.insert("__ManagedSocket.close")
+
+	// Green-thread sleep (`maxon_sleep` parks the GT on the timer wheel).
+	leaves.insert("__Builtins.sleep")
+
+	// Subprocess: spawn/wait/signal plus the streaming variants, which block on
+	// overlapped child pipes (__subp_create_overlapped_pipe + IOCP).
+	leaves.insert("__Builtins.subprocessSpawn")
+	leaves.insert("__Builtins.subprocessWaitCollect")
+	leaves.insert("__Builtins.subprocessKill")
+	leaves.insert("__Builtins.subprocessSendSignal")
+	leaves.insert("__Builtins.subprocessDetach")
+	leaves.insert("__Builtins.subprocessSpawnStreaming")
+	leaves.insert("__Builtins.subprocessWriteStdinAll")
+	leaves.insert("__Builtins.subprocessReadStdoutLine")
+	leaves.insert("__Builtins.subprocessReadStderrLine")
+	leaves.insert("__Builtins.subprocessCloseStdin")
+	leaves.insert("__Builtins.subprocessWaitExit")
+
+	return leaves
+end 'ioYieldBuiltinSet'
 
 // E3057: calling a throwing function without `try`.
 // The callee is the unqualified name; qualify it before looking up in funcThrowsTypes.
