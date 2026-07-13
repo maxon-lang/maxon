@@ -1,0 +1,294 @@
+// ElimTrivialBlockArgs — a Std→Std pass that deletes the block-args (phis) that CARRY NOTHING:
+// a phi whose every incoming value, once its own self-references are set aside, is the SAME
+// single value `v`. Such a phi IS `v` — it merely renames it — so every use of it is rewritten
+// to `v` and the slot is dropped.
+//
+// WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (ARCHITECTURE.md,
+// register allocator §"the contract"), and this is the second place one came from.
+//
+// `pruneDeadBlockArgs` deletes the loop-header phis nothing READS. It deliberately left the
+// merely REDUNDANT ones alone — a var the loop reads (or that is read after the loop) but never
+// WRITES gets a header phi carrying a value that never changes — on the grounds that "it costs
+// nothing: biased coloring coalesces it with its incoming value into one register and SSA
+// destruction drops the self-move".
+//
+// That is true of the REGISTER COUNT and false of everything else. The parser mints one phi per
+// mutable var in scope, BEFORE the body is parsed (the set of body-written vars is not yet
+// known — `Parser.parseWhileStatement`). So every `var` declared before a loop and read after it
+// becomes a loop-carried phi, self-sustaining through the back edge and therefore live across the
+// ENTIRE loop. And a phi is precisely what the cold-spill splitter may NOT spill:
+// `isColdSpillable` requires a value that is not a phi and not edge-passed, because a cold store
+// goes in the PREHEADER and a phi's def is the header itself. So those values are pinned in
+// registers across a loop that never touches them, and once they outnumber the pool the compiler
+// raises E5001 against a program that fits the machine.
+//
+// The tell is that `let` and `var` compiled DIFFERENTLY. Fifteen idle `let`s across a loop are
+// ordinary values: the splitter spills them around it for free and the program builds. The same
+// fifteen written `var` — never reassigned, semantically identical — became fifteen phis, could
+// not be spilled, and were refused with E5001 on a loop whose real working set was two.
+//
+// The parser has always PROMISED this collapse ("phis for unmutated vars turn out trivial and
+// collapse in the Std-tier phi-elim pass"). That pass was M4b's `eliminatePhis`, retired at M5
+// when the register allocator took over SSA destruction. `pruneDeadBlockArgs` restored its DEAD
+// half; this is the TRIVIAL half, and with both of them the promise holds again.
+//
+// TRIVIALITY IS A FIXPOINT, not a single sweep. Removing one trivial phi can make another
+// trivial: in nested loops the inner header's phi for `k` is fed by the outer header's phi for
+// `k`, which is fed by `k`'s real def. The inner one only becomes redundant once the outer one
+// has been folded away. So the pass iterates until a sweep changes nothing.
+//
+// SELF-REFERENCES ARE IGNORED, AND THAT IS THE WHOLE TRICK. A loop-header phi's back edge passes
+// the phi to ITSELF, so its incoming set is `{v, phi}` and a naive "all incoming equal" test sees
+// two distinct values and gives up. Discounting the self-reference is what recognises
+// `phi = φ(v, phi)` as just `v`.
+//
+// A phi whose non-self incoming values genuinely DIFFER (a var written to different values in an
+// if/else) is NOT trivial and is left exactly where it is — it is a real merge and it needs a
+// real register.
+
+// One trivial block-arg found in a sweep: `arg` is the phi, `target` the single value it carries.
+type TrivialArg
+	export var arg as ValueId
+	export var target as ValueId
+
+	export static function create(arg ValueId, target ValueId) returns TrivialArg
+		return Self{arg: arg, target: target}
+	end 'create'
+end 'TrivialArg'
+
+typealias TrivialArgArray = Array with TrivialArg
+
+// Fold every trivial block-arg in every function, in place.
+export function elimTrivialBlockArgs(module StdModule)
+	var removed = 0 as ValueId
+	for func in module.functions 'eachFunc'
+		removed = removed + elimTrivialBlockArgsInFunc(module, func: func)
+	end 'eachFunc'
+
+	let total = removed
+	logDebug(LogCategory.ir, message: function() gives "elimTrivialBlockArgs: folded {total} trivial block-arg(s) across {module.funcCount()} function(s)")
+end 'elimTrivialBlockArgs'
+
+// Sweep one function to a fixpoint. Returns how many block-args it folded away.
+function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+	var removed = 0 as ValueId
+
+	// Each sweep strictly removes at least one block-arg, and a function has finitely many, so
+	// the loop terminates. The bound is that count, and exceeding it means a sweep reported a
+	// removal it did not make — a bug in this pass, not a program the bound is too small for.
+	let bound = countBlockArgs(module, func: func) + 1
+	var sweeps = 0 as ValueId
+	while true 'toFixpoint'
+		let folded = foldOneSweep(module, func: func)
+		if folded == 0 'settled'
+			break
+		end 'settled'
+		removed = removed + folded
+
+		sweeps = sweeps + 1
+		if sweeps > bound 'runaway'
+			panic("elimTrivialBlockArgs: '{func.name}' did not settle after {sweeps} sweep(s) over {bound - 1} block-arg(s)")
+		end 'runaway'
+	end 'toFixpoint'
+
+	return removed
+end 'elimTrivialBlockArgsInFunc'
+
+function countBlockArgs(module StdModule, func IrFunction) returns ValueId
+	var n = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		n = n + block.blockArgs.count()
+	end 'eachBlock'
+	return n
+end 'countBlockArgs'
+
+// One sweep: find every trivial block-arg, rewrite its uses to the value it carries, and drop it
+// (and its slot in every incoming edge). Returns how many were folded, so the caller knows
+// whether to sweep again.
+function foldOneSweep(module StdModule, func IrFunction) returns ValueId
+	let refByBlockId = buildTrivialBlockIdIndex(module, func: func)
+	let trivial = findTrivialArgs(module, func: func)
+	if trivial.count() == 0 'none'
+		return 0
+	end 'none'
+
+	for t in trivial 'eachSubst'
+		substituteEverywhere(module, func: func, from: t.arg, to: t.target)
+	end 'eachSubst'
+
+	dropFoldedArgs(module, func: func, refByBlockId: refByBlockId, trivial: trivial)
+	return trivial.count()
+end 'foldOneSweep'
+
+// The trivial block-args of this function. A block-arg is trivial iff, DISCOUNTING incoming
+// values that are the arg itself (the back edge feeding a loop-header phi to itself), every
+// predecessor passes it the SAME value — and there is at least one such value.
+//
+// Only args whose target is NOT itself being folded this sweep are reported. That is what keeps
+// substitution chains out of the picture: folding `inner -> outer -> v` in one sweep would
+// rewrite uses of `inner` to `outer` and then delete `outer`'s slot, leaving a dangling
+// reference. Deferring `inner` to the NEXT sweep — by which time `outer` is gone and `inner`'s
+// incoming really is `v` — needs no chain resolution at all, and the fixpoint loop above is
+// what makes deferral free.
+function findTrivialArgs(module StdModule, func IrFunction) returns TrivialArgArray
+	var candidates = TrivialArgArray.create()
+	var isCandidate = StdValueUseSet.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for k in 0 upto block.blockArgs.count() 'eachSlot'
+			let arg = try block.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{block.label}'")
+			let carried = carriedValue(module, func: func, target: block, slot: k, arg: arg.valueId)
+			if carried.isTrivial 'trivial'
+				candidates.push(TrivialArg.create(arg.valueId, target: carried.value))
+				isCandidate.insert(arg.valueId)
+			end 'trivial'
+		end 'eachSlot'
+	end 'eachBlock'
+
+	var ready = TrivialArgArray.create()
+	for c in candidates 'eachCandidate'
+		if not isCandidate.contains(c.target) 'targetSurvives'
+			ready.push(c)
+		end 'targetSurvives'
+	end 'eachCandidate'
+	return ready
+end 'findTrivialArgs'
+
+// What a block-arg carries: the single non-self value every predecessor passes it, when there is
+// one. `isTrivial` is false when the incoming values genuinely differ (a real merge), and when
+// there is no non-self incoming at all (an unreachable block, or a phi fed only by itself —
+// neither of which this pass may fold, since there is no value to fold it TO).
+type CarriedValue
+	export var isTrivial as bool
+	export var value as ValueId
+
+	export static function trivial(value ValueId) returns CarriedValue
+		return Self{isTrivial: true, value: value}
+	end 'trivial'
+
+	export static function notTrivial() returns CarriedValue
+		return Self{isTrivial: false, value: 0}
+	end 'notTrivial'
+end 'CarriedValue'
+
+function carriedValue(module StdModule, func IrFunction, target IrBlock, slot ValueId, arg ValueId) returns CarriedValue
+	var seen = false
+	var only = 0 as ValueId
+
+	for blockRef in func.blockRefs 'eachPred'
+		let pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		for edge in pred.branchEdges 'eachEdge'
+			if edge.targetBlockId != target.id 'otherTarget'
+				continue
+			end 'otherTarget'
+
+			let incoming = try edge.argIds.get(slot) otherwise panic("elimTrivialBlockArgs: the edge '{pred.label}' -> '{target.label}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+
+			// The self-reference a loop-header phi's back edge carries. Discounting it is the
+			// whole point: `phi = φ(v, phi)` is just `v`.
+			if incoming == arg 'selfReference'
+				continue
+			end 'selfReference'
+
+			if not seen 'first'
+				seen = true
+				only = incoming
+			end 'first' else if incoming != only 'differs'
+				return CarriedValue.notTrivial()
+			end 'differs'
+		end 'eachEdge'
+	end 'eachPred'
+
+	if not seen 'noRealIncoming'
+		return CarriedValue.notTrivial()
+	end 'noRealIncoming'
+	return CarriedValue.trivial(only)
+end 'carriedValue'
+
+// Rewrite every READ of `from` to `to` — in the ops, via the dialect's `substituteStdOpUses`, and
+// in the branch-edge args, which live on the predecessor blocks rather than on any op and so are
+// this pass's own responsibility.
+function substituteEverywhere(module StdModule, func IrFunction, from ValueId, to ValueId)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("elimTrivialBlockArgs: live op index {opIdx} not in module.ops")
+		try module.ops.set(opIdx, value: substituteStdOpUses(op, from: from, to: to)) otherwise panic("elimTrivialBlockArgs: ops.set({opIdx}) OOB")
+	end 'eachOp'
+
+	for blockRef in func.blockRefs 'eachPred'
+		var pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newEdges = BranchEdgeArray.create()
+		for edge in pred.branchEdges 'eachEdge'
+			var newArgs = ValueIdArray.create()
+			for a in edge.argIds 'eachArg'
+				newArgs.push(to if a == from else a)
+			end 'eachArg'
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgs))
+		end 'eachEdge'
+		pred.branchEdges = newEdges
+	end 'eachPred'
+end 'substituteEverywhere'
+
+// Drop each folded block-arg together with its slot in EVERY incoming edge. The edges are
+// rewritten FIRST, while each target still declares the block-args the slots are aligned to; the
+// block-arg lists are rebuilt after. This is the same slot-alignment discipline
+// `pruneDeadBlockArgs.dropUselessBlockArgs` follows, and for the same reason: dropping slot `k`
+// of a block means dropping `blockArgs[k]` AND slot `k` of every incoming edge, or the positional
+// `blockArgs[k] <-> argIds[k]` correspondence the whole phi model rests on is broken.
+function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, trivial TrivialArgArray)
+	var folded = StdValueUseSet.create()
+	for t in trivial 'eachFolded'
+		folded.insert(t.arg)
+	end 'eachFolded'
+
+	for blockRef in func.blockRefs 'eachPred'
+		var pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newEdges = BranchEdgeArray.create()
+		for edge in pred.branchEdges 'eachEdge'
+			let target = trivialBlockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			var keptArgs = ValueIdArray.create()
+			for k in 0 upto target.blockArgs.count() 'eachSlot'
+				let targetArg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+				if not folded.contains(targetArg.valueId) 'keep'
+					keptArgs.push(try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{pred.label}' -> '{target.label}' is missing slot {k}"))
+				end 'keep'
+			end 'eachSlot'
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgs))
+		end 'eachEdge'
+		pred.branchEdges = newEdges
+	end 'eachPred'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var newArgs = IrBlockArgArray.create()
+		for arg in block.blockArgs 'eachArg'
+			if not folded.contains(arg.valueId) 'keep'
+				newArgs.push(arg)
+			end 'keep'
+		end 'eachArg'
+		block.blockArgs = newArgs
+	end 'eachBlock'
+end 'dropFoldedArgs'
+
+// BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space. The +1 lets
+// a zero-filled column carry its own "not in this function" sentinel. Same shape, and same
+// motivation, as `pruneDeadBlockArgs.buildBlockIdIndex`: `IrModule.getBlockByIdIn` is a LINEAR
+// scan, and calling it once per edge would be O(edges × blocks).
+function buildTrivialBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
+	var refByBlockId = ValueIdArray.create()
+	refByBlockId.resize(func.nextBlockId)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("elimTrivialBlockArgs: block '{block.label}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+	end 'eachBlock'
+	return refByBlockId
+end 'buildTrivialBlockIdIndex'
+
+function trivialBlockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from String) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("elimTrivialBlockArgs: block '{from}' branches to block id {id}, outside its function's block-id space")
+	if refPlusOne == 0 'notInFunction'
+		panic("elimTrivialBlockArgs: block '{from}' branches to block id {id}, which is not registered in the function")
+	end 'notInFunction'
+	return try module.blocks.get(refPlusOne - 1) otherwise panic("elimTrivialBlockArgs: blockRef for block id {id} not in module.blocks")
+end 'trivialBlockById'

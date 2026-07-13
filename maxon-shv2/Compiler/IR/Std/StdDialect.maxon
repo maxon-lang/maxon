@@ -366,6 +366,42 @@ function insertUsePair(referenced StdValueUseSet, a ValueId, b ValueId)
 	referenced.insert(b)
 end 'insertUsePair'
 
+// `op` with every READ of `from` rewritten to `to`. The mirror of `collectStdOpUses`: it
+// rewrites exactly the operands that one reports, so the two cannot drift. DEFS are left alone
+// (a def is not a use), and so are branch-edge args — those live on the predecessor's `IrBlock`,
+// not on the op, so rewriting them is the caller's job. Exhaustive over StdOp with no bare
+// `default`, for the same reason its twin is: a new variant must be a COMPILE ERROR here rather
+// than a silently-missed rewrite at every call site.
+module function substituteStdOpUses(op StdOp, from ValueId, to ValueId) returns StdOp
+	return match op 'r'
+		const gives op
+		binOp(resultId, lhs, rhs, opcode) gives StdOp.binOp(resultId, lhs: substitutedValue(lhs, from: from, to: to), rhs: substitutedValue(rhs, from: from, to: to), opcode: opcode)
+		unaryOp(resultId, operand, opcode) gives StdOp.unaryOp(resultId, operand: substitutedValue(operand, from: from, to: to), opcode: opcode)
+		cmp(resultId, lhs, rhs, pred) gives StdOp.cmp(resultId, lhs: substitutedValue(lhs, from: from, to: to), rhs: substitutedValue(rhs, from: from, to: to), pred: pred)
+		binOpImm(resultId, lhs, imm, opcode) gives StdOp.binOpImm(resultId, lhs: substitutedValue(lhs, from: from, to: to), imm: imm, opcode: opcode)
+		cmpImm(resultId, lhs, imm, pred) gives StdOp.cmpImm(resultId, lhs: substitutedValue(lhs, from: from, to: to), imm: imm, pred: pred)
+		div(resultId, lhs, rhs) gives StdOp.div(resultId, lhs: substitutedValue(lhs, from: from, to: to), rhs: substitutedValue(rhs, from: from, to: to))
+		mod(resultId, lhs, rhs) gives StdOp.mod(resultId, lhs: substitutedValue(lhs, from: from, to: to), rhs: substitutedValue(rhs, from: from, to: to))
+		condBranch(condId, thenBlockId, elseBlockId) gives StdOp.condBranch(substitutedValue(condId, from: from, to: to), thenBlockId: thenBlockId, elseBlockId: elseBlockId)
+		branch gives op
+		ret(retValId) gives StdOp.ret(substitutedValue(retValId, from: from, to: to))
+		param gives op
+		call(resultId, callee, args) gives StdOp.call(resultId, callee: callee, args: substitutedArgs(args, from: from, to: to))
+	end 'r'
+end 'substituteStdOpUses'
+
+function substitutedValue(v ValueId, from ValueId, to ValueId) returns ValueId
+	return to if v == from else v
+end 'substitutedValue'
+
+function substitutedArgs(args ValueIdArray, from ValueId, to ValueId) returns ValueIdArray
+	var out = ValueIdArray.create()
+	for a in args 'each'
+		out.push(substitutedValue(a, from: from, to: to))
+	end 'each'
+	return out
+end 'substitutedArgs'
+
 // --- The sugar band contract ---
 //
 // v1 enforced "no sugar reaches the backend" with a TYPE: sugar ops existed in

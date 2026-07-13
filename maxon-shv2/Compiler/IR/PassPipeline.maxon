@@ -47,9 +47,20 @@ export union PassKind
 	// its edge args is what lets `foldConstOperands`'s const DCE (below) then drop a
 	// `const` whose only reader was that edge.
 	//
+	// `elimTrivialBlockArgs` folds away the phis that CARRY NOTHING — one whose every
+	// incoming value, self-references discounted, is the same value. Those are the phis the
+	// parser mints for a var it must assume the loop body might write and that the body then
+	// never writes. They are not dead (something reads them), so `pruneDeadBlockArgs` leaves
+	// them; but a PHI is exactly what the cold-spill splitter may not spill, so an idle `var`
+	// across a loop was pinned in a register where an idle `let` was spilled for free — and
+	// past the pool, a FALSE E5001. It runs after the prune (which is cheaper and removes the
+	// self-sustaining dead phis first) and before `foldConstOperands`, whose const DCE can then
+	// drop a `const` whose only reader was a folded phi's edge.
+	//
 	// `foldConstOperands` moves a const operand into an immediate so the literal never
 	// needs a register.
 	pruneDeadBlockArgs
+	elimTrivialBlockArgs
 	foldConstOperands
 end 'PassKind'
 
@@ -76,6 +87,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
 		pruneDeadBlockArgs gives PassClassification.perFunction
+		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
 	end 'classify'
 end 'classifyPass'
@@ -91,6 +103,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		semanticCheck gives CompilePhase.semanticCheck
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
+		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstOperands gives CompilePhase.foldConstOperands
 	end 'phase'
 end 'compilePhaseOfPass'
@@ -102,6 +115,7 @@ export function passKindToString(pass PassKind) returns String
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
+		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstOperands gives "foldConstOperands"
 	end 'name'
 end 'passKindToString'
@@ -124,6 +138,7 @@ export function buildDefaultPipeline() returns PassKindArray
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.pruneDeadBlockArgs)
+	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstOperands)
 	return passes
 end 'buildDefaultPipeline'
@@ -197,6 +212,7 @@ export type PassPipeline
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, funcSignatures: self.project.funcSignatures)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
+			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 			foldConstOperands then foldConstOperands(self.stdModule)
 		end 'dispatch'
 
