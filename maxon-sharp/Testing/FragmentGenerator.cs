@@ -180,28 +180,46 @@ public static partial class FragmentGenerator {
       }
     }
 
-    // On unfiltered runs, clean up orphaned fragment files and exe-staging
-    // directories for tests/specs that no longer exist. (No global cache to
-    // invalidate — orphan cleanup is the only persistent-state hygiene step.)
+    // On unfiltered runs, clean up orphaned fragment files and exe-staging directories.
+    //
+    // ORPHANED means the SPEC FILE IS GONE — not merely that this run did not select the spec.
+    // The two are very different, and conflating them destroyed committed goldens: a run skips a
+    // spec whenever it is `draft`, `status: selfhosted` (owned by the other runner), or
+    // `category: network` (excluded from the default gate). Sweeping on "not in this run's set"
+    // therefore had the C# runner DELETE the fragments of every selfhosted-owned spec, which the
+    // self-hosted runner then regenerated — the fragment churn that has always shown up in
+    // `git status` after switching runners, and which hid real codegen diffs in the noise.
+    //
+    // So: a spec directory survives if its `.md` still exists on disk, whoever runs it. Individual
+    // `.test` files are only swept inside directories THIS run actually enumerated — for a spec we
+    // skipped, we never parsed its tests and so cannot know which of its fragments are stale.
     if (filter == null) {
+      var specsOnDisk = new HashSet<string>(
+        Directory.GetFiles(specDir, "*.md").Select(Path.GetFileNameWithoutExtension)!,
+        StringComparer.OrdinalIgnoreCase);
+      var specsThisRun = new HashSet<string>(
+        specs.Select(s => Path.GetFileNameWithoutExtension(s.FilePath)),
+        StringComparer.OrdinalIgnoreCase);
+
       foreach (var specDir2 in Directory.GetDirectories(fragmentDir)) {
-        if (Path.GetFileName(specDir2) == ".spec-cache") continue;
+        var name = Path.GetFileName(specDir2);
+        if (name == ".spec-cache") continue;
+        if (!specsThisRun.Contains(name)) continue;
         foreach (var file in Directory.GetFiles(specDir2, "*.test")) {
           if (!allFragmentPaths.Contains(Path.GetFullPath(file))) {
             try { File.Delete(file); } catch { }
           }
         }
       }
-      var expectedSpecDirs = new HashSet<string>(specs.Select(s => Path.GetFileNameWithoutExtension(s.FilePath)), StringComparer.OrdinalIgnoreCase);
       foreach (var dir in Directory.GetDirectories(fragmentDir)) {
         if (Path.GetFileName(dir) == ".spec-cache") continue;
-        if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
+        if (!specsOnDisk.Contains(Path.GetFileName(dir))) {
           try { Directory.Delete(dir, recursive: true); } catch { }
         }
       }
       if (Directory.Exists(specCacheDir)) {
         foreach (var dir in Directory.GetDirectories(specCacheDir)) {
-          if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
+          if (!specsOnDisk.Contains(Path.GetFileName(dir))) {
             try { Directory.Delete(dir, recursive: true); } catch { }
           }
         }
