@@ -31,9 +31,10 @@ the divisor — and every value live across the `idiv` — OUT of `RAX`/`RDX`. I
 this from `idivReg`'s implicit-register masks (`implicitDefs = {RAX, RDX}`): the
 liveness pass forbids those registers for anything crossing the op, and forbids
 them for the divisor operand directly (which dies at the `idiv`, so the live-across
-sweep alone would miss it). The AllocChecker then verifies the whole sequence — the
-dividend reaches `RAX`, the divisor sits in a non-`RAX`/`RDX` register at the
-`idiv`, and the result is read back out — on every function of every compile.
+sweep alone would miss it). The tests below pin the whole sequence: they RUN, so a
+dividend that never reached `RAX` or a divisor colored into `RDX` computes the wrong
+quotient and the exit-code assertion catches it, and their committed `.test` goldens
+pin the emitted `mov rax` / `cqo` / `idiv` sequence itself against regression.
 
 Divide-by-zero and `INT_MIN / -1` overflow raise a hardware `#DE`, delivered by the
 runtime fault handler (a later deliverable), so there is no compiler-inserted guard.

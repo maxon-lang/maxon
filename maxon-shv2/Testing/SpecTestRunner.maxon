@@ -2,13 +2,11 @@
 // through the shv2 compiler and collect PASS/FAIL results.
 //
 // Each test is driven end-to-end through the REAL CLI as a SUBPROCESS:
-// `<compilerExe> build <fragment> -o <exeBase> --emit-ir --check-alloc`. Spawning
-// (rather than compiling in-process) is deliberate — a compiler crash is isolated to
-// the one test that triggered it instead of killing the whole runner, and the actual
-// `build` command path (arg parsing, output-path derivation) is exercised, not bypassed.
-// It is also why `--check-alloc` must be passed on the command line rather than set
-// in-process: the compile happens in another process (see CheckAllocFlag). An AllocChecker
-// panic there exits the build non-zero, which surfaces as a FAILED test.
+// `<compilerExe> build <fragment> -o <exeBase> --emit-ir`. Spawning (rather than compiling
+// in-process) is deliberate — a compiler crash is isolated to the one test that triggered it
+// instead of killing the whole runner, and the actual `build` command path (arg parsing,
+// output-path derivation) is exercised, not bypassed. A panic inside the compiler exits that
+// build non-zero, which surfaces as a FAILED test rather than a dead runner.
 //
 // Trimmed HARD from v1's SpecTestRunner: no fragment cache, no parallel worker
 // pool / IPC, no RequiredIR/lowering capture, no `--update-required`, no per-
@@ -28,20 +26,15 @@ let OutputFlag = "-o"
 let EmitIrFlag = "--emit-ir"
 let IrFileExtension = ".ir"
 
-// `--check-alloc` runs the AllocChecker on every function the test compiles. NON-NEGOTIABLE
-// on this path, and the reason the flag has to be passed HERE: each test is compiled by a
-// SUBPROCESS (`<compilerExe> build ...`), so the checker cannot be switched on from inside
-// the runner — only on that command line. A plain `build` leaves it off (it is a ~10%
-// verification tax).
-let CheckAllocFlag = "--check-alloc"
-
 // Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
 //
 // These `.test` files are GATES, not outputs (see `checkTestFragment`): the emitted Target IR is
 // compared against the committed golden and a mismatch FAILS the test. `--update-required`
 // regenerates them, and that diff is the review.
 //
-// The suite needs this AND the run, because they answer different questions:
+// TOGETHER WITH THE RUN, these two ARE the register allocator's gate — there is no in-compiler
+// allocation checker any more, and none is needed. The suite needs both, because they answer
+// different questions:
 //   * RUNNING the test proves the allocation is CORRECT — a value left in the wrong register
 //     computes the wrong answer, and the exit-code assertion catches it.
 //   * The GOLDEN proves the code did not get WORSE. An extra spill, a lost coalesce, a live range
@@ -210,13 +203,6 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
 	compileArgv.push(EmitIrFlag)
-
-	// ON unless this test (or its spec) explicitly opted out — see SpecParser's CheckAllocKey.
-	// `test.checkAlloc` is already the EFFECTIVE value (spec frontmatter with the per-test marker
-	// applied over it), so the precedence is not re-derived here.
-	if test.checkAlloc 'checkAlloc'
-		compileArgv.push(CheckAllocFlag)
-	end 'checkAlloc'
 
 	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
 		cleanup(fragmentPath, exePath: exePath, irPath: irPath)

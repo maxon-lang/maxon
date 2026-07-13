@@ -1,7 +1,7 @@
 // TargetOperands — the register allocator's OPERAND MODEL.
 //
 // Every consumer that needs "which registers does this op read, and which does it
-// write?" — dense liveness, the colorer, the AllocChecker — reads it from exactly
+// write?" — dense liveness, the cold-spill splitter, the colorer — reads it from exactly
 // ONE place: `targetOpOperands`, an EXHAUSTIVE match over every `TargetOp` with NO
 // bare `default`. So a new `TargetOp` variant is a COMPILE error here rather than a
 // silent miscompile (the ad-hoc "which field is a register / is this read-modify-
@@ -144,8 +144,8 @@ end 'operandIsDef'
 // The two-address seed `mov` is deleted: ISel emits one reuse-def op and the allocator
 // materializes the copy only when the input outlives it. `allocateReuseDef` (the
 // colorer) reads the constraint field these accessors decode to find a reuse def's
-// input operand; the biased-coloring hints (`collectReuseHints`) and the AllocChecker's
-// reuse-invariant check read it too. `targetOpOperands` SETS it via `pushReuseDef`.
+// input operand; the biased-coloring hints (`collectReuseHints`) read it too.
+// `targetOpOperands` SETS it via `pushReuseDef`.
 export function operandConstraintTag(op Operand) returns MachineWord
 	return (op shr OperandConstraintTagShift) and OperandConstraintTagMask
 end 'operandConstraintTag'
@@ -187,7 +187,7 @@ end 'operandReuseIndex'
 
 // The VALUE ID of a reuse def's input — the operand its reuse index names in `buf`.
 // The one place the "chase the reuse index to its input value" walk lives, shared by
-// the colorer's biased hints, its copy insertion, and the AllocChecker's reuse check.
+// the colorer's biased hints and its copy insertion.
 // Every reuse op carries a VIRTUAL input at coloring time (a physical one would be a
 // bug the panic surfaces). Caller must have checked `operandIsReuseDef(o)`.
 export function operandReuseInputValueId(o Operand, buf OperandList) returns ValueId

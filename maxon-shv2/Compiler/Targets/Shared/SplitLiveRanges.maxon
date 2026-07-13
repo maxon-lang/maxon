@@ -95,82 +95,6 @@
 // live sets to be editable in place, which the CSR representation is deliberately not; that is
 // the remaining super-linear term (O(function × splits)) and the natural next step.
 
-// The fresh value id a `loadRegSlot` defines, paired with the slot it reads and the ORIGINAL
-// spilled value it reloads — the AllocChecker's teeth against a wrong-slot reload.
-export type ReloadOrigin
-	export var reloadValueId as ValueId
-	export var slot as SpillSlot
-	export var originalValueId as ValueId
-
-	export static function create(reloadValueId ValueId, slot SpillSlot, originalValueId ValueId) returns ReloadOrigin
-		return Self{reloadValueId: reloadValueId, slot: slot, originalValueId: originalValueId}
-	end 'create'
-end 'ReloadOrigin'
-
-export typealias ReloadOriginArray = Array with ReloadOrigin
-
-// The origin record for a reload's fresh value id, or `none` when the value is not a reload
-// (a normal SSA value the checker interprets without slot tracking).
-export union ReloadOriginLookup
-	none
-	origin(slot SpillSlot, originalValueId ValueId)
-end 'ReloadOriginLookup'
-
-// The reload origins, INDEXED — two dense columns, so the AllocChecker's per-op questions are
-// O(1) rather than a scan of every origin. It asks two of them, once per spill op:
-//
-//  • `originOf(freshId)` at every `loadRegSlot` — a linear scan here was O(reloads × origins).
-//  • `storedValueOfSlot(slot)` at every `storeSlotReg` — the store-side half of the slot-chain
-//    identity check, which scanned every origin looking for ones naming this slot. Every spilled
-//    value gets its OWN slot, so all origins for a slot share one `originalValueId` and the
-//    column holds it directly; a future slot-COALESCING pass must revisit this (the invariant it
-//    would break is named in `AllocChecker.recordSpill`).
-//
-// On a spill-heavy program both scans were O(splits²), which is the same shape — and the same
-// mistake — as the per-candidate rescans the splitter itself had.
-export type ReloadOriginIndex
-	// freshValueId -> index into `origins`, or `origins.count()` for "not a reload".
-	var originByValue as CfgIndexArray
-	// slot -> the value stored there, or `noValue` for "nothing stored there yet".
-	var storedBySlot as ValueIdArray
-	var origins as ReloadOriginArray
-	var noValue as ValueId
-
-	export static function build(origins ReloadOriginArray, valueCount ValueId, slotCount SpillSlot) returns ReloadOriginIndex
-		let notAReload = origins.count()
-		var originByValue = filledColumn(valueCount, value: notAReload)
-		var storedBySlot = filledColumn(slotCount, value: valueCount)
-
-		for i in 0 upto origins.count() 'each'
-			let o = try origins.get(i) otherwise panic("ReloadOriginIndex.build: origins.get OOB")
-			try originByValue.set(o.reloadValueId, value: i) otherwise panic("ReloadOriginIndex.build: reload value {o.reloadValueId} is outside the function's value space")
-			try storedBySlot.set(o.slot, value: o.originalValueId) otherwise panic("ReloadOriginIndex.build: slot {o.slot} is outside the spill plan's slot count")
-		end 'each'
-
-		return Self{originByValue: originByValue, storedBySlot: storedBySlot, origins: origins, noValue: valueCount}
-	end 'build'
-
-	export function originOf(reloadValueId ValueId) returns ReloadOriginLookup
-		let i = try self.originByValue.get(reloadValueId) otherwise panic("ReloadOriginIndex.originOf: value {reloadValueId} out of range")
-		if i == self.origins.count() 'notAReload'
-			return ReloadOriginLookup.none
-		end 'notAReload'
-		let o = try self.origins.get(i) otherwise panic("ReloadOriginIndex.originOf: origins.get OOB")
-		return ReloadOriginLookup.origin(o.slot, originalValueId: o.originalValueId)
-	end 'originOf'
-
-	// The value every reload of `slot` claims to reload, or `noValue` when no reload reads it.
-	export function reloadedValueOfSlot(slot SpillSlot) returns ValueId
-		return try self.storedBySlot.get(slot) otherwise panic("ReloadOriginIndex.reloadedValueOfSlot: slot {slot} out of range")
-	end 'reloadedValueOfSlot'
-
-	// The "no reload reads this slot" marker `reloadedValueOfSlot` returns (a spilled value whose
-	// every use preceded the peak has a store but no reload).
-	export function noReloadOfSlot() returns ValueId
-		return self.noValue
-	end 'noReloadOfSlot'
-end 'ReloadOriginIndex'
-
 // The outcome of a lineage lookup: `source(id)` for a splitter-minted fresh value (the
 // value it derives from), `none` for any value the splitter did not mint. A union rather
 // than a sentinel id — a real ValueId 0 would be indistinguishable from "not found".
@@ -219,33 +143,6 @@ export type SplitLineage
 		return SplitLineageLookup.none
 	end 'sourceOf'
 end 'SplitLineage'
-
-// What the splitter produced for one function: the reload origins (for the checker) and the
-// number of slots it allocated (each spilled value gets its own — no slot coalescing yet, a
-// future optimization). `slotCount * SpillSlotBytes == func.stackSize` by construction.
-export type SpillPlan
-	export var origins as ReloadOriginArray
-	export var slotCount as SpillSlot
-
-	export static function create(origins ReloadOriginArray, slotCount SpillSlot) returns SpillPlan
-		return Self{origins: origins, slotCount: slotCount}
-	end 'create'
-
-	export static function empty() returns SpillPlan
-		return Self{origins: ReloadOriginArray.create(), slotCount: 0}
-	end 'empty'
-end 'SpillPlan'
-
-// The splitter's result: the final liveness (recomputed on the split IR, `maxPressure ≤
-// pool` guaranteed) so the caller reuses it for coloring, plus the spill plan for the checker.
-export type SplitOutcome
-	export var liveness as LivenessResult
-	export var plan as SpillPlan
-
-	export static function create(liveness LivenessResult, plan SpillPlan) returns SplitOutcome
-		return Self{liveness: liveness, plan: plan}
-	end 'create'
-end 'SplitOutcome'
 
 // The peak-pressure program point: the op with the maximum live-before population, its owning
 // local block, and the live-before set there (the candidate spill pool). `found` is false when
@@ -343,19 +240,18 @@ end 'SpillChoice'
 
 // Split one function's live ranges so the colorer finds every program point within its pool.
 // Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and
-// returns the final liveness + the spill plan. Called by `allocateFunction` BEFORE coloring.
+// returns the final liveness (recomputed on the split IR, `maxPressure ≤ pool` guaranteed) so
+// the caller reuses it for coloring. Called by `allocateFunction` BEFORE coloring.
 //
 // `throws CompileError` because a HOT overflow — a program point over its pool where NO
 // crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
 // panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
 // diagnostic maps each blocking Target ValueId back to its source span through.
-export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, stats RegAllocStats, project Project) returns SplitOutcome throws CompileError
+export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
 	let poolSize = regMaskPopcount(pool)
-	var origins = ReloadOriginArray.create()
 	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
 	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
-	// Rule-3 panic (see SplitLineage). Built alongside `origins` (which the AllocChecker needs
-	// for the reload SLOT identity `SplitLineage` does not carry).
+	// Rule-3 panic (see SplitLineage).
 	var lineage = SplitLineage.create()
 	var nextSlot = 0 as SpillSlot
 
@@ -412,7 +308,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 			remat(v) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
-			spill(v) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, slot: nextSlot, origins: origins, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			spill(v) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, slot: nextSlot, nextValueId: nextValueId, stats: stats, lineage: lineage)
 		end 'act'
 		match choice 'countSlot'
 			spill then nextSlot = nextSlot + 1
@@ -442,7 +338,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		panic("splitLiveRanges: '{func.name}' finished with maxPressure {liveness.maxPressure} still > pool {poolSize} — the splitter's post-condition (every point within its pool) was violated")
 	end 'residual'
 
-	return SplitOutcome.create(liveness, plan: SpillPlan.create(origins, slotCount: nextSlot))
+	return liveness
 end 'splitLiveRanges'
 
 // Nothing crossing the peak can be relieved. What that MEANS depends on which overflow it is —
@@ -1199,7 +1095,7 @@ end 'markBlocksReachableFromPeak'
 // The index is read ONLY through fields that survive the insertions below: an op's `module.ops`
 // index (the table is append-only) and a use's owning block. Positions inside a block shift as ops
 // are spliced in, and every insertion re-derives its own (see `positionInBlock`).
-function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, slot SpillSlot, origins ReloadOriginArray, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, slot SpillSlot, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let peakSeq = peak.peakSeq
 	let placement = placementOf(peak)
 	let useCount = index.useCount(valueId)
@@ -1226,7 +1122,6 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 		// use in the block — including the edge arg, which is read after all of them.
 		let blockLocal = index.useBlockAt(record)
 		insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
-		origins.push(ReloadOrigin.create(freshId, slot: slot, originalValueId: valueId))
 		// The reload id derives from the value it reloads — record it so a reload id in an
 		// E5001 blocking set chases back to that value's source origin (see SplitLineage).
 		lineage.record(freshId, sourceId: valueId)

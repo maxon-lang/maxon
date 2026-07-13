@@ -88,8 +88,8 @@ export typealias SpillSlot = int(0 to u64.max)
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
 // consumed by the instruction scheduler + register allocator. The scheduling
 // flags plus the implicit-GPR read/def masks the register allocator's liveness
-// and AllocChecker consume — same "you cannot add an op without declaring its
-// facts" discipline `StdOpMeta` enforces.
+// consumes — same "you cannot add an op without declaring its facts" discipline
+// `StdOpMeta` enforces.
 export type TargetOpMeta
 	// Accesses memory / has a side effect the scheduler must order as a barrier.
 	export let isMemory as bool
@@ -102,8 +102,7 @@ export type TargetOpMeta
 	export let setsFlags as bool
 	// Registers this op READS without naming them as an explicit operand: R8 for
 	// `ret` today; the volatile set a `call` reads/clobbers grows in when M5
-	// colors calls. Liveness folds these into `forbiddenPhys`; the AllocChecker
-	// asserts each is defined at the op.
+	// colors calls. Liveness folds these into `forbiddenPhys`.
 	export let implicitUses as RegMask
 	// Registers this op WRITES without an explicit operand — a `call`'s
 	// caller-saved clobber set (M5). 0 for every op the M5.1 spine colors, so a
@@ -127,9 +126,8 @@ export union TargetOp
 	// implicitUses = 0x100 = the R8 bit (`X64Register.r8.rawValue` == 8, so 1<<8):
 	// `ret` reads the primary-return register. This is what lets the register
 	// allocator ADMIT R8 into the pool safely — forbiddenPhys proves nothing is live
-	// across the `mov r8, retval` return move, and the AllocChecker verifies R8 holds
-	// a value at every `ret`. (A union-backing literal cannot reference a named `let`,
-	// so the mask is written inline.)
+	// across the `mov r8, retval` return move. (A union-backing literal cannot
+	// reference a named `let`, so the mask is written inline.)
 	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, setsFlags: false, implicitUses: 0x100, implicitDefs: 0}
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
@@ -223,8 +221,8 @@ export union TargetOp
 	// CALLEE-saved and DELIBERATELY EXCLUDED (rbx being wrongly clobbered was a shipped
 	// v1 regalloc bug — project_regalloc_crosscall_spill_fixes). The liveness pass folds
 	// this mask into `forbiddenPhys` for every value live ACROSS a call, so such a value
-	// is forced into a callee-saved register; the AllocChecker then verifies it survives
-	// (a value left in a clobbered register reads `noValue` at its next use → a panic).
+	// is forced into a callee-saved register — and `assertCallClobberConsistent` guards
+	// the mask against drifting apart from the pool it is subtracted from.
 	// A union-backing literal cannot reference a named `let`, so the mask is inline.
 	callDirect(targetName String) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, setsFlags: true, implicitUses: 0, implicitDefs: 0xFC7}
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
@@ -236,9 +234,9 @@ export union TargetOp
 	// operand): implicitUses = 0x1 (the RAX bit — `X64Register.rax.rawValue` == 0, so
 	// 1<<0 — it READS RAX), implicitDefs = 0x4 (the RDX bit — `rdx.rawValue` == 2, so
 	// 1<<2 — it WRITES RDX). Liveness folds implicitDefs into `forbiddenPhys` (a value
-	// live across `cqo` must avoid RDX); the AllocChecker asserts RAX holds a value here
-	// (the dividend the div lowering moved in). setsFlags is false — `cqo` leaves EFLAGS
-	// untouched. (A union-backing literal cannot reference a named `let`, so the masks
+	// live across `cqo` must avoid RDX), and implicitUses keeps RAX — which the div
+	// lowering moved the dividend into — reserved across it. setsFlags is false — `cqo`
+	// leaves EFLAGS untouched. (A union-backing literal cannot reference a named `let`, so the masks
 	// are written inline.) APPENDED at the END of the union (after the call band) so no
 	// existing `… to iatCall` range arm can SILENTLY swallow it — each such arm instead
 	// fails to compile until it is consciously extended (the band-append invariant).
@@ -246,9 +244,9 @@ export union TargetOp
 	// Signed divide RDX:RAX by `divisor` (`idiv r/m64`, REX.W F7 /7): QUOTIENT → RAX,
 	// REMAINDER → RDX. `divisor` is the ONE explicit virtual USE (any GPR the allocator
 	// keeps out of RAX/RDX). implicitUses = 0x1 (reads RAX — the dividend low half; it
-	// also reads RDX, but that is EXCLUDED from implicitUses because `cqo` set RDX to the
-	// AllocChecker's untracked `noValue`, so asserting a tracked value there would false-
-	// positive — RDX's role is captured entirely by implicitDefs). implicitDefs = 0x5
+	// also reads RDX, but that is EXCLUDED from implicitUses because `cqo` — not any
+	// tracked value — is what puts RDX's contents there, so RDX's role is captured
+	// entirely by implicitDefs). implicitDefs = 0x5
 	// (the RAX bit 0x1 OR the RDX bit 0x4 — it WRITES both), which the clobber→forbidden
 	// path uses to keep every value live across the idiv, AND the divisor operand itself,
 	// out of RAX/RDX. idiv TRAPS (#DE) on divide-by-zero and INT_MIN / -1; the trap is a

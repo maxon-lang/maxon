@@ -291,11 +291,13 @@ export type IrModule uses Op
 	// THE ONLY WAY a conditional branch may enter a block: the recorded index is what makes
 	// a block's second successor O(1) to find instead of a scan of every op in the block,
 	// and a `jcc` appended through plain `appendOp` would leave that index unset — an edge
-	// missing from every CFG the allocator builds. `AllocChecker.checkCondBranchIndex`
+	// missing from every CFG the allocator builds. `TargetLiveness.checkCondBranchIndex`
 	// asserts, against the ops themselves, that no such op ever got in another way.
 	//
 	// Generic over `Op` like the rest of this container, so it cannot itself check that the
-	// op IS a conditional branch; that check lives with the dialect, in the AllocChecker.
+	// op IS a conditional branch — which is exactly why that sweep has to exist: `appendOp`
+	// cannot refuse a `jcc` either. The op-kind check lives with the dialect, in
+	// `TargetLiveness`.
 	export function appendCondBranch(block IrBlock, op Op)
 		if block.hasCondBranchOp() 'second'
 			panic("appendCondBranch: block '{block.label}' already has a conditional branch at op {block.condBranchIndex()} — a block has at most one")

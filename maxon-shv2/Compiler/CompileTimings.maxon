@@ -153,11 +153,10 @@ export type CompileTimings
 	end 'unattributedNanos'
 end 'CompileTimings'
 
-// Time inside the `regalloc` phase that none of its six sub-phases claimed: the
-// per-module `splitCriticalEdges`, the per-function RPO block reordering, and the
-// driver loop itself. Same disjointness contract as `CompileTimings.unattributedNanos`,
-// enforced the same way — the sub-phases are intervals INSIDE the regalloc wall, so
-// exceeding it means a sub-phase timer overlaps another.
+// Time inside the `regalloc` phase that none of its sub-phases claimed: the driver loop
+// itself. Same disjointness contract as `CompileTimings.unattributedNanos`, enforced the
+// same way — the sub-phases are intervals INSIDE the regalloc wall, so exceeding it means
+// a sub-phase timer overlaps another.
 function regAllocUnattributedNanos(timings CompileTimings) returns DurationNanos
 	let wall = timings.phaseNanosOf(CompilePhase.regalloc)
 
@@ -200,7 +199,7 @@ export function compileTimingsReport(timings CompileTimings) returns String
 	return msg
 end 'compileTimingsReport'
 
-// The allocator's six sub-phases, indented under `regalloc`. Their percentages are
+// The allocator's sub-phases, indented under `regalloc`. Their percentages are
 // taken against the WHOLE-COMPILE total (not against the regalloc wall), so a reader
 // can compare "liveness" directly against "parse" — the question the table exists to
 // answer is where the compile's time goes, not where the allocator's does.
@@ -221,8 +220,8 @@ end 'timingRow'
 //
 // The timers read `Clock.nowNanos` (a monotonic ~100 ns clock) rather than `Clock.nowMs`,
 // whose GetTickCount64 backing has a ~15.6 ms TICK — coarser than most phases being
-// measured. On that clock every per-function sub-phase read 0 or 16 ms, and the
-// AllocChecker's share of a compile swung between 9.6% and 14.4% across identical runs.
+// measured. On that clock every per-function sub-phase read 0 or 16 ms, and a single
+// sub-phase's share of a compile swung between 9.6% and 14.4% across identical runs.
 // The reading was quantization, not signal. Nanoseconds are stored; milliseconds are
 // merely how a human reads the row.
 function millisText(nanos DurationNanos) returns String

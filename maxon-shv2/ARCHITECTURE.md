@@ -72,13 +72,12 @@ registry lives in `Compiler/Diagnostics.maxon`; `E3010` is the catch-all for
 strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
 *emit* (Workstream R), the parallel compilation driver, arm64/wasm. See `PLAN.md`.
 
-**The gate battery** (all four must be green before a commit):
+**The gate battery** (all three must be green before a commit):
 | Gate | What it proves |
 |---|---|
-| `maxon-shv2 spec-test` | **75 passing / 0 failing** over `specs-shv2/*.md` — the functional suite |
-| `AllocChecker` | Every function of every `spec-test` / `verify-warm-rebuild` compile is symbolically verified for register correctness (a failure panics the build). Opt-out per spec/test; on a plain `build` it is opt-**in** via `--check-alloc` |
+| `maxon-shv2 spec-test` — the RUN | **84 passing / 0 failing** over `specs-shv2/*.md`. Each test compiles a program, **runs** it, and asserts its exit code — so an allocation that leaves a value in the wrong register computes the wrong answer and FAILS. This is the correctness gate on the register allocator. |
+| `specs-shv2/fragments/x64-windows/**` — the GOLDENS | Committed Target-IR goldens, **compared** by the same `spec-test` run (`SpecTestRunner.checkTestFragment`): a mismatch FAILS the test with `codegen changed`. This is the *quality* gate — an extra spill, a lost coalesce, a needlessly widened live range all still return the right answer, so only the pinned IR sees them. They also reach where the run cannot: one execution takes ONE path, the golden pins EVERY block. `--update-required` regenerates them, and that diff is the review. |
 | `maxon-shv2 verify-warm-rebuild <file>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) |
-| `specs-shv2/fragments/x64-windows/**` | Committed Target-IR goldens — every codegen change shows up in `git diff` |
 
 ---
 
@@ -118,12 +117,11 @@ is the index.
   entries and `terminatorIndex` are indices into that array; a pass that appended or
   compacted instead would invalidate every reference in the function.
   *(→ Register allocator)*
-- **The `AllocChecker` runs on every function of every `spec-test` compile** (and of
-  `verify-warm-rebuild`), because spec fragments are *outputs*, not gates: the suite
-  would go green on a wrong-but-self-consistent allocator. It is an **opt-out** there
-  (`checkAlloc: false` per spec / per test), never an opt-in. A plain `build` skips it
-  — it is a pure verification pass and cannot change an emitted byte — and re-arms it
-  with `--check-alloc`. *(→ Register allocator)*
+- **The allocator is gated by the SUITE, not by a pass inside the compiler** — running a
+  spec test proves the allocation is CORRECT (a wrong register → a wrong exit code), and
+  the committed `.test` goldens prove it did not get WORSE (they are *compared*, and pin
+  every block of every function). There is deliberately no in-compiler allocation
+  verifier. *(→ Register allocator)*
 - **Ownership-kind lattice** — `trivial · owned · borrow · shared`, with three
   first-class homes and zero sidetables. Declared, inert until the ownership stage.
   *(→ Own tier)*
@@ -136,8 +134,8 @@ is the index.
 
 | Command | Purpose |
 |---|---|
-| `maxon-shv2 build <file\|dir> [-o out] [--emit-ir] [--check-alloc]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. `--check-alloc` runs the `AllocChecker` (off by default; a pure verification pass worth ~10% of compile time — it cannot change the emitted bytes). |
-| `maxon-shv2 spec-test [dir]` | Run the spec suite (default `specs-shv2`) and regenerate fragments. |
+| `maxon-shv2 build <file\|dir> [-o out] [--emit-ir]` | Compile to a PE. A single-file build writes next to the source (`basic.maxon` → `basic.exe`). `--emit-ir` also prints the Target module to `<output>.ir`. |
+| `maxon-shv2 spec-test [dir] [--update-required]` | Run the spec suite (default `specs-shv2`): compile each test, run it, check its exit code, and compare its Target IR against the committed golden. `--update-required` rewrites the goldens instead of checking them. |
 | `maxon-shv2 verify-warm-rebuild <file>` | The determinism + incrementality gate. |
 
 `--log=<category>:<level>` enables the `Logger` categories (`codegen` carries the
@@ -840,8 +838,7 @@ across the module (outside the per-function loop, because inserting a block muta
 | 1 | **Split** | `SplitLiveRanges.maxon` + `HallCondition.maxon` | Cold-spill live-range splitting. Finds every point that cannot be colored — including one whose values are *confined* to a register subset too small for them (Hall) — and relieves it. Mutates the IR and returns the final `LivenessResult`. |
 | 2 | **Color** | `RegisterAllocator.maxon` | Biased forward-sweep coloring. Records the reuse copies it needed. |
 | 3 | **Plan SSA destruction** | `SsaDestruction.maxon` | Builds the per-edge parallel-copy plan; does not commit. |
-| 4 | **Check** | `AllocChecker.maxon` | Symbolically verifies the still-virtual program + coloring + plans. |
-| 5 | **Commit** | `SsaDestruction.maxon` | `applyAllocation` rewrites ops in place, splices copies, clears the phi model. |
+| 4 | **Commit** | `SsaDestruction.maxon` | `applyAllocation` rewrites ops in place, splices copies, clears the phi model. |
 
 > **INVARIANT: coloring rewrites ops IN PLACE, at the same `module.ops` index.**
 > `applyAllocation` reads the op at index *i*, rebuilds it with colored operands, and writes it
@@ -1066,55 +1063,38 @@ at the predecessor's end (single-successor pred) or the successor's start (singl
 succ) — which is why **every phi-carrying critical edge is split by a pre-pass before coloring**,
 so a move never runs on a sibling edge.
 
-### The `AllocChecker`
+### What gates the allocator
 
-A symbolic verifier that abstractly interprets the allocated function — per-op `preg → vreg`
-state, per-edge parallel-copy simulation, spill store→slot→reload identity chains, the
-reuse-invariant (dest holds the reuse input at the op), and the incoming ABI registers seeded at
-entry — and asserts that every use reads the register holding its value. A failure **panics** the
-build, which under `spec-test` fails the test that triggered it.
+**There is no in-compiler allocation verifier, and none is needed.** Two things gate the
+allocator, and both live in the suite:
 
-**Where it runs** — it is a *verification* pass costing ~10% of total compile time, so it is
-always on where it is the actual safety net and opt-in where it is merely a tax:
-
-| Context | AllocChecker | Why |
+| Gate | Question it answers | Why the other one cannot |
 |---|---|---|
-| `spec-test` | **ON** (default, per test) | the only real gate — see below |
-| `verify-warm-rebuild` | **ON** (forced) | dev gate; byte-identity across two cold compiles is satisfied just as well by two *identically wrong* compiles, so determinism alone proves nothing about correctness |
-| `build` | **OFF** unless `--check-alloc` | a production build should not pay ~10% for a verification pass |
+| **The RUN** (`spec-test` compiles each test, executes it, asserts its exit code) | *Is the allocation CORRECT?* A value left in the wrong register — an aliased colour, a mis-ordered edge copy, a reload from the wrong slot, a clobbered parameter — computes the wrong answer, and the exit-code assertion catches it end-to-end. | A golden cannot say whether the answer is *right*; it only says the code is what it was. |
+| **The GOLDENS** (`specs-shv2/fragments/**.test`, **compared** by `SpecTestRunner.checkTestFragment`) | *Did the code get WORSE?* An extra spill, a lost coalesce, a needlessly widened live range: each still returns the right answer, so a suite that only *runs* the program stays green while codegen quietly rots. The goldens also reach where the run cannot — one execution takes ONE path, but the golden pins **every block** of the function, including blocks that path never enters. | The run cannot see quality, and cannot see unexecuted blocks. |
 
-**Why `spec-test` must never turn it off.** `SpecTestRunner` **regenerates** the committed
-fragments on every run: they are **outputs, not gates**. A wrong-but-self-consistent allocator
-therefore produces a self-consistent fragment and a **green suite**. The checker is the one thing
-in that path that can say *no*. This is not hypothetical — it has caught real silent miscompiles
-the full suite passed (the parameter-capture read-after-clobber in `functions.md`), and it is
-directly reproducible: sabotage `chooseRegister` to honour a copy hint without checking the
-register is free, and `functions/call-in-loop` still **passes** with the checker off, on a
-program the checker proves is miscompiled.
+A golden mismatch FAILS the test (`codegen changed — golden fragment mismatch`); `--update-required`
+regenerates them, and **that diff is the review**.
 
-**Why the split is safe.** The checker is *pure*: it reads the IR plus the allocation plan and
-either panics or does nothing. It cannot change an emitted byte, so `build` and
-`build --check-alloc` emit **identical** output — the flag decides only whether a wrong byte is
-*caught*, never which byte is produced. (It runs before `applyAllocation` commits the plan.)
+**This pairing is teeth-tested.** Disable the copy hint in `chooseRegister`
+(`if false and hints.hasCopy(v)`) — a change that produces *correct but worse* code — and the
+suite goes **72 passed, 12 failed**: all twelve are `codegen changed`, **zero** are behavioural.
+That is exactly the split the two gates are supposed to produce, and it is what says the quality
+gate is armed.
 
-**Opt-out, never opt-in.** Under `spec-test` the checker defaults to ON for every test, and a
-spec must deliberately *say* it does not want it:
-
-* per spec — `checkAlloc: false` in the YAML frontmatter, beside `status:`
-* per test — a `<!-- checkAlloc: false -->` marker on a line *after* that test's
-  `<!-- test: NAME -->` marker (overrides the spec-level value for that one test)
-
-Any value other than `true`/`false` is a hard `CompileError.specError` that aborts the run — an
-unreadable gate directive is never guessed at. The polarity is the whole point: the checker's
-value is that it runs over code nobody thought to check. Every allocator bug it has caught
-surfaced where no author would have ticked a box — the parameter-capture clobber in `functions`,
-the two-sequential-loops colorer panic in `while-loops`, the false-E5001 class in ordinary loop
-code; **none** in an allocator-focused spec. An opt-in would arm it exactly where someone already
-suspected a problem, i.e. where it is least needed.
-
-The setting rides on `Project.checkAlloc` (already threaded into the backend, so no global and no
-new parameter). `spec-test` passes `--check-alloc` on the **subprocess** `build` it spawns per
-test — the compile happens in another process, so the flag is the only channel available.
+> **HISTORY.** M5 carried a third gate, an `AllocChecker`: a symbolic verifier that abstractly
+> interpreted the allocated function and asserted every use read the register holding its value.
+> It existed because the fragments were then **regenerated** on every run — *outputs*, not gates —
+> so the suite would go green on a wrong-but-self-consistent allocator, and the checker was the
+> only thing in that path that could say *no*. It earned its keep (it caught the parameter-capture
+> read-after-clobber, a real shipped miscompile). Commit `41b498a1d` turned the fragments into
+> **compared goldens**, which — together with the run, which was always there — decides everything
+> the checker decided. It was then spending 7–10% of every spec-test compile (its own `checking`
+> sub-phase timer: 13.7 ms of 192 ms on a 300-function benchmark) to re-derive a verdict the suite
+> already reached, so it was removed. Its one check that was *not* about allocation — the
+> CFG `condBranch`-index completeness sweep — was kept and moved to `TargetLiveness`
+> (see *The `condBranch` index* below), where it now runs on **every** build rather than only under
+> `spec-test`.
 
 ### The register pool and ABI
 
@@ -1147,9 +1127,10 @@ unsoundness in `forbidOperandsFromImplicit`.
 Parameter **capture** at entry (`mov v_i, argReg[i]`, a physical *source*) needed its own
 protection, because the arg-setup forbidding is a physical-def mechanism and does not mirror to
 sources: each parameter is forbidden every *other* parameter's incoming register, so a parameter
-can only take its own incoming register or a non-argument register. The `AllocChecker` seeds each
-parameter in its incoming register at entry so it models this and catches violations. (The entry
-move elides whenever the value lands in its own argument register.)
+can only take its own incoming register or a non-argument register. (The entry move elides
+whenever the value lands in its own argument register.) This class **shipped once as a silent
+miscompile**; what holds it now is that a clobbered incoming register hands the callee a wrong
+argument, so the multi-parameter tests in `functions.md` return the wrong exit code and FAIL.
 
 **`idiv`/`mod`** is lowered as `mov rax, dividend; cqo; idivReg divisor; mov result, rax|rdx`, with
 the divisor left VIRTUAL. Two mechanisms keep it out of RAX/RDX: the clobber→forbidden path
@@ -1180,7 +1161,6 @@ to be iterated**:
 | site | was | now |
 |---|---|---|
 | `seedInUse` (colorer) | O(blocks × values), once per block | O(live) — `bitsetCollectRow` |
-| `seedRegState`, `checkEdge` (AllocChecker) | O(blocks × values), O(edges × values) | O(live) |
 | `applyForbidden` (liveness) | O(clobber-ops × values × operands) — every call | O(live) |
 | `deadPhiCountForBlock` | re-swept each block + 2 heap allocs per call | recorded once by the sweep that already computes it |
 | liveness fixpoint inner step | 9 row passes per block per iteration | 2 (`bitsetOrAndNotRow`, `bitsetTransferRow`) |
@@ -1228,12 +1208,24 @@ allocator bug. It is enforced in three places, none of them a hope:
 |---|---|---|
 | `IrModule.appendCondBranch` — the ONLY way a conditional branch enters a block (`lowerCondBranch` is its one caller) | O(1), always | the index is *set*, and a block gets at most one |
 | `IrModule.appendOp` | O(1), always | **no op may be appended past a conditional branch** — it would run only on the not-taken path (a miscompile independent of the CFG), and would hide an edge behind an op the builder no longer scans |
-| `AllocChecker.checkCondBranchIndex` (check D) | O(ops), under `checkAlloc` | against the OPS: the block's `jcc` set is exactly what `condBranch` names, and a two-way block's terminator is a `jmp` |
+| `TargetLiveness.condBranchTargetOf` | O(1), always | the op **at** the recorded index **is** a `jcc` — so a stale index, or one set by something that is not a branch, cannot survive a CFG build |
+| `TargetLiveness.checkCondBranchIndex` | O(ops in the block), always | the **converse**, against the OPS: the block's `jcc` set is exactly what `condBranch` names, and a two-way block's terminator is a `jmp` |
 
-The O(ops) completeness sweep is the very scan the index removed, which is why it lives behind
-`Project.checkAlloc` — `spec-test` and `verify-warm-rebuild` pay it on every function of every run,
-a production `build` does not. Same policy as the rest of the AllocChecker: the flag decides whether
-a wrong byte is *caught*, never which byte is *produced*.
+**Why the O(ops) sweep is not redundant, given the three O(1) guards.** `IrModule` is generic over
+`Op` and therefore **cannot ask whether an op is a conditional branch** — `appendCondBranch`'s own
+comment says so. `appendOp` can only refuse to append *past* a branch it already knows about; it
+cannot refuse a `jcc` appended to a block that has not recorded one **yet**, and such a block's
+then-edge would then be missing from every CFG built from it. (`SplitLiveRanges` widens the hole: it
+mints its ops through its *own* append — push to `module.ops`, then `opRefs.insert` — bypassing
+`IrModule.appendOp` entirely.) `condBranchTargetOf` checks only the ops the index *names*; nothing
+but this sweep looks at the ops it does **not** name. It is what makes the class unspellable rather
+than merely unlikely.
+
+**Where it runs.** `buildFuncCfg` — once per function, on **every** build (it used to be an
+`AllocChecker` check, and so ran only under `spec-test` / `verify-warm-rebuild`). That is the sole
+constructor of the CFG the allocator consumes, so the invariant is checked exactly where it is
+relied on; and it is asymptotically **free** there, because `scanFunctionValueCount` beside it
+already walks every op of the function. It adds one op-kind match per op and no new traversal.
 
 Two scans died with it. `SsaDestruction.retargetControlOp` was walking a predecessor's whole op list
 to find the `jcc` it had to redirect. And `insertReloadAtBlockEnd` — the splitter's "put the reload
@@ -1648,17 +1640,20 @@ shv2-native) and compares; for an `exitCode` test it runs the produced exe and c
 `Main` resolves the compiler via `Process.executablePath()` (the runner tests itself), prints
 per-test PASS/FAIL and `N passed, M failed`, and **exits non-zero iff any failed**.
 
-**Fragments.** Every run regenerates `specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test
-source + its generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `match`
-over every `TargetOp`, so a new op is a compile error, never a silent `??`), written through
-`build --emit-ir`; or the normalized diagnostic for an error test. The fragments are
-byte-deterministic and committed, so `git diff` surfaces every codegen change in review.
+**Fragments.** `specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test source + its
+generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `match` over every
+`TargetOp`, so a new op is a compile error, never a silent `??`), captured through `build --emit-ir`;
+or the normalized diagnostic for an error test. They are byte-deterministic and committed.
 
-**Fragment writing is a pure side effect** — it never changes `spec-test`'s pass/fail or exit code.
-Fragments are outputs, not gates; that is precisely why the `AllocChecker` exists, and why the
-runner spawns each test's `build` with **`--check-alloc`** (see *The `AllocChecker`*). The compile
-runs in a subprocess, so that flag is the only channel through which the checker can be armed.
-It is on for every test unless the spec or the test explicitly opts out.
+**Fragments are GATES, not outputs.** `checkTestFragment` **compares** the emitted IR against the
+committed golden and FAILS the test on a mismatch (`codegen changed — golden fragment mismatch`).
+`--update-required` rewrites them instead of checking, and that diff is the review. The golden check
+runs only *after* the behaviour check has passed — a failing test's IR is noise, and reporting a
+golden mismatch on top of it would bury the real failure.
+
+Together with the run, this is what gates the register allocator (see *What gates the allocator*):
+the run proves the allocation is **correct**, the golden proves it did not get **worse** — including
+in blocks the test's single execution path never enters.
 
 ## Coverage scaffold
 

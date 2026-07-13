@@ -278,9 +278,9 @@ type StdToX64Lowering
 	// Modelled as a copy from a PHYSICAL source, so the existing `collectOpHints` fixed-
 	// register hint (mov-to-virtual from a physical source) biases the parameter value
 	// toward its own argument register — when free, the coloring lands it there and this
-	// move self-elides. The AllocChecker treats it as a copy: it does not assert the
-	// physical source (an incoming register the caller populated, untracked at entry) and
-	// establishes `resultId` in its color, so downstream uses verify.
+	// move self-elides. `collectEntryParamCaptures` finds these moves again, and the
+	// cross-param forbidding it drives is what stops one capture's DESTINATION from
+	// clobbering a later capture's incoming register before it is read.
 	function lowerParam(resultId ValueId, index ParamCount, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(argRegisterAt(index))))
 	end 'lowerParam'
@@ -299,9 +299,7 @@ type StdToX64Lowering
 	// argument's register before any later move overwrites it. The `callDirect` carries
 	// no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to
 	// values live across the call (never to the just-established argument registers), and
-	// `forbidOperandsFromImplicit` is a no-op on it. The AllocChecker verifies each
-	// argument reaches its register (the arg move asserts its source and writes argReg[k])
-	// and that no value live across the call sits in a clobbered register.
+	// `forbidOperandsFromImplicit` is a no-op on it.
 	function lowerCall(resultId ValueId, callee String, args ValueIdArray, dstBlock IrBlock)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")

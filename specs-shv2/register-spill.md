@@ -103,14 +103,13 @@ values *across* the point — a store before it and a reload after — exactly t
 machinery. So `maxPressure ≤ pool` is necessary but not sufficient; the splitter checks each
 op against its own reduced pool.
 
-Every allocation — including these spills and reloads — is verified by the
-`AllocChecker`, which tracks both `register → value` and `slot → value` and asserts
-the store→slot→reload chain preserves value identity **from both ends**: each store
-supplies exactly the value every reload of its slot expects (store side), and each
-reload reads the slot holding the value it is meant to reload (reload side). A chain
-that does not preserve identity — a mis-targeted store, a reload with the wrong origin,
-a wrong-slot or never-written reload — fails the build rather than shipping a wrong
-answer.
+A store→slot→reload chain that does not preserve value identity — a mis-targeted store,
+a wrong-slot reload, a reload of a slot nothing wrote — hands a use the wrong value, so
+the program computes the wrong answer and the exit-code assertion below fails. The
+committed `.test` goldens carry the other half: they pin *how many* stores and reloads
+each function emits and *where*, so a spill that leaks into a loop body, or a reload
+that reappears at every use, fails as a golden mismatch even though the answer is still
+right.
 
 ## Tests
 

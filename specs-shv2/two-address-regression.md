@@ -25,8 +25,9 @@ fragment below changes visibly.
 
 The complementary case — a two-address op whose input genuinely OUTLIVES it (`b = a -
 b` with `a` loop-invariant) — DOES need one copy, because the input must be preserved.
-That copy is correct, is verified by the AllocChecker's reuse-invariant check, and the
-program still computes the right answer.
+That copy is correct: the program still computes the right answer, and the fragment
+below pins the single `mov` so neither a lost copy (a wrong answer) nor an extra one
+(worse code) goes unnoticed.
 
 ## Tests
 
@@ -69,8 +70,8 @@ end 'main'
 <!-- test: reuse-copy-outlives -->
 `b = a - b` with `a` loop-invariant (used every iteration, so it outlives the `sub`).
 Here the allocator MUST materialize `mov b_new, a` before the `sub` — the one case that
-legitimately needs a reuse copy. The AllocChecker validates the copy; the loop runs
-`b = 20 - b` three times from `b = 5`: 15, 5, 15.
+legitimately needs a reuse copy. The loop runs `b = 20 - b` three times from `b = 5`:
+15, 5, 15 — a missing or mis-targeted copy would compute on the wrong value and fail.
 ```maxon
 function main() returns ExitCode
 	var a = 20

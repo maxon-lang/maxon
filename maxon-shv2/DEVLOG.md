@@ -195,11 +195,14 @@ where they are brutal to find.
 - **THE LESSON: the `AllocChecker` only catches what it MODELS.** It did not model the incoming argument
   registers at function entry, so a physical-*source* move was untracked and the safety net was simply blind
   there. The fix hardened the *model* (seed each parameter into its incoming register), not just the bug.
-  **When adding codegen that reads or writes physical registers the checker does not track, extend the
-  checker's model FIRST** — until then, "the suite is green" means nothing in that region.
+  ***(Both of these bullets are SUPERSEDED — see "The `AllocChecker` is removed", 2026-07-12. This lesson is
+  exactly why it is gone: a verifier is only as good as its model, whereas RUNNING the program models
+  nothing and misses nothing. The parameter-capture miscompile returned a wrong exit code; a test that runs
+  catches it whether or not anyone thought to model the entry registers.)***
 - **Fragments are OUTPUTS, not gates.** `spec-test` regenerates them, so a wrong-but-self-consistent
   allocator passes them. The `AllocChecker` — plus actually *running* the produced binaries — is what gates
-  correctness.
+  correctness. ***(SUPERSEDED at `41b498a1d`: the fragments are now COMPARED goldens, and a mismatch fails
+  the test. That premise is what the `AllocChecker` rested on, and its falsification is what retired it.)***
 - **False *rejections* are Design B's characteristic failure mode, and they clustered in the splitter.**
   Caught pre-commit: a reload placed before a block's *first* use rather than at the eviction point (so a
   value used on both sides of a pressure peak never actually split → spurious "did not converge"); a
@@ -401,6 +404,51 @@ The design each milestone establishes is documented in
 > by the `AllocChecker`. Stage 1's one design item (the allocator) is done and its contract is complete:
 > **spill cold, error hot.** Next: **Stage 0 tooling** (the `selfhost-distance` compass + the pruned
 > `stdlib-shv2` fork — the loop that gates Stage 2), then **Stage 2** (generics BEFORE ownership).
+
+## The `AllocChecker` is removed — 2026-07-12, **specs-shv2 84/0**
+
+The allocator's symbolic verifier is **deleted** (`Targets/Shared/AllocChecker.maxon`, the `--check-alloc`
+flag, `Project.checkAlloc`, the `RegAllocPhase.checking` timer, and the per-spec / per-test `checkAlloc`
+opt-out machinery in `Testing/SpecParser.maxon`). It was not wrong; **its premise expired.**
+
+- **Why it existed.** *Fragments are outputs, not gates* — `spec-test` regenerated them on every run, so a
+  wrong-but-self-consistent allocator produced a self-consistent fragment and a green suite. The checker was
+  the only thing in that path that could say *no*, and it earned its keep (the parameter-capture
+  read-after-clobber above was a real shipped miscompile).
+- **Why it no longer does.** `41b498a1d` made the `.test` fragments **compared goldens**: a mismatch now
+  FAILS the test. So the suite already answers both questions the checker was there to answer. **Running**
+  a test proves the allocation is *correct* — a value in the wrong register computes the wrong answer and
+  the exit-code assertion catches it, end to end, modelling nothing. The **golden** proves the code did not
+  get *worse* — and it pins **every block** of every function, including blocks the test's single execution
+  path never enters. That is strictly more than an internal invariant assertion, for none of the cost: the
+  allocator's own `checking` sub-phase timer put it at **13.7 ms of a 192 ms compile (7.1%)** on a
+  300-function benchmark, and it was re-deriving a verdict the suite already reached.
+- **Teeth-tested, not assumed.** Sabotaging `chooseRegister` to drop the copy hint (`if false and
+  hints.hasCopy(v)`) — correct code, worse code — yields **72 passed, 12 failed**, all twelve `codegen
+  changed`, **zero** behavioural. The quality gate is armed.
+- **THE LESSON, and it is the general one:** *a verifier is only as good as its model; a RUNNING PROGRAM
+  has no model to be wrong about.* The M5.6 miscompile slipped past the checker precisely because the
+  checker did not model the incoming ABI registers — the gap was in the safety net, not the code. Prefer an
+  end-to-end assertion over an internal one wherever both are available.
+- **ONE thing was preserved**, because it was never an allocation check. `checkCondBranchIndex` (added as
+  "check D") is a **CFG-invariant** check: it asserts, against the ops, that a block's cached
+  `IrBlock.condBranch` index names exactly the conditional branches the block actually has. It is **not**
+  redundant with the O(1) guards — `IrModule` is generic over `Op` and so *cannot* ask whether an op is a
+  branch, which means `appendOp(block, jcc)` on a block with no recorded branch is accepted **silently**
+  (and `SplitLiveRanges` bypasses `appendOp` entirely, minting ops through its own append), leaving a
+  then-edge out of every CFG the allocator builds. It now lives in `TargetLiveness`, called from
+  `buildFuncCfg` — **once per function, on every build** (it used to run only under `spec-test`), and
+  asymptotically free there because `scanFunctionValueCount` beside it already walks every op.
+- **Also removed as dead:** `ReloadOrigin` / `ReloadOriginIndex` / `SpillPlan` / `SplitOutcome` (built by the
+  splitter on every spill, read by nobody but the checker — `splitLiveRanges` now returns its
+  `LivenessResult` directly), and `CompileError.specError` (its only constructor was the malformed-
+  `checkAlloc`-directive throw).
+- **Gates:** shv2 build clean; **specs-shv2 84/0**; `git status specs-shv2/fragments/` **empty** (the
+  goldens are compared, so any codegen perturbation would have failed the suite — there was none);
+  `verify-warm-rebuild` PASS. The **E5001 cliff is bit-for-bit unchanged**, verified against a compiler
+  built from the parent commit: identical accept/reject boundary (N≤13 accepts, N≥14 raises E5001),
+  identical diagnostic text including the ranked blocking set, and **byte-identical executables** across the
+  whole accepting range. The compiler itself shed ~74 KB of `.text`.
 - [ ] **per-function fan-out** — carried by M5's original "functions (fan-out)" scope but NOT built by
   M5.1–M5.6. Both seams exist (`PassPipeline.classifyPass` labels each pass `wholeModule`/`perFunction`;
   the parser is already a pure function of its file), and the runtime under it is proven (Track 0); nothing

@@ -141,7 +141,7 @@ export type LiveSets
 	end 'create'
 end 'LiveSets'
 
-// The liveness result the colorer and AllocChecker consume. `live` holds the sparse per-block
+// The liveness result the colorer and the cold-spill splitter consume. `live` holds the sparse per-block
 // live-in/live-out sets; `forbidden` is the per-value register mask; `maxPressure` is the exact
 // per-program-point maxlive (χ = ω) the E5001 feasibility decision rests on; `livenessMarkSteps` is
 // the path-exploration cost counter.
@@ -179,8 +179,8 @@ export type LivenessResult
 	end 'deadPhiCountOf'
 
 	// The values live on ENTRY to `local`, into `out` (cleared first). O(live) — this is the seed
-	// the colorer's in-use mask and the AllocChecker's register state are built from. `out` is meant
-	// to be a scratch buffer reused across blocks.
+	// the colorer's in-use mask is built from. `out` is meant to be a scratch buffer reused across
+	// blocks.
 	export function liveInInto(local CfgIndex, out ValueIdArray)
 		copyCsrRange(self.live.inStart, list: self.live.inList, node: local, out: out)
 	end 'liveInInto'
@@ -250,9 +250,9 @@ end 'localOfBlockId'
 // A resolved phi-carrying edge: the target block's block-args (phis) paired
 // positionally with the incoming values a predecessor passes on the edge. Built once
 // per edge — arity-checked HERE, the one place that check lives — then indexed by the
-// three consumers that each walk the (phi, incoming) pairs differently: SSA-destruction
-// plan building, the colorer's biased-coloring hints, and the AllocChecker's edge
-// simulation. Holds references to the existing arrays (no per-element copy).
+// consumers that each walk the (phi, incoming) pairs differently: SSA-destruction plan
+// building, the colorer's biased-coloring hints, and the E5001 diagnostic's phi
+// resolution. Holds references to the existing arrays (no per-element copy).
 export type PhiEdgeView
 	export var blockArgs as IrBlockArgArray
 	export var argIds as ValueIdArray
@@ -564,10 +564,98 @@ end 'buildFuncTopology'
 // one already — which is the point: the RPO reorder has just built one, and its skeleton is
 // still exactly this function's, so the allocator completes it instead of re-deriving it.
 export function buildFuncCfg(module TargetModule, func IrFunction, topo FuncTopology) returns FuncCfg
+	assertCondBranchIndicesComplete(module, func: func, topo: topo)
 	let valueCount = scanFunctionValueCount(module, func: func)
 	let loopDepth = computeLoopDepth(topo.succ, pred: topo.pred, numBlocks: topo.numBlocks)
 	return FuncCfg.create(topo, loopDepth: loopDepth, valueCount: valueCount)
 end 'buildFuncCfg'
+
+// THE COMPLETENESS half of the `condBranch`-index invariant: assert, against the OPS, that every
+// block's cached index names EXACTLY the conditional branches the block actually has. The O(1)
+// half (`condBranchTargetOf`, below) checks the converse — that the op AT the recorded index IS a
+// `jcc` — and the two together are what let the successor derivation ADDRESS a block's second
+// branch instead of searching for it.
+//
+// WHY IT IS STILL NEEDED, given `IrModule`'s two O(1) guards. `appendCondBranch` refuses a SECOND
+// conditional branch, and `appendOp` refuses to append anything PAST a recorded one — but neither
+// can refuse the case this catches: `IrModule` is generic over `Op` and therefore cannot ask
+// whether an op IS a conditional branch (its own comment says so), so `appendOp(block, jcc)` on a
+// block that has not recorded one yet is accepted, silently. The `jcc`'s then-edge would then be
+// missing from every CFG built from that block, and liveness, loop depth, pressure and spill
+// placement would all follow a CFG the program does not have — surfacing far from the cause, as an
+// allocator bug. `SplitLiveRanges` additionally mints its ops through its OWN append (append to
+// `module.ops`, then `opRefs.insert`), which bypasses `IrModule.appendOp`'s guard entirely. This
+// sweep is the only thing that makes the whole class unspellable rather than merely unlikely.
+//
+// WHERE IT RUNS. Here, once per function, on EVERY build — `buildFuncCfg` is the sole constructor
+// of the CFG the allocator consumes, so the invariant is checked exactly where it is relied on.
+// It is asymptotically free: `scanFunctionValueCount` beside it already walks every op of the
+// function, so this adds one op-kind match per op and no new traversal.
+function assertCondBranchIndicesComplete(module TargetModule, func IrFunction, topo FuncTopology)
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		checkCondBranchIndex(module, block: blockAt(module, topo: topo, local: local), funcName: func.name)
+	end 'eachBlock'
+end 'assertCondBranchIndicesComplete'
+
+// One block's half of the sweep. The index records only WHERE the branch is — what it TARGETS is
+// always dereferenced from the op — so an in-place retarget (`retargetJcc`) has no cache to go
+// stale, and the only things that CAN go wrong are the four this asserts.
+function checkCondBranchIndex(module TargetModule, block IrBlock, funcName String)
+	var seen = 0 as ByteCount
+	var seenIdx = 0 as OpIndex
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("checkCondBranchIndex: opIdx {opIdx} not in module.ops")
+		if opIsCondBranch(op) 'isCond'
+			seen = seen + 1
+			seenIdx = opIdx
+		end 'isCond'
+	end 'eachOp'
+
+	if not block.hasCondBranchOp() 'recordsNone'
+		if seen > 0 'unrecorded'
+			panic("checkCondBranchIndex: '{funcName}' block '{block.label}' holds {seen} `jcc` op(s) but records NO conditional branch — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator builds")
+		end 'unrecorded'
+		return
+	end 'recordsNone'
+
+	let recorded = block.condBranchIndex()
+	if seen != 1 'notExactlyOne'
+		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' records a conditional branch at op {recorded} but its body holds {seen} `jcc` op(s) — the index must name the one branch the block has")
+	end 'notExactlyOne'
+	if seenIdx != recorded 'stale'
+		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' records its conditional branch at op {recorded}, but the `jcc` in its body is op {seenIdx} — the recorded index is stale")
+	end 'stale'
+
+	// A `jcc` names only the THEN edge; the else edge is the `jmp` terminator. Without one, the
+	// block would contribute a single successor to the CFG while branching two ways at run time.
+	if not terminatorIsJmp(module, block: block) 'noJmpTerminator'
+		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' has a conditional branch but its terminator is not a `jmp` — a `jcc` carries only the then-edge, so the else-edge has nowhere to come from")
+	end 'noJmpTerminator'
+end 'checkCondBranchIndex'
+
+function opIsCondBranch(op TargetOp) returns bool
+	return match op 'check'
+		prologue to jmp gives false
+		jcc gives true
+		movRegImm to idivReg gives false
+		pushReg to popReg gives false
+		storeSlotReg to loadRegSlot gives false
+	end 'check'
+end 'opIsCondBranch'
+
+function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorIsJmp: terminator not in module.ops")
+	return match op 'check'
+		prologue to ret gives false
+		jmp gives true
+		jcc to idivReg gives false
+		pushReg to popReg gives false
+		storeSlotReg to loadRegSlot gives false
+	end 'check'
+end 'terminatorIsJmp'
 
 // A block's successor BlockIds: the `jcc` conditional-branch op names the then-target; the
 // `jmp` terminator names the (unconditional / else) target; `ret` names none.
@@ -582,8 +670,8 @@ end 'buildFuncCfg'
 // so building the CFG skeleton was a full pass over every op of the function — and the
 // allocator builds one twice per function (the critical-edge split, then the RPO reorder).
 // It is now O(1) per block, making a topology build O(blocks + edges).
-// `AllocChecker.checkCondBranchIndex` asserts, against the ops, that the two indices name
-// every branch the block actually has.
+// `checkCondBranchIndex` (above) asserts, against the ops, that the two indices name every
+// branch the block actually has.
 function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
 	if block.hasCondBranchOp() 'hasCond'
 		let opIdx = block.condBranchIndex()
@@ -1367,7 +1455,7 @@ end 'countDeadPhis'
 // register NUMBER it arrives in. The entry block opens with one `mov virtual(v_i),
 // physical(argReg[i])` per parameter — a PARALLEL COPY from the incoming ABI registers.
 // Collected once (paramCount is capped at the register-arg count), then consumed by the
-// cross-param forbidding here and the AllocChecker's entry seed + capture verification.
+// cross-param register forbidding below.
 export type ParamCapture
 	export var valueId as ValueId
 	export var incomingReg as MachineWord

@@ -45,8 +45,7 @@ the call.
 Argument setup is emitted as a move of each argument into its ABI register followed by
 the `call`. Because each such move clobbers its target register, a value still needed by
 a later argument move can never be colored to an earlier argument register — so the
-arguments reach their registers with no read-before-clobber, and the AllocChecker
-verifies the whole sequence on every function of every compile.
+arguments reach their registers with no read-before-clobber.
 
 The symmetric hazard appears at function ENTRY. Each parameter is captured out of its
 incoming ABI register (`mov paramReg, argReg[i]`); emitted in slot order these form a
@@ -54,10 +53,10 @@ parallel copy whose SOURCES are the incoming registers. So a parameter's capture
 DESTINATION must never be colored onto a *different* parameter's incoming register, or
 that capture would clobber the sibling's incoming value before its own capture reads it.
 The allocator forbids each parameter from every other parameter's incoming register (its
-own is still preferred, so the common case is a self-move that elides), and the
-AllocChecker seeds each parameter into its incoming register and verifies every capture
-reads the right one — so this read-after-clobber class fails the build instead of
-shipping a wrong answer.
+own is still preferred, so the common case is a self-move that elides). The multi-parameter
+tests below are what hold that: a clobbered incoming register hands the callee a wrong
+argument, the function returns the wrong answer, and the exit-code assertion fails — this
+class shipped as a silent miscompile once, and it is a running test that catches it.
 
 ## Tests
 
