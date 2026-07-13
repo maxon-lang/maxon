@@ -1,0 +1,69 @@
+// Test: deep-reuse-chain
+function chain(p int) returns int
+	let a = p + 100
+	let b = p + 1
+	let c = p + 2
+	let d = p + 3
+	let e = p + 4
+	let f = p + 5
+	let r1 = a - b
+	let r2 = a - c
+	let r3 = a - d
+	let r4 = a - e
+	let r5 = a - f
+	return r1 + r2 + r3 + r4 + r5 + a
+end 'chain'
+
+function main() returns ExitCode
+	let s = chain(0)
+	if s == 585 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @chain {
+  entry:
+    x64.leaRegRegImm32 rax, rcx, 100
+    x64.leaRegRegImm32 rdx, rcx, 1
+    x64.leaRegRegImm32 rsi, rcx, 2
+    x64.leaRegRegImm32 rdi, rcx, 3
+    x64.leaRegRegImm32 r8, rcx, 4
+    x64.leaRegRegImm32 rcx, rcx, 5
+    x64.movRegReg r9, rax
+    x64.subRegReg r9, rax, rdx
+    x64.movRegReg rdx, rax
+    x64.subRegReg rdx, rax, rsi
+    x64.movRegReg rsi, rax
+    x64.subRegReg rsi, rax, rdi
+    x64.movRegReg rdi, rax
+    x64.subRegReg rdi, rax, r8
+    x64.movRegReg r8, rax
+    x64.subRegReg r8, rax, rcx
+    x64.leaRegRegReg rcx, r9, rdx
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, rdi
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg r8, rcx, rax
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect chain
+    x64.cmpRegImm32 r8, 585
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.ret
+}

@@ -1,0 +1,48 @@
+// Test: neg-chain
+function negs(p int) returns int
+	let x = p + 7
+	let n1 = -x
+	let n2 = -n1
+	let n3 = -n2
+	return x * 100 - n3
+end 'negs'
+
+function main() returns ExitCode
+	let r = negs(0)
+	if r == 707 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @negs {
+  entry:
+    x64.leaRegRegImm32 rax, rcx, 7
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.negReg rcx, rcx
+    x64.negReg rcx, rcx
+    x64.imulRegRegImm32 r8, rax, 100
+    x64.subRegReg r8, r8, rcx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect negs
+    x64.cmpRegImm32 r8, 707
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.ret
+}
