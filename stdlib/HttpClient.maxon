@@ -182,15 +182,28 @@ export type HttpClient
 			sleep(100)
 		#endif
 
-		// Receive response until server closes connection
+		// Receive the response until the server closes the connection.
+		//
+		// `connectionClosed` is the ONLY clean end of the body — the server signalling it has sent
+		// everything. A `recvFailed` is a RESET, not an ending. The loop used to be written as
+		// `if let chunk = try client.recv(...)`, which treats EVERY throw alike, so a connection
+		// dropped mid-response was indistinguishable from a complete one: the body was silently
+		// TRUNCATED and handed to the parser as if it were whole. A throttling or failing server —
+		// exactly what a busy test suite provokes — therefore produced a garbage response instead of
+		// an error the caller could see.
 		var responseData = ""
 		var receiving = true
 		while receiving 'recvLoop'
-			if let chunk = try client.recv(4096) 'gotData'
-				responseData.append(chunk)
-			end 'gotData' else 'recvDone'
-				receiving = false
-			end 'recvDone'
+			let chunk = try client.recv(4096) otherwise (e) 'recvErr'
+				if e == NetworkError.connectionClosed 'serverFinished'
+					receiving = false
+					continue
+				end 'serverFinished'
+
+				throw HttpError.recvFailed
+			end 'recvErr'
+
+			responseData.append(chunk)
 		end 'recvLoop'
 
 		// Close connection
