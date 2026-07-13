@@ -10,6 +10,12 @@ export union ParserError
 	unexpectedEof
 end 'ParserError'
 
+// The i64 boundary magnitudes, as digit bytes, for the overflow checks below. Built ONCE:
+// `parseInt` consults `I64MaxDigits` for EVERY 19-digit literal and `parseNegatedInt`
+// consults `I64MinMagnitudeDigits` for every negated one.
+let I64MaxDigits = b"9223372036854775807"
+let I64MinMagnitudeDigits = b"9223372036854775808"
+
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Throws ParserError.overflow if the value exceeds float64 range.
 //
@@ -270,15 +276,8 @@ export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
 		throw ParserError.overflow
 	end 'tooMany'
 
-	// Exactly 19 digits: compare digit-by-digit against "9223372036854775807"
+	// Exactly 19 digits: compare digit-by-digit against i64.max
 	if digitCount == 19 'checkMax'
-		// Derive the max-magnitude digits through `String.toByteArray` — the same byte
-		// source `bytes` ultimately comes from (the lexer's buffer, of which a token's
-		// value is a slice) — so both operands of the `b > maxByte` compare below carry
-		// the same element type. A `b"..."` byte-string literal lowers through a
-		// different byte-typed path whose element type the checker won't compare against
-		// a toByteArray() byte (E3005).
-		let maxStr = "9223372036854775807".toByteArray()
 		var mi = 0
 		var pastLeading = false
 		for pi in 0 upto sLen 'cmp'
@@ -291,7 +290,7 @@ export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
 			end 'skipLz'
 			if b >= '0' and b <= '9' 'cmpDigit'
 				pastLeading = true
-				let maxByte = try maxStr.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = maxStr.count() but get({mi}) failed")
+				let maxByte = try I64MaxDigits.get(mi) otherwise panic("parseInt.cmp: digitCount==19 so mi < 19 = I64MaxDigits.count() but get({mi}) failed")
 				if b > maxByte 'bigger'
 					throw ParserError.overflow
 				end 'bigger' else if b < maxByte 'smaller'
@@ -313,9 +312,7 @@ end 'parseInt'
 // (which throws on a true overflow) and is negated. The caller must apply this
 // ONLY when a `-` immediately precedes the literal.
 export function parseNegatedInt(bytes ByteArray) returns ParsedInt throws ParserError
-	// Same element-type reasoning as `parseInt`'s `maxStr` — see the comment there.
-	let i64MinMagnitude = "9223372036854775808".toByteArray()
-	if digitsWithoutSeparators(bytes).equals(i64MinMagnitude) 'isI64Min'
+	if digitsWithoutSeparators(bytes).equals(I64MinMagnitudeDigits) 'isI64Min'
 		return i64.min
 	end 'isI64Min'
 	return 0 - (try parseInt(bytes))

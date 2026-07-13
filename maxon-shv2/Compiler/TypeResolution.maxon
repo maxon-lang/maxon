@@ -17,11 +17,7 @@
 // The one builtin alias M1 resolves without the stdlib. Named constant, not a
 // bare string — the alias spelling is a contract shared with the parser's
 // interner. Grows into a builtin-alias table (Character, etc.) at M9/M10.
-// A function, not a global: a `b"..."` literal is not a constant expression (E2004) and
-// so cannot initialize one. Reached once per named type reference, never per token.
-function exitCodeBuiltinName() returns ByteArray
-	return b"ExitCode"
-end 'exitCodeBuiltinName'
+let ExitCodeBuiltinName = b"ExitCode"
 
 // Resolve every unresolved/named type in `module`'s function signatures to a
 // concrete `MaxonType`, and re-sync each function's resolved return type into
@@ -82,7 +78,7 @@ end 'resolveType'
 
 function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
-	if name.equals(exitCodeBuiltinName()) 'isExitCode'
+	if name.equals(ExitCodeBuiltinName) 'isExitCode'
 		return MaxonType.exitCode
 	end 'isExitCode'
 	panic("resolveTypes: unknown named type '{String.from(name)}' — M1 resolves only the ExitCode builtin (user-defined types arrive at M9)")

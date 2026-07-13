@@ -11,11 +11,7 @@
 
 // The entrypoint function's unqualified name — a contract shared with the parser
 // (which keeps `main` unqualified) and the backend (whose entry stub calls it).
-// A function, not a global: a byte constant cannot initialize one (E2004). Called twice per
-// compile, so the per-call materialization is irrelevant.
-function mainFunctionName() returns ByteArray
-	return b"main"
-end 'mainFunctionName'
+let MainFunctionName = b"main"
 
 // The exact spec-gated diagnostic text (`specs-shv2/basics.md`). Named constants
 // so the wire format lives in one place.
@@ -82,12 +78,12 @@ end 'reportArgError'
 
 // E3001 / E3002: `main` must exist and return ExitCode.
 function checkMainFunction(project Project)
-	if not project.funcReturnTypes.contains(mainFunctionName()) 'noMain'
+	if not project.funcReturnTypes.contains(MainFunctionName) 'noMain'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.noMainFunction, message: NoMainMessage))
 		return
 	end 'noMain'
 
-	let returnType = try project.funcReturnTypes.get(mainFunctionName()) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
+	let returnType = try project.funcReturnTypes.get(MainFunctionName) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
 	if not returnsExitCode(returnType) 'wrongReturn'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.mainWrongReturnType, message: MainWrongReturnMessage))
 	end 'wrongReturn'

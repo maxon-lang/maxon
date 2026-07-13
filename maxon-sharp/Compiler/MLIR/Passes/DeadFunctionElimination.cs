@@ -182,6 +182,24 @@ public static class DeadFunctionElimination {
     return callee.EndsWith(".create") || callee.EndsWith(".from");
   }
 
+  /// The id of the value a PURE PRODUCER op yields — an op whose only effect is to
+  /// materialize a literal into its result. Nothing reading that result means the op is
+  /// dead and can go.
+  ///
+  /// The rdata-backed literals belong here exactly as much as the scalar ones do: each
+  /// ALLOCATES (a String / ByteArray / Character struct plus its __ManagedMemory). Left
+  /// behind in an init body whose global store this pass just dropped, the allocation still
+  /// happens at runtime but the global that would have owned it is gone — so
+  /// `__maxon_global_cleanup` never decrefs it and the program exits with a leak.
+  private static int? PureProducerResultId(MaxonOp op) => op switch {
+    MaxonLiteralOp lit => lit.Result.Id,
+    MaxonStringLiteralOp str => str.Result.Id,
+    MaxonByteStringLiteralOp bstr => bstr.Result.Id,
+    MaxonCharLiteralOp chr => chr.Result.Id,
+    MaxonStructLiteralOp sl => sl.Result.Id,
+    _ => null
+  };
+
   /// Remove dead stores and their producing ops from a block.
   /// First removes global_store ops for dead globals, then iteratively
   /// removes ops whose results are unused by any remaining op.
@@ -273,10 +291,9 @@ public static class DeadFunctionElimination {
             !referencedVarNames.Contains(deadAssign.VarName)) {
           return true;
         }
-        // Remove value-producing ops whose result is unused
-        if (op is MaxonLiteralOp lit && !usedIds.Contains(lit.Result.Id))
-          return true;
-        if (op is MaxonStructLiteralOp sl && !usedIds.Contains(sl.Result.Id))
+        // Remove pure producers whose result is unused
+        var producedId = PureProducerResultId(op);
+        if (producedId != null && !usedIds.Contains(producedId.Value))
           return true;
         // Remove array element assigns whose tag has no surviving struct literal
         if (op is MaxonAssignOp { VarName: var name } && name.StartsWith("__arr_")) {

@@ -51,6 +51,28 @@ data.count()       // 5
 data.get(0)        // 104 (ASCII 'h')
 ```
 
+### Identical to `String.toByteArray()`
+
+A byte string literal has *exactly* the type `String.toByteArray()` returns — `ByteArray`, whose
+element is the ranged `Byte` (`int(0 to u8.max)`). The two are therefore interchangeable in every
+position, including when `let`-bound, and elements read out of one may be ordered-compared against
+elements read out of the other.
+
+### At module scope
+
+A byte string literal is a compile-time constant, so it may initialize a module-scope `let` or
+`var`. The array is materialized ONCE at startup and every reference loads it — so a byte string
+constant on a hot path costs no allocation per use, unlike a literal written inline.
+
+```text
+let Keyword = b"critsplit"     // one ByteArray for the whole program
+var Buffer = b""
+```
+
+A module-scope initializer must be constant in its entirety. A method call is not, so
+`let X = "lit".toByteArray()` is rejected (**E2045**) rather than silently folded to a `String` —
+write `let X = b"lit"` instead.
+
 ## Tests
 
 <!-- test: byte-string-literal.basic -->
@@ -171,6 +193,94 @@ end 'main'
 ```
 ```stdout
 10 20
+```
+
+<!-- test: byte-string-literal.top-level-let -->
+A byte string literal initializes a module-scope `let`, and the global is a `ByteArray`.
+```maxon
+let Keyword = b"critsplit"
+
+function takes(b ByteArray) returns ExitCode
+		return 0 if b.count() == 9 else 1
+end 'takes'
+
+function main() returns ExitCode
+		return takes(Keyword)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: byte-string-literal.top-level-var -->
+A module-scope `var` holds a byte string literal and can be reassigned to another one.
+```maxon
+var Buffer = b""
+
+function main() returns ExitCode
+		if Buffer.count() != 0 'notEmpty'
+				return 1
+		end 'notEmpty'
+		Buffer = b"filled"
+		return Buffer.count()
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: byte-string-literal.tobytearray-ordered-compare -->
+A `let`-bound byte string literal has the same element type as `String.toByteArray()`, so bytes
+read out of the two can be ordered-compared.
+```maxon
+function main() returns ExitCode
+		let fromString = "9223372036854775807".toByteArray()
+		let fromLiteral = b"9223372036854775807"
+		let a = try fromString.get(0) otherwise panic("oob")
+		let b = try fromLiteral.get(0) otherwise panic("oob")
+		if a > b or a < b 'differ'
+				return 1
+		end 'differ'
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: byte-string-literal.dead-global-not-leaked -->
+A byte string global whose only reader is eliminated as dead code must not be allocated and
+then left unreleased — dead-code elimination drops the literal along with the global it fed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let Live = b"aa"
+let Dead = b"bbbb"
+
+function readDead() returns Integer
+		return Dead.count()
+end 'readDead'
+
+function main() returns ExitCode
+		return Live.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: byte-string-literal.tobytearray-global-error -->
+A method call is not a constant expression, so it cannot initialize a global — it is rejected
+rather than silently folded back to a `String`.
+```maxon
+let B = "critsplit".toByteArray()
+
+function main() returns ExitCode
+		return B.count()
+end 'main'
+```
+```maxoncstderr
+error E2045: specs/fragments/byte-string-literal/byte-string-literal.tobytearray-global-error.test:2:20: Global initializer for 'B' is not a constant expression: '.toByteArray()' cannot be evaluated at compile time
 ```
 
 <!-- test: byte-string-literal.field-access -->

@@ -690,11 +690,7 @@ typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 // The runtime entry point's function name — its `.text` offset becomes the PE
 // AddressOfEntryPoint (see augmentWithRuntime, which lays it out first). Exported
 // so augmentWithRuntime builds a function under the same name the concat looks up.
-// A function, not a global: a `b"..."` literal is not a constant expression (E2004) and a
-// global `"lit".toByteArray()` folds back to String, so a byte constant cannot initialize one.
-export function entryPointName() returns ByteArray
-	return b"mrt_start"
-end 'entryPointName'
+export let EntryPointName = b"mrt_start"
 
 // Concatenate every function chunk into the final `.text`, rebase each chunk's
 // CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct
@@ -725,7 +721,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 
-	let entryOffset = try labelOffsets.get(entryPointName()) otherwise panic("concatX64FunctionChunks: '{String.from(entryPointName())}' was not laid out — augmentWithRuntime did not run before emission")
+	let entryOffset = try labelOffsets.get(EntryPointName) otherwise panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' was not laid out — augmentWithRuntime did not run before emission")
 
 	// M1 registers no read-only data / globals, so rdata, rdata relocs, symdata,
 	// and covdata are all empty — they GROW back at their milestones (strings/M10,

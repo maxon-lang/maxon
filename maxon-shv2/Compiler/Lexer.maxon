@@ -294,21 +294,13 @@ end 'Token'
 // than a fresh heap String per token — the allocation this type exists to not make.
 // Exported because every name-shaped field downstream (VarInfo's inert payload names)
 // wants the same "no source text" value rather than minting its own empty.
-export let EmptySourceText = ByteArray.create()
+export let EmptySourceText = b""
 
 // The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
 // lexer, reports them: neither is legal Maxon, and the parser quotes the offending text
-// back in its diagnostic. Functions rather than globals because a `b"..."` literal is not
-// a constant expression (E2004), so it cannot initialize one — and unlike EmptySourceText,
-// which every punctuator touches, these two are reached only by source that is already
-// broken, so materializing them per occurrence costs nothing that matters.
-function bangTokenText() returns ByteArray
-	return b"!"
-end 'bangTokenText'
-
-function backslashTokenText() returns ByteArray
-	return b"\\"
-end 'backslashTokenText'
+// back in its diagnostic.
+let BangTokenText = b"!"
+let BackslashTokenText = b"\\"
 
 export typealias TokenArray = Array with Token
 
@@ -420,7 +412,7 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		21 then tokens.push(Token.create(TokenKind.lessEquals, line: line, column: column))
 		22 then tokens.push(Token.create(TokenKind.greaterThan, line: line, column: column))
 		23 then tokens.push(Token.create(TokenKind.greaterEquals, line: line, column: column))
-		24 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: bangTokenText()))
+		24 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: BangTokenText))
 		31 then tokens.push(Token.create(TokenKind.slash, line: line, column: column))
 		33 then tokens.push(Token.create(TokenKind.dot, line: line, column: column))
 		34 then tokens.push(Token.create(TokenKind.leftBracket, line: line, column: column))
@@ -430,7 +422,7 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		// `Expected function declaration, got '\\'` (which the spec runner's
 		// path normalization renders as `'/'`) instead of silently dropping
 		// the byte.
-		36 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: backslashTokenText()))
+		36 then tokens.push(Token.create(TokenKind.identifier, line: line, column: column, value: BackslashTokenText))
 		37 then tokens.push(Token.create(TokenKind.comma, line: line, column: column))
 		default panic("emitFixedToken: unhandled state index {stateIndex}")
 	end 'dispatch'

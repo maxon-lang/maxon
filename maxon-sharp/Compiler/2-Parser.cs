@@ -1656,6 +1656,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       int savedPos2 = _pos;
       _pos = deferred.TokenStart;
       var value = EvalConstExpr(constDecls, evaluated, evaluating);
+      ExpectConstInitializerFullyConsumed(deferred.Name, deferred.TokenEnd);
       _pos = savedPos2;
 
       var (fieldType, defaultValue) = ConstValueToAttribute(value, deferred.Line, deferred.Column);
@@ -1730,6 +1731,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private bool IsComplexInitializer(int exprStart) {
     if (_tokens[exprStart].Type == TokenType.LeftBracket) return true;
+    // A byte string literal builds a heap ByteArray, so it has no representation as a
+    // compile-time constant attribute — it is materialized once at startup like an array
+    // or map literal global, and every reference then loads the global instead of
+    // re-allocating the array.
+    if (_tokens[exprStart].Type == TokenType.ByteStringLiteral) return true;
     if (_tokens[exprStart].Type == TokenType.Identifier
         && exprStart + 1 < _tokens.Count
         && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
@@ -1810,6 +1816,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return InferMapTypeAlias(deferred.TokenStart);
     if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket)
       return InferArrayTypeAlias(deferred.TokenStart);
+    if (_tokens[deferred.TokenStart].Type == TokenType.ByteStringLiteral)
+      return FindByteArrayTypeAlias(_tokens[deferred.TokenStart]);
     var startToken = _tokens[deferred.TokenStart];
     throw new CompileError(ErrorCode.ParserExpectedExpression,
       $"Cannot infer type of global initializer from '{startToken.Type}' token",
@@ -1931,10 +1939,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         throw new CompileError(ErrorCode.ParserExpectedType,
           "Character type not found in type registry; is the standard library loaded?", token.Line, token.Column);
       case TokenType.ByteStringLiteral:
-        var alias = FindArrayTypeAliasForElement(MaxonValueKind.Byte);
-        if (_typeRegistry.TryGetValue(alias, out var bstrType)) return bstrType;
-        throw new CompileError(ErrorCode.ParserExpectedType,
-          $"ByteArray type alias '{alias}' not found in type registry; is the standard library loaded?", token.Line, token.Column);
+        return _typeRegistry[FindByteArrayTypeAlias(token)];
       case TokenType.Identifier:
         // Enum/struct reference: Type.case
         if (pos + 2 < _tokens.Count && _tokens[pos + 1].Type == TokenType.Dot) {
@@ -4828,11 +4833,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     int savedPos = _pos;
     _pos = decl.TokenStart;
     var result = EvalConstExpr(decls, evaluated, evaluating);
+    ExpectConstInitializerFullyConsumed(decl.Name, decl.TokenEnd);
     _pos = savedPos;
 
     evaluated[name] = result;
     evaluating.Remove(name);
     return result;
+  }
+
+  /// <summary>
+  /// Rejects a global initializer whose expression the constant evaluator could only fold in
+  /// part. The evaluator stops at the first token it cannot fold and the caller then restores
+  /// `_pos`, so without this check the remainder is silently DISCARDED and the declared value
+  /// quietly becomes something else: `let B = "lit".toByteArray()` folded to the String "lit"
+  /// and only surfaced far away at the use site as a type mismatch. A global initializer that
+  /// is not constant in its entirety is an error, not a truncation.
+  /// </summary>
+  private void ExpectConstInitializerFullyConsumed(string name, int tokenEnd) {
+    if (_pos >= tokenEnd) return;
+
+    var leftoverToken = _tokens[_pos];
+    var leftoverText = string.Concat(_tokens.Skip(_pos).Take(tokenEnd - _pos).Select(t => t.Value));
+    throw new CompileError(ErrorCode.ParserNonConstantInitializer,
+      $"Global initializer for '{name}' is not a constant expression: '{leftoverText}' cannot be evaluated at compile time",
+      leftoverToken.Line, leftoverToken.Column);
   }
 
   // ============================================================================
@@ -15882,7 +15906,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       throw new CompileError(ErrorCode.LexerInvalidEscape,
           $"{ex.Message} in byte string literal", token.Line, token.Column);
     }
-    var arrayTypeName = FindArrayTypeAliasForElement(MaxonValueKind.Byte);
+    var arrayTypeName = FindByteArrayTypeAlias(token);
     _usedTypeAliases.Add(arrayTypeName);
     var op = new MaxonByteStringLiteralOp(value, arrayTypeName);
     _currentBlock!.AddOp(op);
@@ -16107,9 +16131,34 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Primitive types (i64, f64, etc.) already have predefined aliases (IntArray, FloatArray, etc.)
   }
 
+  // The standard library's canonical `Array with Byte` alias, where `Byte` is the ranged
+  // typealias `int(0 to u8.max)`. Resolved by name the same way "String" and "Character" are.
+  private const string ByteArrayAliasName = "ByteArray";
+
+  /// <summary>
+  /// Resolves the type of a `b"..."` literal: the standard library's `ByteArray`
+  /// (`Array with Byte`), which is exactly what `String.toByteArray()` returns.
+  ///
+  /// It deliberately does NOT go through <see cref="FindArrayTypeAliasForElement"/>, which would
+  /// auto-create an `__Array_i8` whose element is the *primitive* `byte` rather than the ranged
+  /// `Byte`. The two arrays have identical layout but not identical element types, so a value read
+  /// out of one could not be ordered-compared against a value read out of the other ("cannot
+  /// compare int with byte") — the literal and `toByteArray()` must be interchangeable everywhere.
+  /// </summary>
+  private string FindByteArrayTypeAlias(Token token) {
+    if (_typeAliasSources.TryGetValue(ByteArrayAliasName, out var aliasSource)
+        && aliasSource == "Array"
+        && _typeRegistry.ContainsKey(ByteArrayAliasName))
+      return ByteArrayAliasName;
+
+    throw new CompileError(ErrorCode.ParserExpectedType,
+      $"Byte string literals require the '{ByteArrayAliasName}' type alias ('Array with Byte'); is the standard library loaded?",
+      token.Line, token.Column);
+  }
+
   /// <summary>
   /// Finds the typealias name for Array with the given element type.
-  /// Returns the concrete alias (e.g., "ByteArray") if one exists, otherwise "Array".
+  /// Returns the concrete alias (e.g., "StringArray") if one exists, otherwise "Array".
   /// For struct element types, auto-creates a type alias if none exists.
   /// </summary>
   private string FindArrayTypeAliasForElement(MaxonValueKind elementKind, string? elementStructTypeName = null) {
@@ -18021,8 +18070,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       TokenType.FloatLiteral => IrType.F64,
       TokenType.StringLiteral or TokenType.StringInterp =>
         _typeRegistry.TryGetValue("String", out var strType) ? strType : null,
-      TokenType.ByteStringLiteral =>
-        _typeRegistry.TryGetValue(FindArrayTypeAliasForElement(MaxonValueKind.Byte), out var baType) ? baType : null,
+      TokenType.ByteStringLiteral => _typeRegistry[FindByteArrayTypeAlias(token)],
       TokenType.CharacterLiteral =>
         _typeRegistry.TryGetValue("Character", out var charType) ? charType : null,
       TokenType.True or TokenType.False => IrType.I1,

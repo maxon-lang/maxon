@@ -377,11 +377,9 @@ end 'spliceSplitUnreachable'
 // Critical-edge splitting — a PRE-PASS run before coloring
 // ==========================================================================
 
-// See EmptySourceText: a byte constant cannot initialize a global, so the label is a
-// function. No worse than the String literal it replaces, which also allocated per call.
-function critSplitLabel() returns ByteArray
-	return b"critsplit"
-end 'critSplitLabel'
+// The label every spliced edge block carries. Built ONCE: this is on the hot path — a split
+// happens per critical edge — and a global holds the one slice every split block shares.
+let CritSplitLabel = b"critsplit"
 
 // Split every phi-carrying critical edge in the module, so SSA destruction always
 // has a safe home for its moves (a block reached from exactly this edge). A critical
@@ -453,7 +451,7 @@ function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) r
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	module.blocks.push(IrBlock.create(newId, label: critSplitLabel()))
+	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.append(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
