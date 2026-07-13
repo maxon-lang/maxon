@@ -413,3 +413,51 @@ end 'main'
 ```maxoncstderr
 error E3036: specs/fragments/method-calls/error-instance-method-too-many-args.test:19:4: too many arguments to 'Counter.increment': expected 0, got at least 1
 ```
+
+### Calling a method that does not exist
+
+A call to a method the receiver's type does not declare is a compile error. This holds for
+stdlib generic types (`Map`, `Array`, …) exactly as it does for user types — before, an
+unknown method on a stdlib generic resolved to a bare `Map.set` callee that nothing had a
+signature for, and the backend panicked in `lookupFuncParamTypes` instead of reporting the
+typo.
+
+<!-- test: error-no-such-method-on-user-type -->
+```maxon
+
+typealias ExitCode = int(0 to 255)
+
+type Counter
+	var count as ExitCode
+
+	export static function create() returns Counter
+		return Counter{count: 0}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.incrementt()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/fragments/method-calls/error-no-such-method-on-user-type.test:15:2: Type 'Counter' has no method named 'incrementt'
+```
+
+<!-- test: error-no-such-method-on-stdlib-generic -->
+```maxon
+
+typealias ExitCode = int(0 to 255)
+typealias Count = int(0 to 1000)
+typealias CountMap = Map with String, Count
+
+function main() returns ExitCode
+	var m = CountMap.create()
+	m.set("a", value: 1 as Count)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/fragments/method-calls/error-no-such-method-on-stdlib-generic.test:9:2: Type 'Map' has no method named 'set'
+```

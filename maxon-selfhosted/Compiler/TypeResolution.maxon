@@ -10594,6 +10594,26 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	if not isUnresolvedType(receiverType) 'haveReceiver'
 		try project.resolvedReceiverTypes.insert(opIdx, value: receiverType) otherwise ignore
 	end 'haveReceiver'
+	// A miss here does NOT mean the function is undefined, so do not diagnose it.
+	// Unlike the method-call path, a free callee can still legitimately acquire a
+	// signature after this point:
+	//   * closure-lifted functions do not exist yet (interface-extensions' `tag`);
+	//   * synthesized enum accessors (`__enum_X_fromRawValue`, `..._fromName`) are
+	//     generated during lowering;
+	//   * module-scoped functions called cross-directory are keyed under a namespace
+	//     this bare lookup does not see.
+	// It also cannot tell "no such function" from "the function exists but this call
+	// does not match it" — reporting here MASKS the better arity/overload diagnostics
+	// (a wrong-arg-count `fromName` would say "undefined function" instead of "too
+	// many arguments").
+	//
+	// An undefined FREE function therefore still reaches the backend and panics in
+	// `lookupFuncParamTypes` (`bogusFunction(1)`). Fixing that properly needs a LATE
+	// pass — after closure lifting and enum synthesis, gated on the existing
+	// first-error suppression — that checks each call's final callee against the same
+	// universe the backend uses (module functions + stdlib functions, via
+	// `calleeNameMatches`). The method-call path in `resolveMethodCallSite` has no such
+	// deferral and is diagnosed there.
 	let signature = try project.funcSignatures.get(resolved) otherwise return
 	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
@@ -10942,7 +10962,39 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	if not isUnresolvedType(receiverType) 'haveReceiver'
 		try project.resolvedReceiverTypes.insert(opIdx, value: receiverType) otherwise ignore
 	end 'haveReceiver'
-	let signature = try project.funcSignatures.get(resolved) otherwise return
+	let signature = try project.funcSignatures.get(resolved) otherwise 'noSignature'
+		// Reaching here means NOTHING supplied a signature for this method: the
+		// receiver's own type does not declare it, no interface extension it conforms
+		// to supplies it, and no overload matched. In other words the method does not
+		// exist — a typo, or a call to an API that was renamed.
+		//
+		// This used to return silently, which is how `m.bogusMethod()` on a stdlib
+		// generic reached the backend as a literal `call Map.bogusMethod` and panicked
+		// in `lookupFuncParamTypes` ("callee not registered in funcSignatures") instead
+		// of telling the author their method name was wrong. A user typo must be a
+		// diagnostic, never a compiler panic. (The C# bootstrap rejects the same
+		// program, but only incidentally: its parser falls back to parsing the call as
+		// a field ASSIGNMENT and reports "Expected '=' but got '('", which points at
+		// the wrong problem. Say what is actually wrong.)
+		//
+		// `createIterator` is the ONE legitimate miss, and it is carved out for ANY
+		// receiver. Two distinct shapes reach here with no signature, and lowering
+		// resolves both:
+		//   * the iterator-passthrough identity — `x.createIterator()` where `x`
+		//     conforms to Iterator but declares no createIterator of its own (the
+		//     receiver IS the iterator; `methodCallResultType` and `lowerMethodCall`
+		//     recognise the same shape);
+		//   * for-in over a type whose `createIterator` comes from an interface
+		//     extension rather than a direct declaration (`for x in intList`).
+		// Do NOT tighten this to a `typeConformsTo(Iterator)` test: that misses the
+		// second shape and rejects valid programs (it broke conditional-extensions'
+		// `IntList` / `HashBucket`, which conform to Iterable, not Iterator).
+		if bareMethodName == "createIterator" 'iteratorLowering'
+			return
+		end 'iteratorLowering'
+		reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Type '{receiverStructName}' has no method named '{bareMethodName}'", line: range.line, column: range.column, filePath: readerFilePath)
+		return
+	end 'noSignature'
 	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
 end 'resolveMethodCallSite'

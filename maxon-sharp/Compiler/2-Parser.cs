@@ -7316,6 +7316,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             $"Promise has no method named '{methodFieldName}'",
             _tokens[_pos + 2].Line, _tokens[_pos + 2].Column);
         }
+
+        // `local.member(...)` where nothing resolved `member` as a method: not a
+        // static method, not an instance method, not a builtin, not an interface or
+        // type-parameter method, not a promise. The method does not exist.
+        //
+        // Falling through to ParseAssignment() here made the parser demand '=' and
+        // report "Expected '=' but got '('" — which points at the wrong problem
+        // entirely (it blames the call syntax rather than the method name). A '('
+        // means the author wrote a CALL, so say the method is missing. Matches the
+        // self-hosted compiler's E4006.
+        // Reported at the RECEIVER token, not the method name, to match where the
+        // self-hosted compiler anchors the same diagnostic (its methodCall op's
+        // SourceRange starts at the statement). Same code, same message, same
+        // position — so one spec golden covers both compilers.
+        if (structTypeName != null) {
+          var missingMethodToken = _tokens[_pos + 2];
+          throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+            $"Type '{ResolveBaseTypeName(structTypeName)}' has no method named '{missingMethodToken.Value}'",
+            nameToken.Line, nameToken.Column);
+        }
       }
     }
 
