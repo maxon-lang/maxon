@@ -49,36 +49,36 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// the Std tier, not of x64, so installing it at the one target-neutral entry
 	// means arm64/wasm inherit it instead of each having to re-add it. See
 	// StdDialect's sugar-band contract.
-	let tSugar = Clock.nowMs()
+	let tSugar = Clock.nowNanos()
 	assertNoSugarOps(stdModule)
-	project.timings.addPhaseMs(CompilePhase.sugarGate, ms: Clock.elapsedMs(tSugar))
+	project.timings.addPhaseNanos(CompilePhase.sugarGate, nanos: Clock.elapsedNanos(tSugar))
 
-	let tIsel = Clock.nowMs()
+	let tIsel = Clock.nowNanos()
 	var targetModule = lowerStdToX64(stdModule)
-	project.timings.addPhaseMs(CompilePhase.isel, ms: Clock.elapsedMs(tIsel))
+	project.timings.addPhaseNanos(CompilePhase.isel, nanos: Clock.elapsedNanos(tIsel))
 
-	let tRegAlloc = Clock.nowMs()
+	let tRegAlloc = Clock.nowNanos()
 	try allocateRegisters(targetModule, target: target, project: project)
-	project.timings.addPhaseMs(CompilePhase.regalloc, ms: Clock.elapsedMs(tRegAlloc))
+	project.timings.addPhaseNanos(CompilePhase.regalloc, nanos: Clock.elapsedNanos(tRegAlloc))
 
-	let tPrologue = Clock.nowMs()
+	let tPrologue = Clock.nowNanos()
 	insertPrologueEpilogue(targetModule, target: target)
-	project.timings.addPhaseMs(CompilePhase.prologueEpilogue, ms: Clock.elapsedMs(tPrologue))
+	project.timings.addPhaseNanos(CompilePhase.prologueEpilogue, nanos: Clock.elapsedNanos(tPrologue))
 
-	let tRuntime = Clock.nowMs()
+	let tRuntime = Clock.nowNanos()
 	augmentWithRuntime(targetModule, target: target)
-	project.timings.addPhaseMs(CompilePhase.runtimeAugment, ms: Clock.elapsedMs(tRuntime))
+	project.timings.addPhaseNanos(CompilePhase.runtimeAugment, nanos: Clock.elapsedNanos(tRuntime))
 
-	let tEncode = Clock.nowMs()
+	let tEncode = Clock.nowNanos()
 	var chunks = FunctionCodeChunkArray.create()
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitFunctionChunk(targetModule, func: func))
 	end 'eachFunc'
-	project.timings.addPhaseMs(CompilePhase.encode, ms: Clock.elapsedMs(tEncode))
+	project.timings.addPhaseNanos(CompilePhase.encode, nanos: Clock.elapsedNanos(tEncode))
 
-	let tLink = Clock.nowMs()
+	let tLink = Clock.nowNanos()
 	let codeResult = concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
-	project.timings.addPhaseMs(CompilePhase.link, ms: Clock.elapsedMs(tLink))
+	project.timings.addPhaseNanos(CompilePhase.link, nanos: Clock.elapsedNanos(tLink))
 
 	return codeResult
 end 'buildBackend'

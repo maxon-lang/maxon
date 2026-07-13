@@ -44,7 +44,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	// calls this query BEFORE it starts its own `parse` timer, so the two phases are
 	// disjoint by construction and neither has to subtract the other out. A cache hit
 	// returned above does no lexing and is correctly billed nothing.
-	let tLex = Clock.nowMs()
+	let tLex = Clock.nowNanos()
 	let tokens = try tokenize(content) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
 		popQuery(project)
@@ -52,7 +52,7 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 		// the next attempt must re-run against corrected source.
 		return TokenArray.create()
 	end 'lexFail'
-	project.timings.addPhaseMs(CompilePhase.lex, ms: Clock.elapsedMs(tLex))
+	project.timings.addPhaseNanos(CompilePhase.lex, nanos: Clock.elapsedNanos(tLex))
 
 	popQuery(project)
 
@@ -84,7 +84,7 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 	// allocator has to do for liveness; here the call order makes it unnecessary.) It
 	// spans everything the parse query itself does: building the parser, the parse
 	// proper, the termination assert, and the memo write.
-	let tParse = Clock.nowMs()
+	let tParse = Clock.nowNanos()
 
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
@@ -108,7 +108,7 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: entry.contentHash))
 	end 'cacheOk'
 
-	project.timings.addPhaseMs(CompilePhase.parse, ms: Clock.elapsedMs(tParse))
+	project.timings.addPhaseNanos(CompilePhase.parse, nanos: Clock.elapsedNanos(tParse))
 	return artifact
 end 'queryParseOps'
 
@@ -138,9 +138,9 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	for path in project.db.sourcePaths 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
 
-		let tMerge = Clock.nowMs()
+		let tMerge = Clock.nowNanos()
 		mergeArtifact(project, target: merged, artifact: artifact)
-		project.timings.addPhaseMs(CompilePhase.merge, ms: Clock.elapsedMs(tMerge))
+		project.timings.addPhaseNanos(CompilePhase.merge, nanos: Clock.elapsedNanos(tMerge))
 	end 'eachFile'
 
 	popQuery(project)

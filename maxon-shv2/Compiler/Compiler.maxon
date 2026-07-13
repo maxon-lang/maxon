@@ -37,31 +37,31 @@
 // route through this default: `spec-test` passes `--check-alloc` on the subprocess build it
 // spawns per test, and `verify-warm-rebuild` forces it on (see verifyWarmRebuild).
 export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, checkAlloc bool = false) returns FilePath throws CompileError
-	let tTotal = Clock.nowMs()
+	let tTotal = Clock.nowNanos()
 
 	// Loading starts the instant the compile does, so `tTotal` is also the `load` phase's
 	// start — a second Clock read here would measure the same moment.
 	var project = try loadProject(inputPath, target: target, checkAlloc: checkAlloc)
-	project.timings.addPhaseMs(CompilePhase.load, ms: Clock.elapsedMs(tTotal))
+	project.timings.addPhaseNanos(CompilePhase.load, nanos: Clock.elapsedNanos(tTotal))
 
 	let codeResult = try compileToCodeResult(project)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 
-	let tWrite = Clock.nowMs()
+	let tWrite = Clock.nowNanos()
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
-	project.timings.addPhaseMs(CompilePhase.writeExe, ms: Clock.elapsedMs(tWrite))
+	project.timings.addPhaseNanos(CompilePhase.writeExe, nanos: Clock.elapsedNanos(tWrite))
 
 	if emitIr 'emitIr'
-		let tEmitIr = Clock.nowMs()
+		let tEmitIr = Clock.nowNanos()
 		writeTargetIr(codeResult, outputPath: outputPath)
-		project.timings.addPhaseMs(CompilePhase.emitIr, ms: Clock.elapsedMs(tEmitIr))
+		project.timings.addPhaseNanos(CompilePhase.emitIr, nanos: Clock.elapsedNanos(tEmitIr))
 	end 'emitIr'
 
 	// Stamp the total BEFORE the report reads it (every percentage divides by it), and
 	// build the table lazily behind logDebug so a build without `--log=compiler:debug`
 	// pays only for the handful of Clock reads, never for formatting a row.
-	project.timings.totalMs = Clock.elapsedMs(tTotal)
+	project.timings.totalNanos = Clock.elapsedNanos(tTotal)
 	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")

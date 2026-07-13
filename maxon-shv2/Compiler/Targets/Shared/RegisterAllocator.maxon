@@ -155,7 +155,7 @@ end 'ReuseCopyPlan'
 // not free — leaving them out put ~10% of the compile in a nameless remainder, the
 // same "big cost hiding in the wrong bucket" defect this instrumentation exists to
 // catch. Whatever these arms still do not claim surfaces as an explicit
-// `(unattributed)` row (see CompileTimings.regAllocUnattributedMs), never as silence.
+// `(unattributed)` row (see CompileTimings.regAllocUnattributedNanos), never as silence.
 //
 // Ordinals index a per-run array and are persisted nowhere, so this list may be
 // reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunction`,
@@ -171,12 +171,12 @@ export enum RegAllocPhase
 	rewrite
 end 'RegAllocPhase'
 
-export typealias DurationMsArray = Array with DurationMs
+export typealias DurationNanosArray = Array with DurationNanos
 
 // Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
 // than the clock at M5.1's sub-millisecond functions (design §"Stats").
 export type RegAllocStats
-	export var phaseMs as DurationMsArray
+	export var phaseNanos as DurationNanosArray
 	export var functionsAllocated as ByteCount
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
 	export var livenessMarkStepsTotal as ByteCount
@@ -202,20 +202,20 @@ export type RegAllocStats
 	export var forcedSpills as ByteCount
 
 	export static function create() returns RegAllocStats
-		var phaseMs = DurationMsArray.create()
-		phaseMs.resize(RegAllocPhase.allCases.count())
-		return Self{phaseMs: phaseMs, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
+		var phaseNanos = DurationNanosArray.create()
+		phaseNanos.resize(RegAllocPhase.allCases.count())
+		return Self{phaseNanos: phaseNanos, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
 	end 'create'
 
-	export function addPhaseMs(phase RegAllocPhase, ms DurationMs)
+	export function addPhaseNanos(phase RegAllocPhase, nanos DurationNanos)
 		let idx = phase.ordinal
-		let cur = try self.phaseMs.get(idx) otherwise panic("RegAllocStats.addPhaseMs: phase index OOB")
-		try self.phaseMs.set(idx, value: cur + ms) otherwise panic("RegAllocStats.addPhaseMs: phase index OOB")
-	end 'addPhaseMs'
+		let cur = try self.phaseNanos.get(idx) otherwise panic("RegAllocStats.addPhaseNanos: phase index OOB")
+		try self.phaseNanos.set(idx, value: cur + nanos) otherwise panic("RegAllocStats.addPhaseNanos: phase index OOB")
+	end 'addPhaseNanos'
 
-	export function phaseMsOf(phase RegAllocPhase) returns DurationMs
-		return try self.phaseMs.get(phase.ordinal) otherwise panic("RegAllocStats.phaseMsOf: phase index OOB")
-	end 'phaseMsOf'
+	export function phaseNanosOf(phase RegAllocPhase) returns DurationNanos
+		return try self.phaseNanos.get(phase.ordinal) otherwise panic("RegAllocStats.phaseNanosOf: phase index OOB")
+	end 'phaseNanosOf'
 
 	export function recordLivenessMarkSteps(steps ByteCount)
 		self.livenessMarkStepsTotal = self.livenessMarkStepsTotal + steps
@@ -330,9 +330,9 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
 	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
 	// would forbid).
-	let tEdges = Clock.nowMs()
+	let tEdges = Clock.nowNanos()
 	splitCriticalEdges(module)
-	stats.addPhaseMs(RegAllocPhase.criticalEdges, ms: Clock.elapsedMs(tEdges))
+	stats.addPhaseNanos(RegAllocPhase.criticalEdges, nanos: Clock.elapsedNanos(tEdges))
 
 	// Index-based (not `for func in ...`) because the loop index IS the function's
 	// Maxon-tier index: function indices are 1:1 across Maxon -> Std -> Target, and
@@ -352,9 +352,9 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
 	// would otherwise misclassify an idle value's post-loop use and false-E5001 (single-loop /
 	// straight-line CFGs are already in RPO, so they are untouched). See reorderFuncBlocksRpo.
-	let tOrder = Clock.nowMs()
+	let tOrder = Clock.nowNanos()
 	reorderFuncBlocksRpo(module, func: func)
-	stats.addPhaseMs(RegAllocPhase.blockOrder, ms: Clock.elapsedMs(tOrder))
+	stats.addPhaseNanos(RegAllocPhase.blockOrder, nanos: Clock.elapsedNanos(tOrder))
 
 	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
 	// idle values out (store in a cold, dominating spot and reload at their uses) or
@@ -370,12 +370,12 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// includes `liveness` and the biggest cost in the allocator hides inside the wrong bucket, which
 	// is exactly the "74% with zero sub-phase attribution" failure this instrumentation exists to
 	// prevent.
-	let tSplit = Clock.nowMs()
-	let livenessMsBefore = stats.phaseMsOf(RegAllocPhase.liveness)
+	let tSplit = Clock.nowNanos()
+	let livenessNanosBefore = stats.phaseNanosOf(RegAllocPhase.liveness)
 	let outcome = try splitLiveRanges(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
-	let splitWallMs = Clock.elapsedMs(tSplit)
-	let livenessMs = stats.phaseMsOf(RegAllocPhase.liveness) - livenessMsBefore
-	stats.addPhaseMs(RegAllocPhase.splitting, ms: splitWallMs - livenessMs)
+	let splitWallNanos = Clock.elapsedNanos(tSplit)
+	let livenessNanos = stats.phaseNanosOf(RegAllocPhase.liveness) - livenessNanosBefore
+	stats.addPhaseNanos(RegAllocPhase.splitting, nanos: splitWallNanos - livenessNanos)
 	let liveness = outcome.liveness
 	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
 	stats.recordPressure(liveness.maxPressure, funcName: func.name)
@@ -386,13 +386,13 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// splices them). Populated during coloring.
 	var reuseCopies = ReuseCopyPlan.create()
 
-	let tColor = Clock.nowMs()
+	let tColor = Clock.nowNanos()
 	let alloc = colorFunction(module, liveness: liveness, pool: pool, stats: stats, reuseCopies: reuseCopies)
-	stats.addPhaseMs(RegAllocPhase.coloring, ms: Clock.elapsedMs(tColor))
+	stats.addPhaseNanos(RegAllocPhase.coloring, nanos: Clock.elapsedNanos(tColor))
 
-	let tPlan = Clock.nowMs()
+	let tPlan = Clock.nowNanos()
 	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, stats: stats)
-	stats.addPhaseMs(RegAllocPhase.ssaDestruction, ms: Clock.elapsedMs(tPlan))
+	stats.addPhaseNanos(RegAllocPhase.ssaDestruction, nanos: Clock.elapsedNanos(tPlan))
 
 	// The AllocChecker verifies the plan (coloring + edge moves + reuse copies + spill chains)
 	// BEFORE applyAllocation commits it. Gated on `project.checkAlloc` because it is a pure
@@ -402,14 +402,14 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// `verify-warm-rebuild` (where it is the only real gate on the allocator) always turn it on,
 	// and `build --check-alloc` opts in. See Project.checkAlloc.
 	if project.checkAlloc 'verifyAllocation'
-		let tCheck = Clock.nowMs()
+		let tCheck = Clock.nowNanos()
 		checkFunctionAllocation(module, func: func, alloc: alloc, liveness: liveness, plans: plans, reuseCopies: reuseCopies, spillPlan: outcome.plan)
-		stats.addPhaseMs(RegAllocPhase.checking, ms: Clock.elapsedMs(tCheck))
+		stats.addPhaseNanos(RegAllocPhase.checking, nanos: Clock.elapsedNanos(tCheck))
 	end 'verifyAllocation'
 
-	let tRewrite = Clock.nowMs()
+	let tRewrite = Clock.nowNanos()
 	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies)
-	stats.addPhaseMs(RegAllocPhase.rewrite, ms: Clock.elapsedMs(tRewrite))
+	stats.addPhaseNanos(RegAllocPhase.rewrite, nanos: Clock.elapsedNanos(tRewrite))
 
 	stats.functionsAllocated = stats.functionsAllocated + 1
 end 'allocateFunction'
@@ -1079,7 +1079,7 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 	// later, which is how an unmeasured cost hides in the first place.
 	msg.append("  phase ms:")
 	for phase in RegAllocPhase.allCases 'eachPhase'
-		msg.append(" {phase.name}={stats.phaseMsOf(phase)}")
+		msg.append(" {phase.name}={stats.phaseNanosOf(phase)}")
 	end 'eachPhase'
 	return msg
 end 'regAllocStatsMessage'

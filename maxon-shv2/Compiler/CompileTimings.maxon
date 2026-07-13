@@ -22,14 +22,14 @@
 //      subtracts the inner phase's delta from its own wall time — see
 //      `allocateFunction`, which takes liveness back out of the splitter's wall.
 //
-// The remainder is never silently absorbed. `unattributedMs` reports what no phase
+// The remainder is never silently absorbed. `unattributedNanos` reports what no phase
 // claimed, and PANICS if the phases claim MORE than the total: phases are disjoint
 // sub-intervals of the timed total, so a sum that exceeds it means two timers
 // double-count — precisely the defect above, caught instead of averaged away.
 //
 // COST: the timers are always on, like the allocator's have been since M5. They are
 // per PASS (and per function only inside the allocator, which already paid that),
-// never per op or per block, so a compile takes a few dozen `Clock.nowMs` reads. The
+// never per op or per block, so a compile takes a few dozen `Clock.nowNanos` reads. The
 // REPORT is built lazily behind `logDebug`, so a build without `--log=compiler:debug`
 // never formats a row.
 
@@ -38,22 +38,29 @@
 typealias ColumnWidth = int(0 to 128)
 
 let PhaseNameWidth = 22 as ColumnWidth
-let MsWidth = 9 as ColumnWidth
+let TimeWidth = 11 as ColumnWidth
 let PercentWidth = 8 as ColumnWidth
-let RuleWidth = PhaseNameWidth + MsWidth + PercentWidth
+let RuleWidth = PhaseNameWidth + TimeWidth + PercentWidth
 
 // Every row is indented under the report's title line; a sub-phase row is indented
 // once more, under the phase whose wall time it breaks down.
 let RowIndent = "  "
 let SubPhaseIndent = "    "
 
-// A percentage held to one decimal place in integer math: `ms * 1000 / total`, so
+// A percentage held to one decimal place in integer math: `nanos * 1000 / total`, so
 // 1000 = 100.0%. There is no float formatting on this path (and no reason to pull
 // one in for two digits).
 typealias Permille = int(0 to 1000)
 
 let PermilleScale = 1000
 let PermilleTenthsPerPercent = 10
+
+// Nanoseconds -> milliseconds, to one decimal place, in integer math. `NanosPerSecond`
+// and `MillisTenthsPerSecond` are the two ends of the same conversion (1e9 ns/s and
+// 10,000 tenths-of-a-ms per second), named rather than written as bare literals.
+let NanosPerSecond = 1000000000
+let MillisTenthsPerSecond = 10000
+let MillisTenthsPerMs = 10
 
 // The phases the compile is attributed to, in EXECUTION order — which is also the
 // order the report prints them, so the table reads as the pipeline runs.
@@ -90,14 +97,14 @@ end 'CompilePhase'
 // pass needs a new parameter just to be timed, and the per-file fan-out driver gets
 // per-compile timings instead of contending on a global).
 //
-// Mirrors `RegAllocStats`: a dense `phaseMs` column indexed by the phase enum's
-// ordinal, with `addPhaseMs`/`phaseMsOf` as the only accessors.
+// Mirrors `RegAllocStats`: a dense `phaseNanos` column indexed by the phase enum's
+// ordinal, with `addPhaseNanos`/`phaseNanosOf` as the only accessors.
 export type CompileTimings
-	export var phaseMs as DurationMsArray
+	export var phaseNanos as DurationNanosArray
 	// Wall time of the whole compile, stamped once by `compile`. Zero until then: the
 	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
 	// zero total means "not a reported build", not "an instant build".
-	export var totalMs as DurationMs
+	export var totalNanos as DurationNanos
 	// The register allocator's own sub-phase breakdown. Owned HERE (rather than
 	// created per-run inside `allocateRegisters`) so the report can nest it under the
 	// `regalloc` phase and RECONCILE the two. The sub-phases are a breakdown OF that
@@ -106,29 +113,29 @@ export type CompileTimings
 	export var regAlloc as RegAllocStats
 
 	export static function create() returns CompileTimings
-		var phaseMs = DurationMsArray.create()
-		phaseMs.resize(CompilePhase.allCases.count())
-		return Self{phaseMs: phaseMs, totalMs: 0, regAlloc: RegAllocStats.create()}
+		var phaseNanos = DurationNanosArray.create()
+		phaseNanos.resize(CompilePhase.allCases.count())
+		return Self{phaseNanos: phaseNanos, totalNanos: 0, regAlloc: RegAllocStats.create()}
 	end 'create'
 
-	export function addPhaseMs(phase CompilePhase, ms DurationMs)
+	export function addPhaseNanos(phase CompilePhase, nanos DurationNanos)
 		let idx = phase.ordinal
-		let cur = try self.phaseMs.get(idx) otherwise panic("CompileTimings.addPhaseMs: phase index OOB for '{phase.name}'")
-		try self.phaseMs.set(idx, value: cur + ms) otherwise panic("CompileTimings.addPhaseMs: phase index OOB for '{phase.name}'")
-	end 'addPhaseMs'
+		let cur = try self.phaseNanos.get(idx) otherwise panic("CompileTimings.addPhaseNanos: phase index OOB for '{phase.name}'")
+		try self.phaseNanos.set(idx, value: cur + nanos) otherwise panic("CompileTimings.addPhaseNanos: phase index OOB for '{phase.name}'")
+	end 'addPhaseNanos'
 
-	export function phaseMsOf(phase CompilePhase) returns DurationMs
-		return try self.phaseMs.get(phase.ordinal) otherwise panic("CompileTimings.phaseMsOf: phase index OOB for '{phase.name}'")
-	end 'phaseMsOf'
+	export function phaseNanosOf(phase CompilePhase) returns DurationNanos
+		return try self.phaseNanos.get(phase.ordinal) otherwise panic("CompileTimings.phaseNanosOf: phase index OOB for '{phase.name}'")
+	end 'phaseNanosOf'
 
 	// What the instrumentation actually claimed — the sum of every phase.
-	export function attributedMs() returns DurationMs
-		var sum = 0 as DurationMs
-		for ms in self.phaseMs 'eachPhase'
-			sum = sum + ms
+	export function attributedNanos() returns DurationNanos
+		var sum = 0 as DurationNanos
+		for nanos in self.phaseNanos 'eachPhase'
+			sum = sum + nanos
 		end 'eachPhase'
 		return sum
-	end 'attributedMs'
+	end 'attributedNanos'
 
 	// Compile time no phase claimed: the glue between phases (project construction,
 	// output-path resolution, the query spine's own cache/hash bookkeeping). Visible
@@ -137,26 +144,26 @@ export type CompileTimings
 	// Phases are disjoint sub-intervals of the timed total, so their sum can NEVER
 	// exceed it. If it does, two timers overlap and are double-counting — the exact
 	// failure this file's header describes, so it panics rather than clamp to zero.
-	export function unattributedMs() returns DurationMs
-		let attributed = self.attributedMs()
-		if attributed > self.totalMs 'overlap'
-			panic("CompileTimings: the phases sum to {attributed} ms but the whole compile took {self.totalMs} ms — two phase timers OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileTimings' header).")
+	export function unattributedNanos() returns DurationNanos
+		let attributed = self.attributedNanos()
+		if attributed > self.totalNanos 'overlap'
+			panic("CompileTimings: the phases sum to {attributed} ns but the whole compile took {self.totalNanos} ns — two phase timers OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileTimings' header).")
 		end 'overlap'
-		return self.totalMs - attributed
-	end 'unattributedMs'
+		return self.totalNanos - attributed
+	end 'unattributedNanos'
 end 'CompileTimings'
 
 // Time inside the `regalloc` phase that none of its six sub-phases claimed: the
 // per-module `splitCriticalEdges`, the per-function RPO block reordering, and the
-// driver loop itself. Same disjointness contract as `CompileTimings.unattributedMs`,
+// driver loop itself. Same disjointness contract as `CompileTimings.unattributedNanos`,
 // enforced the same way — the sub-phases are intervals INSIDE the regalloc wall, so
 // exceeding it means a sub-phase timer overlaps another.
-function regAllocUnattributedMs(timings CompileTimings) returns DurationMs
-	let wall = timings.phaseMsOf(CompilePhase.regalloc)
+function regAllocUnattributedNanos(timings CompileTimings) returns DurationNanos
+	let wall = timings.phaseNanosOf(CompilePhase.regalloc)
 
-	var claimed = 0 as DurationMs
+	var claimed = 0 as DurationNanos
 	for sub in RegAllocPhase.allCases 'eachSub'
-		claimed = claimed + timings.regAlloc.phaseMsOf(sub)
+		claimed = claimed + timings.regAlloc.phaseNanosOf(sub)
 	end 'eachSub'
 
 	if claimed > wall 'overlap'
@@ -164,22 +171,22 @@ function regAllocUnattributedMs(timings CompileTimings) returns DurationMs
 	end 'overlap'
 
 	return wall - claimed
-end 'regAllocUnattributedMs'
+end 'regAllocUnattributedNanos'
 
 // The whole-compile attribution table: every phase with its ms and share of the
 // total, the allocator's sub-phases nested under `regalloc`, and a TOTAL /
 // attributed / unattributed footer that makes any gap explicit.
 export function compileTimingsReport(timings CompileTimings) returns String
-	let total = timings.totalMs
+	let total = timings.totalNanos
 
-	var msg = "compile timings — total {total} ms\n"
+	var msg = "compile timings — total {millisText(total)} ms\n"
 	// The header's label carries the same indent every row's does, so it pads to the
 	// same column width and the three columns line up.
-	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: MsWidth)}{padLeft("%", width: PercentWidth)}\n")
+	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: TimeWidth)}{padLeft("%", width: PercentWidth)}\n")
 	msg.append(horizontalRule())
 
 	for phase in CompilePhase.allCases 'eachPhase'
-		msg.append(timingRow("{RowIndent}{phase.name}", ms: timings.phaseMsOf(phase), total: total))
+		msg.append(timingRow("{RowIndent}{phase.name}", nanos: timings.phaseNanosOf(phase), total: total))
 
 		if phase == CompilePhase.regalloc 'nestRegAlloc'
 			msg.append(regAllocBreakdown(timings, total: total))
@@ -187,9 +194,9 @@ export function compileTimingsReport(timings CompileTimings) returns String
 	end 'eachPhase'
 
 	msg.append(horizontalRule())
-	msg.append(timingRow("{RowIndent}TOTAL", ms: total, total: total))
-	msg.append(timingRow("{RowIndent}attributed", ms: timings.attributedMs(), total: total))
-	msg.append(timingRow("{RowIndent}unattributed", ms: timings.unattributedMs(), total: total))
+	msg.append(timingRow("{RowIndent}TOTAL", nanos: total, total: total))
+	msg.append(timingRow("{RowIndent}attributed", nanos: timings.attributedNanos(), total: total))
+	msg.append(timingRow("{RowIndent}unattributed", nanos: timings.unattributedNanos(), total: total))
 	return msg
 end 'compileTimingsReport'
 
@@ -197,18 +204,31 @@ end 'compileTimingsReport'
 // taken against the WHOLE-COMPILE total (not against the regalloc wall), so a reader
 // can compare "liveness" directly against "parse" — the question the table exists to
 // answer is where the compile's time goes, not where the allocator's does.
-function regAllocBreakdown(timings CompileTimings, total DurationMs) returns String
+function regAllocBreakdown(timings CompileTimings, total DurationNanos) returns String
 	var msg = ""
 	for sub in RegAllocPhase.allCases 'eachSub'
-		msg.append(timingRow("{SubPhaseIndent}{sub.name}", ms: timings.regAlloc.phaseMsOf(sub), total: total))
+		msg.append(timingRow("{SubPhaseIndent}{sub.name}", nanos: timings.regAlloc.phaseNanosOf(sub), total: total))
 	end 'eachSub'
-	msg.append(timingRow("{SubPhaseIndent}(unattributed)", ms: regAllocUnattributedMs(timings), total: total))
+	msg.append(timingRow("{SubPhaseIndent}(unattributed)", nanos: regAllocUnattributedNanos(timings), total: total))
 	return msg
 end 'regAllocBreakdown'
 
-function timingRow(label String, ms DurationMs, total DurationMs) returns String
-	return "{padRight(label, width: PhaseNameWidth)}{padLeft("{ms}", width: MsWidth)}{padLeft(percentOfTotal(ms, total: total), width: PercentWidth)}\n"
+function timingRow(label String, nanos DurationNanos, total DurationNanos) returns String
+	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(nanos), width: TimeWidth)}{padLeft(percentOfTotal(nanos, total: total), width: PercentWidth)}\n"
 end 'timingRow'
+
+// Nanoseconds rendered as milliseconds to one decimal place, in integer math.
+//
+// The timers read `Clock.nowNanos` (a monotonic ~100 ns clock) rather than `Clock.nowMs`,
+// whose GetTickCount64 backing has a ~15.6 ms TICK — coarser than most phases being
+// measured. On that clock every per-function sub-phase read 0 or 16 ms, and the
+// AllocChecker's share of a compile swung between 9.6% and 14.4% across identical runs.
+// The reading was quantization, not signal. Nanoseconds are stored; milliseconds are
+// merely how a human reads the row.
+function millisText(nanos DurationNanos) returns String
+	let tenths = (nanos * MillisTenthsPerSecond) / NanosPerSecond
+	return "{tenths / MillisTenthsPerMs}.{tenths mod MillisTenthsPerMs}"
+end 'millisText'
 
 // Spans exactly the three columns. A row's own indent is part of its label column, so
 // the rule starts at column 0 and ends where the percent column does.
@@ -224,18 +244,18 @@ function horizontalRule() returns String
 end 'horizontalRule'
 
 // `ms` as a percentage of `total`, to one decimal place, in integer math.
-function percentOfTotal(ms DurationMs, total DurationMs) returns String
+function percentOfTotal(nanos DurationNanos, total DurationNanos) returns String
 	if total == 0 'noTotal'
 		// Not a reported build (the warm-rebuild gate never stamps a total), so there is
 		// no denominator to divide by and every share is vacuously zero.
 		return "0.0%"
 	end 'noTotal'
 
-	if ms > total 'overlap'
-		panic("percentOfTotal: a phase claims {ms} ms of a {total} ms compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
+	if nanos > total 'overlap'
+		panic("percentOfTotal: a phase claims {nanos} ns of a {total} ns compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
 	end 'overlap'
 
-	let permille = ((ms * PermilleScale) / total) as Permille
+	let permille = ((nanos * PermilleScale) / total) as Permille
 	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
 end 'percentOfTotal'
 
