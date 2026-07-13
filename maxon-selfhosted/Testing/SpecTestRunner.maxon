@@ -157,6 +157,21 @@ let whitelist = ["basics",
 	"parsable-interface",
 	"register-allocator",
 	"x64-stack-arg-disp32",
+	// Guards the prologue against clobbering an incoming ARGUMENT register. The prologue runs
+	// BEFORE the incoming args are spilled to their slots, so any scratch it needs must be a
+	// register that carries no argument — only R10/R11 qualify (caller-saved, non-argument),
+	// which is the discipline `__gt_morestack` and the arm64 X16/X17 probe already follow.
+	//
+	// The two compilers order arguments DIFFERENTLY, so do not carry the bootstrap's reasoning
+	// into this file:
+	//   C# bootstrap: rcx, rdx, r8, r9, rsi, rdi, rax, rbx  -> RAX is parameter 7
+	//   self-hosted:  rcx, rdx, rax, r9, rsi, rdi, rbx      -> RAX is parameter 3
+	// The bootstrap's `__chkstk` took its probe size in RAX and destroyed parameter 7 of every
+	// function with a >4 KiB frame (370c4813a). This backend emits no `__chkstk` at all — it
+	// allocates frames with a bare `sub rsp, imm32` — so it cannot have that bug. But if anyone
+	// ever ports a probe helper here, note that a RAX clobber would destroy parameter THREE, a
+	// far more common shape than a seventh parameter.
+	"x64-large-frame-arg7",
 	"function-overloads",
 	"tuples",
 	"panic-stack-trace",
