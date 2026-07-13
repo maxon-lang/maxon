@@ -166,12 +166,17 @@ public partial class X86CodeEmitter() {
         EmitPushReg(X86Register.Rbp);
         EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
         if (prologue.StackSize > 4096) {
-          // Large frames need __chkstk to probe guard pages
-          EmitMovRegImm(X86Register.Rax, prologue.StackSize);
+          // Large frames need __chkstk to probe guard pages. The size goes in R11,
+          // never RAX: this runs BEFORE the incoming arguments are spilled, and RAX
+          // carries parameter 7 of the internal calling convention (see EmitChkstk).
+          // R11 is caller-saved and not an argument register, so it is dead here.
+          EmitMovRegImm(X86Register.R11, prologue.StackSize);
           EmitByte(0xE8); // call rel32
           _chkstkCallSites.Add(_code.Count);
           EmitDword(0); // placeholder, patched by PatchChkstkCalls
-          EmitSubRegReg(X86Register.Rsp, X86Register.Rax);
+          // __chkstk leaves rsp alone; the frame size is a compile-time constant,
+          // so allocate it with an immediate rather than a second register.
+          EmitSubRegImm(X86Register.Rsp, prologue.StackSize);
         } else if (prologue.StackSize > 0) {
           EmitSubRegImm(X86Register.Rsp, prologue.StackSize);
         }
@@ -544,27 +549,37 @@ public partial class X86CodeEmitter() {
 
   public void EmitChkstk() {
     DefineLabel("__chkstk");
-    // Probes each 4K page between current rsp and rsp-rax to trigger
-    // guard page expansion on Windows. rax = allocation size (preserved).
-    // Uses r10/r11 as scratch (caller-saved, safe in prologue context).
+    // Probes each 4K page between rsp and rsp-size so Windows expands the stack
+    // one guard page at a time (skipping a guard page faults the process).
+    //
+    // The allocation size arrives in R11, NOT RAX. This is load-bearing: the
+    // prologue calls this BEFORE spilling the incoming argument registers, and
+    // RAX is the 7th register of the internal calling convention (CallConvRegs =
+    // rcx, rdx, r8, r9, rsi, rdi, rax, rbx). A probe helper that took its size in
+    // RAX silently destroyed parameter 7 of every function with a >4 KiB frame.
+    // R10/R11 are caller-saved and are not argument registers, so they are the
+    // only registers dead at function entry — the same discipline __gt_morestack
+    // and the arm64 probe (X16/X17) already follow.
+    //
+    // Clobbers R10 and R11. Leaves rsp untouched, so the `ret` below needs no
+    // stack restore, and the caller subtracts the (compile-time constant) frame
+    // size itself.
 
-    // r10 = rsp (save original rsp, accounting for return address on stack)
+    // r10 = lowest address the frame will reach = rsp - size
     EmitMovRegReg(X86Register.R10, X86Register.Rsp);
+    EmitSubRegReg(X86Register.R10, X86Register.R11);
 
-    // r11 = rsp - rax (target address)
+    // r11 = probe cursor, walking down from rsp (the size is no longer needed)
     EmitMovRegReg(X86Register.R11, X86Register.Rsp);
-    EmitSubRegReg(X86Register.R11, X86Register.Rax);
 
     // Probe loop: touch each 4K page
     DefineLabel("__chkstk_loop");
-    EmitSubRegImm(X86Register.Rsp, 4096);
-    // test dword ptr [rsp], 0 — read-probe to trigger guard page expansion
-    EmitByte(0xF7); EmitByte(0x04); EmitByte(0x24); EmitDword(0);
-    EmitCmpRegReg(X86Register.Rsp, X86Register.R11);
-    EmitJcc("a", "__chkstk_loop"); // loop while rsp > target
+    EmitSubRegImm(X86Register.R11, 4096);
+    // test dword ptr [r11], 0 — read-probe to trigger guard page expansion
+    EmitBytes(0x41, 0xF7, 0x03); EmitDword(0);
+    EmitCmpRegReg(X86Register.R11, X86Register.R10);
+    EmitJcc("a", "__chkstk_loop"); // loop while the cursor is above the target
 
-    // Restore original rsp (caller will do sub rsp, rax)
-    EmitMovRegReg(X86Register.Rsp, X86Register.R10);
     EmitByte(0xC3); // ret
   }
 
