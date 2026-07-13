@@ -1,0 +1,429 @@
+// HallCondition — the feasibility test for a program point whose live values have DIFFERENT
+// effective pools (design: ARCHITECTURE.md's register-allocator section, "Known limits" #0).
+//
+// WHAT IT IS FOR. `maxPressure <= pool` is NECESSARY but not SUFFICIENT, because a forbidden set
+// SHRINKS a value's pool: a value live across a `callDirect` is forbidden all 9 caller-saved
+// registers, so its only home is one of the 5 CALLEE-SAVED; a value live across an `idiv` cannot be
+// RAX/RDX; a value live across an argument pre-move cannot be that argument register. Two values at
+// the same point can therefore be shopping in two different, differently sized register sets, and
+// counting them against one number cannot decide whether they fit.
+//
+// THE CASE THE OLD TEST COULD NOT SEE. The splitter used to test each op two ways: `effective >
+// |pool|` (the full pool) and `raw > popcount(pool ∖ op.implicitDefs)` (the op's own reduced pool).
+// The second only ever fires AT A CLOBBER OP, so it is blind to exactly this:
+//
+//     several values are each confined to the callee-saved subset — but by DIFFERENT calls — and
+//     are simultaneously live at a point that is NOT ITSELF A CALL.
+//
+// At that point the pool is nominally the full 14, so the peak-finder saw nothing; no call had more
+// than five values live across it, so the reduced-pool test saw nothing either. The splitter
+// relieved nothing and the COLORER then ran out of registers ("no free register", every callee-saved
+// one taken). Six values, each used after a call in its own arm of an `if`/`else if` chain, are
+// enough: each is live across only ITS OWN call (liveness is path-sensitive — a value used only in
+// arm 3 is dead in arm 1), yet all six are live together at the chain's first `cmp`.
+//
+// THE MODEL. At a program point, give each live value `v` its ALLOWED set `A(v) = pool ∖
+// forbidden(v)`. Colouring the point is a system of distinct representatives — a bipartite matching
+// between values and registers — and by HALL'S THEOREM it is possible iff no register set `U` has
+// more values confined to it than it has registers:
+//
+//     for every U ⊆ pool:   |{ v : A(v) ⊆ U }|  <=  |U|
+//
+// This SUBSUMES both old tests. `U = pool` is the full-pool test (every value is confined to the
+// pool, so it is plain pigeonhole). `U = callee-saved` at a call is the reduced-pool test (every
+// value live across the call is confined to it). And it additionally sees the case above, whose
+// witness `U` is the callee-saved set at a point that is not a call.
+//
+// HOW IT IS COMPUTED, AND WHY IN TWO STAGES. Enumerating every `U` is exponential, so:
+//
+//  1. A CARDINALITY SCREEN, O(live + 16), runs at every op (`RegPoolCensus.screenViolates`): bucket
+//     the live values by `|A(v)|` and prefix-sum, so `C(p) = #{v : |A(v)| <= p}`; report a possible
+//     violation if `C(p) > p` for some `p`. This NEVER MISSES a real one — every value of a
+//     violating tight set has `|A(v)| <= |U|`, so a violation at `U` always trips the screen at
+//     `p = |U|`. It is maintained INCREMENTALLY across the backward sweep, exactly as the live count
+//     is, and skipped outright when no live value is constrained (every op of a call-free function).
+//
+//  2. An EXACT CONFIRMATION, run only where the screen fires (`hallVerdictAt`): a maximum bipartite
+//     matching. Feasible iff it saturates the live values; the deficit is `|live| - |matching|`
+//     (the König–Ore deficiency), and the tight set / witness `U` falls out of the same search.
+//
+// The screen alone would NOT be exact, and the difference matters: the forbidden sets are NOT
+// laminar. `forbidEntryParamCrossRegisters` forbids each parameter its SIBLINGS' incoming registers,
+// so with three parameters the masks are `{rdx,rax}`, `{rcx,rax}`, `{rcx,rdx}` — same size,
+// pairwise INCOMPARABLE, and jointly colourable. A cardinality-only test can call such a group an
+// overflow when it fits, and the spill it would then emit is one the program did not need. The
+// confirmation is what keeps this from adding pressure relief to code that was already fine — the
+// same discipline that makes a false E5001 the worst bug this compiler can have.
+//
+// COST. The confirmation runs only where the screen fired and the point does NOT overflow the full
+// pool — so `|live| <= |pool| <= RegisterFileSize` there, and the whole search is bounded by 16
+// values × 16 registers. Everything else on the per-op path is the O(16) prefix scan, behind a
+// zero-constrained-values gate.
+
+// The registers `valueId` may actually be coloured into: the pool minus every register an op wrote
+// while the value was live across it (`forbidden` — a call's 9 caller-saved, an `idiv`'s RAX/RDX,
+// an argument pre-move's target). This is the ONE definition of a value's effective pool; the
+// colorer blocks on the same mask (`chooseRegister`), so the two cannot disagree about what fits.
+export function allowedRegistersOf(liveness LivenessResult, valueId ValueId, pool RegMask) returns RegMask
+	return pool and not liveness.forbiddenOf(valueId)
+end 'allowedRegistersOf'
+
+// Is `valueId` confined to `witness` — is EVERY register it could take inside that set? This is
+// membership of the tight set an overflow is about, and it is what makes a victim choice
+// meaningful: spilling a value that could have taken a register OUTSIDE the witness frees nothing
+// the confined values were able to use. For a FULL-pool peak the witness IS the pool, so every value
+// is confined to it and the test is a no-op — which is why the E5001 path is untouched by it.
+export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
+	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
+end 'valueConfinedTo'
+
+// Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))`. One dense column, filled once per
+// pressure sweep, so maintaining the per-op census costs an array read instead of a popcount.
+export function effectivePoolSizes(liveness LivenessResult, pool RegMask) returns CfgIndexArray
+	var sizes = zeroColumn(liveness.valueCount)
+	for v in 0 upto liveness.valueCount 'eachValue'
+		try sizes.set(v, value: regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))) otherwise panic("effectivePoolSizes: sizes.set OOB for value {v}")
+	end 'eachValue'
+	return sizes
+end 'effectivePoolSizes'
+
+// ==========================================================================
+// Stage 1 — the cardinality screen (per op, O(live + 16))
+// ==========================================================================
+
+// The live set's census BY EFFECTIVE POOL SIZE: how many live values have exactly `k` registers
+// available to them. Hall's condition needs the whole DISTRIBUTION, not just the total, which is
+// precisely what a single `liveCount` cannot carry.
+//
+// Maintained INCREMENTALLY across the backward sweep (`stepCensusBackwardOverOp`), for the same
+// reason `liveCount` is: recomputing it would be a walk of the live set at every op — O(ops × live)
+// per sweep, per splitter iteration — which is the quadratic the sparse representation exists to
+// remove.
+export type RegPoolCensus
+	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
+	var byPoolSize as CfgIndexArray
+	// How many live values are CONSTRAINED (effective pool strictly smaller than the full pool).
+	// Zero at every op of a call-free, idiv-free function, and the screen returns early when it is —
+	// so an unconstrained function pays nothing for this test at all.
+	var constrained as RegCount
+
+	export static function create() returns RegPoolCensus
+		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), constrained: 0}
+	end 'create'
+
+	export function reset()
+		for size in 0 upto RegisterFileSize + 1 'eachSize'
+			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
+		end 'eachSize'
+		self.constrained = 0
+	end 'reset'
+
+	export function add(poolSize RegCount, fullPoolSize RegCount)
+		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.add: pool size {poolSize} out of range")
+		try self.byPoolSize.set(poolSize, value: current + 1) otherwise panic("RegPoolCensus.add: byPoolSize.set OOB")
+		if poolSize < fullPoolSize 'constrainedValue'
+			self.constrained = self.constrained + 1
+		end 'constrainedValue'
+	end 'add'
+
+	export function remove(poolSize RegCount, fullPoolSize RegCount)
+		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.remove: pool size {poolSize} out of range")
+		if current == 0 'underflow'
+			panic("RegPoolCensus.remove: no live value has an effective pool of {poolSize} — the census has drifted from the live row it mirrors")
+		end 'underflow'
+		try self.byPoolSize.set(poolSize, value: current - 1) otherwise panic("RegPoolCensus.remove: byPoolSize.set OOB")
+		if poolSize < fullPoolSize 'constrainedValue'
+			self.constrained = self.constrained - 1
+		end 'constrainedValue'
+	end 'remove'
+
+	// Does the cardinality screen see a possible Hall violation against a PROPER SUBSET of the pool?
+	//
+	// `C(p) = #{ live v : |A(v)| <= p }`, and `C(p) > p` for some `p < fullPoolSize` means more values
+	// are confined to `p`-or-fewer registers than `p` registers exist. That is NECESSARY for a real
+	// violation (every value of a tight set `U` has `|A(v)| <= |U|`, so the violation at `U` shows up
+	// here at `p = |U|`) but not sufficient — see the file header on why the masks are not laminar —
+	// so a `true` here is a call for the exact confirmation, never a verdict.
+	//
+	// `p == fullPoolSize` is deliberately NOT scanned: that is the FULL-pool overflow, whose demand
+	// is `effective` (live values PLUS the dead-phi reservations PLUS the reuse-copy transient) and
+	// not the live count alone. The caller tests it separately and it always outranks this one.
+	export function screenViolates(fullPoolSize RegCount) returns bool
+		if self.constrained == 0 'nothingConfined'
+			return false
+		end 'nothingConfined'
+
+		var confinedSoFar = 0 as RegCount
+		for p in 0 upto fullPoolSize 'prefixSum'
+			confinedSoFar = confinedSoFar + (try self.byPoolSize.get(p) otherwise panic("RegPoolCensus.screenViolates: byPoolSize.get OOB at {p}"))
+			if confinedSoFar > p 'violates'
+				return true
+			end 'violates'
+		end 'prefixSum'
+		return false
+	end 'screenViolates'
+end 'RegPoolCensus'
+
+// Step the live ROW and its CENSUS backward over one op together, returning the new live count.
+//
+// The census delta is OBSERVED, never re-derived. A backward step flips only the op's OWN virtual
+// operands, so their live bits are recorded BEFORE `stepRowBackwardOverOperands` and compared AFTER.
+// Re-deriving which bits flip would duplicate that transfer function in a second place, and the two
+// silently drifting apart is exactly the class of pressure bug this file exists to end.
+//
+// `ids`/`wasLive` are caller-owned scratch, reused across every op so nothing is allocated in the
+// sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
+// is also its use), and counting a single flip twice would corrupt the census for the rest of the
+// block.
+export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, liveCount RegCount, census RegPoolCensus, effPoolSizes CfgIndexArray, fullPoolSize RegCount, ids ValueIdArray, wasLive BoolArray) returns RegCount
+	ids.clear()
+	wasLive.clear()
+	for o in buf 'snapshot'
+		if not operandIsVirtual(o) 'physical'
+			continue
+		end 'physical'
+		let v = operandValueId(o)
+		if valueIdListContains(ids, valueId: v) 'alreadySnapshot'
+			continue
+		end 'alreadySnapshot'
+		ids.push(v)
+		wasLive.push(bitsetTest(row, base: 0, bit: v))
+	end 'snapshot'
+
+	let liveBefore = stepRowBackwardOverOperands(row, base: 0, buf: buf, liveCount: liveCount)
+
+	for k in 0 upto ids.count() 'applyDelta'
+		let v = try ids.get(k) otherwise panic("stepCensusBackwardOverOp: ids.get OOB at {k}")
+		let was = try wasLive.get(k) otherwise panic("stepCensusBackwardOverOp: wasLive.get OOB at {k}")
+		let now = bitsetTest(row, base: 0, bit: v)
+		if was == now 'unchanged'
+			continue
+		end 'unchanged'
+
+		let size = try effPoolSizes.get(v) otherwise panic("stepCensusBackwardOverOp: value {v} is outside the function's value space")
+		if now 'entered'
+			census.add(size, fullPoolSize: fullPoolSize)
+		end 'entered' else 'left'
+			census.remove(size, fullPoolSize: fullPoolSize)
+		end 'left'
+	end 'applyDelta'
+
+	return liveBefore
+end 'stepCensusBackwardOverOp'
+
+// Is `valueId` already in `ids`? A linear scan, and deliberately so: `ids` holds one op's distinct
+// virtual operands — at most a handful — so a set would cost more to build than the scan costs to
+// run.
+function valueIdListContains(ids ValueIdArray, valueId ValueId) returns bool
+	for existing in ids 'each'
+		if existing == valueId 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'valueIdListContains'
+
+// ==========================================================================
+// Stage 2 — the exact confirmation (maximum bipartite matching)
+// ==========================================================================
+
+// What the exact test says about one program point.
+export union HallVerdict
+	// Every live value can be given a DISTINCT register it is allowed to take. The point colours,
+	// whatever the screen suspected.
+	feasible
+	// It cannot. `witness` is the register set the overflow is against (the callee-saved subset at a
+	// call, `pool ∖ {rax,rdx}` at an `idiv`, or — the case this file was written for — the
+	// callee-saved subset at a point that is not a call at all). `tight` is how many live values are
+	// confined to it, so `tight - popcount(witness)` is the EXACT number that must leave.
+	overflow(witness RegMask, tight RegCount)
+end 'HallVerdict'
+
+// The EXACT verdict for one program point: can the values in `live` be given distinct registers they
+// are each allowed to take?
+//
+// This is a maximum bipartite matching — values on one side, the 16 physical registers on the other,
+// an edge wherever `A(v)` permits. Hall's theorem: the point colours iff the matching SATURATES the
+// values. The DEFICIT is `|live| - |matching|` (König–Ore deficiency), and the witness falls out of
+// the same alternating-path search that proved the matching maximum.
+//
+// It runs only where the cardinality screen already fired AND the point does not overflow the full
+// pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by 16 values × 16
+// registers and cannot be a hot-path cost.
+//
+// It answers FEASIBILITY, not the colorer's CHOICE. The colorer is a dominance-order greedy, exact
+// for this constraint family because it prefers caller-saved registers first (so an unconstrained
+// value never takes a callee-saved one while a caller-saved one is free) and because a copy hint may
+// never take a register outside a value's preferred class while that class still has one free
+// (`preferredClassMask`, M5.12). A point this call declares feasible is one the colorer can colour.
+export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask) returns HallVerdict
+	let valueCount = live.count()
+	// "No register" / "no value" markers, each one past the last valid index of its side.
+	let noRegister = RegisterFileSize
+	let noValue = valueCount
+
+	var allowed = RegMaskColumn.create()
+	allowed.resize(valueCount)
+	for i in 0 upto valueCount 'eachValue'
+		let v = try live.get(i) otherwise panic("hallVerdictAt: live.get OOB at {i}")
+		try allowed.set(i, value: allowedRegistersOf(liveness, valueId: v, pool: pool)) otherwise panic("hallVerdictAt: allowed.set OOB at {i}")
+	end 'eachValue'
+
+	// The matching, as its two inverse maps. Positions in `live`, not ValueIds — the search is over
+	// this point's live set alone, so a dense 0..valueCount numbering is the right one.
+	var regOfValue = filledColumn(valueCount, value: noRegister)
+	var valueOfReg = filledColumn(RegisterFileSize, value: noValue)
+
+	var matched = 0 as RegCount
+	for i in 0 upto valueCount 'augment'
+		if augmentValue(i, allowed: allowed, regOfValue: regOfValue, valueOfReg: valueOfReg, noRegister: noRegister, noValue: noValue) 'grew'
+			matched = matched + 1
+		end 'grew'
+	end 'augment'
+
+	if matched == valueCount 'saturated'
+		return HallVerdict.feasible
+	end 'saturated'
+
+	let witness = tightRegisterSet(allowed, regOfValue: regOfValue, valueOfReg: valueOfReg, valueCount: valueCount, noRegister: noRegister, noValue: noValue)
+	let tight = countConfinedTo(allowed, witness: witness, valueCount: valueCount)
+
+	// The tight set is exactly the unmatched values plus the holders of the witness registers — every
+	// witness register is held (an unheld one would have been an augmenting path), and every value
+	// confined to the witness is reachable through the register it holds. So the two ways of counting
+	// it must agree, and a disagreement means the matching or the reachability walk is wrong — which
+	// would silently corrupt the deficit this reports.
+	let expected = regMaskPopcount(witness) + (valueCount - matched)
+	if tight != expected 'inconsistentTightSet'
+		panic("hallVerdictAt: {tight} live values are confined to the witness {witness} but the matching's tight set has {expected} (witness {regMaskPopcount(witness)} + unmatched {valueCount - matched}) — the maximum matching and its alternating-path reachability disagree")
+	end 'inconsistentTightSet'
+
+	return HallVerdict.overflow(witness, tight: tight)
+end 'hallVerdictAt'
+
+// One augmenting search from value position `start`, growing the matching by one if it can.
+//
+// Alternating paths: `start` offers a register it is allowed; if the register is FREE, take it; if it
+// is HELD, the holder is queued and must find another register for itself, freeing this one. Reaching
+// a free register means the whole chain can shift by one and `start` ends up matched.
+//
+// ITERATIVE — a worklist plus one parent link per register — like every other graph walk in the
+// allocator. The parent links are not just an anti-recursion device: they ARE the path the
+// augmentation walks back along.
+function augmentValue(start CfgIndex, allowed RegMaskColumn, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, noRegister CfgIndex, noValue CfgIndex) returns bool
+	// register -> the value position that offered it during THIS search (its predecessor on the
+	// alternating path). Only registers in `visited` have a meaningful entry.
+	var parentOfReg = filledColumn(RegisterFileSize, value: noValue)
+	var visited = 0 as RegMask
+	var queue = CfgIndexArray.create()
+	queue.push(start)
+
+	var head = 0 as CfgIndex
+	while head < queue.count() 'alternatingPaths'
+		let u = try queue.get(head) otherwise panic("augmentValue: queue.get OOB at {head}")
+		head = head + 1
+
+		let mask = try allowed.get(u) otherwise panic("augmentValue: allowed.get OOB for value position {u}")
+		for r in 0 upto RegisterFileSize 'eachRegister'
+			if not regMaskContains(mask, regNum: r) 'notAllowed'
+				continue
+			end 'notAllowed'
+			if regMaskContains(visited, regNum: r) 'alreadyOnAPath'
+				continue
+			end 'alreadyOnAPath'
+
+			visited = regMaskAdd(visited, regNum: r)
+			try parentOfReg.set(r, value: u) otherwise panic("augmentValue: parentOfReg.set OOB at {r}")
+
+			let holder = try valueOfReg.get(r) otherwise panic("augmentValue: valueOfReg.get OOB at {r}")
+			if holder == noValue 'freeRegister'
+				applyAugmentingPath(r, start: start, parentOfReg: parentOfReg, regOfValue: regOfValue, valueOfReg: valueOfReg, noRegister: noRegister)
+				return true
+			end 'freeRegister'
+
+			queue.push(holder)
+		end 'eachRegister'
+	end 'alternatingPaths'
+
+	return false
+end 'augmentValue'
+
+// Flip every edge on the alternating path from the free register `freeReg` back to `start`: each
+// register on it is re-assigned to the value that offered it, and THAT value's previous register —
+// vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
+// register, so the matching finishes one edge larger.
+function applyAugmentingPath(freeReg CfgIndex, start CfgIndex, parentOfReg CfgIndexArray, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, noRegister CfgIndex)
+	var reg = freeReg
+	var reachedStart = false
+	while not reachedStart 'walkBack'
+		let u = try parentOfReg.get(reg) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
+		let vacated = try regOfValue.get(u) otherwise panic("applyAugmentingPath: regOfValue.get OOB for value position {u}")
+
+		try valueOfReg.set(reg, value: u) otherwise panic("applyAugmentingPath: valueOfReg.set OOB at {reg}")
+		try regOfValue.set(u, value: reg) otherwise panic("applyAugmentingPath: regOfValue.set OOB for value position {u}")
+
+		reachedStart = u == start
+		if (not reachedStart) and vacated == noRegister 'brokenPath'
+			panic("applyAugmentingPath: value position {u} is on the alternating path but held no register, yet it is not the search's start — only the start is unmatched, so the parent links are corrupt")
+		end 'brokenPath'
+		reg = vacated
+	end 'walkBack'
+end 'applyAugmentingPath'
+
+// The Hall WITNESS: the registers reachable from the UNMATCHED values along alternating paths.
+//
+// Every one of them is held — an unheld reachable register would have been an augmenting path, and
+// the matching is already maximum, so the walk asserts that rather than assume it. The values that
+// reach them (the unmatched ones, plus each holder) are therefore confined to exactly this register
+// set and outnumber it by the deficiency. That is the set Hall's condition fails on, and it is why
+// removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
+// unmatched value augment into the chain.
+function tightRegisterSet(allowed RegMaskColumn, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, valueCount CfgIndex, noRegister CfgIndex, noValue CfgIndex) returns RegMask
+	var reachable = 0 as RegMask
+	var queue = CfgIndexArray.create()
+	for i in 0 upto valueCount 'seedUnmatched'
+		if (try regOfValue.get(i) otherwise panic("tightRegisterSet: regOfValue.get OOB at {i}")) == noRegister 'unmatched'
+			queue.push(i)
+		end 'unmatched'
+	end 'seedUnmatched'
+
+	var head = 0 as CfgIndex
+	while head < queue.count() 'alternatingPaths'
+		let u = try queue.get(head) otherwise panic("tightRegisterSet: queue.get OOB at {head}")
+		head = head + 1
+
+		let mask = try allowed.get(u) otherwise panic("tightRegisterSet: allowed.get OOB for value position {u}")
+		for r in 0 upto RegisterFileSize 'eachRegister'
+			if not regMaskContains(mask, regNum: r) 'notAllowed'
+				continue
+			end 'notAllowed'
+			if regMaskContains(reachable, regNum: r) 'alreadyReached'
+				continue
+			end 'alreadyReached'
+
+			reachable = regMaskAdd(reachable, regNum: r)
+
+			let holder = try valueOfReg.get(r) otherwise panic("tightRegisterSet: valueOfReg.get OOB at {r}")
+			if holder == noValue 'freeRegister'
+				panic("tightRegisterSet: register {r} is reachable from an unmatched value along an alternating path yet is held by nobody — that is an augmenting path, so the matching `augmentValue` produced is not maximum")
+			end 'freeRegister'
+
+			queue.push(holder)
+		end 'eachRegister'
+	end 'alternatingPaths'
+
+	return reachable
+end 'tightRegisterSet'
+
+// How many of the point's live values are confined to `witness` — every register they could take
+// lies inside it. This is the set the overflow is about, and the number the deficit is measured from.
+function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount CfgIndex) returns RegCount
+	var confined = 0 as RegCount
+	for i in 0 upto valueCount 'eachValue'
+		let mask = try allowed.get(i) otherwise panic("countConfinedTo: allowed.get OOB at {i}")
+		if (mask and not witness) == 0 'insideWitness'
+			confined = confined + 1
+		end 'insideWitness'
+	end 'eachValue'
+	return confined
+end 'countConfinedTo'

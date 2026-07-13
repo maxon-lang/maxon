@@ -746,18 +746,21 @@ Three consequences, and they are the reason several things elsewhere in the comp
 >   and every use sit at loop depth 0). Store before, reload after; **every inserted op lies
 >   outside every loop**, asserted on insertion. This relieves a **full-pool** overflow.
 >
-> - **FORCED** (`SpillPlacement.forced`) — the value is live across a **fixed-register point** (a
->   call, an `idiv`) whose live-across set exceeds `pool ∖ implicitDefs`. It *cannot* stay in a
->   register the op clobbers, so the store/reload bracket is the only placement in existence.
+> - **FORCED** (`SpillPlacement.forced`) — the value is **confined** by the clobbers it is live
+>   across (a call's caller-saved set, an `idiv`'s RAX/RDX), and more values are confined to that
+>   register subset than it has registers (Hall's condition — `HallCondition.maxon`). It *cannot* stay
+>   in a register those ops clobber, so the store/reload bracket is the only placement in existence.
 >   **Permitted at any loop depth** — this is the amendment, and it is what makes ordinary
->   call-in-a-loop code compile.
+>   call-in-a-loop code compile. Note the confinement is a property of the **value's whole live
+>   range**, not of the clobber op: the violation can therefore appear at a point that clobbers
+>   nothing at all, which is exactly the bug "Known limits" #0 records.
 >
 > `E5001` fires **only** on a **full-pool** overflow with no cold-spillable value: the loop's
-> genuine working set exceeds the machine. A **clobber-only** overflow (pressure fits the full pool
-> but not the op's reduced pool) is *always* relievable by a forced bracket — every live-across
-> value has a store anchor, an op def or a phi's block entry — so reaching `E5001` from one is a
-> **splitter bug**, and `noVictimAtPeak` panics rather than let it surface as user register
-> pressure.
+> genuine working set exceeds the machine. A **confined** (clobber-only) overflow (the values fit the
+> full pool but not the subset they are confined to) is *always* relievable by a forced bracket —
+> every confined value has a store anchor, an op def or a phi's block entry — so reaching `E5001`
+> from one is a **splitter bug**, and `noVictimAtPeak` panics rather than let it surface as user
+> register pressure.
 >
 > **The two pools count two different demands, and lumping them over-counts.** Full-pool demand is
 > the colorer's total register hold at a point — live values *plus* dead-phi reservations *plus*
@@ -834,7 +837,7 @@ across the module (outside the per-function loop, because inserting a block muta
 
 | # | Phase | File | What it does |
 |---|---|---|---|
-| 1 | **Split** | `SplitLiveRanges.maxon` | Cold-spill live-range splitting. Mutates the IR and returns the final `LivenessResult`. |
+| 1 | **Split** | `SplitLiveRanges.maxon` + `HallCondition.maxon` | Cold-spill live-range splitting. Finds every point that cannot be colored — including one whose values are *confined* to a register subset too small for them (Hall) — and relieves it. Mutates the IR and returns the final `LivenessResult`. |
 | 2 | **Color** | `RegisterAllocator.maxon` | Biased forward-sweep coloring. Records the reuse copies it needed. |
 | 3 | **Plan SSA destruction** | `SsaDestruction.maxon` | Builds the per-edge parallel-copy plan; does not commit. |
 | 4 | **Check** | `AllocChecker.maxon` | Symbolically verifies the still-virtual program + coloring + plans. |
@@ -939,20 +942,31 @@ scarce-class protection (below) exactly as it was.
 choose a victim → remat or spill → recompute liveness → repeat, with a runaway bound and a
 post-condition assert that no point still exceeds its pool.
 
-**Two overflows, two pools, two responses.** `reducedPoolSizeAt(op) = popcount(pool ∖
-op.implicitDefs)` — a value live across a `callDirect` competes for the **5 callee-saved**
-registers, one live across an `idiv` for `pool ∖ {rax, rdx}`. Each op is therefore tested twice:
+**Two overflows, two responses — and the second is HALL'S CONDITION, not a second number**
+(`HallCondition.maxon`). A clobber shrinks a *value's* pool for its **whole live range**: a value
+live across a `callDirect` can only ever sit in one of the **5 callee-saved** registers, one live
+across an `idiv` in `pool ∖ {rax, rdx}`, one live across an argument pre-move outside that argument
+register. Values at one point are therefore shopping in **differently sized register sets**, and no
+single number decides whether they fit. Each op is tested two ways:
 
 | overflow | demand counted | against | response |
 |---|---|---|---|
 | **full-pool** | `effective` — live values **+** dead-phi reservations **+** the reuse-copy transient | the whole pool (14) | COLD split; `E5001` if nothing is idle |
-| **clobber-only** | `raw` — only the values the op *constrains* (live across it, plus its own operands) | `pool ∖ implicitDefs` | **FORCED bracket**, at any loop depth. Never `E5001` |
+| **confined** | Hall: for every register subset `U`, the live values with `A(v) = pool ∖ forbidden(v) ⊆ U` | `U` — the **witness** (the callee-saved subset at a call; `pool ∖ {rax,rdx}` at an `idiv`) | **FORCED bracket**, at any loop depth. Never `E5001` |
 
-The two demands are genuinely different, and lumping them over-counts the reduced pool: a dead phi
-is not live across the call and is not forbidden its clobbered registers, and
-`pickPreferredRegister` puts it in a caller-saved register anyway — so it never competes for the
-callee-saved subset. Full-pool peaks always outrank clobber-only ones, so they are relieved first;
-that ordering is what makes the store-anchor gate sound by the time a clobber peak is reached.
+The two demands are genuinely different, and lumping them over-counts: a dead phi is not live across
+the call and is not forbidden its clobbered registers, and `pickPreferredRegister` puts it in a
+caller-saved register anyway — so it is confined to nothing and never competes for the callee-saved
+subset. Full-pool peaks always outrank confined ones, so they are relieved first; that ordering is
+what makes the store-anchor gate sound by the time a confined peak is reached (and it also bounds the
+live set at 14 wherever the Hall search runs, which is what makes an exact search affordable).
+
+The confined test **subsumes** the old one — at a call, every live-across value is confined to the
+callee-saved subset, so the witness is that subset and the count is the same live count the old
+`raw > popcount(pool ∖ implicitDefs)` compared. What it adds is the case that check could not
+express: values confined by **different** calls, colliding at a point that is not itself a call.
+That was a colorer panic. See "Known limits" #0 for the two-stage screen-then-confirm shape and why
+the cheap cardinality form alone is *not* exact.
 
 **Victim choice** is remat-first, then Belady/MIN:
 - **Rematerializable** values (a constant def, not a phi, not edge-passed) are re-emitted at each
@@ -1009,11 +1023,16 @@ set against the registers available AT that point. This file does not re-decide 
 turns an already-exact decision into a source-mapped message, so **it cannot add a false positive**.
 
 The message reports:
-- **The exact deficit** — "remove 3 of these 17 values", not "too many".
-- **The constrained register count that actually applies.** A value live across a **call** can only
-  sit in one of the 5 callee-saved registers, so at a call the effective pool is 5, not 14 — and an
-  `idiv` reserves RAX/RDX. Reporting the nominal 14 would be actively misleading to a consumer that
-  acts on it literally.
+- **The exact deficit** — "remove 3 of these 17 values", not "too many" — measured against the
+  peak's own **witness** (`PressurePeak.witness`), which for an `E5001` is always the full pool of
+  14. That equality is enforced, not assumed: `E5001` is raised **only** for a full-pool overflow (a
+  *confined* point is relieved by a forced bracket, and `noVictimAtPeak` panics rather than let one
+  reach the diagnostic), and `buildRegisterPressureMessage` panics if it ever sees a witness that is
+  not the whole pool. Reading the pool off the peak **op** instead — `pool ∖ op.implicitDefs`, which
+  is what this used to do — reports 5 whenever a full-pool overflow happens to land on a call, and
+  the deficit computed from it asks the author to remove **nine more values than the program needs**.
+  Measuring an `E5001` against a reduced pool is the false-positive class of "Known limits" #2; the
+  witness makes it structurally unspellable.
 - **Each blocking value's source def site**, ranked cheapest-to-move first (fewest uses inside the
   loop = fewest reloads after the array rewrite).
 - **The transformation**, named: hold the working set in an array. Array elements are never promoted
@@ -1353,11 +1372,45 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    class while that class still has one free.** Copy elision is worth a `mov`; it is never worth a
    register the value cannot otherwise obtain. (`while-loops.sequential-loops-across-a-call`.)
 
-   The remaining exposure is the same shape at a *different* scale: if values confined by
-   *different* calls are simultaneously live at a point that is not itself a call, the peak-finder —
-   which only checks the reduced pool AT clobber ops — will not see the collision. The exact model
-   is Hall's condition on the per-value effective pools (`popcount(pool ∖ forbidden(v))`), which is
-   sound because the forbidden sets here are laminar (`∅ ⊂ {rax,rdx} ⊂ caller-saved`). Not yet built.
+   **The second half of this class is now CLOSED (`HallCondition.maxon`), and it took a stronger
+   test than this entry originally proposed.** The exposure was the same shape at a *different*
+   scale: values confined by **different** calls, simultaneously live at a point that is **not
+   itself a call**. The peak-finder only checked the reduced pool AT clobber ops, so it saw nothing
+   (at that point the pool is nominally the full 14), no single call had more than five values live
+   across it, and the **colorer** then died with every register blocked. Six values, each used after
+   a call in its own arm of an `if`/`else if` chain, are enough — liveness is path-sensitive, so
+   each is live across only *its own* call, yet all six are live together at the chain's first
+   `cmp`. (`register-spill.values-confined-by-different-calls`.)
+
+   The model is **Hall's condition** on the per-value effective pools: no register subset `U` may
+   have more values *confined* to it (`A(v) = pool ∖ forbidden(v) ⊆ U`) than it has registers. It
+   **subsumes** both old tests — `U = pool` is the full-pool pigeonhole, and `U = callee-saved` at a
+   call is the reduced-pool check — and the witness `U` is what tells `chooseVictim` which values can
+   actually relieve the point (spilling one that could have taken a register outside `U` frees
+   nothing) and what the E5001 deficit is measured against.
+
+   > **The laminarity this entry claimed is FALSE, and the cardinality test it implied is therefore
+   > not exact.** `forbidEntryParamCrossRegisters` forbids each parameter its **siblings'** incoming
+   > registers, so with three parameters the masks are `{rdx,rax}`, `{rcx,rax}`, `{rcx,rdx}` — the
+   > same size, pairwise **incomparable**, and jointly colorable. Bucketing by `|A(v)|` and
+   > prefix-summing (`C(p) > p`) can call such a group an overflow *when it fits* — and the relief it
+   > would then emit is a spill the program did not need, which is a false positive in a smaller key.
+   > So the test runs in **two stages**: the O(16) cardinality prefix-sum is a **screen** (it never
+   > *misses* — every value of a violating tight set has `|A(v)| ≤ |U|` — and is maintained
+   > incrementally alongside the live count, gated on any value being confined at all, so a call-free
+   > function pays nothing), and where it fires, an **exact** maximum bipartite matching decides.
+   > Feasible iff it saturates the live values; the deficit is `|live| − |matching|` and the witness
+   > falls out of the same alternating-path search. The confirmation is cheap because it only runs
+   > where the point already fits the full pool, which bounds the live set at 14.
+
+   Relief is a **forced bracket**, never `E5001` — the program fits the machine. One tie-break makes
+   that true *and* leaves existing code untouched: a value confined by a call is confined
+   **everywhere it is live**, not just at the call, so Hall sees the same violation at every op the
+   confined values span (a loop header's `cmp` included). At equal pressure the peak therefore
+   prefers a **fixed-register op**: bracketing at the call is the minimal repair, and without the
+   preference the peak would drift to the earliest op the values happen to be live at, widening the
+   bracket for no gain. A violation visible only at normal ops — the case above — has no such op and
+   is relieved where it is seen.
 
 1. **`maxlive` is exact for the program AS LOWERED — so a false `E5001` means the IR itself
    carries a value the author did not write.** Chordal ⇒ χ = ω = maxlive, and liveness is
@@ -1384,14 +1437,14 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    literal in a register (→ immediates, `foldConstOperands`), a witness table in a register (→
    remat), a redundant two-address copy (→ `lea`, `Reuse`). **The lesson generalizes: when
    `E5001` looks wrong, read the IR before you read the colorer.**
-2. **Fixed-register points reduce the effective pool locally, so `maxPressure ≤ pool` is necessary
-   but NOT sufficient** — the splitter's peak-finder tests every op against its *own* pool
-   (`popcount(pool ∖ implicitDefs)`) as well as the full one. But a reduced-pool overflow is a
-   **clobber constraint, not a capacity limit**: it is dispatched by a FORCED bracket, never by an
-   error. The **`E5001` deficit is always against the full pool of 14**. Reporting it against a
-   reduced pool ("6 live, only 5 survive a call") was a false-positive generator — it made an
-   ordinary loop with five accumulators and a call a compile error, which is the shape of most real
-   code and of this compiler's own inner loops.
+2. **Clobbers reduce the effective pool PER VALUE, so `maxPressure ≤ pool` is necessary but NOT
+   sufficient** — the splitter's peak-finder tests Hall's condition on the per-value pools as well as
+   the full one (#0). But a confined overflow is a **clobber constraint, not a capacity limit**: it is
+   dispatched by a FORCED bracket, never by an error. The **`E5001` deficit is always against the
+   full pool of 14** — enforced by measuring it against the peak's own witness, which for an `E5001`
+   is the whole pool by construction. Reporting it against a reduced pool ("6 live, only 5 survive a
+   call") was a false-positive generator — it made an ordinary loop with five accumulators and a call
+   a compile error, which is the shape of most real code and of this compiler's own inner loops.
 3. **There is always a rewrite, but sometimes it is a real restructuring.** Register pressure is
    always reducible by hand-spilling into memory: twenty accumulators become one array, and pressure
    collapses to `{base, index, temp}`. The floor is set by the most demanding single operation,

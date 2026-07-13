@@ -3,17 +3,21 @@
 // genuine HOT overflow already happened in `SplitLiveRanges`: the cold-spill splitter
 // relieved every idle value and rematerialized every constant, and `chooseVictim` still
 // found NO value crossing the peak that can be moved — so what remains is the loop's true
-// working set against the registers available AT that point (the FULL pool at a normal op,
-// the REDUCED pool `pool ∖ implicitDefs` at a call/idiv). This file does NOT re-decide
-// feasibility; it only turns that already-exact decision into a source-mapped message. So
-// it can add no false positive — every number it prints comes from the same per-point,
-// reduced-pool figures the splitter converged on.
+// working set against the FULL pool. This file does NOT re-decide feasibility; it only turns that
+// already-exact decision into a source-mapped message. So it can add no false positive — every
+// number it prints comes from the peak the splitter converged on, measured against that peak's own
+// witness (`PressurePeak.witness`).
+//
+// **E5001 is a FULL-POOL overflow, always.** A point where the values fit the machine but not the
+// registers one op leaves them (a call's callee-saved subset, an `idiv`'s `pool ∖ {rax,rdx}`) is
+// relieved by a FORCED store/reload bracket and never reaches here — `noVictimAtPeak` panics rather
+// than let it. So the pool this message reports is the full 14, never a reduced one: reporting "6
+// live, only 5 survive a call" as a deficit was the false-positive class this design exists to end
+// (ARCHITECTURE, "Known limits" #2).
 //
 // **The message is the remedy, and the consumer is an agent in a rewrite loop**, so it must
 // let the agent converge in ONE step (design Phase 7):
 //   • the EXACT deficit ("remove N values"), not "too many";
-//   • the CONSTRAINED register count that actually applies (5 callee-saved across a call,
-//     `pool ∖ {rax,rdx}` at an idiv), never the nominal 14;
 //   • each blocking value's SOURCE def site (via ValueOrigin -> Maxon op -> SourceRange),
 //     ranked cheapest-to-move first (fewest uses inside the loop — the fewest reloads after
 //     the array rewrite);
@@ -58,7 +62,7 @@ typealias PressureCandidateArray = Array with PressureCandidate
 
 // Report the E5001 diagnostic for a HOT register-pressure overflow onto `project.diagnostics`
 // and THROW. The overflow point (`peak`) genuinely needs `peak.pressure` registers but only
-// `reducedPoolSizeAt(peakOp, pool)` are available there. This DIRECTLY throws (rather than
+// `popcount(peak.witness)` are available there. This DIRECTLY throws (rather than
 // returning an error for the caller to throw) so the control flow is byte-for-byte the shape
 // of `PassPipeline.run`'s gate — report onto the shared project, then a plain
 // `throw CompileError.compileError`; `compileToCodeResult` catches it, prints, and re-throws a
@@ -78,9 +82,23 @@ end 'raiseRegisterPressure'
 // paragraph naming the constrained register count that actually applies at the point, the
 // ranked worklist of blocking values with their source def sites, and the transformation.
 function buildRegisterPressureMessage(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) returns String
+	// THE POOL THE DEFICIT IS MEASURED AGAINST IS THE PEAK'S OWN WITNESS — the register set Hall's
+	// condition failed on. E5001 is raised ONLY for a FULL-POOL overflow (a CONFINED one is always
+	// relievable by a forced bracket, and `noVictimAtPeak` panics rather than let one surface here),
+	// so the witness is always the full pool and `available` is always 14.
+	//
+	// That equality is the point, not an accident to be optimized away: reading the pool off the peak
+	// OP instead — `pool ∖ op.implicitDefs`, which is what this used to do — reports 5 whenever a
+	// full-pool overflow happens to land on a call, and the deficit computed from it asks the author
+	// to remove NINE MORE VALUES THAN THE PROGRAM NEEDS. Measuring an E5001 against a reduced pool is
+	// the documented false-positive class (ARCHITECTURE, "Known limits" #2); the witness is what makes
+	// it structurally unspellable.
+	let available = regMaskPopcount(peak.witness)
+	if available != regMaskPopcount(pool) 'confinedPeak'
+		panic("buildRegisterPressureMessage: E5001 reached with a CONFINED peak (witness {peak.witness}, {available} of {regMaskPopcount(pool)} registers) — such a point fits the machine and is relieved by a forced store/reload bracket, so `noVictimAtPeak` must have panicked before this. Reporting it as user register pressure would be the false positive this design treats as its worst possible bug.")
+	end 'confinedPeak'
+
 	let cfg = liveness.cfg
-	let peakOp = try module.ops.get(liveness.useIndex.opAtSequence(peak.peakSeq)) otherwise panic("buildRegisterPressureMessage: peak op not in module.ops")
-	let available = reducedPoolSizeAt(peakOp, pool: pool)
 	let filePath = func.sourceFilePath.toString()
 	let loopLine = loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
 
@@ -100,12 +118,8 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	let heldCount = candidates.count()
 	let deficit = minCount(peak.pressure - available, b: heldCount)
 
-	// The fixed-register kind (call / idiv) is what makes `available` the REDUCED pool rather
-	// than the nominal one — reported so "5 available" is not read as "the machine has 5 GPRs".
-	let fixedKind = fixedPointKind(peakOp)
-
 	var msg = "the loop at {filePath}:{loopLine} needs {deficit} more register(s) than are available\n"
-	msg.append(pressureParagraph(heldCount, available: available, poolSize: regMaskPopcount(pool), fixedKind: fixedKind))
+	msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
 	msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
 	msg.append(candidateList(candidates, order: order, filePath: filePath))
 	msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
@@ -118,20 +132,6 @@ end 'buildRegisterPressureMessage'
 function minCount(a RegCount, b RegCount) returns RegCount
 	return a if a <= b else b
 end 'minCount'
-
-// The paragraph explaining WHERE the registers went. At a normal op every pool register is
-// available, so the overflow is the raw working-set size. At a FIXED-REGISTER point (a call
-// clobbers the caller-saved set; an idiv reserves RAX/RDX) the effective pool is smaller, and
-// saying "14 available" would be actively misleading — so the reduced count + WHY are stated.
-// `heldCount` is the listed working-set size (`candidates.count()`), so this number matches the
-// worklist below it rather than the effective `peak.pressure` (see `buildRegisterPressureMessage`).
-function pressureParagraph(heldCount RegCount, available RegCount, poolSize RegCount, fixedKind String) returns String
-	if fixedKind.isEmpty() 'normalPoint'
-		return "  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n"
-	end 'normalPoint'
-	let clobbered = poolSize - available
-	return "  {heldCount} values are live across the {fixedKind} inside this loop, but only {available}\n  registers survive it on x64-windows (the other {clobbered} are clobbered by the {fixedKind}). The\n  values idle across the loop were already spilled around it at no cost; spilling any of\n  these would put a load or store inside the loop body, which this error exists to prevent.\n"
-end 'pressureParagraph'
 
 // Render the ranked worklist, one line per candidate: its source def site + its in-loop use
 // count. The location is what identifies the value to the user — shv2 carries no value NAMES
@@ -197,21 +197,6 @@ function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, 
 	end 'eachOperand'
 	return 0
 end 'firstOriginLineOfOp'
-
-// The kind of FIXED-REGISTER point `op` is, for the message wording: "call" (its caller-saved
-// implicitDefs are clobbered) or "idiv" (RAX/RDX reserved), or "" for a normal op (the full
-// pool applies). Read off the op variant, mirroring the operand model's exhaustiveness so a
-// new fixed-register op is a compile error here.
-function fixedPointKind(op TargetOp) returns String
-	return match op 'k'
-		callDirect gives "call"
-		iatCall gives "call"
-		cqo gives "idiv"
-		idivReg gives "idiv"
-		prologue to xchgRegReg gives ""
-		pushReg to loadRegSlot gives ""
-	end 'k'
-end 'fixedPointKind'
 
 // ==========================================================================
 // Collecting + ranking the blocking values

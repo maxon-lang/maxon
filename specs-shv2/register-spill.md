@@ -1,3 +1,4 @@
+
 ---
 feature: register-spill
 status: selfhosted
@@ -657,6 +658,77 @@ end 'edgeAnchor'
 function main() returns ExitCode
 	let v = edgeAnchor(1, q: 2)
 	if v == 52 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: values-confined-by-different-calls -->
+The reduced pool at a call is a property of the VALUE, not of the call — a value live across a
+call is forbidden the 9 caller-saved registers for its *whole* live range, not merely at the call
+op. So the confinement can bite at a point that is **not itself a call**, and the peak-finder must
+be able to see it there.
+
+Here each of `v1`..`v6` is used AFTER a `sink` call in its OWN arm of the `else if` chain, so each
+is live across a DIFFERENT call and each is confined to the five callee-saved registers. Liveness
+is path-sensitive, so no single call has more than one of them live across it — every reduced-pool
+test AT a clobber op passes. Yet all six are simultaneously live at the chain's first `cmp`, where
+the nominal pool is the full fourteen and nothing looks wrong at all. Six values, five registers:
+the point does not colour.
+
+This is why the splitter tests HALL'S CONDITION on the per-value effective pools rather than the
+live count against one number: no register subset may hold more values confined to it than it has
+registers. The witness here is the callee-saved subset, at an op that clobbers nothing. One value
+is relieved with a forced store/reload bracket — which is NOT E5001: the program fits the machine,
+and the bracket is the placement the ABI forces.
+
+Before the Hall test the splitter relieved nothing here and the colorer died with every register
+blocked (`chooseRegister: no free register for value 12 (blocked mask 65535)`).
+
+`pick(k) = (k + 11k) + sink(k) = k + 12k`, so the six arms give 13, 26, 39, 52, 65, 78 — every one
+of the six confined values is read on some path, and all six must survive.
+```maxon
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function pick(k int) returns int
+	let v1 = k + 11
+	let v2 = k + 22
+	let v3 = k + 33
+	let v4 = k + 44
+	let v5 = k + 55
+	let v6 = k + 66
+	var out = 0
+	if k == 1 'b1'
+		let t = sink(1)
+		out = v1 + t
+	end 'b1' else if k == 2 'b2'
+		let t = sink(2)
+		out = v2 + t
+	end 'b2' else if k == 3 'b3'
+		let t = sink(3)
+		out = v3 + t
+	end 'b3' else if k == 4 'b4'
+		let t = sink(4)
+		out = v4 + t
+	end 'b4' else if k == 5 'b5'
+		let t = sink(5)
+		out = v5 + t
+	end 'b5' else 'b6'
+		let t = sink(6)
+		out = v6 + t
+	end 'b6'
+	return out
+end 'pick'
+
+function main() returns ExitCode
+	let total = pick(1) + pick(2) + pick(3) + pick(4) + pick(5) + pick(6)
+	if total == 273 'ok'
 		return 0
 	end 'ok'
 	return 99

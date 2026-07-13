@@ -54,13 +54,15 @@
 // drops by one and the loop converges (a store/reload only READS an already-live value / only
 // SHIFTS which value is live, so neither ever raises the function's max pressure).
 //
-// "OVERFLOWS ITS POOL" is per-point, because a FIXED-REGISTER point has a REDUCED pool: at a
-// call the caller-saved registers are clobbered, so a value live ACROSS it can only sit in the
-// callee-saved subset; at an `idiv` RAX/RDX are the div's own, so a value live across it is
-// confined to `pool ∖ {RAX,RDX}`. The reduced pool at an op is `pool ∖ op.implicitDefs` — read
-// straight off the operand model, so calls, `idiv`, and `cqo` are handled uniformly with no
-// x64-specific mask here. `maxPressure ≤ pool` is therefore NECESSARY but NOT SUFFICIENT; the
-// peak-finder (`analyzePressure`) checks each op against its OWN reduced pool.
+// "OVERFLOWS ITS POOL" is per-point AND per-VALUE, because a clobber SHRINKS a value's pool: a value
+// live across a call is forbidden all 9 caller-saved registers, so its only home is one of the 5
+// callee-saved; one live across an `idiv` is confined to `pool ∖ {RAX,RDX}`. Values at one point can
+// therefore be shopping in differently sized register sets, and no single number decides whether they
+// fit. `analyzePressure` tests HALL'S CONDITION on those per-value pools (`HallCondition`): no
+// register subset may have more values CONFINED to it than it has registers. That subsumes the old
+// "compare the live count against `pool ∖ op.implicitDefs` AT the clobber op" check and additionally
+// sees what that check structurally could not — values confined by DIFFERENT calls, colliding at a
+// point that is not itself a call. `maxPressure ≤ pool` is NECESSARY but far from SUFFICIENT.
 //
 // ==========================================================================
 // PERFORMANCE: EVERY PER-VALUE QUESTION IS ANSWERED FROM AN INDEX, NEVER A SCAN
@@ -256,12 +258,13 @@ export type PressurePeak
 	export var peakSeq as ByteCount
 	// Which of the two overflows this point is — the distinction the amended Rule 2 turns on.
 	//
-	//  • CLOBBER-ONLY (`true`): pressure fits the FULL pool but exceeds the REDUCED pool at a
-	//    fixed-register op (`pool ∖ implicitDefs`). The values live across it fit the machine —
-	//    they simply cannot all sit in registers this op leaves alone (a call clobbers the
-	//    caller-saved set; `idiv` takes RAX/RDX). Relief is a FORCED store/reload bracket: the
-	//    value cannot stay in a clobbered register, so memory is the ONLY placement — there is
-	//    nothing to search. Permitted at ANY loop depth, and never E5001.
+	//  • CLOBBER-ONLY (`true`): the live values fit the FULL pool, but more of them are CONFINED to
+	//    some proper subset of it than that subset has registers (Hall's condition, `HallCondition`).
+	//    They fit the machine — they simply cannot all sit in the registers left to them by the ops
+	//    they are live across (a call clobbers the caller-saved set; `idiv` takes RAX/RDX). Relief is
+	//    a FORCED store/reload bracket: a confined value cannot stay in a clobbered register, so
+	//    memory is the ONLY placement — there is nothing to search. Permitted at ANY loop depth, and
+	//    never E5001.
 	//
 	//  • FULL-POOL (`false`): pressure exceeds the full pool outright. This is genuine register
 	//    demand — the loop's working set is larger than the machine — and only COLD splitting
@@ -271,9 +274,23 @@ export type PressurePeak
 	// definition higher than any clobber-only one, so full-pool peaks are relieved FIRST. That
 	// ordering is what lets `storeFitsPool` be sound at a clobber peak (see `chooseVictim`).
 	export var clobberOnly as bool
+	// The register set the overflow is measured against — Hall's WITNESS. `pool` itself for a
+	// full-pool peak (every value is confined to the pool, so the overflow is plain pigeonhole);
+	// a PROPER SUBSET for a clobber-only one — the 5 callee-saved registers when the confining op is
+	// a call, `pool ∖ {rax,rdx}` at an `idiv`.
+	//
+	// Two things read it, and both would be wrong without it. `chooseVictim` relieves the peak by
+	// spilling a value CONFINED to the witness — spilling one that could have taken a register
+	// outside it frees nothing the confined values were able to use. And the E5001 deficit is
+	// `pressure - popcount(witness)`: measured against any other pool it is not the number of values
+	// the author must actually remove.
+	export var witness as RegMask
+	// Is the peak op ITSELF a fixed-register point (does it carry implicit clobbers)? The ranking
+	// tie-break — see `peakOutranks`.
+	export var atFixedRegisterOp as bool
 
-	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, clobberOnly bool) returns PressurePeak
-		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: clobberOnly}
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
+		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
 end 'PressurePeak'
 
@@ -391,7 +408,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let peak = analysis.peak
 
 		let index = liveness.useIndex
-		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, poolSize: poolSize)
+		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, poolSize: poolSize)
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 			remat(v) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
@@ -437,17 +454,17 @@ end 'splitLiveRanges'
 //    restructuring. `maxlive` is EXACT here (SSA interference is chordal, so χ = ω), so the
 //    deficit is a theorem about the program, not the outcome of a search.
 //
-//  • CLOBBER-ONLY overflow → a SPLITTER BUG, and it must NEVER reach the user as E5001. The
-//    values live across the fixed-register point FIT the pool; they are excluded only from the
-//    registers this one op clobbers. A forced store/reload bracket is therefore always available —
-//    every live-across value has a store anchor (an op def, or a phi's block entry), which is
+//  • CONFINED (clobber-only) overflow → a SPLITTER BUG, and it must NEVER reach the user as E5001.
+//    The values confined to the witness FIT the pool; they are excluded only from the registers the
+//    ops they are live across clobber. A forced store/reload bracket is therefore always available —
+//    every confined value has a store anchor (an op def, or a phi's block entry), which is
 //    exactly what `hasStoreAnchor` accepts. Reaching here means the eligibility scan or the
 //    peak classification is broken. Raising E5001 instead would be the false positive this design
 //    treats as its worst possible bug: it would tell the author to delete a value from code that
 //    fits the machine, and the rewrite it suggests would emit strictly worse code.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
-		panic("noVictimAtPeak: '{func.name}' has a CLOBBER-ONLY overflow (effective pressure {peak.pressure} at a fixed-register point, which the full pool of {regMaskPopcount(pool)} would fit) yet no value crossing it is forced-spillable. Every value live across such a point has a store anchor — an op def or a phi block entry — so a forced store/reload bracket is ALWAYS available; finding none is a SPLITTER BUG in `hasStoreAnchor` / `analyzePressure`, not user register pressure. It must never surface as E5001: this program fits the machine.")
+		panic("noVictimAtPeak: '{func.name}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet none of them is forced-spillable. Every confined value has a store anchor — an op def or a phi block entry — so a forced store/reload bracket is ALWAYS available; finding none is a SPLITTER BUG in `hasStoreAnchor` / `analyzePressure` / `killsValueAtPeak`, not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -475,24 +492,35 @@ end 'timedLiveness'
 // (where a victim is chosen) and, per value, the live-set population right after its def (the
 // pressure its spill store would face, see `storeFitsPool`).
 //
-// The peak is the op whose EFFECTIVE pressure most exceeds its OWN pool. Two things make this
-// agree with the driver guard rather than false-panicking:
+// The peak is the op whose demand most exceeds the registers actually available to it. Three things
+// make this agree with the colorer rather than leaving it to panic:
 //
 //  1. EFFECTIVE pressure carries the SAME corrections TargetLiveness folds into `maxPressure`:
 //     the reuse-copy transient (`reuseInputOutlivesOp` — a two-address input that outlives its
 //     op costs one extra register for the `mov dest,input` the colorer inserts before it) and
 //     the per-block dead-phi count (`deadPhiCountForBlock` — the colorer reserves a register for
 //     each dead block-arg across the whole block). Without them a transient/dead-phi overflow
-//     enters the driver loop yet finds no RAW peak here — the false panic this replaces.
+//     enters the driver loop yet finds no RAW peak here — a false panic.
 //
-//  2. Each op is compared against its OWN pool — `pool ∖ op.implicitDefs` (`reducedPoolSizeAt`):
-//     the FULL pool for a normal op, the callee-saved subset at a call (its caller-saved
-//     `implicitDefs` are clobbered), `pool ∖ {RAX,RDX}` at an `idiv`/`cqo`. So a value live
-//     across a call that fits the nominal pool but not the reduced one IS found here, rather
-//     than passing the splitter and panicking in the colorer.
+//  2. HALL'S CONDITION on the per-value effective pools (`HallCondition`) decides the rest. A
+//     forbidden set SHRINKS a value's pool — a value live across a call is confined to the 5
+//     callee-saved registers, one live across an `idiv` to `pool ∖ {rax,rdx}` — so values at one
+//     point can be shopping in differently sized register sets, and no single number decides
+//     whether they fit. The test is: no register subset may have more values CONFINED to it than it
+//     has registers. That subsumes the old `raw > popcount(pool ∖ op.implicitDefs)` check (at a
+//     call, every live-across value is confined to the callee-saved subset, so the witness is that
+//     subset and the count is the same `raw`) AND catches what that check structurally could not —
+//     values confined by DIFFERENT calls, colliding at a point that is not itself a call, where the
+//     nominal pool is the full 14 and nothing looked wrong. That was a colorer panic; see
+//     `HallCondition`'s header.
 //
-// Both quantities come from the operand model + op metadata, never hardcoded opcodes, so calls,
-// `idiv`, and `cqo` need no special-casing. Mirrors TargetLiveness's pressure sweep.
+//  3. The census the screen reads is maintained INCREMENTALLY (`stepCensusBackwardOverOp`), like the
+//     live count, and gated on any value being confined at all — so a call-free function pays
+//     nothing and no op walks its live set.
+//
+// Every quantity comes from the operand model + the liveness `forbidden` column, never a hardcoded
+// opcode, so calls, `idiv`, `cqo` and argument pre-moves are handled uniformly. Mirrors
+// TargetLiveness's pressure sweep.
 function analyzePressure(module TargetModule, liveness LivenessResult, pool RegMask) returns PressureAnalysis
 	let topo = liveness.cfg.topo
 	let wordsPerRow = liveness.wordsPerRow
@@ -504,7 +532,16 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	var seedBuf = ValueIdArray.create()
 	let fullPoolSize = regMaskPopcount(pool)
 
-	var best = PressurePeak.create(false, pressure: 0, blockLocal: 0, liveBefore: zeroRow(wordsPerRow), peakSeq: 0, clobberOnly: false)
+	// The Hall machinery: one dense `value -> popcount(pool ∖ forbidden(v))` column, the running
+	// census of the live set by that size, and the scratch its incremental maintenance + its (rare)
+	// exact confirmation need. All allocated ONCE per sweep and reused across every block and op.
+	let effPoolSizes = effectivePoolSizes(liveness, pool: pool)
+	var census = RegPoolCensus.create()
+	var censusIds = ValueIdArray.create()
+	var censusWasLive = BoolArray.create()
+	var liveAtOp = ValueIdArray.create()
+
+	var best = PressurePeak.create(false, pressure: 0, blockLocal: 0, liveBefore: zeroRow(wordsPerRow), peakSeq: 0, clobberOnly: false, witness: pool, atFixedRegisterOp: false)
 	// A value with no op-def (a phi / a value never defined by an op) keeps this sentinel
 	// (`valueCount + 1`, above any real count) so it is never mistaken for store-safe.
 	var defLiveAfter = filledColumn(valueCount, value: valueCount + 1)
@@ -519,6 +556,12 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		// the whole row at every op would be O(values/64) per op — O(ops × values/64) per function,
 		// and on a large function the single biggest cost left in the allocator.
 		var liveCount = seedBuf.count()
+
+		// The census tracks the SAME set as `liveRow`, so it is seeded and cleared with it.
+		census.reset()
+		for v in seedBuf 'seedCensus'
+			census.add(try effPoolSizes.get(v) otherwise panic("analyzePressure: live-out value {v} is outside the function's value space"), fullPoolSize: fullPoolSize)
+		end 'seedCensus'
 
 		// A per-block constant added to every op's effective pressure — the colorer holds a
 		// register for each dead block-arg across the WHOLE block. Read from the column the
@@ -546,39 +589,38 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 			// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it.
 			let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
 
-			liveCount = stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveCount: liveCount)
+			liveCount = stepCensusBackwardOverOp(liveRow, buf: buf, liveCount: liveCount, census: census, effPoolSizes: effPoolSizes, fullPoolSize: fullPoolSize, ids: censusIds, wasLive: censusWasLive)
 
 			let raw = liveCount
 			let effective = raw + (1 if reuseTransient else 0) + deadPhis
-			let reducedPool = reducedPoolSizeAt(op, pool: pool)
 			let seq = blockBaseSeq + forwardPos
 
-			// TWO overflows, against TWO different pools, counting TWO different demands. Lumping
-			// them (comparing `effective` against BOTH pools) over-counts the reduced pool — it
-			// over-spills at every call, and it would inflate an E5001 deficit.
+			// TWO overflows, counting TWO different demands. Lumping them over-counts the confined
+			// case — it would over-spill at every call and inflate an E5001 deficit.
 			//
 			//  • FULL-POOL demand is `effective`: every register the colorer holds at this point,
-			//    INCLUDING the dead-phi reservations and the reuse-copy transient.
+			//    INCLUDING the dead-phi reservations and the reuse-copy transient. A dead phi is not
+			//    live and a transient is not a value, so neither is CONFINED by anything — they
+			//    compete for the machine, never for the callee-saved subset — which is exactly why
+			//    they belong here and nowhere else. Every value is confined to the pool, so the
+			//    witness is the pool itself and the overflow is plain pigeonhole: no Hall search is
+			//    needed, and none is run.
 			//
-			//  • REDUCED-POOL demand is `raw` — ONLY the values the op constrains: those live across
-			//    it (a call's survivors) plus its own operands (an `idiv`'s divisor, which cannot sit
-			//    in RAX/RDX either). A dead phi and a reuse transient are NOT among them: neither is
-			//    live across the op, so neither is forbidden the op's clobbered registers, and
-			//    `pickPreferredRegister` lands them in caller-saved registers anyway. They compete
-			//    for the machine, not for the callee-saved subset.
-			let fullOverflow = effective > fullPoolSize
-			let clobberOverflow = raw > reducedPool
-
-			// A FULL-pool overflow outranks any clobber-only one, so full-pool peaks are always
-			// relieved FIRST. That ordering is what makes `storeFitsPool` sound at a clobber peak:
-			// by the time one is reached, no program point exceeds the full pool, so every value's
-			// def-point pressure fits and a store anchor is always available.
-			if fullOverflow or clobberOverflow 'overflows'
-				let pressure = effective if fullOverflow else raw
-				if peakOutranks(fullOverflow, pressure: pressure, best: best) 'newPeak'
-					best = PressurePeak.create(true, pressure: pressure, blockLocal: i, liveBefore: copyOfRow(liveRow, wordsPerRow: wordsPerRow), peakSeq: seq, clobberOnly: not fullOverflow)
-				end 'newPeak'
-			end 'overflows'
+			//  • CONFINED demand is Hall's, over the LIVE values only, against a proper subset of the
+			//    pool. Checked only when the point fits the full pool — which also bounds the live set
+			//    at `poolSize`, so the exact confirmation below can never be a hot-path cost.
+			//
+			// A FULL-pool overflow outranks any confined one, so full-pool peaks are always relieved
+			// FIRST. That ordering is what makes `storeFitsPool` sound at a confined peak: by the time
+			// one is reached, no program point exceeds the full pool, so every value's def-point
+			// pressure fits and a store anchor is always available.
+			let atFixedRegisterOp = opIsFixedRegisterPoint(op)
+			if effective > fullPoolSize 'fullPoolOverflow'
+				best = betterPeak(best, pressure: effective, blockLocal: i, liveBefore: liveRow, peakSeq: seq, clobberOnly: false, witness: pool, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+			end 'fullPoolOverflow' else if census.screenViolates(fullPoolSize) 'maybeConfined'
+				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
+				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, liveBefore: liveRow, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+			end 'maybeConfined'
 		end 'eachOpRev'
 
 		// A PHI has no defining op, so the sweep above never recorded a def-point pressure for it.
@@ -602,13 +644,57 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	return PressureAnalysis.create(best, defLiveAfter: defLiveAfter)
 end 'analyzePressure'
 
+// The better of `best` and a CONFINED overflow at this op — but only if there IS one. The
+// cardinality screen that got us here NEVER MISSES a real violation and is not exact about the rest
+// (the forbidden masks are not laminar — see `HallCondition`), so the exact verdict decides. A false
+// peak here would spill a value the program could have coloured, which is the same class of harm as
+// a false E5001 in a smaller key: pressure relief added to code that was already fine.
+function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PressurePeak, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, atFixedRegisterOp bool, wordsPerRow ByteCount) returns PressurePeak
+	return match hallVerdictAt(liveness, live: live, pool: pool) 'verdict'
+		feasible gives best
+		overflow(witness, tight) gives betterPeak(best, pressure: tight, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: true, witness: witness, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
+	end 'verdict'
+end 'confinedPeakAt'
+
+// `best`, replaced by the candidate peak iff the candidate outranks it. The ONE place a
+// `PressurePeak` is minted from a candidate, so both overflow kinds agree on the ranking and on
+// snapshotting the live row (which only the WINNER pays for — `copyOfRow` is a full row copy, and
+// doing it before the rank test would cost one per overflowing op rather than one per new peak).
+function betterPeak(best PressurePeak, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, clobberOnly bool, witness RegMask, atFixedRegisterOp bool, wordsPerRow ByteCount) returns PressurePeak
+	if not peakOutranks(not clobberOnly, atFixedRegisterOp: atFixedRegisterOp, pressure: pressure, best: best) 'keepBest'
+		return best
+	end 'keepBest'
+	return PressurePeak.create(true, pressure: pressure, blockLocal: blockLocal, liveBefore: copyOfRow(liveBefore, wordsPerRow: wordsPerRow), peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
+end 'betterPeak'
+
+// Is `op` itself a FIXED-REGISTER point — does it clobber registers implicitly (a call's 9
+// caller-saved, an `idiv`'s RAX/RDX)? Read off the operand model's metadata, so a new fixed-register
+// op needs no edit here.
+function opIsFixedRegisterPoint(op TargetOp) returns bool
+	return op.rawValue.implicitDefs != 0
+end 'opIsFixedRegisterPoint'
+
 // Does a candidate overflow outrank the best peak so far?
 //
-// A FULL-pool overflow always outranks a CLOBBER-ONLY one, whatever their pressures — which is
-// what guarantees full-pool peaks are relieved FIRST (see the caller). Within a class, the higher
-// pressure wins, and `>=` breaks ties toward the EARLIER op: the sweep visits ops in DECREASING
-// forward sequence, so the last update at a given pressure is the earliest one.
-function peakOutranks(fullOverflow bool, pressure RegCount, best PressurePeak) returns bool
+// A FULL-pool overflow always outranks a CONFINED (clobber-only) one, whatever their pressures —
+// which is what guarantees full-pool peaks are relieved FIRST (see the caller). Within a class, the
+// higher pressure wins.
+//
+// At EQUAL pressure a confined candidate AT A FIXED-REGISTER OP outranks one at a normal op, and
+// that tie-break is load-bearing rather than cosmetic. A value confined by a call is confined
+// EVERYWHERE it is live, not just at the call — so Hall's condition sees the same violation at every
+// op the confined values span, including the loop header's `cmp`. Relieving it at the CALL is the
+// minimal repair: the value keeps its register at every other point, and the store/reload bracket
+// sits against the op whose own clobber mask created the confinement — the placement the ABI forces,
+// and the one it pays for. Without this preference the peak would drift to the earliest op the
+// values happen to be live at, widening the bracket for no gain (and moving every forced-spill
+// program's code for no reason). A violation visible ONLY at normal ops — values confined by
+// DIFFERENT calls, converging where none of them is — has no such op, and is relieved where it is
+// seen. That is the case this whole test exists to find.
+//
+// Otherwise ties resolve toward the EARLIER op: the sweep visits ops in DECREASING forward sequence,
+// so the last update at a given pressure is the earliest one.
+function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCount, best PressurePeak) returns bool
 	if not best.found 'firstPeak'
 		return true
 	end 'firstPeak'
@@ -619,7 +705,15 @@ function peakOutranks(fullOverflow bool, pressure RegCount, best PressurePeak) r
 		return fullOverflow
 	end 'differentClass'
 
-	return pressure >= best.pressure
+	if pressure != best.pressure 'byPressure'
+		return pressure > best.pressure
+	end 'byPressure'
+
+	if (not fullOverflow) and atFixedRegisterOp != best.atFixedRegisterOp 'byConfiningOp'
+		return atFixedRegisterOp
+	end 'byConfiningOp'
+
+	return true
 end 'peakOutranks'
 
 // Record each block-arg's def-point live count — the block's live-in population (see the caller).
@@ -628,15 +722,6 @@ function recordPhiDefLiveAfter(defLiveAfter CfgIndexArray, block IrBlock, liveIn
 		try defLiveAfter.set(arg.valueId, value: liveInCount) otherwise panic("recordPhiDefLiveAfter: defLiveAfter.set OOB for phi {arg.valueId}")
 	end 'eachPhi'
 end 'recordPhiDefLiveAfter'
-
-// The size of the pool available at `op` to the values it constrains. At a FIXED-REGISTER point
-// the op's `implicitDefs` are unavailable to any value live across it (a call clobbers the
-// caller-saved set; `idiv`/`cqo` write RAX/RDX), so the effective pool there is `pool ∖
-// implicitDefs`. For a normal op `implicitDefs` is 0, so this is just the full pool size. Read
-// from op metadata, so a call, `idiv`, and `cqo` are all handled with no x64-specific mask here.
-export function reducedPoolSizeAt(op TargetOp, pool RegMask) returns RegCount
-	return regMaskPopcount(pool and not op.rawValue.implicitDefs)
-end 'reducedPoolSizeAt'
 
 // Record each of the op's virtual defs as living-after at `afterCount` (its store point). `buf`
 // already holds the op's operands.
@@ -679,7 +764,7 @@ end 'copyOfRow'
 // to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
-function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, poolSize RegCount) returns SpillChoice
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, pool RegMask, poolSize RegCount) returns SpillChoice
 	let valueCount = liveness.valueCount
 	let placement = placementOf(peak)
 	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak)
@@ -702,6 +787,16 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		if bitsetTest(usedAtPeak, base: 0, bit: v) 'consumedHere'
 			continue
 		end 'consumedHere'
+		if not valueConfinedTo(liveness, valueId: v, pool: pool, witness: peak.witness) 'notConfinedByThisPeak'
+			// Only a value the overflow CONFINES can relieve it. At a CONFINED peak the witness is a
+			// proper subset of the pool (the 5 callee-saved registers at a call), and spilling a value
+			// that could have taken a register OUTSIDE it frees a register the confined values were
+			// never able to use — the peak survives, the potential Φ does not fall, and the driver
+			// re-picks forever. At a FULL-POOL peak the witness IS the pool, so every live value is
+			// confined to it and this gate is a no-op: the E5001 path chooses from exactly the same
+			// candidates it always did.
+			continue
+		end 'notConfinedByThisPeak'
 		if index.hasSpillStore(v) 'alreadySpilled'
 			// v (this exact id) was already stored in an earlier iteration; after that split its only
 			// remaining "reads" are before-peak uses + its own store, and it is dead across every
