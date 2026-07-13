@@ -1,22 +1,47 @@
 // Test: clock.elapsed-nanos-after-sleep
 function main() returns ExitCode
 		let requestedNanos = 30000000
-		let start = Clock.nowNanos()
-		sleep(30)
-		let elapsed = Clock.elapsedNanos(start)
+		let reps = 16
+		var early = 0
+		var slowest = 0
+		var spins = 0
+
+		for i in 0 upto reps 'sweep'
+				let spinStart = Clock.nowNanos()
+
+				while Clock.elapsedNanos(spinStart) < i * 1000000 'burn'
+						spins = spins + 1
+				end 'burn'
+
+				let start = Clock.nowNanos()
+				sleep(30)
+				let elapsed = Clock.elapsedNanos(start)
+
+				if elapsed < requestedNanos 'tooSoon'
+						early = early + 1
+				end 'tooSoon'
+
+				if elapsed > slowest 'newSlowest'
+						slowest = elapsed
+				end 'newSlowest'
+		end 'sweep'
+
 		var score = 0
-		if elapsed >= requestedNanos 'neverEarly'
+		if early == 0 'neverEarly'
 				score = score + 1
 		end 'neverEarly'
-		if elapsed < 10000000000 'bounded'
+		if slowest < 10000000000 'bounded'
 				score = score + 1
 		end 'bounded'
+		if spins > 0 'sweptTheTick'
+				score = score + 1
+		end 'sweptTheTick'
 		print("score={score}\n")
 		return 0
 end 'main'
 ---
 Stdout: ```
-score=2
+score=3
 ```
 ---
 // CompiledIR
@@ -24,25 +49,73 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.call Clock.nowNanos
+    x64.xor r8d, r8d
+    x64.mov r8d, 1
+    x64.mov r8, 0
     x64.mov rbx, r8
+    x64.mov r12, r8
+    x64.mov r13, r8
+    x64.mov r14, r8
+  sweep_0.header:
+    x64.cmp r14, 16
+    x64.jge sweep_0.exit
+  sweep_0:
+    x64.call Clock.nowNanos
+    x64.mov r15, r8
+    x64.jmp burn_0.header
+  sweep_0.step:
+    x64.add r14, 1
+    x64.jmp sweep_0.header
+  sweep_0.exit:
+    x64.test rbx, rbx
+    x64.mov r8, 0
+    x64.jne neverEarly_0.after
+    x64.jmp neverEarly_0
+  burn_0.header:
+    x64.mov rcx, r15
+    x64.call Clock.elapsedNanos
+    x64.mov r9d, 1000000
+    x64.mov rsi, r14
+    x64.imul rsi, r9
+    x64.cmp r8, rsi
+    x64.jge burn_0.exit
+  burn_0:
+    x64.add r13, 1
+    x64.jmp burn_0.header
+  burn_0.exit:
+    x64.call Clock.nowNanos
+    x64.mov r15, r8
     x64.mov ecx, 30
     x64.call maxon_sleep
-    x64.mov rcx, rbx
+    x64.mov rcx, r15
     x64.call Clock.elapsedNanos
-    x64.xor r9d, r9d
     x64.cmp r8, 30000000
-    x64.jl neverEarly_0.after
+    x64.jge tooSoon_0.after
+  tooSoon_0:
+    x64.add rbx, 1
+  tooSoon_0.after:
+    x64.cmp r8, r12
+    x64.jle newSlowest_0.after
+  newSlowest_0:
+    x64.mov r12, r8
+  newSlowest_0.after:
+    x64.jmp sweep_0.step
   neverEarly_0:
-    x64.add r9, 1
+    x64.mov r8, 0
+    x64.add r8, 1
   neverEarly_0.after:
-    x64.mov rsi, 10000000000
-    x64.cmp r8, rsi
-    x64.jge __phi_trampoline_2_0
+    x64.mov r9, 10000000000
+    x64.cmp r12, r9
+    x64.jge bounded_0.after
   bounded_0:
-    x64.add r9, 1
-    x64.mov rbx, r9
+    x64.add r8, 1
   bounded_0.after:
+    x64.test r13, r13
+    x64.jle __phi_trampoline_15_0
+  sweptTheTick_0:
+    x64.add r8, 1
+    x64.mov rbx, r8
+  sweptTheTick_0.after:
     x64.mov ecx, 21
     x64.call mrt_alloc
     x64.mov r12, r8
@@ -50,22 +123,21 @@ module {
     x64.mov rdx, r12
     x64.call mrt_i64_to_string
     x64.mov rbx, r8
-    x64.mov r13d, 1
     x64.mov r8, rbx
     x64.add r8, 6
-    x64.mov r14, r8
-    x64.add r14, 1
-    x64.mov rcx, r14
+    x64.mov r13, r8
+    x64.add r13, 1
+    x64.mov rcx, r13
     x64.add rcx, 1
     x64.call mrt_alloc
-    x64.mov r15, r8
+    x64.mov r14, r8
     x64.mov r8d, 6
     x64.lea r9, [rip+__istr_0]
-    x64.mov [rbp-8], r15
+    x64.mov [rbp-8], r14
     x64.mov [rbp-16], r9
     x64.mov [rbp-24], r8
     x64.rep_movsb
-    x64.mov r8, r15
+    x64.mov r8, r14
     x64.add r8, 6
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r12
@@ -75,7 +147,8 @@ module {
     x64.add r8, rbx
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r9
-    x64.mov [rbp-24], r13
+    x64.mov r8, 1
+    x64.mov [rbp-24], r8
     x64.rep_movsb
     x64.mov rcx, r12
     x64.call stdlib.__mm_decref
@@ -83,12 +156,12 @@ module {
     x64.mov ecx, 48
     x64.call mrt_alloc_with_dtor
     x64.mov rbx, r8
-    x64.xor r8d, r8d
+    x64.mov r8, 0
     x64.mov [rbx+40], r8 (8b)
-    x64.mov [rbx+0], r15 (8b)
-    x64.mov [rbx+8], r14 (8b)
-    x64.mov [rbx+16], r14 (8b)
-    x64.mov r8d, 1
+    x64.mov [rbx+0], r14 (8b)
+    x64.mov [rbx+8], r13 (8b)
+    x64.mov [rbx+16], r13 (8b)
+    x64.mov r8, 1
     x64.mov [rbx+24], r8 (8b)
     x64.mov r8, -1
     x64.mov [rbx+32], r8 (8b)
@@ -98,7 +171,7 @@ module {
     x64.call stdlib.__mm_alloc_needzero
     x64.mov r12, r8
     x64.mov [r12+0], rbx (8b)
-    x64.xor r8d, r8d
+    x64.mov r8, 0
     x64.mov [r12+8], r8 (8b)
     x64.mov r8, [r12+0] (8b)
     x64.mov rdx, [r8+8] (8b)
@@ -106,12 +179,12 @@ module {
     x64.call mrt_write_stdout
     x64.mov rcx, r12
     x64.call mm_drop
-    x64.xor r8d, r8d
+    x64.mov r8, 0
     x64.epilogue
     x64.ret
-  __phi_trampoline_2_0:
-    x64.mov rbx, r9
-    x64.jmp bounded_0.after
+  __phi_trampoline_15_0:
+    x64.mov rbx, r8
+    x64.jmp sweptTheTick_0.after
   }
 }
 ---

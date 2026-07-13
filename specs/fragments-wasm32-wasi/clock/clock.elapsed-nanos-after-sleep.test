@@ -1,94 +1,152 @@
 // Test: clock.elapsed-nanos-after-sleep
 function main() returns ExitCode
 		let requestedNanos = 30000000
-		let start = Clock.nowNanos()
-		sleep(30)
-		let elapsed = Clock.elapsedNanos(start)
+		let reps = 16
+		var early = 0
+		var slowest = 0
+		var spins = 0
+
+		for i in 0 upto reps 'sweep'
+				let spinStart = Clock.nowNanos()
+
+				while Clock.elapsedNanos(spinStart) < i * 1000000 'burn'
+						spins = spins + 1
+				end 'burn'
+
+				let start = Clock.nowNanos()
+				sleep(30)
+				let elapsed = Clock.elapsedNanos(start)
+
+				if elapsed < requestedNanos 'tooSoon'
+						early = early + 1
+				end 'tooSoon'
+
+				if elapsed > slowest 'newSlowest'
+						slowest = elapsed
+				end 'newSlowest'
+		end 'sweep'
+
 		var score = 0
-		if elapsed >= requestedNanos 'neverEarly'
+		if early == 0 'neverEarly'
 				score = score + 1
 		end 'neverEarly'
-		if elapsed < 10000000000 'bounded'
+		if slowest < 10000000000 'bounded'
 				score = score + 1
 		end 'bounded'
+		if spins > 0 'sweptTheTick'
+				score = score + 1
+		end 'sweptTheTick'
 		print("score={score}\n")
 		return 0
 end 'main'
 ---
 Stdout: ```
-score=2
+score=3
 ```
 ---
 // CompiledIR
 module {
   func @main() -> u8 {
   entry:
+    %98 = mir.mov_imm 1 : i64
     %0 = mir.mov_imm 30000000 : i64
-    %1 = mir.call @Clock.nowNanos()
-    %2 = mir.mov_imm 30 : i64
-    %52 = mir.call @maxon_sleep(%2)
-    %5 = mir.call @Clock.elapsedNanos(%1)
-    %6 = mir.mov_imm 0 : i64
-    %9 = mir.cmp ge, %5, %0
-    mir.cond_br %9 [then: neverEarly_0(), else: neverEarly_0.after(%6)]
+    %1 = mir.mov_imm 16 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br sweep_0.header(%2, %2, %2, %2)
+  sweep_0.header(%89: i64, %91: i64, %93: i64, %94: i64):
+    %9 = mir.cmp lt, %94, %1
+    mir.cond_br %9 [then: sweep_0(), else: sweep_0.exit()]
+  sweep_0:
+    %10 = mir.call @Clock.nowNanos()
+    mir.br burn_0.header(%93)
+  sweep_0.step:
+    %13 = mir.add.i64 %94, %98
+    mir.br sweep_0.header(%88, %90, %92, %13)
+  sweep_0.exit:
+    %17 = mir.cmp eq, %89, %2
+    mir.cond_br %17 [then: neverEarly_0(), else: neverEarly_0.after(%2)]
+  burn_0.header(%92: i64):
+    %19 = mir.call @Clock.elapsedNanos(%10)
+    %21 = mir.mov_imm 1000000 : i64
+    %22 = mir.mul.i64 %94, %21
+    %23 = mir.cmp lt, %19, %22
+    mir.cond_br %23 [then: burn_0(), else: burn_0.exit()]
+  burn_0:
+    %26 = mir.add.i64 %92, %98
+    mir.br burn_0.header(%26)
+  burn_0.exit:
+    %27 = mir.call @Clock.nowNanos()
+    %28 = mir.mov_imm 30 : i64
+    %99 = mir.call @maxon_sleep(%28)
+    %31 = mir.call @Clock.elapsedNanos(%27)
+    %34 = mir.cmp lt, %31, %0
+    mir.cond_br %34 [then: tooSoon_0(), else: tooSoon_0.after(%89)]
+  tooSoon_0:
+    %37 = mir.add.i64 %89, %98
+    mir.br tooSoon_0.after(%37)
+  tooSoon_0.after(%88: i64):
+    %40 = mir.cmp gt, %31, %91
+    mir.cond_br %40 [then: newSlowest_0(), else: newSlowest_0.after(%91)]
+  newSlowest_0:
+    mir.br newSlowest_0.after(%31)
+  newSlowest_0.after(%90: i64):
+    mir.br sweep_0.step()
   neverEarly_0:
-    %11 = mir.mov_imm 1 : i64
-    %12 = mir.add.i64 %6, %11
-    mir.br neverEarly_0.after(%12)
-  neverEarly_0.after(%51: i64):
-    %14 = mir.mov_imm 10000000000 : i64
-    %15 = mir.cmp lt, %5, %14
-    mir.cond_br %15 [then: bounded_0(), else: bounded_0.after(%51)]
+    %44 = mir.add.i64 %2, %98
+    mir.br neverEarly_0.after(%44)
+  neverEarly_0.after(%97: i64):
+    %46 = mir.mov_imm 10000000000 : i64
+    %47 = mir.cmp lt, %91, %46
+    mir.cond_br %47 [then: bounded_0(), else: bounded_0.after(%97)]
   bounded_0:
-    %17 = mir.mov_imm 1 : i64
-    %18 = mir.add.i64 %51, %17
-    mir.br bounded_0.after(%18)
-  bounded_0.after(%50: i64):
-    %20 = mir.global_addr @__istr_0
-    %21 = mir.mov_imm 6 : i64
-    %22 = mir.mov_imm 21 : i64
-    %23 = mir.call @mrt_alloc(%22)
-    %24 = mir.call @mrt_i64_to_string(%50, %23)
-    %25 = mir.global_addr @__istr_1
-    %26 = mir.mov_imm 1 : i64
-    %28 = mir.mov_imm 6 : i64
-    %29 = mir.add.i64 %28, %24
-    %30 = mir.add.i64 %29, %26
-    %31 = mir.mov_imm 1 : i64
-    %32 = mir.add.i64 %30, %31
-    %33 = mir.call @mrt_alloc(%32)
-    mir.memcpy %33, %20, %21
-    %34 = mir.add.i64 %33, %21
-    mir.memcpy %34, %23, %24
-    %35 = mir.add.i64 %34, %24
-    mir.memcpy %35, %25, %26
-    %37 = mir.call @stdlib.__mm_decref(%23)
-    %38 = mir.mov_imm 48 : i64
-    %39 = mir.func_addr @stdlib.__destruct___ManagedMemory
-    %40 = mir.call @mrt_alloc_with_dtor(%38, %39)
-    %41 = mir.mov_imm 0 : i64
-    mir.store %41, %40, 40 width: qword
-    mir.store %33, %40, 0 width: qword
-    mir.store %30, %40, 8 width: qword
-    mir.store %30, %40, 16 width: qword
-    %42 = mir.mov_imm 1 : i64
-    mir.store %42, %40, 24 width: qword
-    %43 = mir.mov_imm -1 : i64
-    mir.store %43, %40, 32 width: qword
-    %45 = mir.mov_imm 16 : i64
-    %46 = mir.func_addr @__destruct_String
-    %53 = mir.mov_imm 1 : i64
-    %54 = mir.call @stdlib.__mm_alloc_needzero(%45, %46, %53)
-    mir.store %40, %54, 0 width: qword
-    %47 = mir.mov_imm 0 : i64
-    mir.store %47, %54, 8 width: qword
-    %55 = mir.load %54, 0 width: qword
-    %56 = mir.load %55, 0 width: qword
-    %57 = mir.load %55, 8 width: qword
-    %58 = mir.call @mrt_write_stdout(%56, %57)
-    %59 = mir.call @mm_drop(%54)
-    %49 = mir.mov_imm 0 : i64
-    mir.ret %49
+    %50 = mir.add.i64 %97, %98
+    mir.br bounded_0.after(%50)
+  bounded_0.after(%96: i64):
+    %53 = mir.cmp gt, %93, %2
+    mir.cond_br %53 [then: sweptTheTick_0(), else: sweptTheTick_0.after(%96)]
+  sweptTheTick_0:
+    %56 = mir.add.i64 %96, %98
+    mir.br sweptTheTick_0.after(%56)
+  sweptTheTick_0.after(%95: i64):
+    %58 = mir.global_addr @__istr_0
+    %59 = mir.mov_imm 6 : i64
+    %60 = mir.mov_imm 21 : i64
+    %61 = mir.call @mrt_alloc(%60)
+    %62 = mir.call @mrt_i64_to_string(%95, %61)
+    %63 = mir.global_addr @__istr_1
+    %66 = mir.mov_imm 6 : i64
+    %67 = mir.add.i64 %66, %62
+    %68 = mir.add.i64 %67, %98
+    %70 = mir.add.i64 %68, %98
+    %71 = mir.call @mrt_alloc(%70)
+    mir.memcpy %71, %58, %59
+    %72 = mir.add.i64 %71, %59
+    mir.memcpy %72, %61, %62
+    %73 = mir.add.i64 %72, %62
+    mir.memcpy %73, %63, %98
+    %75 = mir.call @stdlib.__mm_decref(%61)
+    %76 = mir.mov_imm 48 : i64
+    %77 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %78 = mir.call @mrt_alloc_with_dtor(%76, %77)
+    mir.store %2, %78, 40 width: qword
+    mir.store %71, %78, 0 width: qword
+    mir.store %68, %78, 8 width: qword
+    mir.store %68, %78, 16 width: qword
+    mir.store %98, %78, 24 width: qword
+    %81 = mir.mov_imm -1 : i64
+    mir.store %81, %78, 32 width: qword
+    %83 = mir.mov_imm 16 : i64
+    %84 = mir.func_addr @__destruct_String
+    %100 = mir.mov_imm 1 : i64
+    %101 = mir.call @stdlib.__mm_alloc_needzero(%83, %84, %100)
+    mir.store %78, %101, 0 width: qword
+    mir.store %2, %101, 8 width: qword
+    %102 = mir.load %101, 0 width: qword
+    %103 = mir.load %102, 0 width: qword
+    %104 = mir.load %102, 8 width: qword
+    %105 = mir.call @mrt_write_stdout(%103, %104)
+    %106 = mir.call @mm_drop(%101)
+    mir.ret %2
   }
 }
 ---

@@ -205,28 +205,64 @@ assertion about the host, not about the compiler. The 10 s ceiling exists solely
 catch a grossly mis-scaled counter, not to police wake latency.
 
 This test previously asserted a 5 ms lower bound, because `sleep(30)` genuinely
-returned after as little as ~16 ms: the scheduler computed its wake deadline from
+returned after as little as ~17 ms: the scheduler computed its wake deadline from
 the COARSE ~15.6 ms tick (`GetTickCount64`), so the deadline could expire a full
 tick before the requested duration had actually elapsed. The deadline is now
 anchored to the monotonic nanosecond clock, so the real bound holds.
 
+**The sleep is PHASE-SWEPT, and that is what gives this test teeth.** A tick-derived
+deadline only expires early when the call lands LATE within a tick — the deadline is
+anchored to the tick edge already behind you, so the later in the tick you call, the
+more of the requested duration is eaten. Sleeps naturally synchronise to the tick edge
+and then stay in phase, so a single `sleep(30)`, or a fixed-cadence loop of them,
+samples essentially ONE phase: measured against the buggy runtime, a lone `sleep(30)`
+returned early only about two times in three, and a 40-iteration fixed-cadence loop
+came back fully green on its second run. A test that passes a third of the time on a
+broken compiler is not a gate. Busy-spinning a growing amount before each sleep walks
+the call site across the whole tick period, and the buggy runtime then fails 44 of 64.
+
 ```maxon
 function main() returns ExitCode
 		let requestedNanos = 30000000
-		let start = Clock.nowNanos()
-		sleep(30)
-		let elapsed = Clock.elapsedNanos(start)
+		let reps = 16
+		var early = 0
+		var slowest = 0
+		var spins = 0
+
+		for i in 0 upto reps 'sweep'
+				let spinStart = Clock.nowNanos()
+
+				while Clock.elapsedNanos(spinStart) < i * 1000000 'burn'
+						spins = spins + 1
+				end 'burn'
+
+				let start = Clock.nowNanos()
+				sleep(30)
+				let elapsed = Clock.elapsedNanos(start)
+
+				if elapsed < requestedNanos 'tooSoon'
+						early = early + 1
+				end 'tooSoon'
+
+				if elapsed > slowest 'newSlowest'
+						slowest = elapsed
+				end 'newSlowest'
+		end 'sweep'
+
 		var score = 0
-		if elapsed >= requestedNanos 'neverEarly'
+		if early == 0 'neverEarly'
 				score = score + 1
 		end 'neverEarly'
-		if elapsed < 10000000000 'bounded'
+		if slowest < 10000000000 'bounded'
 				score = score + 1
 		end 'bounded'
+		if spins > 0 'sweptTheTick'
+				score = score + 1
+		end 'sweptTheTick'
 		print("score={score}\n")
 		return 0
 end 'main'
 ```
 ```stdout
-score=2
+score=3
 ```
