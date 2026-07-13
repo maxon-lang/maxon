@@ -18863,8 +18863,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (elemType is IrEnumType elemEnum) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Enum, elemEnum.Name);
       }
-      var elemKind = elemType.ToValueKind();
-      return FindArrayTypeAliasForElement(elemKind);
+      // A ranged primitive is a distinct element type with its own storage width:
+      // `int(0 to 16)` occupies one byte, `int(0 to u64.max)` eight. Its ValueKind is
+      // merely `Integer`, so the kind-keyed lookup used for unranged primitives cannot
+      // tell two ranged element types apart — it would hand back (or synthesize) an
+      // `i64` array whose 8-byte element stride does not match the 1-byte buffer the
+      // caller actually holds. Element addresses come from the managed struct's runtime
+      // elementSize, but the LOAD WIDTH comes from this static type, so the reads would
+      // be at the right address and the wrong width: silent garbage. Key it by NAME,
+      // exactly as struct and enum elements already are.
+      if (elemType is IrRangedPrimitiveType elemRanged) {
+        var rangedAlias = FindArrayAliasByElementName(elemRanged.Name);
+        if (rangedAlias != null) return rangedAlias;
+        // No alias declared for this ranged element yet — fall through to the mangled
+        // auto-create below, which substitutes the ranged type itself and so preserves
+        // the width.
+      } else {
+        return FindArrayTypeAliasForElement(elemType.ToValueKind());
+      }
     }
 
     // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)

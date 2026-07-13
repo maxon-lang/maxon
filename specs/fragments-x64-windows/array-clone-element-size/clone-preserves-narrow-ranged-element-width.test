@@ -1,0 +1,246 @@
+// Test: clone-preserves-narrow-ranged-element-width
+typealias Narrow = int(0 to 16)
+typealias Wide = int(0 to u64.max)
+typealias NarrowCol = Array with Narrow
+typealias WideCol = Array with Wide
+
+function main() returns ExitCode
+	var n = NarrowCol.create()
+	n.push(1)
+	n.push(2)
+	n.push(3)
+
+	var w = WideCol.create()
+	w.push(9)
+
+	var c = n.clone()
+	let c0 = try c.get(0) otherwise 0
+	let c1 = try c.get(1) otherwise 0
+	let c2 = try c.get(2) otherwise 0
+
+	var s = try n.slice(1, endIndex: 3) otherwise panic("slice 1..3 is in bounds")
+	let s0 = try s.get(0) otherwise 0
+	let s1 = try s.get(1) otherwise 0
+
+	let ok = c0 == 1 and c1 == 2 and c2 == 3 and s0 == 2 and s1 == 3
+	return 0 if ok else 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea rcx, [rip+__layout_Array_Narrow]
+    x64.call Array.create
+    x64.mov rbx, r8
+    x64.lea rax, [rip+__layout_Array_Narrow]
+    x64.mov r8d, 1
+    x64.mov rcx, rbx
+    x64.mov rdx, 1
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Narrow]
+    x64.mov edx, 2
+    x64.mov rcx, rbx
+    x64.call Array.push
+    x64.lea rax, [rip+__layout_Array_Narrow]
+    x64.mov edx, 3
+    x64.mov rcx, rbx
+    x64.call Array.push
+    x64.lea rcx, [rip+__layout_Array_Wide]
+    x64.call Array.create
+    x64.mov r12, r8
+    x64.lea rax, [rip+__layout_Array_Wide]
+    x64.mov edx, 9
+    x64.mov rcx, r12
+    x64.call Array.push
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.lea rdx, [rip+__layout_Array_Narrow]
+    x64.mov rcx, rbx
+    x64.call Array.clone
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+  inlined_Array.get_0_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, 0
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_0
+  inlined_Array.get_1_0:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Array.get_3_0:
+    x64.xor edx, edx
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.mov r9, 0
+    x64.je try_0.ok
+    x64.mov r13, r9
+    x64.jmp try_0.merge
+  try_0.ok:
+    x64.mov r13, r8
+  try_0.merge:
+  inlined_Array.get_0_1:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, 1
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_1
+  inlined_Array.get_1_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_1
+  inlined_Array.get_3_1:
+    x64.xor edx, edx
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.mov r9, 0
+    x64.je try_1.ok
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.mov r9, r8
+  try_1.merge:
+    x64.mov [rbp+-8], r9
+    x64.mov edx, 2
+  inlined_Array.get_0_2:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call stdlib.__managed_mem_get
+    x64.mov r14, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_2
+  inlined_Array.get_1_2:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_2
+  inlined_Array.get_3_2:
+    x64.mov rcx, r12
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r14
+  inline_cont_main_2:
+    x64.test rdx, rdx
+    x64.mov r9, 0
+    x64.je try_2.ok
+    x64.mov r12, r9
+    x64.jmp try_2.merge
+  try_2.ok:
+    x64.mov r12, r8
+  try_2.merge:
+    x64.lea r9, [rip+__layout_Array_Narrow]
+    x64.mov eax, 3
+    x64.mov rcx, rbx
+    x64.mov rdx, 1
+    x64.call Array.slice
+    x64.mov r14, r8
+    x64.mov r15, rdx
+    x64.mov rcx, rbx
+    x64.call __mm_decref_maybenull_helper
+    x64.test r15, r15
+    x64.je inlined_Array.get_0_3
+  try_3.otherwise:
+    x64.lea rcx, [rip+__panic_msg_2dc0877316b11792]
+    x64.call mrt_panic
+    x64.mov r8, 0
+    x64.epilogue
+    x64.ret
+  inlined_Array.get_0_3:
+    x64.mov rcx, [r14+0] (8b)
+    x64.mov rdx, 0
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_3
+  inlined_Array.get_1_3:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_3
+  inlined_Array.get_3_3:
+    x64.xor edx, edx
+  inline_cont_main_3:
+    x64.test rdx, rdx
+    x64.mov r9, 0
+    x64.je try_4.ok
+    x64.mov rbx, r9
+    x64.jmp try_4.merge
+  try_4.ok:
+    x64.mov rbx, r8
+  try_4.merge:
+  inlined_Array.get_0_4:
+    x64.mov rcx, [r14+0] (8b)
+    x64.mov rdx, 1
+    x64.call stdlib.__managed_mem_get
+    x64.mov r15, r8
+    x64.test rdx, rdx
+    x64.je inlined_Array.get_3_4
+  inlined_Array.get_1_4:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_4
+  inlined_Array.get_3_4:
+    x64.mov rcx, r14
+    x64.call __mm_decref_maybenull_helper
+    x64.xor edx, edx
+    x64.mov r8, r15
+  inline_cont_main_4:
+    x64.test rdx, rdx
+    x64.mov r9, 0
+    x64.je try_5.ok
+    x64.jmp try_5.merge
+  try_5.ok:
+    x64.mov r9, r8
+  try_5.merge:
+    x64.cmp r13, 1
+    x64.mov r8, 0
+    x64.jne shortAnd.merge
+  shortAnd.rhs:
+    x64.mov r8, [rbp+-8]
+    x64.cmp r8, 2
+    x64.sete r8
+  shortAnd.merge:
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.je shortAnd.merge
+  shortAnd.rhs:
+    x64.cmp r12, 3
+    x64.sete r8
+  shortAnd.merge:
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.je shortAnd.merge
+  shortAnd.rhs:
+    x64.cmp rbx, 2
+    x64.sete r8
+  shortAnd.merge:
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.je shortAnd.merge
+  shortAnd.rhs:
+    x64.cmp r9, 3
+    x64.sete r8
+  shortAnd.merge:
+    x64.test r8, r8
+    x64.mov r8, 0
+    x64.je ternary.else
+    x64.jmp ternary.merge
+  ternary.else:
+    x64.mov r8, 1
+  ternary.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_a341f7a46ea85117]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
