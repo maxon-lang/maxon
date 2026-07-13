@@ -2370,8 +2370,28 @@ end 'structNameIsDropTracked'
 //   - `__ManagedMemoryCursor` : `__destruct___ManagedMemoryCursor` decrefs the
 //     source record the cursor retained at creation (source_ptr@32).
 function runtimeOwnsStructDestructor(structName String) returns bool
-	return structName == "__ManagedFile" or structName == "__ManagedSocket" or structName == "__ManagedMemory" or structName == "__ManagedList" or structName == "__ManagedMemoryCursor" or structName == "__ManagedDirectory"
+	return structName == MANAGED_FILE_TYPE or structName == MANAGED_SOCKET_TYPE or structName == HAND_MANAGED_MEMORY_TYPE or structName == MANAGED_LIST_TYPE or structName == HAND_MANAGED_CURSOR_TYPE or structName == MANAGED_DIRECTORY_TYPE
 end 'runtimeOwnsStructDestructor'
+
+// The containers whose refcount traffic `lowerCreateCursor` writes BY HAND (the cursor's
+// `source_ptr@32` retain, released again by `__destruct___ManagedMemoryCursor`). A member
+// alias naming one of these must stay classified NOT-managed so the inserter adds no
+// field-store-incref on top of that hand-written retain — see `memberAliasTargetIsHeapManaged`.
+let HAND_MANAGED_MEMORY_TYPE = "__ManagedMemory"
+let HAND_MANAGED_CURSOR_TYPE = "__ManagedMemoryCursor"
+
+// Runtime handles whose destructors the runtime owns (see `runtimeOwnsStructDestructor`).
+// The file and socket handles are additionally heap-managed despite not being user structs.
+let MANAGED_FILE_TYPE = "__ManagedFile"
+let MANAGED_SOCKET_TYPE = "__ManagedSocket"
+let MANAGED_LIST_TYPE = "__ManagedList"
+let MANAGED_DIRECTORY_TYPE = "__ManagedDirectory"
+
+// `Promise with T` is a facade over a raw green-thread handle, never refcounted.
+let PROMISE_FACADE_TYPE = "Promise"
+
+// Synthesized tuple structs (`__Tuple2`, …): `__mm_alloc`'d, but not registered in `structTypes`.
+let TUPLE_TYPE_PREFIX = "__Tuple"
 
 // True for any user struct (every struct is heap-allocated and refcount-managed,
 // matching the C# reference's `IrStructType.IsHeapAllocated => true`). Drives the
@@ -2391,33 +2411,13 @@ export function structNameIsHeapManaged(project Project, structName String) retu
 	// record's lifecycle belongs to the scheduler (per-P free-list recycle),
 	// not the refcounter. Mirrors the C# bootstrap's `IsPromiseStructType`
 	// special-casing, adapted to the self-hosted raw-handle representation.
-	if structName == "Promise" 'promiseFacade'
+	// Checked BEFORE the declared-type test, which would match `Promise` in `structTypes`.
+	if structName == PROMISE_FACADE_TYPE 'promiseFacade'
 		return false
 	end 'promiseFacade'
-	if structName == "__ManagedFile" 'handle'
+	if structNameIsDeclaredHeapManaged(project, structName: structName) 'declaredType'
 		return true
-	end 'handle'
-	if structName == "__ManagedSocket" 'socket'
-		return true
-	end 'socket'
-	if project.structTypes.contains(structName) 'isStruct'
-		return true
-	end 'isStruct'
-	// A HEAP-BOXED union value (some case carries a payload) is allocated by
-	// `lowerEnumConstruct` via `__mm_alloc`, so it is refcount-managed exactly like a
-	// struct: the BOX must be dropped at last use regardless of what the payload
-	// holds. A union with a MANAGED payload additionally gets a `__destruct_<Union>`
-	// that cascade-decrefs the live case's payload; a scalar-payload boxed union keeps
-	// the null destructor (the free releases just the box). Unions live in `enumTypes`
-	// (not `structTypes`), so the struct check above misses them — gate on
-	// `enumTypeIsBoxedUnion` (the construct path and `namedTypeIsManagedRef` use the
-	// same predicate). A PURE-SCALAR union (no payload anywhere — a bare i64 like an
-	// enum, never boxed) stays unmanaged exactly like a plain enum.
-	if let unionType = try project.enumTypes.get(structName) 'isUnion'
-		if enumTypeIsBoxedUnion(unionType) 'boxedUnion'
-			return true
-		end 'boxedUnion'
-	end 'isUnion'
+	end 'declaredType'
 	// A GENERIC TYPEALIAS (`typealias IntArray = Array with Integer`,
 	// `ByteArray = Array with Byte`, `ByteMemory = __ManagedMemory with Byte`,
 	// `RunArrayStack = Array with SortRun`, …) names a heap-managed container but is
@@ -2451,65 +2451,140 @@ export function structNameIsHeapManaged(project Project, structName String) retu
 	// map and recurse — the target (`(Key,Value)` → `__Tuple2`, `Array with Element`)
 	// is heap-managed, mirroring the genericTypealias chase just above.
 	// A MEMBER TYPEALIAS whose declaring type's inner-alias map resolves the name to a
-	// concrete heap-managed type. Only consulted as the last resort below; `false` for
+	// concrete heap-managed type. Only consulted as the last resort; `false` for
 	// a non-member name or one that resolves to a scalar/typeParameter target.
-	if memberAliasIsHeapManaged(project, aliasName: structName) 'isMemberAlias'
-		return true
-	end 'isMemberAlias'
-	return false
+	return memberAliasIsHeapManaged(project, aliasName: structName)
 end 'structNameIsHeapManaged'
 
-// True iff bare member-typealias NAME `aliasName` (declared inside a type body's
-// `innerAliases`) resolves to a TUPLE type (`__TupleN`). The motivating member alias
-// is `Map.Entry`/`MapIterator.Entry` = `(Key, Value)`: the LIFTED CLOSURE param/return
-// of `m.map(function(p) gives p)` inherits `Element = Entry` from the
-// `function(Element) returns Element` signature, and the resolver leaves the param's
-// MaxonType as `named("Entry")` rather than the concrete `(String, Int)` tuple. A
-// tuple holding a managed field IS heap-managed (`__mm_alloc`'d, owns its String), but
-// `named("Entry")` would otherwise classify `notManaged` — so the inserter never hands
-// the closure's returned managed param a +1 (`planReturnIncrefs` is `isManaged`-gated),
-// the indirect-call result is treated as owning a +1 the borrow never owned, and the
-// caller's input-arg drop frees the tuple out from under `Array.push` (the
-// stdlib-map-on-map-with-function garbage-pointer crash).
+// The heap-managed classification of a name that DECLARES a type — a registered struct, a
+// runtime handle whose lifecycle the lowering owns, or a heap-BOXED union.
 //
-// DELIBERATELY TUPLE-ONLY. The resolution is restricted to `__TupleN` targets — NOT
-// every managed member alias. A broad "any member alias → its target's heap-managed
-// classification" rule flips long-standing classifications the lowering relies on:
-// `ArrayIterator.ElementMemory` = `__ManagedMemory with Element` and
-// `RawCursor` = `__ManagedMemoryCursor with Element` carried the bare alias name into
-// `lowerCreateCursor`'s `source` value, whose manual `source_ptr@32` retain is sized to
-// the source being classified NOT-managed (the inserter then adds NO field-store-incref
-// for the cursor source); reclassifying those managed double-increfs the cursor source
-// and leaks the array's backing buffer on every `for x in array`. Tuples have no such
-// hand-tuned retain path, so the narrow rule fixes the closure case in isolation.
-// `anyStructHasInnerAlias` is an O(1) reverse-index gate (off the hot path for
-// ordinary names); the per-target tuple check then bounds the work.
+// Resolves NO aliases. That is the point: it is the TERMINAL step of every chase in
+// `structNameIsHeapManaged`, so the member-alias hop can reuse it (a member alias's target
+// names a real struct/union, never another member alias) without the two calling back into
+// each other. An earlier revision let the member-alias hop recurse through
+// `maxonTypeIsHeapManaged` and blew the stack on the stdlib compile.
+function structNameIsDeclaredHeapManaged(project Project, structName String) returns bool
+	if structName == MANAGED_FILE_TYPE or structName == MANAGED_SOCKET_TYPE 'runtimeHandle'
+		return true
+	end 'runtimeHandle'
+	if project.structTypes.contains(structName) 'isStruct'
+		return true
+	end 'isStruct'
+	// A HEAP-BOXED union value (some case carries a payload) is allocated by
+	// `lowerEnumConstruct` via `__mm_alloc`, so it is refcount-managed exactly like a
+	// struct: the BOX must be dropped at last use regardless of what the payload
+	// holds. A union with a MANAGED payload additionally gets a `__destruct_<Union>`
+	// that cascade-decrefs the live case's payload; a scalar-payload boxed union keeps
+	// the null destructor (the free releases just the box). Unions live in `enumTypes`
+	// (not `structTypes`), so the struct check above misses them — gate on
+	// `enumTypeIsBoxedUnion` (the construct path and `namedTypeIsManagedRef` use the
+	// same predicate). A PURE-SCALAR union (no payload anywhere — a bare i64 like an
+	// enum, never boxed) stays unmanaged exactly like a plain enum.
+	if let unionType = try project.enumTypes.get(structName) 'isUnion'
+		if enumTypeIsBoxedUnion(unionType) 'boxedUnion'
+			return true
+		end 'boxedUnion'
+	end 'isUnion'
+	return false
+end 'structNameIsDeclaredHeapManaged'
+
+// The heap-managed classification of a bare member-typealias NAME (one declared inside a
+// type body's `innerAliases`, e.g. `MapIterator.IterKeyArray` = `Array with Key` or
+// `Map.Entry` = `(Key, Value)`), resolved through whichever type declares it.
+//
+// The resolver leaves such a value's MaxonType as the bare alias NAME (`named("Entry")`,
+// `named("IterKeyArray")`) rather than the concrete target, and a bare name that is not a
+// registered struct/union/generic-typealias would otherwise classify `notManaged` — so the
+// inserter would never acquire or release it. Two costs of that, both observed:
+//   - the LIFTED CLOSURE of `m.map(function(p) gives p)` inherits `Element = Entry`, so its
+//     returned managed param never got a +1 (`planReturnIncrefs` is `isManaged`-gated), the
+//     indirect-call result was treated as owning a +1 the borrow never owned, and the
+//     caller's input-arg drop freed the tuple out from under `Array.push`
+//     (the stdlib-map-on-map-with-function garbage-pointer crash);
+//   - `MapIterator.create`'s member-aliased CONSUMED params were never released on its
+//     throw path (see `memberAliasTargetIsHeapManaged`) — the empty-Map for-in leak.
+//
+// `anyStructHasInnerAlias` is an O(1) reverse-index gate, keeping ordinary names off the
+// per-struct scan.
 function memberAliasIsHeapManaged(project Project, aliasName String) returns bool
 	if not anyStructHasInnerAlias(project, aliasName: aliasName) 'notMember'
 		return false
 	end 'notMember'
 	for (_, structType) in project.structTypes 'eachStruct'
 		if let resolved = try structType.innerAliases.get(aliasName) 'hit'
-			return memberAliasTargetIsTuple(project, t: resolved)
+			return memberAliasTargetIsHeapManaged(project, t: resolved)
 		end 'hit'
 	end 'eachStruct'
 	return false
 end 'memberAliasIsHeapManaged'
 
-// True iff a member-alias's resolved target is a tuple type (`__TupleN`), in either the
-// `genericInstance(__TupleN, [...])` form (`Entry` = `(Key, Value)`) or the bare
-// `named("__TupleN")` form. A tuple struct is always heap-managed (`__mm_alloc`'d), so
-// no further recursion through `maxonTypeIsHeapManaged` is needed — keeping the
-// member-alias resolution to a single, non-recursive hop.
-function memberAliasTargetIsTuple(project Project, t MaxonType) returns bool
+// The heap-managed classification of a member typealias's resolved TARGET.
+//
+// A member alias names exactly the container its target names — `MapIterator`'s
+// `IterKeyArray` = `Array with Key` IS an Array, a heap-managed struct — so the rule is
+// simply the target's own classification. This restores, for member aliases, the same
+// chase the generic-typealias branch above already performs; without it every value typed
+// by a member alias classifies `notManaged`, so the inserter never acquires or releases it.
+//
+// That gap is what leaked `MapIterator.create`'s CONSUMED params: it takes
+// `keys`/`values`/`states` (all member-aliased `Array with …`), and its caller
+// `Map.createIterator` — reading the consume registry, which deliberately does NOT gate on
+// the managed bit — increfs each one and suppresses its own release, handing ownership in.
+// On the SUCCESS path the callee move-stores them into the returned iterator, whose
+// destructor frees them; on the `IterationError.exhausted` THROW path (an EMPTY map) it
+// stores them nowhere, and being `notManaged` it emitted no release — orphaning one
+// reference per argument. Every `for … in` over an empty Map leaked 3 Arrays plus their
+// backing buffers (`HttpClient` iterates a request's header map, which is empty).
+//
+// EXCEPT the cursor family, which the LOWERING hand-manages: `lowerCreateCursor` writes the
+// cursor's `source_ptr@32` retain ITSELF, sized to that source being classified NOT-managed,
+// so the inserter must add no field-store-incref on top. Classifying `ArrayIterator`'s
+// `ElementMemory` (`__ManagedMemory with Element`) or `RawCursor` (`__ManagedMemoryCursor
+// with Element`) managed double-increfs the cursor source and leaks the array's backing
+// buffer on every `for x in array`. Their ownership is already balanced without the
+// inserter: the cursor takes the source's reference at construction and gives it back
+// through `__destruct___ManagedMemoryCursor` — including on the throw path, which decrefs
+// the cursor itself (this is precisely why the empty-ARRAY for-in never leaked while the
+// empty-MAP one did).
+//
+// A SINGLE, TERMINAL hop: the target's BASE struct name is classified directly against the
+// declared types, never by recursing back through `maxonTypeIsHeapManaged` (whose
+// member-alias branch is what called us). An alias target names a real struct/union, so one
+// hop is complete — and refusing to recurse makes even a malformed self-referential alias a
+// plain `false` instead of an unbounded descent that blows the stack on the stdlib compile.
+function memberAliasTargetIsHeapManaged(project Project, t MaxonType) returns bool
+	let base = memberAliasTargetBaseName(project, t: t)
+	if base.isEmpty() 'notStructShaped'
+		return false
+	end 'notStructShaped'
+	// The cursor family the lowering hand-manages (see the doc above): NOT-managed.
+	if base == HAND_MANAGED_MEMORY_TYPE or base == HAND_MANAGED_CURSOR_TYPE 'handManagedByLowering'
+		return false
+	end 'handManagedByLowering'
+	// A tuple struct (`Entry` = `(Key, Value)` → `__TupleN`) is `__mm_alloc`'d and so is
+	// heap-managed, but it is synthesized rather than registered in `structTypes` — the
+	// declared-type test below would miss it.
+	if base.startsWith(TUPLE_TYPE_PREFIX) 'tupleTarget'
+		return true
+	end 'tupleTarget'
+	if base == PROMISE_FACADE_TYPE 'promiseFacade'
+		return false
+	end 'promiseFacade'
+	return structNameIsDeclaredHeapManaged(project, structName: base)
+end 'memberAliasTargetIsHeapManaged'
+
+// The base struct name of a member alias's target (`Array` for `Array with Key`), or the
+// empty string when the target is not a struct-shaped type.
+function memberAliasTargetBaseName(project Project, t MaxonType) returns String
 	return match t 'kind'
-		genericInstance(gid) gives genericInstanceIdBaseName(project, id: gid).startsWith("__Tuple")
-		named(id) gives project.typeNames.get(id).startsWith("__Tuple")
-		boolean to character gives false
-		function to typeParameter gives false
-		interface to cstring gives false
+		genericInstance(gid) gives genericInstanceIdBaseName(project, id: gid)
+		named(id) gives project.typeNames.get(id)
+		boolean to character gives ""
+		function to typeParameter gives ""
+		interface to cstring gives ""
 	end 'kind'
-end 'memberAliasTargetIsTuple'
+end 'memberAliasTargetBaseName'
 
 // The (present, resultId, callee) triple of a call op, for the classification
 // audit. Direct `call`/`tryCall` carry a named static callee; the dynamic
