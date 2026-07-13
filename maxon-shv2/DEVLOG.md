@@ -468,3 +468,58 @@ at M14 — *reversed*, because `own.drop` on a type-parameter value needs the ru
   2.12 error handling · 2.13 ranged typealias
 - [ ] **Stage 3** self-host · [ ] **Stage 4** broaden · [ ] **Stage 5** budget gate (≤30 s / ≤1.7 GB /
   >90% CPU; Workstream **R3** = the GT scheduler)
+
+## The phi model is SHARED, not copied — 2026-07-13, **specs-shv2 126/0**
+
+Four `.clone()` calls existed in shv2. **None of them earned their keep**, and the reason is the memory
+model, not discipline: Maxon has **reference semantics** (`a = b` increfs, it does not copy) and **no move
+checker**, so a clone is *never* needed for lifetime safety — only to obtain independent **mutation**. That
+is the only bar a clone has to clear, and all four failed it.
+
+- **Two were dead.** `sequenceParallelCopy` cloned its two worklists because the parallel-move algorithm
+  destroys them — but `buildEdgePlan`, its only caller, builds those arrays for that call alone and never
+  reads them again. The clone defended against nothing, and it was not even cheap: `Array.clone()` is a COW
+  slice, and `removeSatisfiedMoves` runs unconditionally, so the copy-on-write *always* fired. It now
+  CONSUMES its arguments.
+- **Two were a tier-boundary tax on tier-independent data.** The phi model (`blockArgs` / `branchEdges` /
+  `argIds`) is the same ValueIds at every tier, but it lives inside a per-tier container, so it was
+  deep-copied at each boundary — while `prepareSkeleton` **shared the `IrFunction` objects by reference one
+  line below** (and the backend mutates them). The clones were the outlier, not the sharing. The tiers now
+  share ONE phi model; the Target tier owns only what it *replaces* (the `BranchEdgeArray` and the
+  `BranchEdge` objects), because those are field assignments.
+
+**What made this a real decision and not a cleanup: the memo is shared.** `queryAllModule` hands back the
+SAME `MaxonModule` object on every cache hit, and `relocateIrBlock` (né `cloneIrBlock` — it always *aliased*
+the arrays its name said it copied) merges the artifacts' phi arrays into it by reference. So an in-place
+write to a shared `argIds` corrupts the parse memo for every later compile — **silently**, since nothing
+downstream re-reads the Maxon or Std phi model to notice.
+
+Exactly ONE line in the compiler writes `argIds` in place: `rewriteEdgeArgsIn`, repointing an edge arg at a
+reload. It now **copies before it writes** — the compiler's one remaining `.clone()`, at the one place
+independent mutation is genuinely required. A program that never spills now copies the phi model **zero**
+times at any tier, where it used to pay a copy per edge per boundary.
+
+- **THE LESSON:** the safety was already resting on an accident. `pruneDeadBlockArgs` rebuilds every edge's
+  `argIds` *unconditionally* — even when it prunes nothing — which happens to close the Maxon aliasing
+  window before the Target tier can write. The obvious optimization to that pass ("skip the rebuild if
+  nothing was dropped") would have exposed the memo to the splitter's in-place write, and **no test would
+  have caught it.** The copy-on-write makes the safety **local and unconditional** instead of an emergent
+  property of a distant pass. That is worth far more than the allocations it saves.
+- **FINDING — the edge-rewrite path is UNEXERCISED.** Probing `rewriteEdgeArgsIn` with a print shows it is
+  **never called across all 126 specs** — including the five regalloc *stress* specs written expressly to
+  force spilling: no spill victim in the suite is an edge-passed value. So the one path that makes
+  cross-tier sharing dangerous has **no coverage**, which is precisely why a missing copy-on-write would
+  have been invisible. That a suite built to stress the allocator still never reaches it is the finding, not
+  a footnote to it. The COW is correct by construction — it relies on the same field-assign-through-`.get(i)`
+  mechanism `pruneDeadBlockArgs` and `remapArtifact` already depend on — but **it wants a spec that reaches
+  it** (a spilled value forwarded to a phi). Worth its own test.
+- **Names that lied are gone:** `cloneIrBlock`→`relocateIrBlock` and `cloneWithBlockRefs`→`relocateFunction`
+  (both are index *relocation*, not copying), `IrFunction.clone`→`shallowCopy` (it shares
+  `maxonParamTypes`/`paramTypes`/`scope` by reference), and `IrBlockArg.cloneOf` **deleted** (all-scalar; it
+  only ever guarded a default-arg footgun). `IrBlock`'s header claimed the Maxon tier had no phis and that
+  nothing rewrites them at the Target tier — **both false**, and it was the comment a reader would trust
+  when judging whether aliasing was safe. It now carries the ownership rule.
+- **Also:** `gatherIncomingAtPosition` — the last raw indexer of `edge.argIds` — routes through
+  `PhiEdgeView`, so the positional `blockArgs[k] ↔ argIds[k]` invariant has exactly one enforcement point.
+- **Gates:** shv2 build clean; **specs-shv2 126/0**; `git status specs-shv2/fragments/` **empty** — the
+  goldens are compared, so codegen is **byte-identical**; `verify-warm-rebuild` PASS.

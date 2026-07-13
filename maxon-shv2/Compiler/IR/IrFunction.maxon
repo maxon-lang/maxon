@@ -165,12 +165,15 @@ export type IrFunction
 		}
 	end 'createFromStd'
 
-	// Copies signature + type info with a fresh-empty `blockRefs`. Callers that
-	// need the source's block references must copy them explicitly — that
-	// empty-list contract is what `cloneWithBlockRefs` (and the backends that
-	// rebuild `blockRefs` themselves) rely on. See `cloneWithBlockRefs` for the
-	// variant that preserves them, optionally shifted by a block offset.
-	export static function clone(src IrFunction) returns IrFunction
+	// A SHALLOW copy of the signature + type info, with a fresh-empty `blockRefs`.
+	// Deliberately NOT a clone: `maxonParamTypes`, `paramTypes` and `scope` are
+	// SHARED with `src` by reference, because no consumer mutates them in place.
+	// Only `blockRefs` is fresh — callers that need the source's block references
+	// must carry them over explicitly, and that empty-list contract is what
+	// `relocateFunction` (and the backends that rebuild `blockRefs` themselves)
+	// rely on. See `relocateFunction` for the variant that preserves them, shifted
+	// by a block offset.
+	export static function shallowCopy(src IrFunction) returns IrFunction
 		return Self{
 			name: src.name,
 			namespace: src.namespace,
@@ -193,22 +196,21 @@ export type IrFunction
 			outgoingArgSize: src.outgoingArgSize,
 			isPure: src.isPure
 		}
-	end 'clone'
+	end 'shallowCopy'
 
-	// Copies signature, type info, AND the source's `blockRefs`, shifting each
-	// ref by `blockOffset` (0 = verbatim). Used where a cloned function must keep
-	// pointing at the source's body blocks: in place (offset 0) for the backends
-	// that clone a function whole, or offset by the destination's prior block
-	// count when `IrModule.merge` relocates a source module's blocks into this
-	// one. Subsumes the former `IrModule.cloneFunc` (which was this same
-	// clone-then-carry-refs walk, always with an offset).
-	export static function cloneWithBlockRefs(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
-		var copy = IrFunction.clone(src)
+	// RELOCATION, not copying: a shallow copy that also carries the source's
+	// `blockRefs` across, shifting each by `blockOffset` (0 = verbatim). The shift is
+	// the whole point — `IrModule.merge` appends a source module's blocks after the
+	// destination's, so every ref into them moves by the destination's prior block
+	// count. Offset 0 serves a backend that needs the function to keep pointing at the
+	// source's body blocks in place.
+	export static function relocateFunction(src IrFunction, blockOffset BlockRef = 0) returns IrFunction
+		var relocated = IrFunction.shallowCopy(src)
 		for blockRef in src.blockRefs 'eachBlock'
-			copy.blockRefs.append(blockRef + blockOffset)
+			relocated.blockRefs.append(blockRef + blockOffset)
 		end 'eachBlock'
-		return copy
-	end 'cloneWithBlockRefs'
+		return relocated
+	end 'relocateFunction'
 
 	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
 	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting

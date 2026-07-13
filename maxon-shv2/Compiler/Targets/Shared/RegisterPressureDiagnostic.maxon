@@ -397,7 +397,7 @@ function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId Va
 		if pos == block.blockArgs.count() 'notHere'
 			continue
 		end 'notHere'
-		gatherIncomingAtPosition(module, topo: topo, targetBlockId: block.id, position: pos, out: result)
+		gatherIncomingAtPosition(module, topo: topo, targetBlock: block, position: pos, out: result)
 	end 'eachBlock'
 	return result
 end 'phiIncomingValues'
@@ -414,16 +414,19 @@ function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
 	return block.blockArgs.count()
 end 'blockArgPosition'
 
-// Gather the `position`-th argument of every branch edge targeting `targetBlockId` into `out`
-// (the values predecessors pass to that phi). Uses `PhiEdgeView` only for its arity check.
-function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlockId BlockId, position PhiIndex, out ValueIdArray)
+// Gather the `position`-th argument of every branch edge targeting `targetBlock` into `out`
+// (the values predecessors pass to that phi). Routed through `PhiEdgeView` so that the
+// positional `blockArgs[k] <-> argIds[k]` invariant every phi consumer rests on is enforced in
+// ONE place — this was the last reader indexing an edge's `argIds` raw.
+function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlock IrBlock, position PhiIndex, out ValueIdArray)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
 		for edge in block.branchEdges 'eachEdge'
-			if edge.targetBlockId != targetBlockId 'notThisEdge'
+			if edge.targetBlockId != targetBlock.id 'notThisEdge'
 				continue
 			end 'notThisEdge'
-			out.push(try edge.argIds.get(position) otherwise panic("gatherIncomingAtPosition: edge to block {targetBlockId} lacks arg at phi position {position}"))
+			let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(register-pressure diagnostic)")
+			out.push(view.incomingAt(position))
 		end 'eachEdge'
 	end 'eachBlock'
 end 'gatherIncomingAtPosition'

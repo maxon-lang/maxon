@@ -153,32 +153,36 @@ end 'classifyPlacement'
 // moves. Repeatedly emit a move whose dst is no other move's source (a leaf); when
 // only cycles remain, break one with an `xchg` and rewrite the remaining sources
 // through the swap. This is the standard parallel-move algorithm.
+//
+// CONSUMES ITS ARGUMENTS: `dsts`/`srcs` ARE the worklists — each move is removed as
+// it is emitted, so both are EMPTY on return. `buildEdgePlan`, the sole caller,
+// builds them for this call alone and never reads them again, so they are handed
+// over rather than copied. A second caller must likewise pass arrays it owns and is
+// finished with.
 function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns MoveSequence
 	var moves = MoveSequence.create()
-	var pd = dsts.clone()
-	var ps = srcs.clone()
 
-	while pd.count() > 0 'sequence'
+	while dsts.count() > 0 'sequence'
 		// Drop moves already satisfied (dst == src) — the initial ones the caller may
 		// leave, and the one a preceding `xchg` just fulfilled (its source, rewritten
 		// through the swap, now equals its dst). Emitting `xchg r, r` would be a no-op.
-		removeSatisfiedMoves(pd, ps: ps)
-		if pd.count() == 0 'allDone'
+		removeSatisfiedMoves(dsts, ps: srcs)
+		if dsts.count() == 0 'allDone'
 			break
 		end 'allDone'
 
-		let leaf = findLeafMove(pd, ps: ps)
-		if leaf < pd.count() 'foundLeaf'
-			let d = try pd.get(leaf) otherwise panic("sequenceParallelCopy: pd.get OOB")
-			let s = try ps.get(leaf) otherwise panic("sequenceParallelCopy: ps.get OOB")
+		let leaf = findLeafMove(dsts, ps: srcs)
+		if leaf < dsts.count() 'foundLeaf'
+			let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB")
+			let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB")
 			moves.pushMove(d, src: s, swap: false)
-			removeMoveAt(pd, ps: ps, idx: leaf)
+			removeMoveAt(dsts, ps: srcs, idx: leaf)
 		end 'foundLeaf' else 'cycle'
-			let a = try pd.get(0) otherwise panic("sequenceParallelCopy: pd.get(0) OOB")
-			let b = try ps.get(0) otherwise panic("sequenceParallelCopy: ps.get(0) OOB")
+			let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
+			let b = try srcs.get(0) otherwise panic("sequenceParallelCopy: srcs.get(0) OOB")
 			moves.pushMove(a, src: b, swap: true)
-			removeMoveAt(pd, ps: ps, idx: 0)
-			rewriteSourcesThroughSwap(ps, a: a, b: b)
+			removeMoveAt(dsts, ps: srcs, idx: 0)
+			rewriteSourcesThroughSwap(srcs, a: a, b: b)
 		end 'cycle'
 	end 'sequence'
 

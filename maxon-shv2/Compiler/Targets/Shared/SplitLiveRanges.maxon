@@ -1621,12 +1621,34 @@ end 'insertReloadFor'
 
 // Repoint every branch-edge arg of `blockLocal` naming `from` at `to` (the reload that now holds
 // the value). The reload precedes the block's terminator, so it dominates the edge.
+//
+// THE ONLY IN-PLACE WRITER OF `argIds` IN THE COMPILER — which makes it the only place that must
+// COPY BEFORE IT WRITES. The tiers SHARE one phi model: an edge's `argIds` reaches back through
+// the Std module to the Maxon module the parse memo hands out, and `queryAllModule` returns that
+// SAME module object on every cache hit. A write straight through this array would corrupt the
+// memo for every later compile of the project — silently, since nothing downstream re-reads the
+// Std or Maxon phi model to notice.
+//
+// So de-alias first: the FIRST arg an edge actually repoints swaps in a private copy, and the
+// writes land there. An edge with nothing to repoint keeps sharing and copies nothing, so a
+// program that never spills pays no copy at any tier. `.clone()` is exactly right here and is the
+// compiler's ONE remaining clone: independent mutation is the sole thing Maxon's reference
+// semantics make a clone necessary FOR.
+//
+// Index-based over `branchEdges` because a `for edge in ...` binding is immutable, so it could
+// not host the `edge.argIds = ...` field assignment the copy needs.
 function rewriteEdgeArgsIn(module TargetModule, topo FuncTopology, blockLocal CfgIndex, from ValueId, to ValueId)
 	let block = blockAt(module, topo: topo, local: blockLocal)
-	for edge in block.branchEdges 'eachEdge'
+	for e in 0 upto block.branchEdges.count() 'eachEdge'
+		var edge = try block.branchEdges.get(e) otherwise panic("rewriteEdgeArgsIn: branchEdges.get OOB")
+		var privatized = false
 		for k in 0 upto edge.argIds.count() 'eachArg'
 			let argId = try edge.argIds.get(k) otherwise panic("rewriteEdgeArgsIn: argIds.get OOB")
 			if argId == from 'match'
+				if not privatized 'stillShared'
+					edge.argIds = edge.argIds.clone()
+					privatized = true
+				end 'stillShared'
 				try edge.argIds.set(k, value: to) otherwise panic("rewriteEdgeArgsIn: argIds.set OOB")
 			end 'match'
 		end 'eachArg'

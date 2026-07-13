@@ -438,13 +438,13 @@ export type IrModule uses Op
 
 		for i in 0 upto source.blocks.count() 'eachBlock'
 			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
-			self.blocks.push(cloneIrBlock(srcBlock, opOffset: opOffset))
+			self.blocks.push(relocateIrBlock(srcBlock, opOffset: opOffset))
 			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
 			self.blockSourceInfo.push(srcInfo)
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'
-			self.functions.push(IrFunction.cloneWithBlockRefs(srcFunc, blockOffset: blockOffset))
+			self.functions.push(IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset))
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
@@ -609,9 +609,16 @@ function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
 	end 'rewriteFunc'
 end 'rewriteFuncBlockRefs'
 
-// Clone a block, adjusting op indices by the given offset.
-// Used by MergeableModule.merge to relocate blocks into a destination module.
-function cloneIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
+// RELOCATE a block into a destination module: everything that names an op by index —
+// `opRefs`, the terminator, the cond-branch — shifts by `opOffset`, because `merge`
+// appended the source's ops after the destination's. Nothing is deep-copied; this is
+// index arithmetic, not a clone.
+//
+// The phi model (`blockArgs` / `branchEdges`) is SHARED with the source block, whose
+// module is the parse memo's. Safe because no Maxon-tier pass mutates it, and the one
+// in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
+// copies before it writes. See IrBlock's header for the ownership rules.
+function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
 	var block = IrBlock.create(src.id, label: src.label)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
@@ -629,6 +636,6 @@ function cloneIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
 		opIndex(index) gives CondBranch.opIndex(index + opOffset)
 	end 'relocateCond'
 	return block
-end 'cloneIrBlock'
+end 'relocateIrBlock'
 
 export typealias MaxonModule = IrModule with MaxonOp

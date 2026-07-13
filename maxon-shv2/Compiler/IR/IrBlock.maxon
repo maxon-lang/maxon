@@ -3,12 +3,49 @@
 // Stores op indices into the owning module's flat ops array, exactly one
 // terminator, block arguments (phi nodes), and outgoing branch edges.
 //
-// At the Maxon phase blockArgs and branchEdges are always empty. Both are
-// populated during the Std phase — by the parser's on-the-fly SSA (M4b) and, later,
-// mem2reg — and carried verbatim into the Target phase by
-// `StdToX64Conversion.prepareSkeleton`. The register allocator consumes them
-// DIRECTLY (SSA destruction after coloring); nothing rewrites them at the Target
-// phase (M5 retired the EliminatePhis pass that used to clear them before codegen).
+// THE PHI MODEL AND ITS LIFECYCLE. `blockArgs` (the phis) and `branchEdges` (each
+// predecessor's per-phi incoming values) are one positional pair: `blockArgs[k]` of a
+// block is fed by slot `k` of every incoming edge's `argIds`. `PhiEdgeView.resolve`
+// is the one place that arity is checked.
+//
+//   Maxon phase — BORN HERE. The parser's on-the-fly SSA mints them (`Parser.mintPhi`
+//     / `recordBranchEdge`), so they are NOT empty at this phase. A block whose
+//     successor carries no phis gets no edge recorded at all, so `branchEdges` is not
+//     a successor list — the CFG is derived from the ops (see `TargetLiveness`).
+//   Std phase — `lowerMaxonToStd` carries them across, then `pruneDeadBlockArgs` DROPS
+//     the phis nothing reads, rebuilding both lists in lockstep.
+//   Target phase — `StdToX64Conversion.prepareSkeleton` carries them across, and the
+//     register allocator consumes them DIRECTLY (it does SSA destruction after
+//     coloring; M5 retired the EliminatePhis pass that used to clear them beforehand).
+//     They ARE rewritten here: the live-range splitter repoints edge args at reloads
+//     (`rewriteEdgeArgsIn`), critical-edge splitting moves edges onto new blocks, and
+//     `clearPhiModel` finally empties the model once the edge moves are committed.
+//
+// WHO OWNS WHAT — the rule every pass must respect.
+//
+// The phi model is tier-independent data, so the three tiers SHARE ONE COPY of it
+// rather than deep-copying it at each boundary. Concretely: a Std block's `blockArgs`
+// and `branchEdges` are the Maxon block's arrays; a Target block gets its own
+// `BranchEdgeArray` and `BranchEdge` objects (it replaces those) but SHARES the
+// `ValueIdArray` inside each edge and the `blockArgs` list.
+//
+// That sharing reaches all the way back into the PARSE MEMO: `queryAllModule` hands
+// out the same MaxonModule object on every cache hit, and `relocateIrBlock` aliases
+// its phi arrays into the merged module. So a pass that mutates one of these arrays
+// IN PLACE corrupts the memo for every later compile of the project — and nothing
+// downstream re-reads the Maxon or Std phi model, so no test would catch it.
+//
+// Hence the rule:
+//
+//   A pass MUST NOT mutate `blockArgs`, `branchEdges`, or an edge's `argIds` in place.
+//   To change the phi model, BUILD A FRESH ARRAY AND ASSIGN THE FIELD.
+//
+// Every pass already obeys it. `pruneDeadBlockArgs` (Std) rebuilds both lists and
+// field-assigns them onto the Std block. `extractPredEdge` / `clearPhiModel` (Target)
+// field-assign a rebuilt `BranchEdgeArray`. The ONE in-place writer in the whole
+// compiler is `rewriteEdgeArgsIn` (Target), and it de-aliases — it clones an edge's
+// `argIds` before its first write to it. A pass that CREATES phis (mem2reg, when it
+// lands) must follow the same discipline.
 
 // Role tag for an IrBlockArg, used by the inliner to record that a
 // continuation-block arg stands in for what would otherwise be a value
@@ -17,7 +54,7 @@
 // the hint anchor the post-call capture mov used to provide before the
 // callee was inlined.
 //
-//   none           — normal phi (mem2reg, branch-arg, etc.). Default.
+//   none           — normal phi (the parser's SSA, a branch arg). Default.
 //   primaryReturn  — primary return value: R8 (x64) / X0 (arm64).
 //   errorFlag      — multi-value-return error flag: RDX / X1.
 export enum BlockArgReturnRole
@@ -27,39 +64,33 @@ export enum BlockArgReturnRole
 end 'BlockArgReturnRole'
 
 // A block argument (phi node): a value defined at block entry, bound by
-// the branch op that transfers control to this block. Introduced by
-// mem2reg at the Std phase and carried into the Target phase.
+// the branch op that transfers control to this block. Minted by the
+// parser's on-the-fly SSA at the Maxon phase (see this file's header) and
+// carried down through the Std and Target phases.
 export type IrBlockArg
 	export var valueId as ValueId
 	export var argType as StdType
 	// Set to a non-`none` value only by the inliner on the continuation
 	// block it synthesizes for a multi-block splice. Every other producer
-	// of blockArgs (mem2reg, parser, target lowering) leaves it as
-	// `none`. Consumed by each backend's `coalesceRanges` to seed a
+	// of blockArgs (the parser, target lowering) leaves it as `none`.
+	// Consumed by each backend's `coalesceRanges` to seed a
 	// physical-register hint via `setPhysHint`.
 	export var returnRole as BlockArgReturnRole
 
 	export static function create(valueId ValueId, argType StdType, returnRole BlockArgReturnRole = BlockArgReturnRole.none) returns IrBlockArg
 		return Self{valueId: valueId, argType: argType, returnRole: returnRole}
 	end 'create'
-
-	// Clone an arg from another block (e.g. when copying blocks during
-	// target lowering). Preserves the source arg's returnRole so the
-	// backend coalescer can still seed an ABI-role hint after lowering.
-	export static function cloneOf(srcArg IrBlockArg) returns IrBlockArg
-		return Self{valueId: srcArg.valueId, argType: srcArg.argType, returnRole: srcArg.returnRole}
-	end 'cloneOf'
 end 'IrBlockArg'
 
 export typealias IrBlockArgArray = Array with IrBlockArg
 
 // An outgoing branch arg list paired with its successor block id: the values a
-// predecessor passes to the successor's block-args (phis) on that edge. Populated
-// during the Std phase (the M4b parser's on-the-fly SSA) and carried into the
-// Target phase, where the register allocator's SSA destruction reads it AFTER
-// coloring to emit the parallel edge copies. The physical terminators (x64 jmp,
-// arm64 branch) carry only the target block id, so this metadata lives on the
-// predecessor's IrBlock instead.
+// predecessor passes to the successor's block-args (phis) on that edge. Recorded by
+// the parser at the Maxon phase (`recordBranchEdge`) and carried down to the Target
+// phase, where the register allocator's SSA destruction reads it AFTER coloring to
+// emit the parallel edge copies. The physical terminators (x64 jmp, arm64 branch)
+// carry only the target block id, so this metadata lives on the predecessor's
+// IrBlock instead.
 export type BranchEdge
 	export var targetBlockId as BlockId
 	export var argIds as ValueIdArray

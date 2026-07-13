@@ -121,29 +121,28 @@ type MaxonToStdLowering
 	end 'create'
 
 	function lower() returns StdModule
-		// Clone blocks 1:1 first so blockRef indices stay aligned between the
+		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
 		// source MaxonModule and the dest StdModule; each dest block starts empty
 		// and its ops are appended during the per-function walk below. The
 		// per-block source footprint is copied in lock-step so it survives to the
 		// coverage-instrumentation pass (a later-milestone consumer).
-		for i in 0 upto self.maxonModule.blocks.count() 'cloneBlocks'
+		for i in 0 upto self.maxonModule.blocks.count() 'relocateBlocks'
 			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: maxonModule.blocks.get OOB at {i}")
-			// Fresh block: opRefs/terminator are rebuilt by the per-function walk below,
-			// but the phi metadata the parser attached (block-args + the per-edge
-			// branchEdges carrying each phi's incoming values) must survive to the
-			// Std-tier phi-elim pass. Carry it across 1:1 — the ValueIds it references
-			// pass through this lowering verbatim.
-			var dstClone = IrBlock.create(srcBlock.id, label: srcBlock.label)
-			for arg in srcBlock.blockArgs 'eachArg'
-				dstClone.blockArgs.push(IrBlockArg.cloneOf(arg))
-			end 'eachArg'
-			for edge in srcBlock.branchEdges 'eachEdge'
-				dstClone.branchEdges.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
-			end 'eachEdge'
-			self.stdModule.blocks.push(dstClone)
+			// Fresh block: opRefs/terminator are rebuilt by the per-function walk below.
+			// The phi model the parser attached (block-args + the per-edge branchEdges
+			// carrying each phi's incoming values) is SHARED with the Maxon block, not
+			// copied: the ValueIds it names pass through this lowering verbatim, so the
+			// two tiers want the identical data. Sharing is safe because no Std pass
+			// mutates it in place — `pruneDeadBlockArgs` rebuilds both lists and
+			// field-assigns them onto the Std block, leaving the Maxon block's own
+			// arrays untouched. See IrBlock's header for the ownership rules.
+			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
+			dstBlock.blockArgs = srcBlock.blockArgs
+			dstBlock.branchEdges = srcBlock.branchEdges
+			self.stdModule.blocks.push(dstBlock)
 			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
 			self.stdModule.blockSourceInfo.push(srcInfo)
-		end 'cloneBlocks'
+		end 'relocateBlocks'
 
 		// Transfer each function, collapsing its Maxon-phase types (return type +
 		// param types) to the Std-phase types. blockRefs stay valid because block

@@ -100,7 +100,7 @@ type StdToX64Lowering
 		return Self{stdModule: stdModule, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create()}
 	end 'create'
 
-	// Whole-module setup: clone every StdModule block 1:1 into `targetModule.blocks`
+	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks`
 	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
 	// transfer every function (its StdReturnType / paramTypes carry across
 	// unchanged). Must run before any lowerFunction call.
@@ -109,17 +109,24 @@ type StdToX64Lowering
 	// incoming values) are carried across: the register allocator consumes them
 	// DIRECTLY and does SSA destruction after coloring (EliminatePhis is retired),
 	// so the phi model must survive into the Target tier intact.
+	//
+	// WHAT THE TARGET TIER OWNS, AND WHY. It owns each block's `BranchEdgeArray` and
+	// the `BranchEdge` objects in it, because it REPLACES them: `extractPredEdge`
+	// rebuilds the array to move an edge onto a split block, and `rewriteEdgeArgsIn`
+	// swaps an edge's `argIds` for a private copy before repointing it at a reload.
+	// Both are field assignments, so they must land on Target-owned objects.
+	// It does NOT own `blockArgs` or the `argIds` arrays — nothing here mutates those
+	// in place, so they are SHARED with the Std tier (and through it the Maxon module
+	// the parse memo holds). See IrBlock's header for the full ownership rules.
 	function prepareSkeleton()
-		for srcBlock in self.stdModule.blocks 'cloneBlocks'
+		for srcBlock in self.stdModule.blocks 'relocateBlocks'
 			var dstBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
-			for srcArg in srcBlock.blockArgs 'eachArg'
-				dstBlock.blockArgs.push(IrBlockArg.cloneOf(srcArg))
-			end 'eachArg'
+			dstBlock.blockArgs = srcBlock.blockArgs
 			for srcEdge in srcBlock.branchEdges 'eachEdge'
-				dstBlock.branchEdges.push(BranchEdge.create(srcEdge.targetBlockId, argIds: srcEdge.argIds.clone()))
+				dstBlock.branchEdges.push(BranchEdge.create(srcEdge.targetBlockId, argIds: srcEdge.argIds))
 			end 'eachEdge'
 			self.targetModule.blocks.push(dstBlock)
-		end 'cloneBlocks'
+		end 'relocateBlocks'
 
 		for srcFunc in self.stdModule.functions 'transferFuncs'
 			self.targetModule.functions.push(srcFunc)

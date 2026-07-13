@@ -278,8 +278,25 @@ Because the parser wrote nothing to `Project` speculatively, there is no ParseDe
 rollback dance. Each new registry family arrives the same way: an ordered contribution
 array on the artifact, folded here.
 
-**Interner note:** for a *cached* artifact, a non-identity remap must clone before
-rewriting — it must not mutate the cache in place.
+**Interner note:** for a *cached* artifact, a non-identity remap must not mutate the cache
+in place. The remedy is not "clone the artifact first" — it is to build the rewritten data
+fresh and assign it, which is what `remapArtifact` already does for `maxonParamTypes`.
+
+**The memo is shared, so nothing may be mutated in place.** `queryAllModule` returns the
+SAME `MaxonModule` object on every cache hit, and the merge aliases each artifact's phi
+arrays into it (`relocateIrBlock`) rather than copying them. The tiers then share that one
+phi model rather than deep-copying it at each boundary — a Std block's `blockArgs`/
+`branchEdges` ARE the Maxon block's, and a Target block shares the `ValueIdArray` inside
+each edge. So an in-place write to any of them corrupts the memo for every later compile,
+silently: nothing downstream re-reads the Maxon or Std phi model to notice.
+
+The rule, stated once here and enforced by convention in `IrBlock`'s header: **to change
+the phi model, build a fresh array and assign the field — never mutate in place.** Every
+pass obeys it (`pruneDeadBlockArgs`, `extractPredEdge`, `clearPhiModel` all rebuild-and-
+assign). The single in-place writer in the compiler, the splitter's `rewriteEdgeArgsIn`,
+de-aliases first: it copies an edge's `argIds` before its first write to it. That
+copy-on-write is the compiler's ONE remaining `.clone()` — independent mutation being the
+only thing Maxon's reference semantics make a clone necessary for.
 
 The `Project` registry set today is small: `funcReturnTypes`, `funcSignatures`
 (param names + types), `typeNames`, `opRanges`, plus `diagnostics`, `globalData`, `db`,
