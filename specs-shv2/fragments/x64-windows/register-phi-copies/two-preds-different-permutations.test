@@ -1,0 +1,85 @@
+// Test: two-preds-different-permutations
+function twoPerms(p int) returns int
+	var a = p + 1
+	var b = p + 2
+	var c = p + 3
+	var i = 0
+	while i < 4 'loop'
+		if i mod 2 == 0 'even'
+			var t = a
+			a = b
+			b = t
+		end 'even' else 'odd'
+			var u = b
+			b = c
+			c = u
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return a * 100 + b * 10 + c
+end 'twoPerms'
+
+function main() returns ExitCode
+	let r = twoPerms(0)
+	if r == 312 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @twoPerms {
+  entry:
+    x64.leaRegRegImm32 rsi, rcx, 1
+    x64.leaRegRegImm32 rdi, rcx, 2
+    x64.leaRegRegImm32 rcx, rcx, 3
+    x64.movRegImm32 r8, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r8, 4
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegImm32 r9, 2
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg r9
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, even
+    x64.jmp ifelse
+  even:
+    x64.jmp ifcont
+  ifelse:
+    x64.xchgRegReg rdi, rsi
+    x64.xchgRegReg rsi, rcx
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.xchgRegReg rsi, rdi
+    x64.jmp whilehdr
+  whileexit:
+    x64.imulRegRegImm32 rax, rsi, 100
+    x64.imulRegRegImm32 rdx, rdi, 10
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg r8, rax, rcx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect twoPerms
+    x64.cmpRegImm32 r8, 312
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.ret
+}
