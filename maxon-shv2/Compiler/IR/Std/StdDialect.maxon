@@ -319,7 +319,7 @@ export union StdOp
 	// metadata (`isCall`/`isMemory`/`isStore`/`clobbersFlags` all true, `isPure` false
 	// — a call may read/write memory and must not move or drop). APPENDED at the END of
 	// the call band, after `param`.
-	call(resultId ValueId, callee String, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	call(resultId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -445,7 +445,7 @@ export function assertNoSugarOps(module StdModule)
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("assertNoSugarOps: live op index {opIdx} not in module.ops")
 			if op.rawValue.category == StdOpCategory.sugar 'isSugar'
-				panic("Std→Target: a `sugar`-category StdOp survived into the backend in function '{func.name}' — lowerToMachineForm did not run, or does not handle this op")
+				panic("Std→Target: a `sugar`-category StdOp survived into the backend in function '{String.from(func.name)}' — lowerToMachineForm did not run, or does not handle this op")
 			end 'isSugar'
 		end 'eachOp'
 	end 'eachFunc'

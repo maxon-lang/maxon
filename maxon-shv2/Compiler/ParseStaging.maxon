@@ -20,10 +20,10 @@
 // declared return type, recorded by the parser. Ordered in an array so the
 // merge order is the declaration order.
 export type FuncReturnTypeEntry
-	export var name as String
+	export var name as ByteArray
 	export var returnType as MaxonReturnType
 
-	export static function create(name String, returnType MaxonReturnType) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -37,13 +37,13 @@ export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 // position so `commitFuncSignatures` can anchor a duplicate-definition diagnostic
 // (E2001) on the offending declaration.
 export type FuncSignatureEntry
-	export var name as String
+	export var name as ByteArray
 	export var signature as FuncSignature
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
 	export var sourceFilePath as FilePath
 
-	export static function create(name String, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath) returns FuncSignatureEntry
+	export static function create(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath) returns FuncSignatureEntry
 		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath}
 	end 'create'
 end 'FuncSignatureEntry'
@@ -142,7 +142,7 @@ export type FileParseArtifact
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
 	// builds a function — NEVER touching `Project`.
-	export function recordFuncReturnType(name String, returnType MaxonReturnType)
+	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType)
 		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType))
 	end 'recordFuncReturnType'
 
@@ -151,7 +151,7 @@ export type FileParseArtifact
 	// a function — NEVER touching `Project` (mirrors `recordFuncReturnType`). The
 	// name's source position travels with the entry so a merge-time duplicate can be
 	// positioned on the offending declaration.
-	export function recordFuncSignature(name String, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
+	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
 		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
 	end 'recordFuncSignature'
 end 'FileParseArtifact'
@@ -247,7 +247,7 @@ end 'commitFuncReturnTypes'
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
-			reportPositioned(project, code: ErrorCode.duplicateFunction, message: "duplicate definition of function '{entry.name}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			reportPositioned(project, code: ErrorCode.duplicateFunction, message: "duplicate definition of function '{String.from(entry.name)}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
 			continue
 		end 'duplicate'
 		project.funcSignatures.upsert(entry.name, value: entry.signature)

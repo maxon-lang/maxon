@@ -146,7 +146,7 @@ end 'CondBranch'
 
 export type IrBlock
 	export var id as BlockId
-	export var label as String
+	export var label as ByteArray
 	export var opRefs as OpIndexList
 	export var terminator as Terminator
 	// The block's conditional-branch body op, when it has one. Set ONLY by
@@ -165,7 +165,7 @@ export type IrBlock
 	// silently drop every non-phi edge — which is why successors come from the ops.
 	export var branchEdges as BranchEdgeArray
 
-	export static function create(id BlockId, label String) returns IrBlock
+	export static function create(id BlockId, label ByteArray) returns IrBlock
 		return Self{
 			id: id,
 			label: label,
@@ -207,7 +207,7 @@ export type IrBlock
 	export function terminatorIndex() returns OpIndex
 		match self.terminator 'unwrap'
 			opIndex(index) then return index
-			default panic("terminatorIndex: block '{self.label}' has no terminator op")
+			default panic("terminatorIndex: block '{String.from(self.label)}' has no terminator op")
 		end 'unwrap'
 	end 'terminatorIndex'
 
@@ -225,7 +225,7 @@ export type IrBlock
 	export function condBranchIndex() returns OpIndex
 		match self.condBranch 'unwrap'
 			opIndex(index) then return index
-			none then panic("condBranchIndex: block '{self.label}' has no conditional-branch op")
+			none then panic("condBranchIndex: block '{String.from(self.label)}' has no conditional-branch op")
 		end 'unwrap'
 	end 'condBranchIndex'
 
@@ -235,7 +235,7 @@ export type IrBlock
 	// only), or a concrete terminator op.
 	export function assertTerminated()
 		match self.terminator 'check'
-			unset then panic("IrBlock '{self.label}' (id={self.id}) has no terminator — parser left it in Terminator.unset")
+			unset then panic("IrBlock '{String.from(self.label)}' (id={self.id}) has no terminator — parser left it in Terminator.unset")
 			dead then break 'check'
 			fallthrough then break 'check'
 			opIndex then break 'check'
@@ -247,13 +247,13 @@ export typealias IrBlockArray = Array with IrBlock
 
 // Resolve a block's label by its BlockId. Used by IR printers across
 // all phases to display branch targets by name rather than raw IDs.
-export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns String
+export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns ByteArray
 	for block in blocks 'search'
 		if block.id == blockId 'found'
 			return block.label
 		end 'found'
 	end 'search'
-	return "block_{blockId}"
+	return "block_{blockId}".toByteArray()
 end 'resolveBlockLabel'
 
 // Collect the IrBlocks referenced by a function's blockRefs list.

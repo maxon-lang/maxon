@@ -460,7 +460,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	var analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch)
 	while analysis.peak.found 'relievePressure'
 		if iterations >= iterationBound 'runaway'
-			panic("splitLiveRanges: '{func.name}' did not converge after {iterations} splits (peak effective pressure {analysis.peak.pressure} still over its pool) — a splitter bug")
+			panic("splitLiveRanges: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {analysis.peak.pressure} still over its pool) — a splitter bug")
 		end 'runaway'
 		iterations = iterations + 1
 
@@ -502,7 +502,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// here rather than as a colorer panic. (The reduced-pool half has no separate maxPressure
 	// analogue; the loop's `analyzePressure`-based exit is its guarantee.)
 	if liveness.maxPressure > poolSize 'residual'
-		panic("splitLiveRanges: '{func.name}' finished with maxPressure {liveness.maxPressure} still > pool {poolSize} — the splitter's post-condition (every point within its pool) was violated")
+		panic("splitLiveRanges: '{String.from(func.name)}' finished with maxPressure {liveness.maxPressure} still > pool {poolSize} — the splitter's post-condition (every point within its pool) was violated")
 	end 'residual'
 
 	return liveness
@@ -547,7 +547,7 @@ end 'splitLiveRanges'
 //     here; an op names at most two virtual registers. At least four candidates always remain.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
-		panic("noVictimAtPeak: '{func.name}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
+		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -1664,7 +1664,7 @@ end 'rewriteEdgeArgsIn'
 // Insert `storeSlotReg(slot, valueId)` right after `afterOpIdx` — the op that DEFINES the value, so
 // it is live there by construction and the store reads it from its own register.
 function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, afterOpIdx OpIndex, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "store", placement: placement)
+	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
 	try block.opRefs.insert(anchorPos + 1, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAfter: opRefs.insert OOB")
@@ -1675,7 +1675,7 @@ end 'insertStoreAfter'
 // places at the predecessors' ends, so it is live at block entry and a store there reads it
 // correctly. Its block dominates every use of it, so this store dominates every reload.
 function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId ValueId, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "store", placement: placement)
+	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	try block.opRefs.insert(0, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAtBlockEntry: opRefs.insert OOB")
 end 'insertStoreAtBlockEntry'
@@ -1684,7 +1684,7 @@ end 'insertStoreAtBlockEntry'
 // `blockLocal`). The reload dominates every after-peak use in the block (it precedes the first
 // one, and the edge arg is read after them all). The caller rewrites those uses.
 function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, beforeOpIdx OpIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "reload", placement: placement)
+	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = positionInBlock(block, opIdx: beforeOpIdx)
 	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadBefore: opRefs.insert OOB")
@@ -1702,7 +1702,7 @@ end 'insertReloadBefore'
 // `loadRegSlot` is a plain `mov r, [rsp+disp]` and writes no flags, so it is safe between the
 // compare and the `jcc` that reads that compare's EFLAGS.
 function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "reload", placement: placement)
+	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = beforeBranchPosition(block)
 	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadAtBlockEnd: opRefs.insert OOB")
@@ -1895,7 +1895,7 @@ function positionInBlock(block IrBlock, opIdx OpIndex) returns BlockOpPos
 			return pos
 		end 'match'
 	end 'each'
-	panic("positionInBlock: op {opIdx} not in block '{block.label}' opRefs (a terminator or wrong block?)")
+	panic("positionInBlock: op {opIdx} not in block '{String.from(block.label)}' opRefs (a terminator or wrong block?)")
 end 'positionInBlock'
 
 // ==========================================================================
@@ -1918,7 +1918,16 @@ end 'positionInBlock'
 // store and one load against a call that costs far more. Refusing it would be a FALSE E5001 —
 // the program fits the machine, and the "restructuring" it would demand (hoist the values into an
 // array) emits the same store and load at EVERY use, i.e. strictly worse code.
-function assertPlacementLegal(cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, what String, placement SpillPlacement)
+// Which half of a split is being placed. An enum rather than a "store"/"reload" String
+// literal: the argument is evaluated eagerly, so the literal allocated a heap String on
+// EVERY placement — and the splitter places once per split, on the hottest path in the
+// compiler — to name the operation in a panic that fires only on a splitter bug.
+enum SplitPlacementOp
+	store
+	reload
+end 'SplitPlacementOp'
+
+function assertPlacementLegal(cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, what SplitPlacementOp, placement SpillPlacement)
 	match placement 'p'
 		forced then return
 		cold then break 'p'
@@ -1926,6 +1935,6 @@ function assertPlacementLegal(cfg FuncCfg, blockLocal CfgIndex, valueId ValueId,
 
 	let depth = try cfg.loopDepth.get(blockLocal) otherwise panic("assertPlacementLegal: loopDepth.get OOB")
 	if depth != 0 'inLoop'
-		panic("assertPlacementLegal: a COLD {what} for value {valueId} would land in block local {blockLocal} at loop depth {depth} — a cold spill relieves a FULL-pool overflow and must lie outside every loop. (A fixed-register point's FORCED spill is the placement that IS allowed in a loop; it goes through SpillPlacement.forced.)")
+		panic("assertPlacementLegal: a COLD {what.name} for value {valueId} would land in block local {blockLocal} at loop depth {depth} — a cold spill relieves a FULL-pool overflow and must lie outside every loop. (A fixed-register point's FORCED spill is the placement that IS allowed in a loop; it goes through SpillPlacement.forced.)")
 	end 'inLoop'
 end 'assertPlacementLegal'

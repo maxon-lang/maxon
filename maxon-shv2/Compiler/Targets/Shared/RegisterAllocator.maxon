@@ -238,7 +238,7 @@ export type RegAllocStats
 		end 'newMax'
 	end 'recordLivenessMarkSteps'
 
-	export function recordPressure(pressure RegCount, funcName String)
+	export function recordPressure(pressure RegCount, funcName ByteArray)
 		if pressure > self.maxPressure 'newMax'
 			self.maxPressure = pressure
 			self.maxPressureFunc = funcName
@@ -570,7 +570,7 @@ end 'addCopyFromVirtualDst'
 function collectPhiEdgeHints(module TargetModule, topo FuncTopology, predBlock IrBlock, hints ColorHints)
 	for edge in predBlock.branchEdges 'eachEdge'
 		let targetBlock = blockAt(module, topo: topo, local: localOfBlockId(topo, blockId: edge.targetBlockId))
-		let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(coloring hints)")
+		let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.coloringHints)
 		for k in 0 upto view.count 'eachPhi'
 			let phi = view.phiValueIdAt(k)
 			let incoming = view.incomingAt(k)

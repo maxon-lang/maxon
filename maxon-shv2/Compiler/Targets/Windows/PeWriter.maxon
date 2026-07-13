@@ -207,7 +207,7 @@ function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRv
 		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
 		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex)
 		let rel = iatEntryRva - ripAtReloc
-		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel, what: "x64IatDisp32", targetAddr: iatEntryRva)
+		patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rel, what: PatchSite.x64IatDisp32, targetAddr: iatEntryRva)
 	end 'patch'
 end 'patchRelocationsX86'
 
@@ -218,7 +218,7 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
 		match reloc.kind 'kind'
-			ripRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rdataRva + reloc.rdataOffset - ripAtReloc, what: "x64RdataDisp32", targetAddr: rdataRva + reloc.rdataOffset)
+			ripRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rdataRva + reloc.rdataOffset - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: rdataRva + reloc.rdataOffset)
 			symdataRipRelDisp32 to funcAbs64InRdata then panic("PeWriter: rdata relocation kind not supported until its milestone (M1 registers no rdata relocations)")
 		end 'kind'
 	end 'patch'
@@ -312,7 +312,7 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, secti
 	// Function symbols all live in .text, typed DTYPE_FUNCTION with external
 	// storage class and no auxiliary record.
 	for sym in debugSymbols 'funcSyms'
-		writeCoffSymbolEntry(pe, stringTable: stringTable, name: sym.name, value: sym.codeOffset, sectionNumber: TextSectionNumber, symType: CoffSymTypeFunction, storageClass: CoffSymClassExternal, numAux: CoffAuxCountNone)
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: String.from(sym.name), value: sym.codeOffset, sectionNumber: TextSectionNumber, symType: CoffSymTypeFunction, storageClass: CoffSymClassExternal, numAux: CoffAuxCountNone)
 		total = total + 1
 	end 'funcSyms'
 

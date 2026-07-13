@@ -17,7 +17,7 @@
 
 // Wide range: the interner is unbounded (one id per distinct named reference).
 export typealias TypeNameIdArray = Array with TypeNameId
-export typealias TypeNameIdMap = Map with (String, TypeNameId)
+export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
 
 // Raised when a `TypeNameId` is looked up that this interner never assigned —
 // always a compiler bug (an id must come from the same interner it is resolved
@@ -27,18 +27,19 @@ export union TypeNameInternerError implements Error
 end 'TypeNameInternerError'
 
 export type TypeNameInterner
-	// id -> name (index is the TypeNameId).
-	var names as StringArray
+	// id -> name (index is the TypeNameId). The names are zero-copy slices of the
+	// source the parser interned them from, never copies.
+	var names as ByteArrayArray
 	// name -> id, for O(1) interning of an already-seen name.
 	var ids as TypeNameIdMap
 
 	export static function create() returns TypeNameInterner
-		return Self{names: StringArray.create(), ids: TypeNameIdMap.create()}
+		return Self{names: ByteArrayArray.create(), ids: TypeNameIdMap.create()}
 	end 'create'
 
 	// Intern `name`, returning its stable id. Idempotent: a name already present
 	// returns its existing id without appending a duplicate.
-	export function intern(name String) returns TypeNameId
+	export function intern(name ByteArray) returns TypeNameId
 		if let existing = try ids.get(name) 'seen'
 			return existing
 		end 'seen'
@@ -50,7 +51,7 @@ export type TypeNameInterner
 
 	// Resolve an id back to its name. Throws for an id this interner never
 	// assigned (a compiler bug — see TypeNameInternerError).
-	export function nameOf(id TypeNameId) returns String throws TypeNameInternerError
+	export function nameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
 		return try names.get(id) otherwise throw TypeNameInternerError.unknownId(id)
 	end 'nameOf'
 

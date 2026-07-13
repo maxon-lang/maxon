@@ -22,9 +22,8 @@ end 'ParserError'
 // and `0.0000000000000000001` (1e-19) — significant digits past the 18-digit
 // budget are silently dropped exactly like strtod, but their position is
 // preserved so the magnitude stays correct.
-export function parseFloatBits(s String) returns ParsedInt throws ParserError
+export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserError
 	let DIGIT_BUDGET = 18
-	let bytes = s.toByteArray()
 	var intPart = 0  // accumulated significant digits (capped at budget)
 	var decExp = 0  // implicit decimal exponent for intPart
 	var pastDot = false
@@ -227,8 +226,12 @@ end 'parseFloatBits'
 
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
 // Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
-export function parseInt(s String) returns ParsedInt throws ParserError
-	let bytes = s.toByteArray()
+//
+// Takes the literal's BYTES — the caller hands over the token's zero-copy slice of the
+// source directly. This function only ever read the digits as bytes (as the prefix
+// helpers below always have); a `String` parameter merely meant every caller built one
+// so that the first statement here could immediately unbuild it again.
+export function parseInt(bytes ByteArray) returns ParsedInt throws ParserError
 	let sLen = bytes.count()
 
 	if sLen < 1 'empty'
@@ -269,11 +272,12 @@ export function parseInt(s String) returns ParsedInt throws ParserError
 
 	// Exactly 19 digits: compare digit-by-digit against "9223372036854775807"
 	if digitCount == 19 'checkMax'
-		// Derive the max-magnitude digits from the SAME byte source as `bytes`
-		// (String.toByteArray) so both operands of the `b > maxByte` compare
-		// below carry the same element type. A `b"..."` byte-string literal
-		// lowers through a different byte-typed path whose element type the
-		// checker won't compare against a toByteArray() byte (E3005).
+		// Derive the max-magnitude digits through `String.toByteArray` — the same byte
+		// source `bytes` ultimately comes from (the lexer's buffer, of which a token's
+		// value is a slice) — so both operands of the `b > maxByte` compare below carry
+		// the same element type. A `b"..."` byte-string literal lowers through a
+		// different byte-typed path whose element type the checker won't compare against
+		// a toByteArray() byte (E3005).
 		let maxStr = "9223372036854775807".toByteArray()
 		var mi = 0
 		var pastLeading = false
@@ -308,12 +312,27 @@ end 'parseInt'
 // `ParseNegatedIntegerLiteral`. Every other magnitude parses through `parseInt`
 // (which throws on a true overflow) and is negated. The caller must apply this
 // ONLY when a `-` immediately precedes the literal.
-export function parseNegatedInt(s String) returns ParsedInt throws ParserError
-	if s.replace("_", with: "") == "9223372036854775808" 'isI64Min'
+export function parseNegatedInt(bytes ByteArray) returns ParsedInt throws ParserError
+	// Same element-type reasoning as `parseInt`'s `maxStr` — see the comment there.
+	let i64MinMagnitude = "9223372036854775808".toByteArray()
+	if digitsWithoutSeparators(bytes).equals(i64MinMagnitude) 'isI64Min'
 		return i64.min
 	end 'isI64Min'
-	return 0 - (try parseInt(s))
+	return 0 - (try parseInt(bytes))
 end 'parseNegatedInt'
+
+// The literal's digits with `_` separators removed, so a magnitude can be compared
+// against a fixed digit string. Only the i64.min check needs this: every other path
+// skips separators inline as it scans.
+function digitsWithoutSeparators(bytes ByteArray) returns ByteArray
+	var digits = ByteArray.create()
+	for b in bytes 'each'
+		if b != '_' 'keep'
+			digits.push(b)
+		end 'keep'
+	end 'each'
+	return digits
+end 'digitsWithoutSeparators'
 
 // Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
 function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError

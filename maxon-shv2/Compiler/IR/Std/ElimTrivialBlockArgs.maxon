@@ -87,7 +87,7 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 
 		sweeps = sweeps + 1
 		if sweeps > bound 'runaway'
-			panic("elimTrivialBlockArgs: '{func.name}' did not settle after {sweeps} sweep(s) over {bound - 1} block-arg(s)")
+			panic("elimTrivialBlockArgs: '{String.from(func.name)}' did not settle after {sweeps} sweep(s) over {bound - 1} block-arg(s)")
 		end 'runaway'
 	end 'toFixpoint'
 
@@ -170,8 +170,8 @@ function findTrivialArgs(module StdModule, func IrFunction, refByBlockId ValueId
 		for edge in pred.branchEdges 'eachEdge'
 			let target = trivialBlockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let arg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
-				let incoming = try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{pred.label}' -> '{target.label}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+				let arg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
+				let incoming = try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
 
 				// The self-reference a loop-header phi's back edge carries. Discounting it is the
 				// whole point: `phi = φ(v, phi)` is just `v`.
@@ -293,9 +293,9 @@ function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdA
 			let target = trivialBlockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			var keptArgs = ValueIdArray.create()
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let targetArg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+				let targetArg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
 				if not folded.contains(targetArg.valueId) 'keep'
-					keptArgs.push(try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{pred.label}' -> '{target.label}' is missing slot {k}"))
+					keptArgs.push(try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' is missing slot {k}"))
 				end 'keep'
 			end 'eachSlot'
 			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgs))
@@ -324,15 +324,15 @@ function buildTrivialBlockIdIndex(module StdModule, func IrFunction) returns Val
 	refByBlockId.resize(func.nextBlockId)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("elimTrivialBlockArgs: block '{block.label}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("elimTrivialBlockArgs: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
 	end 'eachBlock'
 	return refByBlockId
 end 'buildTrivialBlockIdIndex'
 
-function trivialBlockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from String) returns IrBlock
-	let refPlusOne = try refByBlockId.get(id) otherwise panic("elimTrivialBlockArgs: block '{from}' branches to block id {id}, outside its function's block-id space")
+function trivialBlockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("elimTrivialBlockArgs: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
 	if refPlusOne == 0 'notInFunction'
-		panic("elimTrivialBlockArgs: block '{from}' branches to block id {id}, which is not registered in the function")
+		panic("elimTrivialBlockArgs: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
 	end 'notInFunction'
 	return try module.blocks.get(refPlusOne - 1) otherwise panic("elimTrivialBlockArgs: blockRef for block id {id} not in module.blocks")
 end 'trivialBlockById'

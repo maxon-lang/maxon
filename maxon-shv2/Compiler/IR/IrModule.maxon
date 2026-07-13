@@ -15,7 +15,7 @@ export typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 export typealias BlockRefIndex = int(0 to u64.max)
 
-typealias DroppedNameSet = Set with String
+typealias DroppedNameSet = Set with ByteArray
 
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
@@ -280,7 +280,7 @@ export type IrModule uses Op
 		// block's body (SSA-destruction edge moves, the epilogue) only ever do so on
 		// single-successor / `ret` blocks, which have no conditional branch.
 		if block.hasCondBranchOp() 'pastCondBranch'
-			panic("appendOp: block '{block.label}' already ends in a conditional branch (op {block.condBranchIndex()}) — an op appended after it would run only on the not-taken path. Insert it BEFORE the conditional branch instead.")
+			panic("appendOp: block '{String.from(block.label)}' already ends in a conditional branch (op {block.condBranchIndex()}) — an op appended after it would run only on the not-taken path. Insert it BEFORE the conditional branch instead.")
 		end 'pastCondBranch'
 		let idx = self.ops.count()
 		self.ops.push(op)
@@ -300,7 +300,7 @@ export type IrModule uses Op
 	// `TargetLiveness`.
 	export function appendCondBranch(block IrBlock, op Op)
 		if block.hasCondBranchOp() 'second'
-			panic("appendCondBranch: block '{block.label}' already has a conditional branch at op {block.condBranchIndex()} — a block has at most one")
+			panic("appendCondBranch: block '{String.from(block.label)}' already has a conditional branch at op {block.condBranchIndex()} — a block has at most one")
 		end 'second'
 		let idx = self.ops.count()
 		self.ops.push(op)
@@ -314,7 +314,7 @@ export type IrModule uses Op
 		block.terminator = Terminator.opIndex(idx)
 	end 'setTerminator'
 
-	export function addBlock(func IrFunction, label String) returns IrBlock
+	export function addBlock(func IrFunction, label ByteArray) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
 		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
@@ -332,7 +332,7 @@ export type IrModule uses Op
 	// table. `firstLine` is the line of the token that triggered the block's
 	// creation — the condition/while keyword, the entry token of a function
 	// body, etc.
-	export function addBlockAt(func IrFunction, label String, filePath String, firstLine LineNumber) returns IrBlock
+	export function addBlockAt(func IrFunction, label ByteArray, filePath String, firstLine LineNumber) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
 		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label)
@@ -343,7 +343,7 @@ export type IrModule uses Op
 	// Create a new IrBlock, append it to the blocks array, and register its
 	// index in the function's blockRefs. The caller must bump func.nextBlockId
 	// after calling this (the function returns the allocated id via the block).
-	function createAndRegisterBlock(blockRefs BlockRefList, id BlockId, label String) returns IrBlock
+	function createAndRegisterBlock(blockRefs BlockRefList, id BlockId, label ByteArray) returns IrBlock
 		let blockIdx = blocks.count()
 		let block = IrBlock.create(id, label: label)
 		blocks.push(block)
@@ -404,7 +404,7 @@ export type IrModule uses Op
 	// already provides. The dropped functions' blocks/ops stay in
 	// `self.blocks` / `self.ops` as orphans because the backend walks
 	// `self.functions[].blockRefs[]`, never the global blocks array.
-	export function dropFunctionsByName(names StringArray)
+	export function dropFunctionsByName(names ByteArrayArray)
 		// Intern the drop list into a set (O(1) membership) and rebuild
 		// `self.functions` in one pass, keeping survivors. The old form did a
 		// linear `names` scan per function AND an O(count) `remove(i)` per drop,
@@ -539,7 +539,7 @@ module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArra
 			for oldIdx in block.opRefs 'eachRef'
 				let newIdx = try plan.forward.get(oldIdx) otherwise panic("rewriteBlockOpRefs: forward.get OOB at opRef {oldIdx}")
 				if newIdx == plan.deadMarker 'orphanRef'
-					panic("rewriteBlockOpRefs: block '{block.label}' references orphaned op {oldIdx} — live op marked dead")
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' references orphaned op {oldIdx} — live op marked dead")
 				end 'orphanRef'
 				newRefs.append(newIdx)
 			end 'eachRef'
@@ -548,7 +548,7 @@ module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArra
 				let oldTerm = block.terminatorIndex()
 				let newTerm = try plan.forward.get(oldTerm) otherwise panic("rewriteBlockOpRefs: forward.get OOB at terminator {oldTerm}")
 				if newTerm == plan.deadMarker 'orphanTerm'
-					panic("rewriteBlockOpRefs: block '{block.label}' terminator references orphaned op {oldTerm}")
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' terminator references orphaned op {oldTerm}")
 				end 'orphanTerm'
 				block.terminator = Terminator.opIndex(newTerm)
 			end 'rewriteTerm'
@@ -561,7 +561,7 @@ module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArra
 				let oldCond = block.condBranchIndex()
 				let newCond = try plan.forward.get(oldCond) otherwise panic("rewriteBlockOpRefs: forward.get OOB at conditional branch {oldCond}")
 				if newCond == plan.deadMarker 'orphanCond'
-					panic("rewriteBlockOpRefs: block '{block.label}' conditional branch references orphaned op {oldCond}")
+					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' conditional branch references orphaned op {oldCond}")
 				end 'orphanCond'
 				block.condBranch = CondBranch.opIndex(newCond)
 			end 'rewriteCondBranch'
@@ -601,7 +601,7 @@ function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
 		for oldRef in func.blockRefs 'eachRef'
 			let newRef = try plan.forward.get(oldRef) otherwise panic("rewriteFuncBlockRefs: forward.get OOB at blockRef {oldRef}")
 			if newRef == plan.deadMarker 'orphanRef'
-				panic("rewriteFuncBlockRefs: func '{func.name}' references orphaned block {oldRef} — live block marked dead")
+				panic("rewriteFuncBlockRefs: func '{String.from(func.name)}' references orphaned block {oldRef} — live block marked dead")
 			end 'orphanRef'
 			newRefs.append(newRef)
 		end 'eachRef'

@@ -138,7 +138,7 @@ function collectArgFeeders(module StdModule, func IrFunction, refByBlockId Value
 		for edge in pred.branchEdges 'eachEdge'
 			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+				let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
 				argOf.push(arg.valueId)
 				incomingOf.push(incomingArgAt(edge, k: k, pred: pred, target: target))
 			end 'eachSlot'
@@ -153,7 +153,7 @@ end 'collectArgFeeders'
 // SSA or a later pass — so it panics rather than silently mis-pairing a phi with someone
 // else's value.
 function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
-	return try edge.argIds.get(k) otherwise panic("pruneDeadBlockArgs: the edge '{pred.label}' -> '{target.label}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+	return try edge.argIds.get(k) otherwise panic("pruneDeadBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
 end 'incomingArgAt'
 
 // BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space (ids are
@@ -166,15 +166,15 @@ function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArr
 	refByBlockId.resize(func.nextBlockId)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("pruneDeadBlockArgs: block '{block.label}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("pruneDeadBlockArgs: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
 	end 'eachBlock'
 	return refByBlockId
 end 'buildBlockIdIndex'
 
-function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from String) returns IrBlock
-	let refPlusOne = try refByBlockId.get(id) otherwise panic("pruneDeadBlockArgs: block '{from}' branches to block id {id}, outside its function's block-id space")
+function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("pruneDeadBlockArgs: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
 	if refPlusOne == 0 'notInFunction'
-		panic("pruneDeadBlockArgs: block '{from}' branches to block id {id}, which is not registered in the function")
+		panic("pruneDeadBlockArgs: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
 	end 'notInFunction'
 	return try module.blocks.get(refPlusOne - 1) otherwise panic("pruneDeadBlockArgs: blockRef for block id {id} not in module.blocks")
 end 'blockById'
@@ -259,7 +259,7 @@ end 'dropUselessBlockArgs'
 function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, useful ValueFlagColumn) returns ValueIdArray
 	var kept = ValueIdArray.create()
 	for k in 0 upto target.blockArgs.count() 'eachSlot'
-		let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{target.label}'")
+		let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
 		let incoming = incomingArgAt(edge, k: k, pred: pred, target: target)
 		if flagOf(useful, v: arg.valueId) 'keep'
 			kept.push(incoming)

@@ -21,6 +21,7 @@
 // once and stays inert until ownership kinds start being non-trivial.
 
 export union ScopeLookupError implements Error
+	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
 	notFound(name String)
 end 'ScopeLookupError'
 
@@ -29,17 +30,18 @@ end 'ScopeLookupError'
 // Scope is the only layer that sees both the alias and the colliding
 // declaration, so detection lives here.
 export union ScopeError implements Error
+	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
 	shadowsSelfField(name String)
 end 'ScopeError'
 
 // Each scope frame tracks the names declared since the last pushScope so
 // popScope can remove them in O(decls). pushScope is O(1).
-typealias ScopeFrameNames = Array with String
+typealias ScopeFrameNames = Array with ByteArray
 typealias ScopeFrameStack = Array with ScopeFrameNames
 
 // Parallel to the frame stack: names of owned/borrow/shared bindings in the
 // current frame, drained at scope exit to emit drops/releases (M6). Empty at M1.
-typealias ScopeOwnedNames = Array with String
+typealias ScopeOwnedNames = Array with ByteArray
 typealias ScopeOwnedStack = Array with ScopeOwnedNames
 
 export type Scope
@@ -67,15 +69,15 @@ export type Scope
 	// Declare a variable and return its slot. Throws
 	// `ScopeError.shadowsSelfField` when `name` currently maps to a self-field
 	// alias (binding a local of the same name would overwrite it — E3006).
-	export function declare(name String, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
+	export function declare(name ByteArray, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
 		if self.wouldShadowSelfField(name) 'shadow'
-			throw ScopeError.shadowsSelfField(name)
+			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 		return self.declareShadowing(name, varType: varType, mutable: mutable)
 	end 'declare'
 
 	// True when `name` currently resolves to a self-field alias.
-	function wouldShadowSelfField(name String) returns bool
+	function wouldShadowSelfField(name ByteArray) returns bool
 		let info = try vars.get(name) otherwise return false
 		return info.isSelfField
 	end 'wouldShadowSelfField'
@@ -83,7 +85,7 @@ export type Scope
 	// Allocate a slot for `name` without the self-field-shadow guard. The
 	// error-recovery path after a caller reported E3006, and the shared
 	// slot-allocating core for `declare`.
-	export function declareShadowing(name String, varType MaxonType, mutable bool) returns VarSlot
+	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
@@ -95,7 +97,7 @@ export type Scope
 	// Bind `name` to an ALREADY-ALLOCATED slot (no new slot). Aliases a user
 	// binding onto a shared compiler slot so a single scope-exit release frees
 	// it (a separate slot would double-free).
-	export function bindExistingSlot(name String, slot VarSlot, varType MaxonType, mutable bool)
+	export function bindExistingSlot(name ByteArray, slot VarSlot, varType MaxonType, mutable bool)
 		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(info)
@@ -105,16 +107,16 @@ export type Scope
 	// and writes lower to fieldLoad/fieldStore through __self. Throws
 	// `ScopeError.shadowsSelfField` when `name` is already bound (a parameter
 	// shadows this field — the symmetric case to a body local shadowing it).
-	export function declareSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot throws ScopeError
+	export function declareSelfField(name ByteArray, varType MaxonType, offset FieldOffset) returns VarSlot throws ScopeError
 		if vars.contains(name) 'paramShadow'
-			throw ScopeError.shadowsSelfField(name)
+			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'paramShadow'
 		return self.installSelfField(name, varType: varType, offset: offset)
 	end 'declareSelfField'
 
 	// Register a self-field alias unconditionally (no param-shadow guard).
 	// Shared core for `declareSelfField`; also the E3006 recovery path.
-	export function installSelfField(name String, varType MaxonType, offset FieldOffset) returns VarSlot
+	export function installSelfField(name ByteArray, varType MaxonType, offset FieldOffset) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
@@ -125,16 +127,16 @@ export type Scope
 
 	// Declare a match-arm payload binding. Reads work like a normal local;
 	// writes go through a payload store against the scrutinee + field index.
-	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot throws ScopeError
+	export function declarePayloadBinding(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot throws ScopeError
 		if self.wouldShadowSelfField(name) 'shadow'
-			throw ScopeError.shadowsSelfField(name)
+			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 		return self.declarePayloadBindingShadowing(name, varType: varType, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
 	end 'declarePayloadBinding'
 
 	// Non-guarded payload-binding declaration: the E3006 recovery path and the
 	// shared core for `declarePayloadBinding`.
-	export function declarePayloadBindingShadowing(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot
+	export function declarePayloadBindingShadowing(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
 		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
@@ -171,7 +173,7 @@ export type Scope
 	// every binding is trivial). The self-field-shadow guard the slot path carries
 	// is unnecessary here: M2 has no instance methods, so no self-field alias can
 	// exist to shadow — that guard joins this path when methods land.
-	export function declareValueBinding(name String, varType MaxonType, mutable bool, value ValueId)
+	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId)
 		let info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(info)
@@ -185,8 +187,8 @@ export type Scope
 	// the initializer's. The declaration metadata (mutability, type) is untouched.
 	// Panics on an unknown name — every caller has already established the binding
 	// exists (a `var` decl, or a mutability check that fetched the VarInfo).
-	export function setValue(name String, value ValueId)
-		let existing = try vars.get(name) otherwise panic("Scope.setValue: '{name}' not declared — caller must establish the binding before rebinding it")
+	export function setValue(name ByteArray, value ValueId)
+		let existing = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
 		// Read the two carried fields into locals FIRST so the borrow of `vars` (via
 		// `existing`) ends before the `upsert` mutates it. M4b only rebinds plain value
 		// bindings — mutable `var`s and the loop-header/exit phis — so rebuilding as a
@@ -200,13 +202,13 @@ export type Scope
 	// Resolve a value binding to the SSA value it aliases. Throws
 	// `ScopeLookupError.notFound` for an unbound name; the parser turns that into a
 	// positioned diagnostic (an undefined identifier in an expression).
-	export function lookupValue(name String) returns ValueId throws ScopeLookupError
+	export function lookupValue(name ByteArray) returns ValueId throws ScopeLookupError
 		let info = try self.lookupInfoOrThrow(name)
 		return info.boundValue
 	end 'lookupValue'
 
 	// Look up a variable by name. Throws ScopeLookupError.notFound if absent.
-	export function lookup(name String) returns VarSlot throws ScopeLookupError
+	export function lookup(name ByteArray) returns VarSlot throws ScopeLookupError
 		let info = try self.lookupInfoOrThrow(name)
 		return info.slot
 	end 'lookup'
@@ -215,17 +217,17 @@ export type Scope
 	// is a name-resolution failure (ScopeLookupError.notFound) the parser turns into
 	// a positioned diagnostic. `getInfo`/`isSelfField` deliberately keep their own
 	// fetch — they recover differently (panic / false), not by throwing this arm.
-	function lookupInfoOrThrow(name String) returns VarInfo throws ScopeLookupError
-		return try vars.get(name) otherwise throw ScopeLookupError.notFound(name)
+	function lookupInfoOrThrow(name ByteArray) returns VarInfo throws ScopeLookupError
+		return try vars.get(name) otherwise throw ScopeLookupError.notFound(String.from(name))
 	end 'lookupInfoOrThrow'
 
 	// Get the VarInfo for a variable, or panic if not found.
-	export function getInfo(name String) returns VarInfo
-		return try vars.get(name) otherwise panic("Scope: undefined variable '{name}'")
+	export function getInfo(name ByteArray) returns VarInfo
+		return try vars.get(name) otherwise panic("Scope: undefined variable '{String.from(name)}'")
 	end 'getInfo'
 
 	// Check if a variable is defined.
-	export function contains(name String) returns bool
+	export function contains(name ByteArray) returns bool
 		return vars.contains(name)
 	end 'contains'
 
@@ -237,15 +239,15 @@ export type Scope
 
 	// True when `name` is a self-field alias inside an instance method. Returns
 	// false for unknown names so callers can probe without checking contains().
-	export function isSelfField(name String) returns bool
+	export function isSelfField(name ByteArray) returns bool
 		let info = try vars.get(name) otherwise return false
 		return info.isSelfField
 	end 'isSelfField'
 
 	// Get the declared MaxonType for a variable. Callers check `contains(name)`
 	// first, so a missing entry is an invariant violation.
-	export function getType(name String) returns MaxonType
-		let info = try vars.get(name) otherwise panic("Scope.getType: name '{name}' not in scope — callers must check `contains` first")
+	export function getType(name ByteArray) returns MaxonType
+		let info = try vars.get(name) otherwise panic("Scope.getType: name '{String.from(name)}' not in scope — callers must check `contains` first")
 		return info.varType
 	end 'getType'
 

@@ -11,7 +11,11 @@
 
 // The entrypoint function's unqualified name — a contract shared with the parser
 // (which keeps `main` unqualified) and the backend (whose entry stub calls it).
-let MainFunctionName = "main"
+// A function, not a global: a byte constant cannot initialize one (E2004). Called twice per
+// compile, so the per-call materialization is irrelevant.
+function mainFunctionName() returns ByteArray
+	return b"main"
+end 'mainFunctionName'
 
 // The exact spec-gated diagnostic text (`specs-shv2/basics.md`). Named constants
 // so the wire format lives in one place.
@@ -50,22 +54,21 @@ end 'checkCalls'
 // slotting result: arity, unknown label, or a parameter given two arguments). The call
 // site's own span (`project.opRanges[opIndex]`) anchors the callee/arity errors; an
 // argument's own span (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray)
-	let calleeName = String.from(callee)
+function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
-	if not project.funcSignatures.contains(calleeName) 'unknownFn'
-		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{calleeName}'", line: callRange.line, column: callRange.column, filePath: filePath)
+	if not project.funcSignatures.contains(callee) 'unknownFn'
+		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(callee)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'unknownFn'
 
-	let sig = try project.funcSignatures.get(calleeName) otherwise panic("validateCall: contains('{calleeName}') true but get failed")
+	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 	match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
 		ordered then break 'slot'
-		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{calleeName}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
-		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{calleeName}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
-		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{calleeName}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{String.from(callee)}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
+		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{String.from(callee)}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{String.from(callee)}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
 
@@ -79,12 +82,12 @@ end 'reportArgError'
 
 // E3001 / E3002: `main` must exist and return ExitCode.
 function checkMainFunction(project Project)
-	if not project.funcReturnTypes.contains(MainFunctionName) 'noMain'
+	if not project.funcReturnTypes.contains(mainFunctionName()) 'noMain'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.noMainFunction, message: NoMainMessage))
 		return
 	end 'noMain'
 
-	let returnType = try project.funcReturnTypes.get(MainFunctionName) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
+	let returnType = try project.funcReturnTypes.get(mainFunctionName()) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
 	if not returnsExitCode(returnType) 'wrongReturn'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.mainWrongReturnType, message: MainWrongReturnMessage))
 	end 'wrongReturn'

@@ -60,27 +60,36 @@ export type PhaseMemoryColumns
 		return Self{allocs: allocs, frees: frees, bytes: bytes}
 	end 'create'
 
-	export function add(index PhaseIndex, delta PhaseDelta, phaseName String)
-		let curAllocs = try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
-		try self.allocs.set(index, value: curAllocs + delta.allocs) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+	// The index, not the phase's NAME. `phase.name` builds a String, and a parameter is
+	// evaluated EAGERLY — so naming the phase here cost one heap String per phase record,
+	// on every compile, purely to decorate a panic that cannot fire (the columns are
+	// resized to the enum's own case count and indexed by its `ordinal`). The instrument
+	// was polluting the very number it exists to report. CompileTimings never had the bug:
+	// it interpolates `{phase.name}` INSIDE the panic string, where it stays lazy.
+	//
+	// The index and the column width are what actually diagnose the violation anyway — a
+	// column that was not sized to its enum.
+	export function add(index PhaseIndex, delta PhaseDelta)
+		let curAllocs = try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.add: phase index {index} OOB — the columns hold {self.allocs.count()}, so they were not sized to their phase enum")
+		try self.allocs.set(index, value: curAllocs + delta.allocs) otherwise panic("PhaseMemoryColumns.add: allocs.set({index}) failed at an index allocs.get just accepted")
 
-		let curFrees = try self.frees.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
-		try self.frees.set(index, value: curFrees + delta.frees) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+		let curFrees = try self.frees.get(index) otherwise panic("PhaseMemoryColumns.add: phase index {index} OOB in the frees column")
+		try self.frees.set(index, value: curFrees + delta.frees) otherwise panic("PhaseMemoryColumns.add: frees.set({index}) failed at an index frees.get just accepted")
 
-		let curBytes = try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
-		try self.bytes.set(index, value: curBytes + delta.bytes) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+		let curBytes = try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.add: phase index {index} OOB in the bytes column")
+		try self.bytes.set(index, value: curBytes + delta.bytes) otherwise panic("PhaseMemoryColumns.add: bytes.set({index}) failed at an index bytes.get just accepted")
 	end 'add'
 
-	export function allocsAt(index PhaseIndex, phaseName String) returns AllocCount
-		return try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.allocsAt: phase index OOB for '{phaseName}'")
+	export function allocsAt(index PhaseIndex) returns AllocCount
+		return try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.allocsAt: phase index {index} OOB — the allocs column holds {self.allocs.count()}, so it was not sized to its phase enum")
 	end 'allocsAt'
 
-	export function freesAt(index PhaseIndex, phaseName String) returns AllocCount
-		return try self.frees.get(index) otherwise panic("PhaseMemoryColumns.freesAt: phase index OOB for '{phaseName}'")
+	export function freesAt(index PhaseIndex) returns AllocCount
+		return try self.frees.get(index) otherwise panic("PhaseMemoryColumns.freesAt: phase index {index} OOB — the frees column holds {self.frees.count()}, so it was not sized to its phase enum")
 	end 'freesAt'
 
-	export function bytesAt(index PhaseIndex, phaseName String) returns ByteCount
-		return try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.bytesAt: phase index OOB for '{phaseName}'")
+	export function bytesAt(index PhaseIndex) returns ByteCount
+		return try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.bytesAt: phase index {index} OOB — the bytes column holds {self.bytes.count()}, so it was not sized to its phase enum")
 	end 'bytesAt'
 
 	// What the instrumentation actually claimed, summed over every phase.
@@ -120,19 +129,19 @@ export type RegAllocMemory
 	end 'create'
 
 	export function addPhase(phase RegAllocPhase, delta PhaseDelta)
-		self.columns.add(phase.ordinal, delta: delta, phaseName: phase.name)
+		self.columns.add(phase.ordinal, delta: delta)
 	end 'addPhase'
 
 	export function allocsOf(phase RegAllocPhase) returns AllocCount
-		return self.columns.allocsAt(phase.ordinal, phaseName: phase.name)
+		return self.columns.allocsAt(phase.ordinal)
 	end 'allocsOf'
 
 	export function freesOf(phase RegAllocPhase) returns AllocCount
-		return self.columns.freesAt(phase.ordinal, phaseName: phase.name)
+		return self.columns.freesAt(phase.ordinal)
 	end 'freesOf'
 
 	export function bytesOf(phase RegAllocPhase) returns ByteCount
-		return self.columns.bytesAt(phase.ordinal, phaseName: phase.name)
+		return self.columns.bytesAt(phase.ordinal)
 	end 'bytesOf'
 
 	export function deltaOf(phase RegAllocPhase) returns PhaseDelta
@@ -162,13 +171,13 @@ export type CompileMemory
 	end 'create'
 
 	export function addPhase(phase CompilePhase, delta PhaseDelta)
-		self.columns.add(phase.ordinal, delta: delta, phaseName: phase.name)
+		self.columns.add(phase.ordinal, delta: delta)
 	end 'addPhase'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
-		let allocs = self.columns.allocsAt(phase.ordinal, phaseName: phase.name)
-		let frees = self.columns.freesAt(phase.ordinal, phaseName: phase.name)
-		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal, phaseName: phase.name))
+		let allocs = self.columns.allocsAt(phase.ordinal)
+		let frees = self.columns.freesAt(phase.ordinal)
+		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))
 	end 'deltaOf'
 
 	// Allocations no phase claimed: the glue between phases (project construction, output

@@ -116,7 +116,7 @@ end 'buildSsaDestructionPlan'
 function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock, predLocal CfgIndex, edge BranchEdge, alloc Allocation) returns EdgeMovePlan
 	let succLocal = localOfBlockId(topo, blockId: edge.targetBlockId)
 	let targetBlock = blockAt(module, topo: topo, local: succLocal)
-	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: "(SSA destruction)")
+	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.ssaDestruction)
 
 	var dsts = RegNumColumn.create()
 	var srcs = RegNumColumn.create()
@@ -377,7 +377,11 @@ end 'spliceSplitUnreachable'
 // Critical-edge splitting — a PRE-PASS run before coloring
 // ==========================================================================
 
-let CritSplitLabel = "critsplit"
+// See EmptySourceText: a byte constant cannot initialize a global, so the label is a
+// function. No worse than the String literal it replaces, which also allocated per call.
+function critSplitLabel() returns ByteArray
+	return b"critsplit"
+end 'critSplitLabel'
 
 // Split every phi-carrying critical edge in the module, so SSA destruction always
 // has a safe home for its moves (a block reached from exactly this edge). A critical
@@ -449,7 +453,7 @@ function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) r
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel))
+	module.blocks.push(IrBlock.create(newId, label: critSplitLabel()))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.append(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
@@ -518,7 +522,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: conditional branch op {opIdx} not in module.ops")
 		match op 'cond'
 			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			default panic("retargetControlOp: block '{predBlock.label}' records its conditional branch at op {opIdx}, but that op is not a `jcc`")
+			default panic("retargetControlOp: block '{String.from(predBlock.label)}' records its conditional branch at op {opIdx}, but that op is not a `jcc`")
 		end 'cond'
 	end 'hasCond'
 

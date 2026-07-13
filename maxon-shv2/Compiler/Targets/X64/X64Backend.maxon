@@ -480,7 +480,7 @@ end 'encodeJcc'
 // one helper backs BOTH the inter-function call fixups (resolveCallFixups) and the
 // intra-function block jumps (resolveBlockJumps) rather than respelling the
 // displacement math at each. `patchX64Rel32` guards the ±2 GiB reach.
-function patchChunkRel32(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset, what String)
+function patchChunkRel32(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset, what PatchSite)
 	let rel = targetOffset - (codeOffset + X64Disp32Width)
 	patchX64Rel32(code, codeOffset: codeOffset, rel: rel, what: what, targetAddr: targetOffset)
 end 'patchChunkRel32'
@@ -490,7 +490,7 @@ end 'patchChunkRel32'
 function resolveBlockJumps(code ByteArray, blockOffsets BlockStartOffsetMap, blockJumps BlockJumpFixupArray)
 	for jump in blockJumps 'resolve'
 		let targetOffset = try blockOffsets.get(jump.targetBlockId) otherwise panic("resolveBlockJumps: branch to unknown block id {jump.targetBlockId} — the target block was not laid out in this function chunk")
-		patchChunkRel32(code, codeOffset: jump.codeOffset, targetOffset: targetOffset, what: "x64BlockJumpRel32")
+		patchChunkRel32(code, codeOffset: jump.codeOffset, targetOffset: targetOffset, what: PatchSite.x64BlockJumpRel32)
 	end 'resolve'
 end 'resolveBlockJumps'
 
@@ -562,7 +562,7 @@ end 'encodeEpilogue'
 // call rel32 to a named function. The 4-byte displacement is left zero and a
 // CHUNK-LOCAL CallFixup records the disp32 offset; concat rebases it and resolves
 // it to the callee's placement.
-function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targetName String)
+function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
 	code.push(OpcodeCallRel32)
 	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
 	writeDword(code, value: 0)
@@ -685,12 +685,16 @@ end 'emitFunctionChunk'
 // ==========================================================================
 
 // Function name -> its start offset in the concatenated `.text`.
-typealias FuncLabelOffsetMap = Map with (String, CodeOffset)
+typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 
 // The runtime entry point's function name — its `.text` offset becomes the PE
 // AddressOfEntryPoint (see augmentWithRuntime, which lays it out first). Exported
 // so augmentWithRuntime builds a function under the same name the concat looks up.
-export let EntryPointName = "mrt_start"
+// A function, not a global: a `b"..."` literal is not a constant expression (E2004) and a
+// global `"lit".toByteArray()` folds back to String, so a byte constant cannot initialize one.
+export function entryPointName() returns ByteArray
+	return b"mrt_start"
+end 'entryPointName'
 
 // Concatenate every function chunk into the final `.text`, rebase each chunk's
 // CHUNK-LOCAL fixups to absolute `.text` offsets, resolve intra-module direct
@@ -721,7 +725,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 
-	let entryOffset = try labelOffsets.get(EntryPointName) otherwise panic("concatX64FunctionChunks: '{EntryPointName}' was not laid out — augmentWithRuntime did not run before emission")
+	let entryOffset = try labelOffsets.get(entryPointName()) otherwise panic("concatX64FunctionChunks: '{String.from(entryPointName())}' was not laid out — augmentWithRuntime did not run before emission")
 
 	// M1 registers no read-only data / globals, so rdata, rdata relocs, symdata,
 	// and covdata are all empty — they GROW back at their milestones (strings/M10,
@@ -736,7 +740,7 @@ end 'concatX64FunctionChunks'
 // intra-function block jumps).
 function resolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
 	for fixup in callFixups 'resolve'
-		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("resolveCallFixups: call to unknown function '{fixup.targetName}'")
-		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: "x64CallRel32")
+		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("resolveCallFixups: call to unknown function '{String.from(fixup.targetName)}'")
+		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: PatchSite.x64CallRel32)
 	end 'resolve'
 end 'resolveCallFixups'

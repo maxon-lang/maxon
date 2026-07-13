@@ -39,9 +39,9 @@ export typealias RelocationArray = Array with Relocation
 // vs chunk-local) depends on the array it lives in; consumers must know which.
 export type CallFixup
 	export var codeOffset as CodeOffset
-	export var targetName as String
+	export var targetName as ByteArray
 
-	export static function create(codeOffset CodeOffset, targetName String) returns CallFixup
+	export static function create(codeOffset CodeOffset, targetName ByteArray) returns CallFixup
 		return Self{codeOffset: codeOffset, targetName: targetName}
 	end 'create'
 end 'CallFixup'
@@ -51,16 +51,16 @@ export typealias CallFixupArray = Array with CallFixup
 // A DebugSymbol pairs a function name with its byte offset in `.text`.
 // Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
 export type DebugSymbol
-	export var name as String
+	export var name as ByteArray
 	export var codeOffset as CodeOffset
 
-	export static function create(name String, codeOffset CodeOffset) returns DebugSymbol
+	export static function create(name ByteArray, codeOffset CodeOffset) returns DebugSymbol
 		return Self{name: name, codeOffset: codeOffset}
 	end 'create'
 end 'DebugSymbol'
 
 export typealias DebugSymbolArray = Array with DebugSymbol
-export typealias DebugSymbolIndexMap = Map with (String, CodeOffset)
+export typealias DebugSymbolIndexMap = Map with (ByteArray, CodeOffset)
 
 // Relocation kind for code-to-rdata references. `funcAbs64InRdata` is the
 // outlier: it patches an 8-byte slot INSIDE rdata (a layout descriptor's
@@ -137,11 +137,11 @@ export typealias RdataRelocationArray = Array with RdataRelocation
 // A funcAbs64InRdata reloc resolved to the three fields the seed/patch/rebase
 // passes need. Collecting once keeps the reloc-walk in one place.
 export type FuncAbs64Slot
-	export let funcName as String
+	export let funcName as ByteArray
 	export let rdataOffset as CodeOffset
 	export let offsetInLabel as ByteOffset
 
-	export static function create(funcName String, rdataOffset CodeOffset, offsetInLabel ByteOffset) returns Self
+	export static function create(funcName ByteArray, rdataOffset CodeOffset, offsetInLabel ByteOffset) returns Self
 		return Self{funcName: funcName, rdataOffset: rdataOffset, offsetInLabel: offsetInLabel}
 	end 'create'
 end 'FuncAbs64Slot'
@@ -164,7 +164,7 @@ export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
 // cache HIT that skips op emission still re-registers them; empty for the
 // `return 42` slice.
 export type FunctionCodeChunk
-	export var funcName as String
+	export var funcName as ByteArray
 	export var code as ByteArray
 	export var entryOffset as CodeOffset
 	export var callFixups as CallFixupArray
@@ -172,7 +172,7 @@ export type FunctionCodeChunk
 	export var iatRelocs as RelocationArray
 	export var rdataConstants as GlobalDataTable
 
-	export static function create(funcName String) returns FunctionCodeChunk
+	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
 			code: ByteArray.create(),
@@ -187,7 +187,7 @@ export type FunctionCodeChunk
 	// Assemble a chunk from an emitter's accumulated buffers in one shot. The
 	// per-op emitter mutates local `var` buffers (`code`/`callFixups`/…) then hands
 	// them here, keeping the chunk itself an immutable `let` at the call site.
-	export static function createWith(funcName String, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
+	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
 			code: code,

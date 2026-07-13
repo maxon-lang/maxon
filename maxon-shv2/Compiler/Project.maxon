@@ -50,7 +50,9 @@ export typealias CaseOrdinal = int(0 to 65535)
 // union). Both are inert at M1 (no structs, no enums yet) but the record shape
 // is kept whole so M9/M12 activate them without a struct migration.
 export type VarInfo
-	export var name as String
+	// A zero-copy slice of the source, straight off the declaring token — names are
+	// KEYS, and ByteArray hashes/compares by content, so no String is ever built for one.
+	export var name as ByteArray
 	export var varType as MaxonType
 	export var mutable as bool
 	export var slot as VarSlot
@@ -78,21 +80,21 @@ export type VarInfo
 	// payload. Reads go through the local slot; writes are rewritten to a
 	// payload store against the scrutinee + field index.
 	export var isPayloadBinding as bool
-	export var payloadScrutineeName as String
+	export var payloadScrutineeName as ByteArray
 	export var payloadFieldIndex as CaseOrdinal
 	// The union case this binding belongs to — different cases of the same
 	// union have independent payload field types, so the case name is required.
-	export var payloadCaseName as String
+	export var payloadCaseName as ByteArray
 
-	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
+	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: EmptySourceText}
 	end 'create'
 
-	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
+	export static function createSelfField(name ByteArray, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
+		return Self{name: name, varType: varType, mutable: true, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createSelfField'
 
-	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarInfo
+	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
 		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
 	end 'createPayloadBinding'
 
@@ -100,12 +102,12 @@ export type VarInfo
 	// value `boundValue`. No stack slot is materialized (SSA substitution needs
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
-	export static function createValueBinding(name String, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0, payloadCaseName: ""}
+	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createValueBinding'
 end 'VarInfo'
 
-export typealias VarInfoMap = Map with (String, VarInfo)
+export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
@@ -122,7 +124,7 @@ export typealias VarInfoMap = Map with (String, VarInfo)
 // of the parse-staging registry set (v1's grows to ~28). Populated by
 // `mergeArtifact` from each file's artifact; resolved in place by TypeResolution;
 // read by SemanticCheck to locate `main` and validate its return type.
-export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
+export typealias FuncReturnTypeMap = Map with (ByteArray, MaxonReturnType)
 
 // A function's parameter signature: the declared parameter NAMES (in declaration
 // order) and their source-level TYPES (parallel, same order). The M5 parse-staging
@@ -134,10 +136,10 @@ export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 // (v1 homes the same data on a richer `FuncSignature` with defaults/companions; shv2
 // carries only names + types until defaults and generics land.)
 export type FuncSignature
-	export var paramNames as StringArray
+	export var paramNames as ByteArrayArray
 	export var paramTypes as MaxonTypeArray
 
-	export static function create(paramNames StringArray, paramTypes MaxonTypeArray) returns FuncSignature
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray) returns FuncSignature
 		return Self{paramNames: paramNames, paramTypes: paramTypes}
 	end 'create'
 
@@ -151,10 +153,10 @@ export type FuncSignature
 	// name list — parameter counts are tiny, so no per-signature name→index map is
 	// worth its heap object (contrast v1's `nameToIndex`, which paid for one on
 	// every signature to serve method dispatch this milestone does not have).
-	export function indexOfParam(name String) returns ParamCount
+	export function indexOfParam(name ByteArray) returns ParamCount
 		for i in 0 upto self.paramNames.count() 'each'
 			let paramName = try self.paramNames.get(i) otherwise panic("FuncSignature.indexOfParam: paramNames.get OOB at {i}")
-			if paramName == name 'match'
+			if paramName.equals(name) 'match'
 				return i
 			end 'match'
 		end 'each'
@@ -166,7 +168,7 @@ end 'FuncSignature'
 // `mergeArtifact` alongside `funcReturnTypes`; resolved in place by TypeResolution
 // (its param types collapse `named`→concrete); read by SemanticCheck (call
 // validation) and lowerCall (label→positional arg slotting).
-export typealias FuncSignatureMap = Map with (String, FuncSignature)
+export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
@@ -177,6 +179,7 @@ export typealias FuncSignatureMap = Map with (String, FuncSignature)
 export union ArgSlotResult
 	ordered(argIds ValueIdArray)
 	arityMismatch(expected ParamCount, got ParamCount)
+	// Both arms carry a String: they exist only to be FORMATTED into a diagnostic.
 	unknownLabel(argIndex ParamCount, label String)
 	duplicateArg(argIndex ParamCount, paramName String)
 end 'ArgSlotResult'
@@ -189,7 +192,7 @@ end 'ArgSlotResult'
 // value list, or the first slotting error found (arity, unknown label, or two arguments
 // targeting one parameter). THE one place the label→position mapping lives — shared by
 // call validation and call lowering.
-export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels StringArray) returns ArgSlotResult
+export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray) returns ArgSlotResult
 	let paramCount = sig.paramCount()
 	if args.count() != paramCount 'arity'
 		return ArgSlotResult.arityMismatch(paramCount, got: args.count())
@@ -213,14 +216,14 @@ export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels Str
 		if not label.isEmpty() 'labelled'
 			pos = sig.indexOfParam(label)
 			if pos >= paramCount 'unknown'
-				return ArgSlotResult.unknownLabel(i, label: label)
+				return ArgSlotResult.unknownLabel(i, label: String.from(label))
 			end 'unknown'
 		end 'labelled'
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 		if alreadyFilled 'dup'
 			let paramName = try sig.paramNames.get(pos) otherwise panic("slotCallArgs: paramNames.get OOB at {pos}")
-			return ArgSlotResult.duplicateArg(i, paramName: paramName)
+			return ArgSlotResult.duplicateArg(i, paramName: String.from(paramName))
 		end 'dup'
 		try slotIds.set(pos, value: argId) otherwise panic("slotCallArgs: slotIds.set OOB at {pos}")
 		try filled.set(pos, value: true) otherwise panic("slotCallArgs: filled.set OOB at {pos}")

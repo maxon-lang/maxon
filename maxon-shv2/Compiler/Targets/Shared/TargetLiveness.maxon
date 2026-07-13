@@ -361,6 +361,13 @@ end 'localOfBlockId'
 // consumers that each walk the (phi, incoming) pairs differently: SSA-destruction plan
 // building, the colorer's biased-coloring hints, and the E5001 diagnostic's phi
 // resolution. Holds references to the existing arrays (no per-element copy).
+// Which of the three consumers is resolving a phi edge — see PhiEdgeView.resolve.
+export enum PhiEdgeConsumer
+	coloringHints
+	ssaDestruction
+	registerPressureDiagnostic
+end 'PhiEdgeConsumer'
+
 export type PhiEdgeView
 	export var blockArgs as IrBlockArgArray
 	export var argIds as ValueIdArray
@@ -369,10 +376,14 @@ export type PhiEdgeView
 	// Resolve + arity-check the phi edge into `targetBlock` carrying `argIds`. `context`
 	// names the caller for the panic. A mismatch is a malformed SSA edge — the ONE
 	// arity assertion for all three consumers.
-	export static function resolve(targetBlock IrBlock, argIds ValueIdArray, context String) returns PhiEdgeView
+	//
+	// An ENUM, not a String tag: `resolve` runs once per CFG EDGE inside the register
+	// allocator, and a String argument is evaluated eagerly, so a literal here allocated a
+	// heap String per edge to name a caller in a panic that fires only on malformed SSA.
+	export static function resolve(targetBlock IrBlock, argIds ValueIdArray, context PhiEdgeConsumer) returns PhiEdgeView
 		let phiCount = targetBlock.blockArgs.count()
 		if argIds.count() != phiCount 'arity'
-			panic("PhiEdgeView.resolve {context}: edge to '{targetBlock.label}' carries {argIds.count()} args but the block has {phiCount} phis")
+			panic("PhiEdgeView.resolve ({context.name}): edge to '{String.from(targetBlock.label)}' carries {argIds.count()} args but the block has {phiCount} phis")
 		end 'arity'
 		return Self{blockArgs: targetBlock.blockArgs, argIds: argIds, count: phiCount}
 	end 'resolve'
@@ -413,7 +424,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let numBlocks = cfg.topo.numBlocks
 
 	if numBlocks != func.blockRefs.count() 'cfgStale'
-		panic("computeLivenessOn: '{func.name}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
+		panic("computeLivenessOn: '{String.from(func.name)}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
 	end 'cfgStale'
 
 	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount)
@@ -636,7 +647,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncTopology: blockIdByLocal.get OOB")
 		let prior = try localByBlockId.get(bid) otherwise panic("buildFuncTopology: localByBlockId.get(bid) OOB")
 		if prior != numBlocks 'duplicateId'
-			panic("buildFuncTopology: function '{func.name}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
+			panic("buildFuncTopology: function '{String.from(func.name)}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
 		end 'duplicateId'
 		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncTopology: localByBlockId.set(bid) OOB")
 	end 'mapIds'
@@ -656,7 +667,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 		for sid in succIds 'eachSucc'
 			let j = try localByBlockId.get(sid) otherwise panic("buildFuncTopology: successor block id {sid} out of id range")
 			if j == numBlocks 'notInFunc'
-				panic("buildFuncTopology: block '{block.label}' branches to block id {sid} which is not in function '{func.name}'")
+				panic("buildFuncTopology: block '{String.from(block.label)}' branches to block id {sid} which is not in function '{String.from(func.name)}'")
 			end 'notInFunc'
 			edgeFrom.push(i)
 			edgeTo.push(j)
@@ -713,7 +724,7 @@ end 'assertCondBranchIndicesComplete'
 // One block's half of the sweep. The index records only WHERE the branch is — what it TARGETS is
 // always dereferenced from the op — so an in-place retarget (`retargetJcc`) has no cache to go
 // stale, and the only things that CAN go wrong are the four this asserts.
-function checkCondBranchIndex(module TargetModule, block IrBlock, funcName String)
+function checkCondBranchIndex(module TargetModule, block IrBlock, funcName ByteArray)
 	var seen = 0 as OpCount
 	var seenIdx = 0 as OpIndex
 	for opIdx in block.opRefs 'eachOp'
@@ -726,23 +737,23 @@ function checkCondBranchIndex(module TargetModule, block IrBlock, funcName Strin
 
 	if not block.hasCondBranchOp() 'recordsNone'
 		if seen > 0 'unrecorded'
-			panic("checkCondBranchIndex: '{funcName}' block '{block.label}' holds {seen} `jcc` op(s) but records NO conditional branch — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator builds")
+			panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' holds {seen} `jcc` op(s) but records NO conditional branch — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator builds")
 		end 'unrecorded'
 		return
 	end 'recordsNone'
 
 	let recorded = block.condBranchIndex()
 	if seen != 1 'notExactlyOne'
-		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' records a conditional branch at op {recorded} but its body holds {seen} `jcc` op(s) — the index must name the one branch the block has")
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records a conditional branch at op {recorded} but its body holds {seen} `jcc` op(s) — the index must name the one branch the block has")
 	end 'notExactlyOne'
 	if seenIdx != recorded 'stale'
-		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' records its conditional branch at op {recorded}, but the `jcc` in its body is op {seenIdx} — the recorded index is stale")
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records its conditional branch at op {recorded}, but the `jcc` in its body is op {seenIdx} — the recorded index is stale")
 	end 'stale'
 
 	// A `jcc` names only the THEN edge; the else edge is the `jmp` terminator. Without one, the
 	// block would contribute a single successor to the CFG while branching two ways at run time.
 	if not terminatorIsJmp(module, block: block) 'noJmpTerminator'
-		panic("checkCondBranchIndex: '{funcName}' block '{block.label}' has a conditional branch but its terminator is not a `jmp` — a `jcc` carries only the then-edge, so the else-edge has nowhere to come from")
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' has a conditional branch but its terminator is not a `jmp` — a `jcc` carries only the then-edge, so the else-edge has nowhere to come from")
 	end 'noJmpTerminator'
 end 'checkCondBranchIndex'
 
@@ -788,7 +799,7 @@ end 'terminatorIsJmp'
 function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
 	if block.hasCondBranchOp() 'hasCond'
 		let opIdx = block.condBranchIndex()
-		let op = try module.ops.get(opIdx) otherwise panic("collectBlockSuccessorIds: conditional branch of block '{block.label}' is op {opIdx}, which is not in module.ops")
+		let op = try module.ops.get(opIdx) otherwise panic("collectBlockSuccessorIds: conditional branch of block '{String.from(block.label)}' is op {opIdx}, which is not in module.ops")
 		out.push(condBranchTargetOf(op, block: block))
 	end 'hasCond'
 
@@ -797,11 +808,11 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 		match op 'termCtrl'
 			jmp(target) then out.push(target)
 			ret then break 'termCtrl'
-			prologue to epilogue then panic("collectBlockSuccessorIds: block '{block.label}' terminator is a frame op, not a branch/return")
+			prologue to epilogue then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
-			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{block.label}' has a non-terminator op as its terminator")
-			pushReg to popReg then panic("collectBlockSuccessorIds: block '{block.label}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
-			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{block.label}' has a spill/reload as its terminator — the splitter inserts them as body ops")
+			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
+			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -814,7 +825,7 @@ end 'collectBlockSuccessorIds'
 function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
 	match op 'cond'
 		jcc(_, target) then return target
-		default panic("condBranchTargetOf: block '{block.label}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`")
+		default panic("condBranchTargetOf: block '{String.from(block.label)}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`")
 	end 'cond'
 end 'condBranchTargetOf'
 
@@ -1333,7 +1344,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 					continue
 				end 'dedupe'
 				if opCount == 0 'noTerminator'
-					panic("buildUseIndex: block local {i} ('{block.label}') passes value {argId} on a branch edge but has no ops to branch with")
+					panic("buildUseIndex: block local {i} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
 				end 'noTerminator'
 				let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("buildUseIndex: ordered.get OOB")
 				pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: argId, blockLocal: i, opIdx: lastOpIdx, seq: seq + opCount - 1, onEdge: true)

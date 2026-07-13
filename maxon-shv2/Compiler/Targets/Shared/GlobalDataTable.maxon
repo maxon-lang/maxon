@@ -25,6 +25,24 @@ export typealias GlobalDedupMap = Map with (ByteArray, String)
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
+// Does `bytes` begin with `prefix`? The byte-slice twin of `String.startsWith`, for the
+// name comparisons that now run on source slices rather than heap Strings.
+export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool
+	if prefix.count() > bytes.count() 'tooShort'
+		return false
+	end 'tooShort'
+
+	for i in 0 upto prefix.count() 'each'
+		let b = try bytes.get(i) otherwise panic("bytesStartWith: i < prefix.count() <= bytes.count() by the guard above, but get({i}) failed")
+		let p = try prefix.get(i) otherwise panic("bytesStartWith: i < prefix.count() by the loop bound, but get({i}) failed")
+		if b != p 'differs'
+			return false
+		end 'differs'
+	end 'each'
+
+	return true
+end 'bytesStartWith'
+
 export type GlobalDataTable
 	export var names as StringArray
 	export var values as ByteArrayArray

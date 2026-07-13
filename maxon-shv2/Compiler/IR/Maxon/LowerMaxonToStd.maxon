@@ -111,13 +111,13 @@ type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
 	// Qualified name of the function currently lowering — for diagnostics only.
-	var currentFuncName as String
+	var currentFuncName as ByteArray
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), currentFuncName: "", funcSignatures: funcSignatures}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), currentFuncName: EmptySourceText, funcSignatures: funcSignatures}
 	end 'create'
 
 	function lower() returns StdModule
@@ -243,7 +243,7 @@ type MaxonToStdLowering
 		if func.paramCount == 0 'noParams'
 			return
 		end 'noParams'
-		let entryRef = try func.blockRefs.get(0) otherwise panic("emitParams: function '{func.name}' has no entry block")
+		let entryRef = try func.blockRefs.get(0) otherwise panic("emitParams: function '{String.from(func.name)}' has no entry block")
 		var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("emitParams: entry blockRef {entryRef} not in stdModule.blocks")
 		for i in 0 upto func.paramCount 'eachParam'
 			let paramType = try func.paramTypes.get(i) otherwise panic("emitParams: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
@@ -259,14 +259,13 @@ type MaxonToStdLowering
 	// here is a compiler-invariant violation and panics rather than emitting wrong code.
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
-	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels StringArray, dstBlock IrBlock)
-		let calleeName = String.from(callee)
-		let sig = try self.funcSignatures.get(calleeName) otherwise panic("lowerCall: callee '{calleeName}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: calleeName, args: argIds))
-			arityMismatch then panic("lowerCall: arity mismatch for '{calleeName}' reached lowering — SemanticCheck must gate it")
-			unknownLabel then panic("lowerCall: unknown argument label for '{calleeName}' reached lowering — SemanticCheck must gate it")
-			duplicateArg then panic("lowerCall: duplicate argument for '{calleeName}' reached lowering — SemanticCheck must gate it")
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: argIds))
+			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 		end 'slot'
 	end 'lowerCall'
 
@@ -323,7 +322,7 @@ type MaxonToStdLowering
 			unset then break 'carry'
 			dead then dstBlock.terminator = Terminator.dead
 			fallthrough then dstBlock.terminator = Terminator.fallthrough
-			opIndex then panic("carryOplessTerminator: block '{srcBlock.label}' has an op terminator but hasTerminatorOp() was false")
+			opIndex then panic("carryOplessTerminator: block '{String.from(srcBlock.label)}' has an op terminator but hasTerminatorOp() was false")
 		end 'carry'
 	end 'carryOplessTerminator'
 
@@ -350,6 +349,6 @@ type MaxonToStdLowering
 	// E3002 before the pipeline gets this far. So this is a pipeline-ordering bug,
 	// not a user error, and it fails loudly rather than silently emitting nothing.
 	function rejectVoidReturn()
-		panic("lowerMaxonToStd: a void `return` reached lowering in func '{self.currentFuncName}' — StdOp has no void-return variant until M5, and E3002 should have rejected a void `main` first")
+		panic("lowerMaxonToStd: a void `return` reached lowering in func '{String.from(self.currentFuncName)}' — StdOp has no void-return variant until M5, and E3002 should have rejected a void `main` first")
 	end 'rejectVoidReturn'
 end 'MaxonToStdLowering'

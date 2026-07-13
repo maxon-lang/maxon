@@ -17,7 +17,11 @@
 // The one builtin alias M1 resolves without the stdlib. Named constant, not a
 // bare string — the alias spelling is a contract shared with the parser's
 // interner. Grows into a builtin-alias table (Character, etc.) at M9/M10.
-let ExitCodeBuiltinName = "ExitCode"
+// A function, not a global: a `b"..."` literal is not a constant expression (E2004) and
+// so cannot initialize one. Reached once per named type reference, never per token.
+function exitCodeBuiltinName() returns ByteArray
+	return b"ExitCode"
+end 'exitCodeBuiltinName'
 
 // Resolve every unresolved/named type in `module`'s function signatures to a
 // concrete `MaxonType`, and re-sync each function's resolved return type into
@@ -54,7 +58,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
-	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({func.name}) true but get failed")
+	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
 	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes))
 end 'syncResolvedSignature'
 
@@ -78,8 +82,8 @@ end 'resolveType'
 
 function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
-	if name == ExitCodeBuiltinName 'isExitCode'
+	if name.equals(exitCodeBuiltinName()) 'isExitCode'
 		return MaxonType.exitCode
 	end 'isExitCode'
-	panic("resolveTypes: unknown named type '{name}' — M1 resolves only the ExitCode builtin (user-defined types arrive at M9)")
+	panic("resolveTypes: unknown named type '{String.from(name)}' — M1 resolves only the ExitCode builtin (user-defined types arrive at M9)")
 end 'resolveNamedType'

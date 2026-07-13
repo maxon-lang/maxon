@@ -80,14 +80,14 @@ end 'ParseError'
 // True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
 // only caller is parameter-name duplicate detection), so no membership set is worth its
 // heap object (the same reasoning `FuncSignature.indexOfParam` documents).
-function stringArrayContains(names StringArray, name String) returns bool
+function byteArrayContains(names ByteArrayArray, name ByteArray) returns bool
 	for existing in names 'each'
-		if existing == name 'match'
+		if existing.equals(name) 'match'
 			return true
 		end 'match'
 	end 'each'
 	return false
-end 'stringArrayContains'
+end 'byteArrayContains'
 
 // --- Pratt expression parser: precedence table + operator classifiers ---
 //
@@ -209,10 +209,10 @@ end 'comparisonOperator'
 // to `blockArgs[k]` on the merge block and to `argIds[k]` on every predecessor's
 // `BranchEdge`, so all three follow one order (mutable-var declaration order).
 type LoopPhiVar
-	export var name as String
+	export var name as ByteArray
 	export var phiId as ValueId
 
-	export static function create(name String, phiId ValueId) returns LoopPhiVar
+	export static function create(name ByteArray, phiId ValueId) returns LoopPhiVar
 		return Self{name: name, phiId: phiId}
 	end 'create'
 end 'LoopPhiVar'
@@ -234,7 +234,7 @@ typealias LoopPhiVarArray = Array with LoopPhiVar
 // `continue` jumps to a STEP block that runs the increment before the header. When
 // `for` lands (M5), this gains that split; at M4b `continue` → `headerId` is exact.
 type LoopContext
-	export var label as String
+	export var label as ByteArray
 	export var headerId as BlockId
 	export var exitId as BlockId
 	export var phiVars as LoopPhiVarArray
@@ -242,7 +242,7 @@ type LoopContext
 	// header-false-edge value with each break's value, so it needs its own phis.
 	export var hasBreak as bool
 
-	export static function create(label String, headerId BlockId, exitId BlockId, phiVars LoopPhiVarArray) returns LoopContext
+	export static function create(label ByteArray, headerId BlockId, exitId BlockId, phiVars LoopPhiVarArray) returns LoopContext
 		return Self{label: label, headerId: headerId, exitId: exitId, phiVars: phiVars, hasBreak: false}
 	end 'create'
 end 'LoopContext'
@@ -268,7 +268,7 @@ export type Parser
 	// order follows this list so that block-args and every predecessor's BranchEdge
 	// argIds stay positionally aligned. `let` bindings never appear (they cannot be
 	// reassigned, so they carry no loop-carried phi). Reset per function.
-	var mutableVars as StringArray
+	var mutableVars as ByteArrayArray
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
@@ -283,7 +283,7 @@ export type Parser
 			artifact: FileParseArtifact.create(filePath),
 			scope: Scope.create(),
 			valueIds: ValueIdRef.create(0),
-			mutableVars: StringArray.create(),
+			mutableVars: ByteArrayArray.create(),
 			loops: LoopContextArray.create()
 		}
 	end 'create'
@@ -333,7 +333,7 @@ export type Parser
 		// re-seeded at the resulting paramCount just below. Parsing itself only
 		// consumes tokens, so it needs no scope.
 		try self.consume(TokenKind.leftParen)
-		var paramNames = StringArray.create()
+		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		// Parallel to `paramNames`: each parameter's name-token span, so `bindParameters` can
 		// record a ValueOrigin at the DECLARATION for parameter `i` — the source site the
@@ -350,7 +350,7 @@ export type Parser
 		let paramCount = paramNames.count()
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
-		self.mutableVars = StringArray.create()
+		self.mutableVars = ByteArrayArray.create()
 		self.loops = LoopContextArray.create()
 
 		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
@@ -368,7 +368,7 @@ export type Parser
 
 		// Create the entry block (registered in func.blockRefs) BEFORE pushing the
 		// function, mirroring the backend's own function-building order.
-		var entry = self.artifact.module.addBlockAt(func, label: "entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
+		var entry = self.artifact.module.addBlockAt(func, label: b"entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -391,7 +391,7 @@ export type Parser
 	// `= <default>` after the type is a later milestone, so it is rejected here with
 	// a positioned `unsupported` rather than silently dropped. The caller has already
 	// consumed the `(` and consumes the closing `)`.
-	function parseFunctionParameters(paramNames StringArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -402,11 +402,11 @@ export type Parser
 
 			if self.at(TokenKind.equals) 'hasDefault'
 				let eqTok = self.current()
-				throw ParseError.unsupported("a default value on parameter '{nameTok.value}' (parameter defaults arrive at a later milestone)", line: eqTok.line, column: eqTok.column)
+				throw ParseError.unsupported("a default value on parameter '{String.from(nameTok.value)}' (parameter defaults arrive at a later milestone)", line: eqTok.line, column: eqTok.column)
 			end 'hasDefault'
 
-			if stringArrayContains(paramNames, name: nameTok.value) 'duplicate'
-				throw ParseError.duplicateParameter(nameTok.value, line: nameTok.line, column: nameTok.column)
+			if byteArrayContains(paramNames, name: nameTok.value) 'duplicate'
+				throw ParseError.duplicateParameter(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
 
 			paramNames.push(nameTok.value)
@@ -428,7 +428,7 @@ export type Parser
 	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
 	// numbering reserved). Bound as an immutable value binding, so a body reference
 	// resolves to the parameter value and a reassignment is rejected as immutable.
-	function bindParameters(paramNames StringArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray)
+	function bindParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray)
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
@@ -576,10 +576,10 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 		if not self.scope.contains(nameTok.value) 'undeclared'
-			throw ParseError.undefinedVariable(nameTok.value, line: nameTok.line, column: nameTok.column)
+			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'undeclared'
 		if not self.scope.getInfo(nameTok.value).mutable 'immutable'
-			throw ParseError.assignToImmutable(nameTok.value, line: nameTok.line, column: nameTok.column)
+			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'immutable'
 		let value = try self.parseExpression(block, permitComparison: false)
 		self.scope.setValue(nameTok.value, value: value)
@@ -653,7 +653,7 @@ export type Parser
 		end 'noElse'
 
 		try self.consume(TokenKind.else)
-		var elseBlock = self.newBlock(func, label: "ifelse", line: ifTok.line)
+		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
 		let elseVals = self.snapshotMutableValues()
 		return self.finalizeIfElse(func, entry: block, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, thenVals: thenVals, elseVals: elseVals)
@@ -685,7 +685,7 @@ export type Parser
 	// branch returns, the continuation is reached only from the false edge, whose values
 	// are already the restored `entryVals`.
 	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, entryVals ValueIdArray, thenVals ValueIdArray) returns IrBlock
-		var cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
 		if not thenEnd.isTerminated() 'thenFallsThrough'
 			self.mergeAtContinuation(entry, predB: thenEnd, cont: cont, valsA: entryVals, valsB: thenVals)
@@ -708,12 +708,12 @@ export type Parser
 		if thenTerminated and elseTerminated 'bothReturn'
 			// Nothing reaches the continuation — mark it dead rather than leave it
 			// unterminated (assertAllBlocksTerminated forbids an unset block).
-			var cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+			var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 			cont.terminator = Terminator.dead
 			return cont
 		end 'bothReturn'
 
-		var cont = self.newBlock(func, label: "ifcont", line: ifTok.line)
+		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 		if not thenTerminated and not elseTerminated 'bothFallThrough'
 			self.mergeAtContinuation(thenEnd, predB: elseEnd, cont: cont, valsA: thenVals, valsB: elseVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
@@ -811,7 +811,7 @@ export type Parser
 		// current values — the preheader→header block-arg list (their pre-loop values).
 		let preheaderVals = self.snapshotMutableValues()
 
-		var header = self.newBlock(func, label: "whilehdr", line: whileTok.line)
+		var header = self.newBlock(func, label: b"whilehdr", line: whileTok.line)
 		self.recordBranchEdge(block, targetId: header.id, argIds: preheaderVals)
 		self.emitBranch(block, targetId: header.id)
 
@@ -829,7 +829,7 @@ export type Parser
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
-		var exit = self.newBlock(func, label: "whileexit", line: whileTok.line)
+		var exit = self.newBlock(func, label: b"whileexit", line: whileTok.line)
 		self.emitCondBranch(header, cond: cond, thenId: body.id, elseId: exit.id, ifTok: whileTok)
 
 		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars))
@@ -839,7 +839,7 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{loopLabelTok.value}'")
+		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
 		// Normal back-edge: a body that falls through returns to the header with its
 		// (possibly reassigned) current values. A body that always returns/breaks/
@@ -913,14 +913,14 @@ export type Parser
 		let labelTok = try self.consume(TokenKind.charLiteral)
 		for i in 0 upto depth 'search'
 			let ctx = try self.loops.get(depth - 1 - i) otherwise panic("resolveControlTarget: loops.get OOB during label search")
-			if ctx.label == labelTok.value 'match'
+			if ctx.label.equals(labelTok.value) 'match'
 				if i == 0 'ownLabel'
-					throw ParseError.labelTargetsOwnLoop(keyword, label: labelTok.value, line: labelTok.line, column: labelTok.column)
+					throw ParseError.labelTargetsOwnLoop(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 				end 'ownLabel'
 				return ctx
 			end 'match'
 		end 'search'
-		throw ParseError.unknownLoopLabel(keyword, label: labelTok.value, line: labelTok.line, column: labelTok.column)
+		throw ParseError.unknownLoopLabel(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 	end 'resolveControlTarget'
 
 	// The current SSA value of each mutable var, in declaration order — the preheader
@@ -957,8 +957,8 @@ export type Parser
 	// always in scope by construction, so its absence is a compiler-invariant violation
 	// (not a user error) and panics — centralizing the lookup that `snapshotMutableValues`
 	// and `edgeArgsFor` both perform.
-	function currentValueOf(name String) returns ValueId
-		return try self.scope.lookupValue(name) otherwise panic("currentValueOf: var '{name}' not in scope")
+	function currentValueOf(name ByteArray) returns ValueId
+		return try self.scope.lookupValue(name) otherwise panic("currentValueOf: var '{String.from(name)}' not in scope")
 	end 'currentValueOf'
 
 	// Record the block-arg values `block` passes to `targetId` for the Std-tier
@@ -975,7 +975,7 @@ export type Parser
 	// Create + register a fresh block in `func`, filling the source footprint from the
 	// parser's own file/position so the four `if` block-creation sites don't each
 	// respell it.
-	function newBlock(func IrFunction, label String, line LineNumber) returns IrBlock
+	function newBlock(func IrFunction, label ByteArray, line LineNumber) returns IrBlock
 		return self.artifact.module.addBlockAt(func, label: label, filePath: self.filePath.toString(), firstLine: line)
 	end 'newBlock'
 
@@ -1121,7 +1121,7 @@ export type Parser
 	// value. An unbound name is a positioned parse error (undefinedVariable).
 	function parseVariableReference() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.identifier)
-		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(tok.value, line: tok.line, column: tok.column)
+		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
 	end 'parseVariableReference'
 
 	// Parse a bare-call statement `callee(args…)` — the call is emitted for its effect
@@ -1140,7 +1140,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 
 		var args = ValueIdArray.create()
-		var argLabels = StringArray.create()
+		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		try self.parseCallArgs(block, args: args, argLabels: argLabels, argRanges: argRanges)
 
@@ -1155,7 +1155,7 @@ export type Parser
 	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
 	// token). Whether a `name:` label actually matches a parameter is a SEMANTIC check
 	// (SemanticCheck, which has the callee's signature) — not the parser's job.
-	function parseCallArgs(block IrBlock, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray) throws ParseError
+	function parseCallArgs(block IrBlock, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -1186,7 +1186,7 @@ export type Parser
 	// a bare value there is E2053. A `name:` label is two tokens (identifier + colon); a
 	// bare value leaves the cursor untouched. (Whether the label names a real parameter
 	// is checked later, in SemanticCheck.)
-	function consumeArgLabel(argIndex ParamCount) returns String throws ParseError
+	function consumeArgLabel(argIndex ParamCount) returns ByteArray throws ParseError
 		let labelTok = self.current()
 		let isNamed = labelTok.kind == TokenKind.identifier and self.peekKind() == TokenKind.colon
 
@@ -1194,7 +1194,7 @@ export type Parser
 			if isNamed 'firstNamed'
 				throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
 			end 'firstNamed'
-			return ""
+			return EmptySourceText
 		end 'firstArg'
 
 		if not isNamed 'missingLabel'
@@ -1208,9 +1208,9 @@ export type Parser
 	// Append a `call` op defining a fresh result value; return the ValueId it defines.
 	// The callee is stored as a `ByteArray` slice of its identifier token; the call span
 	// runs from the callee name through the closing `)` (the conventional call anchor).
-	function emitCall(block IrBlock, calleeTok Token, args ValueIdArray, argLabels StringArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
+	function emitCall(block IrBlock, calleeTok Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
 		let result = allocValueId(self.valueIds)
-		self.artifact.emitOp(block, op: MaxonOp.call(result, callee: calleeTok.valueBytes, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
+		self.artifact.emitOp(block, op: MaxonOp.call(result, callee: calleeTok.value, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
 		return result
 	end 'emitCall'
 
