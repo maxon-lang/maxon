@@ -336,8 +336,9 @@ green build.
 
 | # | Mechanism | Note |
 |---|---|---|
-| **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker-subprocess pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub |
-| **P1.0b** | **measure the stdlib cone** | against the **upgraded** harness. Cheap, and it sets the boundary — see above |
+| **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub. **Workstream S is what makes it pay:** the corpus takes the suite from 126 tests to thousands |
+| **P1.0b** | **Workstream S1 — port the ≥650 scalar-core cases from `/specs`** ⭐ | *(see Workstream S.)* Teach `SpecParser` the `disabled-test:` marker, bulk-copy the corpus, disable what shv2 cannot yet pass. **The first real test of the scalar core against a corpus shv2 did not author — expect bugs, that is the point.** From here every rung is driven by the cases it enables |
+| **P1.0c** | **measure the stdlib cone** | against the **upgraded** harness. Cheap, and it sets the boundary — see above |
 | **P1.1** | structs · enums · unions · `match` | concrete, trivial-ownership only. **← NEXT** |
 | **P1.2** | **heap + ownership + drops + `String`** ⭐ | **THE CRUX, and String is the FIRST heap value** — real, needed by everything, and trivially-elemented so it forces no descriptor. Hardcoded `__ManagedMemory`(40B) + `String`(16B) bootstrap structs; rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. Runtime slice **R1** lands here — mm-trace gates from here and **cannot run without it**. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
 | **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1 + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
@@ -372,6 +373,126 @@ while silently broken.**
 
 **Then the circle closes:** the shv2-compiled, shv2-parallel harness runs the spec suite that
 tests shv2 — which is what `maxon-selfhosted` does, and is the Phase-1 goal.
+
+---
+
+## Workstream S — `/specs` DRIVES development, from now on ⭐
+
+**Every rung is driven by porting the real spec files from [`/specs`](specs/) into
+[`/specs-shv2`](specs-shv2/) — not by authoring a bespoke spec for the occasion.** Start as early
+as possible; the first slice runs *before* P1.1.
+
+**Why the corpus, and not hand-written specs.** `/specs` is **276 files / ~2,584 `exitcode` cases**
+— the accumulated definition of the language, written against real semantics by someone who was not
+trying to make shv2 look good. A spec authored fresh for a rung tests what its author *remembered*
+to test. A ported one tests what the language *actually promises*, including every edge case a past
+bug already paid for. shv2's five allocator stress specs make the point: written as a corpus shv2
+had not seen, they turned up **two real bugs** in code that was green.
+
+**The formats are IDENTICAL — porting is `cp`.** shv2's `SpecParser` was modeled on the main suite
+and shares its every convention: **275 of the 276** `/specs` files already use the same
+`<!-- test: <name> -->` markers under the same `## Tests` heading, and the four fences shv2 accepts
+(` ```maxon ` / ` ```exitcode ` / ` ```stdout ` / ` ```maxoncstderr `) cover **~6,980 of the 7,875
+fences** in the corpus. The remainder is ` ```text ` (243, mostly prose), ` ```stderr ` (31), and
+` ```mm-trace ` (1) — triage, not a porting layer. **There is no translation step to build.**
+
+### ⚠ The hard part: port at TEST granularity, not FILE granularity
+
+**Most spec files depend on far more of the language than the feature they name.** Measured across
+all **3,259** ` ```maxon ` blocks in `/specs`: **36% use a string literal, 32% declare a
+type/union, 26% use `try`/`throws`, 24% call `print`.** `specs/arithmetic.md` is about `+` and
+`mod`, but a sibling case in the same file will happily `print` an interpolated string.
+
+⇒ **A spec FILE is not a portable unit. A test CASE is.** File-level `status: draft` — which is all
+[SpecTestRunner.maxon:137](maxon-shv2/Testing/SpecTestRunner.maxon#L137) supports today — is
+therefore *the wrong granularity*: it would strand a file's in-core cases behind its out-of-core
+ones.
+
+**Use the marker the project already has: `<!-- disabled-test: <name> -->`.** It is the established
+convention, honored by **both** existing runners — v1 skips it at
+[SpecTestRunner.maxon:2233](maxon-selfhosted/Testing/SpecTestRunner.maxon#L2233), and the C#
+runner's marker regex is `<!--\s*(?:disabled-)?test:\s*\S+\s*-->`
+([TestRunner.cs:1760](maxon-sharp/Testing/TestRunner.cs#L1760)) — and the in-tree usage already
+carries a **reason on the following comment line**:
+
+```
+<!-- disabled-test: http-client.async-trace-interleave -->
+<!-- AsyncTrace -->
+```
+
+> **So the ONE piece of machinery Workstream S must build is small: teach shv2's `SpecParser` to
+> recognize `disabled-test:` and skip it** — parsed as a test boundary, never compiled, never run,
+> and **no `.test` golden generated**. Goldens then accrete only as tests are enabled, and the
+> fragment diff stays reviewable instead of becoming a ten-thousand-file dump.
+>
+> **Port convention:** flip `test:` → `disabled-test:` for any case shv2 cannot yet pass, and put
+> **the rung that unlocks it** in the reason comment (`<!-- P1.2 String -->`). Enabling a test is
+> then a one-word diff, and it is the deliverable of the rung that earns it.
+
+**Keep the copied file otherwise byte-identical to its `/specs` original**, so a future `diff`
+against upstream shows real drift rather than porting noise. The marker flip is the *only*
+sanctioned edit.
+
+### ⇒ The disabled-test reasons ARE the ranked roadmap — the thing the compass promised, for free
+
+Because every disabled case names the rung that unlocks it, one `grep` **groups the entire
+remaining language surface by milestone**:
+
+```
+$ grep -A1 -h 'disabled-test:' specs-shv2/*.md | grep -o 'P1\.[0-9]*' | sort | uniq -c | sort -rn
+    412 P1.2      ← String + heap unlocks 412 cases
+    288 P1.6      ← generics
+    201 P1.4      ← errors
+    ...
+```
+
+That is **exactly** the `TOP UNSUPPORTED` table `selfhost-distance` was going to produce — the one
+thing genuinely lost when the compass was cut. Here it costs **nothing**: no parser recovery mode,
+no 626 recoverable panics, no 485-line reporter. And it is strictly better, because it ranks by
+**cases that must actually pass**, not by syntax-node frequency.
+
+### ⇒ The draft count is the ratchet — and it is what the cut compass was reaching for
+
+`selfhost-distance` was meant to answer *"how much of the language does shv2 have, and what should I
+build next?"* It was cut because its true price was a parser recovery mode plus making `panic()`
+recoverable at 626 sites — **it bought a number, not a feature.**
+
+**The un-drafted spec count answers the same question for free**, and answers it *better*:
+- **Zero new infrastructure.** The runner, the frontmatter key, and the skip are already shipped.
+- It measures **BEHAVIOUR** (the spec runs and produces the right answer), where the compass measured
+  only **ACCEPTANCE** (the frontend didn't choke). SHD=0 would have meant "shv2 parses its source,"
+  not "shv2 compiles it correctly." A green spec means it works.
+- The ranked list of *what is still draft* is a roadmap, in the same way the compass's
+  `TOP UNSUPPORTED` table was meant to be — but grounded in cases that must actually pass.
+
+**The gate: an ENABLED test may never be re-disabled.** That is the per-unit non-regression ratchet
+the compass promised, enforced on behaviour and at no cost. *(This does not reopen the compass — it
+retires the last argument for it.)*
+
+### The slices
+
+- **S1 — NOW, before P1.1: port every case the CURRENT scalar core should already pass.**
+  **Measured: ≥650 of the 3,259 cases (20%) need nothing shv2 does not already have** — integer
+  arithmetic, comparison, `if`/`else`, `while`/`break`/`continue`, functions/params/calls, `/` and
+  `mod`. *(A conservative floor: the classifier's probes over-fire, which can only push cases out of
+  the scalar bucket, never in.)* **That is 5× the entire current 126-test suite**, and shv2's scalar
+  core has never once been tested against a corpus it did not author. **Expect bugs — that is the
+  point.** The five allocator stress specs, written the same way, turned up two real ones in code
+  that was green. Finding them now is far cheaper than finding them stacked under three more rungs.
+- **S2 — every rung, P1.1 onward: a rung is DONE when the cases it unlocks are ENABLED and green.**
+  Author a bespoke spec only where no real one exists — i.e. for shv2-specific surface (allocator
+  stress, IR goldens, `E5001` pressure), never for a language feature `/specs` already covers.
+- **S3 — triage the remainder:** the 19 `status: selfhosted` files (where v1 and the C# bootstrap
+  genuinely conflict), the ` ```text `/` ```stderr `/` ```mm-trace ` blocks, and any case whose
+  expectation is bootstrap-specific rather than language-level.
+
+### ⚠ This is what makes P1.0a (the parallel pool) pay for itself
+
+At today's measured **~24 ms/test**, the full corpus is **~2,584 tests ≈ 60 s serially** — the
+iteration loop stops being instant exactly when the corpus lands. On a 12-worker pool it is a few
+seconds. **So the pool should land before or with the bulk port, and the two justify each other:**
+`async` is in Phase 1 because it is a hard mechanism that must not be retrofitted (§P1.5), and the
+corpus is what makes it *also* the thing keeping the loop fast.
 
 ---
 
@@ -449,9 +570,9 @@ Per the runtime-binding decision (Context): shv2 **excludes `Internals.maxon` an
 ## Beyond the two phases
 
 **Broaden:** general `Iterable` + associated types · `List`/Json/… · arm64 + wasm · coverage ·
-inliner · port the 273-file / ~2,573-case spec suite. *(`async`/green threads LEFT this list on
-2026-07-13 — they are core, at P1.5. Porting the full suite is also what makes the parallel pool
-pay for itself: v1 needs 12 workers for ~2,573 cases.)*
+inliner. *(Two things LEFT this list on 2026-07-13. **`async`/green threads** are core, at P1.5.
+**Porting the spec suite** is no longer an endgame chore — it is **Workstream S**, the driver of
+every rung, starting at P1.0b.)*
 
 **Budgets:** **≤30 s / ≤1.7 GB / >90% CPU** on self-compile. Runtime multi-core is already proven
 (Track 0). **Caching is revisited here, on a working compiler, with the approach chosen fresh** —
@@ -551,8 +672,9 @@ never block on the ladder:
   contract is the MM ABI, fixed at P1.2.
 - ~~**Workstream A — the register allocator**~~ ✅ **DONE** (M5.1→M5.12, and *linear*). The plan's
   biggest single risk, retired.
-- **Workstream S — spec-suite triage.** Pure analysis over the 273 files / ~2,573 cases: which spec
-  ports at which rung. Zero code contention; feeds agent **S** in every wave.
+- **Workstream S — the spec corpus IS the development driver.** See its own section below. *(It was
+  scoped here as "pure analysis — which spec ports at which rung," with the porting itself deferred
+  to Beyond. That was backwards: the corpus is the driver, not the aftermath.)*
 
 ---
 
@@ -589,8 +711,12 @@ it is retired.**
 
 ## Verification
 
-- **Per rung:** `maxon-shv2 spec-test` stays green (**126/0** as of 2026-07-13); ownership rungs
-  (P1.2+) also assert an `mm-trace` block via `maxon monitor`.
+- **Per rung:** `maxon-shv2 spec-test` stays green (**126/0** as of 2026-07-13, and growing with
+  every Workstream-S port); ownership rungs (P1.2+) also assert an `mm-trace` block via
+  `maxon monitor`.
+- **The ratchet (Workstream S):** **an ENABLED spec case may never be re-disabled.** Behavioural,
+  per-unit, and free — this is what the cut compass was for. A rung's deliverable is the set of
+  `disabled-test:` markers it flips to `test:`.
 - **Per commit:** `specs-shv2/fragments/` **clean** under `git status` after a spec run — the
   goldens are compared, so an empty diff *proves* byte-identical codegen. Plus
   `verify-warm-rebuild` PASS. These, not a distance metric, are the continuous gates.

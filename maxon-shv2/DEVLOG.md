@@ -505,7 +505,32 @@ is in Phase 1 for the mechanism, not the seconds.)*
   worker-subprocess pool into `maxon-shv2/Testing/`. Maxon, compiled by **`maxon.exe`**, green under today's
   gates. **The acceptance target must exist before it can be a target** — every later rung is then measured
   against the real Phase-1 harness instead of the serial stub.
-- [ ] **P1.0b measure the stdlib cone** (against the UPGRADED harness) — compile it with `maxon.exe`, list which stdlib functions
+- [ ] **P1.0b — WORKSTREAM S: `/specs` DRIVES DEVELOPMENT.** Port spec files from `/specs` into
+  `/specs-shv2`, starting NOW and continuing every rung. **The formats are IDENTICAL** — 275/276 `/specs`
+  files already use the same `<!-- test: name -->` markers, `## Tests` heading, and fences shv2's SpecParser
+  accepts (maxon/exitcode/stdout/maxoncstderr = ~6,980 of 7,875 fences). **Porting is `cp`.**
+  - **⚠ Port at TEST granularity, not FILE.** Most spec files depend on far more of the language than the
+    feature they name: of 3,259 ```maxon blocks, **36% use a string literal, 32% declare a type/union, 26%
+    use try/throws, 24% call print**. `arithmetic.md` is about `+` and `mod`, but a sibling case in it will
+    `print` an interpolated string. So file-level `status: draft` is the WRONG granularity.
+  - **Machinery to build (small): teach `SpecParser` the `<!-- disabled-test: name -->` marker** — the
+    convention the project ALREADY has, honored by both runners (v1 `SpecTestRunner.maxon:2233`; C#
+    `TestRunner.cs:1760` regex `<!--\s*(?:disabled-)?test:\s*\S+\s*-->`), with the reason on the following
+    comment line. Disabled = parsed as a boundary, never compiled/run, **no `.test` golden generated** (so
+    goldens accrete only as tests are enabled). Keep the copied file otherwise BYTE-IDENTICAL to upstream so
+    a `diff` shows real drift; the marker flip is the only sanctioned edit.
+  - **S1 (do first): ≥650 of the 3,259 cases (20%) are portable TODAY** on the existing scalar core — **5×
+    the whole current 126-test suite**, and the scalar core has NEVER been tested against a corpus shv2 did
+    not author. **Expect bugs; that is the point** (the 5 allocator stress specs found 2 real ones the same
+    way). Put the unlocking rung in each disabled reason (`<!-- P1.2 String -->`).
+  - **⇒ The disabled-test reasons ARE the ranked roadmap the cut compass promised** —
+    `grep -A1 disabled-test: | grep -o 'P1\.[0-9]*' | sort | uniq -c | sort -rn` groups the entire remaining
+    language surface by milestone, for FREE: no parser recovery mode, no 626 recoverable panics, no 485-line
+    reporter. And it ranks by cases that must actually PASS, not by syntax-node frequency.
+  - **⇒ RATCHET: an ENABLED case may never be re-disabled.** Behavioural per-unit non-regression, at no cost.
+  - **⇒ It is also what makes P1.0a pay for itself:** at today's ~24 ms/test the full corpus is ~2,584 tests
+    ≈ **60 s serially**; on a 12-worker pool, seconds.
+- [ ] **P1.0c measure the stdlib cone** (against the UPGRADED harness) — compile it with `maxon.exe`, list which stdlib functions
   actually get codegen'd. **⚠ This sets Phase 1's real boundary.** shv2 parses all 48 stdlib files, and the
   stdlib *declares* things the harness never dispatches through: `Subprocess.maxon:120
   typealias EnvMap = Map with String, String` (the harness needs Subprocess to spawn the compiler, but never
