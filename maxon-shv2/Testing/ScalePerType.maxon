@@ -1,11 +1,25 @@
 // ScalePerType — the `--per-type` pass: not "how much did the compiler allocate", but WHAT did it
-// allocate.
+// allocate, and WHERE FROM.
 //
 // The timed suite answers the first question and gates on it. When it fires — when some phase's
 // allocations start growing as size^2 — the next question is immediately "of WHAT?", and the timed
 // binary cannot answer it: its counters are a single running total, deliberately, because anything
 // per-type on that path would be a per-allocation write to a per-type slot and would perturb the
 // very thing being measured.
+//
+// TWO TABLES, AND THE SECOND IS THE ONE THAT FINDS THINGS. Every trace line carries both the type
+// allocated and the SCOPE that allocated it, so both are tallied:
+//
+//   BY TYPE   names the DATA STRUCTURE behind a growth curve. A `LiveIndexColumn` at exponent 2.17
+//             is a quadratic, and the type is enough to find it.
+//   BY SCOPE  names the CODE. And the type table structurally cannot: a `String` row says a String
+//             was allocated: it can never say that 150 of them came from `emitFixedToken`,
+//             materializing the same `"("` on every token, because they are indistinguishable from
+//             every other String in the compiler. A constant-factor hog HIDES INSIDE ITS TYPE.
+//             It is a single named row here.
+//
+// A growth exponent is fitted for both, so a scope that grows superlinearly is as visible as a type
+// that does.
 //
 // So this is a SECOND, UNTIMED PASS over the same ladder, through a SECOND, DIFFERENTLY-COMPILED
 // binary — and both of those words are load-bearing:
@@ -46,6 +60,23 @@ let ShvSourceDirName = "maxon-shv2"
 let TraceAllocTag = "mm_alloc"
 let TraceRawAllocTag = "mm_raw_alloc"
 let TraceSizePrefix = "size="
+let TraceScopeOpen = 0x5B as Byte  // '['
+let TraceScopeClose = 0x5D as Byte  // ']'
+
+// Printable-ASCII bounds, for the scope field's sanity check — see `traceLineScope`.
+let AsciiPrintableLow = 0x20 as Byte
+let AsciiPrintableHigh = 0x7E as Byte
+
+// A scope field this parser could not read: absent, empty, or a shape it does not know. Counted
+// under a name that says so rather than dropped, so the two tables always reconcile to the same
+// total.
+let UnknownScopeName = "(no scope)"
+
+// The KNOWN corrupt-scope line. `--mm-trace` takes the scope from a C string handed to the runtime
+// at the allocation site, and roughly one line in four million arrives with binary garbage in that
+// field (see `foldTraceLine`'s header). Those allocations are real and are counted — but under this
+// name, never decoded and never printed, because the bytes are not text.
+let CorruptScopeName = "(corrupt scope tag)"
 
 // Raw buffers are counted under one name rather than dropped. They carry most of the BYTE volume
 // (array elements, string bytes), so a table that omitted them would explain a byte-volume
@@ -53,14 +84,18 @@ let TraceSizePrefix = "size="
 // one.
 let RawBufferTypeName = "(raw buffer)"
 
-// One type's allocation profile across the traced rungs. `counts` and `bytes` are parallel with the
-// rungs traced, so a per-type growth exponent is a fit like any other.
-type TypeProfile
+// One KEY's allocation profile across the traced rungs — a key being a type name in one table and
+// an allocating scope in the other. `counts` and `bytes` are parallel with the rungs traced, so a
+// growth exponent is a fit like any other.
+//
+// Nothing here is type-specific, and that is deliberate: the scope table is this same machinery
+// keyed differently, not a second copy of it.
+type AllocProfile
 	export var name as String
 	export var counts as AllocCountArray
 	export var bytes as ByteCountArray
 
-	export static function create(name String, rungs RungCount) returns TypeProfile
+	export static function create(name String, rungs RungCount) returns AllocProfile
 		var counts = AllocCountArray.create()
 		var bytes = ByteCountArray.create()
 		counts.resize(rungs)
@@ -69,11 +104,11 @@ type TypeProfile
 	end 'create'
 
 	export function add(rung RungIndex, size ByteCount)
-		let count = try self.counts.get(rung) otherwise panic("TypeProfile.add: rung {rung} outside the traced range")
-		try self.counts.set(rung, value: count + 1) otherwise panic("TypeProfile.add: counts.set OOB at rung {rung}")
+		let count = try self.counts.get(rung) otherwise panic("AllocProfile.add: rung {rung} outside the traced range")
+		try self.counts.set(rung, value: count + 1) otherwise panic("AllocProfile.add: counts.set OOB at rung {rung}")
 
-		let volume = try self.bytes.get(rung) otherwise panic("TypeProfile.add: rung {rung} outside the traced range")
-		try self.bytes.set(rung, value: volume + size) otherwise panic("TypeProfile.add: bytes.set OOB at rung {rung}")
+		let volume = try self.bytes.get(rung) otherwise panic("AllocProfile.add: rung {rung} outside the traced range")
+		try self.bytes.set(rung, value: volume + size) otherwise panic("AllocProfile.add: bytes.set OOB at rung {rung}")
 	end 'add'
 
 	// This type's total allocations across every traced rung — the ranking key.
@@ -86,39 +121,43 @@ type TypeProfile
 	end 'totalCount'
 
 	export function countAt(rung RungIndex) returns AllocCount
-		return try self.counts.get(rung) otherwise panic("TypeProfile.countAt: rung {rung} outside the traced range")
+		return try self.counts.get(rung) otherwise panic("AllocProfile.countAt: rung {rung} outside the traced range")
 	end 'countAt'
-end 'TypeProfile'
+end 'AllocProfile'
 
-typealias TypeProfileArray = Array with TypeProfile
-typealias TypeIndexMap = Map with (String, ProfileIndex)
+typealias AllocProfileArray = Array with AllocProfile
+typealias ProfileIndexMap = Map with (String, ProfileIndex)
 typealias ProfileIndex = int(0 to 65535)
 
-// The whole per-type table, accumulated across the traced rungs.
-type PerTypeTable
-	export var profiles as TypeProfileArray
-	export var indexByName as TypeIndexMap
+// A table of profiles keyed by name, accumulated across the traced rungs. TWO are built from the
+// same stream: one keyed by the TYPE allocated, one by the SCOPE that allocated it.
+type AllocProfileTable
+	// What this table's keys ARE ("type" / "scope"), for the report's column header. The table is
+	// key-agnostic; only the heading knows which question it answers.
+	export var keyHeading as String
+	export var profiles as AllocProfileArray
+	export var indexByName as ProfileIndexMap
 	export var tracedRungs as RungCount
 
-	export static function create(tracedRungs RungCount) returns PerTypeTable
-		return Self{profiles: TypeProfileArray.create(), indexByName: TypeIndexMap.create(), tracedRungs: tracedRungs}
+	export static function create(keyHeading String, tracedRungs RungCount) returns AllocProfileTable
+		return Self{keyHeading: keyHeading, profiles: AllocProfileArray.create(), indexByName: ProfileIndexMap.create(), tracedRungs: tracedRungs}
 	end 'create'
 
-	export function record(typeName String, rung RungIndex, size ByteCount)
-		let index = try self.indexByName.get(typeName) otherwise 'newType'
+	export function record(key String, rung RungIndex, size ByteCount)
+		let index = try self.indexByName.get(key) otherwise 'newKey'
 			let fresh = self.profiles.count() as ProfileIndex
-			var profile = TypeProfile.create(typeName, rungs: self.tracedRungs)
+			var profile = AllocProfile.create(key, rungs: self.tracedRungs)
 			profile.add(rung, size: size)
 			self.profiles.push(profile)
-			self.indexByName.upsert(typeName, value: fresh)
+			self.indexByName.upsert(key, value: fresh)
 			return
-		end 'newType'
+		end 'newKey'
 
-		var profile = try self.profiles.get(index) otherwise panic("PerTypeTable.record: index {index} for '{typeName}' is not in profiles")
+		var profile = try self.profiles.get(index) otherwise panic("AllocProfileTable.record: index {index} for '{key}' is not in profiles")
 		profile.add(rung, size: size)
 	end 'record'
 
-	// Every traced allocation, summed over every type — the reconciliation total.
+	// Every traced allocation, summed over every key — the reconciliation total.
 	export function totalCount() returns AllocCount
 		var total = 0 as AllocCount
 		for profile in self.profiles 'each'
@@ -126,7 +165,43 @@ type PerTypeTable
 		end 'each'
 		return total
 	end 'totalCount'
-end 'PerTypeTable'
+end 'AllocProfileTable'
+
+// What each table's keys are, and how wide to print them. A scope is a fully-qualified function
+// name (`Compiler.Targets.Shared.collectPhiEdgeHints`) and needs far more room than a type name.
+let TypeKeyHeading = "type"
+let TypeKeyWidth = 28 as ColumnWidth
+let ScopeKeyHeading = "scope (the function that allocated)"
+let ScopeKeyWidth = 44 as ColumnWidth
+
+// The two tables the ONE stream feeds, and the reason the scope table is worth having:
+//
+//   BY TYPE   answers "what was allocated" — a quadratic `LiveIndexColumn` names the data structure
+//             behind a memory gate that fired.
+//   BY SCOPE  answers "which code allocated it" — and the type table structurally CANNOT. A `String`
+//             row says a String was allocated; it cannot say that 150 of them came from
+//             `emitFixedToken`, materializing the same `"("` on every token. Every constant-factor
+//             win in the compiler's memory has been found in this column, never the other one.
+//
+// Both are written at the SAME point from the same line (`record` below is the only writer), so they
+// cannot drift apart: every allocation is counted exactly once in each, and their totals must be
+// equal. `reconcile` checks that rather than assuming it.
+type TraceTables
+	export var byType as AllocProfileTable
+	export var byScope as AllocProfileTable
+
+	export static function create(tracedRungs RungCount) returns TraceTables
+		return Self{
+			byType: AllocProfileTable.create(TypeKeyHeading, tracedRungs: tracedRungs),
+			byScope: AllocProfileTable.create(ScopeKeyHeading, tracedRungs: tracedRungs)
+		}
+	end 'create'
+
+	export function record(typeName String, scope String, rung RungIndex, size ByteCount)
+		self.byType.record(typeName, rung: rung, size: size)
+		self.byScope.record(scope, rung: rung, size: size)
+	end 'record'
+end 'TraceTables'
 
 // ===========================================================================================
 // Entry point
@@ -157,16 +232,16 @@ export function runPerTypePass(results RungResultArray)
 		return
 	end 'noTraceExe'
 
-	var table = PerTypeTable.create(tracedRungs)
+	var tables = TraceTables.create(tracedRungs)
 	for rung in 0 upto tracedRungs 'eachRung'
 		print("  tracing rung {rung}...\n")
-		try traceRung(traceExe, rung: rung as RungIndex, table: table) otherwise (error) 'traceFailed'
+		try traceRung(traceExe, rung: rung as RungIndex, tables: tables) otherwise (error) 'traceFailed'
 			printError("  SKIPPED: {scaleErrorText(error)}\n")
 			return
 		end 'traceFailed'
 	end 'eachRung'
 
-	reportPerType(table, results: results, tracedRungs: tracedRungs)
+	reportPerType(tables, results: results, tracedRungs: tracedRungs)
 end 'runPerTypePass'
 
 function perTypeRungCount(results RungResultArray) returns RungCount
@@ -318,7 +393,7 @@ end 'corpusChild'
 //
 // STREAMED, NOT COLLECTED. Rung 2 emits ~1.7 million trace lines; buffering them would cost more
 // memory than the compile being measured. Each line is folded in and dropped.
-function traceRung(traceExe FilePath, rung RungIndex, table PerTypeTable) throws ScaleError
+function traceRung(traceExe FilePath, rung RungIndex, tables TraceTables) throws ScaleError
 	let rungDirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise throw ScaleError.reason("rung {rung} has no valid directory name")
 	let corpusRoot = try FilePath.from(CorpusRelativeRoot) otherwise throw ScaleError.reason("'{CorpusRelativeRoot}' is not a valid path")
 	let dir = corpusRoot.join(rungDirName)
@@ -345,7 +420,7 @@ function traceRung(traceExe FilePath, rung RungIndex, table PerTypeTable) throws
 			break
 		end 'endOfStream'
 
-		foldTraceLine(line, rung: rung, table: table)
+		foldTraceLine(line, rung: rung, tables: tables)
 	end 'eachLine'
 
 	let code = try child.wait() otherwise (e) 'waitFailed'
@@ -376,14 +451,16 @@ end 'traceRung'
 //
 // `split` and `startsWith` compare bytes and do not decode, so leading indent is handled by dropping
 // the empty fields a split produces rather than by trimming them away.
-function foldTraceLine(line String, rung RungIndex, table PerTypeTable)
+function foldTraceLine(line String, rung RungIndex, tables TraceTables)
 	let fields = nonEmptyFields(line)
 	let tag = try fields.get(0) otherwise 'blankLine'
 		return
 	end 'blankLine'
 
+	// A raw buffer carries a scope like any other allocation — it is the array elements or string
+	// bytes behind SOME call — so it joins the scope table under its own type name.
 	if tag == TraceRawAllocTag 'rawAlloc'
-		table.record(RawBufferTypeName, rung: rung, size: traceLineSize(fields))
+		tables.record(RawBufferTypeName, scope: traceLineScope(line), rung: rung, size: traceLineSize(fields))
 		return
 	end 'rawAlloc'
 
@@ -395,8 +472,79 @@ function foldTraceLine(line String, rung RungIndex, table PerTypeTable)
 	let typeName = try fields.get(1) otherwise 'noType'
 		return
 	end 'noType'
-	table.record(typeName, rung: rung, size: traceLineSize(fields))
+	tables.record(typeName, scope: traceLineScope(line), rung: rung, size: traceLineSize(fields))
 end 'foldTraceLine'
+
+// The `[<scope>]` tag: the function that MADE the allocation.
+//
+// FIRST `[` TO LAST `]`, not the last whitespace-delimited field — because the scope is not always
+// one field. A raw slice buffer NESTS the origin inside its own tag:
+//
+//     mm_raw_alloc #R24 size=1 [slice.buf [stdlib.String.replace]]
+//
+// Taking the last field there yields `stdlib.String.replace]` — a stray bracket, and the same scope
+// split across two bogus rows depending on which shape emitted it. Bracket to bracket keeps the tag
+// whole, nesting and all, and treats `slice.buf [stdlib.String.replace]` as the one thing it is.
+//
+// Read as BYTES, never decoded — the same fact `foldTraceLine`'s header records, not a matter of
+// taste. The scope comes from a C string handed to the runtime at the allocation site and roughly
+// one line in four million arrives with binary garbage in it. Anything grapheme-aware — `trim`,
+// `slice`, `replace` — DECODES, and panics on those bytes, taking the run down over a corrupt
+// diagnostic field. So a scope that is not printable ASCII is counted under `CorruptScopeName`
+// rather than carried into a map key and onto a terminal.
+function traceLineScope(line String) returns String
+	let bytes = line.toByteArray()
+	let count = bytes.count()
+
+	var open = count
+	var i = 0
+	while i < count 'findOpen'
+		let b = try bytes.get(i) otherwise panic("traceLineScope: i < count but get({i}) failed")
+		if b == TraceScopeOpen 'found'
+			open = i
+			break
+		end 'found'
+		i = i + 1
+	end 'findOpen'
+
+	if open >= count 'noScope'
+		return UnknownScopeName
+	end 'noScope'
+
+	var close = count
+	var j = count
+	while j > open 'findClose'
+		j = j - 1
+		let b = try bytes.get(j) otherwise panic("traceLineScope: j < count but get({j}) failed")
+		if b == TraceScopeClose 'found'
+			close = j
+			break
+		end 'found'
+	end 'findClose'
+
+	// `close <= open + 1` is an empty tag (`[]`); `close >= count` is an unterminated one.
+	if close >= count or close <= open + 1 'emptyOrUnterminated'
+		return UnknownScopeName
+	end 'emptyOrUnterminated'
+
+	let inner = try bytes.slice(open + 1, endIndex: close) otherwise return UnknownScopeName
+	if not isPrintableAscii(inner) 'corrupt'
+		return CorruptScopeName
+	end 'corrupt'
+
+	return String.from(inner)
+end 'traceLineScope'
+
+// Printable ASCII throughout — the guard that keeps a corrupt scope tag out of a map key and off the
+// terminal. Byte-wise on purpose: deciding whether bytes are text must not require decoding them.
+function isPrintableAscii(bytes ByteArray) returns bool
+	for b in bytes 'each'
+		if b < AsciiPrintableLow or b > AsciiPrintableHigh 'notPrintable'
+			return false
+		end 'notPrintable'
+	end 'each'
+	return true
+end 'isPrintableAscii'
 
 // The line's space-separated fields with the empties dropped — which is what makes the trace's depth
 // indentation harmless without a `trim`.
@@ -429,31 +577,42 @@ end 'traceLineSize'
 // Reporting
 // ===========================================================================================
 
-function reportPerType(table PerTypeTable, results RungResultArray, tracedRungs RungCount)
+// BOTH tables, WHAT was allocated and then WHERE FROM. The second is not a nicety: a `String` row in
+// the first says a String was allocated and can never say which of the hundreds of places that
+// allocate Strings did it, so a constant-factor hog is INVISIBLE there — it hides among every other
+// user of its type. In the scope table it is a single named row.
+function reportPerType(tables TraceTables, results RungResultArray, tracedRungs RungCount)
+	reportTable(tables.byType, keyWidth: TypeKeyWidth, results: results, tracedRungs: tracedRungs)
+	reportTable(tables.byScope, keyWidth: ScopeKeyWidth, results: results, tracedRungs: tracedRungs)
+	reconcile(tables, results: results, tracedRungs: tracedRungs)
+end 'reportPerType'
+
+// One ranked table. Key-agnostic — it prints whatever the table is keyed by, under that table's own
+// heading — which is why there is one of these and not two.
+function reportTable(table AllocProfileTable, keyWidth ColumnWidth, results RungResultArray, tracedRungs RungCount)
 	print("\n")
-	print("  {padRight("type", width: 28)}{padLeft("allocs", width: 12)}{padLeft("bytes", width: 14)}{padLeft("exponent", width: 11)}\n")
+	print("  {padRight(table.keyHeading, width: keyWidth)}{padLeft("allocs", width: 12)}{padLeft("bytes", width: 14)}{padLeft("exponent", width: 11)}\n")
 
 	let ranked = rankByTotalCount(table)
 	var shown = 0
 	for profile in ranked 'each'
 		if shown >= PerTypeTopRows 'enough'
-			print("  ... and {ranked.count() - PerTypeTopRows} more type(s)\n")
+			print("  ... and {ranked.count() - PerTypeTopRows} more\n")
 			break
 		end 'enough'
-		printTypeRow(profile, results: results, tracedRungs: tracedRungs)
+		printProfileRow(profile, keyWidth: keyWidth, results: results, tracedRungs: tracedRungs)
 		shown = shown + 1
 	end 'each'
+end 'reportTable'
 
-	reconcile(table, results: results, tracedRungs: tracedRungs)
-end 'reportPerType'
-
-// One type's row, with its own growth exponent across the traced rungs — the number this pass
-// exists to produce. A type growing as size^2 is the smoking gun behind a memory gate that fired.
-function printTypeRow(profile TypeProfile, results RungResultArray, tracedRungs RungCount)
+// One row, with its own growth exponent across the traced rungs — the number this pass exists to
+// produce. A key growing as size^2 is the smoking gun behind a memory gate that fired; in the type
+// table it names the data structure, in the scope table the function.
+function printProfileRow(profile AllocProfile, keyWidth ColumnWidth, results RungResultArray, tracedRungs RungCount)
 	var sizes = FitPointArray.create()
 	var counts = FitPointArray.create()
 	for rung in 0 upto tracedRungs 'eachRung'
-		let result = try results.get(rung) otherwise panic("printTypeRow: results.get OOB at rung {rung}")
+		let result = try results.get(rung) otherwise panic("printProfileRow: results.get OOB at rung {rung}")
 		sizes.push(result.sourceBytes as Real)
 		counts.push(profile.countAt(rung as RungIndex))
 	end 'eachRung'
@@ -468,18 +627,18 @@ function printTypeRow(profile TypeProfile, results RungResultArray, tracedRungs 
 		totalBytes = totalBytes + value
 	end 'eachByte'
 
-	print("  {padRight(profile.name, width: 28)}{padLeft("{profile.totalCount()}", width: 12)}{padLeft("{totalBytes}", width: 14)}{padLeft(exponentText, width: 11)}\n")
-end 'printTypeRow'
+	print("  {padRight(profile.name, width: keyWidth)}{padLeft("{profile.totalCount()}", width: 12)}{padLeft("{totalBytes}", width: 14)}{padLeft(exponentText, width: 11)}\n")
+end 'printProfileRow'
 
 // Rank by total allocations, descending. A selection sort: the table has a few dozen types, and a
 // real sort would be more machinery than the thing it sorts.
-function rankByTotalCount(table PerTypeTable) returns TypeProfileArray
-	var remaining = TypeProfileArray.create()
+function rankByTotalCount(table AllocProfileTable) returns AllocProfileArray
+	var remaining = AllocProfileArray.create()
 	for profile in table.profiles 'each'
 		remaining.push(profile)
 	end 'each'
 
-	var ranked = TypeProfileArray.create()
+	var ranked = AllocProfileArray.create()
 	while remaining.count() > 0 'pickLargest'
 		var bestIndex = 0
 		var best = try remaining.get(0) otherwise panic("rankByTotalCount: remaining is non-empty but get(0) failed")
@@ -514,14 +673,23 @@ end 'rankByTotalCount'
 // in SMALLER: every allocation the compile made emitted a line, so a shortfall means lines were
 // dropped — a parser that skipped a shape it did not recognise, or a stream that was truncated — and
 // every per-type number above would be understated by an unknown amount.
-function reconcile(table PerTypeTable, results RungResultArray, tracedRungs RungCount)
+function reconcile(tables TraceTables, results RungResultArray, tracedRungs RungCount)
 	var timedTotal = 0 as AllocCount
 	for rung in 0 upto tracedRungs 'eachRung'
 		let result = try results.get(rung) otherwise panic("reconcile: results.get OOB at rung {rung}")
 		timedTotal = timedTotal + result.total.allocs
 	end 'eachRung'
 
-	let tracedTotal = table.totalCount()
+	// The two tables are written at ONE point from ONE line (`TraceTables.record`), so they must hold
+	// the same number of allocations. If they do not, the scope parse dropped or double-counted events
+	// the type parse did not, and every row of the scope table is wrong by an unknown amount. Checked,
+	// not assumed — the same rule the reconciliation below applies to the trace as a whole.
+	let tracedTotal = tables.byType.totalCount()
+	let scopeTotal = tables.byScope.totalCount()
+	if scopeTotal != tracedTotal 'tablesDisagree'
+		panic("reconcile: the scope table holds {scopeTotal} allocations but the type table holds {tracedTotal} — both are written by TraceTables.record, from the same line, so they cannot differ. The scope parse is dropping or double-counting events.")
+	end 'tablesDisagree'
+
 	print("\n")
 	print("  reconciliation: {tracedTotal} traced allocation(s) vs {timedTotal} the timed binary attributed to the compile.\n")
 

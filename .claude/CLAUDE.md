@@ -49,7 +49,12 @@ What is gated, and what is not:
 - **Aggregate time / memory** — reported, loosely budgeted. They are sums of curves with different exponents, so they bend by construction; the teeth are in the per-phase rows.
 - **Absolute milliseconds** — reported, never gated (machine-dependent).
 
-`perType: true` adds an untimed `--mm-trace` pass that attributes allocations to the TYPE allocated — the way to answer "a memory gate fired, but of *what*?". It is slow (several minutes) and off by default.
+`perType: true` adds an untimed `--mm-trace` pass that prints TWO ranked tables, each with its own growth exponent:
+
+- **by TYPE** — the way to answer "a memory gate fired, but of *what*?". Names the data structure (a `LiveIndexColumn` at exponent 2.17 is a quadratic).
+- **by SCOPE** — the function that made the allocation, which the type table structurally *cannot* tell you: a `String` row can never say that 150 of them came from `emitFixedToken`. A constant-factor hog hides inside its type; it is a single named row here. **This is the column that finds things.**
+
+It is slow (several minutes) and off by default.
 
 There is **no `maxon clean` command** — it prints usage and exits 1. To force a from-source stdlib rebuild, delete `stdlib/.maxon/cache/*.mxc` yourself; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
 
