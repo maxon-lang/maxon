@@ -77,15 +77,39 @@ export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool R
 	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
 end 'valueConfinedTo'
 
-// Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))`. One dense column, filled once per
-// pressure sweep, so maintaining the per-op census costs an array read instead of a popcount.
-export function effectivePoolSizes(liveness LivenessResult, pool RegMask) returns CfgIndexArray
-	var sizes = zeroColumn(liveness.valueCount)
-	for v in 0 upto liveness.valueCount 'eachValue'
-		try sizes.set(v, value: regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))) otherwise panic("effectivePoolSizes: sizes.set OOB for value {v}")
-	end 'eachValue'
-	return sizes
-end 'effectivePoolSizes'
+// Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))` — plus whether ANY value in the
+// function is constrained at all.
+//
+// `sizes` is one dense column, filled once per pressure sweep, so maintaining the per-op census costs
+// an array read instead of a popcount.
+//
+// `anyConstrained` is what lets a call-free function skip the census ENTIRELY. With no forbidden mask
+// anywhere, every value's allowed set IS the pool: no register subset can be tight, Hall's condition
+// cannot fail against a proper subset, and the only overflow possible is the full-pool one the caller
+// already tests on its own. Maintaining a distribution that provably cannot violate anything is pure
+// cost — and it is not a rare case: a compiler's leaf functions are mostly call-free, and the census
+// is stepped over EVERY OPERAND OF EVERY OP.
+export type EffectivePools
+	export var sizes as CfgIndexArray
+	export var anyConstrained as bool
+
+	export static function of(liveness LivenessResult, pool RegMask) returns EffectivePools
+		let fullPoolSize = regMaskPopcount(pool)
+		var sizes = zeroColumn(liveness.valueCount)
+		var anyConstrained = false
+
+		for v in 0 upto liveness.valueCount 'eachValue'
+			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
+			try sizes.set(v, value: size) otherwise panic("EffectivePools.of: sizes.set OOB for value {v}")
+
+			if size < fullPoolSize 'constrained'
+				anyConstrained = true
+			end 'constrained'
+		end 'eachValue'
+
+		return Self{sizes: sizes, anyConstrained: anyConstrained}
+	end 'of'
+end 'EffectivePools'
 
 // ==========================================================================
 // Stage 1 — the cardinality screen (per op, O(live + 16))
@@ -102,25 +126,34 @@ end 'effectivePoolSizes'
 export type RegPoolCensus
 	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
 	var byPoolSize as CfgIndexArray
+	// Which buckets of `byPoolSize` are NON-EMPTY, as a bitmask. Exists so the SMALLEST effective
+	// pool among the live values is a trailing-zero count instead of a scan for the first non-empty
+	// bucket — see `screenViolates`, which needs it on every op.
+	var occupied as MachineWord
 	// How many live values are CONSTRAINED (effective pool strictly smaller than the full pool).
-	// Zero at every op of a call-free, idiv-free function, and the screen returns early when it is —
-	// so an unconstrained function pays nothing for this test at all.
+	// Zero at every op of a call-free, idiv-free function.
 	var constrained as RegCount
 
 	export static function create() returns RegPoolCensus
-		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), constrained: 0}
+		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), occupied: 0, constrained: 0}
 	end 'create'
 
 	export function reset()
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
 		end 'eachSize'
+		self.occupied = 0
 		self.constrained = 0
 	end 'reset'
 
 	export function add(poolSize RegCount, fullPoolSize RegCount)
 		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.add: pool size {poolSize} out of range")
 		try self.byPoolSize.set(poolSize, value: current + 1) otherwise panic("RegPoolCensus.add: byPoolSize.set OOB")
+
+		if current == 0 'bucketBecameOccupied'
+			self.occupied = self.occupied or (1 shl poolSize)
+		end 'bucketBecameOccupied'
+
 		if poolSize < fullPoolSize 'constrainedValue'
 			self.constrained = self.constrained + 1
 		end 'constrainedValue'
@@ -132,6 +165,11 @@ export type RegPoolCensus
 			panic("RegPoolCensus.remove: no live value has an effective pool of {poolSize} — the census has drifted from the live row it mirrors")
 		end 'underflow'
 		try self.byPoolSize.set(poolSize, value: current - 1) otherwise panic("RegPoolCensus.remove: byPoolSize.set OOB")
+
+		if current == 1 'bucketBecameEmpty'
+			self.occupied = self.occupied and not (1 shl poolSize)
+		end 'bucketBecameEmpty'
+
 		if poolSize < fullPoolSize 'constrainedValue'
 			self.constrained = self.constrained - 1
 		end 'constrainedValue'
@@ -153,8 +191,30 @@ export type RegPoolCensus
 			return false
 		end 'nothingConfined'
 
+		// The smallest effective pool among the live values. `constrained > 0` implies at least one
+		// live value, so `occupied` is non-zero and the trailing-zero count is defined.
+		let smallestPool = trailingZeroCount(self.occupied)
+
+		// O(1) EXACT EARLY-OUT — this is what keeps the screen off the per-op critical path.
+		//
+		// A violation needs `C(p) > p` for some `p < fullPoolSize`. Two facts bound `C`:
+		//   * `C(p) = 0` for every `p < smallestPool` — no live value has a pool that small.
+		//   * `C(p) <= constrained` for every `p < fullPoolSize` — a value counted by `C(p)` has
+		//     `|A(v)| <= p < fullPoolSize`, so it is by definition constrained.
+		// So a violating `p` must satisfy `constrained > p >= smallestPool`. If `constrained` does not
+		// exceed `smallestPool`, no such `p` exists and the prefix scan cannot find one.
+		//
+		// This is the overwhelmingly common shape at an op inside a call-heavy function: a couple of
+		// values live across a call (constrained = 2, smallestPool = 5, the callee-saved count), which
+		// is nowhere near an overflow. Without it, every op of every function containing a call pays a
+		// full 14-iteration prefix scan to be told the same thing.
+		if self.constrained <= smallestPool 'cannotViolate'
+			return false
+		end 'cannotViolate'
+
+		// Start at `smallestPool`: `C(p)` is zero below it, so those iterations can only compare 0 > p.
 		var confinedSoFar = 0 as RegCount
-		for p in 0 upto fullPoolSize 'prefixSum'
+		for p in smallestPool upto fullPoolSize 'prefixSum'
 			confinedSoFar = confinedSoFar + (try self.byPoolSize.get(p) otherwise panic("RegPoolCensus.screenViolates: byPoolSize.get OOB at {p}"))
 			if confinedSoFar > p 'violates'
 				return true

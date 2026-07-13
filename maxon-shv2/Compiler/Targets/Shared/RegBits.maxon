@@ -92,9 +92,11 @@ export function bitsetCollectRow(words BitWordArray, base ByteCount, wordsPerRow
 	end 'eachWord'
 end 'bitsetCollectRow'
 
-// The index of the single set bit of `word` (a power of two), i.e. its trailing-zero count.
+// The index of the LOWEST set bit of `word`, i.e. its trailing-zero count. Undefined for zero —
+// every caller must exclude it (`bitsetCollectRow` only calls it on a non-zero word; the Hall
+// census guards on an empty live set).
 // Binary search over the word width — 6 compares, no loop over 64 bits.
-function trailingZeroCount(word MachineWord) returns ByteCount
+export function trailingZeroCount(word MachineWord) returns ByteCount
 	var w = word
 	var count = 0 as ByteCount
 	if (w and 0xFFFFFFFF) == 0 'hi32'

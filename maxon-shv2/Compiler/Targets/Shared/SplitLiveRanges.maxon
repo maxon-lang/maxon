@@ -515,8 +515,12 @@ end 'timedLiveness'
 //     `HallCondition`'s header.
 //
 //  3. The census the screen reads is maintained INCREMENTALLY (`stepCensusBackwardOverOp`), like the
-//     live count, and gated on any value being confined at all — so a call-free function pays
-//     nothing and no op walks its live set.
+//     live count, so no op walks its live set. It is skipped ENTIRELY — not merely screened out —
+//     when no value in the function is confined (`EffectivePools.anyConstrained`): with no call, no
+//     idiv and no argument pre-move, every allowed set IS the pool, so no subset can be tight and the
+//     census would be tracking a distribution that provably cannot violate anything. That gate has to
+//     be on the STEP, not just on the screen: the screen is per-op, but the census is stepped over
+//     every OPERAND of every op, and a compiler's leaf functions are mostly call-free.
 //
 // Every quantity comes from the operand model + the liveness `forbidden` column, never a hardcoded
 // opcode, so calls, `idiv`, `cqo` and argument pre-moves are handled uniformly. Mirrors
@@ -535,7 +539,13 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// The Hall machinery: one dense `value -> popcount(pool ∖ forbidden(v))` column, the running
 	// census of the live set by that size, and the scratch its incremental maintenance + its (rare)
 	// exact confirmation need. All allocated ONCE per sweep and reused across every block and op.
-	let effPoolSizes = effectivePoolSizes(liveness, pool: pool)
+	let effPools = EffectivePools.of(liveness, pool: pool)
+	let effPoolSizes = effPools.sizes
+	// Nothing in this function is confined to a register subset (no call, no idiv, no argument
+	// pre-move), so Hall's condition cannot fail against a proper subset of the pool and the census
+	// would be bookkeeping for a question whose answer is already known. Skipping it takes the census
+	// off the per-operand path entirely — see `EffectivePools`.
+	let censusNeeded = effPools.anyConstrained
 	var census = RegPoolCensus.create()
 	var censusIds = ValueIdArray.create()
 	var censusWasLive = BoolArray.create()
@@ -558,10 +568,12 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		var liveCount = seedBuf.count()
 
 		// The census tracks the SAME set as `liveRow`, so it is seeded and cleared with it.
-		census.reset()
-		for v in seedBuf 'seedCensus'
-			census.add(try effPoolSizes.get(v) otherwise panic("analyzePressure: live-out value {v} is outside the function's value space"), fullPoolSize: fullPoolSize)
-		end 'seedCensus'
+		if censusNeeded 'seedTheCensus'
+			census.reset()
+			for v in seedBuf 'seedCensus'
+				census.add(try effPoolSizes.get(v) otherwise panic("analyzePressure: live-out value {v} is outside the function's value space"), fullPoolSize: fullPoolSize)
+			end 'seedCensus'
+		end 'seedTheCensus'
 
 		// A per-block constant added to every op's effective pressure — the colorer holds a
 		// register for each dead block-arg across the WHOLE block. Read from the column the
@@ -589,7 +601,11 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 			// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it.
 			let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
 
-			liveCount = stepCensusBackwardOverOp(liveRow, buf: buf, liveCount: liveCount, census: census, effPoolSizes: effPoolSizes, fullPoolSize: fullPoolSize, ids: censusIds, wasLive: censusWasLive)
+			if censusNeeded 'stepWithCensus'
+				liveCount = stepCensusBackwardOverOp(liveRow, buf: buf, liveCount: liveCount, census: census, effPoolSizes: effPoolSizes, fullPoolSize: fullPoolSize, ids: censusIds, wasLive: censusWasLive)
+			end 'stepWithCensus' else 'stepPlain'
+				liveCount = stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveCount: liveCount)
+			end 'stepPlain'
 
 			let raw = liveCount
 			let effective = raw + (1 if reuseTransient else 0) + deadPhis
@@ -617,7 +633,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 			let atFixedRegisterOp = opIsFixedRegisterPoint(op)
 			if effective > fullPoolSize 'fullPoolOverflow'
 				best = betterPeak(best, pressure: effective, blockLocal: i, liveBefore: liveRow, peakSeq: seq, clobberOnly: false, witness: pool, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
-			end 'fullPoolOverflow' else if census.screenViolates(fullPoolSize) 'maybeConfined'
+			end 'fullPoolOverflow' else if censusNeeded and census.screenViolates(fullPoolSize) 'maybeConfined'
 				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
 				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, liveBefore: liveRow, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
 			end 'maybeConfined'
