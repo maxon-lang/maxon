@@ -142,6 +142,9 @@ function printUsage()
 	print("  --target=<TARGET|all>    Cross-compile tests for target (e.g. x64-linux)\n")
 	print("  --update-required        Update RequiredLowering/stderr blocks in spec files\n")
 	print("  --verbose                Show pass/fail per test\n")
+	print("  --network                Include 'category: network' specs and live-host fragments. They reach\n")
+	print("                           the public internet, so they are excluded from the default gate: they\n")
+	print("                           fail on someone else's outage or rate limit, not on our code.\n")
 	print("  --profile-passes         Print per-pass wall-clock timings at the end of the run\n")
 	print("  --workers=N              Number of parallel batch workers (default: 12, 1=serial)\n")
 	print("\n")
@@ -199,7 +202,7 @@ end 'runBuild'
 function runSpecTests(args MaxonArgs) returns ExitCode
 	match args.targetOption 'dispatch'
 		host then return runSpecTestsForTarget(args)
-		all then return runAllTargetTests(args.filter)
+		all then return runAllTargetTests(args.filter, includeNetwork: args.includeNetwork)
 		x64Windows to wasm32Wasi then return runSpecTestsForTarget(args)
 	end 'dispatch'
 end 'runSpecTests'
@@ -223,19 +226,19 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	// one JOB:<kind>:<payload> per line from stdin and emitting WORKER_READY +
 	// result markers on stdout. Spawned by the parallel dispatcher.
 	if args.workerPersistent 'isPersistentWorker'
-		return runPersistentWorker(args.filter, target: target, verbose: args.verbose)
+		return runPersistentWorker(args.filter, target: target, verbose: args.verbose, includeNetwork: args.includeNetwork)
 	end 'isPersistentWorker'
 	logInfo(LogCategory.testing, message: function() gives "Running self-hosted spec tests ({targetToString(target)})...")
 	if args.workers == 1 'isSerial'
-		return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose)
+		return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose, includeNetwork: args.includeNetwork)
 	end 'isSerial'
 	// Parallel mode: spawn `workers` persistent worker subprocesses and
 	// dispatch jobs from a single slowest-first queue, draining whichever
 	// worker has results ready (no head-of-line blocking on slow specs).
-	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose, sweepMode: args.sweepMode)
+	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose, sweepMode: args.sweepMode, includeNetwork: args.includeNetwork)
 end 'runSpecTestsForTarget'
 
-function runAllTargetTests(filter String) returns ExitCode
+function runAllTargetTests(filter String, includeNetwork bool) returns ExitCode
 	var totalFailed = 0
 
 	for cpu in CpuArch.allCases 'cpus'
@@ -245,7 +248,7 @@ function runAllTargetTests(filter String) returns ExitCode
 				continue
 			end 'skipUnsupported'
 			logInfo(LogCategory.testing, message: function() gives "Testing target: {targetToString(t)}")
-			totalFailed = totalFailed + runAllSpecTests(filter, target: t)
+			totalFailed = totalFailed + runAllSpecTests(filter, target: t, includeNetwork: includeNetwork)
 		end 'oses'
 	end 'cpus'
 

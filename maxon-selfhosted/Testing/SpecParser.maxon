@@ -15,6 +15,58 @@ export type SpecFrontmatter
 	end 'create'
 end 'SpecFrontmatter'
 
+// Frontmatter `status` marking a spec whose behaviour is not settled yet. The
+// runner never selects its tests.
+let draftSpecStatus = "draft"
+
+// Frontmatter `category` marking a spec that reaches a real server on the public
+// internet (`specs/http-client.md` talks to httpbin.org). Such a spec is a coin
+// toss on somebody else's uptime, not a gate on our compiler: httpbin has been
+// observed returning 503, and it rate-limits under the runner's parallelism, so
+// the suite goes red for reasons no change of ours caused. A gate that fails for
+// reasons unrelated to the code under test trains you to skim past red, which is
+// worse than having no gate at all.
+//
+// These are still real tests and they still run — `--network` opts them back in.
+// They are just not part of the default gate. Mirrors `SpecParser.NetworkCategory`
+// in the C# bootstrap runner, so both suites agree on what the default gate holds.
+let networkSpecCategory = "network"
+
+// Why the runner leaves a spec out of a run — `none` when it runs it.
+export enum SpecSkipReason
+	none
+	draft
+	network
+end 'SpecSkipReason'
+
+// The ONE skip predicate every spec-selection site consults: the serial runner,
+// the parallel dispatcher's spec-parse phase, the persistent worker's spec load,
+// and both `--update-required` regenerators. Keeping the question in one place is
+// what stops those five sites from drifting on what the suite actually contains.
+// Each caller keeps its own reaction to a skip (continue / return no-outcome /
+// return an empty test list); this only answers whether to skip.
+export function specSkipReason(fm SpecFrontmatter, includeNetwork bool) returns SpecSkipReason
+	if fm.status == draftSpecStatus 'isDraft'
+		return SpecSkipReason.draft
+	end 'isDraft'
+
+	if fm.category == networkSpecCategory and not includeNetwork 'isNetwork'
+		return SpecSkipReason.network
+	end 'isNetwork'
+
+	return SpecSkipReason.none
+end 'specSkipReason'
+
+// Name of a skip reason, for the runner's debug log. `none` is not a skip, so it
+// has no name — asking for one is a caller bug, not a formatting edge case.
+export function specSkipReasonName(reason SpecSkipReason) returns String
+	match reason 'name'
+		none then panic("specSkipReasonName: SpecSkipReason.none is not a skip")
+		draft then return "draft"
+		network then return "network"
+	end 'name'
+end 'specSkipReasonName'
+
 export type TestExpectation
 	export var exitCode as ParsedInt
 	export var hasExitCode as bool

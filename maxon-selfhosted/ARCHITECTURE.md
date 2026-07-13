@@ -484,8 +484,13 @@ The self-hosted compiler runs a subset of the spec tests. To enable a new spec:
 # Build the self-hosted compiler (using the C# compiler)
 ./bin/maxon.exe build maxon-selfhosted
 
-# Run all whitelisted spec tests
+# Run all whitelisted spec tests (the default gate: deterministic, no internet)
 ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test
+
+# Also run the tests that reach the public internet (`category: network` specs
+# plus the live-host fragments). Excluded from the default gate because they fail
+# on someone else's outage or rate limit rather than on our code.
+./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --network
 
 # Run filtered spec tests
 ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=arithmetic

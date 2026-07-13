@@ -723,14 +723,14 @@ function captureCompiledIr(source String, virtualPath FilePath, specName String,
 end 'captureCompiledIr'
 
 // Update RequiredLowering blocks in all spec files by compiling each test and capturing lowering output.
-function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
+function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String, includeNetwork bool)
 	for specName in effectiveWhitelist(target) 'eachSpec'
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise continue
 		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
+		if specSkipReason(fm, includeNetwork: includeNetwork) != SpecSkipReason.none 'isSkipped'
 			continue
-		end 'isDraft'
+		end 'isSkipped'
 		let tests = parseSpecFile(content, targetKey: targetKey)
 		var results = TestResultArray.create()
 		for test in tests 'eachTest'
@@ -765,15 +765,15 @@ end 'updateAllRequiredLowering'
 // its final per-function IR (the enforced `// CompiledIR`). Mirrors
 // updateAllRequiredLowering; only tests with an existing RequiredIR:<target>
 // placeholder are updated (updateIrBlock is not a backfill tool).
-function updateAllRequiredIr(fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
+function updateAllRequiredIr(fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String, includeNetwork bool)
 	let specDir = try fragmentDir.parent() otherwise panic("updateAllRequiredIr: fragmentDir has no parent")
 	for specName in effectiveWhitelist(target) 'eachSpec'
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise continue
 		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
+		if specSkipReason(fm, includeNetwork: includeNetwork) != SpecSkipReason.none 'isSkipped'
 			continue
-		end 'isDraft'
+		end 'isSkipped'
 		let tests = parseSpecFile(content, targetKey: targetKey)
 		var results = TestResultArray.create()
 		for test in tests 'eachTest'
@@ -820,9 +820,9 @@ end 'updateAllRequiredIr'
 // inlined this, and the parallel (default) path was missing the
 // `updateAllRequiredIr` call, so `--update-required` silently left RequiredIR
 // stale.
-function runRequiredBlockUpdates(specDir FilePath, fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
-	updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
-	updateAllRequiredIr(fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+function runRequiredBlockUpdates(specDir FilePath, fragmentDir FilePath, tempDir FilePath, filter String, target Target, targetKey String, includeNetwork bool)
+	updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey, includeNetwork: includeNetwork)
+	updateAllRequiredIr(fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey, includeNetwork: includeNetwork)
 end 'runRequiredBlockUpdates'
 
 // Outcome of running one spec end-to-end via the in-process serial path.
@@ -848,10 +848,10 @@ end 'SpecRunOutcome'
 // Run one spec end-to-end on the in-process serial path: parse the spec file,
 // select its tests, then run each per-fragment via the shared `runSingleTests`
 // machinery. Logs the per-spec [FAIL] header inline so callers don't repeat
-// the formatting. Returns ran=false when the spec file is missing or the spec
-// is in draft status — those cases must NOT clear an entry from the failure
-// state file.
-function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePath, specCacheDir FilePath, root FilePath, target Target, filter String, targetKey String, verbose bool, updateRequired bool) returns SpecRunOutcome
+// the formatting. Returns ran=false when the spec file is missing or the spec is
+// skipped (draft, or a network spec without `--network` — see `specSkipReason`) —
+// those cases must NOT clear an entry from the failure state file.
+function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePath, specCacheDir FilePath, root FilePath, target Target, filter String, targetKey String, verbose bool, updateRequired bool, includeNetwork bool) returns SpecRunOutcome
 	let specPath = specDir.join("{specName}.md")
 	let content = try File.readText(specPath) otherwise 'readErr'
 		logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
@@ -859,13 +859,14 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 	end 'readErr'
 
 	let fm = parseFrontmatter(content)
-	if fm.status == "draft" 'isDraft'
-		logDebug(LogCategory.testing, message: function() gives "Skipping draft spec: {specName}")
+	let skipReason = specSkipReason(fm, includeNetwork: includeNetwork)
+	if skipReason != SpecSkipReason.none 'isSkipped'
+		logDebug(LogCategory.testing, message: function() gives "Skipping {specSkipReasonName(skipReason)} spec: {specName}")
 		return SpecRunOutcome.notRun()
-	end 'isDraft'
+	end 'isSkipped'
 
 	let tests = parseSpecFile(content, targetKey: targetKey)
-	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
+	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey, includeNetwork: includeNetwork)
 	let totalTests = unit.totalCount()
 
 	// If the filter excluded every test (or the spec genuinely has none), we
@@ -895,7 +896,7 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 	return SpecRunOutcome.create(true, passed: specPassed, failed: specFailed, totalTests: totalTests, fragmentsWritten: fragmentsWritten)
 end 'runOneSpecSerial'
 
-export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
+export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false, includeNetwork bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
@@ -930,7 +931,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 	// Update spec files before generating fragments so tests compare against current output
 	if updateRequired 'preUpdate'
-		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey, includeNetwork: includeNetwork)
 	end 'preUpdate'
 
 	// On-disk staging area for compiled exes. The run step needs a stable
@@ -955,7 +956,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	var totalFragmentsWritten = 0
 
 	for specName in effectiveWhitelist(target) 'eachSpec'
-		let outcome = runOneSpecSerial(specName, specDir: specDir, fragmentDir: fragmentDir, specCacheDir: specCacheDir, root: root, target: target, filter: filter, targetKey: targetKey, verbose: verbose, updateRequired: updateRequired)
+		let outcome = runOneSpecSerial(specName, specDir: specDir, fragmentDir: fragmentDir, specCacheDir: specCacheDir, root: root, target: target, filter: filter, targetKey: targetKey, verbose: verbose, updateRequired: updateRequired, includeNetwork: includeNetwork)
 		if not outcome.ran 'skipped'
 			continue
 		end 'skipped'
@@ -2353,20 +2354,26 @@ function ensurePerSpecCacheDirs(fragmentDir FilePath, specCacheDir FilePath, spe
 	end 'noFragSpecDir'
 end 'ensurePerSpecCacheDirs'
 
-// Read+parse a spec into its raw test list. Returns an empty array when the
-// spec is unreadable or marked draft; the caller treats empty as "skip" and
-// emits its mode-specific empty result line. Logs the read failure on the
+// Read+parse a spec into its raw test list. Returns an empty array when the spec
+// is unreadable or skipped (`specSkipReason`); the caller treats empty as "skip"
+// and emits its mode-specific empty result line. Logs the read failure on the
 // runner's normal error path.
-function loadSpecTests(root FilePath, specName String, targetKey String) returns SpecTestArray
+//
+// A worker only ever gets jobs for specs the parent already selected, so this
+// skip is a redundancy check rather than the primary gate — but the parent
+// forwards `--network` to every worker precisely so the two agree here. If they
+// disagreed, the parent would count a spec's tests in its total while the worker
+// returned zero results for it.
+function loadSpecTests(root FilePath, specName String, targetKey String, includeNetwork bool) returns SpecTestArray
 	let specPath = root.join("specs").join("{specName}.md")
 	let content = try File.readText(specPath) otherwise 'readErr'
 		logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 		return SpecTestArray.create()
 	end 'readErr'
 	let fm = parseFrontmatter(content)
-	if fm.status == "draft" 'isDraft'
+	if specSkipReason(fm, includeNetwork: includeNetwork) != SpecSkipReason.none 'isSkipped'
 		return SpecTestArray.create()
-	end 'isDraft'
+	end 'isSkipped'
 	return parseSpecFile(content, targetKey: targetKey)
 end 'loadSpecTests'
 
@@ -2604,11 +2611,11 @@ end 'decodeFailPayload'
 // observes a missing/short result stream, marks the spec as failed, and
 // continues. Each test is compiled via runTestFromFragment, the same machinery
 // the in-process serial path uses.
-function runOneSinglesJob(specName String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
+function runOneSinglesJob(specName String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool, includeNetwork bool)
 	ensurePerSpecCacheDirs(fragmentDir, specCacheDir: specCacheDir, specName: specName)
 
-	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey)
-	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
+	let tests = loadSpecTests(root, specName: specName, targetKey: targetKey, includeNetwork: includeNetwork)
+	let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey, includeNetwork: includeNetwork)
 
 	if unit.selectedTests.count() == 0 and unit.missingLoweringCount == 0 'noSingles'
 		emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0, skipped: 0)
@@ -2648,12 +2655,12 @@ end 'emitWorkerReady'
 // The `JOB:singles:` prefix is pure ASCII, so byte position equals character
 // position — `sliceFromBytePos` is safe even though the spec name that follows
 // may not be.
-function dispatchPersistentJob(line String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool)
+function dispatchPersistentJob(line String, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, targetKey String, filter String, verbose bool, includeNetwork bool)
 	let singlesPrefix = persistentJobSinglesPrefix
 	if line.startsWith(singlesPrefix) 'isSingles'
 		let prefixLen = singlesPrefix.count()
 		let specName = sliceFromBytePos(line, bytePos: prefixLen)
-		runOneSinglesJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
+		runOneSinglesJob(specName, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose, includeNetwork: includeNetwork)
 		return
 	end 'isSingles'
 	// Unknown line. Surface to the parent via stderr so the diagnostic is
@@ -2676,7 +2683,7 @@ end 'dispatchPersistentJob'
 // The worker shuts down cleanly on `EXIT` or on stdin EOF. Result-line
 // formats match what `parseSinglesResultLine` and `parseSinglesFailLine`
 // consume on the parent side.
-export function runPersistentWorker(filter String, target Target, verbose bool) returns ExitCode
+export function runPersistentWorker(filter String, target Target, verbose bool, includeNetwork bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
 		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
@@ -2710,7 +2717,7 @@ export function runPersistentWorker(filter String, target Target, verbose bool) 
 			continue
 		end 'isEmpty'
 
-		dispatchPersistentJob(trimmed, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose)
+		dispatchPersistentJob(trimmed, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, targetKey: targetKey, filter: filter, verbose: verbose, includeNetwork: includeNetwork)
 		emitWorkerReady()
 	end 'jobLoop'
 
@@ -2847,31 +2854,28 @@ function isSelfHostedKnownBroken(specName String, testName String) returns bool
 	return false
 end 'isSelfHostedKnownBroken'
 
-// Networking-spec fragments deliberately EXCLUDED from the default whitelist,
-// for two distinct reasons — both intentional, neither a missing test:
+// Networking fragments that connect to a REAL EXTERNAL HOST (tcpbin.com /
+// httpbin.org). They are a coin toss on somebody else's uptime, so they are out
+// of the default gate for exactly the reason `category: network` specs are (see
+// `specSkipReason`) — and they come back with exactly the same switch, `--network`.
+// Whole-spec gating can't express this: their specs (tcp-client, async-tcp) also
+// hold deterministic error-path tests that must keep running by default.
 //
-//   * LIVE NETWORK: fragments that connect to a real external host (tcpbin.com /
-//     httpbin.org). They are flaky in CI (DNS/network availability) and so are
-//     never in the default set. To run them, drop this exclusion locally.
-//       tcp-client.echo, async-tcp.echo, http-client.{get,post,status-404,
-//       response-body,response-headers}
-//   * ASYNC-TRACE: the `<!-- AsyncTrace -->` fragments assert a precise
-//     `io_yield/io_resume [net_connect]` trace. They use TEST-NET-1 (192.0.2.1),
-//     so they are network-free and deterministic, but the self-hosted networking
-//     runtime omits the AsyncTrace emit blocks (like the rest of the self-hosted
-//     IO runtime — see the emitX64NetworkingRuntime header), so the trace output
-//     does not match. Re-enable once async-trace emission is ported.
-//       async-tcp.trace-connect-error, async-tcp.trace-mixed-io
+// The DETERMINISTIC error-path fragments stay enabled — they exercise the real
+// networking runtime without leaving the machine: managed-socket.{error-direct-
+// construction,connect-bad-host,connect-refused}, tcp-client.{connect-error,
+// resolve-error}, async-tcp.{connect-error,resolve-error}.
 //
-// The DETERMINISTIC error-path fragments stay enabled (they validate the real
-// runtime CI-safely): managed-socket.{error-direct-construction,connect-bad-host,
-// connect-refused}, tcp-client.{connect-error,resolve-error},
-// async-tcp.{connect-error,resolve-error}, http-client.{invalid-url,build-request}.
-// The excluded `{specName}/{testName}` paths, in one place so the two reasons
-// above map to one explicit list (see the header for why each is excluded).
-function networkingExcludedFragments() returns StringArray
+// KNOWN SELF-HOSTED GAP, surfaced by `--network`: the five http-client fragments
+// below currently fail to COMPILE here (not to connect) — `E3073: 'async doGet()'
+// — function never yields`. The self-hosted yield analysis does not classify the
+// HttpClient socket path as yielding, so an `async` wrapper around it is rejected;
+// the C# bootstrap compiles and runs the same fragments. Fixing that analysis is
+// what turns `--network` green on this runner. They are listed here (rather than
+// with the async-trace exclusions) because reaching the public internet is still
+// the reason they must stay OUT of the default gate.
+function liveNetworkFragments() returns StringArray
 	var paths = StringArray.create()
-	// LIVE NETWORK: connect to a real external host (flaky in CI).
 	paths.push("tcp-client/tcp-client.echo")
 	paths.push("async-tcp/async-tcp.echo")
 	paths.push("http-client/http-client.get")
@@ -2879,14 +2883,31 @@ function networkingExcludedFragments() returns StringArray
 	paths.push("http-client/http-client.status-404")
 	paths.push("http-client/http-client.response-body")
 	paths.push("http-client/http-client.response-headers")
-	// ASYNC-TRACE: network-free but assert a trace the self-hosted runtime omits.
+	return paths
+end 'liveNetworkFragments'
+
+// The `<!-- AsyncTrace -->` fragments assert a precise `io_yield/io_resume
+// [net_connect]` trace. They use TEST-NET-1 (192.0.2.1), so they are network-free
+// and deterministic — `--network` does NOT bring them back, because the internet
+// is not why they are out. The self-hosted networking runtime omits the AsyncTrace
+// emit blocks (like the rest of the self-hosted IO runtime — see the
+// emitX64NetworkingRuntime header), so the trace output does not match. Re-enable
+// once async-trace emission is ported.
+function asyncTraceExcludedFragments() returns StringArray
+	var paths = StringArray.create()
 	paths.push("async-tcp/async-tcp.trace-connect-error")
 	paths.push("async-tcp/async-tcp.trace-mixed-io")
 	return paths
-end 'networkingExcludedFragments'
+end 'asyncTraceExcludedFragments'
 
-function isNetworkingExcludedFragment(specName String, testName String) returns bool
-	return networkingExcludedFragments().contains("{specName}/{testName}")
+// True when this fragment must not run: an unported async-trace fragment (always),
+// or a live-network fragment outside a `--network` run.
+function isNetworkingExcludedFragment(specName String, testName String, includeNetwork bool) returns bool
+	let path = "{specName}/{testName}"
+	if asyncTraceExcludedFragments().contains(path) 'unportedTrace'
+		return true
+	end 'unportedTrace'
+	return liveNetworkFragments().contains(path) and not includeNetwork
 end 'isNetworkingExcludedFragment'
 
 // Match `testPath` against `filter`. Empty filter matches everything. A
@@ -2927,7 +2948,7 @@ function testRunsOnTarget(test SpecTest, targetKey String) returns bool
 	return false
 end 'testRunsOnTarget'
 
-function partitionSpecTests(tests SpecTestArray, specName String, filter String, targetKey String) returns SpecWorkUnit
+function partitionSpecTests(tests SpecTestArray, specName String, filter String, targetKey String, includeNetwork bool) returns SpecWorkUnit
 	var selected = SpecTestArray.create()
 	var missingLoweringFailures = TextLineArray.create()
 	var missingLoweringCount = 0 as TestCount
@@ -2944,7 +2965,7 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 		if isSelfHostedKnownBroken(specName, testName: test.name) 'knownBroken'
 			continue
 		end 'knownBroken'
-		if isNetworkingExcludedFragment(specName, testName: test.name) 'netExcluded'
+		if isNetworkingExcludedFragment(specName, testName: test.name, includeNetwork: includeNetwork) 'netExcluded'
 			continue
 		end 'netExcluded'
 		if test.expectation.hasAnyRequiredLowering and not test.expectation.hasRequiredLowering 'missingTargetLowering'
@@ -3188,7 +3209,7 @@ type PersistentWorkerHandle
 	// std handles in its own STARTUPINFOW, never sibling spawns' pipes. Without
 	// that runtime fix (in X86CodeEmitter.Runtime.cs's __subp_spawn_core), this
 	// pipeline pattern races and corrupts IPC.
-	export static function spawnNoWait(exe String, workerId WorkerId, targetStr String, filter String, verbose bool, sweepMode String = "") returns PersistentWorkerHandle throws SubprocessError
+	export static function spawnNoWait(exe String, workerId WorkerId, targetStr String, filter String, verbose bool, includeNetwork bool, sweepMode String = "") returns PersistentWorkerHandle throws SubprocessError
 		let exeFile = try FilePath.from(exe) otherwise 'badExe'
 			throw SubprocessError.spawnFailed("worker {workerId}: invalid exe path '{exe}'")
 		end 'badExe'
@@ -3203,6 +3224,12 @@ type PersistentWorkerHandle
 		if verbose 'isVerbose'
 			argv.push("--verbose")
 		end 'isVerbose'
+		// Forward the network opt-in so a worker selects the SAME tests the parent
+		// counted for this spec. Without it the parent would put a network spec's
+		// tests in the run total and the worker would report zero results for them.
+		if includeNetwork 'isNetwork'
+			argv.push("--network")
+		end 'isNetwork'
 		// Forward the interference-construction mode so parallel workers honor
 		// --sweep-mode=validate/sweep (Track-A rewrite validation). Empty = legacy.
 		if not sweepMode.isEmpty() 'hasSweepMode'
@@ -3353,7 +3380,7 @@ end 'VarHolder'
 // slowest-first queue (one singles job per spec), so the long-pole specs start
 // first and the OS-level parallelism gates wall time on the heaviest individual
 // compile rather than on a static round-robin chunk.
-export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false, sweepMode String = "") returns ExitCode
+export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false, sweepMode String = "", includeNetwork bool = false) returns ExitCode
 	// This dispatcher is an I/O multiplexer: the parallelism is the N persistent
 	// worker SUBPROCESSES. The per-worker drain green threads run on the multi-M
 	// green-thread scheduler: each ready drain can be picked up by any idle worker
@@ -3396,7 +3423,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// `--update-required` path below captures RequiredIR (the final compiled IR,
 	// not a trace log), so it needs no pre-load either.
 	if updateRequired 'preUpdate'
-		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+		runRequiredBlockUpdates(specDir, fragmentDir: fragmentDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey, includeNetwork: includeNetwork)
 	end 'preUpdate'
 
 	let specCacheDir = fragmentDir.join(".spec-cache")
@@ -3432,12 +3459,12 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		end 'readErr'
 
 		let fm = parseFrontmatter(content)
-		if fm.status == "draft" 'isDraft'
+		if specSkipReason(fm, includeNetwork: includeNetwork) != SpecSkipReason.none 'isSkipped'
 			continue
-		end 'isDraft'
+		end 'isSkipped'
 
 		let tests = parseSpecFile(content, targetKey: targetKey)
-		let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey)
+		let unit = partitionSpecTests(tests, specName: specName, filter: filter, targetKey: targetKey, includeNetwork: includeNetwork)
 		totalTests = totalTests + unit.totalCount()
 		units.push(unit)
 	end 'parseSpecs'
@@ -3504,7 +3531,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// whatever's buffered when the child exits.
 	var workers = PersistentWorkerHandleArray.create()
 	for i in 0 upto numWorkers 'spawnLoop'
-		let h = try PersistentWorkerHandle.spawnNoWait(exePath, workerId: i as WorkerId, targetStr: targetStr, filter: filter, verbose: verbose, sweepMode: sweepMode) otherwise panic("worker {i}: PersistentWorkerHandle.spawnNoWait failed (see SubprocessError above)")
+		let h = try PersistentWorkerHandle.spawnNoWait(exePath, workerId: i as WorkerId, targetStr: targetStr, filter: filter, verbose: verbose, includeNetwork: includeNetwork, sweepMode: sweepMode) otherwise panic("worker {i}: PersistentWorkerHandle.spawnNoWait failed (see SubprocessError above)")
 		workers.push(h)
 	end 'spawnLoop'
 	for i in 0 upto numWorkers 'readyLoop'

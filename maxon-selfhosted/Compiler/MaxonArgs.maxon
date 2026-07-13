@@ -57,6 +57,15 @@ export type MaxonArgs
 	export var trackAllocs as bool
 	export var updateRequired as bool
 	export var verbose as bool
+	// `maxon spec-test --network`: also run the tests that reach a real server on
+	// the public internet — the `category: network` specs and the live-host
+	// fragments (see `specSkipReason` / `liveNetworkFragments`). Off by default:
+	// those tests fail on somebody else's outage or rate limit rather than on our
+	// code, and a gate that goes red for reasons unrelated to the change under test
+	// teaches you to ignore it. Mirrors the C# bootstrap runner's `--network`, so
+	// the two suites agree on what the default gate contains. The parallel
+	// dispatcher forwards the flag to each persistent worker it spawns.
+	export var includeNetwork as bool
 	export var coverage as bool
 	// `maxon build --leak-check <file>` wires the process-exit leak gate
 	// (`mrt_leak_check`) into the binary so it exits 101 if any allocation is
@@ -181,6 +190,7 @@ export type MaxonArgs
 			trackAllocs: false,
 			updateRequired: false,
 			verbose: false,
+			includeNetwork: false,
 			coverage: false,
 			leakCheck: false,
 			rcSanitize: false,
@@ -304,7 +314,9 @@ export type MaxonArgs
 				args.updateRequired = true
 			end 'isUpdateRequired' else if arg == "--verbose" 'isVerbose'
 				args.verbose = true
-			end 'isVerbose' else if arg == "--coverage" 'isCoverage'
+			end 'isVerbose' else if arg == "--network" 'isNetwork'
+				args.includeNetwork = true
+			end 'isNetwork' else if arg == "--coverage" 'isCoverage'
 				args.coverage = true
 			end 'isCoverage' else if arg == "--profile-passes" 'isProfilePasses'
 				args.profilePasses = true
