@@ -81,9 +81,14 @@ export typealias RegMask = int(0 to u64.max)
 // (SplitLiveRanges) reserves in a function's frame. It is a dense per-function
 // index — slot 0, 1, 2, … — NOT a byte displacement; the x64 encoder turns it into
 // a `[rsp + disp]` displacement (`spillSlotDisp`) at emit time, so the frame layout
-// (shadow space, alignment) lives in one place. Each spilled value gets its own
-// slot (no slot coalescing yet — a future optimization).
+// (shadow space, alignment) lives in one place. Each spilled VALUE gets its own
+// slot, and exactly one: its store is anchored at its def, which dominates every
+// reload, so a value relieved at a SECOND peak reloads out of the slot it already
+// has rather than being written a second time. (No slot coalescing ACROSS values
+// yet — a future optimization.)
 export typealias SpillSlot = int(0 to u64.max)
+
+export typealias SpillSlotArray = Array with SpillSlot
 
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),
 // consumed by the instruction scheduler + register allocator. The scheduling

@@ -665,6 +665,11 @@ inside a loop**, because that placement is *forced by the ABI, not chosen by a s
 is cheap against the op it brackets: one store and one load against a call that costs far more.
 (An `idiv` is the same case in miniature, reserving `RAX`/`RDX`.)
 
+> When the value is read on **both sides** of the call inside the loop, the bracket becomes a load
+> **at each use** — the value is stored once at its def, outside the loop, and lives in a register
+> only where it is read. Still forced, still not searched: the sixth of six values simply has nowhere
+> else to be. (`SplitScope.everyUse`.)
+
 > **This must never be `E5001`.** Such a program *fits the machine* — the values are excluded only
 > from the registers one op happens to clobber. Refusing it would be a false positive, and the
 > restructuring it would demand (hoist the loop's values into an array) puts **every** value in
@@ -755,10 +760,14 @@ Three consequences, and they are the reason several things elsewhere in the comp
 >
 > `E5001` fires **only** on a **full-pool** overflow with no cold-spillable value: the loop's
 > genuine working set exceeds the machine. A **confined** (clobber-only) overflow (the values fit the
-> full pool but not the subset they are confined to) is *always* relievable by a forced bracket —
-> every confined value has a store anchor, an op def or a phi's block entry — so reaching `E5001`
-> from one is a **splitter bug**, and `noVictimAtPeak` panics rather than let it surface as user
-> register pressure.
+> full pool but not the subset they are confined to) is *always* relievable by a forced bracket, so
+> reaching `E5001` from one is a **splitter bug**, and `noVictimAtPeak` panics rather than let it
+> surface as user register pressure. The four legs of that "always" are stated on the panic, because
+> asserting only the first of them once let the panic fire on ordinary Maxon: every value has a store
+> anchor (an op def, or a phi's block entry); its store fits the pool (full-pool peaks are relieved
+> first, so no def point is over-pool by then); **every** confined value can be made dead across the
+> peak (below); and the tight set outnumbers the witness by more than the two virtual registers an op
+> can name, so the values the peak op itself reads can never be all of them.
 >
 > **The two pools count two different demands, and lumping them over-counts.** Full-pool demand is
 > the colorer's total register hold at a point — live values *plus* dead-phi reservations *plus*
@@ -766,13 +775,26 @@ Three consequences, and they are the reason several things elsewhere in the comp
 > across it, plus its own operands. A dead phi is neither, and `pickPreferredRegister` lands it in
 > a caller-saved register anyway, so it never competes for the callee-saved subset.
 >
-> **A split only counts if it actually kills the value at the peak.** Uses *after* the peak become
-> reloads; uses *before* it keep the original. So the value is dead across the peak only if no
-> before-peak use is still reachable *from* the peak without passing the value's (single, SSA) def.
-> Under a back edge it often is: `n` in `while i < n` is used in the header, *before* the loop's
-> call in layout order, yet stays live across it — storing it relieves nothing and leaves a wasted
-> store in the header. A loop-header **phi** is the opposite: every back-edge path re-enters its
-> def, so it *is* relievable. `killsValueAtPeak` is that test.
+> **A split only counts if it actually kills the value at the peak — and when the split at the
+> eviction point cannot, the split WIDENS.** Uses *after* the peak become reloads; uses *before* it
+> keep the original. So the value is dead across the peak only if no before-peak use is still
+> reachable *from* the peak without passing the value's (single, SSA) def (`killsValueAtPeak`). Under
+> a back edge it often is: `n` in `while i < n` is used in the header, *before* the loop's call in
+> layout order, yet stays live across it. A loop-header **phi** is the opposite: every back-edge path
+> re-enters its def, so the eviction-point split kills it.
+>
+> A value the eviction-point split cannot kill is **not un-relievable** — it just cannot be relieved
+> *that cheaply*. At a **confined** peak the split widens to `SplitScope.everyUse`: **every** use is
+> rewritten to a reload, so the original's only remaining reader is its own store and it is dead from
+> the def onward. Six loop-invariants each read *before and after* a call inside the loop are exactly
+> this shape — the eviction-point split cuts none of their ranges, yet six values against fourteen
+> registers plainly fit the machine, so the answer is neither `E5001` nor a panic but a load before
+> each use, which is the code the author would hand-write. (A constant there is re-emitted at every
+> use instead, and costs nothing at all.) At a **full-pool** peak the widening is *refused*: reloading
+> a value the loop uses at every one of its uses, every iteration, is precisely the cost `E5001` will
+> not pay silently. That asymmetry is the forced-vs-searched line, drawn once.
+> (`register-spill.loop-invariant-read-across-a-call-in-a-loop`,
+> `register-spill.loop-invariant-constant-read-across-a-call-in-a-loop`.)
 
 > **RULE 3 (the author always has a move).** There is **no escape hatch** — no attribute, no flag.
 > `E5001` is final. That is only defensible if every value in a blocking set is one the author can
@@ -965,18 +987,28 @@ express: values confined by **different** calls, colliding at a point that is no
 That was a colorer panic. See "Known limits" #0 for the two-stage screen-then-confirm shape and why
 the cheap cardinality form alone is *not* exact.
 
-**Victim choice** is remat-first, then Belady/MIN:
-- **Rematerializable** values (a constant def, not a phi, not edge-passed) are re-emitted at each
-  after-peak use rather than spilled — always preferred.
-- Otherwise the **farthest next use** wins, gated on (a) being spillable for the peak's placement —
-  **cold** requires def and every use at loop depth 0, **forced** requires only a store anchor (an
-  op def, or a phi's block entry).
-- **Both** are additionally gated on `killsValueAtPeak`. It is not a spill-specific test: remat
-  partitions a value's uses around the peak exactly as a spill does, so the original dies across the
-  peak under precisely the same condition. A constant that failed it — `let c = 7` used only in a
-  `while i mod c < 3` header, live across the loop's peak solely around the back edge — re-emitted
-  nothing, relieved nothing, and was re-picked until the runaway bound panicked.
-  (`register-spill.remat-constant-live-only-around-the-back-edge`.)
+**Victim choice** is four tiers, cheapest first; within a tier, Belady/MIN (farthest next use), ties
+to the lowest id. The candidates are the values live before the peak that the witness **confines**
+and the peak op does not itself read.
+
+1. **Remat** at the eviction point — a constant def (not a phi, not edge-passed) that
+   `killsValueAtPeak` accepts is re-emitted before each *after-peak* use. Free: no store, no slot, no
+   load.
+2. **The eviction-point split** (`SplitScope.afterPeakUses`) of a value not yet in a slot — one store
+   at the def, one reload per after-peak use-block, before-peak uses keeping the original in its
+   register for free. Gated on being spillable for the peak's **placement** (**cold** requires def and
+   every use at loop depth 0; **forced** requires only a store anchor), on the store fitting the pool,
+   and on `killsValueAtPeak`.
+3. **Full remat** (`SplitScope.everyUse`) — *confined peaks only*. A constant the eviction-point split
+   cannot kill, re-emitted before **every** use. Still free, so still preferred over any spill.
+4. **The full split / re-relief** (`SplitScope.everyUse`, or reloads-only for a value already in a
+   slot) — *confined peaks only*. The forced bracket, paid at every use. This tier is what makes
+   `noVictimAtPeak`'s confined panic unreachable.
+
+Tiers 3 and 4 are consulted **only** where tiers 1 and 2 are empty — which before they existed was a
+panic (confined peak) or `E5001` (full-pool peak). So no program that already compiled changed by a
+single instruction when they were added; the whole `specs-shv2` golden set is byte-identical across
+that change. And they are confined-only, so the `E5001` cliff is exactly where it was.
 
 **A split must actually kill the value at the peak.** After-peak uses become reloads; before-peak
 uses keep the original. So the value dies across the peak only if no before-peak use is still
@@ -984,7 +1016,19 @@ reachable *from* the peak without passing its (single, SSA) def. `n` in `while i
 cautionary case: its only use is the header compare, which precedes the loop's call in **layout**
 order but follows it around the **back edge** — storing it relieves nothing. A loop-header **phi**
 is the opposite: every back-edge path re-enters its def, so it is relievable. (Without this test the
-splitter over-spills, and its termination potential Φ does not strictly decrease.)
+splitter over-spills, and its termination potential Φ does not strictly decrease.) `killsValueAtPeak`
+gates **both** remat and spill at tiers 1–2, and for the same reason — remat partitions a value's uses
+around the peak exactly as a spill does. A constant that failed it — `let c = 7` used only in a
+`while i mod c < 3` header, live across the loop's peak solely around the back edge — re-emitted
+nothing, relieved nothing, and was re-picked until the runaway bound panicked.
+(`register-spill.remat-constant-live-only-around-the-back-edge`.) At a confined peak, failing it now
+selects tier 3 or 4 rather than nothing at all.
+
+**One slot per value, ever.** The store anchors at the def, which dominates every reload *wherever a
+later peak puts one* — so a value relieved again at a **second** confined peak emits only more loads,
+out of the slot its first store already wrote (`UseIndex.spillSlotOf`). This is what lets tier 4 admit
+an already-stored value without ever writing it twice, and it is why `hasSpillStore` is a tier
+discriminator rather than a refusal.
 
 **Split shape: Belady split at the eviction point + dominating reloads.** Store **at the def** (after
 the defining op — or, for a **phi**, at its block's entry, where the edge copies have already placed
@@ -1403,6 +1447,16 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    preference the peak would drift to the earliest op the values happen to be live at, widening the
    bracket for no gain. A violation visible only at normal ops — the case above — has no such op and
    is relieved where it is seen.
+
+   > **The bracket had to be widened before that "never `E5001`" was actually true.** Surfacing
+   > confined peaks at ops that clobber nothing surfaced them for values the *eviction-point* split
+   > cannot kill — a loop-invariant read on **both** sides of a call inside the loop is live across
+   > that call around the back edge no matter how its after-peak uses are rewritten. Six of them
+   > against the five callee-saved registers left `chooseVictim` with nothing, and `noVictimAtPeak`
+   > panicked on a program that fits fourteen registers twice over. The relief is `SplitScope.everyUse`
+   > — rewrite **every** use, so the original's only reader is its own store — which is the same forced
+   > bracket paid per use instead of once. See Rule 2 and `register-spill.
+   > loop-invariant-read-across-a-call-in-a-loop`.
 
 1. **`maxlive` is exact for the program AS LOWERED — so a false `E5001` means the IR itself
    carries a value the author did not write.** Chordal ⇒ χ = ω = maxlive, and liveness is

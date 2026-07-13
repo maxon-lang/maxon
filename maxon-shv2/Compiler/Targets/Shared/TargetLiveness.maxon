@@ -932,6 +932,19 @@ export union ValueDefSite
 	phiDef(blockLocal CfgIndex)
 end 'ValueDefSite'
 
+// The stack slot a value has already been spilled into, or `none` for a value no `storeSlotReg`
+// writes. A union rather than a sentinel index — slot 0 is a real slot and would be
+// indistinguishable from "not spilled".
+//
+// The splitter reads this to relieve a value at a SECOND peak: the value's store is anchored at
+// its DEF, which dominates every reload wherever it lands, so a second relief adds only reloads
+// out of the slot the first one already wrote. Re-storing it would burn a second slot writing a
+// value the first store already wrote.
+export union ValueSpillSlot
+	none
+	slot(slot SpillSlot)
+end 'ValueSpillSlot'
+
 // THE function's per-value index: every question the allocator asks about a value, answered from a
 // dense column or a CSR range instead of a walk of the function.
 //
@@ -977,16 +990,18 @@ export type UseIndex
 
 	// Passed to a phi on some branch edge.
 	var edgePassed as BoolArray
-	// Some `storeSlotReg` already spills it (an earlier splitter iteration split it).
+	// Some `storeSlotReg` already spills it (an earlier splitter iteration split it), and the slot
+	// that store writes — the slot any FURTHER relief of the same value reloads out of.
 	var spillStored as BoolArray
+	var spillSlot as SpillSlotArray
 	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
 	var touchesLoop as BoolArray
 
 	// Global layout sequence -> module op index (the inverse of the numbering above).
 	var opBySeq as OpIndexArray
 
-	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps ByteCount, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
-		return Self{valueCount: valueCount, numBlocks: numBlocks, totalOps: totalOps, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq}
+	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps ByteCount, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
+		return Self{valueCount: valueCount, numBlocks: numBlocks, totalOps: totalOps, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop, opBySeq: opBySeq}
 	end 'create'
 
 	// How many use sites `valueId` has. Walk them with `useRecordAt(valueId, k)` for k in 0..count.
@@ -1037,6 +1052,14 @@ export type UseIndex
 	export function hasSpillStore(valueId ValueId) returns bool
 		return try self.spillStored.get(valueId) otherwise panic("UseIndex.hasSpillStore: value {valueId} out of range")
 	end 'hasSpillStore'
+
+	// The slot `valueId` is already spilled into, or `none` (see `ValueSpillSlot`).
+	export function spillSlotOf(valueId ValueId) returns ValueSpillSlot
+		if not self.hasSpillStore(valueId) 'notSpilled'
+			return ValueSpillSlot.none
+		end 'notSpilled'
+		return ValueSpillSlot.slot(try self.spillSlot.get(valueId) otherwise panic("UseIndex.spillSlotOf: spillSlot.get OOB for value {valueId}"))
+	end 'spillSlotOf'
 
 	// True iff `valueId`'s def block and every block that touches it as an op operand are at loop
 	// depth 0 — the shape a COLD spill needs.
@@ -1113,6 +1136,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	var phiBlock = zeroColumn(valueCount)
 	var edgePassed = falseColumn(valueCount)
 	var spillStored = falseColumn(valueCount)
+	var spillSlot = zeroColumn(valueCount)
 	var touchesLoop = falseColumn(valueCount)
 	var opBySeq = OpIndexArray.create()
 
@@ -1154,7 +1178,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 
 			let op = try module.ops.get(opIdx) otherwise panic("buildUseIndex: opIdx not in module.ops")
 			targetOpOperands(op, buf: buf)
-			let isStore = opIsSpillStore(op)
+			let storeSlot = spillStoreSlotOf(op)
 
 			for k in 0 upto buf.count() 'eachOperand'
 				let o = try buf.get(k) otherwise panic("buildUseIndex: buf.get OOB")
@@ -1174,9 +1198,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 					continue
 				end 'def'
 
-				if isStore 'spillStore'
-					try spillStored.set(v, value: true) otherwise panic("buildUseIndex: spillStored.set OOB for value {v}")
-				end 'spillStore'
+				recordSpillStore(storeSlot, spillStored: spillStored, spillSlot: spillSlot, v: v)
 
 				if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
 					pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: v, blockLocal: i, opIdx: opIdx, seq: seq + pos, onEdge: false)
@@ -1205,8 +1227,24 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	end 'eachBlock'
 
 	let useCsr = buildCsr(recordValue, to: recordIndex, nodeCount: valueCount)
-	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, touchesLoop: touchesLoop, opBySeq: opBySeq)
+	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop, opBySeq: opBySeq)
 end 'buildUseIndex'
+
+// Record that `v` is the value a spill STORE reads, and the slot that store writes — the two facts
+// a LATER relief of the same value needs (skip the redundant second store; reload out of the slot it
+// already has). A no-op for any op that is not a store: `storeSlot` is `none` there, and it is
+// resolved ONCE per op rather than per operand.
+function recordSpillStore(storeSlot ValueSpillSlot, spillStored BoolArray, spillSlot SpillSlotArray, v ValueId)
+	match storeSlot 'store'
+		none then break 'store'
+		slot(s) then recordSpillStoreSlot(spillStored, spillSlot: spillSlot, v: v, slot: s)
+	end 'store'
+end 'recordSpillStore'
+
+function recordSpillStoreSlot(spillStored BoolArray, spillSlot SpillSlotArray, v ValueId, slot SpillSlot)
+	try spillStored.set(v, value: true) otherwise panic("recordSpillStoreSlot: spillStored.set OOB for value {v}")
+	try spillSlot.set(v, value: slot) otherwise panic("recordSpillStoreSlot: spillSlot.set OOB for value {v}")
+end 'recordSpillStoreSlot'
 
 // Append one use record and its CSR key. The record's index IS its position in the four parallel
 // columns, so the CSR built from (value, index) groups the records by value with no extra table.
@@ -1721,17 +1759,19 @@ function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, im
 	end 'each'
 end 'forbidOperandsFromImplicit'
 
-// True for a spill STORE. Two consumers, and both need exactly this predicate: `buildUseIndex`
-// marks the value it reads as already-spilled (the splitter's double-spill guard), and the
-// splitter's use-rewriter must leave it alone — a store deliberately reads the ORIGINAL value, so
-// repointing it at the reload would make it read a value defined later.
-export function opIsSpillStore(op TargetOp) returns bool
+// The slot a spill STORE writes, or `none` for every other op — the ONE place "is this op a spill
+// store?" is decided, so its two consumers cannot drift on it. `buildUseIndex` records the value the
+// store reads as already-spilled AND the slot it went to (the splitter reloads out of that same slot
+// when it relieves the value again at a second peak). The splitter's use-rewriter uses the same
+// answer to leave a store ALONE — a store deliberately reads the ORIGINAL value, so repointing it at
+// the reload would make it read a value defined later.
+export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 	return match op 'k'
-		storeSlotReg gives true
-		prologue to popReg gives false
-		loadRegSlot gives false
+		storeSlotReg(slot, _) gives ValueSpillSlot.slot(slot)
+		prologue to popReg gives ValueSpillSlot.none
+		loadRegSlot gives ValueSpillSlot.none
 	end 'k'
-end 'opIsSpillStore'
+end 'spillStoreSlotOf'
 
 // The block's ops in execution order: body `opRefs` then the terminator op.
 export function collectBlockOps(block IrBlock, out OpIndexArray)

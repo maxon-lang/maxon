@@ -1,0 +1,98 @@
+// Test: loop-invariant-read-across-a-call-in-a-loop
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function invariantsAcrossCall(p int) returns int
+	let a1 = p + 1
+	let a2 = p + 2
+	let a3 = p + 3
+	let a4 = p + 4
+	let a5 = p + 5
+	let a6 = p + 6
+	var acc = 0
+	var i = 0
+	while i < 3 'loop'
+		let pre = acc + a1 + a2 + a3 + a4 + a5 + a6
+		let r = sink(i)
+		acc = pre + r + a1 + a2 + a3 + a4 + a5 + a6
+		i = i + 1
+	end 'loop'
+	return acc
+end 'invariantsAcrossCall'
+
+function main() returns ExitCode
+	return invariantsAcrossCall(0)
+end 'main'
+---
+ExitCode: 129
+---
+func @sink {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.ret
+}
+
+func @invariantsAcrossCall {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 64
+    x64.leaRegRegImm32 rbx, rcx, 1
+    x64.leaRegRegImm32 r12, rcx, 2
+    x64.leaRegRegImm32 r13, rcx, 3
+    x64.leaRegRegImm32 r14, rcx, 4
+    x64.leaRegRegImm32 r15, rcx, 5
+    x64.leaRegRegImm32 rax, rcx, 6
+    x64.storeSlotReg slot2, rax
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot0, rcx
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegReg rax, r8, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rdx, slot2
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeSlotReg slot1, rax
+    x64.callDirect sink
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg r8, rax, rcx
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rcx, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.epilogue 64
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect invariantsAcrossCall
+    x64.epilogue 40
+    x64.ret
+}

@@ -33,11 +33,20 @@
 //    what makes cold spills cold: spill code is NEVER added to a loop body for a value the
 //    loop uses. We guarantee it by only ever choosing a victim whose def AND every use are
 //    at loop depth 0 (`isColdSpillable`), and placing the store and each reload at (depth-0)
-//    use/def sites — so no store/reload ever lands in any loop at all. `assertPlacementCold`
+//    use/def sites — so no store/reload ever lands in any loop at all. `assertPlacementLegal`
 //    re-verifies this on every inserted op: a violation would be a HOT spill that should have
 //    been E5001, so it panics rather than ship. A value idle across a loop it does not touch
 //    is exactly the depth-0-def, depth-0-uses shape, split with ZERO instructions in the loop
 //    body — the design's signature case.
+//
+//    RULE 2 AS AMENDED — refuse the SEARCH, not the SPILL. The paragraph above is the rule for a
+//    FULL-POOL overflow only. At a CONFINED one (Hall's condition against a proper subset of the
+//    pool: values a call denies the 9 caller-saved registers, or an `idiv` denies RAX/RDX) the value
+//    CANNOT stay in a register across the clobbering op, so memory is not a choice the allocator
+//    searches for — it is the only placement that exists. Such a bracket is therefore emitted at ANY
+//    loop depth (`SpillPlacement.forced`), and it is never E5001: the program fits the machine, and
+//    the restructuring E5001 would demand emits the same load and store at every use anyway. See
+//    `SpillPlacement`, `SplitScope`, and `noVictimAtPeak`.
 //
 // REMAT (load-bearing, not an optimization): an integer constant (`movRegImm`/`movRegImm32`)
 // is REMATERIALIZED rather than spilled — re-emitted at each use with a fresh ValueId, never
@@ -48,11 +57,16 @@
 //
 // ALGORITHM (iterative Belady/MIN with the dominating-reload restriction): recompute
 // liveness; while some program point OVERFLOWS ITS POOL, find that PEAK op, choose a
-// cold-spillable value crossing it — a constant to rematerialize if one is available, else
+// relievable value crossing it — a constant to rematerialize if one is available, else
 // the value with the FARTHEST next use (Belady/MIN) — and split its live range AT the peak;
 // repeat. Splitting at the peak makes the victim DEAD across the peak op, so pressure there
 // drops by one and the loop converges (a store/reload only READS an already-live value / only
 // SHIFTS which value is live, so neither ever raises the function's max pressure).
+//
+// A victim whose live range the eviction-point split does NOT cut — a loop-invariant a call inside
+// the loop reads on BOTH sides of itself, so it is live across the call around the back edge no matter
+// how its after-peak uses are rewritten — is relieved at a CONFINED peak by rewriting EVERY use
+// instead (`SplitScope`). That is the case `noVictimAtPeak`'s confined panic used to hit.
 //
 // "OVERFLOWS ITS POOL" is per-point AND per-VALUE, because a clobber SHRINKS a value's pool: a value
 // live across a call is forbidden all 9 caller-saved registers, so its only home is one of the 5
@@ -198,17 +212,55 @@ end 'PressurePeak'
 //    FULL-pool overflow, and it is free: the store runs once before the loop, the reload once
 //    after it.
 //
-//  • `forced` — relief at a FIXED-REGISTER point, permitted at any loop depth. The value cannot
-//    survive the op in a register the op clobbers, so a store before it and a reload after are
-//    the ONLY placement — the allocator makes no choice and searches nothing. Rule 2 admits it
-//    because the pair is CHEAP AGAINST THE OP IT BRACKETS: one store and one load against a call
-//    that costs far more. Refusing it would send the author to hand-write the same store and load
-//    (a value hoisted into an array is loaded and stored at each use) — strictly worse code, for
-//    an error the compiler could have avoided emitting.
+//  • `forced` — relief at a CONFINED point, permitted at any loop depth. The value cannot survive
+//    the ops it is live across in a register those ops clobber, so MEMORY is the only home left to
+//    it — the allocator makes no choice and searches nothing. Rule 2 admits it because the code is
+//    CHEAP AGAINST THE OP IT BRACKETS: a load and a store against a call that costs far more.
+//    Refusing it would send the author to hand-write the same load and store (a value hoisted into
+//    an array is loaded and stored at each use) — strictly worse code, for an error the compiler
+//    could have avoided emitting.
+//
+//    PLACEMENT is not SCOPE. This says the spill code may land inside a loop; `SplitScope` says which
+//    uses it serves. A value read only AFTER the clobber gets the store/reload bracket around it; one
+//    read on BOTH sides of the clobber, and so live across it around the back edge, gets a load at
+//    each use (`SplitScope.everyUse`) — still forced, still unsearched, just paid per use.
 enum SpillPlacement
 	cold
 	forced
 end 'SpillPlacement'
+
+// WHICH of a victim's uses a split moves to memory — the second half of a relief decision, and the
+// half the peak's PLACEMENT does not decide.
+//
+//  • `afterPeakUses` — the Belady split at the eviction point, and the shape every relief has when it
+//    is available: the after-peak uses are rewritten to reloads, the before-peak uses keep the
+//    ORIGINAL value in its original register. It leaves the value dead across the peak — which is the
+//    entire point — PROVIDED no before-peak use is still reachable FROM the peak (`killsValueAtPeak`).
+//
+//  • `everyUse` — EVERY use is rewritten, before-peak ones included, so the original's only remaining
+//    reader is its own store and it is dead from the def onward. This is what a value whose before-peak
+//    use is reachable from the peak AROUND A BACK EDGE needs, and it is the only thing that works
+//    there: a loop-invariant read both before and after a call inside the loop is live across that
+//    call on the back edge no matter how its after-peak uses are rewritten, so the partial split
+//    relieves NOTHING (`killsValueAtPeak` correctly refuses it). Six such values against the five
+//    callee-saved registers fit the machine easily — the ABI simply denies them the nine caller-saved
+//    ones — so refusing to relieve them is neither E5001 (the program fits) nor a panic: it is the
+//    forced bracket, paid at every use instead of once. The value is loaded before each use and lives
+//    in a register only there, which is exactly the code an author would hand-write for it.
+//
+// The cost difference is why `chooseVictim` prefers an `afterPeakUses` victim whenever one exists.
+enum SplitScope
+	afterPeakUses
+	everyUse
+end 'SplitScope'
+
+// Does a split of this scope leave the BEFORE-peak uses reading the original value in its register?
+function keepsOriginalBeforePeak(scope SplitScope) returns bool
+	return match scope 's'
+		afterPeakUses gives true
+		everyUse gives false
+	end 's'
+end 'keepsOriginalBeforePeak'
 
 // The result of the per-iteration pressure sweep: the peak-pressure op (where a victim is
 // chosen) and the per-value def-point live count (the pressure each value's spill store would
@@ -225,13 +277,16 @@ end 'PressureAnalysis'
 
 // A chosen victim + how to relieve it.
 union SpillChoice
-	// No cold-spillable value crosses the peak — a HOT overflow (E5001, `raiseRegisterPressure`).
+	// No value crossing the peak can be relieved. At a FULL-POOL peak that is the HOT overflow the
+	// design exists to report (E5001, `raiseRegisterPressure`); at a CONFINED one it is a splitter
+	// bug — see `noVictimAtPeak`.
 	none
-	// Rematerialize a constant (re-emit it before each after-peak use, no slot).
-	remat(valueId ValueId)
-	// Spill a value to a fresh slot, splitting its live range at the peak (store before the
-	// peak, reload before its after-peak uses).
-	spill(valueId ValueId)
+	// Rematerialize a constant (re-emit it before each rewritten use, no slot, no store).
+	remat(valueId ValueId, scope SplitScope)
+	// Spill a value, splitting its live range so it is dead across the peak: a store at its def
+	// (skipped when an earlier split already wrote it to its slot) and a reload before each
+	// rewritten use.
+	spill(valueId ValueId, scope SplitScope)
 end 'SpillChoice'
 
 // ==========================================================================
@@ -307,11 +362,15 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, poolSize: poolSize)
 		match choice 'act'
 			none then try noVictimAtPeak(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
-			remat(v) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, nextValueId: nextValueId, stats: stats, lineage: lineage)
-			spill(v) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, slot: nextSlot, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage)
+			spill(v, scope) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: nextSlot), nextValueId: nextValueId, stats: stats, lineage: lineage)
 		end 'act'
+		// Only a FIRST spill of a value consumes a slot: a value relieved again at a second peak
+		// reloads out of the slot its def-anchored store already wrote (see `slotForSpillOf`). `index`
+		// is the PRE-split snapshot, so `hasSpillStore` still answers about the state the choice was
+		// made in — the store this iteration may have just inserted is invisible to it.
 		match choice 'countSlot'
-			spill then nextSlot = nextSlot + 1
+			spill(v, _) then nextSlot = nextSlot if index.hasSpillStore(v) else nextSlot + 1
 			none to remat then break 'countSlot'
 		end 'countSlot'
 
@@ -352,15 +411,35 @@ end 'splitLiveRanges'
 //
 //  • CONFINED (clobber-only) overflow → a SPLITTER BUG, and it must NEVER reach the user as E5001.
 //    The values confined to the witness FIT the pool; they are excluded only from the registers the
-//    ops they are live across clobber. A forced store/reload bracket is therefore always available —
-//    every confined value has a store anchor (an op def, or a phi's block entry), which is
-//    exactly what `hasStoreAnchor` accepts. Reaching here means the eligibility scan or the
-//    peak classification is broken. Raising E5001 instead would be the false positive this design
-//    treats as its worst possible bug: it would tell the author to delete a value from code that
-//    fits the machine, and the rewrite it suggests would emit strictly worse code.
+//    ops they are live across clobber. A forced bracket is therefore ALWAYS available for at least
+//    one of them, and the panic below states the exact invariant that makes that so. Raising E5001
+//    instead would be the false positive this design treats as its worst possible bug: it would tell
+//    the author to delete a value from code that fits the machine, and the rewrite it suggests would
+//    emit strictly worse code.
+//
+// THE INVARIANT THE CONFINED PANIC ASSERTS, in full, because "it cannot happen" was once asserted
+// here on a claim that was merely NECESSARY (a store anchor) and not SUFFICIENT — and the panic was
+// reachable from ordinary Maxon (`register-spill.loop-invariant-read-across-a-call-in-a-loop`):
+//
+//  1. EVERY value the function defines has a store anchor — an op def or a phi's block entry
+//     (`buildUseIndex` gives every Target value one or the other), so `hasStoreAnchor` never refuses
+//     a live value.
+//  2. EVERY value's store FITS the pool. A FULL-pool overflow outranks every confined one
+//     (`peakOutranks`), so by the time a confined peak is the peak, NO program point exceeds the full
+//     pool — including every def point, which is what `storeFitsPool` measures. And a value already
+//     in a slot needs no new store at all.
+//  3. EVERY value can be made DEAD across the peak. Rewriting its after-peak uses to reloads does it
+//     whenever no before-peak use is still reachable from the peak; when one IS (a loop-invariant read
+//     before AND after a call inside the loop, alive across it around the back edge), rewriting EVERY
+//     use does it, because the original's only remaining reader is then its own store
+//     (`SplitScope.everyUse`). There is no third case: a value with no use at all is not live here.
+//  4. So the ONLY confined values `chooseVictim` may refuse are the ones the peak op itself READS —
+//     and it cannot refuse them all. The tight set OUTNUMBERS the witness, and any witness a clobber
+//     produces has at least the five callee-saved registers in it, so at least six values are confined
+//     here; an op names at most two virtual registers. At least four candidates always remain.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
-		panic("noVictimAtPeak: '{func.name}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet none of them is forced-spillable. Every confined value has a store anchor — an op def or a phi block entry — so a forced store/reload bracket is ALWAYS available; finding none is a SPLITTER BUG in `hasStoreAnchor` / `analyzePressure` / `killsValueAtPeak`, not user register pressure. It must never surface as E5001: this program fits the machine.")
+		panic("noVictimAtPeak: '{func.name}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -661,15 +740,40 @@ end 'copyOfRow'
 // Choosing a victim (Belady/MIN, with remat preferred)
 // ==========================================================================
 
-// Choose the value to relieve at the peak. Candidates are the values CROSSING the peak op
-// (live-before it, minus the values the peak op itself uses — those are needed there) that are
-// COLD-spillable and NOT already spilled. A rematerializable constant is preferred (re-emitting
-// it before each after-peak use is free — no store, no slot); otherwise the value with the
-// FARTHEST next use (Belady/MIN), SUBJECT to its store fitting the pool (`defLiveAfter[v] ≤
-// pool`): a value whose def-point pressure exceeds the pool has no register-free anchor for its
-// store YET — a spilled sibling must free a register first, which a later iteration does (its
-// `defLiveAfter` then drops). Remat has no store, so it carries no such constraint. `none` when
-// no candidate qualifies → HOT overflow (E5001, `raiseRegisterPressure`).
+// Choose the value to relieve at the peak, and the SCOPE its split must have. Candidates are the
+// values CROSSING the peak op (live-before it, minus the values the peak op itself uses — those are
+// needed in a register there) that the peak's witness CONFINES. `none` when no candidate qualifies →
+// at a FULL-pool peak that is the HOT overflow (E5001, `raiseRegisterPressure`); at a CONFINED one it
+// is a splitter bug (`noVictimAtPeak`).
+//
+// FOUR TIERS, IN STRICT ORDER — and the order is the whole cost model:
+//
+//  1. REMAT of a constant that the eviction-point split KILLS. Free: re-emitting `mov r, imm` before
+//     each after-peak use costs no store, no slot and no load.
+//  2. THE EVICTION-POINT SPLIT (`SplitScope.afterPeakUses`) of a value not yet in a slot. One store at
+//     the def, one reload per after-peak use-block; the before-peak uses keep the original in its
+//     register for free. This is the tier every peak, cold or confined, is relieved by whenever it is
+//     non-empty — which is every program that compiled before tiers 3 and 4 existed, so adding them
+//     cannot change a single instruction of code that already built.
+//  3. FULL REMAT (`SplitScope.everyUse`) — CONFINED peaks only. A constant read both before and after
+//     a call inside a loop is live across the call around the BACK EDGE, so tier 1 cannot kill it; but
+//     re-emitting it before EVERY use can, and that is still free. Preferred over any spill for the
+//     same reason tier 1 is.
+//  4. THE FULL SPLIT (`SplitScope.everyUse`), or a RE-RELIEF of a value already in a slot — CONFINED
+//     peaks only. This is the forced bracket the amended Rule 2 owes a loop-invariant that a call
+//     inside the loop reads on both sides of itself: it fits the machine (14 registers, 6 values), the
+//     ABI merely denies it the 9 caller-saved ones, and the only placement that works is a load before
+//     each use. Nothing is searched. See `SplitScope` and `noVictimAtPeak`.
+//
+// Tiers 3 and 4 are CONFINED-only because a FULL-pool peak that tier 2 cannot relieve is precisely the
+// program E5001 exists to refuse: the loop's genuine working set is larger than the machine, and
+// reloading at every use inside the loop is the per-iteration cost this design will not silently pay.
+//
+// Within a tier the victim is the one with the FARTHEST next use (Belady/MIN). A spill additionally
+// needs its store to FIT the pool (`storeFitsPool`, `defLiveAfter[v] ≤ pool`): a value whose def-point
+// pressure exceeds the pool has no register-free anchor for its store YET — a spilled sibling must
+// free a register first, which a later iteration does. A remat has no store, and neither does the
+// re-relief of a value already in a slot, so neither carries that constraint.
 //
 // The candidates are the SET BITS of the peak's live row, walked with `bitsetCollectRow` (which
 // yields them in ascending id order, so the strict-improvement tie-break below still resolves ties
@@ -677,7 +781,7 @@ end 'copyOfRow'
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
 function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, pool RegMask, poolSize RegCount) returns SpillChoice
-	let valueCount = liveness.valueCount
+	let topo = liveness.cfg.topo
 	let placement = placementOf(peak)
 	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak)
 	var candidates = ValueIdArray.create()
@@ -688,12 +792,12 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	// overwhelmingly share it (a loop's accumulators are all phis of the same header). Memoized
 	// per def block, the whole `chooseVictim` call costs a handful of walks instead of one per
 	// candidate.
-	var reach = ReachCache.create(liveness.cfg.topo.numBlocks)
+	var reach = ReachCache.create(topo.numBlocks)
 
-	var bestRematId = valueCount
-	var bestRematNextUse = 0 as ByteCount
-	var bestSpillId = valueCount
-	var bestSpillNextUse = 0 as ByteCount
+	var bestRemat = BeladyBest.create()
+	var bestSpill = BeladyBest.create()
+	var bestFullRemat = BeladyBest.create()
+	var bestBracket = BeladyBest.create()
 
 	for v in candidates 'eachValue'
 		if bitsetTest(usedAtPeak, base: 0, bit: v) 'consumedHere'
@@ -709,40 +813,63 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 			// candidates it always did.
 			continue
 		end 'notConfinedByThisPeak'
-		if index.hasSpillStore(v) 'alreadySpilled'
-			// v (this exact id) was already stored in an earlier iteration; after that split its only
-			// remaining "reads" are before-peak uses + its own store, and it is dead across every
-			// later peak — re-picking it would emit a SECOND store of the same id (a double-spill).
-			// This is NOT "split at most once per lineage": each split rewrites v's after-peak uses to
-			// a FRESH reload id, and that reload is an ordinary value a later iteration MAY split again
-			// (it has no store of its OWN yet). So a value crossing K disjoint peaks is relieved by K
-			// successive splits down its reload lineage — one store + one reload per peak — with this
-			// guard only preventing a given id from being stored twice.
-			continue
-		end 'alreadySpilled'
 
 		let nu = nextUseAfterPeak(index, valueId: v, peakSeq: peak.peakSeq)
-		if isRematVictim(module, index: index, topo: liveness.cfg.topo, valueId: v, peak: peak, reach: reach) 'const'
-			if bestRematId == valueCount or nu > bestRematNextUse 'improve'
-				bestRematId = v
-				bestRematNextUse = nu
-			end 'improve'
-		end 'const' else if isSpillVictim(index, topo: liveness.cfg.topo, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize, reach: reach) 'spillable'
-			if bestSpillId == valueCount or nu > bestSpillNextUse 'improve2'
-				bestSpillId = v
-				bestSpillNextUse = nu
-			end 'improve2'
-		end 'spillable'
+		if isRematVictim(module, index: index, topo: topo, valueId: v, peak: peak, reach: reach) 'const'
+			bestRemat.offer(v, nextUse: nu)
+		end 'const' else if isSpillVictim(index, topo: topo, valueId: v, peak: peak, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize, reach: reach) 'spillable'
+			bestSpill.offer(v, nextUse: nu)
+		end 'spillable' else if isFullRematVictim(module, index: index, valueId: v, placement: placement) 'fullConst'
+			bestFullRemat.offer(v, nextUse: nu)
+		end 'fullConst' else if isForcedBracketVictim(index, valueId: v, placement: placement, defLiveAfter: defLiveAfter, poolSize: poolSize) 'bracketable'
+			bestBracket.offer(v, nextUse: nu)
+		end 'bracketable'
 	end 'eachValue'
 
-	if bestRematId != valueCount 'haveRemat'
-		return SpillChoice.remat(bestRematId)
+	if bestRemat.found 'haveRemat'
+		return SpillChoice.remat(bestRemat.valueId, scope: SplitScope.afterPeakUses)
 	end 'haveRemat'
-	if bestSpillId != valueCount 'haveSpill'
-		return SpillChoice.spill(bestSpillId)
+	if bestSpill.found 'haveSpill'
+		return SpillChoice.spill(bestSpill.valueId, scope: SplitScope.afterPeakUses)
 	end 'haveSpill'
+	if bestFullRemat.found 'haveFullRemat'
+		return SpillChoice.remat(bestFullRemat.valueId, scope: SplitScope.everyUse)
+	end 'haveFullRemat'
+	if bestBracket.found 'haveBracket'
+		// The scope is resolved for the WINNER alone: `killsValueAtPeak` is the one eligibility question
+		// tier 4 does not need to ask to know the value is relievable (it is relievable either way), so
+		// asking it per candidate would be a walk bought for nothing.
+		return SpillChoice.spill(bestBracket.valueId, scope: splitScopeAt(index, topo: topo, valueId: bestBracket.valueId, peak: peak, reach: reach))
+	end 'haveBracket'
 	return SpillChoice.none
 end 'chooseVictim'
+
+// The best victim offered to ONE tier so far, under Belady/MIN. Four tiers each run this same
+// tournament, so it is one type rather than four copies of an `id`/`nextUse`/"is it set?" triple —
+// and `found` is a field rather than an `id == valueCount` sentinel, which the tiers previously each
+// had to spell out (and which only works while `valueCount` happens to be in scope).
+type BeladyBest
+	export var found as bool
+	export var valueId as ValueId
+	var farthestNextUse as ByteCount
+
+	export static function create() returns BeladyBest
+		return Self{found: false, valueId: 0, farthestNextUse: 0}
+	end 'create'
+
+	// Offer a candidate. It wins iff it is the first, or its next use is STRICTLY farther away —
+	// strict, and `chooseVictim` offers candidates in ascending id order, so ties resolve to the
+	// LOWEST value id and the choice is deterministic.
+	export function offer(candidate ValueId, nextUse ByteCount)
+		if self.found and nextUse <= self.farthestNextUse 'noImprovement'
+			return
+		end 'noImprovement'
+
+		self.found = true
+		self.valueId = candidate
+		self.farthestNextUse = nextUse
+	end 'offer'
+end 'BeladyBest'
 
 // The global sequence number of `valueId`'s FIRST OP use strictly after `peakSeq` (Belady's
 // next-use distance from the peak), or the `totalOps` sentinel for "no later use".
@@ -774,12 +901,15 @@ function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq ByteCount) re
 	return index.totalOps
 end 'nextUseAfterPeak'
 
-// True iff `valueId`'s def-point live-set fits the pool. A value idle before the peak anchors
-// its store right after its def, so `defLiveAfter[v] ≤ pool` is the store having a register-free
-// anchor. (A value used before the peak anchors its store after that use, at pressure ≤ the peak
-// and never higher — a store only READS an already-live value, so it never raises the max — so
-// this def-point gate is conservative but sound for it: a value cleared here is always spillable,
-// and Belady prefers idle values anyway.)
+// True iff `valueId`'s def-point live-set fits the pool. The store ALWAYS anchors at the def (that
+// is the only point that dominates every reload — see the "STORE ANCHOR IS THE VALUE'S DEF" note),
+// and `defLiveAfter[v]` is the pressure exactly there, so `defLiveAfter[v] ≤ pool` IS "the store has
+// a register-free anchor". A value whose def point is still over-pool has no anchor YET: a spilled
+// sibling must free a register there first, which a later iteration does (a FULL-pool peak always
+// outranks a confined one, so by the time a confined peak is reached no point is over-pool at all and
+// this gate cannot refuse anything).
+//
+// A value already IN a slot skips this gate entirely — its store exists and is not re-emitted.
 function storeFitsPool(defLiveAfter CfgIndexArray, valueId ValueId, poolSize RegCount) returns bool
 	let after = try defLiveAfter.get(valueId) otherwise panic("storeFitsPool: defLiveAfter.get OOB for value {valueId}")
 	return after <= poolSize
@@ -787,6 +917,11 @@ end 'storeFitsPool'
 
 // The set of values the peak op READS (its virtual uses) — excluded from the candidate pool
 // because they are needed in a register AT the peak, so spilling them across it is impossible.
+//
+// This exclusion can never empty the candidate pool at a CONFINED peak, which is one leg of the
+// invariant `noVictimAtPeak` asserts: an op names at most TWO virtual registers, while the tight set
+// outnumbers the witness and any witness a clobber produces holds at least the five callee-saved
+// registers — so at least four confined values survive this cut.
 function usesAtPeakOp(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak) returns BitWordArray
 	var row = zeroRow(liveness.wordsPerRow)
 	let op = try module.ops.get(index.opAtSequence(peak.peakSeq)) otherwise panic("usesAtPeakOp: peak op not in module.ops")
@@ -804,9 +939,10 @@ end 'usesAtPeakOp'
 // Victim eligibility
 // ==========================================================================
 
-// Is `valueId` a legal REMAT victim at this peak? Its def must be a constant materialization, AND
-// re-emitting it must actually KILL it at the peak — the same second gate a spill has, and for the
-// same reason.
+// Is `valueId` a TIER-1 victim — a constant the EVICTION-POINT re-emit (`SplitScope.afterPeakUses`)
+// actually KILLS at the peak? Its def must be a constant materialization, AND re-emitting only its
+// after-peak uses must leave it dead across the peak — the same second gate the eviction-point spill
+// has, and for the same reason.
 //
 // `killsValueAtPeak` is not a spill-specific test: remat partitions a value's uses around the peak
 // EXACTLY as a spill does (after-peak uses are rewritten to fresh copies, before-peak uses keep the
@@ -816,11 +952,13 @@ end 'usesAtPeakOp'
 // in the body below — is chosen, re-emits NOTHING (it has no after-peak use), drops nothing, and
 // relieves nothing. The potential Φ does not decrease, the next iteration re-picks the same value,
 // and the driver spins until the runaway bound panics. That is exactly the failure the spill path's
-// `killsValueAtPeak` was added to prevent; the remat path simply never got it.
+// `killsValueAtPeak` was added to prevent; the remat path simply never got it. Such a constant is not
+// un-relievable — at a CONFINED peak `isFullRematVictim` re-emits it before EVERY use, which is still
+// free — it merely cannot be relieved by the narrow re-emit.
 //
-// It needs no `hasSpillStore`-style already-done guard: once a remat KILLS the value at the peak the
-// value is no longer live there, so it cannot be a candidate at that peak again — and a value that
-// does not kill is refused here rather than re-picked forever.
+// Neither remat tier needs a `hasSpillStore`-style already-done guard, because a rematerializable
+// value is NEVER spilled: at every peak it either takes a remat tier or is refused, and the spill
+// tiers sit behind them in the same `else if` chain. So it never acquires a store to guard against.
 function isRematVictim(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
 	if not isRematerializable(module, index: index, valueId: valueId) 'notConst'
 		return false
@@ -828,14 +966,22 @@ function isRematVictim(module TargetModule, index UseIndex, topo FuncTopology, v
 	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
 end 'isRematVictim'
 
-// Is `valueId` a legal spill victim at this peak? Three independent gates, all necessary:
+// Is `valueId` a TIER-2 victim — the eviction-point split, the cheapest spill there is? Four
+// independent gates, all necessary:
 //
-//  1. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a depth-0, non-phi,
+//  1. not already stored — a value an earlier iteration already wrote to a slot needs no second
+//                          store, so its relief is tier 4's (reloads only), not this one's.
+//  2. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a depth-0, non-phi,
 //                          non-edge-passed value; forced needs only a store anchor).
-//  2. `storeFitsPool`    — its store has a register-free anchor point.
-//  3. `killsValueAtPeak` — spilling it actually makes it DEAD at the peak. Without this the
-//                          splitter emits stores that relieve nothing (see `killsValueAtPeak`).
+//  3. `storeFitsPool`    — its store has a register-free anchor point.
+//  4. `killsValueAtPeak` — the eviction-point split actually makes it DEAD at the peak. Without this
+//                          the splitter emits stores that relieve nothing (see `killsValueAtPeak`).
+//                          A value that fails HERE is not un-relievable — at a confined peak the FULL
+//                          split still kills it (tier 4) — it just cannot be relieved this cheaply.
 function isSpillVictim(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount, reach ReachCache) returns bool
+	if index.hasSpillStore(valueId) 'alreadyStored'
+		return false
+	end 'alreadyStored'
 	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
 		return false
 	end 'wrongShape'
@@ -844,6 +990,56 @@ function isSpillVictim(index UseIndex, topo FuncTopology, valueId ValueId, peak 
 	end 'noStoreAnchor'
 	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
 end 'isSpillVictim'
+
+// Is `valueId` a TIER-3 victim — a constant the eviction-point split could not kill, but re-emitting
+// at EVERY use can? Still free (no store, no slot, no load), so it outranks every spill.
+//
+// CONFINED peaks only. At a FULL-pool peak a constant the loop reads every iteration is part of the
+// loop's genuine working set, and rescuing it here would silently move the E5001 cliff — the line this
+// design draws between "the placement is forced" and "the machine is too small" (see `chooseVictim`).
+function isFullRematVictim(module TargetModule, index UseIndex, valueId ValueId, placement SpillPlacement) returns bool
+	return isForcedPlacement(placement) and isRematerializable(module, index: index, valueId: valueId)
+end 'isFullRematVictim'
+
+// Is `valueId` a TIER-4 victim — relievable by the FORCED bracket, whatever `killsValueAtPeak` says?
+//
+// This is the tier that makes `noVictimAtPeak`'s confined panic unreachable, and it is deliberately
+// TOTAL over the confined values: given a store anchor and somewhere to put the store, EVERY value can
+// be made dead across the peak (`splitScopeAt` picks how). It refuses only what it structurally must:
+//
+//  • no store anchor — impossible for a value this function defines, but `hasStoreAnchor` is the one
+//    place that is stated, so it is asked rather than assumed;
+//  • a NEW store that does not fit the pool — a value already in a slot needs no new store at all, so
+//    that gate applies only to a first spill.
+//
+// CONFINED peaks only, for the same reason tier 3 is: at a FULL-pool peak, reloading a value the loop
+// uses at every one of its uses is exactly the per-iteration cost E5001 refuses to pay silently.
+function isForcedBracketVictim(index UseIndex, valueId ValueId, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount) returns bool
+	if not isForcedPlacement(placement) 'coldPeak'
+		return false
+	end 'coldPeak'
+	if not hasStoreAnchor(index, valueId: valueId) 'noAnchor'
+		return false
+	end 'noAnchor'
+	if index.hasSpillStore(valueId) 'alreadyInASlot'
+		return true
+	end 'alreadyInASlot'
+	return storeFitsPool(defLiveAfter, valueId: valueId, poolSize: poolSize)
+end 'isForcedBracketVictim'
+
+// The narrowest split scope that leaves `valueId` DEAD across the peak: the eviction-point split when
+// it suffices, the full split when a before-peak use is still reachable from the peak (see
+// `killsValueAtPeak` and `SplitScope`).
+function splitScopeAt(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns SplitScope
+	return SplitScope.afterPeakUses if killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach) else SplitScope.everyUse
+end 'splitScopeAt'
+
+function isForcedPlacement(placement SpillPlacement) returns bool
+	return match placement 'p'
+		cold gives false
+		forced gives true
+	end 'p'
+end 'isForcedPlacement'
 
 // The placement a peak's relief is entitled to: a clobber-only overflow gets the FORCED
 // store/reload bracket (any loop depth); a full-pool overflow gets only a COLD split.
@@ -886,12 +1082,16 @@ end 'isColdSpillable'
 // copies SSA destruction places at the predecessors' ends, so it is live at block entry, and its
 // block dominates every use of it).
 //
-// This is the WHOLE eligibility test for a FORCED (clobber-only) spill — no loop-depth bar, no
-// phi bar, no edge-passed bar. Phis and edge-passed values are exactly the loop-carried
-// accumulators that dominate the live-across-a-call set in real code (`sum = sum + f(i)` makes
-// `sum` a phi and its update a back-edge arg), so excluding them would leave nothing to spill and
-// turn every such loop into a false E5001. `spillValue` rewrites branch-edge args alongside op
-// uses, which is what makes the edge-passed case sound.
+// This is the SHAPE test for a FORCED (clobber-only) spill — no loop-depth bar, no phi bar, no
+// edge-passed bar. Phis and edge-passed values are exactly the loop-carried accumulators that
+// dominate the live-across-a-call set in real code (`sum = sum + f(i)` makes `sum` a phi and its
+// update a back-edge arg), so excluding them would leave nothing to spill and turn every such loop
+// into a false E5001. `spillOneValue` rewrites branch-edge args alongside op uses, which is what
+// makes the edge-passed case sound.
+//
+// Every value a function DEFINES has one of the two anchors (`buildUseIndex` records an op def or a
+// phi block for each), so this never refuses a value that is live at a peak — which is one of the
+// four legs of the invariant `noVictimAtPeak` asserts.
 function hasStoreAnchor(index UseIndex, valueId ValueId) returns bool
 	return match index.defSiteOf(valueId) 'site'
 		none gives false
@@ -1095,45 +1295,54 @@ end 'markBlocksReachableFromPeak'
 // The index is read ONLY through fields that survive the insertions below: an op's `module.ops`
 // index (the table is append-only) and a use's owning block. Positions inside a block shift as ops
 // are spliced in, and every insertion re-derives its own (see `positionInBlock`).
-function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, slot SpillSlot, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let peakSeq = peak.peakSeq
 	let placement = placementOf(peak)
 	let useCount = index.useCount(valueId)
+	let keepsOriginal = keepsOriginalBeforePeak(scope)
 
-	// STORE: at the def, which dominates every reload below.
-	insertStore(module, cfg: cfg, valueId: valueId, defSite: index.defSiteOf(valueId), slot: slot, placement: placement)
+	// STORE: at the def, which dominates every reload below — and ONCE per value. An earlier split
+	// already wrote this exact id to this exact slot (`slotForSpillOf` handed it back), and a second
+	// store at the same def would write a value the first store already wrote, into a second slot.
+	if not index.hasSpillStore(valueId) 'firstSpillOfThisValue'
+		insertStore(module, cfg: cfg, valueId: valueId, defSite: index.defSiteOf(valueId), slot: slot, placement: placement)
+	end 'firstSpillOfThisValue'
 
-	// RELOAD: one per AFTER-peak use-block. Use sites are in layout order, so a block's after-peak
-	// uses are contiguous and follow its before-peak uses; each block boundary among the after-peak
-	// uses starts a fresh reload id whose in-block after-peak uses are rewritten to it.
+	// RELOAD: one per (use-block, side-of-the-peak) RUN of the uses this split rewrites. Use sites are
+	// in layout order, so a block's uses are contiguous and its before-peak ones precede its after-peak
+	// ones; each boundary — a new block, or the peak falling between two uses of the SAME block —
+	// starts a fresh reload id, which dominates the run it serves (it precedes the run's first use,
+	// and a block's edge arg is read after every op in it).
+	//
+	// An `afterPeakUses` split skips the before-peak runs entirely: those uses keep the ORIGINAL value
+	// in its original register, for free. An `everyUse` split rewrites them too, which is what leaves
+	// the original with no reader but its own store — see `SplitScope`.
 	var freshId = nextValueId
 	var reloadCount = 0 as ByteCount
 	var buf = OperandList.create()
 	var j = 0 as ByteCount
 	while j < useCount 'eachUse'
 		let record = index.useRecordAt(valueId, k: j)
-		if index.useSeqAt(record) < peakSeq 'beforePeak'
-			// A before-peak use keeps the ORIGINAL value in its register — never rewritten.
+		let afterPeak = index.useSeqAt(record) >= peakSeq
+		if (not afterPeak) and keepsOriginal 'beforePeakUseKeepsTheOriginal'
 			j = j + 1
 			continue
-		end 'beforePeak'
+		end 'beforePeakUseKeepsTheOriginal'
 
-		// The first after-peak use in this block anchors ONE reload, which dominates every later
-		// use in the block — including the edge arg, which is read after all of them.
 		let blockLocal = index.useBlockAt(record)
 		insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
 		// The reload id derives from the value it reloads — record it so a reload id in an
 		// E5001 blocking set chases back to that value's source origin (see SplitLineage).
 		lineage.record(freshId, sourceId: valueId)
 
-		while j < useCount and index.useBlockAt(index.useRecordAt(valueId, k: j)) == blockLocal 'sameBlock'
+		while j < useCount and useIsInRun(index, valueId: valueId, k: j, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
 			let r = index.useRecordAt(valueId, k: j)
 			match index.useKindAt(r) 'kind'
 				op then rewriteOpAt(module, opIdx: index.useOpAt(r), from: valueId, to: freshId, buf: buf)
 				edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
 			end 'kind'
 			j = j + 1
-		end 'sameBlock'
+		end 'sameRun'
 
 		freshId = freshId + 1
 		reloadCount = reloadCount + 1
@@ -1147,6 +1356,29 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 	end 'countForced'
 	return freshId
 end 'spillOneValue'
+
+// Is `valueId`'s `k`-th use in the run one reload serves — the same block, on the same side of the
+// peak? A run may NOT straddle the peak: a reload placed before a block's before-peak use would then
+// serve its after-peak uses too, and that reloaded value would span the peak, so the pressure there
+// would never drop. (That is the whole-range-reload failure the file header names, in the small.)
+function useIsInRun(index UseIndex, valueId ValueId, k ByteCount, blockLocal CfgIndex, afterPeak bool, peakSeq ByteCount) returns bool
+	let record = index.useRecordAt(valueId, k: k)
+	if index.useBlockAt(record) != blockLocal 'otherBlock'
+		return false
+	end 'otherBlock'
+	return (index.useSeqAt(record) >= peakSeq) == afterPeak
+end 'useIsInRun'
+
+// The slot a spill of `valueId` writes into, or reloads out of. A value is stored ONCE, at its def:
+// the def dominates every reload wherever a later peak puts one, so relieving the value AGAIN needs
+// only more loads out of the slot it already has. `nextSlot` — a fresh slot — is for a value that has
+// never been spilled.
+function slotForSpillOf(index UseIndex, valueId ValueId, nextSlot SpillSlot) returns SpillSlot
+	return match index.spillSlotOf(valueId) 'existing'
+		none gives nextSlot
+		slot(s) gives s
+	end 'existing'
+end 'slotForSpillOf'
 
 // Insert the spill STORE at the value's def — the one point that dominates every reload (see above).
 function insertStore(module TargetModule, cfg FuncCfg, valueId ValueId, defSite ValueDefSite, slot SpillSlot, placement SpillPlacement)
@@ -1255,25 +1487,29 @@ end 'appendOp'
 // ==========================================================================
 
 // Rematerialize the constant `valueId` AT the peak (`peakSeq`): re-emit its `movRegImm(32)` (a
-// fresh value id) right before EACH use that follows the eviction point, rewriting that use to
-// the fresh copy. A constant is trivially rematerializable, so per-use re-emit is fine — it
-// holds no register across the gap and never touches memory, so unlike a spill it needs no
-// depth-0 restriction on its uses (re-emitting a constant even inside a loop is free). The
-// original def is dropped ONLY when no before-peak use still reads it; otherwise it stays live
-// from its def to that last before-peak use (dead across the peak either way). Returns the next
-// free value id.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq ByteCount, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+// fresh value id) right before EACH use this split rewrites, rewriting that use to the fresh copy. A
+// constant is trivially rematerializable, so per-use re-emit is fine — it holds no register across
+// the gap and never touches memory, so unlike a spill it needs no depth-0 restriction on its uses
+// (re-emitting a constant even inside a loop is free). Returns the next free value id.
+//
+// The SCOPE says which uses are rewritten (see `SplitScope`). An `afterPeakUses` remat leaves the
+// before-peak uses reading the ORIGINAL, so the original stays live from its def to the last of them
+// — dead across the peak, which is what `killsValueAtPeak` established before choosing it. An
+// `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
+// across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
+// exactly when nothing reads it any more.
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq ByteCount, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	let constValue = constValueOfDef(module, opIdx: defOpIdx)
+	let keepsOriginal = keepsOriginalBeforePeak(scope)
 
 	var freshId = nextValueId
-	var haveBeforePeakUse = false
+	var haveUnrewrittenUse = false
 	var buf = OperandList.create()
 	for j in 0 upto index.useCount(valueId) 'eachUse'
 		let record = index.useRecordAt(valueId, k: j)
-		if index.useSeqAt(record) < peakSeq 'beforePeak'
-			// A before-peak use keeps the ORIGINAL constant; only after-peak uses are re-emitted.
-			haveBeforePeakUse = true
+		if index.useSeqAt(record) < peakSeq and keepsOriginal 'beforePeak'
+			haveUnrewrittenUse = true
 			continue
 		end 'beforePeak'
 
@@ -1289,18 +1525,19 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 		freshId = freshId + 1
 	end 'eachUse'
 
-	if not haveBeforePeakUse 'dropDef'
+	if not haveUnrewrittenUse 'dropDef'
 		dropOriginalDef(module, topo: topo, defOpIdx: defOpIdx, blockLocal: index.defBlockOf(valueId))
 	end 'dropDef'
 
 	// A remat that re-emitted NOTHING changed nothing: the potential Φ did not decrease, so the next
 	// iteration finds the same peak and re-picks the same value — the driver spins until the runaway
-	// bound panics thousands of splits later, naming a symptom instead of the cause. `isRematVictim`'s
-	// `killsValueAtPeak` gate makes this unreachable (a value live at the peak that no before-peak use
-	// keeps alive there MUST have an after-peak use); assert it here so a regression in that gate
-	// fails LOUDLY at the split that caused it.
+	// bound panics thousands of splits later, naming a symptom instead of the cause. Both scopes make
+	// this unreachable — `afterPeakUses` because `isRematVictim`'s `killsValueAtPeak` gate guarantees
+	// an after-peak use (a value live at the peak that no before-peak use keeps alive there MUST have
+	// one), `everyUse` because a live value has at least one use — so assert it here and a regression
+	// in either gate fails LOUDLY at the split that caused it.
 	if freshId == nextValueId 'relievedNothing'
-		panic("rematerializeConstant: value {valueId} was chosen at the peak (sequence {peakSeq}) but has NO use after it, so nothing was re-emitted and the peak's pressure is unchanged — the next iteration would re-pick it forever. `isRematVictim`'s killsValueAtPeak gate must not admit a value whose only uses precede the peak (it is live there only around a back edge).")
+		panic("rematerializeConstant: value {valueId} was chosen at the peak (sequence {peakSeq}) but this split rewrote NO use of it, so nothing was re-emitted and the peak's pressure is unchanged — the next iteration would re-pick it forever. An `afterPeakUses` remat must not be chosen for a value whose only uses precede the peak (it is live there only around a back edge — that is what `isRematVictim`'s killsValueAtPeak gate refuses, and what the `everyUse` scope is for), and an `everyUse` remat must not be chosen for a value with no uses at all (it would not be live here).")
 	end 'relievedNothing'
 
 	stats.rematerialized = stats.rematerialized + 1
@@ -1347,8 +1584,9 @@ end 'dropOriginalDef'
 // and touches no genuine use. A no-op when the op does not use `from` at all.
 function rewriteOpAt(module TargetModule, opIdx OpIndex, from ValueId, to ValueId, buf OperandList)
 	let op = try module.ops.get(opIdx) otherwise panic("rewriteOpAt: opIdx not in module.ops")
-	if opIsSpillStore(op) 'spillStore'
-		return
+	match spillStoreSlotOf(op) 'spillStore'
+		slot then return
+		none then break 'spillStore'
 	end 'spillStore'
 	if not opUsesValue(op, valueId: from, buf: buf) 'noUse'
 		return

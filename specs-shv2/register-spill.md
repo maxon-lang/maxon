@@ -103,6 +103,28 @@ values *across* the point — a store before it and a reload after — exactly t
 machinery. So `maxPressure ≤ pool` is necessary but not sufficient; the splitter checks each
 op against its own reduced pool.
 
+### When the split at the eviction point cannot cut the range: reload at every use
+
+Splitting **at the peak** rewrites only the *after*-peak uses; the *before*-peak ones keep the
+original value in its register. That is what makes the value dead across the peak — **unless a
+before-peak use is still reachable *from* the peak**, which around a **back edge** it usually is. A
+loop-invariant read both *before* and *after* a call inside the loop is live across that call on the
+back edge no matter how its after-peak uses are rewritten, so the split at the eviction point
+relieves nothing at all.
+
+Six such invariants against the five callee-saved registers is not a program that exceeds the
+machine — six values, fourteen registers — so it is emphatically **not** `E5001`, and it must not be
+a compiler crash either. The ABI simply denies those values the nine caller-saved registers, and the
+one placement that survives that is to **load the value before each use** and keep it in a register
+only there. So the splitter widens the split: it rewrites **every** use, before-peak ones included,
+leaving the original with no reader but its own store. The store still anchors at the **def** — once,
+outside the loop — and the loop body pays one load per use. That is exactly the code an author would
+hand-write, and it is the placement the ABI forces, not one the allocator searched for.
+
+A **constant** in that position is relieved the same way but for free: it is re-emitted (`mov r, imm`)
+before *every* use, with no slot, no store and no load. Rematerialization is preferred over spilling
+here for the same reason it is preferred everywhere.
+
 A store→slot→reload chain that does not preserve value identity — a mis-targeted store,
 a wrong-slot reload, a reload of a slot nothing wrote — hands a use the wrong value, so
 the program computes the wrong answer and the exit-code assertion below fails. The
@@ -728,6 +750,107 @@ end 'pick'
 function main() returns ExitCode
 	let total = pick(1) + pick(2) + pick(3) + pick(4) + pick(5) + pick(6)
 	if total == 273 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: loop-invariant-read-across-a-call-in-a-loop -->
+SIX loop-invariants, each read BOTH BEFORE AND AFTER a call inside the loop. Every one of them is
+live across that call — so all six are confined to the five callee-saved registers, and one of them
+cannot stay in a register. But the split at the eviction point cannot cut ANY of their ranges: each
+has a before-peak use (in `pre`) that is reachable from the call around the BACK EDGE, so rewriting
+its after-peak uses would leave it live across the call regardless. `killsValueAtPeak` correctly
+refuses every one of them, and the splitter used to have nothing left to choose — it panicked
+(`noVictimAtPeak: 'f' has a CONFINED overflow ... yet none of them is forced-spillable`) on a
+program that fits the machine six times over.
+
+It is relieved by widening the split: `a6` is stored ONCE at its def in the entry block (loop depth
+0) and **every** use of it is rewritten to a reload — one before the `pre` sum, one after the call —
+so nothing reads the original and it is dead across the call. `a1`..`a5` keep the five callee-saved
+registers. The loop body grows by two loads, which is the ABI's price for a sixth live-across-call
+value, not a search: the fragment pins one `storeSlotReg` OUTSIDE the loop and exactly two
+`loadRegSlot` of that slot inside it. This must never be `E5001` — the program fits.
+
+Each iteration adds `2 × (a1+…+a6) + i` = `42 + i` to `acc`, so `i = 0, 1, 2` gives `42 + 43 + 44 = 129`.
+```maxon
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function invariantsAcrossCall(p int) returns int
+	let a1 = p + 1
+	let a2 = p + 2
+	let a3 = p + 3
+	let a4 = p + 4
+	let a5 = p + 5
+	let a6 = p + 6
+	var acc = 0
+	var i = 0
+	while i < 3 'loop'
+		let pre = acc + a1 + a2 + a3 + a4 + a5 + a6
+		let r = sink(i)
+		acc = pre + r + a1 + a2 + a3 + a4 + a5 + a6
+		i = i + 1
+	end 'loop'
+	return acc
+end 'invariantsAcrossCall'
+
+function main() returns ExitCode
+	return invariantsAcrossCall(0)
+end 'main'
+```
+```exitcode
+129
+```
+
+<!-- test: loop-invariant-constant-read-across-a-call-in-a-loop -->
+The same shape, but the sixth confined value is a CONSTANT (`c`, read as `c - i` on both sides of
+the call, which needs it in a register — a `sub`'s minuend cannot be an immediate). Five invariants
+`a1`..`a5` take the five callee-saved registers, and `c` is the one that cannot stay.
+
+Spilling it would work and would be wrong: a constant is free to recreate. So it is REMATERIALIZED
+across **every** use — `movRegImm32 …, 1000` re-emitted before each `sub`, the original def dropped,
+and NO stack slot for it at all. (The narrower remat — re-emit only after the peak — cannot be used:
+`c`'s before-peak use is reachable from the call around the back edge, exactly as in the test above,
+so the original would stay live across the call.) The fragment pins two `movRegImm32 …, 1000` inside
+the loop and no slot for `c`; the three slots it does use are `pre`, `d1` and the counter `i`, all
+of them ordinary eviction-point splits.
+
+Each iteration adds `pre + d1 + d2 + r + (a1+…+a5)` to `acc`, with `d1 = d2 = 1000 - i` and
+`pre = acc + 15`: `i = 0, 1, 2` give `acc = 2030, 4059, 6087`.
+```maxon
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function loopConst(p int) returns int
+	let c = 1000
+	let a1 = p + 1
+	let a2 = p + 2
+	let a3 = p + 3
+	let a4 = p + 4
+	let a5 = p + 5
+	var acc = 0
+	var i = 0
+	while i < 3 'loop'
+		let pre = acc + a1 + a2 + a3 + a4 + a5
+		let d1 = c - i
+		let r = sink(i)
+		let d2 = c - i
+		acc = pre + d1 + d2 + r + a1 + a2 + a3 + a4 + a5
+		i = i + 1
+	end 'loop'
+	return acc
+end 'loopConst'
+
+function main() returns ExitCode
+	let v = loopConst(0)
+	if v == 6087 'ok'
 		return 0
 	end 'ok'
 	return 99
