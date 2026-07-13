@@ -269,6 +269,11 @@ export type Project
 	// parameter merely to be timed, and each compile gets its own timings instead of
 	// the per-file fan-out driver contending on a global.
 	export var timings as CompileTimings
+	// Allocation attribution for this compile (see CompileMemory) — the twin of
+	// `timings`, phase for phase, and here for the same reason. The two are written
+	// TOGETHER, from one `PhaseProbe`, so a phase can never be timed at one boundary and
+	// metered at another; see PhaseProbe's header for why that is worth a type.
+	export var memory as CompileMemory
 
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
@@ -282,7 +287,8 @@ export type Project
 			target: target,
 			diagnostics: DiagnosticArray.create(),
 			globalData: GlobalDataTable.create(),
-			timings: CompileTimings.create()
+			timings: CompileTimings.create(),
+			memory: CompileMemory.create()
 		}
 	end 'create'
 end 'Project'

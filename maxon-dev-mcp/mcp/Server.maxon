@@ -211,10 +211,37 @@ function toolSchema(doc JsonDoc, name String) returns JsonNodeId
 	if name.equals("mm_trace_analyze") 'mta'
 		return schemaForMmTraceAnalyze(doc)
 	end 'mta'
+	if name.equals("run_scale_test") 'rsct'
+		return schemaForScaleTest(doc)
+	end 'rsct'
 	// Unknown tool — fall back to the permissive empty-object schema so
 	// the descriptor still validates against the MCP spec.
 	return schemaEmptyObject(doc)
 end 'toolSchema'
+
+// -----------------------------------------------------------------------------
+// run_scale_test
+// -----------------------------------------------------------------------------
+//
+// NO `compiler` FIELD. Only shv2 has a `scale-test` command, so the tool is fixed to it — exactly
+// as `dump_stages` is fixed to selfhosted. Offering the field would invite `compiler: "csharp"`
+// and answer it with a usage dump; see Compilers.maxon's header on never handing a compiler a flag
+// it has never heard of.
+function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
+	let rungsSchema = schemaInteger(doc, description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the generated program, so this is exponential in cost: 6 rungs is a 32x span and about 20 seconds.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Rewrite the committed per-rung MEMORY GOLDENS in Testing/scale-baseline.tsv instead of checking against them. Same door-you-must-open semantics as run_spec_test's updateRequired: THE DIFF IS THE REVIEW. A golden that moved means the compiler now allocates differently for the same input, which is the event this suite exists to catch. It does NOT rewrite the exponent budgets — those are a human's judgement, and a suite that regenerated its own ceilings would pass by construction.")
+	let perTypeSchema = schemaBoolean(doc, description: "Also run the untimed --mm-trace pass, which attributes allocations to the TYPE allocated. Off by default: it is a differently-compiled binary from the one being timed, and it traces every allocation individually.")
+	let emitCorpusSchema = schemaString(doc, description: "Dump the generated corpus to this directory for inspection and compile NOTHING. The corpus is otherwise built into a gitignored temp dir and thrown away.")
+	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"compiler:debug\", which prints the per-phase time AND memory tables for each rung's compile).")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("rungs", schemaId: rungsSchema, required: false))
+	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
+	fields.push(SchemaField.create("perType", schemaId: perTypeSchema, required: false))
+	fields.push(SchemaField.create("emitCorpus", schemaId: emitCorpusSchema, required: false))
+	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Compile a ladder of generated programs, each rung double the last, and gate the per-phase time and memory growth curves. Returns a structured verdict of PASS / FAIL / VOID / NOISY.")
+end 'schemaForScaleTest'
 
 function schemaEmptyObject(doc JsonDoc) returns JsonNodeId
 	let typeId = doc.add(JsonNode.stringNode("object"))
@@ -386,6 +413,9 @@ function toolDescription(name String) returns String
 	if name.equals("mm_trace_analyze") 'mta'
 		return "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
 	end 'mta'
+	if name.equals("run_scale_test") 'rsct'
+		return "Run the maxon-shv2 compile-time + memory scaling suite (shv2 only): compile a ladder of generated programs, each rung double the last, fit a growth exponent to every phase's time AND allocations, and check the per-rung memory goldens exactly. Returns PASS / FAIL / VOID (degenerate corpus) / NOISY (machine too loaded to judge time)."
+	end 'rsct'
 	return "(no description)"
 end 'toolDescription'
 
@@ -466,6 +496,9 @@ function invokeTool(name String, argsDoc JsonDoc, argsId JsonNodeId) returns Too
 	if name.equals("mm_trace_analyze") 'mta'
 		return mmTraceAnalyzeHandler(argsDoc, argsId: argsId)
 	end 'mta'
+	if name.equals("run_scale_test") 'rsct'
+		return scaleTestHandler(argsDoc, argsId: argsId)
+	end 'rsct'
 	panic("invokeTool: tool name '{name}' passed registration check but no dispatch branch matched")
 end 'invokeTool'
 
@@ -568,6 +601,7 @@ function toolRegistry() returns ToolNameArray
 	names.push("run_self_hosted_test")
 	names.push("spec_test_outcome")
 	names.push("mm_trace_analyze")
+	names.push("run_scale_test")
 	return names
 end 'toolRegistry'
 

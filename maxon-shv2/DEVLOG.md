@@ -680,3 +680,54 @@ stdlib cut is worth about a second. It gates nothing. (It also can no longer dro
 build time hurts; the Stage-0 trap table stays valid for whenever that is.
 
 **Net: Stage 0 is closed, mostly by deletion. The next step is Stage 2.1 — structs, enums, unions, `match`.**
+## Scale suite — compile-time + memory-traffic scaling, gated
+
+`ARCHITECTURE.md` claimed compilation is linear in program size and quoted exponents to prove it.
+Every one of those numbers had been measured on throwaway generated programs that were never
+committed: there was no corpus, no harness, and no gate anywhere in the tree, so the claim was
+unfalsifiable and free to regress silently. Separately, nothing measured the compiler's MEMORY at
+all — and `PLAN.md`'s Stage-5 gate is *≤30 s and ≤1.7 GB*, of which the second half had no instrument.
+
+`maxon-shv2 scale-test` (and `mcp__maxon-dev__run_scale_test`) is that instrument.
+
+- [x] **Runtime counters** (`RuntimeEmitter`): `__mm_alloc_bytes` / `__mm_raw_alloc_bytes`, readable
+  from a RELEASE binary via `__Builtins.mmAllocBytes()` etc. **Per-P slots, unlocked** — a P owns its
+  slot and is run by one M at a time, so a plain add is exact with no lock. The obvious `lock xadd`
+  on a shared global measured **+9%** on a fixed compile (with live/peak) and **+3%** (without); per-P
+  measured **+0.05% mean / +0.83% min**, which is what shipped. Exact, not approximate.
+- [x] **`PhaseProbe`** — ONE bracket measuring time AND memory at the same two instants, so the two
+  attributions cannot drift apart. Every timing site converted; `CompileMemory` is the twin of
+  `CompileTimings`, with the same panic-on-overlap disjointness contract.
+- [x] **`--metrics=<path>`** (TSV, driven off `CompilePhase.allCases` so a new phase cannot be
+  silently omitted) and **`--result-json=<path>`** (so the MCP tool reads data instead of scraping a
+  padded table).
+- [x] **Six-rung ladder**, fold-resistant by construction (every value seeded from a loop-carried
+  accumulator or a call result — shv2 has no SCCP and no inliner to see through either). Verified:
+  a deliberately degenerate corpus reports **VOID**, not PASS.
+- [x] **Gates**: exact per-rung memory goldens (bit-for-bit reproducible — verified across 5 runs),
+  per-phase exponents in time AND allocations, a degeneracy self-check, and a noise guard that
+  reports **NOISY** rather than a confident verdict from a loaded machine.
+- [x] **Teeth, demonstrated**: reintroducing the quadratic below makes three independent gates fire
+  and name it (memory goldens on all 4 rungs, `phase:elimTrivialBlockArgs` at 2.018, and
+  `mem:phase:elimTrivialBlockArgs` at 1.988).
+
+### What it found on its first run
+
+**`elimTrivialBlockArgs` was quadratic, and had become 54% of a large compile.** It applied its
+substitutions ONE AT A TIME — re-walking every op and REBUILDING EVERY BRANCH EDGE per substitution
+— and separately rescanned every edge in the function for every block-arg. On the shapes where the
+pass matters most (a chain of N if/elses over one variable: ~N blocks, ~3N edges, ~N trivial phis)
+both are quadratic in the same quantity. Measured at **63× the allocations for an 8× program**.
+
+Fixed by inverting the edge scan into per-arg accumulators (the shape `pruneDeadBlockArgs` already
+uses) and applying all substitutions in one walk through a dense column (`remapStdOpUses`).
+
+| | before | after |
+|---|---|---|
+| `elimTrivialBlockArgs` exponent (time / allocs) | 2.02 / 1.99 | **1.04 / 1.01** |
+| share of a rung-3 compile | 54% | **0.2%** |
+| rung-3 wall time | 1888 ms | **862 ms** |
+| rung-3 allocations | 12.0 M | **4.3 M** |
+
+**The emitted IR is byte-identical** (`specs-shv2` 126/0, zero fragment drift). The pass produced
+the right answer all along; it just paid quadratically for it.

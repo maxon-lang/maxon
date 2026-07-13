@@ -91,7 +91,11 @@ end 'pruneDeadBlockArgsInFunc'
 // then skips the pass entirely). Sizing the columns by the BLOCK-ARG id space rather than
 // the function's whole value space is safe because `flagOf` reads false for any id above it,
 // and an id above it is by definition not a block-arg.
-function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
+//
+// Exported: `elimTrivialBlockArgs` sizes its own dense columns by exactly this space, for exactly
+// this reason. Two copies of "how big is the block-arg id space" would be two chances to size a
+// column wrong.
+export function blockArgIdBound(module StdModule, func IrFunction) returns ValueId
 	var bound = 0 as ValueId
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")

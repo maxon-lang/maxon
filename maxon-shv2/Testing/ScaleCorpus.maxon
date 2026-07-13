@@ -1,0 +1,463 @@
+// ScaleCorpus — the generated ladder the scale suite measures.
+//
+// ONE PROGRAM PER RUNG, and each rung DOUBLES all six structural knobs at once. Six rungs is a
+// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be six ladders
+// and thirty-six compiles to learn the same thing, because the question is never "which knob is
+// the compiler slow in" (the per-phase curves answer that already) but "does the whole thing stay
+// linear as a program grows", and a program grows in every direction at once.
+//
+// ARCHITECTURE.md claims compilation is linear in program size, and quotes exponents to back it —
+// 1.96 -> ~1.0 for a 3,200-`if` function, 40x faster, a 19,200-block function that used to
+// SIGSEGV. Every one of those numbers was measured on throwaway generated programs that were never
+// committed. This file is the corpus that makes those claims falsifiable, and the two headline
+// shapes are deliberately reproduced at the top rung: rung 5's `longFunction` is 3,200 `if`s, and
+// its `deepBlocks` is ~19,200 blocks.
+//
+// ===========================================================================================
+// THE TRAP, AND WHY EVERY VALUE HERE IS SEEDED FROM SOMETHING OPAQUE
+// ===========================================================================================
+//
+// `foldConstOperands` is a real pass in this pipeline. A naively generated benchmark — the obvious
+// one, a pile of arithmetic on literals — FOLDS AWAY TO NOTHING. The suite would then measure an
+// empty compile at every rung, fit a perfect straight line through it, and report that the
+// compiler is beautifully linear. It is the "check the instrument before the subject" failure, and
+// it produces the most convincing possible wrong answer.
+//
+// So every value chain in this corpus starts from something the folder provably cannot see
+// through, and there are exactly two such things in shv2:
+//
+//   1. A LOOP-CARRIED `var`. Its value at the top of the loop is a phi of its initializer and
+//      whatever the body last wrote, so it is not a constant — and shv2 has no SCCP to prove
+//      otherwise. `scaleSeed` is one, and it is where every rung's data originates.
+//   2. A CALL RESULT. shv2 has no inliner and no interprocedural constant propagation, so a
+//      function's return value is opaque at the call site no matter how trivial the callee. Every
+//      generated function therefore takes its seed as a PARAMETER and derives everything from it.
+//
+// The runner does not take this on trust. It runs the degeneracy self-check on every ladder —
+// emitted code bytes must grow with source bytes — and reports VOID, not PASS, if the corpus ever
+// folds flat. See ScaleTestRunner.
+//
+// ===========================================================================================
+// NOT COMMITTED, ON PURPOSE
+// ===========================================================================================
+//
+// The rungs are generated into `.scale-tmp/` at run time (gitignored, exactly as `.spec-tmp/` is).
+// Committing them would add megabytes of generated Maxon to the tree for no benefit: generation is
+// deterministic, so the corpus is a pure function of this file, and this file IS the corpus.
+// `--emit-corpus=<dir>` dumps a ladder anywhere you want to look at it.
+//
+// THE SUBSET: shv2 implements `int` arithmetic, functions (<=6 params), `if`, `while`, `break`,
+// `return`, `let`, `var`. No `print`, no structs, no arrays, no strings, no `for`. Everything below
+// stays inside it — see the 15 specs in `specs-shv2/`.
+
+// Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
+// exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
+// thousand times rung 0 that never finishes. Hence a hard, refused-not-clamped upper bound.
+export typealias RungIndex = int(0 to 15)
+export typealias RungCount = int(1 to 16)
+
+export let MinRungCount = 1 as RungCount
+export let MaxRungCount = 8 as RungCount
+export let DefaultRungCount = 6 as RungCount
+
+// Total bytes of generated source in one rung — the denominator of the degeneracy check.
+export typealias SourceByteCount = int(0 to u32.max)
+
+// The outcome of parsing `--rungs=<n>`. A union rather than a throw, because the caller is inside
+// the argument loop and must neither diverge nor invent a value: `invalid` is recorded as a bad
+// option and the driver then refuses to run at all.
+export union RungCountArg
+	valid(count RungCount)
+	invalid
+end 'RungCountArg'
+
+// Parse `--rungs=<n>`.
+//
+// A rung count outside the ladder's range is REFUSED, never clamped. Each rung DOUBLES the program,
+// so `--rungs=20` is not "a thorough run", it is a program a hundred thousand times rung 0 that will
+// never finish — and a caller who asked for it and silently got 8 would believe they had measured
+// something they had not.
+//
+// The digits themselves are `parseCount`'s job (ScaleTestRunner) — this only decides what a valid
+// RANGE is. Two hand-rolled decimal loops in one suite would be one loop too many.
+export function parseRungCount(raw String) returns RungCountArg
+	let value = try parseCount(raw) otherwise 'notANumber'
+		return RungCountArg.invalid
+	end 'notANumber'
+
+	if value < MinRungCount or value > MaxRungCount 'outOfRange'
+		return RungCountArg.invalid
+	end 'outOfRange'
+	return RungCountArg.valid(value as RungCount)
+end 'parseRungCount'
+
+// The number of `if`s, files, functions... in one knob at one rung. Bounded well above the top
+// rung's largest knob (rung 7's deepBlocks is 200 << 7 = 25,600).
+export typealias KnobSize = int(1 to 1048576)
+
+// ===========================================================================================
+// The six knobs, and their rung-0 sizes
+// ===========================================================================================
+//
+// Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
+// overhead (a rung that compiles in 3 ms measures the OS, not the compiler) and rung 5 stays near
+// a second. They are the ONE place to retune if the ladder gets too slow or too fast.
+
+// The realistic codebase shape: many small functions. Each is a few ops — a couple of arithmetic
+// ops and a branch — which is what most real functions are.
+let FunctionsBase = 16 as KnobSize
+
+// Real source FILES, not one big one: this is what exercises `load`, `merge`, and the query spine,
+// none of which a single-file corpus would touch at all. The `manyFunctions` above are distributed
+// across them, so functions-per-file stays constant as both double.
+let FilesBase = 4 as KnobSize
+
+// ONE function, N sequential `if`s. The 3,200-`if` benchmark ARCHITECTURE.md quotes: at rung 5
+// this is exactly 100 << 5 = 3,200.
+let LongIfsBase = 100 as KnobSize
+
+// ONE function, a huge BLOCK count. Each `if`/`else` contributes three blocks (then, else,
+// continuation), so this is ~3x its knob: at rung 5, 200 << 5 = 6,400 if/elses = ~19,200 blocks —
+// the shape that used to SIGSEGV, and the reason "no CFG traversal may recurse" is a rule. It is
+// separate from `longFunction` because that one grows OPS in a mostly-straight line and this one
+// grows the CFG.
+let DeepBlocksBase = 200 as KnobSize
+
+// N chained calls, each caller holding values live ACROSS its call — so this is the cross-call
+// spill bracket knob, not merely a call-depth knob.
+let CallChainBase = 8 as KnobSize
+
+// ONE function, N pressured loops. KNOWN SUPERLINEAR, and the reason the aggregate time exponent
+// is reported rather than gated: the splitter's driver recomputes liveness from scratch after
+// every split (ARCHITECTURE.md:1336-1345 calls the fix "not worth doing until a real program
+// demands it"). Its base is the smallest of the six because its cost overtakes everything else as
+// the ladder climbs.
+let PressuredLoopsBase = 2 as KnobSize
+
+// How many accumulators each pressured loop holds live ACROSS a call.
+//
+// EIGHT IS A CHOSEN NUMBER, not a round one. The allocatable pool is 14 GPRs, of which only 5 are
+// callee-saved — so a value live across a call has just those 5 to live in, and the excess MUST go
+// to memory. Eight accumulators plus the loop counter plus the running total is ten values live
+// across the call: five forced spill brackets per loop, which is exactly the splitter work this
+// knob exists to provoke.
+//
+// And it stays clear of E5001. Peak pressure here is eleven (the ten above plus the call's result),
+// against a full pool of fourteen — so the loop FITS the machine, and the spills are the ABI's
+// doing, not a register shortage. Raising this to fourteen-plus would make the corpus fail to
+// compile with a register-pressure diagnostic and VOID the whole ladder. See
+// `specs-shv2/register-pressure.md`, which spells out that a forced spill across a call is not
+// E5001 and must never become it.
+let PressuredValuesPerLoop = 8 as KnobSize
+
+// Iterations of each generated loop. Small: the compiler never RUNS these programs, so trip count
+// is irrelevant to the measurement — only the code shape is. Big enough not to look degenerate.
+let GeneratedLoopTrips = 4
+
+// ===========================================================================================
+// Rung layout on disk
+// ===========================================================================================
+
+let ScaleTempDirName = ".scale-tmp"
+
+// Shared with ScalePerType, which locates the rungs this generator wrote.
+export let RungDirPrefix = "rung"
+export let MaxonExtension = ".maxon"
+
+// One generated rung: where it lives and how big it is. `sourceBytes` is the degeneracy check's
+// denominator — the question "did the compiler's output grow with its input" needs both.
+export type ScaleRung
+	export let index as RungIndex
+	export let dir as FilePath
+	export let sourceBytes as SourceByteCount
+
+	export static function create(index RungIndex, dir FilePath, sourceBytes SourceByteCount) returns ScaleRung
+		return Self{index: index, dir: dir, sourceBytes: sourceBytes}
+	end 'create'
+end 'ScaleRung'
+
+export typealias ScaleRungArray = Array with ScaleRung
+
+// A knob's size at `rung`: `base << rung`. THE one place the doubling lives, so no knob can drift
+// out of step with the others and quietly change what "one rung" means.
+function knobAt(base KnobSize, rung RungIndex) returns KnobSize
+	var size = base
+	for _ in 0 upto rung 'double'
+		size = size * 2
+	end 'double'
+	return size
+end 'knobAt'
+
+// Generate the whole ladder under `root`, returning one ScaleRung per rung.
+export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws CompileError
+	if not Directory.create(root) 'noRoot'
+		throw CompileError.directoryNotFound(root)
+	end 'noRoot'
+
+	var ladder = ScaleRungArray.create()
+	for rung in 0 upto rungs 'eachRung'
+		ladder.push(try generateRung(root, rung: rung as RungIndex))
+	end 'eachRung'
+	return ladder
+end 'generateCorpus'
+
+// The default corpus root: `<specDir>/../.scale-tmp`, resolved against the cwd. Gitignored, and
+// rebuilt from scratch on every run — generation is deterministic, so a stale rung is never
+// silently reused.
+export function defaultCorpusRoot() returns FilePath
+	let rel = try FilePath.from(ScaleTempDirName) otherwise panic("ScaleCorpus: '{ScaleTempDirName}' must be a valid relative path")
+	return Directory.currentPath().join(rel)
+end 'defaultCorpusRoot'
+
+// Generate one rung: a DIRECTORY of `.maxon` files (shv2's `build <dir>` walks them recursively),
+// so the `manyFiles` knob is expressed as real files on disk rather than simulated.
+function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws CompileError
+	let dirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise panic("ScaleCorpus: rung dir name must be valid")
+	let dir = root.join(dirName)
+	if not Directory.create(dir) 'noDir'
+		throw CompileError.directoryNotFound(dir)
+	end 'noDir'
+
+	let fileCount = knobAt(FilesBase, rung: rung)
+	let funcCount = knobAt(FunctionsBase, rung: rung)
+
+	var sourceBytes = 0 as SourceByteCount
+
+	// `a_` / `b_` / ... prefixes only order the directory listing for a human reading a dumped
+	// corpus; shv2 merges files in listing order and the merge is order-independent.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource())
+	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(knobAt(CallChainBase, rung: rung)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_main", source: mainSource(fileCount, funcCount: funcCount, chainLength: knobAt(CallChainBase, rung: rung)))
+
+	return ScaleRung.create(rung, dir: dir, sourceBytes: sourceBytes)
+end 'generateRung'
+
+// Write one generated file, returning its byte length so the caller can total the rung's source
+// size without stat-ing the directory back.
+function writeRungFile(dir FilePath, name String, source String) returns SourceByteCount throws CompileError
+	let path = dir.join("{name}{MaxonExtension}")
+	try File.writeText(path, content: source) otherwise throw CompileError.readError(path)
+	return source.byteLength() as SourceByteCount
+end 'writeRungFile'
+
+// ===========================================================================================
+// The knobs, as source
+// ===========================================================================================
+
+// THE ORIGIN OF EVERY VALUE IN THE CORPUS, and the reason none of it folds away.
+//
+// `acc` is a loop-carried `var`: at the top of the loop it is a phi of its initializer and what the
+// body last wrote it. `foldConstOperands` moves a CONSTANT operand into an immediate; it cannot
+// prove a phi is a constant, and shv2 has no SCCP that could. So `scaleSeed()` is opaque, its
+// return value is opaque, and everything downstream that derives from it is opaque too.
+//
+// This is the same trick `specs-shv2/register-pressure.md` uses to hold 17 values live without the
+// folder eating them.
+function seedSource() returns String
+	var out = "// Generated by ScaleCorpus. The opaque seed every other value derives from.\n"
+	out.append("function scaleSeed() returns int\n")
+	out.append("\tvar acc = 1\n")
+	out.append("\tvar i = 0\n")
+	out.append("\twhile i < {GeneratedLoopTrips} 'seedLoop'\n")
+	out.append("\t\tacc = acc + i * 3\n")
+	out.append("\t\ti = i + 1\n")
+	out.append("\tend 'seedLoop'\n")
+	out.append("\treturn acc\n")
+	out.append("end 'scaleSeed'\n")
+	out.append("\n")
+	// A callee with a branch in it, so a call to it is neither trivially foldable nor free. Every
+	// pressured loop calls this ACROSS its live accumulators, which is what forces the spills.
+	out.append("function scaleOpaque(a int) returns int\n")
+	out.append("\tif a > 100 'big'\n")
+	out.append("\t\treturn a - 100\n")
+	out.append("\tend 'big'\n")
+	out.append("\treturn a + 1\n")
+	out.append("end 'scaleOpaque'\n")
+	return out
+end 'seedSource'
+
+// The `manyFunctions` + `manyFiles` knobs, which are one piece of work: N functions spread over M
+// real files. Both double per rung, so functions-per-file is constant and the two knobs stay
+// independent — M is what `load`/`merge`/the query spine see, N is what the pass pipeline sees.
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize) returns SourceByteCount throws CompileError
+	// Ceiling division: the last file takes the remainder, and no function is dropped because the
+	// counts did not divide evenly.
+	let perFile = (funcCount + fileCount - 1) / fileCount
+
+	var total = 0 as SourceByteCount
+	for fileIndex in 0 upto fileCount 'eachFile'
+		var out = "// Generated by ScaleCorpus: the many-small-functions knob, file {fileIndex}.\n"
+		for slot in 0 upto perFile 'eachFunc'
+			let funcIndex = fileIndex * perFile + slot
+			if funcIndex >= funcCount 'past'
+				break
+			end 'past'
+			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex))
+		end 'eachFunc'
+		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out)
+	end 'eachFile'
+	return total
+end 'writeManyFunctions'
+
+// One small function of the realistic-codebase shape: a couple of arithmetic ops and a branch.
+// Everything derives from the parameter `a`, which is a call argument at every call site and
+// therefore opaque to the folder.
+function smallFunctionSource(fileIndex KnobSize, slot KnobSize, salt KnobSize) returns String
+	let name = smallFunctionName(fileIndex, slot: slot)
+	// `salt` varies the constants across functions so they are not textually identical — identical
+	// bodies would be a fair benchmark of nothing but the parser's cache.
+	let k = salt mod 7 + 1
+	var out = "\nfunction {name}(a int) returns int\n"
+	out.append("\tlet b = a + {k}\n")
+	out.append("\tlet c = b * 3\n")
+	out.append("\tif c > a 'grew'\n")
+	out.append("\t\treturn c - a\n")
+	out.append("\tend 'grew'\n")
+	out.append("\treturn c + a\n")
+	out.append("end '{name}'\n")
+	return out
+end 'smallFunctionSource'
+
+function smallFunctionName(fileIndex KnobSize, slot KnobSize) returns String
+	return "sf{fileIndex}_{slot}"
+end 'smallFunctionName'
+
+// The `longFunction` knob: ONE function, N sequential `if`s. At rung 5 this is the 3,200-`if`
+// benchmark ARCHITECTURE.md quotes an exponent for. It grows OPS in a near-straight line; the CFG
+// grows with it but stays a simple chain.
+function longFunctionSource(ifCount KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs.\n"
+	out.append("function scaleLongIf(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto ifCount 'eachIf'
+		out.append("\tif acc > {i} 'c{i}'\n")
+		out.append("\t\tacc = acc + {i mod 5 + 1}\n")
+		out.append("\tend 'c{i}'\n")
+	end 'eachIf'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleLongIf'\n")
+	return out
+end 'longFunctionSource'
+
+// The `deepBlocks` knob: ONE function whose BLOCK count is huge. Each if/else is three blocks (then,
+// else, continuation), so this lands near 3x its knob — ~19,200 blocks at rung 5, which is the
+// shape that used to SIGSEGV and the reason "no CFG traversal may recurse" is a rule rather than a
+// preference. Distinct from `longFunction`: that grows ops along a chain, this grows the CFG.
+function deepBlocksSource(ifElseCount KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks.\n"
+	out.append("function scaleDeepBlocks(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto ifElseCount 'eachIfElse'
+		out.append("\tif acc > {i} 'd{i}'\n")
+		out.append("\t\tacc = acc + {i mod 3 + 1}\n")
+		out.append("\tend 'd{i}' else 'e{i}'\n")
+		out.append("\t\tacc = acc - {i mod 2 + 1}\n")
+		out.append("\tend 'e{i}'\n")
+	end 'eachIfElse'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleDeepBlocks'\n")
+	return out
+end 'deepBlocksSource'
+
+// The `callChain` knob: N functions, each calling the one below it and holding values LIVE ACROSS
+// that call. The live values are the point — a bare call chain would measure call lowering, but
+// values live across a call can only live in the 5 callee-saved registers, so this is what
+// exercises the cross-call spill bracket.
+function callChainSource(length KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the call-chain knob — {length} chained calls, values live across each.\n"
+	// The base of the chain: takes no call, so the recursion of generated text terminates.
+	out.append("function scaleChain0(a int) returns int\n")
+	out.append("\treturn a + 1\n")
+	out.append("end 'scaleChain0'\n")
+
+	for i in 1 upto length 'eachLink'
+		out.append("\nfunction scaleChain{i}(a int) returns int\n")
+		out.append("\tlet x = a + {i mod 9 + 1}\n")
+		out.append("\tlet y = a * 2\n")
+		out.append("\tlet z = scaleChain{i - 1}(a)\n")
+		out.append("\treturn x + y + z\n")
+		out.append("end 'scaleChain{i}'\n")
+	end 'eachLink'
+	return out
+end 'callChainSource'
+
+// The `pressuredLoops` knob: ONE function, N loops, each holding PressuredValuesPerLoop
+// accumulators live across a call to `scaleOpaque`.
+//
+// This is the knob that is KNOWN SUPERLINEAR, and the whole reason the aggregate exponent is
+// reported rather than gated. The splitter must spill the accumulators that do not fit the five
+// callee-saved registers, and its driver recomputes liveness from scratch after every split — so
+// its cost is O(function x splits) and it overtakes everything else as the ladder climbs. That cost
+// lands in exactly two sub-phases (`splitting` and `liveness`), which is why every OTHER phase's
+// curve stays clean enough to gate tightly.
+//
+// It does NOT trip E5001 — see PressuredValuesPerLoop.
+function pressuredLoopsSource(loopCount KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the pressured-loops knob — {loopCount} loops, {PressuredValuesPerLoop} values live across a call in each.\n"
+	out.append("function scalePressured(a int) returns int\n")
+	out.append("\tvar total = a\n")
+
+	for loopIndex in 0 upto loopCount 'eachLoop'
+		// Fresh accumulator names per loop, so the loops' live ranges do not overlap and peak
+		// pressure stays at one loop's worth however many loops there are.
+		for v in 0 upto PressuredValuesPerLoop 'declValues'
+			out.append("\tvar s{loopIndex}_{v} = a + {v + 1}\n")
+		end 'declValues'
+		out.append("\tvar i{loopIndex} = 0\n")
+		out.append("\twhile i{loopIndex} < {GeneratedLoopTrips} 'p{loopIndex}'\n")
+		// The call is what makes the loop pressured: every accumulator is live across it, and a
+		// value live across a call is forbidden all 9 caller-saved registers.
+		out.append("\t\tlet r{loopIndex} = scaleOpaque(i{loopIndex})\n")
+		for v in 0 upto PressuredValuesPerLoop 'updateValues'
+			out.append("\t\ts{loopIndex}_{v} = s{loopIndex}_{v} + r{loopIndex}\n")
+		end 'updateValues'
+		out.append("\t\ti{loopIndex} = i{loopIndex} + 1\n")
+		out.append("\tend 'p{loopIndex}'\n")
+
+		for v in 0 upto PressuredValuesPerLoop 'sumValues'
+			out.append("\ttotal = total + s{loopIndex}_{v}\n")
+		end 'sumValues'
+	end 'eachLoop'
+
+	out.append("\treturn total\n")
+	out.append("end 'scalePressured'\n")
+	return out
+end 'pressuredLoopsSource'
+
+// `main`, which threads the seed through every generated function.
+//
+// It calls all of them ON PURPOSE. An uncalled function is a function a future dead-code pass could
+// legitimately delete, and the day that pass lands, the `manyFunctions` knob would silently
+// evaporate and the ladder would go flat — reporting perfect linearity because it had stopped
+// compiling anything. Threading `acc` through every call makes each one load-bearing.
+function mainSource(fileCount KnobSize, funcCount KnobSize, chainLength KnobSize) returns String
+	let perFile = (funcCount + fileCount - 1) / fileCount
+
+	var out = "// Generated by ScaleCorpus: threads the opaque seed through every generated function.\n"
+	out.append("function main() returns ExitCode\n")
+	out.append("\tvar acc = scaleSeed()\n")
+
+	for fileIndex in 0 upto fileCount 'eachFile'
+		for slot in 0 upto perFile 'eachFunc'
+			if fileIndex * perFile + slot >= funcCount 'past'
+				break
+			end 'past'
+			out.append("\tacc = {smallFunctionName(fileIndex, slot: slot)}(acc)\n")
+		end 'eachFunc'
+	end 'eachFile'
+
+	out.append("\tacc = scaleLongIf(acc)\n")
+	out.append("\tacc = scaleDeepBlocks(acc)\n")
+	out.append("\tacc = scaleChain{chainLength - 1}(acc)\n")
+	out.append("\tacc = scalePressured(acc)\n")
+	out.append("\tif acc > 0 'ok'\n")
+	out.append("\t\treturn 0\n")
+	out.append("\tend 'ok'\n")
+	out.append("\treturn 1\n")
+	out.append("end 'main'\n")
+	return out
+end 'mainSource'

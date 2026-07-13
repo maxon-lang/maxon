@@ -431,7 +431,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// count, which the reorder had no use for and therefore never paid for.
 	var cfg = buildFuncCfg(module, func: func, topo: topo)
 	var nextValueId = cfg.valueCount
-	var liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
+	var liveness = timedLiveness(module, cfg: cfg, func: func, project: project)
 	// One set of working buffers for every iteration below — the sweep and the victim choice allocate
 	// nothing per split (see `SplitScratch`). It is sized off the CFG, which splitting cannot change.
 	var scratch = SplitScratch.create(cfg.topo.numBlocks)
@@ -487,7 +487,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		// function would report as the new value count. Publishing it on the (reused) CFG is what
 		// re-sizes every value-indexed column of the next liveness + index build.
 		cfg.valueCount = nextValueId
-		liveness = timedLiveness(module, cfg: cfg, func: func, stats: stats)
+		liveness = timedLiveness(module, cfg: cfg, func: func, project: project)
 		analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch)
 	end 'relievePressure'
 
@@ -560,10 +560,16 @@ end 'noVictimAtPeak'
 // `splitting` — and `liveness` read 0.00ms on every program, which is exactly the "74% of
 // self-compile with ZERO sub-phase attribution" failure the design set out to avoid. On a large
 // function liveness, not splitting, is the dominant cost, and the numbers said the opposite.
-function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, stats RegAllocStats) returns LivenessResult
-	let t = Clock.nowNanos()
+//
+// It takes `project`, not `stats`, because the probe records into BOTH the timing and the memory
+// table and only Project holds both. This is also the phase whose ALLOCATIONS matter most: the
+// splitter's driver recomputes liveness from scratch after every split (O(function × splits)), so
+// liveness is where a superlinear allocation curve would first appear — and now it is measured
+// there rather than smeared across `splitting`.
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, project Project) returns LivenessResult
+	let probe = PhaseProbe.begin()
 	let liveness = computeLivenessOn(module, cfg: cfg, func: func)
-	stats.addPhaseNanos(RegAllocPhase.liveness, nanos: Clock.elapsedNanos(t))
+	recordRegAllocPhase(project, phase: RegAllocPhase.liveness, probe: probe)
 	return liveness
 end 'timedLiveness'
 

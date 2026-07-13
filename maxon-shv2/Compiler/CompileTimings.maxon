@@ -35,7 +35,12 @@
 
 // Column widths for the report table. `RuleWidth` is derived, so the separator can
 // never drift out of step with the columns above it.
-typealias ColumnWidth = int(0 to 128)
+//
+// Exported, along with `padRight`/`padLeft`/`millisText` below, because the scale-test runner
+// prints tables of the same numbers and must not grow a second, subtly-different copy of
+// "nanoseconds as milliseconds to one decimal place" (CLAUDE.md's no-duplicated-code rule, and a
+// second copy would eventually disagree with this one about rounding).
+export typealias ColumnWidth = int(0 to 128)
 
 let PhaseNameWidth = 22 as ColumnWidth
 let TimeWidth = 11 as ColumnWidth
@@ -225,7 +230,7 @@ end 'timingRow'
 // sub-phase's share of a compile swung between 9.6% and 14.4% across identical runs.
 // The reading was quantization, not signal. Nanoseconds are stored; milliseconds are
 // merely how a human reads the row.
-function millisText(nanos DurationNanos) returns String
+export function millisText(nanos DurationNanos) returns String
 	let tenths = (nanos * MillisTenthsPerSecond) / NanosPerSecond
 	return "{tenths / MillisTenthsPerMs}.{tenths mod MillisTenthsPerMs}"
 end 'millisText'
@@ -261,7 +266,7 @@ end 'percentOfTotal'
 
 // Pad to `width` with spaces. A label longer than its column widens that row rather
 // than being truncated — a phase name must always be readable in full.
-function padRight(text String, width ColumnWidth) returns String
+export function padRight(text String, width ColumnWidth) returns String
 	var out = "{text}"
 	var i = text.byteLength()
 	while i < width 'pad'
@@ -271,7 +276,7 @@ function padRight(text String, width ColumnWidth) returns String
 	return out
 end 'padRight'
 
-function padLeft(text String, width ColumnWidth) returns String
+export function padLeft(text String, width ColumnWidth) returns String
 	var out = ""
 	var i = text.byteLength()
 	while i < width 'pad'

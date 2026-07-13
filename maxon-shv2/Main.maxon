@@ -34,6 +34,7 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		specTest gives runSpecTest(args)
+		scaleTest gives runScaleTest(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -50,7 +51,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'badPath'
 
 	let target = detectHostTarget()
-	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -176,11 +177,22 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	return 0
 end 'reportResults'
 
+// The FIRST bad option wins. A command line can be wrong in several ways at once, and reporting the
+// last one found would point at whichever flag happened to be typed rightmost rather than at the one
+// the reader would look for first.
+function firstBadOption(current String, arg String) returns String
+	if current.isEmpty() 'firstBad'
+		return arg
+	end 'firstBad'
+	return current
+end 'firstBadOption'
+
 // Print the user-facing message for a file/IO CompileError. The `compileError` arm
 // is SILENT: its diagnostics were already printed by the pipeline, so stderr stays
 // exactly those diagnostic lines (the `maxoncstderr` spec contract). Shared by
-// every command's failure path so the mapping lives in one place.
-function reportCompileError(e CompileError)
+// every command's failure path so the mapping lives in one place — including the
+// scale-test runner, which is why it is exported.
+export function reportCompileError(e CompileError)
 	match e 'report'
 		fileNotFound(p) then printError("error: file not found: {p}\n")
 		directoryNotFound(p) then printError("error: directory not found: {p}\n")
@@ -202,10 +214,15 @@ function printUsage()
 	print("  build <file|directory>        Compile a Maxon program to an executable\n")
 	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
+	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
+	print("                                last, and gate the per-phase time + memory growth curves\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
+	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
+	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
+	print("                                the same numbers as a human-readable table.\n")
 	print("  --filter=<pattern>            (spec-test) Run only tests whose `<spec>/<test>` label contains\n")
 	print("                                <pattern>. A bare spec name selects that whole spec.\n")
 	print("  --update-required             (spec-test) Rewrite the committed .test goldens instead of\n")
@@ -213,6 +230,19 @@ function printUsage()
 	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
 	print("                                WORSE. REVIEW THE RESULTING DIFF. Pair it with --filter: an\n")
 	print("                                unfiltered run rewrites EVERY golden in the suite.\n")
+	print("  --rungs=<n>                   (scale-test) Climb <n> rungs (default {DefaultRungCount},\n")
+	print("                                range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the\n")
+	print("                                program, so this is exponential in cost.\n")
+	print("  --update-required             (scale-test) Rewrite the committed memory goldens in\n")
+	print("                                Testing/scale-baseline.tsv instead of checking against them.\n")
+	print("                                Same door-you-must-open semantics as above: the diff IS the\n")
+	print("                                review, and a memory golden that moved without a reason is\n")
+	print("                                exactly what this suite exists to catch.\n")
+	print("  --per-type                    (scale-test) Also run the untimed --mm-trace pass, attributing\n")
+	print("                                allocations to the TYPE allocated. Off by default: it is slow,\n")
+	print("                                and it is a different binary from the one being timed.\n")
+	print("  --emit-corpus=<dir>           (scale-test) Dump the generated corpus to <dir> for inspection\n")
+	print("                                (it is otherwise built into a temp dir and thrown away).\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -220,13 +250,16 @@ enum MaxonCommand
 	build
 	verifyWarmRebuild
 	specTest
+	scaleTest
 	unknown
 end 'MaxonCommand'
 
 // Thin M1 argument model: a command, an input path, an optional output override,
 // and the `--emit-ir` toggle. Grows into v1's full option set (targets, logging,
 // cache flags, ...) as the driver gains those capabilities.
-type MaxonArgs
+// Exported: the scale-test runner lives in Testing/ and takes the parsed args, exactly as the
+// spec-test runner takes them from inside Main.
+export type MaxonArgs
 	export let command as MaxonCommand
 	export let path as String
 	export let outputOverride as String
@@ -240,6 +273,27 @@ type MaxonArgs
 	// (an extra spill still computes the right answer). So regenerating them is the one way a
 	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
 	export let updateRequired as bool
+	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
+	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
+	// `--log=compiler:debug`, which prints the same numbers as a table.
+	export let metricsPath as String
+	// `--emit-corpus=<dir>` (scale-test only): dump the generated scaling corpus to <dir> for
+	// inspection instead of the temp directory it is otherwise built into and thrown away.
+	export let emitCorpus as String
+	// `--rungs=<n>` (scale-test only): how many rungs of the ladder to climb. Each doubles the
+	// program, so this is exponential in cost — see ScaleCorpus.
+	export let rungs as RungCount
+	// `--per-type` (scale-test only): also run the untimed `--mm-trace` pass, which attributes
+	// allocations to the TYPE allocated. Off by default: it traces every allocation individually
+	// and is far slower than the timed run.
+	export let perType as bool
+	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung metrics,
+	// per-curve exponent + budget + verdict, and the overall verdict — as JSON.
+	//
+	// This exists so the MCP tool does not SCRAPE the human report. The report's columns are padded
+	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
+	// mis-parse rather than fail. A caller that wants data gets data.
+	export let resultJson as String
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
 	export let badOption as String
@@ -262,6 +316,11 @@ type MaxonArgs
 		var emitIr = false
 		var filter = ""
 		var updateRequired = false
+		var metricsPath = ""
+		var emitCorpus = ""
+		var rungs = DefaultRungCount
+		var perType = false
+		var resultJson = ""
 		var badOption = ""
 
 		let args = CommandLine.args()
@@ -274,7 +333,9 @@ type MaxonArgs
 				command = MaxonCommand.verifyWarmRebuild
 			end 'verifyCmd' else if arg == "spec-test" 'specTestCmd'
 				command = MaxonCommand.specTest
-			end 'specTestCmd' else if arg == "-o" 'dashOutput'
+			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
+				command = MaxonCommand.scaleTest
+			end 'scaleTestCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
 				outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
@@ -285,7 +346,26 @@ type MaxonArgs
 				filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'filterFlag' else if arg == "--update-required" 'updateRequiredFlag'
 				updateRequired = true
-			end 'updateRequiredFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'updateRequiredFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
+				metricsPath = try CommandLine.optionValue(arg) otherwise ""
+			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
+				emitCorpus = try CommandLine.optionValue(arg) otherwise ""
+			end 'emitCorpusFlag' else if arg.startsWith("--rungs=") 'rungsFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				// A bad value is recorded as a BAD OPTION, not clamped to the default. `main` refuses
+				// to run on a command line it only partly understood, which is the only honest
+				// response to `--rungs=99`: the caller asked for a ladder this suite will not climb
+				// (each rung DOUBLES the program), and quietly climbing a different one would answer
+				// a question they never asked. See ScaleCorpus.parseRungCount.
+				match parseRungCount(raw) 'rungsArg'
+					valid(count) then rungs = count
+					invalid then badOption = firstBadOption(badOption, arg: arg)
+				end 'rungsArg'
+			end 'rungsFlag' else if arg == "--per-type" 'perTypeFlag'
+				perType = true
+			end 'perTypeFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
+				resultJson = try CommandLine.optionValue(arg) otherwise ""
+			end 'resultJsonFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
@@ -302,6 +382,6 @@ type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, resultJson: resultJson, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

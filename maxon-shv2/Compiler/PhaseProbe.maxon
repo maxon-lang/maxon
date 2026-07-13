@@ -1,0 +1,158 @@
+// PhaseProbe — ONE bracket around a compile phase, measuring wall time and memory
+// traffic at the SAME two instants.
+//
+// WHY THIS TYPE EXISTS AT ALL. Before it, every phase opened its own timing bracket by
+// hand: `let t = Clock.nowNanos()` ... `addPhaseNanos(phase, Clock.elapsedNanos(t))`.
+// Adding a second quantity (memory) by the same method would have meant a second pair of
+// hand-written reads at every one of those sites — and the moment one site brackets time
+// from A to B but memory from A to C, the two attributions drift apart and the report
+// says a phase spent its milliseconds in one place and its allocations in another. That
+// is precisely the class of bug CompileTimings' header exists to prevent, one level up.
+// So there is exactly one bracket type, it captures both, and a phase cannot measure one
+// without the other.
+//
+// THE CLOCK IS READ INNERMOST. `begin` reads the counters first and the clock LAST;
+// `elapsed` reads the clock FIRST and the counters after. The probe's own cost (five
+// runtime calls) therefore falls OUTSIDE the timed interval rather than inside it —
+// which matters because the register allocator probes per FUNCTION, so a 3,200-function
+// program opens tens of thousands of these. The counter interval is correspondingly a
+// hair WIDER than the clock's, and that costs nothing: reading a counter allocates
+// nothing, so the memory delta across the wider interval is identical.
+
+// A count of heap allocations, and a volume of heap bytes. Both are cumulative counters
+// read out of the running process's own allocator (see `__Builtins.mm*`), so both are
+// monotonic and neither can go negative.
+export typealias AllocCount = int(0 to u64.max)
+export typealias ByteCount = int(0 to u64.max)
+
+export typealias AllocCountArray = Array with AllocCount
+export typealias ByteCountArray = Array with ByteCount
+
+// What one phase consumed. The unit of attribution: every phase in the report is one of
+// these, and the report's job is to prove they sum to the whole compile.
+//
+// `frees` is DERIVED, never counted — see PhaseProbe.elapsed.
+export type PhaseDelta
+	export let nanos as DurationNanos
+	export let allocs as AllocCount
+	export let frees as AllocCount
+	export let bytes as ByteCount
+
+	export static function create(nanos DurationNanos, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseDelta
+		return Self{nanos: nanos, allocs: allocs, frees: frees, bytes: bytes}
+	end 'create'
+
+	export static function zero() returns PhaseDelta
+		return Self{nanos: 0, allocs: 0, frees: 0, bytes: 0}
+	end 'zero'
+
+	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
+	// to all four quantities at once (see `recordPhaseExcluding`).
+	//
+	// Every component is a non-negative range, so an inner delta that EXCEEDS the outer
+	// one traps here rather than wrapping. That is the intent: the inner phase is a
+	// sub-interval of the outer, so exceeding it means the two brackets overlap and are
+	// double-counting, which is the exact defect CompileTimings' header describes. A trap
+	// is the loudest available way to say so.
+	export function minus(inner PhaseDelta) returns PhaseDelta
+		return Self{
+			nanos: self.nanos - inner.nanos,
+			allocs: self.allocs - inner.allocs,
+			frees: self.frees - inner.frees,
+			bytes: self.bytes - inner.bytes
+		}
+	end 'minus'
+end 'PhaseDelta'
+
+// An open bracket: the four counters as they stood when the phase began.
+export type PhaseProbe
+	export let nanos as DurationNanos
+	// Cumulative allocations, and allocations LIVE, at the instant the phase opened. Both
+	// are needed because frees are derived from the pair, not counted (see `elapsed`).
+	export let allocTotal as AllocCount
+	export let allocLive as AllocCount
+	export let bytes as ByteCount
+
+	// Open a bracket. Counters first, clock last — see this file's header.
+	export static function begin() returns PhaseProbe
+		let allocTotal = __Builtins.mmAllocTotal() as AllocCount
+		let allocLive = __Builtins.mmAllocLive() as AllocCount
+		let bytes = totalAllocBytes()
+		return Self{nanos: Clock.nowNanos(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
+	end 'begin'
+
+	// Close the bracket. Clock first, counters after — see this file's header.
+	//
+	// FREES ARE DERIVED, NOT COUNTED. The allocator maintains a cumulative allocation
+	// count and a live one; it does not maintain a free count, and adding one would have
+	// cost a locked add on the free path (the measurement that shaped the runtime side of
+	// this — see RuntimeEmitter.EmitMmGlobals). But `live = total - freed` holds at every
+	// instant by definition, so over any interval `freed = Δtotal - Δlive`, exactly. No
+	// counter is missing; one is redundant.
+	export function elapsed() returns PhaseDelta
+		let elapsedNanos = Clock.elapsedNanos(self.nanos)
+		let endAllocTotal = __Builtins.mmAllocTotal() as AllocCount
+		let endAllocLive = __Builtins.mmAllocLive() as AllocCount
+		let endBytes = totalAllocBytes()
+
+		let allocs = endAllocTotal - self.allocTotal
+		let liveDelta = endAllocLive - self.allocLive
+
+		return PhaseDelta.create(elapsedNanos, allocs: allocs, frees: allocs - liveDelta, bytes: endBytes - self.bytes)
+	end 'elapsed'
+end 'PhaseProbe'
+
+// Every byte the process's allocator has handed out, both layers summed.
+//
+// The allocator has two: TRACKED objects (a struct, an array's handle, a String) carry a
+// header and are counted by `mmAllocTotal`; the RAW buffers behind them (array elements,
+// string bytes) are header-free. Almost all of a compiler's byte VOLUME is in the raw
+// layer — the tracked layer sees little but 8- and 24-byte handles — so a "bytes" figure
+// that omitted it would report a compiler's memory traffic as very nearly flat, which is
+// the one thing this instrument must never do.
+function totalAllocBytes() returns ByteCount
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+end 'totalAllocBytes'
+
+// --- Recording a closed bracket against a phase ---
+//
+// These are the ONLY writers of per-phase attribution. Both tables are written together,
+// from one delta, so time and memory can never be bracketed differently.
+
+export function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
+	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
+end 'recordPhase'
+
+export function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
+	project.timings.addPhaseNanos(phase, nanos: delta.nanos)
+	project.memory.addPhase(phase, delta: delta)
+end 'recordPhaseDelta'
+
+// Record `phase`, less whatever an INNER phase already claimed while it ran.
+//
+// The register allocator's splitter owns every liveness computation, so the wall clock
+// around the splitter contains the whole of liveness — and so does its allocation count,
+// and its byte volume. Billing the splitter for all three would put the allocator's
+// biggest cost inside the wrong bucket, which is the failure CompileTimings was built to
+// stop and which it stopped only for the clock. `inner` is the accumulated total of the
+// inner phase taken BEFORE the outer one opened; this subtracts what it grew by.
+export function recordPhaseExcluding(project Project, phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
+	let innerGrowth = regAllocAccumulated(project, phase: innerPhase).minus(innerBefore)
+	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed().minus(innerGrowth))
+end 'recordPhaseExcluding'
+
+export function recordRegAllocPhase(project Project, phase RegAllocPhase, probe PhaseProbe)
+	recordRegAllocDelta(project, phase: phase, delta: probe.elapsed())
+end 'recordRegAllocPhase'
+
+export function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
+	project.timings.regAlloc.addPhaseNanos(phase, nanos: delta.nanos)
+	project.memory.regAlloc.addPhase(phase, delta: delta)
+end 'recordRegAllocDelta'
+
+// Everything a register-allocator sub-phase has claimed so far, across both tables. The
+// "before" snapshot `recordPhaseExcluding` subtracts against.
+export function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
+	let nanos = project.timings.regAlloc.phaseNanosOf(phase)
+	return PhaseDelta.create(nanos, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
+end 'regAllocAccumulated'

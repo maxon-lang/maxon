@@ -31,33 +31,43 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false) returns FilePath throws CompileError
-	let tTotal = Clock.nowNanos()
+export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "") returns FilePath throws CompileError
+	let whole = PhaseProbe.begin()
 
-	// Loading starts the instant the compile does, so `tTotal` is also the `load` phase's
-	// start — a second Clock read here would measure the same moment.
+	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
+	// probe — a second set of reads here would sample the same instant.
 	var project = try loadProject(inputPath, target: target)
-	project.timings.addPhaseNanos(CompilePhase.load, nanos: Clock.elapsedNanos(tTotal))
+	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
 	let codeResult = try compileToCodeResult(project)
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 
-	let tWrite = Clock.nowNanos()
+	let writeProbe = PhaseProbe.begin()
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
-	project.timings.addPhaseNanos(CompilePhase.writeExe, nanos: Clock.elapsedNanos(tWrite))
+	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
 
 	if emitIr 'emitIr'
-		let tEmitIr = Clock.nowNanos()
+		let irProbe = PhaseProbe.begin()
 		writeTargetIr(codeResult, outputPath: outputPath)
-		project.timings.addPhaseNanos(CompilePhase.emitIr, nanos: Clock.elapsedNanos(tEmitIr))
+		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
-	// Stamp the total BEFORE the report reads it (every percentage divides by it), and
-	// build the table lazily behind logDebug so a build without `--log=compiler:debug`
-	// pays only for the handful of Clock reads, never for formatting a row.
-	project.timings.totalNanos = Clock.elapsedNanos(tTotal)
+	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
+	// reconciliation panics compare against them), and build the tables lazily behind
+	// logDebug so a build without `--log=compiler:debug` pays only for the handful of
+	// counter reads, never for formatting a row.
+	let total = whole.elapsed()
+	project.timings.totalNanos = total.nanos
+	project.memory.total = total
 	logDebug(LogCategory.compiler, message: function() gives compileTimingsReport(project.timings))
+	logDebug(LogCategory.compiler, message: function() gives compileMemoryReport(project.memory))
+
+	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
+	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
+	if not metricsPath.isEmpty() 'metrics'
+		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeResult.code.count())
+	end 'metrics'
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath

@@ -1350,9 +1350,42 @@ reached faster:
 
 The splitter's own growth exponent on the intra-function shape falls from **2.07 to 1.26**.
 
+> **These numbers are now MEASURED ON EVERY RUN, not remembered.** Every figure in this section — and
+> every linearity claim below — used to rest on throwaway generated programs that were never
+> committed, which made them unfalsifiable and free to regress silently. `maxon-shv2 scale-test` is
+> the committed instrument: a six-rung ladder (each rung double the last), a fitted growth exponent
+> per phase in TIME and in ALLOCATIONS, and exact per-rung memory goldens. See
+> `Testing/ScaleTestRunner.maxon`, or run it through `mcp__maxon-dev__run_scale_test`.
+>
+> **As measured, on the committed corpus (6 rungs, 27 KB → 922 KB of source):**
+>
+> | curve | exponent | budget |
+> |---|---|---|
+> | every frontend + mid phase (`lex`, `parse`, `merge`, `lowerMaxonToStd`, `isel`, `encode`, …) | **0.93 – 1.14** | 1.25 |
+> | `regalloc:splitting` | **1.93** | 2.20 (known gap, below) |
+> | `regalloc:liveness` | **1.72** | 2.20 (known gap, below) |
+> | `regalloc` (phase, = the sum of the above) | **1.70** | 2.20 |
+> | aggregate compile time | **1.48** | reported, not gated |
+>
+> So the linearity claim HOLDS for the whole compiler **except** the register allocator's splitter,
+> exactly as this section says — and that exception is now a number a gate watches rather than a
+> caveat in a document.
+>
+> The suite found one thing this section did not know about: `elimTrivialBlockArgs` was **quadratic**
+> (exponent 2.02 in time, 1.99 in allocations) and had become **54% of a large compile**. It applied
+> its substitutions one at a time, re-walking every op and rebuilding every branch edge per
+> substitution, and it rescanned every edge in the function for every block-arg. Both are now single
+> passes; the emitted IR is byte-identical and rung 3 compiles **2.2× faster** with **2.8× fewer
+> allocations**.
+
 **What is left, and it is now the whole of it: the driver still recomputes liveness from scratch
 after every split.** That is O(function × splits) — the intra-function shape above is still
 exponent ~1.9, and `liveness` is ~80% of allocation there. Splitting itself is no longer the cost.
+
+The `--per-type` pass names the objects behind it: `LiveIndexColumn` / `__ManagedMemory_LiveIndex`
+grow at exponent **2.17** and `DenseColumn` / `__ManagedMemory_DenseInt` at **2.04** — the liveness
+result's own dense columns, reallocated from scratch on every recompute. That is the shape of the
+gap, in the allocator's own vocabulary.
 Making it incremental is tractable *in principle* — a split changes the liveness of exactly one
 value plus the fresh reload ids it mints, and nothing else — but the CSR live sets are deliberately
 not editable in place, the per-op layout sequence numbers all shift when an op is inserted, and the

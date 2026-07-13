@@ -15,6 +15,56 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal("__mm_alloc_id_counter", 8, 0);
     _b.DefineGlobal("__mm_raw_alloc_count", 8, 0);
 
+    // ---- Memory-traffic byte counters (always on, like the three above) --------
+    //
+    // WHY THEY ARE UNCONDITIONAL: --mm-debug and --mm-trace change codegen, so a
+    // binary that can report its memory is a DIFFERENT binary from the one being
+    // timed. A suite that measures a compiler's time AND memory in one run therefore
+    // needs counters that survive a release build. These are them, and their accessors
+    // (EmitMmCounterAccessors) are what `__Builtins.mm*()` reads.
+    //
+    // TWO LAYERS, because the allocator has two and they answer different questions:
+    //
+    //   TRACKED  (mm_alloc / mm_realloc / mm_free) — every managed OBJECT: a struct,
+    //            an array's outer handle, a __ManagedMemory, a String. Header-carrying,
+    //            counted by __mm_alloc_count / __mm_alloc_id_counter above.
+    //   RAW      (mm_raw_alloc / mm_raw_free) — the header-free BUFFERS behind those
+    //            objects: array elements, string bytes. This is where the byte VOLUME
+    //            lives; the tracked layer alone sees little but 8- and 24-byte handles
+    //            and would report a compiler's memory traffic as nearly flat.
+    //
+    // NOT GLOBAL WORDS — PER-P SLOTS, AND NOT ATOMIC. That is the whole design, and it
+    // was forced by measurement. Both counters sit in the allocator's hot path, so the
+    // obvious `lock xadd` on a shared global costs a locked read-modify-write on EVERY
+    // allocation: measured at +3% on a fixed shv2 compile, and a first cut that also
+    // carried live/peak bytes (a locked add on the FREE path too) cost +9%. That is the
+    // instrument perturbing the subject it exists to measure, and it would be a permanent
+    // tax on every binary this compiler emits.
+    //
+    // A P owns its slot and is run by at most one M at a time (the GMP single-writer
+    // invariant the slab's own free-list already rests on), so a PLAIN add to that slot
+    // is exact with no lock at all — measured at +1%. Slots are one cache line apart, so
+    // two Ps accumulating concurrently do not ping-pong a shared line. The accessors sum
+    // the slots.
+    //
+    // Threads with no P (the IOCP completion loop, the sync worker, the fault handler)
+    // and allocations that land before __slab_init has run have nowhere to accumulate, so
+    // they fall back to a genuinely shared word — and THAT one is atomic. It is off the
+    // measured path and rarely touched.
+    //
+    // The result is a counter that is monotonic and EXACT: it deltas cleanly across a
+    // phase boundary and is bit-for-bit reproducible on the same input, which is what
+    // lets a suite gate on memory where it cannot gate on wall time.
+    //
+    // There is deliberately no live-bytes or peak-bytes counter. mm_raw_free is handed a
+    // bare pointer with no header and no size, so raw bytes cannot be given back, and a
+    // "live bytes" that silently omitted every array buffer would be worse than none.
+    // Peak memory, if it is ever wanted, belongs at the slab/OS layer where the sizes are
+    // already known and the path is cold.
+    _b.DefineGlobal(MmBytesByPLabel, 8, 0);          // -> max_procs * 64 bytes (see __slab_init)
+    _b.DefineGlobal(MmAllocBytesNoPLabel, 8, 0);     // atomic fallback, tracked layer
+    _b.DefineGlobal(MmRawAllocBytesNoPLabel, 8, 0);  // atomic fallback, raw layer
+
     // Per-tag live-allocation counters for --mm-debug leak breakdown.
     // Array of int64, one slot per tag index (index 0 reserved for "no tag").
     // Size at least one slot so LeaGlobal always resolves.
@@ -486,6 +536,64 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // Memory-traffic counter updates (see EmitMmGlobals for the design and the
+  // measurements that forced it)
+  // =========================================================================
+
+  // The per-P byte-counter table: one CACHE LINE per P, so two Ps accumulating at the
+  // same time never share a line. Two counters live in it, at the offsets below.
+  // Allocated and zeroed by __slab_init, which is also the only place that knows
+  // __sched_max_procs — hence the table's size lives there and its shape lives here.
+  public const string MmBytesByPLabel = "__mm_bytes_by_p";
+  public const int MmBytesPerPStrideShift = 6;                       // 64 bytes
+  public const int MmBytesPerPStride = 1 << MmBytesPerPStrideShift;
+  public const int MmBytesOffTracked = 0;
+  public const int MmBytesOffRaw = 8;
+
+  // The shared fallback words, for allocations with no P to accumulate into: raw OS
+  // threads (no TLS P) and anything allocated before __slab_init has built the table.
+  // Genuinely shared, hence genuinely atomic — and off the hot path, so the cost is moot.
+  private const string MmAllocBytesNoPLabel = "__mm_alloc_bytes_no_p";
+  private const string MmRawAllocBytesNoPLabel = "__mm_raw_alloc_bytes_no_p";
+
+  /// <summary>
+  /// Add the bytes an allocation just handed out to this P's byte counter — a plain,
+  /// unlocked add, because the P owns the slot (see EmitMmGlobals). Falls back to an
+  /// atomic add on a shared word when there is no P, or before the table exists.
+  ///
+  /// Cumulative by construction: nothing on the free path ever undoes it.
+  ///
+  /// Clobbers Scratch0/1/2.
+  /// </summary>
+  private void EmitAllocBytesCounter(int fieldOffset, string fallbackGlobal, int sizeSlot) {
+    var fallback = UniqueLabel("mm_bytes_no_p");
+    var done = UniqueLabel("mm_bytes_done");
+
+    _b.LoadGlobal(VReg.Scratch1, MmBytesByPLabel);
+    _b.JumpIfZero(VReg.Scratch1, fallback); // pre-__slab_init allocation
+    _b.LoadCurrentP(VReg.Scratch0);
+    _b.JumpIfZero(VReg.Scratch0, fallback); // raw OS thread, no P
+
+    // slot = table + p->id * MmBytesPerPStride
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, GtLayout.POffId);
+    _b.ShlRegImm(VReg.Scratch0, MmBytesPerPStrideShift);
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
+
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, fieldOffset);
+    _b.LoadLocal(VReg.Scratch2, sizeSlot);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.StoreIndirect(VReg.Scratch0, fieldOffset, VReg.Scratch1);
+    _b.Jump(done);
+
+    _b.DefineLabel(fallback);
+    _b.LoadLocal(VReg.Scratch2, sizeSlot);
+    _b.LeaGlobal(VReg.Scratch0, fallbackGlobal);
+    _b.AtomicXadd(VReg.Scratch0, 0, VReg.Scratch2);
+
+    _b.DefineLabel(done);
+  }
+
+  // =========================================================================
   // mm_free(user_ptr, [scope_cstr]) -> void
   //
   // Decrements __mm_alloc_count and releases OS pages for (user_ptr - MmHeaderSize).
@@ -647,6 +755,12 @@ public partial class RuntimeEmitter {
     _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count");
     _b.AtomicInc(VReg.Scratch0, 0);
 
+    // Cumulative tracked bytes. The requested USER size (slot 0), not alloc_size, so the
+    // number is identical under --mm-debug — whose canary would otherwise silently add 8
+    // bytes to every allocation in the report, making the debug and release builds
+    // disagree about a figure the suite gates on.
+    EmitAllocBytesCounter(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 0);
+
     // Under --mm-debug: atomic increment __mm_alloc_count_by_tag[tag_index]
     if (mmDebug) {
       _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count_by_tag");
@@ -778,6 +892,13 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = new_size
     _b.AddRegImm(VReg.Scratch0, mmDebug ? MmHeaderSize + 8 : MmHeaderSize);
     _b.StoreLocal(4, VReg.Scratch0); // slot 4 = new_alloc_size
+
+    // Cumulative tracked bytes. A realloc allocates a whole new block and memcpy's into
+    // it, so it contributes the FULL new_size, not the growth: that is real traffic, and
+    // it is exactly the traffic a quadratic in array growth would show up as. mm_alloc is
+    // not on this path (the block comes straight from __slab_alloc_raw below), so nothing
+    // else would account for it.
+    EmitAllocBytesCounter(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 2);
 
     // Trace mm_realloc BEFORE slab calls (top-down order)
     if (mmTrace) {
@@ -923,6 +1044,11 @@ public partial class RuntimeEmitter {
     // Atomic increment __mm_raw_alloc_count
     _b.LeaGlobal(VReg.Scratch0, "__mm_raw_alloc_count");
     _b.AtomicInc(VReg.Scratch0, 0);
+
+    // Cumulative raw bytes. This is where a compiler's byte VOLUME actually lives: array
+    // element buffers and string bytes are header-free raw buffers, and the tracked layer
+    // above sees only their 8- and 24-byte handles.
+    EmitAllocBytesCounter(MmBytesOffRaw, MmRawAllocBytesNoPLabel, sizeSlot: 0);
 
     if (mmTrace) {
       // Assign raw alloc ID
@@ -1280,6 +1406,92 @@ public partial class RuntimeEmitter {
   public void EmitCurrentTimeNanos() {
     _b.FunctionStart("maxon_current_time_nanos", 0, 0x40);
     _b.GetCurrentTimeNanos(VReg.Scratch0, scratchSlot: 0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
+  // The memory-traffic counter accessors: one runtime function per counter a caller can
+  // read, each a bare load. Together they are what makes a compiler's memory measurable
+  // from inside itself, in a RELEASE binary — the same binary whose time is being
+  // measured, which is the whole point (--mm-debug and --mm-trace change codegen, so a
+  // binary that reports its memory the old way is not the binary under test).
+  //
+  // Reachable from ordinary Maxon as `__Builtins.mmAllocTotal()` etc. (registered in
+  // 2-Parser.cs's CompilerBuiltins table), so no stdlib wrapper is needed.
+  //
+  // WHY FIVE AND NOT THREE: `frees` is not counted, it is DERIVED as
+  // `Δtotal − Δlive` — which needs BOTH a cumulative and a live counter. Those two,
+  // plus the two cumulative byte volumes (tracked + raw), plus the live raw count that
+  // makes a raw leak visible, are the five. Three of them already existed; only the two
+  // byte counters are new, and only they cost anything.
+  // =========================================================================
+  public void EmitMmCounterAccessors() {
+    EmitGlobalReader("maxon_mm_alloc_total", "__mm_alloc_id_counter");
+    EmitGlobalReader("maxon_mm_alloc_live", "__mm_alloc_count");
+    EmitGlobalReader("maxon_mm_raw_alloc_live", "__mm_raw_alloc_count");
+    EmitPerPBytesReader("maxon_mm_alloc_bytes", MmBytesOffTracked, MmAllocBytesNoPLabel);
+    EmitPerPBytesReader("maxon_mm_raw_alloc_bytes", MmBytesOffRaw, MmRawAllocBytesNoPLabel);
+  }
+
+  /// <summary>A runtime function that returns the i64 held in one global. Shaped exactly
+  /// like EmitCurrentTimeNanos: FunctionStart -> read -> ReturnValue.</summary>
+  private void EmitGlobalReader(string funcName, string globalLabel) {
+    _b.FunctionStart(funcName, 0, 0x20);
+    _b.LoadGlobal(VReg.Scratch0, globalLabel);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// Sum one byte counter across every P's slot, plus the no-P fallback word. This is the
+  /// read side of the per-P scheme in EmitMmGlobals: the write side is a plain unlocked
+  /// add precisely because the read side pays for it here instead, and reads happen a few
+  /// dozen times per compile against millions of allocations.
+  ///
+  /// Racy against a concurrently-allocating P by construction — it walks the slots one at
+  /// a time. That is exactly as racy as asking "how much memory has this program allocated"
+  /// of a running program is, and callers that need an exact answer (the scale suite) read
+  /// it at a point where they own every thread that allocates.
+  ///
+  /// Stack slots: 0 = accumulator, 1 = index, 2 = table base.
+  /// </summary>
+  private void EmitPerPBytesReader(string funcName, int fieldOffset, string fallbackGlobal) {
+    _b.FunctionStart(funcName, 0, 0x40);
+
+    // Seed with the no-P total, so a thread that never had a P is never lost.
+    _b.LoadGlobal(VReg.Scratch0, fallbackGlobal);
+    _b.StoreLocal(0, VReg.Scratch0);
+
+    var done = UniqueLabel("mm_bytes_sum_done");
+    _b.LoadGlobal(VReg.Scratch0, MmBytesByPLabel);
+    _b.StoreLocal(2, VReg.Scratch0);
+    // No table => __slab_init never ran => the fallback word is the whole story.
+    _b.JumpIfZero(VReg.Scratch0, done);
+
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(1, VReg.Scratch0); // i = 0
+
+    var loop = UniqueLabel("mm_bytes_sum_loop");
+    _b.DefineLabel(loop);
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.LoadGlobal(VReg.Scratch1, "__sched_max_procs");
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, done);
+
+    _b.ShlRegImm(VReg.Scratch0, MmBytesPerPStrideShift);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);           // &slot[i]
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, fieldOffset);
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);
+    _b.StoreLocal(0, VReg.Scratch1);                      // acc += slot[i]
+
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(1, VReg.Scratch0);
+    _b.Jump(loop);
+
+    _b.DefineLabel(done);
+    _b.LoadLocal(VReg.Scratch0, 0);
     _b.ReturnValue(VReg.Scratch0);
   }
 

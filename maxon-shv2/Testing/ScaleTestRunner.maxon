@@ -1,0 +1,488 @@
+// ScaleTestRunner — climb the generated ladder, fit the growth curves, and return a verdict.
+//
+// One rung per compile, six rungs, each double the last. Per rung: spawn the compiler on the rung's
+// directory with `--metrics=<tsv>`, read the TSV back. Then, across the ladder, fit a growth
+// exponent to every phase's time and to the whole compile's memory, and compare each against a
+// committed budget.
+//
+// ===========================================================================================
+// A SUBPROCESS PER RUNG, ONE REPETITION
+// ===========================================================================================
+//
+// shv2 has no on-disk cache — `Compiler.loadProject` reads every source fresh in every process — so
+// a new process is COLD BY CONSTRUCTION and there is nothing to bust. Spawning also means a crash
+// at the top rung kills that rung and not the run, which is not hypothetical: the 19,200-block
+// shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
+// would report nothing at all about the five rungs that had already passed.
+//
+// One repetition, because a second would not buy what it appears to. Wall time at n=1 is noisy, but
+// the fix for that is not averaging — it is the RESIDUAL (see CurveFit), which detects a noisy
+// machine directly and reports NOISY instead of a confident wrong exponent. And the numbers this
+// suite actually GATES on — allocations, frees, bytes — are bit-for-bit reproducible, so a second
+// repetition of those would return the same digits.
+//
+// ===========================================================================================
+// WHAT IS GATED, AND WHAT IS MERELY REPORTED
+// ===========================================================================================
+//
+//   Per-rung memory GOLDENS      exact, committed, deterministic       ** the strong gate **
+//   Per-phase time EXPONENT      fitted; tight budget everywhere except regalloc's
+//                                splitting/liveness, which are known superlinear
+//   Aggregate time EXPONENT      reported. It is POLLUTED BY CONSTRUCTION: `pressuredLoops`
+//                                doubles with everything else and is ~1.9, so its cost overtakes
+//                                the rest as the ladder climbs and drags the aggregate up. That
+//                                is a property of the corpus, not a regression, and gating on it
+//                                would fail every run. The PER-PHASE curves stay clean precisely
+//                                because that cost lands in two named sub-phases.
+//   Absolute milliseconds        reported, never gated — machine-dependent.
+//
+// RESIDUAL RISK, STATED PLAINLY: a genuinely new quadratic introduced INSIDE regalloc's
+// `splitting` or `liveness` could hide under their loosened budgets. Nowhere else can. Tightening
+// them requires fixing the known liveness-recompute gap (ARCHITECTURE.md:1336-1345), which is
+// deliberately out of scope — this suite is the instrument that would justify that work.
+
+let ScaleMetricsFileName = "metrics.tsv"
+let ScaleOutputName = "rung"
+
+// Shared with ScalePerType, which spawns the same `build` command against a --mm-trace compiler.
+export let BuildSubcommandName = "build"
+export let OutputFlagName = "-o"
+
+// The compiler must be given a RELATIVE rung path, and this is load-bearing rather than tidy.
+//
+// The byte counters count every String the compiler allocates, and a source file's PATH is one of
+// them. An absolute path is as long as wherever the repo happens to live, so the same rung compiled
+// from `C:/dev/maxon` and from `/home/e/src/maxon-checkout` would allocate a different number of
+// BYTES — and the per-rung byte goldens, which are committed to git and compared exactly, would
+// fail for every developer whose checkout path differed in length from the one that generated them.
+// A relative path is the same string on every machine. The subprocess inherits this process's
+// working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
+export let CorpusRelativeRoot = ".scale-tmp"
+
+// One phase's numbers, as parsed back out of a rung's metrics TSV.
+export type PhaseMetric
+	export let nanos as DurationNanos
+	export let allocs as AllocCount
+	export let frees as AllocCount
+	export let bytes as ByteCount
+
+	export static function create(nanos DurationNanos, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseMetric
+		return Self{nanos: nanos, allocs: allocs, frees: frees, bytes: bytes}
+	end 'create'
+
+	export static function zero() returns PhaseMetric
+		return Self{nanos: 0, allocs: 0, frees: 0, bytes: 0}
+	end 'zero'
+end 'PhaseMetric'
+
+export typealias PhaseMetricArray = Array with PhaseMetric
+
+// Everything one rung reported. `phases` and `regAlloc` are dense, indexed by their enum's ordinal,
+// so a phase that failed to appear in the TSV is a parse ERROR rather than a silent zero — see
+// `parseRungMetrics`.
+export type RungResult
+	export let rung as RungIndex
+	export let sourceBytes as SourceByteCount
+	export let codeBytes as CodeByteCount
+	export let total as PhaseMetric
+	export let phases as PhaseMetricArray
+	export let regAlloc as PhaseMetricArray
+
+	export static function create(rung RungIndex, sourceBytes SourceByteCount, codeBytes CodeByteCount, total PhaseMetric, phases PhaseMetricArray, regAlloc PhaseMetricArray) returns RungResult
+		return Self{rung: rung, sourceBytes: sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc}
+	end 'create'
+
+	export function phaseAt(phase CompilePhase) returns PhaseMetric
+		return try self.phases.get(phase.ordinal) otherwise panic("RungResult.phaseAt: phases.get OOB for '{phase.name}'")
+	end 'phaseAt'
+
+	export function regAllocAt(sub RegAllocPhase) returns PhaseMetric
+		return try self.regAlloc.get(sub.ordinal) otherwise panic("RungResult.regAllocAt: regAlloc.get OOB for '{sub.name}'")
+	end 'regAllocAt'
+end 'RungResult'
+
+export typealias RungResultArray = Array with RungResult
+
+// The suite's verdict. FOUR outcomes, not two, and the two extra ones are the point.
+//
+// VOID  — the CORPUS is degenerate, so the run measured nothing. Not a pass and not a failure: an
+//         invalid experiment. (See `checkDegeneracy`: shv2 folds constants, and a naive benchmark
+//         folds to nothing and reports a perfect straight line.)
+// NOISY — the MACHINE was too loaded to produce a trustworthy fit. Also not a verdict. A green
+//         result from untrustworthy data is the expensive kind of lie.
+export union ScaleVerdict
+	pass
+	fail(reasons StringArray)
+	degenerate(reason String)
+	noisy(reason String)
+
+	export function label() returns String
+		return match self 'v'
+			pass gives "PASS"
+			fail gives "FAIL"
+			degenerate gives "VOID"
+			noisy gives "NOISY"
+		end 'v'
+	end 'label'
+
+	export function isPass() returns bool
+		return match self 'v'
+			pass gives true
+			fail gives false
+			degenerate gives false
+			noisy gives false
+		end 'v'
+	end 'isPass'
+end 'ScaleVerdict'
+
+// ===========================================================================================
+// Entry point
+// ===========================================================================================
+
+export function runScaleTest(args MaxonArgs) returns ExitCode
+	let compilerExe = try Process.executablePath() otherwise 'noExe'
+		printError("error: could not determine the running compiler's path\n")
+		return 1
+	end 'noExe'
+
+	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
+		printError("error: invalid --emit-corpus path: {args.emitCorpus}\n")
+		return 1
+	end 'badCorpus'
+
+	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}\n")
+	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (e) 'genErr'
+		reportCompileError(e)
+		return 1
+	end 'genErr'
+
+	if not args.emitCorpus.isEmpty() 'corpusOnly'
+		print("scale-test: corpus written to {corpusRoot.toString()} (--emit-corpus: not compiling)\n")
+		return 0
+	end 'corpusOnly'
+
+	var results = RungResultArray.create()
+	for rung in ladder 'eachRung'
+		let result = try compileRung(compilerExe, rung: rung) otherwise (reason) 'rungFailed'
+			// A rung that would not compile is not a slow rung, it is a broken suite: every later
+			// rung is a superset of this one's shapes, so there is nothing left to measure and no
+			// curve worth fitting through what came before.
+			printError("scale-test: rung {rung.index} FAILED to compile — {reason}\n")
+			return 1
+		end 'rungFailed'
+		printRungLine(result)
+		results.push(result)
+	end 'eachRung'
+
+	let baseline = try loadBaseline() otherwise (reason) 'noBaseline'
+		printError("scale-test: could not read {BaselineRelativePath} — {reason}\n")
+		return 1
+	end 'noBaseline'
+
+	if args.updateRequired 'regenerate'
+		return writeBaseline(baseline, results: results)
+	end 'regenerate'
+
+	let verdict = evaluate(results, baseline: baseline)
+	printVerdict(verdict, results: results, baseline: baseline)
+
+	if not args.resultJson.isEmpty() 'json'
+		writeResultJson(args.resultJson, verdict: verdict, results: results, baseline: baseline)
+	end 'json'
+
+	if args.perType 'perTypePass'
+		runPerTypePass(results)
+	end 'perTypePass'
+
+	if verdict.isPass() 'green'
+		return 0
+	end 'green'
+	return 1
+end 'runScaleTest'
+
+// Where the corpus is generated. `--emit-corpus=<dir>` puts it somewhere a human can read it;
+// otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
+// CorpusRelativeRoot for why relative rather than absolute is load-bearing.
+function corpusRootPath(args MaxonArgs) returns FilePath throws FilePathError
+	if not args.emitCorpus.isEmpty() 'explicit'
+		return try FilePath.from(args.emitCorpus)
+	end 'explicit'
+	return try FilePath.from(CorpusRelativeRoot)
+end 'corpusRootPath'
+
+// ===========================================================================================
+// Compiling one rung
+// ===========================================================================================
+
+function compileRung(compilerExe FilePath, rung ScaleRung) returns RungResult throws ScaleError
+	// Bind the FilePath components first: `join` is overloaded on String and FilePath, and a bare
+	// String constant matches both.
+	let metricsName = try FilePath.from(ScaleMetricsFileName) otherwise panic("ScaleTestRunner: '{ScaleMetricsFileName}' must be a valid relative path")
+	let outputName = try FilePath.from(ScaleOutputName) otherwise panic("ScaleTestRunner: '{ScaleOutputName}' must be a valid relative path")
+	let metricsPath = rung.dir.join(metricsName)
+	let outputBase = rung.dir.join(outputName)
+
+	var argv = StringArray.create()
+	argv.push(BuildSubcommandName)
+	argv.push(rung.dir.toString())
+	argv.push(OutputFlagName)
+	argv.push(outputBase.toString())
+	argv.push("--metrics={metricsPath.toString()}")
+
+	let compile = try runProcess(compilerExe, argv: argv) otherwise (e) 'spawnFailed'
+		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if compile.exitCode != 0 'compileFailed'
+		throw ScaleError.reason("compiler exited {compile.exitCode}: {compile.stderr.trim()}")
+	end 'compileFailed'
+
+	// A MISSING metrics file is a failed rung, never a rung of zeroes. Zeroes would fit a curve —
+	// a beautifully flat one — and report that the compiler had become infinitely fast.
+	let text = try File.readText(metricsPath) otherwise throw ScaleError.reason("rung {rung.index} produced no metrics file at {metricsPath.toString()}")
+
+	return try parseRungMetrics(text, rung: rung)
+end 'compileRung'
+
+// ===========================================================================================
+// Parsing the metrics TSV (the format is MetricsEmit's; see its header)
+// ===========================================================================================
+
+function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws ScaleError
+	var phases = PhaseMetricArray.create()
+	phases.resize(CompilePhase.allCases.count())
+	var regAlloc = PhaseMetricArray.create()
+	regAlloc.resize(RegAllocPhase.allCases.count())
+
+	// `seen` is what turns a missing row into an error instead of a zero. A dense array seeded with
+	// zeroes cannot otherwise tell "this phase did no work" from "this phase never reported".
+	var phaseSeen = BoolArray.create()
+	phaseSeen.resize(CompilePhase.allCases.count())
+
+	var total = PhaseMetric.zero()
+	var totalSeen = false
+	var codeBytes = 0 as CodeByteCount
+	var codeSeen = false
+
+	for line in text.split("\n") 'eachLine'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() or trimmed.startsWith("#") 'skip'
+			continue
+		end 'skip'
+
+		let fields = trimmed.split("\t")
+		if fields.count() != MetricsFieldCount 'malformed'
+			throw ScaleError.reason("malformed metrics row (expected {MetricsFieldCount} tab-separated fields, got {fields.count()}): {trimmed}")
+		end 'malformed'
+
+		let kind = try fields.get(0) otherwise panic("parseRungMetrics: fields.get(0) OOB after count check")
+		let name = try fields.get(1) otherwise panic("parseRungMetrics: fields.get(1) OOB after count check")
+		let metric = try parseMetricFields(fields)
+
+		if kind == MetricsKindTotal 'isTotal'
+			total = metric
+			totalSeen = true
+		end 'isTotal' else if kind == MetricsKindPhase 'isPhase'
+			let phase = try CompilePhase.fromName(name) otherwise throw ScaleError.reason("metrics names an unknown phase '{name}'")
+			try phases.set(phase.ordinal, value: metric) otherwise panic("parseRungMetrics: phases.set OOB for '{name}'")
+			try phaseSeen.set(phase.ordinal, value: true) otherwise panic("parseRungMetrics: phaseSeen.set OOB for '{name}'")
+		end 'isPhase' else if kind == MetricsKindRegAlloc 'isRegAlloc'
+			let sub = try RegAllocPhase.fromName(name) otherwise throw ScaleError.reason("metrics names an unknown regalloc sub-phase '{name}'")
+			try regAlloc.set(sub.ordinal, value: metric) otherwise panic("parseRungMetrics: regAlloc.set OOB for '{name}'")
+		end 'isRegAlloc' else if kind == MetricsKindCode 'isCode'
+			codeBytes = metric.bytes as CodeByteCount
+			codeSeen = true
+		end 'isCode' else if kind == MetricsKindUnattributed 'isUnattributed'
+			// Read and discarded: the compiler emits it so the two reconciliation panics run on
+			// every metrics build (that is what makes them a tripwire), but the gates are on the
+			// phases themselves and on the total, both of which are already here.
+			continue
+		end 'isUnattributed' else 'unknownKind'
+			throw ScaleError.reason("metrics row has an unknown kind '{kind}': {trimmed}")
+		end 'unknownKind'
+	end 'eachLine'
+
+	if not totalSeen 'noTotal'
+		throw ScaleError.reason("metrics for rung {rung.index} carried no `total` row")
+	end 'noTotal'
+	if not codeSeen 'noCode'
+		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the degeneracy check cannot run without it")
+	end 'noCode'
+
+	for phase in CompilePhase.allCases 'checkSeen'
+		let seen = try phaseSeen.get(phase.ordinal) otherwise panic("parseRungMetrics: phaseSeen.get OOB for '{phase.name}'")
+		if not seen 'missing'
+			throw ScaleError.reason("metrics for rung {rung.index} never reported phase '{phase.name}' — a phase added to CompilePhase but not to the metrics output would silently escape every gate")
+		end 'missing'
+	end 'checkSeen'
+
+	return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+end 'parseRungMetrics'
+
+let MetricsFieldCount = 6
+
+function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
+	let nanos = try parseCount(try fields.get(2) otherwise panic("parseMetricFields: nanos field OOB"))
+	let allocs = try parseCount(try fields.get(3) otherwise panic("parseMetricFields: allocs field OOB"))
+	let frees = try parseCount(try fields.get(4) otherwise panic("parseMetricFields: frees field OOB"))
+	let bytes = try parseCount(try fields.get(5) otherwise panic("parseMetricFields: bytes field OOB"))
+	return PhaseMetric.create(nanos, allocs: allocs, frees: frees, bytes: bytes)
+end 'parseMetricFields'
+
+export typealias ParsedCount = int(0 to u64.max)
+
+// A non-negative decimal integer — THE one decimal parser in the suite (the metrics TSV, the
+// baseline rows, `--rungs`, and the trace's `size=` fields all come through here). Every number any
+// of them carries is a count, a byte volume, or a nanosecond reading, and none of them can be
+// negative.
+//
+// The digit-count guard is not decoration: `--rungs=999999999999999999999` is user input, and
+// without it the accumulator would run past `u64.max` and trap on the range rather than being
+// rejected as the nonsense it is. Twenty digits is `u64.max`'s own width.
+export function parseCount(raw String) returns ParsedCount throws ScaleError
+	if raw.isEmpty() 'empty'
+		throw ScaleError.reason("expected a number, got an empty field")
+	end 'empty'
+
+	let digits = raw.toByteArray()
+	if digits.count() > MaxDecimalDigits 'tooManyDigits'
+		throw ScaleError.reason("'{raw}' has {digits.count()} digits — no count in this suite exceeds {MaxDecimalDigits}")
+	end 'tooManyDigits'
+
+	var value = 0 as ParsedCount
+	for digit in digits 'eachDigit'
+		if digit < AsciiDigitZero or digit > AsciiDigitNine 'notADigit'
+			throw ScaleError.reason("expected a number, got '{raw}'")
+		end 'notADigit'
+		value = value * 10 + (digit - AsciiDigitZero)
+	end 'eachDigit'
+	return value
+end 'parseCount'
+
+// The decimal width of u64.max — one more digit than any value the accumulator above can hold.
+let MaxDecimalDigits = 20
+
+let AsciiDigitZero = 0x30
+let AsciiDigitNine = 0x39
+
+// ===========================================================================================
+// Reporting
+// ===========================================================================================
+
+let RungColumnWidth = 6 as ColumnWidth
+let SizeColumnWidth = 12 as ColumnWidth
+let MsColumnWidth = 10 as ColumnWidth
+let CountColumnWidth = 12 as ColumnWidth
+
+function printRungLine(result RungResult)
+	var line = padRight("  rung {result.rung}", width: RungColumnWidth + 4)
+	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
+	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
+	line.append(padLeft(millisText(result.total.nanos), width: MsColumnWidth))
+	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
+	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
+	print("{line}\n")
+end 'printRungLine'
+
+function printVerdict(verdict ScaleVerdict, results RungResultArray, baseline ScaleBaseline)
+	print("\n")
+	print("{padRight("  curve", width: 26)}{padLeft("exponent", width: 12)}{padLeft("budget", width: 10)}{padLeft("residual", width: 11)}{padLeft("share", width: 9)}{padLeft("gate", width: 8)}\n")
+	printCurveTable(results, baseline: baseline)
+
+	print("\n")
+	match verdict 'v'
+		pass then print("scale-test: PASS\n")
+		fail(reasons) then printFailures(reasons)
+		degenerate(reason) then printVoid(reason)
+		noisy(reason) then printNoisy(reason)
+	end 'v'
+end 'printVerdict'
+
+function printFailures(reasons StringArray)
+	printError("scale-test: FAIL — {reasons.count()} gate(s)\n")
+	for reason in reasons 'each'
+		printError("  - {reason}\n")
+	end 'each'
+end 'printFailures'
+
+// VOID is NOT a failure of the compiler — it is a failure of the EXPERIMENT, and saying so in the
+// same breath as "FAIL" would send someone hunting a regression in a compiler that was never
+// measured. It gets its own word.
+function printVoid(reason String)
+	printError("scale-test: VOID — the corpus was degenerate, so this run measured NOTHING.\n")
+	printError("  {reason}\n")
+	printError("  This is not a compiler regression. It is a broken benchmark, and no verdict\n")
+	printError("  about the compiler can be drawn from it — see ScaleCorpus's header on the trap.\n")
+end 'printVoid'
+
+// NOISY is not a verdict either, and it deliberately does not read like one.
+function printNoisy(reason String)
+	printError("scale-test: NOISY — not a verdict.\n")
+	printError("{reason}\n")
+	printError("  The memory gates (which are exact and machine-independent) PASSED. It is the TIME\n")
+	printError("  curves that could not be trusted: their points do not lie on a curve, which means\n")
+	printError("  something else was competing for this machine. Re-run on an idle one.\n")
+end 'printNoisy'
+
+function printCurveTable(results RungResultArray, baseline ScaleBaseline)
+	for phase in CompilePhase.allCases 'eachPhase'
+		var costs = FitPointArray.create()
+		for result in results 'eachRung'
+			costs.push(result.phaseAt(phase).nanos as Real)
+		end 'eachRung'
+		printCurveRow(phaseCurveName(phase), results: results, costs: costs, baseline: baseline, share: phaseShare(results, phase: phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		var costs = FitPointArray.create()
+		for result in results 'eachRung'
+			costs.push(result.regAllocAt(sub).nanos as Real)
+		end 'eachRung'
+		printCurveRow(regAllocCurveName(sub), results: results, costs: costs, baseline: baseline, share: regAllocShare(results, sub: sub))
+	end 'eachSub'
+
+	var totals = FitPointArray.create()
+	var allocs = FitPointArray.create()
+	for result in results 'eachRung'
+		totals.push(result.total.nanos as Real)
+		allocs.push(result.total.allocs as Real)
+	end 'eachRung'
+	printCurveRow(BaselineCurveAggregate, results: results, costs: totals, baseline: baseline, share: ScaleFullShare)
+	printCurveRow(BaselineCurveMemory, results: results, costs: allocs, baseline: baseline, share: ScaleFullShare)
+end 'printCurveTable'
+
+// One row of the curve table: the fitted exponent, the budget it is held to, the phase's share of
+// the top rung, and whether that share was enough for the gate to run at all.
+//
+// THE `share` AND `gated` COLUMNS ARE NOT DECORATION. A phase below the threshold is SKIPPED, and a
+// reader who could not tell a skipped curve from a passing one would read a table of dashes as a
+// table of passes. So a skipped row says `skip`, in the column where a verdict would otherwise be.
+function printCurveRow(curve String, results RungResultArray, costs FitPointArray, baseline ScaleBaseline, share Milli)
+	var sizes = FitPointArray.create()
+	for result in results 'each'
+		sizes.push(result.sourceBytes as Real)
+	end 'each'
+
+	// `loadBaseline` has already asserted every curve is budgeted, so a miss here is a bug in this
+	// file rather than a missing row — hence panic, not a dash.
+	let budgetText = milliText(try baseline.budgetFor(curve) otherwise panic("printCurveRow: curve '{curve}' has no committed budget, which loadBaseline's assertEveryCurveBudgeted should have refused"))
+
+	let fit = fitPowerLaw(sizes, costs: costs)
+	let exponentText = match fit 'e'
+		unfittable gives "-"
+		fitted(exponent, _) gives milliText(exponent)
+	end 'e'
+	// The residual is PRINTED, not merely consulted. It is what separates "this compiler is
+	// superlinear" from "this machine was busy", and a reader looking at a surprising exponent needs
+	// to see whether the points it was fitted through actually lay on a curve. On a COMPOSITE row it
+	// is expected to be large and means nothing about the machine — see ScaleGates.curveIsComposite.
+	let residualText = match fit 'r'
+		unfittable gives "-"
+		fitted(_, residual) gives milliText(residual)
+	end 'r'
+
+	let shareText = "{share / 10}.{share mod 10}%"
+	let gatedText = "gated" if share >= MinPhaseShareMilli else "skip"
+
+	print("{padRight("  {curve}", width: 26)}{padLeft(exponentText, width: 12)}{padLeft(budgetText, width: 10)}{padLeft(residualText, width: 11)}{padLeft(shareText, width: 9)}{padLeft(gatedText, width: 8)}\n")
+end 'printCurveRow'

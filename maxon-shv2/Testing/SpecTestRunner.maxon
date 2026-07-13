@@ -94,7 +94,11 @@ export typealias SpecTestResultArray = Array with SpecTestResult
 // Captured result of one spawned process: exit code + both streams. The single
 // spawn/capture choke point that BOTH the compile step and the run step go
 // through, so there is exactly one place that talks to `Subprocess`.
-type ProcessCapture
+//
+// Exported because the scale-test runner spawns compiles too (one per rung) and must go through
+// the SAME choke point. A second, private copy of "spawn and capture" is how the two runners would
+// drift into disagreeing about what a captured stream is.
+export type ProcessCapture
 	export let exitCode as ExitCodeValue
 	export let stdout as String
 	export let stderr as String
@@ -104,7 +108,7 @@ type ProcessCapture
 	end 'create'
 end 'ProcessCapture'
 
-function runProcess(exe FilePath, argv StringArray) returns ProcessCapture throws SubprocessError
+export function runProcess(exe FilePath, argv StringArray) returns ProcessCapture throws SubprocessError
 	let collected = try Subprocess.run(Executable.path(exe), arguments: argv)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'

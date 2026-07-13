@@ -9537,6 +9537,52 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "tick — this resolves sub-microsecond durations, so it is the one to use for "
       + "profiling and benchmarking.\n\n`__Builtins.currentTimeNanos() returns int`",
       "maxon_current_time_nanos", [], true),
+    // === Memory-traffic counters ===
+    //
+    // The allocator's own counters, readable from a RELEASE binary — which is the point:
+    // --mm-debug and --mm-trace change codegen, so a binary that reports its memory the
+    // old way is not the binary whose time you just measured. These let one run report
+    // both. See RuntimeEmitter.EmitMmGlobals for what each counter covers and what it
+    // deliberately does not.
+    //
+    // TRACKED = managed objects (structs, String, array handles, __ManagedMemory), which
+    // carry a header. RAW = the header-free buffers behind them (array elements, string
+    // bytes), which is where the byte VOLUME is. A caller wanting one number sums them.
+    //
+    // Frees are DERIVED, not counted: `freed = Δtotal − Δlive` over any interval. Both
+    // cumulative counters are monotonic, so they delta exactly across a phase boundary and
+    // are bit-for-bit reproducible on the same input — which is what makes memory, unlike
+    // wall time, something a suite can gate on.
+    //
+    // There is deliberately no live-bytes or peak-bytes counter. Maintaining one costs a
+    // locked add on the FREE path as well, which measured +9% on a fixed compile: the
+    // instrument perturbing the subject. See EmitMmGlobals.
+    ["mmAllocTotal"] = RuntimeCallIntrinsic(
+      "Cumulative count of TRACKED allocations (mm_alloc) since process start. Monotonic. "
+      + "With mmAllocLive, gives frees over an interval: `freed = Δtotal − Δlive`.\n\n"
+      + "`__Builtins.mmAllocTotal() returns int`",
+      "maxon_mm_alloc_total", [], true),
+    ["mmAllocLive"] = RuntimeCallIntrinsic(
+      "Count of TRACKED allocations currently live (allocated and not yet freed). This is "
+      + "the counter whose non-zero value at exit is reported as `MM leak: N allocation(s) "
+      + "remain`.\n\n`__Builtins.mmAllocLive() returns int`",
+      "maxon_mm_alloc_live", [], true),
+    ["mmAllocBytes"] = RuntimeCallIntrinsic(
+      "Cumulative USER bytes handed out by TRACKED allocations. Monotonic. Excludes the "
+      + "32-byte header and the --mm-debug canary, so the number is identical across debug "
+      + "and release builds.\n\n`__Builtins.mmAllocBytes() returns int`",
+      "maxon_mm_alloc_bytes", [], true),
+    ["mmRawAllocLive"] = RuntimeCallIntrinsic(
+      "Count of RAW allocations (mm_raw_alloc — the header-free buffers behind arrays and "
+      + "strings) currently live. Reported at exit as `MM raw leak: N`.\n\n"
+      + "`__Builtins.mmRawAllocLive() returns int`",
+      "maxon_mm_raw_alloc_live", [], true),
+    ["mmRawAllocBytes"] = RuntimeCallIntrinsic(
+      "Cumulative bytes handed out by RAW allocations. Monotonic. This is where a program's "
+      + "byte VOLUME actually lives: array element buffers and string bytes are raw, and the "
+      + "tracked layer sees only their 8- and 24-byte handles.\n\n"
+      + "`__Builtins.mmRawAllocBytes() returns int`",
+      "maxon_mm_raw_alloc_bytes", [], true),
     ["currentProcessId"] = RuntimeCallIntrinsic(
       "Returns the OS-assigned process ID of the currently-running process. "
       + "Stable for the process's lifetime; differs across concurrent processes. "

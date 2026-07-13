@@ -20,6 +20,7 @@ Three compilers live in this repo, and every tool that drives one takes a `compi
 | Build csharp then selfhosted | `mcp__maxon-dev__build` with `target: "both"` |
 | Build all three, in order | `mcp__maxon-dev__build` with `target: "all"` |
 | Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
+| Gate compile-time + memory SCALING (shv2) | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
 | Run self-hosted spec tests | `mcp__maxon-dev__run_self_hosted_test` |
 | Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; any compiler) |
 | Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler`) |
@@ -30,6 +31,25 @@ Three compilers live in this repo, and every tool that drives one takes a `compi
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
 
 Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test`/`run_self_hosted_test` or use `spec_test_outcome` for per-test detail. Cross-compile tests (e.g. wasm) via `target: "wasm32-wasi"` on `run_self_hosted_test`/`spec_test_outcome`.
+
+### `run_scale_test` — the scaling gate (shv2 only)
+
+`spec-test` proves the compiler is CORRECT. `scale-test` proves it is still LINEAR. It compiles a ladder of generated programs — six rungs, each double the last — and gates the growth curves. **Run it after any change to a pass, the IR, or a data structure the compiler indexes by.** A default run is ~20 s.
+
+It returns four verdicts, and the last two are the point:
+
+- **PASS** / **FAIL** — a named curve blew its budget, or a per-rung memory golden moved.
+- **VOID** — the generated corpus was DEGENERATE (it folded away, so nothing was compiled and no verdict about the compiler can be drawn). Not a compiler regression.
+- **NOISY** — the machine was too loaded for the TIME curves to mean anything. Not a verdict. The memory gates, which are exact, still ran.
+
+What is gated, and what is not:
+
+- **Per-rung memory goldens** (allocations / frees / bytes) — EXACT, committed, bit-for-bit reproducible. The strong gate. `updateRequired: true` rewrites them, and **the diff is the review** — a golden that moved means the compiler allocates differently for the same input.
+- **Per-phase growth exponents**, in time AND in allocations — tight (~1.25) everywhere except `regalloc`'s `splitting`/`liveness`, which are KNOWN superlinear (the splitter recomputes liveness after every split — `ARCHITECTURE.md:1336-1345`) and are budgeted at 2.2.
+- **Aggregate time / memory** — reported, loosely budgeted. They are sums of curves with different exponents, so they bend by construction; the teeth are in the per-phase rows.
+- **Absolute milliseconds** — reported, never gated (machine-dependent).
+
+`perType: true` adds an untimed `--mm-trace` pass that attributes allocations to the TYPE allocated — the way to answer "a memory gate fired, but of *what*?". It is slow (several minutes) and off by default.
 
 There is **no `maxon clean` command** — it prints usage and exits 1. To force a from-source stdlib rebuild, delete `stdlib/.maxon/cache/*.mxc` yourself; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
 

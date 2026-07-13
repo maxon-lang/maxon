@@ -1,0 +1,263 @@
+// ScaleBaseline — the committed budgets and memory goldens `scale-test` gates against.
+//
+// TWO KINDS OF ROW, and the split between them is the central idea of the whole suite:
+//
+//   budget  A ceiling on a fitted GROWTH EXPONENT. Machine-INDEPENDENT — "does this phase's cost
+//           double when the program doubles" has the same answer on a fast laptop and a slow CI
+//           box, because it is a ratio, not a duration. So it can be committed and gated.
+//
+//   golden  An EXACT per-rung allocation count / free count / byte volume. Machine-independent for
+//           a stronger reason: it is bit-for-bit REPRODUCIBLE. The same source through the same
+//           compiler makes exactly the same allocations, on an idle machine or a loaded one. So it
+//           is not a budget at all — it is an equality, and it is the strongest gate here.
+//
+// Absolute MILLISECONDS appear in neither. They are machine-dependent, so they are reported and
+// never gated: a baseline of "parse takes 8 ms" would fail on any machine but the one that wrote it.
+//
+// REGENERATING THE GOLDENS is `--update-required`, deliberately the same door-you-must-open verb
+// the `.test` fragments use, and for the same reason: THE DIFF IS THE REVIEW. A golden that moved
+// is a change in what the compiler allocates, and that is precisely the event this suite exists to
+// put in front of a human. A run that quietly rewrote them would be a suite that could never fail.
+
+// Where the committed budgets + goldens live, relative to the repo root (which is the working
+// directory `scale-test` is run from — the same assumption `spec-test` makes about `specs-shv2`).
+export let BaselineRelativePath = "maxon-shv2/Testing/scale-baseline.tsv"
+
+// Everything in the scale suite that can go wrong at RUN time rather than at gate time: a malformed
+// baseline row, a rung that would not compile, a metrics file that never appeared.
+//
+// A union carrying its own message, because Maxon errors are enums/unions and a message is the only
+// payload any of these needs — every one of them is reported to a human and none is recovered from
+// programmatically. `scaleErrorText` is the single place it is unwrapped.
+export union ScaleError implements Error
+	reason(message String)
+end 'ScaleError'
+
+export function scaleErrorText(error ScaleError) returns String
+	return match error 'e'
+		reason(message) gives message
+	end 'e'
+end 'scaleErrorText'
+
+let BaselineKindBudget = "budget"
+let BaselineKindGolden = "golden"
+
+// The two curves that are not a phase: the whole compile's time, and the whole compile's memory.
+export let BaselineCurveAggregate = "aggregate"
+export let BaselineCurveMemory = "memory"
+
+let BaselineCurvePhasePrefix = "phase:"
+let BaselineCurveRegAllocPrefix = "regalloc:"
+
+let BaselineHeader = "# maxon-shv2 scale baseline — committed growth budgets and memory goldens.\n# See Testing/ScaleBaseline.maxon. Regenerate the goldens with `scale-test --update-required`; THE DIFF IS THE REVIEW.\n#\n# budget\t<curve>\t<maxExponentMilli>      exponent ceiling, in thousandths (1250 = 1.25)\n# golden\t<rung>\t<allocs>\t<frees>\t<bytes>   exact, reproducible; an equality, not a budget\n"
+
+// One curve's committed exponent ceiling.
+export type CurveBudget
+	export let curve as String
+	export let maxExponent as Milli
+
+	export static function create(curve String, maxExponent Milli) returns CurveBudget
+		return Self{curve: curve, maxExponent: maxExponent}
+	end 'create'
+end 'CurveBudget'
+
+export typealias CurveBudgetArray = Array with CurveBudget
+
+// One rung's exact memory. No nanos: time is not golden-able.
+export type MemoryGolden
+	export let rung as RungIndex
+	export let allocs as AllocCount
+	export let frees as AllocCount
+	export let bytes as ByteCount
+
+	export static function create(rung RungIndex, allocs AllocCount, frees AllocCount, bytes ByteCount) returns MemoryGolden
+		return Self{rung: rung, allocs: allocs, frees: frees, bytes: bytes}
+	end 'create'
+end 'MemoryGolden'
+
+export typealias MemoryGoldenArray = Array with MemoryGolden
+
+export type ScaleBaseline
+	export var budgets as CurveBudgetArray
+	export var goldens as MemoryGoldenArray
+
+	export static function create() returns ScaleBaseline
+		return Self{budgets: CurveBudgetArray.create(), goldens: MemoryGoldenArray.create()}
+	end 'create'
+
+	// The ceiling for `curve`, or a throw naming it.
+	//
+	// A MISSING BUDGET IS AN ERROR, not a default. Defaulting would mean a phase added to
+	// CompilePhase — and therefore measured, and therefore already in the metrics file — would be
+	// gated against a number nobody chose, and would pass. The whole point of driving the report off
+	// the enums is that a new phase cannot slip through unmeasured; a silent default would put the
+	// hole back one level down.
+	export function budgetFor(curve String) returns Milli throws ScaleError
+		for budget in self.budgets 'each'
+			if budget.curve == curve 'hit'
+				return budget.maxExponent
+			end 'hit'
+		end 'each'
+		throw ScaleError.reason("no budget committed for curve '{curve}' — add a `{BaselineKindBudget}\t{curve}\t<maxExponentMilli>` row to {BaselineRelativePath}")
+	end 'budgetFor'
+
+	// The golden for `rung`, if one was committed. A ladder run with more rungs than the baseline
+	// has goldens for is legitimate (`--rungs=8` on a 6-rung baseline), and the extra rungs simply
+	// have nothing to be compared against — the runner REPORTS which ones it skipped rather than
+	// passing them silently.
+	export function goldenFor(rung RungIndex) returns MemoryGolden throws NotFound
+		for golden in self.goldens 'each'
+			if golden.rung == rung 'hit'
+				return golden
+			end 'hit'
+		end 'each'
+		throw NotFound.notFound
+	end 'goldenFor'
+end 'ScaleBaseline'
+
+// The curve name for one phase / sub-phase. THE one place these strings are built, so the writer,
+// the reader and the gate cannot disagree about what a row is called.
+export function phaseCurveName(phase CompilePhase) returns String
+	return "{BaselineCurvePhasePrefix}{phase.name}"
+end 'phaseCurveName'
+
+export function regAllocCurveName(sub RegAllocPhase) returns String
+	return "{BaselineCurveRegAllocPrefix}{sub.name}"
+end 'regAllocCurveName'
+
+// ===========================================================================================
+// Reading
+// ===========================================================================================
+
+export function loadBaseline() returns ScaleBaseline throws ScaleError
+	let path = try FilePath.from(BaselineRelativePath) otherwise throw ScaleError.reason("'{BaselineRelativePath}' is not a valid path")
+	let text = try File.readText(path) otherwise throw ScaleError.reason("could not read it (run scale-test from the repo root)")
+
+	var baseline = ScaleBaseline.create()
+	for line in text.split("\n") 'eachLine'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() or trimmed.startsWith("#") 'skip'
+			continue
+		end 'skip'
+
+		let fields = trimmed.split("\t")
+		let kind = try fields.get(0) otherwise throw ScaleError.reason("malformed baseline row: {trimmed}")
+
+		if kind == BaselineKindBudget 'isBudget'
+			baseline.budgets.push(try parseBudgetRow(fields, line: trimmed))
+		end 'isBudget' else if kind == BaselineKindGolden 'isGolden'
+			baseline.goldens.push(try parseGoldenRow(fields, line: trimmed))
+		end 'isGolden' else 'unknown'
+			throw ScaleError.reason("baseline row has an unknown kind '{kind}': {trimmed}")
+		end 'unknown'
+	end 'eachLine'
+
+	try assertEveryCurveBudgeted(baseline)
+	return baseline
+end 'loadBaseline'
+
+// Every phase the compiler measures must have a committed budget. This is the same discipline
+// MetricsEmit applies when it drives its rows off `allCases`, enforced at the other end: there, a
+// new phase cannot escape being REPORTED; here, it cannot escape being GATED.
+function assertEveryCurveBudgeted(baseline ScaleBaseline) throws ScaleError
+	for phase in CompilePhase.allCases 'eachPhase'
+		try assertBudgeted(baseline, curve: phaseCurveName(phase))
+	end 'eachPhase'
+	for sub in RegAllocPhase.allCases 'eachSub'
+		try assertBudgeted(baseline, curve: regAllocCurveName(sub))
+	end 'eachSub'
+	try assertBudgeted(baseline, curve: BaselineCurveAggregate)
+	try assertBudgeted(baseline, curve: BaselineCurveMemory)
+	try assertParentNotTighterThanChildren(baseline)
+end 'assertEveryCurveBudgeted'
+
+// A PARENT PHASE MAY NOT BE BUDGETED TIGHTER THAN ITS CHILDREN. The `regalloc` phase's wall time IS
+// its sub-phases' wall time — they are a breakdown of it, not additions to it (see CompileTimings) —
+// so a sub-phase permitted to grow as size^2.2 can, on its own, drag the parent to 2.2. Budgeting
+// the parent at 1.25 then guarantees a FAILURE that says "regalloc is superlinear" while the two
+// rows directly beneath it sit comfortably inside budgets that were deliberately loosened to admit
+// exactly that growth.
+//
+// That is not a gate, it is a contradiction, and it is the kind that survives review because each
+// number looks defensible alone. It cost this suite its first green run. Refuse it at load time,
+// where the fix is one row rather than an afternoon of hunting a compiler regression that is not
+// there.
+function assertParentNotTighterThanChildren(baseline ScaleBaseline) throws ScaleError
+	let parent = try baseline.budgetFor(phaseCurveName(CompilePhase.regalloc))
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		let child = try baseline.budgetFor(regAllocCurveName(sub))
+		if child > parent 'parentTooTight'
+			throw ScaleError.reason("the budget for '{phaseCurveName(CompilePhase.regalloc)}' is {child - parent} thousandths TIGHTER than its own sub-phase '{regAllocCurveName(sub)}' ({parent} vs {child}). The sub-phases are a BREAKDOWN of the regalloc phase, not additions to it, so a sub-phase allowed to reach {child} can carry the parent there by itself — and the parent would then fail while the child that caused it passed. Raise the parent to at least {child}.")
+		end 'parentTooTight'
+	end 'eachSub'
+end 'assertParentNotTighterThanChildren'
+
+// The curve has a budget, and the budget is a number that could ever fail. A ceiling of zero (or
+// below) is not a strict gate, it is a BROKEN one: no cost can grow slower than size^0, so every
+// curve would fail it and the suite would be permanently red for a reason that has nothing to do
+// with the compiler. Catching it while reading the file points at the row, not at a phase.
+function assertBudgeted(baseline ScaleBaseline, curve String) throws ScaleError
+	let budget = try baseline.budgetFor(curve)
+	if budget <= 0 'nonPositive'
+		throw ScaleError.reason("the budget for curve '{curve}' is {budget} — an exponent ceiling must be positive, or nothing can ever pass it")
+	end 'nonPositive'
+end 'assertBudgeted'
+
+function parseBudgetRow(fields StringArray, line String) returns CurveBudget throws ScaleError
+	if fields.count() != 3 'malformed'
+		throw ScaleError.reason("a budget row needs 3 tab-separated fields (budget, curve, maxExponentMilli), got {fields.count()}: {line}")
+	end 'malformed'
+	let curve = try fields.get(1) otherwise panic("parseBudgetRow: fields.get(1) OOB after count check")
+	let raw = try fields.get(2) otherwise panic("parseBudgetRow: fields.get(2) OOB after count check")
+	return CurveBudget.create(curve, maxExponent: (try parseCount(raw)) as Milli)
+end 'parseBudgetRow'
+
+function parseGoldenRow(fields StringArray, line String) returns MemoryGolden throws ScaleError
+	if fields.count() != 5 'malformed'
+		throw ScaleError.reason("a golden row needs 5 tab-separated fields (golden, rung, allocs, frees, bytes), got {fields.count()}: {line}")
+	end 'malformed'
+	let rung = try parseCount(try fields.get(1) otherwise panic("parseGoldenRow: rung field OOB"))
+	let allocs = try parseCount(try fields.get(2) otherwise panic("parseGoldenRow: allocs field OOB"))
+	let frees = try parseCount(try fields.get(3) otherwise panic("parseGoldenRow: frees field OOB"))
+	let bytes = try parseCount(try fields.get(4) otherwise panic("parseGoldenRow: bytes field OOB"))
+	return MemoryGolden.create(rung as RungIndex, allocs: allocs, frees: frees, bytes: bytes)
+end 'parseGoldenRow'
+
+// ===========================================================================================
+// Writing (--update-required)
+// ===========================================================================================
+
+// Rewrite the goldens from this run, PRESERVING the budgets.
+//
+// The budgets are a human's judgement about what growth is acceptable and must never be
+// regenerated from a measurement — a suite that rewrote its own ceilings from whatever it just
+// observed would pass by construction, forever, and would have been better off not existing. Only
+// the goldens, which are facts rather than judgements, are rewritten.
+export function writeBaseline(baseline ScaleBaseline, results RungResultArray) returns ExitCode
+	var out = "{BaselineHeader}"
+
+	for budget in baseline.budgets 'eachBudget'
+		out.append("{BaselineKindBudget}\t{budget.curve}\t{budget.maxExponent}\n")
+	end 'eachBudget'
+
+	out.append("\n")
+	for result in results 'eachRung'
+		out.append("{BaselineKindGolden}\t{result.rung}\t{result.total.allocs}\t{result.total.frees}\t{result.total.bytes}\n")
+	end 'eachRung'
+
+	let path = try FilePath.from(BaselineRelativePath) otherwise 'badPath'
+		printError("scale-test: '{BaselineRelativePath}' is not a valid path\n")
+		return 1
+	end 'badPath'
+
+	try File.writeText(path, content: out) otherwise 'writeFailed'
+		printError("scale-test: could not write {BaselineRelativePath}\n")
+		return 1
+	end 'writeFailed'
+
+	print("\nscale-test: rewrote {results.count()} memory golden(s) in {BaselineRelativePath}\n")
+	print("            REVIEW THE DIFF. A golden that moved means the compiler now allocates\n")
+	print("            differently for the same input — which is the event this suite exists to catch.\n")
+	return 0
+end 'writeBaseline'

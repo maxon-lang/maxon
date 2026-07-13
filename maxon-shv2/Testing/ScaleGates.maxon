@@ -1,0 +1,395 @@
+// ScaleGates — the four checks a ladder is put through, and the order they run in.
+//
+//   1. DEGENERACY  Did the corpus actually compile anything? -> VOID if not.
+//   2. MEMORY      Exact per-rung goldens, plus a fitted budget. Deterministic.  ** the strong one **
+//   3. TIME        A fitted exponent per phase, against a per-phase budget.
+//   4. NOISE       Was the machine quiet enough for a time verdict to mean anything? -> NOISY.
+//
+// THE ORDER IS THE ARGUMENT. Degeneracy runs first because it asks whether the experiment happened
+// at all, and no other answer means anything until it does. Memory runs before time because it is
+// REPRODUCIBLE: a memory failure is a fact, and it stays a failure on a machine too noisy to say
+// anything about time. Only when memory is clean does a noisy machine get to withhold the verdict.
+//
+// So a run that fails memory and is too noisy to fit time reports FAIL, not NOISY. That is not a
+// technicality — a deterministic gate that has fired is evidence, and letting machine load suppress
+// it would let a real regression hide behind a busy CI box.
+
+// The degeneracy check's floor. Emitted code must grow at least this fast against source: an
+// exponent of 1.0 is "the compiler emits code proportional to the program", and anything much below
+// that means the program is being optimized away rather than compiled.
+//
+// Not 1.0 exactly: real code size grows slightly SUBLINEARLY here, because a rung's fixed overhead
+// (the entry stub, the runtime floor) is amortized over more program as the ladder climbs. 0.85 is
+// comfortably below that and nowhere near the ~0.0 a folded-flat corpus produces.
+export let MinCodeGrowthExponent = 850 as Milli
+
+export function evaluate(results RungResultArray, baseline ScaleBaseline) returns ScaleVerdict
+	// 1. DEGENERACY — before any verdict, check the instrument, not the subject.
+	let degeneracy = checkDegeneracy(results)
+	match degeneracy 'd'
+		degenerate(reason) then return ScaleVerdict.degenerate(reason)
+		pass then break 'd'
+		fail then break 'd'
+		noisy then break 'd'
+	end 'd'
+
+	var failures = StringArray.create()
+
+	// 2. MEMORY — exact goldens first (an equality, not a budget), then the growth curve.
+	checkMemoryGoldens(results, baseline: baseline, failures: failures)
+	checkMemoryGrowth(results, baseline: baseline, failures: failures)
+
+	// A memory failure is DETERMINISTIC evidence. Report it now, before a noisy machine gets the
+	// chance to withhold the verdict on the strength of the time curves alone.
+	if failures.count() > 0 'memoryFailed'
+		checkTimeCurves(results, baseline: baseline, failures: failures)
+		return ScaleVerdict.fail(failures)
+	end 'memoryFailed'
+
+	// 3 + 4. TIME, and the noise guard that decides whether its answer is worth anything.
+	var noise = StringArray.create()
+	checkTimeCurvesWithNoise(results, baseline: baseline, failures: failures, noise: noise)
+
+	if failures.count() > 0 'timeFailed'
+		return ScaleVerdict.fail(failures)
+	end 'timeFailed'
+
+	if noise.count() > 0 'tooNoisy'
+		return ScaleVerdict.noisy(joinLines(noise))
+	end 'tooNoisy'
+
+	return ScaleVerdict.pass
+end 'evaluate'
+
+// ===========================================================================================
+// 1. The degeneracy self-check — THE reason the rest can be trusted
+// ===========================================================================================
+//
+// `foldConstOperands` is a real pass in this pipeline. A benchmark of constant arithmetic folds away
+// to NOTHING, and the suite would then measure an empty compile at every rung, fit a perfect
+// straight line through six near-zeroes, and report flawless linearity. It is the most convincing
+// possible wrong answer, and no amount of care in the gates below would catch it — they would all
+// pass.
+//
+// So before any verdict: did the compiler actually EMIT anything, and did it emit proportionally
+// more of it as the program grew? Emitted code bytes are fitted against source bytes exactly as a
+// phase's time is fitted, and a flat or sublinear result means the corpus is degenerate and the run
+// is VOID — not PASS.
+//
+// ScaleCorpus is built to survive this (every value chain is seeded from a loop-carried
+// accumulator or a call result, which shv2 has no SCCP and no inliner to see through). This check
+// is what verifies that claim on every single run rather than trusting it.
+function checkDegeneracy(results RungResultArray) returns ScaleVerdict
+	if results.count() < 2 'tooFewRungs'
+		return ScaleVerdict.degenerate("only {results.count()} rung(s) — a growth check needs at least two")
+	end 'tooFewRungs'
+
+	var sizes = FitPointArray.create()
+	var codes = FitPointArray.create()
+	for result in results 'each'
+		sizes.push(result.sourceBytes as Real)
+		codes.push(result.codeBytes as Real)
+	end 'each'
+
+	let fit = fitPowerLaw(sizes, costs: codes)
+	return match fit 'f'
+		unfittable(reason) gives ScaleVerdict.degenerate("emitted code size could not be fitted against source size ({reason}) — the corpus compiled to nothing")
+		fitted(exponent, _) gives degeneracyVerdict(exponent)
+	end 'f'
+end 'checkDegeneracy'
+
+function degeneracyVerdict(exponent Milli) returns ScaleVerdict
+	if exponent < MinCodeGrowthExponent 'folded'
+		return ScaleVerdict.degenerate("emitted code grows as source^{milliText(exponent)}, below the floor of {milliText(MinCodeGrowthExponent)} — the corpus FOLDED AWAY rather than compiling, so every curve below it is a curve through nothing. The generated programs must be fold-resistant (see ScaleCorpus): seed every value from a loop-carried accumulator or a call result.")
+	end 'folded'
+	return ScaleVerdict.pass
+end 'degeneracyVerdict'
+
+// ===========================================================================================
+// 2. The memory gates — exact, deterministic, and therefore the strong ones
+// ===========================================================================================
+
+// Per-rung EQUALITY against the committed goldens. Not a tolerance: the same source through the
+// same compiler makes exactly the same allocations, so any difference at all is a real change in
+// what the compiler does with memory, and that is the event worth catching.
+function checkMemoryGoldens(results RungResultArray, baseline ScaleBaseline, failures StringArray)
+	var ungoverned = StringArray.create()
+
+	for result in results 'eachRung'
+		let golden = try baseline.goldenFor(result.rung) otherwise 'noGolden'
+			ungoverned.push("{result.rung}")
+			continue
+		end 'noGolden'
+
+		if golden.allocs != result.total.allocs 'allocsMoved'
+			failures.push("memory golden, rung {result.rung}: {result.total.allocs} allocations, expected {golden.allocs} ({goldenDelta(result.total.allocs, golden: golden.allocs)}). The compiler now allocates differently for the same input. If that is INTENDED, re-run with --update-required and review the diff.")
+		end 'allocsMoved'
+
+		if golden.frees != result.total.frees 'freesMoved'
+			failures.push("memory golden, rung {result.rung}: {result.total.frees} frees, expected {golden.frees} ({goldenDelta(result.total.frees, golden: golden.frees)}).")
+		end 'freesMoved'
+
+		if golden.bytes != result.total.bytes 'bytesMoved'
+			failures.push("memory golden, rung {result.rung}: {result.total.bytes} bytes, expected {golden.bytes} ({goldenDelta(result.total.bytes, golden: golden.bytes)}).")
+		end 'bytesMoved'
+	end 'eachRung'
+
+	// SAY WHAT WAS NOT CHECKED. A rung with no committed golden is not a passing rung, it is an
+	// unchecked one, and a suite that reported green over silently-unchecked rungs would be telling
+	// exactly the lie this whole design is built to avoid.
+	if ungoverned.count() > 0 'someUngoverned'
+		print("scale-test: NOTE — rung(s) {joinCommas(ungoverned)} have no committed memory golden and were NOT checked.\n")
+		print("            Run with --update-required to commit goldens for them.\n")
+	end 'someUngoverned'
+end 'checkMemoryGoldens'
+
+function goldenDelta(actual AllocCount, golden AllocCount) returns String
+	if actual > golden 'grew'
+		return "+{actual - golden}"
+	end 'grew'
+	return "-{golden - actual}"
+end 'goldenDelta'
+
+// The memory GROWTH curves, on top of the per-rung equalities. The goldens catch a change against
+// the committed past; these catch a shape that is wrong on its own terms — a compiler whose
+// allocations grow quadratically would fail here even on the very first run that committed them.
+//
+// PER PHASE, AND THAT IS THE WHOLE POINT. An aggregate memory exponent has exactly the pollution
+// problem the aggregate TIME exponent has: `pressuredLoops` doubles with everything else, the
+// splitter's liveness recompute allocates as well as costs time, and so the whole-compile memory
+// curve drifts upward as the ladder climbs — by construction, on a healthy compiler. Gating THAT
+// tightly fails every run; gating it loosely gates nothing. Gating each phase against its own
+// budget does neither: a new quadratic in `parse` or `isel` or `encode` blows its own budget and is
+// NAMED, while the two phases that are known to be superlinear are held to the budgets that admit
+// it. The aggregate is still reported, as a headline number.
+//
+// NO NOISE GUARD HERE, and none is needed. Allocation counts are bit-for-bit reproducible (verified:
+// five compiles of one rung produce one distinct triple), so their points do not scatter and a poor
+// fit cannot be blamed on the machine. A memory curve that will not fit has simply not allocated
+// enough to have a shape, which is a SKIP, not a NOISY.
+function checkMemoryGrowth(results RungResultArray, baseline ScaleBaseline, failures StringArray)
+	for phase in CompilePhase.allCases 'eachPhase'
+		var allocs = FitPointArray.create()
+		for result in results 'eachRung'
+			allocs.push(result.phaseAt(phase).allocs as Real)
+		end 'eachRung'
+		gateMemoryCurve(phaseCurveName(phase), results: results, allocs: allocs, baseline: baseline, failures: failures, share: phaseAllocShare(results, phase: phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		var allocs = FitPointArray.create()
+		for result in results 'eachRung'
+			allocs.push(result.regAllocAt(sub).allocs as Real)
+		end 'eachRung'
+		gateMemoryCurve(regAllocCurveName(sub), results: results, allocs: allocs, baseline: baseline, failures: failures, share: regAllocAllocShare(results, sub: sub))
+	end 'eachSub'
+end 'checkMemoryGrowth'
+
+// One phase's ALLOCATION growth against its budget. Named `mem:<curve>` in a failure so it can
+// never be mistaken for that curve's TIME gate — the two are held to the same budget but they are
+// different measurements, and a report that said only "parse is superlinear" would leave a reader
+// guessing which.
+function gateMemoryCurve(curve String, results RungResultArray, allocs FitPointArray, baseline ScaleBaseline, failures StringArray, share Milli)
+	if share < MinPhaseShareMilli 'tooSmallToGate'
+		return
+	end 'tooSmallToGate'
+
+	let budget = try baseline.budgetFor(curve) otherwise (error) 'noBudget'
+		failures.push(scaleErrorText(error))
+		return
+	end 'noBudget'
+
+	var sizes = FitPointArray.create()
+	for result in results 'each'
+		sizes.push(result.sourceBytes as Real)
+	end 'each'
+
+	match fitPowerLaw(sizes, costs: allocs) 'f'
+		unfittable then break 'f'
+		fitted(exponent, _) then checkExponent("{MemoryCurvePrefix}{curve}", exponent: exponent, budget: budget, failures: failures)
+	end 'f'
+end 'gateMemoryCurve'
+
+export let MemoryCurvePrefix = "mem:"
+
+// A phase's share of the compile's ALLOCATIONS at the top rung — the memory analogue of
+// `phaseShare`, and it must be the memory one: a phase can be a rounding error in wall time and a
+// large fraction of the allocations, or the reverse, and gating a memory curve on a TIME share
+// would skip exactly the phase whose memory was worth watching.
+function phaseAllocShare(results RungResultArray, phase CompilePhase) returns Milli
+	let top = try results.get(results.count() - 1) otherwise panic("phaseAllocShare: results is empty")
+	return allocShareOf(top.phaseAt(phase).allocs, total: top.total.allocs)
+end 'phaseAllocShare'
+
+function regAllocAllocShare(results RungResultArray, sub RegAllocPhase) returns Milli
+	let top = try results.get(results.count() - 1) otherwise panic("regAllocAllocShare: results is empty")
+	return allocShareOf(top.regAllocAt(sub).allocs, total: top.total.allocs)
+end 'regAllocAllocShare'
+
+function allocShareOf(allocs AllocCount, total AllocCount) returns Milli
+	if total == 0 'noTotal'
+		return 0
+	end 'noTotal'
+	return ((allocs * PermilleFull) / total) as Milli
+end 'allocShareOf'
+
+// ===========================================================================================
+// 3 + 4. The time gates, and the noise guard
+// ===========================================================================================
+
+// Time curves WITHOUT the noise guard — used only on the path where memory has already failed, so
+// the report can still say something about time without a noisy machine changing the verdict.
+function checkTimeCurves(results RungResultArray, baseline ScaleBaseline, failures StringArray)
+	var ignored = StringArray.create()
+	checkTimeCurvesWithNoise(results, baseline: baseline, failures: failures, noise: ignored)
+end 'checkTimeCurves'
+
+function checkTimeCurvesWithNoise(results RungResultArray, baseline ScaleBaseline, failures StringArray, noise StringArray)
+	for phase in CompilePhase.allCases 'eachPhase'
+		var costs = FitPointArray.create()
+		for result in results 'eachRung'
+			costs.push(result.phaseAt(phase).nanos as Real)
+		end 'eachRung'
+		gateCurve(phaseCurveName(phase), results: results, costs: costs, baseline: baseline, failures: failures, noise: noise, share: phaseShare(results, phase: phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		var costs = FitPointArray.create()
+		for result in results 'eachRung'
+			costs.push(result.regAllocAt(sub).nanos as Real)
+		end 'eachRung'
+		gateCurve(regAllocCurveName(sub), results: results, costs: costs, baseline: baseline, failures: failures, noise: noise, share: regAllocShare(results, sub: sub))
+	end 'eachSub'
+
+	// The aggregate. Its budget is deliberately loose — see ScaleTestRunner's header: the corpus
+	// contains a knob that is known superlinear, so the aggregate DRIFTS UP as the ladder climbs by
+	// construction. It is a headline number, not a fine-grained gate.
+	var totals = FitPointArray.create()
+	for result in results 'eachRung'
+		totals.push(result.total.nanos as Real)
+	end 'eachRung'
+	gateCurve(BaselineCurveAggregate, results: results, costs: totals, baseline: baseline, failures: failures, noise: noise, share: PermilleFull)
+end 'checkTimeCurvesWithNoise'
+
+let PermilleFull = 1000 as Milli
+
+// Fit one curve and hold it to its budget — unless it is too small to have an opinion.
+//
+// A phase holding a fraction of a percent of the compile is being measured in units of clock
+// jitter. Fitting a curve through six readings of "0 or 1 microseconds" yields an exponent, and
+// that exponent is noise: it will eventually exceed any budget and fail a suite for no reason. Such
+// phases are SKIPPED — and the skip is PRINTED, because a gate that quietly declines to run reads
+// exactly like a gate that passed.
+function gateCurve(curve String, results RungResultArray, costs FitPointArray, baseline ScaleBaseline, failures StringArray, noise StringArray, share Milli)
+	if share < MinPhaseShareMilli 'tooSmallToGate'
+		return
+	end 'tooSmallToGate'
+
+	let budget = try baseline.budgetFor(curve) otherwise (error) 'noBudget'
+		failures.push(scaleErrorText(error))
+		return
+	end 'noBudget'
+
+	var sizes = FitPointArray.create()
+	for result in results 'each'
+		sizes.push(result.sourceBytes as Real)
+	end 'each'
+
+	match fitPowerLaw(sizes, costs: costs) 'f'
+		unfittable(reason) then noise.push("{curve}: {reason}")
+		fitted(exponent, residual) then gateFitted(curve, exponent: exponent, residual: residual, budget: budget, failures: failures, noise: noise)
+	end 'f'
+end 'gateCurve'
+
+function gateFitted(curve String, exponent Milli, residual Milli, budget Milli, failures StringArray, noise StringArray)
+	// THE NOISE GUARD RUNS FIRST, and it is not a formality. A scattered set of points still fits a
+	// line — a confident, meaningless one — so an exponent from a bad fit can exceed its budget and
+	// FAIL a perfectly healthy compiler because something else was running on the machine. A poor
+	// fit therefore withholds the verdict rather than casting it.
+	//
+	// BUT ONLY WHERE A SINGLE POWER LAW IS ACTUALLY EXPECTED — see `curveIsComposite`.
+	if residual > MaxCleanResidualMilli and not curveIsComposite(curve) 'noisy'
+		noise.push("{curve}: fit residual {milliText(residual)} exceeds {milliText(MaxCleanResidualMilli)} — the points do not lie on a curve, so the machine was too loaded to measure. (Exponent would have read {milliText(exponent)} against a budget of {milliText(budget)}.)")
+		return
+	end 'noisy'
+
+	checkExponent(curve, exponent: exponent, budget: budget, failures: failures)
+end 'gateFitted'
+
+// Is this curve a SUM of other curves, rather than one operation?
+//
+// This matters because of what the residual actually measures. A single operation's cost really is
+// a power law, so its log-log points lie on a line and any scatter is the machine — which is what
+// makes the residual a noise detector. A SUM of two power laws with different exponents is NOT a
+// power law: it BENDS, from the shallower exponent at small sizes toward the steeper one at large
+// ones. Its residual is that curvature, and it is there on a perfectly idle machine.
+//
+// So applying the noise guard to a composite reports NOISY on every run of a healthy compiler,
+// which is exactly what it did: `aggregate` is the linear frontend plus the superlinear register
+// allocator, and it bent, and the suite refused to return a verdict about a machine that was fine.
+// Composites are still fitted, still reported, and still held to their (loose) budgets — but their
+// residual is not evidence about the machine and is not read as such.
+//
+// The two composites are the whole-compile total and the `regalloc` phase, which is the sum of the
+// seven sub-phases nested under it.
+function curveIsComposite(curve String) returns bool
+	return curve == BaselineCurveAggregate or curve == BaselineCurveMemory or curve == phaseCurveName(CompilePhase.regalloc)
+end 'curveIsComposite'
+
+function checkExponent(curve String, exponent Milli, budget Milli, failures StringArray)
+	if exponent > budget 'overBudget'
+		failures.push("{curve}: grows as size^{milliText(exponent)}, over its budget of {milliText(budget)}. Something in this phase is superlinear in program size.")
+	end 'overBudget'
+end 'checkExponent'
+
+// ===========================================================================================
+// Phase shares — measured at the TOP rung, where the curves are furthest apart
+// ===========================================================================================
+
+// A phase's share of the compile, in thousandths, at the LARGEST rung.
+//
+// The top rung, not an average: the whole question is how costs behave as programs get big, and a
+// phase that is 0.2% of rung 0 and 30% of rung 5 is exactly the phase that most needs gating. An
+// average over the ladder would dilute it back below the threshold and skip it.
+export function phaseShare(results RungResultArray, phase CompilePhase) returns Milli
+	let top = try results.get(results.count() - 1) otherwise panic("phaseShare: results is empty")
+	return shareOf(top.phaseAt(phase).nanos, total: top.total.nanos)
+end 'phaseShare'
+
+export function regAllocShare(results RungResultArray, sub RegAllocPhase) returns Milli
+	let top = try results.get(results.count() - 1) otherwise panic("regAllocShare: results is empty")
+	return shareOf(top.regAllocAt(sub).nanos, total: top.total.nanos)
+end 'regAllocShare'
+
+function shareOf(nanos DurationNanos, total DurationNanos) returns Milli
+	if total == 0 'noTotal'
+		return 0
+	end 'noTotal'
+	return ((nanos * PermilleFull) / total) as Milli
+end 'shareOf'
+
+// ===========================================================================================
+// Small helpers
+// ===========================================================================================
+
+export function joinLines(lines StringArray) returns String
+	var out = ""
+	for line in lines 'each'
+		if not out.isEmpty() 'separator'
+			out.append("\n")
+		end 'separator'
+		out.append(line)
+	end 'each'
+	return out
+end 'joinLines'
+
+export function joinCommas(items StringArray) returns String
+	var out = ""
+	for item in items 'each'
+		if not out.isEmpty() 'separator'
+			out.append(", ")
+		end 'separator'
+		out.append(item)
+	end 'each'
+	return out
+end 'joinCommas'

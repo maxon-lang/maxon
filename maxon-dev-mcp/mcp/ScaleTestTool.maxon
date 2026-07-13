@@ -1,0 +1,167 @@
+// `run_scale_test` MCP tool. Wraps `maxon-shv2 scale-test` — the compile-time + memory-traffic
+// scaling suite — and returns its verdict as a STRUCTURED document.
+//
+// NO `compiler` ARGUMENT. Only shv2 has `scale-test`, so the tool is fixed to it, exactly as
+// `dump_stages` is fixed to selfhosted (`schemaForSourceOnly(..., withCompiler: false)`). This
+// follows Compilers.maxon's stated discipline: never hand a compiler a flag it has never heard of.
+// Offering a `compiler` field here would invite `compiler: "csharp"` and answer it with a usage dump.
+//
+// IT DOES NOT SCRAPE. The runner's stdout is a padded ASCII table built to be read by a person, and
+// a scrape of it would silently mis-parse the day a phase name outgrew its column. So the tool asks
+// the runner for `--result-json=<path>` and reads THAT — the same reason the compiler grew
+// `--metrics=` rather than having the runner scrape its `--log=compiler:debug` table one level down.
+// The returned doc carries the runner's own JSON verbatim, plus the envelope every tool here returns
+// (command, exitCode, durationMs), plus the tail of the human report for a reader who wants it.
+//
+// Inputs (JSON):
+//   rungs?: int          → --rungs=<n>          how many rungs to climb. Each DOUBLES the program.
+//   updateRequired?: bool → --update-required   rewrite the committed memory goldens
+//   perType?: bool       → --per-type           also run the untimed --mm-trace pass
+//   emitCorpus?: string  → --emit-corpus=<dir>  dump the generated corpus and compile nothing
+//   log?: string         → --log=<value>
+//
+// Output (JSON): { command, exitCode, durationMs, verdict, result: <the runner's document> }
+
+// A full six-rung ladder is ~20 s of compiling, but the top rungs are superlinear and a slow or
+// loaded machine can take several times that. Ten minutes is the same head room `run_spec_test`
+// allows, and for the same reason: a runaway run should be reported, not silently killed.
+let defaultScaleTestTimeoutMs = 600000
+
+// Where the runner is asked to leave its structured result. Under the corpus temp dir, which is
+// already gitignored and already wiped per run — a result file is exactly as disposable as the
+// corpus that produced it.
+let scaleResultRelativePath = ".scale-tmp/scale-result.json"
+
+// Enough of the human report to see the curve table and the verdict, without shipping the whole
+// thing through the MCP envelope alongside the structured copy of the same numbers.
+let scaleRawTailMaxBytes = 4096
+
+/// Entry point called by Server.maxon's dispatch table.
+export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let repoRoot = try repoRootPath() otherwise 'noRoot'
+		return repoRootErrorOutcome("scale-test")
+	end 'noRoot'
+
+	let binary = try compilerBinary(repoRoot, compiler: Compiler.shv2) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "scale-test: the shv2 compiler has not been built. Build it first via the `build` tool (target: \"shv2\").")
+	end 'noBin'
+
+	let resultPath = childPath(repoRoot, segment: scaleResultRelativePath)
+
+	// A STALE result file is worse than none. If the run crashes before writing one, a leftover from
+	// a previous run would be read back and reported as this run's verdict — a green result for a run
+	// that never finished. Delete it up front so its absence is meaningful.
+	try File.delete(resultPath) otherwise ignore
+
+	let argv = buildScaleTestArgv(argsDoc, argsId: argsId, resultPath: resultPath)
+	let displayCommand = displayCommandFor(binary, argv: argv)
+
+	let timing = Clock.nowMs()
+	// `workingDirectory: repoRoot` is load-bearing, not tidiness. The runner resolves the corpus, the
+	// committed baseline, and the rung paths it hands the compiler ALL relative to the working
+	// directory — and the rung paths in particular must stay relative, because an absolute path is a
+	// String the compiler allocates and its LENGTH would shift the byte goldens (see
+	// ScaleTestRunner's CorpusRelativeRoot).
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultScaleTestTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "scale-test: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(timing)
+
+	return buildScaleOutcome(displayCommand, result: result, durationMs: elapsed, resultPath: resultPath)
+end 'scaleTestHandler'
+
+// =============================================================================
+// Argument parsing
+// =============================================================================
+
+function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FilePath) returns StringArray
+	var argv = StringArray.create()
+	argv.push("scale-test")
+	argv.push("--result-json={resultPath.path}")
+
+	let rungs = try argsDoc.getInt(argsId, key: "rungs") otherwise 0
+	if rungs > 0 'haveRungs'
+		argv.push("--rungs={rungs}")
+	end 'haveRungs'
+
+	let updateRequired = try argsDoc.getBool(argsId, key: "updateRequired") otherwise false
+	if updateRequired 'haveUR'
+		argv.push("--update-required")
+	end 'haveUR'
+
+	let perType = try argsDoc.getBool(argsId, key: "perType") otherwise false
+	if perType 'havePerType'
+		argv.push("--per-type")
+	end 'havePerType'
+
+	let emitCorpus = try argsDoc.getString(argsId, key: "emitCorpus") otherwise ""
+	if not emitCorpus.isEmpty() 'haveEmitCorpus'
+		argv.push("--emit-corpus={emitCorpus}")
+	end 'haveEmitCorpus'
+
+	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+	if not log.isEmpty() 'haveLog'
+		argv.push("--log={log}")
+	end 'haveLog'
+
+	return argv
+end 'buildScaleTestArgv'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildScaleOutcome(command String, result CollectedOutput, durationMs DurationMs, resultPath FilePath) returns ToolOutcome
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	keys.push("command")
+	children.push(doc.add(JsonNode.stringNode(command)))
+	keys.push("exitCode")
+	children.push(doc.add(JsonNode.numberNode(result.exitCode())))
+	keys.push("durationMs")
+	children.push(doc.add(JsonNode.numberNode(durationMs)))
+
+	// The runner's own structured document, spliced in whole. When it is absent the run died before
+	// it could write one — a crash, a timeout, a rung that would not compile — and that is reported
+	// as such rather than as an empty result, because an empty result would read as "no failures".
+	let resultText = try File.readText(resultPath) otherwise 'noResult'
+		keys.push("verdict")
+		children.push(doc.add(JsonNode.stringNode("ERROR")))
+		keys.push("error")
+		children.push(doc.add(JsonNode.stringNode("scale-test wrote no result document — it exited {result.exitCode()} before completing. The tail of its output is in `rawTail`.")))
+		keys.push("rawTail")
+		children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: scaleRawTailMaxBytes))))
+		doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+		return ToolOutcome.success(doc, root: doc.root)
+	end 'noResult'
+
+	let parsed = try Json.parse(resultText) otherwise (err) 'badJson'
+		keys.push("verdict")
+		children.push(doc.add(JsonNode.stringNode("ERROR")))
+		keys.push("error")
+		children.push(doc.add(JsonNode.stringNode("scale-test's result document is not valid JSON ({err.name}).")))
+		keys.push("rawTail")
+		children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: scaleRawTailMaxBytes))))
+		doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+		return ToolOutcome.success(doc, root: doc.root)
+	end 'badJson'
+
+	// Hoist the verdict to the top level. It is the one field every caller reads, and burying it one
+	// level down inside `result` would make the commonest question the fiddliest to ask.
+	let verdict = try parsed.getString(parsed.root, key: "verdict") otherwise "UNKNOWN"
+	keys.push("verdict")
+	children.push(doc.add(JsonNode.stringNode(verdict)))
+
+	keys.push("result")
+	children.push(copyJsonNode(parsed, srcId: parsed.root, dst: doc))
+
+	keys.push("rawTail")
+	children.push(doc.add(JsonNode.stringNode(lastBytes(combined, max: scaleRawTailMaxBytes))))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildScaleOutcome'

@@ -29,6 +29,9 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
     EmitMmManagedElementsFunctions(mmTrace);
     EmitMmLeakCheck(mmDebug, tags);
     EmitMmValidatePtr();
+    // The memory-traffic counter readers. Registered HERE, at the platform-independent
+    // VReg layer, so x86 and ARM64 both get them from one definition.
+    EmitMmCounterAccessors();
     EmitManagedListFunctions(mmTrace);
     if (Compiler.DebugStream) {
       EmitDebugStreamFunctions(tagNames ?? []);

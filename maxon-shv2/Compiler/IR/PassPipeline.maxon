@@ -200,12 +200,12 @@ export type PassPipeline
 	// them up. resolveTypes/semanticCheck operate on the Maxon module + project;
 	// lowerMaxonToStd produces the next tier's module.
 	//
-	// Timing lives at THIS choke point rather than inside each pass body: every pass
+	// Measurement lives at THIS choke point rather than inside each pass body: every pass
 	// runs through here, so no pass can be scheduled and go unmeasured, and the passes
-	// stay free functions that know nothing about the clock. No pass calls another, so
-	// the phases are disjoint with nothing to subtract.
+	// stay free functions that know nothing about the clock or the allocator. No pass
+	// calls another, so the phases are disjoint with nothing to subtract.
 	function dispatch(pass PassKind)
-		let tPass = Clock.nowNanos()
+		let probe = PhaseProbe.begin()
 
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
@@ -216,6 +216,6 @@ export type PassPipeline
 			foldConstOperands then foldConstOperands(self.stdModule)
 		end 'dispatch'
 
-		self.project.timings.addPhaseNanos(compilePhaseOfPass(pass), nanos: Clock.elapsedNanos(tPass))
+		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)
 	end 'dispatch'
 end 'PassPipeline'

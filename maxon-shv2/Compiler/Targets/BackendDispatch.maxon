@@ -38,47 +38,49 @@ let EntryStubFrameBytes = 0x28
 // `project.diagnostics`). `project` also carries the `opRanges`/`valueOrigins` tables the
 // allocator maps a Target ValueId back to its source span through. Every other backend
 // stage is infallible — a failure there is a compiler bug and still panics.
-// Each stage below is bracketed by a `CompilePhase` timer. The stages are strictly
-// sequential and none calls another, so the phases are disjoint by construction and
-// nothing has to be subtracted back out (unlike the allocator's internals, which
-// nest — see CompileTimings' header). `regalloc`'s own six sub-phases are recorded
-// into `project.timings.regAlloc` and nest UNDER this phase in the report; they are a
-// breakdown of the wall time measured here, never additional phases.
+// Each stage below is bracketed by one `PhaseProbe`, which measures its wall time AND its
+// allocations at the same two instants (see PhaseProbe's header for why that is one type
+// and not two). The stages are strictly sequential and none calls another, so the phases
+// are disjoint by construction and nothing has to be subtracted back out (unlike the
+// allocator's internals, which nest — see CompileTimings' header). `regalloc`'s own seven
+// sub-phases are recorded into `project.timings.regAlloc` / `project.memory.regAlloc` and
+// nest UNDER this phase in both reports; they are a breakdown of what is measured here,
+// never additional phases.
 export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	// The sugar gate lives HERE, not in the per-target lowering: it is a property of
 	// the Std tier, not of x64, so installing it at the one target-neutral entry
 	// means arm64/wasm inherit it instead of each having to re-add it. See
 	// StdDialect's sugar-band contract.
-	let tSugar = Clock.nowNanos()
+	let sugarProbe = PhaseProbe.begin()
 	assertNoSugarOps(stdModule)
-	project.timings.addPhaseNanos(CompilePhase.sugarGate, nanos: Clock.elapsedNanos(tSugar))
+	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
 
-	let tIsel = Clock.nowNanos()
+	let iselProbe = PhaseProbe.begin()
 	var targetModule = lowerStdToX64(stdModule)
-	project.timings.addPhaseNanos(CompilePhase.isel, nanos: Clock.elapsedNanos(tIsel))
+	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
-	let tRegAlloc = Clock.nowNanos()
+	let regAllocProbe = PhaseProbe.begin()
 	try allocateRegisters(targetModule, target: target, project: project)
-	project.timings.addPhaseNanos(CompilePhase.regalloc, nanos: Clock.elapsedNanos(tRegAlloc))
+	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
-	let tPrologue = Clock.nowNanos()
+	let prologueProbe = PhaseProbe.begin()
 	insertPrologueEpilogue(targetModule, target: target)
-	project.timings.addPhaseNanos(CompilePhase.prologueEpilogue, nanos: Clock.elapsedNanos(tPrologue))
+	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
-	let tRuntime = Clock.nowNanos()
+	let runtimeProbe = PhaseProbe.begin()
 	augmentWithRuntime(targetModule, target: target)
-	project.timings.addPhaseNanos(CompilePhase.runtimeAugment, nanos: Clock.elapsedNanos(tRuntime))
+	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
-	let tEncode = Clock.nowNanos()
+	let encodeProbe = PhaseProbe.begin()
 	var chunks = FunctionCodeChunkArray.create()
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitFunctionChunk(targetModule, func: func))
 	end 'eachFunc'
-	project.timings.addPhaseNanos(CompilePhase.encode, nanos: Clock.elapsedNanos(tEncode))
+	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
-	let tLink = Clock.nowNanos()
+	let linkProbe = PhaseProbe.begin()
 	let codeResult = concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
-	project.timings.addPhaseNanos(CompilePhase.link, nanos: Clock.elapsedNanos(tLink))
+	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult
 end 'buildBackend'

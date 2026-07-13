@@ -1,0 +1,190 @@
+// CurveFit — log-log least squares. Six points on a doubling ladder in, one growth exponent out.
+//
+// The question the whole scale suite asks is "is this phase linear in program size?", and the
+// honest way to answer it is to assume the cost obeys a power law
+//
+//     cost = C * size^k
+//
+// and recover `k`. Take logs and it is a straight line — `log cost = log C + k * log size` — so `k`
+// is the SLOPE of an ordinary least-squares fit through the log-log points. k ~ 1.0 is linear,
+// k ~ 2.0 is quadratic, and the budget a phase is gated against is an upper bound on k.
+//
+// WHY A FIT AND NOT A RATIO. The tempting cheap answer is to divide the top rung by the bottom and
+// take a log: `k = log2(cost5 / cost0) / 5`. That uses two of six measurements and throws away the
+// four in between — so a phase that is linear at every rung except one, where it hitches, reports
+// as perfectly linear, and a single noisy endpoint moves the verdict on its own. The fit uses every
+// point, and — more importantly — it produces a RESIDUAL, which is the only thing that can tell a
+// clean curve from a noisy one.
+//
+// THE RESIDUAL IS NOT A DIAGNOSTIC, IT IS A VERDICT. Wall time on a loaded machine is not
+// reproducible: another process steals the cores mid-rung and that rung's point jumps. Fit a line
+// through jumped points and you still get an exponent — a confident, meaningless one. So a poor fit
+// does not produce a FAIL and it does not produce a PASS; it produces NOISY, which is a third
+// outcome meaning "this machine could not be measured, run it again on an idle one". Reporting a
+// green verdict from untrustworthy data is the expensive kind of lie, and this codebase already
+// refuses to tell it elsewhere (Main.maxon's "no tests selected" refusal is the same instinct).
+//
+// Memory needs none of this. Allocation counts are bit-for-bit reproducible, so their points do not
+// jump, their residual is ~0, and they can be gated on EXACT goldens rather than a fitted curve —
+// which is why the memory gate is the strong one and this file is the weak one's best effort.
+
+// A growth exponent, and a fit's residual, in fixed-point THOUSANDTHS. There is no float formatting
+// on this path and no reason to pull one in: 1.037 is `1037`, and a budget of 1.25 is `1250`. The
+// arithmetic is done in floats (Math.log needs them) and only the RESULT is quantized, so the
+// quantization is a display and comparison convenience, never an accumulated error.
+export typealias Milli = int(i64.min to i64.max)
+
+let MilliScale = 1000.0
+let MilliScaleInt = 1000
+
+// Below this, a phase is too small to have a meaningful exponent and must not be allowed to fail a
+// suite. A phase that takes 0.1% of the compile is being measured in units of clock jitter: its
+// "exponent" is quantization noise, and a curve fitted through six values of 0-or-1 nanoseconds can
+// report anything at all. The runner skips such phases rather than gating them — and SAYS it
+// skipped them, because a silently-skipped gate reads exactly like a passing one.
+export let MinPhaseShareMilli = 50 as Milli  // 5.0% of the compile
+
+// A fit whose residual exceeds this is NOISY, not a verdict. Chosen against the observed spread of
+// an idle machine: repeated identical compiles vary by a few percent, which lands a clean fit's
+// residual well under this; a machine with something else running on it blows straight past it.
+export let MaxCleanResidualMilli = 150 as Milli  // 0.150 in log-space RMS
+
+// The outcome of fitting one curve. A union, not a struct with an `ok` flag, so an
+// unfittable curve cannot be read as an exponent of zero — which is what a struct would
+// have handed back, and which would have read as "perfectly flat: PASS".
+export union FitResult
+	// `exponent` is the slope, `residual` the RMS error of the fit in log-space.
+	fitted(exponent Milli, residual Milli)
+	// Fewer than two usable points, or a curve that is entirely zeros. NOT an exponent of 0:
+	// there is nothing here to fit, and saying so is different from saying it is flat.
+	unfittable(reason String)
+end 'FitResult'
+
+// `Real` is stdlib Math's own float alias (`float(f64.min to f64.max)`) — the type `Math.log` and
+// `Math.pow` take. Using it rather than declaring a private twin keeps the fit's numbers assignable
+// to the functions that consume them without a cast at every call.
+export typealias FitPointArray = Array with Real
+
+// Fit `cost = C * size^k` and return `k` with the fit's residual.
+//
+// `sizes` and `costs` are parallel; both must be positive to have a logarithm. A point whose cost
+// is ZERO is DROPPED, not clamped to one: a phase that did no measurable work at a rung has no
+// information to contribute about its growth, and clamping it to 1 ns would fabricate a data point
+// and bend the curve toward whatever the clamp implied.
+export function fitPowerLaw(sizes FitPointArray, costs FitPointArray) returns FitResult
+	if sizes.count() != costs.count() 'mismatched'
+		panic("fitPowerLaw: {sizes.count()} sizes but {costs.count()} costs — the arrays must be parallel")
+	end 'mismatched'
+
+	var logSizes = FitPointArray.create()
+	var logCosts = FitPointArray.create()
+
+	for i in 0 upto sizes.count() 'eachPoint'
+		let size = try sizes.get(i) otherwise panic("fitPowerLaw: sizes.get OOB at {i}")
+		let cost = try costs.get(i) otherwise panic("fitPowerLaw: costs.get OOB at {i}")
+		if size <= 0.0 or cost <= 0.0 'noLogarithm'
+			continue
+		end 'noLogarithm'
+		logSizes.push(Math.log(size))
+		logCosts.push(Math.log(cost))
+	end 'eachPoint'
+
+	let n = logSizes.count()
+	if n < 2 'tooFewPoints'
+		return FitResult.unfittable("only {n} rung(s) did measurable work — a growth exponent needs at least two")
+	end 'tooFewPoints'
+
+	return leastSquaresSlope(logSizes, logCosts: logCosts)
+end 'fitPowerLaw'
+
+// Ordinary least squares through the log-log points: slope = Sxy / Sxx, intercept = ybar - slope*xbar.
+function leastSquaresSlope(logSizes FitPointArray, logCosts FitPointArray) returns FitResult
+	let n = logSizes.count()
+	let count = n
+
+	var sumX = 0.0
+	var sumY = 0.0
+	for i in 0 upto n 'sums'
+		sumX = sumX + (try logSizes.get(i) otherwise panic("leastSquaresSlope: logSizes.get OOB at {i}"))
+		sumY = sumY + (try logCosts.get(i) otherwise panic("leastSquaresSlope: logCosts.get OOB at {i}"))
+	end 'sums'
+	let meanX = sumX / count
+	let meanY = sumY / count
+
+	var sxy = 0.0
+	var sxx = 0.0
+	for i in 0 upto n 'covariance'
+		let dx = (try logSizes.get(i) otherwise panic("leastSquaresSlope: logSizes.get OOB at {i}")) - meanX
+		let dy = (try logCosts.get(i) otherwise panic("leastSquaresSlope: logCosts.get OOB at {i}")) - meanY
+		sxy = sxy + dx * dy
+		sxx = sxx + dx * dx
+	end 'covariance'
+
+	// Every rung is a different size, so the log-sizes are distinct and Sxx cannot be zero — unless
+	// every surviving point came from ONE rung, which `fitPowerLaw`'s n>=2 check cannot rule out
+	// (two points from the same rung is impossible here, but the guard costs nothing and a division
+	// by zero would produce a silent infinity that fits any budget).
+	if sxx == 0.0 'noSpread'
+		return FitResult.unfittable("every usable rung was the same size — nothing to fit a growth curve against")
+	end 'noSpread'
+
+	let slope = sxy / sxx
+	let intercept = meanY - slope * meanX
+
+	return FitResult.fitted(toMilli(slope), residual: toMilli(rmsResidual(logSizes, logCosts: logCosts, slope: slope, intercept: intercept)))
+end 'leastSquaresSlope'
+
+// Root-mean-square distance of the points from the fitted line, in log-space.
+//
+// This is the number that separates "the compiler is superlinear" from "the machine was busy". A
+// genuine power law — even a bad one — lies ON a log-log line, so its residual is small no matter
+// how steep it is. Scattered points do not, however plausible the slope through them looks.
+function rmsResidual(logSizes FitPointArray, logCosts FitPointArray, slope Real, intercept Real) returns Real
+	let n = logSizes.count()
+	var sumSquares = 0.0
+	for i in 0 upto n 'eachPoint'
+		let x = try logSizes.get(i) otherwise panic("rmsResidual: logSizes.get OOB at {i}")
+		let y = try logCosts.get(i) otherwise panic("rmsResidual: logCosts.get OOB at {i}")
+		let error = y - (intercept + slope * x)
+		sumSquares = sumSquares + error * error
+	end 'eachPoint'
+	return sqrt(sumSquares / n)
+end 'rmsResidual'
+
+// A float to fixed-point thousandths, rounded to NEAREST — so 1.0299 reads as 1.030, not 1.029.
+//
+// `trunc` is the only float->int route the language has (`as` widens int->float and never narrows),
+// and it truncates TOWARD ZERO. Adding half a unit before truncating is what turns that into
+// round-to-nearest, and the half has to carry the value's sign or a negative exponent would round
+// the wrong way: trunc(-1.037 * 1000 - 0.5) is -1037, while trunc(-1037.4) alone would be -1037 only
+// by luck and -1036 for -1036.6.
+function toMilli(value Real) returns Milli
+	let scaled = value * MilliScale
+	if scaled < 0.0 'negative'
+		return trunc(scaled - 0.5)
+	end 'negative'
+	return trunc(scaled + 0.5)
+end 'toMilli'
+
+// Fixed-point thousandths rendered for a human: `1037` -> `1.037`.
+export function milliText(value Milli) returns String
+	if value < 0 'negative'
+		return "-{milliText(0 - value)}"
+	end 'negative'
+
+	let whole = value / MilliScaleInt
+	let frac = value mod MilliScaleInt
+	return "{whole}.{zeroPad3(frac)}"
+end 'milliText'
+
+// The fractional part of a milli value, always three digits — `7` is `007`, not `7`, or `1.007`
+// would print as `1.7` and read as ten times its actual value.
+function zeroPad3(frac Milli) returns String
+	if frac < 10 'oneDigit'
+		return "00{frac}"
+	end 'oneDigit'
+	if frac < 100 'twoDigits'
+		return "0{frac}"
+	end 'twoDigits'
+	return "{frac}"
+end 'zeroPad3'

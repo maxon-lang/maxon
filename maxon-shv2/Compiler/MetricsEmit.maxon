@@ -1,0 +1,110 @@
+// MetricsEmit — `--metrics=<path>`: the machine-readable twin of the two `--log=compiler:debug`
+// report tables.
+//
+// WHY A SECOND OUTPUT AT ALL. `compileTimingsReport` and `compileMemoryReport` are ASCII tables
+// on stderr: padded columns, milliseconds rounded to one decimal, a horizontal rule. They are for
+// a human reading one compile. A harness that reads them would be screen-scraping a layout that
+// exists to be pretty — and the first time a phase name grew past its column, the scrape would
+// silently mis-parse rather than fail. So the harness gets its own format, and the tables stay
+// free to change.
+//
+// THE ROWS ARE DRIVEN OFF THE ENUMS, not written out by hand. Every row comes from
+// `CompilePhase.allCases` / `RegAllocPhase.allCases`, so a phase added to either enum appears in
+// this file the moment it exists. A hand-written row list would let a new phase be added, timed,
+// metered, and then silently omitted from the only output a gate actually reads — which is the
+// same class of bug as adding a pass and forgetting to time it (see PassPipeline.dispatch, which
+// solves it the same way: at the choke point, off the enum).
+//
+// FORMAT: a `#`-commented header, then tab-separated rows of
+//
+//     kind <TAB> name <TAB> nanos <TAB> allocs <TAB> frees <TAB> bytes
+//
+// with these kinds:
+//   total        the whole compile — the denominator every share is taken against
+//   phase        one CompilePhase
+//   regalloc     one RegAllocPhase, nested inside the `regalloc` phase (NOT an extra phase — a
+//                breakdown of one; adding these to the phases would double-count)
+//   unattributed what no phase claimed (the glue between them)
+//   code         the emitted .exe's code size, in the `bytes` column
+//
+// The `code` row is not decoration: it is the SUBJECT of the degeneracy self-check. shv2 runs a
+// real `foldConstOperands` pass, so a naively generated benchmark of constant arithmetic folds
+// away to nothing and every rung of a scaling ladder would compile an empty program in a
+// beautiful straight line. If code bytes do not grow with source bytes across the ladder, the
+// corpus is degenerate and the run is VOID, not PASS — and this row is how the runner can tell.
+
+let MetricsColumnSep = "\t"
+let MetricsHeader = "# maxon-shv2 compile metrics\n# kind\tname\tnanos\tallocs\tfrees\tbytes\n"
+
+// The `kind` column's vocabulary. A format contract shared with ScaleTestRunner, which parses
+// these rows back, so they are named here rather than spelled inline at both ends.
+export let MetricsKindTotal = "total"
+export let MetricsKindPhase = "phase"
+export let MetricsKindRegAlloc = "regalloc"
+export let MetricsKindUnattributed = "unattributed"
+export let MetricsKindCode = "code"
+
+// The `name` column for a row that names no phase (`total`, `code`). A literal `-` rather than an
+// empty field, so a row never contains two adjacent tabs and a naive split never yields a
+// surprise empty column.
+export let MetricsNoName = "-"
+
+// Write the whole compile's metrics to `metricsPath`.
+//
+// A write failure is REPORTED AND SWALLOWED, exactly as the executable and IR-sidecar writes are
+// (see `writePe` / `writeTargetIr`): metrics are a diagnostic side output, never a build gate. A
+// build that produced a correct executable must not be failed by a full disk under the metrics
+// path. The runner, for its part, treats a MISSING metrics file as a failed rung rather than as
+// zeroes — a rung that reported nothing is not a rung that compiled instantly.
+export function writeMetrics(project Project, metricsPath String, codeBytes CodeByteCount)
+	let path = try FilePath.from(metricsPath) otherwise 'badPath'
+		logError(LogCategory.compiler, message: function() gives "Invalid --metrics path '{metricsPath}'")
+		return
+	end 'badPath'
+
+	try File.writeText(path, content: metricsText(project, codeBytes: codeBytes)) otherwise 'writeErr'
+		logError(LogCategory.compiler, message: function() gives "Failed to write metrics to {metricsPath}")
+		return
+	end 'writeErr'
+
+	logInfo(LogCategory.compiler, message: function() gives "Wrote compile metrics to {metricsPath}")
+end 'writeMetrics'
+
+// Number of bytes of emitted machine code. Bounded by what a PE `.text` section can hold, which is
+// far more than any program shv2 compiles — but a named range, not a bare `int`, because it is the
+// quantity the degeneracy check reads.
+export typealias CodeByteCount = int(0 to u32.max)
+
+function metricsText(project Project, codeBytes CodeByteCount) returns String
+	let timings = project.timings
+	let memory = project.memory
+
+	var out = "{MetricsHeader}"
+	out.append(metricsRow(MetricsKindTotal, name: MetricsNoName, nanos: timings.totalNanos, delta: memory.total))
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		out.append(metricsRow(MetricsKindPhase, name: phase.name, nanos: timings.phaseNanosOf(phase), delta: memory.deltaOf(phase)))
+	end 'eachPhase'
+
+	// Nested INSIDE the `regalloc` phase above, never alongside it. A consumer that summed the
+	// `phase` rows AND these would double-count the allocator — which is the whole reason the two
+	// carry different kinds instead of being one flat list.
+	for sub in RegAllocPhase.allCases 'eachSub'
+		out.append(metricsRow(MetricsKindRegAlloc, name: sub.name, nanos: timings.regAlloc.phaseNanosOf(sub), delta: memory.regAlloc.deltaOf(sub)))
+	end 'eachSub'
+
+	// What no phase claimed. Emitted so the gap is VISIBLE to the harness rather than implicit in
+	// a subtraction it would have to know to perform — and so the two reconciliation panics
+	// (CompileTimings.unattributedNanos, CompileMemory.unattributed) run on every metrics build,
+	// which is what makes them a tripwire rather than a comment.
+	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, nanos: timings.unattributedNanos(), delta: memory.unattributed()))
+
+	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, nanos: 0, delta: PhaseDelta.create(0, allocs: 0, frees: 0, bytes: codeBytes as ByteCount)))
+	return out
+end 'metricsText'
+
+function metricsRow(kind String, name String, nanos DurationNanos, delta PhaseDelta) returns String
+	var row = "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{nanos}"
+	row.append("{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}\n")
+	return row
+end 'metricsRow'

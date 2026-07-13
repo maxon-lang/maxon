@@ -1110,6 +1110,32 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 1);
     _b.StoreGlobal(McacheBaseLabel, VReg.Scratch0);
 
+    // Step 6: Allocate the per-P memory-traffic byte counters: max_procs * 64 bytes,
+    // one cache line each. Sized here because this is the only place that already knows
+    // __sched_max_procs; its shape (the two counters inside a line) lives with the rest
+    // of the MM counters in RuntimeEmitter.MemoryManager.cs, which explains why they are
+    // per-P and unlocked rather than one shared atomic word.
+    //
+    // Until this runs, __mm_bytes_by_p is NULL and the counters route to their atomic
+    // fallback words — which is exactly what makes an allocation before slab init safe.
+    _b.LoadGlobal(VReg.Scratch0, "__sched_max_procs");
+    _b.MovRegImm(VReg.Scratch1, MmBytesPerPStride);
+    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.StoreLocal(3, VReg.Scratch0); // byte_table_size
+
+    _b.AddRegImm(VReg.Scratch0, ChunkSize - 1);
+    _b.ShrRegImm(VReg.Scratch0, ChunkShift);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__slab_arena_alloc_chunks");
+    _b.StoreLocal(1, VReg.Scratch0); // byte_table_ptr
+
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.LoadLocal(VReg.Arg1, 3);
+    _b.Call("__slab_memzero");
+
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.StoreGlobal(MmBytesByPLabel, VReg.Scratch0);
+
     if (mmTrace) {
       EmitTraceDepthDec();
     }

@@ -1,0 +1,292 @@
+// CompileMemory — allocation attribution for the WHOLE compile pipeline. The twin of
+// CompileTimings, phase for phase, and it exists for a reason that file cannot serve.
+//
+// WHY MEMORY AND NOT JUST TIME. `PLAN.md`'s Stage-5 self-compile gate is "≤30 s AND
+// ≤1.7 GB". The first half has had an instrument since CompileTimings; the second half
+// has had none at all, and a quadratic in ALLOCATIONS is what actually kills a
+// self-compile — it is invisible to a clock until it is fatal.
+//
+// AND WHY MEMORY IS THE STRONGER GATE. Wall time is not reproducible: the same compile on
+// the same machine varies by several percent between runs, so a time gate can only ever
+// be a loose one (a growth exponent, never an absolute). Allocation counts and byte
+// volumes ARE reproducible — bit for bit, on an idle machine or a loaded one, because the
+// counters behind them are monotonic and order-independent (see PhaseProbe, and
+// RuntimeEmitter.EmitMmGlobals for why they are exact rather than approximate). So memory
+// can be gated on EXACT per-rung goldens where time can only be gated on a fitted curve.
+// That is the whole reason the scale suite leans on this table.
+//
+// THE DISJOINTNESS CONTRACT IS THE SAME, and here it is even sharper. CompileTimings
+// panics when its phases sum to MORE than the whole compile, because phases are disjoint
+// sub-intervals and a sum that exceeds the total means two brackets double-count. The
+// same holds here, and the reconciliation is STRICTER than the clock's: a delta of a
+// monotonic counter over a set of disjoint intervals sums to at most the counter's delta
+// over their union, with no measurement error in the way. Where the clock's `unattributed`
+// row absorbs a few microseconds of scheduling noise, this one's absorbs only real,
+// unbracketed allocation.
+//
+// Phases are bracketed by PhaseProbe, jointly with the clock, so a phase cannot be timed
+// at one boundary and metered at another. See PhaseProbe's header.
+
+// Column widths for the report table. Its own set: the memory table has four numeric
+// columns to the timing table's two, and its numbers are counts and byte volumes rather
+// than milliseconds.
+typealias MemColumnWidth = int(0 to 128)
+
+let MemPhaseNameWidth = 22 as MemColumnWidth
+let MemAllocsWidth = 12 as MemColumnWidth
+let MemFreesWidth = 12 as MemColumnWidth
+let MemBytesWidth = 14 as MemColumnWidth
+let MemRuleWidth = MemPhaseNameWidth + MemAllocsWidth + MemFreesWidth + MemBytesWidth
+
+let MemRowIndent = "  "
+let MemSubPhaseIndent = "    "
+
+// One phase's memory, in the three quantities the gate rests on. A dense column per
+// quantity, indexed by the phase enum's ordinal — the same shape as CompileTimings'
+// `phaseNanos` and RegAllocStats' `phaseNanos`, so a new CompilePhase extends all of them
+// identically and none can silently fall behind.
+export type PhaseMemoryColumns
+	export var allocs as AllocCountArray
+	export var frees as AllocCountArray
+	export var bytes as ByteCountArray
+
+	export static function create(phaseCount PhaseIndex) returns PhaseMemoryColumns
+		var allocs = AllocCountArray.create()
+		var frees = AllocCountArray.create()
+		var bytes = ByteCountArray.create()
+		allocs.resize(phaseCount)
+		frees.resize(phaseCount)
+		bytes.resize(phaseCount)
+		return Self{allocs: allocs, frees: frees, bytes: bytes}
+	end 'create'
+
+	export function add(index PhaseIndex, delta PhaseDelta, phaseName String)
+		let curAllocs = try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+		try self.allocs.set(index, value: curAllocs + delta.allocs) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+
+		let curFrees = try self.frees.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+		try self.frees.set(index, value: curFrees + delta.frees) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+
+		let curBytes = try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+		try self.bytes.set(index, value: curBytes + delta.bytes) otherwise panic("PhaseMemoryColumns.add: phase index OOB for '{phaseName}'")
+	end 'add'
+
+	export function allocsAt(index PhaseIndex, phaseName String) returns AllocCount
+		return try self.allocs.get(index) otherwise panic("PhaseMemoryColumns.allocsAt: phase index OOB for '{phaseName}'")
+	end 'allocsAt'
+
+	export function freesAt(index PhaseIndex, phaseName String) returns AllocCount
+		return try self.frees.get(index) otherwise panic("PhaseMemoryColumns.freesAt: phase index OOB for '{phaseName}'")
+	end 'freesAt'
+
+	export function bytesAt(index PhaseIndex, phaseName String) returns ByteCount
+		return try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.bytesAt: phase index OOB for '{phaseName}'")
+	end 'bytesAt'
+
+	// What the instrumentation actually claimed, summed over every phase.
+	export function totalDelta() returns PhaseDelta
+		var allocSum = 0 as AllocCount
+		for value in self.allocs 'eachAlloc'
+			allocSum = allocSum + value
+		end 'eachAlloc'
+
+		var freeSum = 0 as AllocCount
+		for value in self.frees 'eachFree'
+			freeSum = freeSum + value
+		end 'eachFree'
+
+		var byteSum = 0 as ByteCount
+		for value in self.bytes 'eachByte'
+			byteSum = byteSum + value
+		end 'eachByte'
+
+		return PhaseDelta.create(0, allocs: allocSum, frees: freeSum, bytes: byteSum)
+	end 'totalDelta'
+end 'PhaseMemoryColumns'
+
+// Index into a dense per-phase column. Bounded by the enums it indexes, both of which are
+// a couple of dozen arms.
+export typealias PhaseIndex = int(0 to 1024)
+
+// The allocator's own sub-phase memory, nested under the `regalloc` phase exactly as
+// RegAllocStats' timers nest under it. A breakdown OF that phase's allocations, never
+// six additional phases — adding them to the phase they live inside is the double-count
+// this file's header exists to prevent.
+export type RegAllocMemory
+	export var columns as PhaseMemoryColumns
+
+	export static function create() returns RegAllocMemory
+		return Self{columns: PhaseMemoryColumns.create(RegAllocPhase.allCases.count())}
+	end 'create'
+
+	export function addPhase(phase RegAllocPhase, delta PhaseDelta)
+		self.columns.add(phase.ordinal, delta: delta, phaseName: phase.name)
+	end 'addPhase'
+
+	export function allocsOf(phase RegAllocPhase) returns AllocCount
+		return self.columns.allocsAt(phase.ordinal, phaseName: phase.name)
+	end 'allocsOf'
+
+	export function freesOf(phase RegAllocPhase) returns AllocCount
+		return self.columns.freesAt(phase.ordinal, phaseName: phase.name)
+	end 'freesOf'
+
+	export function bytesOf(phase RegAllocPhase) returns ByteCount
+		return self.columns.bytesAt(phase.ordinal, phaseName: phase.name)
+	end 'bytesOf'
+
+	export function deltaOf(phase RegAllocPhase) returns PhaseDelta
+		return PhaseDelta.create(0, allocs: self.allocsOf(phase), frees: self.freesOf(phase), bytes: self.bytesOf(phase))
+	end 'deltaOf'
+end 'RegAllocMemory'
+
+// Per-compile memory attribution, owned by `Project` beside `timings` — for the same
+// reason: Project is already threaded through every phase, so no pass needs a new
+// parameter merely to be metered, and each compile gets its own table instead of the
+// per-file fan-out driver contending on a global.
+export type CompileMemory
+	export var columns as PhaseMemoryColumns
+	// The whole compile's memory, stamped once by `compile` — the denominator every
+	// phase's share is taken against, and the total the phases must reconcile to. Zero
+	// until then: the warm-rebuild gate drives `compileToCodeResult` directly and never
+	// reports, so a zero total means "not a reported build", not "an allocation-free one".
+	export var total as PhaseDelta
+	export var regAlloc as RegAllocMemory
+
+	export static function create() returns CompileMemory
+		return Self{
+			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count()),
+			total: PhaseDelta.zero(),
+			regAlloc: RegAllocMemory.create()
+		}
+	end 'create'
+
+	export function addPhase(phase CompilePhase, delta PhaseDelta)
+		self.columns.add(phase.ordinal, delta: delta, phaseName: phase.name)
+	end 'addPhase'
+
+	export function deltaOf(phase CompilePhase) returns PhaseDelta
+		let allocs = self.columns.allocsAt(phase.ordinal, phaseName: phase.name)
+		let frees = self.columns.freesAt(phase.ordinal, phaseName: phase.name)
+		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal, phaseName: phase.name))
+	end 'deltaOf'
+
+	// Allocations no phase claimed: the glue between phases (project construction, output
+	// path resolution, the query spine's own cache/hash bookkeeping). Visible as its own
+	// row, so a growing gap shows up instead of hiding inside a neighbour.
+	//
+	// Phases are disjoint intervals, and these are deltas of MONOTONIC counters, so their
+	// sum can never exceed the whole compile's. If it does, two probes overlap and are
+	// double-counting — the exact failure this file's header describes, so it panics
+	// rather than clamp to zero.
+	export function unattributed() returns PhaseDelta
+		let claimed = self.columns.totalDelta()
+
+		if claimed.allocs > self.total.allocs 'overlapAllocs'
+			panic("CompileMemory: the phases claim {claimed.allocs} allocations but the whole compile made {self.total.allocs} — two phase probes OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileMemory's header, and CompileTimings' for the original of this rule).")
+		end 'overlapAllocs'
+
+		if claimed.bytes > self.total.bytes 'overlapBytes'
+			panic("CompileMemory: the phases claim {claimed.bytes} allocated bytes but the whole compile allocated {self.total.bytes} — two phase probes OVERLAP and are double-counting (see CompileMemory's header).")
+		end 'overlapBytes'
+
+		if claimed.frees > self.total.frees 'overlapFrees'
+			panic("CompileMemory: the phases claim {claimed.frees} frees but the whole compile freed {self.total.frees} — two phase probes OVERLAP and are double-counting (see CompileMemory's header).")
+		end 'overlapFrees'
+
+		let allocs = self.total.allocs - claimed.allocs
+		let frees = self.total.frees - claimed.frees
+		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.total.bytes - claimed.bytes)
+	end 'unattributed'
+end 'CompileMemory'
+
+// Allocations inside the `regalloc` phase that none of its sub-phases claimed: the driver
+// loop itself. Same contract as `CompileMemory.unattributed`, enforced the same way.
+function regAllocMemoryUnattributed(memory CompileMemory) returns PhaseDelta
+	let wall = memory.deltaOf(CompilePhase.regalloc)
+
+	var claimed = PhaseDelta.zero()
+	for sub in RegAllocPhase.allCases 'eachSub'
+		let subDelta = memory.regAlloc.deltaOf(sub)
+		claimed = PhaseDelta.create(0, allocs: claimed.allocs + subDelta.allocs, frees: claimed.frees + subDelta.frees, bytes: claimed.bytes + subDelta.bytes)
+	end 'eachSub'
+
+	if claimed.allocs > wall.allocs 'overlap'
+		panic("CompileMemory: the register allocator's sub-phases claim {claimed.allocs} allocations but the regalloc phase made {wall.allocs} — two sub-phase probes OVERLAP (see RegisterAllocator.allocateFunction, which subtracts liveness back out of the splitter's bracket precisely to keep them disjoint).")
+	end 'overlap'
+
+	let allocs = wall.allocs - claimed.allocs
+	let frees = wall.frees - claimed.frees
+	return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: wall.bytes - claimed.bytes)
+end 'regAllocMemoryUnattributed'
+
+// The whole-compile memory table: every phase's allocations, frees and byte volume, the
+// allocator's sub-phases nested under `regalloc`, and a TOTAL / attributed / unattributed
+// footer that makes any gap explicit. Printed beside the timing table, under the same
+// `--log=compiler:debug`, and built lazily behind it so a plain build never formats a row.
+export function compileMemoryReport(memory CompileMemory) returns String
+	let total = memory.total
+
+	var msg = "compile memory — {total.allocs} allocs, {total.frees} frees, {total.bytes} bytes\n"
+	msg.append("{memPadRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{memPadLeft("allocs", width: MemAllocsWidth)}{memPadLeft("frees", width: MemFreesWidth)}{memPadLeft("bytes", width: MemBytesWidth)}\n")
+	msg.append(memHorizontalRule())
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		msg.append(memoryRow("{MemRowIndent}{phase.name}", delta: memory.deltaOf(phase)))
+
+		if phase == CompilePhase.regalloc 'nestRegAlloc'
+			msg.append(regAllocMemoryBreakdown(memory))
+		end 'nestRegAlloc'
+	end 'eachPhase'
+
+	msg.append(memHorizontalRule())
+	msg.append(memoryRow("{MemRowIndent}TOTAL", delta: total))
+	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.columns.totalDelta()))
+	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed()))
+	return msg
+end 'compileMemoryReport'
+
+function regAllocMemoryBreakdown(memory CompileMemory) returns String
+	var msg = ""
+	for sub in RegAllocPhase.allCases 'eachSub'
+		msg.append(memoryRow("{MemSubPhaseIndent}{sub.name}", delta: memory.regAlloc.deltaOf(sub)))
+	end 'eachSub'
+	msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: regAllocMemoryUnattributed(memory)))
+	return msg
+end 'regAllocMemoryBreakdown'
+
+function memoryRow(label String, delta PhaseDelta) returns String
+	return "{memPadRight(label, width: MemPhaseNameWidth)}{memPadLeft("{delta.allocs}", width: MemAllocsWidth)}{memPadLeft("{delta.frees}", width: MemFreesWidth)}{memPadLeft("{delta.bytes}", width: MemBytesWidth)}\n"
+end 'memoryRow'
+
+function memHorizontalRule() returns String
+	var out = ""
+	var i = 0
+	while i < MemRuleWidth 'dash'
+		out.append("-")
+		i = i + 1
+	end 'dash'
+	out.append("\n")
+	return out
+end 'memHorizontalRule'
+
+function memPadRight(text String, width MemColumnWidth) returns String
+	var out = "{text}"
+	var i = text.byteLength()
+	while i < width 'pad'
+		out.append(" ")
+		i = i + 1
+	end 'pad'
+	return out
+end 'memPadRight'
+
+function memPadLeft(text String, width MemColumnWidth) returns String
+	var out = ""
+	var i = text.byteLength()
+	while i < width 'pad'
+		out.append(" ")
+		i = i + 1
+	end 'pad'
+	out.append(text)
+	return out
+end 'memPadLeft'
