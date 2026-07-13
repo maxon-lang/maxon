@@ -28,17 +28,59 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
+  func @tryA() -> i64 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @tryB() -> i64 {
+  entry:
+    x64.mov rax, 42
+    x64.xor edx, edx
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8d, 42
-  b_0.after:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.call tryA
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne main.a_0.elseif
+  a_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-8], rax
+    x64.jmp main.a_0.merge
+  a_0.elseif:
+    x64.call tryB
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne main.b_0.merge
+  b_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-8], rax
+    x64.jmp main.b_0.merge
+  b_0.merge:
+    x64.jmp main.a_0.merge
   a_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_d7040260b1eab9de]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

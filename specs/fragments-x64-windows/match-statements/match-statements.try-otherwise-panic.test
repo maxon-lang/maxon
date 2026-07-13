@@ -25,26 +25,46 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @dispatch(rcx: u8) {
+  func @ok() {
+  entry:
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @dispatch(kind: i64) {
   entry:
     x64.prologue stack_size=16
-    x64.cmp rcx, 1
-    x64.jne k_0.case1
-  k_0.merge:
-    x64.epilogue
-    x64.ret
-  k_0.case1:
-    x64.lea rcx, [rip+__panic_msg_b8addeb5faa064f5]
+    x64.mov [rbp-8], rcx
+    x64.jmp dispatch.k_0.cmp0
+  k_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne dispatch.k_0.case1
+  k_0.case0:
+    x64.call ok
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je dispatch.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
+  otherwise_continue_0:
+    x64.jmp dispatch.k_0.merge
+  k_0.case1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  k_0.merge:
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 1
+    x64.mov rcx, 1
     x64.call dispatch
-    x64.xor r8d, r8d
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
   }

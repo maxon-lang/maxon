@@ -14,14 +14,33 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor r8d, r8d
-  __cast_check_lo_0:
-    x64.test r8, r8
-    x64.jge __cast_ok_0
-  __cast_panic_0:
-    x64.lea rcx, [rip+__panic_msg_2c833ff7b6c601ba]
+    x64.mov rax, -9223372036854775808
+    x64.mov rcx, -9223372036854775808
+    x64.sub rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
-  __cast_ok_0:
+  __range_ok_0:
+    x64.xor ecx, ecx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
     x64.epilogue
     x64.ret
   }

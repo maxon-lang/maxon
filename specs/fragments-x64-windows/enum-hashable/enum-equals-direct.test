@@ -22,17 +22,45 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
+  func @Color.equals(self: i64, other: i64) -> i1 {
+  entry:
+    x64.jmp stdlib.int.equals
+  }
   func @main() -> u32 {
   entry:
-    x64.mov r8d, 1
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.xor edx, edx
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Color.equals
+    x64.test rax, rax
+    x64.je main.eq_0.after
   eq_0:
-    x64.test r8, r8
-    x64.jne neq_0.after
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call Color.equals
+    x64.test rax, rax
+    x64.je main.neq_0.after
   neq_0:
-    x64.xor r8d, r8d
+    x64.xor eax, eax
+    x64.epilogue
     x64.ret
   neq_0.after:
-    x64.mov r8d, 1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  eq_0.after:
+    x64.xor eax, eax
+    x64.epilogue
     x64.ret
   }
 }

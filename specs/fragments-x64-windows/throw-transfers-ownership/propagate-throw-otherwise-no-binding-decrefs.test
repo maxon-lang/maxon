@@ -28,49 +28,79 @@ module {
   func @tokenize() -> u64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov edx, 13
-    x64.mov ecx, 7
-    x64.call __construct_LexErr_unterminatedString
-    x64.mov r9, r8
-    x64.xor r8d, r8d
-    x64.mov rdx, r9
+    x64.mov rax, 7
+    x64.mov rcx, 13
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.mov rbx, 7
+    x64.mov [rax+8], rbx
+    x64.mov rsi, 13
+    x64.mov [rax+16], rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-1], rax
     x64.call tokenize
-    x64.mov rbx, r8
-    x64.mov r12, rdx
-    x64.mov rcx, r12
-    x64.call __mm_decref_maybenull_helper
-    x64.xor r9d, r9d
-    x64.test r12, r12
-    x64.je try_0.merge
-  try_0.otherwise:
-    x64.xor r8d, r8d
+    x64.mov [rbp-9], rdx
+    x64.mov [rbp-17], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_0
+  otherwise_error_0:
+    x64.mov rax, [rbp-9]
+    x64.mov rcx, [rbp-9]
+    x64.call mm_decref
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
-  try_0.merge:
-    x64.test r9, r9
-    x64.je ranOk_0.after
+  otherwise_continue_0:
+    x64.mov rax, [rbp-17]
+    x64.mov [rbp-25], rax
+    x64.mov rcx, [rbp-1]
+    x64.test rcx, rcx
+    x64.je main.ranOk_0.after
   ranOk_0:
-    x64.mov r9d, 4294967295
-    x64.mov r8, rbx
-    x64.add r8, 5
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
-    x64.jmp __range_panic_0
-  ranOk_0.after:
-    x64.mov r8d, 99
-    x64.epilogue
-    x64.ret
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-25]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_336cea91c4813784]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
+    x64.ret
+  ranOk_0.after:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_LexErr(ptr: i64) {
+  entry:
+    x64.jmp __destruct_LexErr.done
+  done:
     x64.ret
   }
 }

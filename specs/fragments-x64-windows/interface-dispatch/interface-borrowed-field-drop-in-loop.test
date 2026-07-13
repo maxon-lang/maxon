@@ -70,149 +70,330 @@ ExitCode: 4
 ---
 // CompiledIR
 module {
-  func @ConcreteQuery.score(rcx: i64) -> i1 {
-  entry:
-    x64.mov r8, [rcx+0] (8b)
-    x64.test r8, r8
-    x64.setge r8
-    x64.ret
-  }
-  func @Allocator.create(rcx: i64, rdx: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov eax, 1
-    x64.lea rdx, [rip+__destruct_Allocator]
-    x64.mov ecx, 64
-    x64.call stdlib.__mm_alloc_needzero
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.xor r8d, r8d
-    x64.mov [rbx+0], r8 (8b)
-    x64.mov [rbx+16], r8 (8b)
-    x64.mov [rbx+24], r8 (8b)
-    x64.mov [rbx+32], r8 (8b)
-    x64.mov [rbx+40], r8 (8b)
-    x64.mov [rbx+48], r8 (8b)
-    x64.mov [rbx+56], r8 (8b)
-    x64.mov r12, [rbp-8]
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_incref
-    x64.mov r8, [rbp-16]
-    x64.mov [rbx+0], r12 (8b)
-    x64.mov [rbx+8], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+16], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+24], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+32], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+40], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+48], r8 (8b)
-    x64.lea rcx, [rip+__layout_Array_String]
-    x64.call Array.create
-    x64.mov [rbx+56], r8 (8b)
-    x64.mov rcx, [rbp-8]
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, rbx
-    x64.epilogue
-    x64.ret
-  }
-  func @Allocator.run(rcx: i64) -> i1 {
+  func @ConcreteQuery.create(tag: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rbx, rcx
-    x64.mov r8, [rbx+8] (8b)
-    x64.mov rcx, [rbx+0] (8b)
-    x64.mov r10, [r8+24] (8b)
-    x64.call r10
-    x64.mov r12, r8
-    x64.mov rcx, [rbx+16] (8b)
-    x64.lea rdx, [rip+__layout_Array_String]
-    x64.call Array.count
-    x64.test r8, r8
-    x64.sete r8
-    x64.and r8, r12
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 23
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
     x64.epilogue
     x64.ret
   }
-  func @allocateFor(rcx: i64, rdx: i64) -> i1 {
+  func @ConcreteQuery.score(__self_ptr: i64) -> i1 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rbx, [rbp-8]
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.mov rdx, [rbp-16]
-    x64.mov rcx, rbx
-    x64.call Allocator.create
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call Allocator.run
-    x64.mov r12, r8
-    x64.mov rcx, [rbp-8]
-    x64.call __mm_decref_maybenull_helper
-    x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8, r12
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.setge rax
+    x64.movzx rax, raxb
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.mov eax, 1
-    x64.xor edx, edx
-    x64.mov ecx, 8
-    x64.call stdlib.__mm_alloc_needzero
-    x64.mov rbx, r8
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.mov r8d, 7
-    x64.mov [rbx+0], r8 (8b)
-    x64.xor r8d, r8d
-    x64.xor r9d, r9d
-    x64.mov r12, r9
-    x64.mov r13, r8
+    x64.mov rcx, 7
+    x64.call ConcreteQuery.create
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x64.cmp r13, 4
-    x64.jge loop_0.exit
+    x64.mov rax, 4
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_incref
-    x64.lea rdx, [rip+__witness_ConcreteQuery_Query]
-    x64.mov rcx, rbx
-    x64.call allocateFor
-    x64.test r8, r8
-    x64.je ok_0.after
-    x64.jmp ok_0
-  loop_0.exit:
-    x64.mov rcx, rbx
-    x64.call stdlib.__mm_decref
-    x64.mov r8d, 4294967295
-    x64.cmp r12, r8
-    x64.jbe __range_ok_0
-    x64.jmp __range_panic_0
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call allocateFor$ConcreteQuery
+    x64.test rax, rax
+    x64.je main.ok_0.merge
   ok_0:
-    x64.add r12, 1
-  ok_0.after:
-    x64.add r13, 1
-    x64.jmp loop_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.ok_0.merge
+  ok_0.merge:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_e4593d603606d9a8]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @allocateFor$ConcreteQuery(query: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Allocator.create$ConcreteQuery
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call Allocator.run$ConcreteQuery
+    x64.mov rdx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @Allocator.create$ConcreteQuery(query: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov [rbp-8], rcx
+    x64.call StrArray.create
+    x64.mov [rbp-16], rax
+    x64.call StrArray.create
+    x64.mov [rbp-24], rax
+    x64.call StrArray.create
+    x64.mov [rbp-32], rax
+    x64.call StrArray.create
+    x64.mov [rbp-40], rax
+    x64.call StrArray.create
+    x64.mov [rbp-48], rax
+    x64.call StrArray.create
+    x64.mov [rbp-56], rax
+    x64.lea_func rax, [__destruct_Allocator]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 56
+    x64.mov r8, 29
+    x64.call mm_alloc
+    x64.mov [rbp-64], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-64]
+    x64.mov [rbx+0], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rbp-64]
+    x64.mov [rdi+8], rsi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-24]
+    x64.mov r9, [rbp-64]
+    x64.mov [r9+16], r8
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+24], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+32], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+40], rax
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+48], rax
+    x64.mov rcx, [rbp-56]
+    x64.call mm_incref
+    x64.mov rax, [rbp-56]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-48]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov rax, [rbp-64]
+    x64.epilogue
+    x64.ret
+  }
+  func @Allocator.run$ConcreteQuery(__self_ptr: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call ConcreteQuery.score
+    x64.xor ecx, ecx
+    x64.mov [rbp-17], rcx
+    x64.test rax, rax
+    x64.je Allocator.run$ConcreteQuery.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-25], rcx
+    x64.mov rdx, [rbp-25]
+    x64.mov rcx, [rbp-25]
+    x64.call StrArray.count
+    x64.xor ebx, ebx
+    x64.cmp rax, rbx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov [rbp-17], rsi
+    x64.jmp Allocator.run$ConcreteQuery.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-17]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ConcreteQuery(ptr: i64) {
+  entry:
+    x64.jmp __destruct_ConcreteQuery.done
+  done:
+    x64.ret
+  }
+  func @__destruct_StrArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_StrArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Allocator(ptr: i64) {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+16]
+    x64.mov [rbp-32], rdi
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [r8+24]
+    x64.mov [rbp-40], r9
+    x64.test r9, r9
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-48], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+40]
+    x64.mov [rbp-56], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+48]
+    x64.mov [rbp-64], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.jmp __destruct_Allocator.done
+  done:
     x64.epilogue
     x64.ret
   }

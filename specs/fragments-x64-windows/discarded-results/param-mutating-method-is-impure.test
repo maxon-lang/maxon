@@ -27,102 +27,157 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @removeFirst(rcx: i64, rdx: i64) -> i1 {
+  func @removeFirst(arr: i64, value: i64) -> i1 {
   entry:
     x64.prologue stack_size=32
-    x64.mov rbx, rcx
-    x64.mov r12, rdx
-    x64.xor r13d, r13d
-    x64.mov r14, r13
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp removeFirst.scan_0.header
   scan_0.header:
-    x64.lea rdx, [rip+__layout_Array_Integer]
-    x64.mov rcx, rbx
-    x64.call Array.count
-    x64.cmp r14, r8
-    x64.jge scan_0.exit
-  inlined_Array.get_0_0:
-    x64.mov rcx, [rbx+0] (8b)
-    x64.mov rdx, r14
-    x64.call stdlib.__managed_mem_get
-    x64.test rdx, rdx
-    x64.je inlined_Array.get_3_0
-  inlined_Array.get_1_0:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_removeFirst_0
-  inlined_Array.get_3_0:
-    x64.xor edx, edx
-  inline_cont_removeFirst_0:
-    x64.test rdx, rdx
-    x64.je try_0.merge
-    x64.jmp try_0.otherwise
-  scan_0.exit:
-    x64.mov r8, r13
-    x64.epilogue
-    x64.ret
-  try_0.otherwise:
-    x64.lea rcx, [rip+__panic_msg_e96049aa06d659cc]
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call IntArray.count
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge removeFirst.scan_0.exit
+  scan_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call IntArray.get
+    x64.mov [rbp-32], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je removeFirst.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
-    x64.mov r8, r13
-    x64.epilogue
-    x64.ret
-  try_0.merge:
-    x64.cmp r8, r12
-    x64.jne hit_0.after
+  otherwise_continue_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jne removeFirst.hit_0.after
   hit_0:
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov rcx, rbx
-    x64.mov rdx, r14
-    x64.call Array.remove
-    x64.test rdx, rdx
-    x64.je try_1.merge
-  try_1.otherwise:
-    x64.lea rcx, [rip+__panic_msg_0083276c9421f443]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call IntArray.remove
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je removeFirst.otherwise_continue_1
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
-    x64.mov r8, r13
-    x64.epilogue
-    x64.ret
-  try_1.merge:
-    x64.mov r8d, 1
+  otherwise_continue_1:
+    x64.mov rcx, 1
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   hit_0.after:
-    x64.mov rdx, r14
-    x64.add rdx, 1
-    x64.mov r14, rdx
-    x64.jmp scan_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp removeFirst.scan_0.header
+  scan_0.exit:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.lea rcx, [rip+__layout_Array_Integer]
-    x64.call Array.create
-    x64.mov rbx, r8
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov edx, 2
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.lea rax, [rip+__layout_Array_Integer]
-    x64.mov edx, 5
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.mov edx, 2
-    x64.mov rcx, rbx
+    x64.prologue stack_size=32
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call IntArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 5
+    x64.call IntArray.push
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
     x64.call removeFirst
-    x64.lea rdx, [rip+__layout_Array_Integer]
-    x64.mov rcx, rbx
-    x64.call Array.count
-    x64.mov r12, r8
-    x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8d, 4294967295
-    x64.cmp r12, r8
-    x64.jbe __range_ok_0
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.call IntArray.count
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_5380187719303d10]
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_IntArray.done
+  done:
     x64.epilogue
     x64.ret
   }

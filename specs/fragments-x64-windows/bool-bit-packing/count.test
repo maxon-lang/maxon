@@ -16,35 +16,57 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.lea rcx, [rip+__layout_Array_Bool]
-    x64.call Array.create
-    x64.mov rbx, r8
-    x64.lea rax, [rip+__layout_Array_Bool]
-    x64.mov edx, 1
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.lea rax, [rip+__layout_Array_Bool]
+    x64.call BoolArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call BoolArray.push
+    x64.mov rcx, [rbp-8]
     x64.xor edx, edx
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.lea rax, [rip+__layout_Array_Bool]
-    x64.mov edx, 1
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.lea rdx, [rip+__layout_Array_Bool]
-    x64.mov rcx, rbx
-    x64.call Array.count
-    x64.mov r12, r8
-    x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov r8d, 4294967295
-    x64.cmp r12, r8
-    x64.jbe __range_ok_0
+    x64.call BoolArray.push
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call BoolArray.push
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call BoolArray.count
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0122fad1ca9ad793]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r12
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_BoolArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_BoolArray.done
+  done:
     x64.epilogue
     x64.ret
   }

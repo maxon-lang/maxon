@@ -23,20 +23,105 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
+  func @Config.makeValue() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Config.getValue() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx rax, byte [rip+Config.value.__initialized]
+    x64.test rax, rax
+    x64.je Config.getValue.__lazy_init_0
+  __lazy_merge_0:
+    x64.mov rax, qword [rip+Config.value]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  __lazy_init_0:
+    x64.call Config.value.__lazy_init
+    x64.jmp Config.getValue.__lazy_merge_0
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.lea r8, [rip+__data_Config.value]
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, [r9+0] (8b)
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.call Config.getValue
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_b9e28ea05edf259d]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
     x64.epilogue
+    x64.ret
+  }
+  func @Config.value.__lazy_init() {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov byte [rip+Config.value.__initialized], rax
+    x64.call Config.makeValue
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, qword [rip+Config.value]
+    x64.mov [rbp-16], rdx
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-8]
+    x64.mov qword [rip+Config.value], rbx
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Config(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Config.done
+  done:
     x64.ret
   }
 }

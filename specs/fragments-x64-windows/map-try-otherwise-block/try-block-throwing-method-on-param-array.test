@@ -25,116 +25,162 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @bump(rcx: i64) {
+  func @bump(a: i64) {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rbx, rcx
-    x64.xor r12d, r12d
-  inlined_Array.get_0_0:
-    x64.mov rcx, [rbx+0] (8b)
-    x64.mov rdx, r12
-    x64.call stdlib.__managed_mem_get
-    x64.test rdx, rdx
-    x64.je inlined_Array.get_3_0
-  inlined_Array.get_1_0:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_bump_0
-  inlined_Array.get_3_0:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
     x64.xor edx, edx
-  inline_cont_bump_0:
-    x64.test rdx, rdx
-    x64.jne tryblock_1.err
-  tryblock_0.cont:
-    x64.mov rax, r8
-    x64.add rax, 1
-  inlined_Array.set_0_0:
-    x64.mov rcx, [rbx+0] (8b)
-    x64.mov rdx, r12
-    x64.call stdlib.__managed_mem_set
-    x64.test rdx, rdx
-    x64.je inlined_Array.set_3_0
-  inlined_Array.set_1_0:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_bump_1
-  inlined_Array.set_3_0:
+    x64.call CodeArray.get
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne bump.try_block_err_0
+  try_block_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov r8, rax
     x64.xor edx, edx
-    x64.xor r8d, r8d
-  inline_cont_bump_1:
-    x64.test rdx, rdx
-    x64.jne tryblock_1.err
-    x64.jmp tryblock_2.after
-  tryblock_1.err:
-    x64.sub rdx, 1
-    x64.test rdx, rdx
-    x64.jne kind_0.next0
-    x64.jmp kind_0.case0
-  tryblock_2.after:
-    x64.epilogue
-    x64.ret
+    x64.call CodeArray.set
+    x64.mov [rbp-24], rdx
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.jne bump.try_block_throw_0
+  try_block_continue_1:
+    x64.jmp bump.try_block_after_0
+  try_block_throw_0:
+    x64.jmp bump.try_block_err_0
+  try_block_err_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.mov [rbp-32], rax
+    x64.jmp bump.kind_0.cmp0
+  kind_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne bump.kind_0.cmp1
   kind_0.case0:
-    x64.lea rcx, [rip+__panic_msg_72002a12736ad795]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
-    x64.epilogue
-    x64.ret
-  kind_0.next0:
-    x64.cmp rdx, 1
-    x64.jne kind_0.next1
+  kind_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne bump.kind_0.merge
   kind_0.case1:
-    x64.lea rcx, [rip+__panic_msg_f4a783586e51a055]
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
     x64.call mrt_panic
-    x64.epilogue
-    x64.ret
-  kind_0.next1:
-    x64.lea rcx, [rip+__panic_msg_96c7daeb3f9a871f]
-    x64.call mrt_panic
+  kind_0.merge:
+  try_block_after_0:
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.lea rcx, [rip+__layout_Array_Code]
-    x64.call Array.create
-    x64.mov rbx, r8
-    x64.lea rax, [rip+__layout_Array_Code]
-    x64.mov edx, 41
-    x64.mov rcx, rbx
-    x64.call Array.push
-    x64.mov rcx, rbx
+    x64.prologue stack_size=32
+    x64.call CodeArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 41
+    x64.call CodeArray.push
+    x64.mov rcx, [rbp-8]
     x64.call bump
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
     x64.xor edx, edx
-  inlined_Array.get_0_0:
-    x64.mov rcx, [rbx+0] (8b)
-    x64.call stdlib.__managed_mem_get
-    x64.mov r12, r8
-    x64.test rdx, rdx
-    x64.je inlined_Array.get_3_0
-  inlined_Array.get_1_0:
-    x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_main_0
-  inlined_Array.get_3_0:
-    x64.mov rcx, rbx
-    x64.call __mm_decref_maybenull_helper
-    x64.xor edx, edx
-    x64.mov r8, r12
-  inline_cont_main_0:
-    x64.test rdx, rdx
-    x64.je try_0.merge
-  try_0.otherwise:
-    x64.mov r8d, 99
-  try_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.call CodeArray.get
+    x64.mov rbx, 99
+    x64.mov [rbp-16], rbx
+    x64.mov [rbp-24], rax
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_f2594521cd422fea]
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Code(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Code.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemory_Code.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Code.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Code.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Code.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_CodeArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_CodeArray.done
+  done:
     x64.epilogue
     x64.ret
   }

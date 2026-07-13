@@ -48,143 +48,254 @@ score=3
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
-    x64.xor r8d, r8d
-    x64.mov r8d, 1
-    x64.mov r8, 0
-    x64.mov rbx, r8
-    x64.mov r12, r8
-    x64.mov r13, r8
-    x64.mov r14, r8
-  sweep_0.header:
-    x64.cmp r14, 16
-    x64.jge sweep_0.exit
-  sweep_0:
-    x64.call Clock.nowNanos
-    x64.mov r15, r8
-    x64.jmp burn_0.header
-  sweep_0.step:
-    x64.add r14, 1
-    x64.jmp sweep_0.header
-  sweep_0.exit:
-    x64.test rbx, rbx
-    x64.mov r8, 0
-    x64.jne neverEarly_0.after
-    x64.jmp neverEarly_0
-  burn_0.header:
-    x64.mov rcx, r15
-    x64.call Clock.elapsedNanos
-    x64.mov r9d, 1000000
-    x64.mov rsi, r14
-    x64.imul rsi, r9
-    x64.cmp r8, rsi
-    x64.jge burn_0.exit
-  burn_0:
-    x64.add r13, 1
-    x64.jmp burn_0.header
-  burn_0.exit:
-    x64.call Clock.nowNanos
-    x64.mov r15, r8
-    x64.mov ecx, 30
-    x64.call maxon_sleep
-    x64.mov rcx, r15
-    x64.call Clock.elapsedNanos
-    x64.cmp r8, 30000000
-    x64.jge tooSoon_0.after
-  tooSoon_0:
-    x64.add rbx, 1
-  tooSoon_0.after:
-    x64.cmp r8, r12
-    x64.jle newSlowest_0.after
-  newSlowest_0:
-    x64.mov r12, r8
-  newSlowest_0.after:
-    x64.jmp sweep_0.step
-  neverEarly_0:
-    x64.mov r8, 0
-    x64.add r8, 1
-  neverEarly_0.after:
-    x64.mov r9, 10000000000
-    x64.cmp r12, r9
-    x64.jge bounded_0.after
-  bounded_0:
-    x64.add r8, 1
-  bounded_0.after:
-    x64.test r13, r13
-    x64.jle __phi_trampoline_15_0
-  sweptTheTick_0:
-    x64.add r8, 1
-    x64.mov rbx, r8
-  sweptTheTick_0.after:
-    x64.mov ecx, 21
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov rcx, rbx
-    x64.mov rdx, r12
-    x64.call mrt_i64_to_string
-    x64.mov rbx, r8
-    x64.mov r8, rbx
-    x64.add r8, 6
-    x64.mov r13, r8
-    x64.add r13, 1
-    x64.mov rcx, r13
-    x64.add rcx, 1
-    x64.call mrt_alloc
-    x64.mov r14, r8
-    x64.mov r8d, 6
-    x64.lea r9, [rip+__istr_0]
-    x64.mov [rbp-8], r14
-    x64.mov [rbp-16], r9
-    x64.mov [rbp-24], r8
-    x64.rep_movsb
-    x64.mov r8, r14
-    x64.add r8, 6
-    x64.mov [rbp-8], r8
-    x64.mov [rbp-16], r12
+    x64.prologue stack_size=208
+    x64.mov rax, 30000000
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.xor ebx, ebx
     x64.mov [rbp-24], rbx
-    x64.rep_movsb
-    x64.lea r9, [rip+__istr_1]
-    x64.add r8, rbx
-    x64.mov [rbp-8], r8
-    x64.mov [rbp-16], r9
+    x64.xor esi, esi
+    x64.mov [rbp-32], rsi
+    x64.xor edi, edi
+    x64.mov [rbp-40], rcx
+    x64.mov [rbp-48], rdi
+    x64.jmp main.sweep_0.header
+  sweep_0.header:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.cmp rax, rcx
+    x64.jge main.sweep_0.exit
+  sweep_0:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-56], rax
+    x64.call stdlib.Clock.nowNanos
+    x64.mov [rbp-64], rax
+    x64.jmp main.burn_0.header
+  burn_0.header:
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call stdlib.Clock.elapsedNanos
+    x64.mov rcx, 1000000
+    x64.mov rdx, [rbp-56]
+    x64.imul rdx, rcx
+    x64.cmp rax, rdx
+    x64.jge main.burn_0.exit
+  burn_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp main.burn_0.header
+  burn_0.exit:
+    x64.call stdlib.Clock.nowNanos
+    x64.mov [rbp-184], rax
+    x64.mov rcx, 30
+    x64.call stdlib.sleep
+    x64.mov rcx, [rbp-184]
+    x64.call stdlib.Clock.elapsedNanos
+    x64.mov [rbp-72], rax
+    x64.mov rcx, [rbp-8]
+    x64.cmp rax, rcx
+    x64.jge main.tooSoon_0.merge
+  tooSoon_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.tooSoon_0.merge
+  tooSoon_0.merge:
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-24]
+    x64.cmp rax, rcx
+    x64.jle main.newSlowest_0.merge
+  newSlowest_0:
+    x64.mov rax, [rbp-72]
+    x64.mov [rbp-24], rax
+    x64.jmp main.newSlowest_0.merge
+  newSlowest_0.merge:
+    x64.jmp main.sweep_0.incr
+  sweep_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-48]
+    x64.add rcx, rax
+    x64.mov [rbp-48], rcx
+    x64.jmp main.sweep_0.header
+  sweep_0.exit:
+    x64.xor eax, eax
+    x64.mov [rbp-80], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.cmp rdx, rcx
+    x64.jne main.neverEarly_0.merge
+  neverEarly_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-80]
+    x64.add rcx, rax
+    x64.mov [rbp-80], rcx
+    x64.jmp main.neverEarly_0.merge
+  neverEarly_0.merge:
+    x64.mov rax, 10000000000
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge main.bounded_0.merge
+  bounded_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-80]
+    x64.add rcx, rax
+    x64.mov [rbp-80], rcx
+    x64.jmp main.bounded_0.merge
+  bounded_0.merge:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-32]
+    x64.cmp rcx, rax
+    x64.jle main.sweptTheTick_0.merge
+  sweptTheTick_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-80]
+    x64.add rcx, rax
+    x64.mov [rbp-80], rcx
+    x64.jmp main.sweptTheTick_0.merge
+  sweptTheTick_0.merge:
+    x64.mov rax, [rbp-80]
+    x64.lea_rdata rcx, [__interp_lit_0]
+    x64.mov rdx, rcx
+    x64.mov rbx, 6
+    x64.mov [rbp-184], rdx
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-88], rax
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, [rbp-88]
+    x64.call maxon_i64_to_string
+    x64.mov rsi, [rbp-88]
+    x64.lea_rdata rdi, [__interp_lit_1]
+    x64.mov r8, rdi
+    x64.mov r9, 1
+    x64.mov rcx, 6
+    x64.lea rdx, [rcx + rax]
+    x64.add rdx, r9
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rdi, rbx
+    x64.mov [rbp-192], rax
+    x64.mov [rbp-200], rdx
+    x64.mov [rbp-208], r8
+    x64.mov rdx, rdi
+    x64.mov rcx, 16
     x64.mov r8, 1
-    x64.mov [rbp-24], r8
+    x64.call mm_alloc
+    x64.mov [rbp-96], rax
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-104], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-200]
+    x64.lea rdx, [rcx + rax]
+    x64.mov rcx, rdx
+    x64.call mm_raw_alloc
+    x64.xor ecx, ecx
+    x64.mov [rbp-112], rcx
+    x64.mov [rbp-120], rax
+    x64.mov rax, [rbp-200]
+    x64.mov [rbp-128], rax
+    x64.mov rax, [rbp-184]
+    x64.mov [rbp-136], rax
+    x64.mov rax, 6
+    x64.mov [rbp-144], rax
+    x64.mov rax, [rbp-88]
+    x64.mov [rbp-152], rax
+    x64.mov rax, [rbp-192]
+    x64.mov [rbp-160], rax
+    x64.mov rax, [rbp-208]
+    x64.mov [rbp-168], rax
+    x64.mov rax, 1
+    x64.mov [rbp-176], rax
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rbp-112]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-136]
+    x64.mov rdx, [rbp-144]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
     x64.rep_movsb
-    x64.mov rcx, r12
-    x64.call stdlib.__mm_decref
-    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
-    x64.mov ecx, 48
-    x64.call mrt_alloc_with_dtor
-    x64.mov rbx, r8
-    x64.mov r8, 0
-    x64.mov [rbx+40], r8 (8b)
-    x64.mov [rbx+0], r14 (8b)
-    x64.mov [rbx+8], r13 (8b)
-    x64.mov [rbx+16], r13 (8b)
-    x64.mov r8, 1
-    x64.mov [rbx+24], r8 (8b)
-    x64.mov r8, -1
-    x64.mov [rbx+32], r8 (8b)
-    x64.mov eax, 1
-    x64.lea rdx, [rip+__destruct_String]
-    x64.mov ecx, 16
-    x64.call stdlib.__mm_alloc_needzero
-    x64.mov r12, r8
-    x64.mov [r12+0], rbx (8b)
-    x64.mov r8, 0
-    x64.mov [r12+8], r8 (8b)
-    x64.mov r8, [r12+0] (8b)
-    x64.mov rdx, [r8+8] (8b)
-    x64.mov rcx, [r8+0] (8b)
-    x64.call mrt_write_stdout
-    x64.mov rcx, r12
-    x64.call mm_drop
-    x64.mov r8, 0
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-144]
+    x64.add rax, rcx
+    x64.mov [rbp-112], rax
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rbp-112]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-152]
+    x64.mov rdx, [rbp-160]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-160]
+    x64.add rax, rcx
+    x64.mov [rbp-112], rax
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rbp-112]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-168]
+    x64.mov rdx, [rbp-176]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rbp-128]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-88]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rbp-128]
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-104]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-104]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-104]
+    x64.mov rcx, [rbp-96]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-104]
+    x64.mov rcx, [rbp-104]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-96]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-96]
+    x64.call mm_incref
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-96]
+    x64.call stdlib.print
+    x64.mov rax, [rbp-96]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-96]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
-  __phi_trampoline_15_0:
-    x64.mov rbx, r8
-    x64.jmp sweptTheTick_0.after
   }
 }
 ---

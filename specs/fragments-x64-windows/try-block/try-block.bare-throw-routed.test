@@ -40,100 +40,177 @@ ExitCode: 121
 ---
 // CompiledIR
 module {
-  func @dispatch(rcx: u8) -> u16 {
+  func @dispatch(k: i64) -> u16 {
   entry:
-    x64.xor r9d, r9d
-    x64.test rcx, rcx
-    x64.jne m_0.next0
-    x64.jmp m_0.case0
-  tryblock_0.err:
-    x64.sub r8, 1
-    x64.test r8, r8
-    x64.jne he_0.next0
-    x64.jmp he_0.case0
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rcx
+    x64.jmp dispatch.m_0.cmp0
+  m_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne dispatch.m_0.cmp1
   m_0.case0:
-    x64.mov r8d, 1
-    x64.jmp tryblock_1.after
-  m_0.next0:
-    x64.cmp rcx, 1
-    x64.jne m_0.case2
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.jmp dispatch.m_0.merge
+  m_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne dispatch.m_0.case2
   m_0.case1:
-    x64.mov r8d, 2
-    x64.jmp tryblock_0.err
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.xor esi, esi
+    x64.test rbx, rbx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov r8, 1
+    x64.cmp rax, r8
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.mov rax, 1
+    x64.test r9, r9
+    x64.mov rcx, rdi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp dispatch.try_block_err_0
   m_0.case2:
-    x64.mov r8d, 1
-    x64.jmp tryblock_0.err
-  tryblock_1.after:
-    x64.mov rdx, r9
-    x64.ret
-  he_0.merge:
-    x64.mov r8, rsi
-    x64.jmp tryblock_1.after
+    x64.xor eax, eax
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.xor esi, esi
+    x64.test rbx, rbx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov r8, 1
+    x64.cmp rax, r8
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.mov rax, 1
+    x64.test r9, r9
+    x64.mov rcx, rdi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp dispatch.try_block_err_0
+  m_0.merge:
+    x64.jmp dispatch.try_block_after_0
+  try_block_err_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.mov [rbp-32], rax
+    x64.jmp dispatch.he_0.cmp0
+  he_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne dispatch.he_0.cmp1
   he_0.case0:
-    x64.mov r8d, 40
-    x64.mov rsi, r8
-    x64.jmp he_0.merge
-  he_0.next0:
-    x64.cmp r8, 1
-    x64.jne __phi_trampoline_11_0
+    x64.mov rax, 40
+    x64.mov [rbp-8], rax
+    x64.jmp dispatch.he_0.merge
+  he_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne dispatch.he_0.merge
   he_0.case1:
-    x64.mov r8d, 80
-    x64.mov rsi, r8
-    x64.jmp he_0.merge
-  __phi_trampoline_11_0:
-    x64.mov rsi, r9
-    x64.jmp he_0.merge
+    x64.mov rax, 80
+    x64.mov [rbp-8], rax
+    x64.jmp dispatch.he_0.merge
+  he_0.merge:
+    x64.jmp dispatch.try_block_after_0
+  try_block_after_0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov rdx, 1000
+    x64.cmp rax, rdx
+    x64.jg dispatch.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl dispatch.__range_panic_0
+    x64.jmp dispatch.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
+    x64.xor ecx, ecx
+    x64.call dispatch
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 1
+    x64.call dispatch
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_1
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, 2
+    x64.call dispatch
+    x64.mov [rbp-40], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_2
+  otherwise_panic_2:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_2:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-32]
+    x64.add rcx, rdx
+    x64.add rcx, rax
     x64.xor ebx, ebx
-    x64.mov rcx, rbx
-    x64.call dispatch
-    x64.mov r12, r8
-    x64.test rdx, rdx
-    x64.je try_0.merge
-  try_0.otherwise:
-    x64.lea rcx, [rip+__panic_msg_539c8b0b48b05f43]
-    x64.call mrt_panic
-    x64.mov r8, rbx
-    x64.epilogue
-    x64.ret
-  try_0.merge:
-    x64.mov ecx, 1
-    x64.call dispatch
-    x64.mov r13, r8
-    x64.test rdx, rdx
-    x64.je try_1.merge
-  try_1.otherwise:
-    x64.lea rcx, [rip+__panic_msg_65926b468e81d423]
-    x64.call mrt_panic
-    x64.mov r8, rbx
-    x64.epilogue
-    x64.ret
-  try_1.merge:
-    x64.mov ecx, 2
-    x64.call dispatch
-    x64.test rdx, rdx
-    x64.je try_2.merge
-  try_2.otherwise:
-    x64.lea rcx, [rip+__panic_msg_686a735bcf39825a]
-    x64.call mrt_panic
-    x64.mov r8, rbx
-    x64.epilogue
-    x64.ret
-  try_2.merge:
-    x64.add r12, r13
-    x64.mov r9d, 4294967295
-    x64.mov rsi, r12
-    x64.add rsi, r8
-    x64.cmp rsi, r9
-    x64.jbe __range_ok_0
+    x64.mov esi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_656d6448de697f0f]
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, rsi
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }
