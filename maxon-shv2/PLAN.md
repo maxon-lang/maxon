@@ -4,13 +4,18 @@
 > history) — the user adopted its core-first ordering, whose load-bearing consequence
 > is **generics BEFORE ownership** (Stage 2: ownership's `own.drop` on a type-parameter
 > value needs the runtime layout descriptor, so generics must exist first; strings/arrays
-> are themselves generic and can't precede it either). The self-host reframe (compass,
-> not gate), the `stdlib-shv2/` fork, and the `selfhost-distance` ratchet come with it.
+> are themselves generic and can't precede it either).
+>
+> **AMENDED 2026-07-13 — the `selfhost-distance` compass is CUT.** See "The compass, and
+> why it is gone" below. Stage 0 collapses to almost nothing as a result, and the next
+> step is **Stage 2.1 (structs)**.
 >
 > **Stage ↔ old-M mapping** (so DEVLOG's M-numbered ledger stays interpretable):
 > - **Stage 0** (test loop + tooling) — NEW; no old-M. `0.1 spec-test` **DONE** (`72ffe87a9`).
->   Pending: `0.2` MAXON_STDLIB, `0.3` stdlib-shv2 fork, `0.4` selfhost-distance compass,
->   `0.5` rewrite the 9 core-violating sites, `0.6` one-command.
+>   `0.4` compass **CUT**. `0.2` MAXON_STDLIB / `0.3` stdlib-shv2 fork / `0.6` one-command
+>   **DEFERRED** (a cold shv2 build is 4.2 s — the fork buys ~1 s and gates nothing).
+>   `0.5` rewrite the core-violating sites — **folded into Stage 3**, where it is discovered
+>   for free.
 > - **Stage 1** (scalar core) = old M1–M5. **DONE:** M1 basics, M2 variables, M3 arithmetic,
 >   M4a comparison+if. **IN PROGRESS:** M4b while/break/continue + mem2reg. **PENDING:** M5
 >   functions+params+calls **+ the REAL register allocator** (Stage 1's one design item).
@@ -67,10 +72,9 @@ iteration-speed mechanism." One cheap hedge worth keeping in the meantime: keep 
 id-producing table (`TypeNameInterner.foldInto`/`TypeNameRemap`) serializable-in-order, so
 a future cache has a stable id space to build on rather than a retrofit.
 
-**So self-host is the compass, not a gate.** What it genuinely buys is a
-`selfhost-distance` ratchet that makes the next feature fall out of measured data
-("412 sites need `let`") instead of a guessed milestone order — and that enforces
-"shv2's source stays in core" in CI rather than as a suggestion.
+**Self-host is a milestone (Stage 3), not a gate on the stages before it.** An earlier
+draft of this plan proposed measuring the distance to it continuously; that is cut — see
+"The compass, and why it is gone."
 
 **Intended outcome:** a ~50–65k-line compiler that self-hosts, with every pervasive
 mechanism landed *before* the passes that must be aware of it.
@@ -82,7 +86,7 @@ mechanism landed *before* the passes that must be aware of it.
 | | Choice |
 |---|---|
 | **Generics** | **Dictionary-passing + 64-byte layout descriptors + witness tables** — v1's design. (Rejected: monomorphization. It contaminates 3 files instead of 20, but trades code size and compile time — exactly the resources the ≤30 s / ≤1.7 GB budget exists to conserve.) |
-| **Self-host** | **Compass, not a gate.** `selfhost-distance` ratchet from day one; no "early" promise. |
+| **Self-host** | **A Stage-3 milestone, measured when we get there.** No continuous distance metric, no CI ratchet — cut 2026-07-13. |
 | **Conditional conformance** | **OUT of core** — see the one-line finding below. |
 | **Core `Map`** | multi-param generics + one `Hashable` constraint. No `Iterable`-on-Map, no tuple `Entry`. |
 | **Iteration** | **Hardcode `for-in`** over Array/Range/String. No general `Iterable`/associated types in core. |
@@ -137,10 +141,22 @@ Bounded by *measurement against shv2's own 7,961-line source*, not by guess:
 | enum with struct `rawValue` | the whole `StdOpMeta` design | **IN** |
 | interfaces | only `implements Error` (9×) — an **empty marker** | **IN, static only.** Witness tables are needed for the *stdlib* (`Hashable`), not shv2's code |
 | string interpolation | pervasive | **IN** |
-| **closures** | **7** | **OUT** — rewrite the 7 sites |
+| **closures** | 7 → **14** | **OUT** — rewrite the sites (all still `log*`) |
 | **conditional conformance** | **1** (`GlobalDedupMap`) | **OUT** — rewrite the 1 site |
-| `Set` | 1 | **OUT** — rewrite the 1 site (`DroppedNameSet`, [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18)) at 0.5 |
+| `Set` | 1 → **2 typealiases, 4 files** | **IN, at 2.10** — *reclassified 2026-07-13, see below* |
 | tuples · `extension` · `async` · sort/higher-order | **0** | OUT |
+
+> **Counts re-measured 2026-07-13** against a 21,038-line shv2 (the column above was taken
+> at 7,961). Closures doubled; `panic()` went 148 → **626**; `Set` grew a second, load-bearing
+> use. Nothing enforced the boundary, so the source drifted out of it — which is exactly what
+> the cut compass existed to prevent. That is the cost being knowingly accepted (below).
+>
+> **`Set` is reclassified INTO core.** It is no longer the one incidental `DroppedNameSet`:
+> `StdValueUseSet = Set with ValueId` ([StdDialect.maxon:333](maxon-shv2/Compiler/IR/Std/StdDialect.maxon#L333))
+> is now used by `ElimTrivialBlockArgs`, `FoldConstOperands`, `PruneDeadBlockArgs`, and
+> `StdDialect` itself. Rewriting that is worse than implementing it, and it is nearly free
+> once `Map` lands — **same** multi-param generics + one `Hashable` constraint, no new
+> mechanism. So `Set` ships beside `Map` at **2.10** instead of being rewritten away.
 
 **Also OUT** (Stage 4): general `Iterable`/associated types · arm64/wasm/macOS/Linux ·
 coverage · inliner.
@@ -149,23 +165,34 @@ coverage · inliner.
 
 ## Stage 0 — The loop (before any new language feature)
 
-shv2 has **no test runner**. `specs-shv2/basics.md` exists but *nothing executes it* —
-and its `status: selfhosted` frontmatter makes the C# runner skip it outright. DEVLOG's
-`[x] M1 … Spec specs-shv2/basics.md` is **false**; M1 was hand-verified. Nothing else is
-safe until this exists.
+> **STATUS 2026-07-13: Stage 0 is effectively DONE.** `0.1 spec-test` shipped and is the
+> real gate (specs-shv2 **126/0** across 19 files). `0.4` is **CUT**. `0.2`/`0.3`/`0.6` are
+> **DEFERRED** — they were justified by iteration speed, and a cold shv2 build measures
+> **4.2 s**, of which the pruned stdlib fork would remove roughly one. Revisit them when
+> build time actually hurts; the trap table below stays valid for whenever that is.
+> `0.5` is **folded into Stage 3**. Nothing in Stage 0 now blocks Stage 2.
 
-- **0.1 `maxon-shv2 spec-test`** (~665 lines new). New
+shv2 had **no test runner**. `specs-shv2/basics.md` existed but *nothing executed it* —
+and its `status: selfhosted` frontmatter made the C# runner skip it outright. DEVLOG's
+`[x] M1 … Spec specs-shv2/basics.md` was **false**; M1 was hand-verified. Nothing else was
+safe until this existed.
+
+- **0.1 `maxon-shv2 spec-test`** ✅ **DONE** (`72ffe87a9`; ~665 lines new). New
   `maxon-shv2/Testing/{SpecParser,SpecRunner}.maxon`; grow `Compiler.maxon` with
   `compileSource()` + `CompileOutcome` (returns `project.diagnostics` instead of printing
   them — `Diagnostic.render()` already emits the exact `error EXXXX:` wire format
   `maxoncstderr` compares against). Block types: ` ```maxon `/` ```exitcode `/
   ` ```stdout `/` ```maxoncstderr ` only. **Do NOT port v1's 7,699-line harness** — shv2
   won't be able to compile a line of it for a year.
-- **0.2 `MAXON_STDLIB` override** in
+- **0.2 `MAXON_STDLIB` override** — **DEFERRED.** In
   [0-Compiler.cs:846](maxon-sharp/Compiler/0-Compiler.cs#L846) `FindStdlibPath()` (~50
   lines C#). Default path byte-for-byte unchanged so v1 and the 273-spec suite cannot
   regress.
-- **0.3 `stdlib-shv2/stdlib/`** — the pruned fork. The bootstrap parses **48 files /
+- **0.3 `stdlib-shv2/stdlib/`** — the pruned fork. **DEFERRED** (see the status note: a cold
+  shv2 build is 4.2 s; this removes ~1 s and gates nothing. The plan originally called this
+  "the iteration-speed mechanism" because it assumed per-build stdlib cost was the binding
+  constraint on iteration — measured, it is not, and `Set`'s reclassification into core means
+  the fork can no longer drop `Set.maxon` anyway). The bootstrap parses **48 files /
   11,007 lines** today (`SearchOption.AllDirectories`; only `Internals.maxon` excluded) —
   the 15 `helpers/` files (~3,046 lines) count too, and mostly must stay
   (MonomorphizationPass hardcodes the `stdlib.helpers.itertools.` /
@@ -182,15 +209,17 @@ safe until this exists.
   position. The fork carries no `Internals.maxon` at all (both compilers exclude it —
   see the runtime-binding decision). Sub-task: audit the 15 `helpers/` files and drop
   any unreachable from the kept set.
-- **0.4 `maxon-shv2 selfhost-distance`** (~485 lines) — the compass. See below.
-- **0.5** Rewrite the 9 core-violating sites: the 7 closures (`if logEnabled(cat)`
-  guards), the `GlobalDedupMap` key (ContentHash + byte-verify), and the one `Set`
-  (`DroppedNameSet`, [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18) →
-  `Map with (String, bool)`). Delete `LazyMessage`.
-- **0.6** One command: build → spec-test → distance.
+- **0.4 `maxon-shv2 selfhost-distance`** — ❌ **CUT 2026-07-13.** See below.
+- **0.5** Rewrite the core-violating sites — **folded into Stage 3.** The closures
+  (`if logEnabled(cat)` guards, delete `LazyMessage`) and the `GlobalDedupMap` key
+  (ContentHash + byte-verify) still have to happen before shv2 compiles shv2; they just
+  aren't Stage-0 work, because with the compass gone nothing between here and Stage 3 reads
+  them. `Set` is no longer on this list — it moved *into* core (2.10). Expect the closure
+  count to keep growing until then; it is a mechanical rewrite whenever it is done.
+- **0.6** One command: build → spec-test → distance. **DEFERRED** (and half of it no longer
+  exists).
 
-**Gate:** `spec-test` green on `basics.md` — the first time M1 is verified by anything
-but hand.
+**Gate:** `spec-test` green — ✅ met, and now the suite gate for everything: **126/0**.
 
 ### Stage-0 traps (each is a silent miscompile, not an error)
 
@@ -202,35 +231,40 @@ but hand.
 | 4 | `__Managed*Error` case ordinals must match `Builtins.maxon` **exactly** ([2-Parser.cs:1116](maxon-sharp/Compiler/2-Parser.cs#L1116)) | Reordering a case re-points builtin `throwsType` at the wrong ordinal |
 | 5 | `ExitCode` lives in **`Process.maxon`**, not where you'd guess | Drop it and `main() returns ExitCode` won't resolve |
 | 6 | Spec fragments need a **trailing newline** ([SpecTestRunner.maxon:1045](maxon-selfhosted/Testing/SpecTestRunner.maxon#L1045)) | Every spec test dies with a lexer EOF error |
-| 7 | **`panic()` is not catchable** — 148 sites in shv2 | `selfhost-distance` crashes instead of counting. **Audit all 148 now** (`INVARIANT` = keep vs `NOT-YET-IMPLEMENTED` = record-and-recover); by mid-Stage-2 there will be ~600. Record-and-recover on the resolve/lower/emit paths means threading `throws` through those call chains — plumbing well beyond parser recovery, NOT covered by 0.4's ~485-line reporter estimate. |
-| 8 | A recovery-mode parse artifact **must not enter the query memo** (the parse query: [Queries.maxon:58](maxon-shv2/Compiler/Queries.maxon#L58); the memo tables: `QueryDatabase.maxon:70-72`) | `selfhost-distance` poisons the cache |
+| 7 | *(was: the 148-site `panic()` audit — **VOID with the compass**, and it was the compass's true cost: 626 sites as of 2026-07-13, not 148. `panic()` is still not catchable; nothing now needs it to be.)* | — |
+| 8 | *(was: recovery-mode parse artifacts poisoning the query memo — **VOID with the compass**. shv2 needs no parser recovery mode.)* | — |
 | 9 | *(inverse)* `BuildCache` is **already** stdlib-path-keyed ([BuildCache.cs:52](maxon-sharp/BuildCache.cs#L52)) | Don't "fix" it. But never set `MAXON_STDLIB` globally — v1's own `findStdlibPath()` ignores it and the two compilers would diverge. |
 
-### The compass — `selfhost-distance`
+### The compass, and why it is gone — ❌ CUT 2026-07-13
 
-`stageUnits = filesLexed + filesParsed + funcsResolved + funcsLowered + funcsEmitted` —
-the *reported* compass number. Monotone within a run (each term counts only *successes*,
-and a unit reaches stage *k+1* only if stage *k* passed) — but **NOT across commits**:
-the denominator is shv2's own source, and legitimate refactors shrink it (the M1-post
-MIR-tier deletion removed whole files). So the CI ratchet is **per-unit non-regression
-on surviving units**, not a scalar comparison: every `(file|func, stage)` pair that
-passed at the previous commit and still exists must still pass. New units may fail
-(that's the roadmap); deleted units drop out; a passing unit that regresses fails CI.
-That per-unit rule is the *only* thing that actually enforces "shv2's source stays in
-core."
+`selfhost-distance` was to run shv2's own frontend over shv2's own source each commit and
+report `stageUnits = filesLexed + filesParsed + funcsResolved + funcsLowered + funcsEmitted`,
+plus a ranked `TOP UNSUPPORTED` table. It was sold on two jobs. **Neither survives contact
+with where the project actually is:**
 
-```
-SELFHOST DISTANCE   43
-  files  lexed 39/39   parsed 4/39      funcs  resolved 0/612  lowered 0/612  emitted 0/612
-  FIRST BLOCKING:  Lexer.maxon:5:1  top-level `typealias`
-  TOP UNSUPPORTED (1,844 sites):   412 `let`   288 type decl   201 binary op   174 `if`
-```
+1. **"The ranked table IS the roadmap."** It isn't needed. The roadmap is already written and
+   already ordered by a *reason* — dictionary-passing forces generics before ownership, and
+   `Array`/`String` are themselves generic. A frequency table that says `412 sites need
+   'let'` cannot discover that constraint and would not reorder the 2.1 → 2.13 ladder if it
+   could. **We know what we need to implement.**
+2. **"The per-unit ratchet is the only thing that enforces 'shv2's source stays in core.'"**
+   True, and cut with eyes open (below).
 
-The ranked table **is** the roadmap, and it reprioritizes itself after every milestone.
-Prerequisites (both wanted anyway): a parser **recovery mode** — Maxon's mandatory
-labeled `end '<label>'` makes `skipToMatchingEnd` ~30 lines rather than a heuristic —
-and the panic audit (trap 7). Report the pair `(SHD, specs_passing)`: SHD=0 means shv2
-*accepts* its source, not that it compiles it *correctly*.
+**What it would have cost**, honestly re-priced at 21,038 lines: the ~485-line reporter, a
+parser **recovery mode**, and — the real bill — making `panic()` recoverable across the
+resolve/lower/emit call chains at **626** sites (the plan estimated 148, and projected ~600
+only by *mid-Stage-2*; we hit it at the end of Stage 1). It buys a number, not a feature.
+
+**The cost being accepted:** nothing now stops shv2's source drifting out of core, and it
+demonstrably does — closures 7 → 14, `panic()` 148 → 626, a second `Set` grown into four Std
+passes, all during Stage 1 alone. **The bet is that discovering this at Stage 3 is cheaper
+than a CI ratchet plus 626 recoverable panics, because at Stage 3 shv2 compiling shv2 reports
+every violation for free, and each one is a mechanical rewrite** (the closures are all `log*`;
+`GlobalDedupMap` is one line). The failure mode to watch for is a violation that is *not*
+mechanical — one that turns into a language feature we must ship late. `Set` was already that
+(rewriting it beat implementing it right up until it didn't), which is why it is now in core
+at 2.10 rather than on the rewrite list. **If a second such case appears, re-open this
+decision** — that, not the drift itself, is the signal.
 
 ---
 
@@ -273,7 +307,7 @@ rebuilds the interference graph every iteration.
 | 2.7 | **`Array`** | = 2.2 ∘ 2.4 — the first real integration proof |
 | 2.8 | **`String`** + interpolation | = Array-of-Byte + `BuiltinStringLiteral`; runtime slice **R2** |
 | 2.9 | owned payloads in enums/unions | |
-| 2.10 | **`Map`** | multi-param generics + `Hashable` constraint |
+| 2.10 | **`Map`** + **`Set`** | multi-param generics + `Hashable` constraint. `Set` rides the same mechanism (reclassified into core 2026-07-13 — `StdValueUseSet` is load-bearing in four Std passes) |
 | 2.11 | hardcoded `for-in` | Array / Range / String |
 | 2.12 | **errors** | `throws`/`try`/`otherwise`; drops on the error edge. v1's dual-register flag verbatim |
 | 2.13 | ranged typealiases | `ExpandCastRangeChecks` + `InsertRangeChecks` |
@@ -323,10 +357,17 @@ ramp** — it demands determinism in rdata ordering, hash iteration order, name 
 and float formatting. **Gate byte-identity from Stage 1 on the toy corpus**, the way the
 plan already gates 1-core-vs-N-core.
 
+**Stage 3 absorbs old 0.5 — the core-violating rewrites.** With the compass cut, this is
+where they surface, and shv2 pointing at its own source names them for free. Known going in
+(the list will have grown): the `log*` closures → `if logEnabled(cat)` guards, delete
+`LazyMessage`; `GlobalDedupMap`'s `ByteArray` key → `ContentHash` + byte-verify-on-hit.
+Budget a rewrite pass here, not a surprise.
+
 ## Stage 4 — Broaden
 async/green threads · closures · general `Iterable` + associated types · conditional
-conformance + per-gid witness thunks · `Set`/`List`/Json/… · arm64 + wasm · coverage ·
-inliner · port the 273-file / ~2,573-case spec suite.
+conformance + per-gid witness thunks · `List`/Json/… · arm64 + wasm · coverage ·
+inliner · port the 273-file / ~2,573-case spec suite. (`Set` left this list on 2026-07-13
+— it is core, at 2.10.)
 
 ## Stage 5 — Budgets
 Parallel per-function fan-out at scale; **≤30 s / ≤1.7 GB / >90% CPU**. Runtime multi-core
@@ -350,36 +391,38 @@ approach chosen fresh** — not ported from v1's `.mxc`.
 | Testing | 7,699 | ~665 |
 | **Total** | **191,487** | **~50–65k** |
 
-Current: **7,961**. Self-compile is **~45–55k lines away**. That is the project.
+Current: **21,038** (7,961 when this table was written; Stage 1 is complete). Self-compile
+is roughly **30–45k lines away**. That is the project.
 
 ---
 
 ## Verification
 
-- **Per milestone:** `maxon-shv2 spec-test` stays green; ownership milestones (2.4+) also
-  assert an `mm-trace` block via `maxon monitor`.
-- **Continuous:** the `selfhost-distance` **per-unit ratchet** — no surviving
-  `(unit, stage)` pass may regress (the scalar may legitimately shrink on refactors; see
-  the compass) — this is what enforces "shv2's source stays in core." Track `% values
-  promoted to shared` alongside it.
+- **Per milestone:** `maxon-shv2 spec-test` stays green (**126/0** as of 2026-07-13);
+  ownership milestones (2.4+) also assert an `mm-trace` block via `maxon monitor`.
+- **Per commit:** `specs-shv2/fragments/` **clean** under `git status` after a spec run —
+  the goldens are compared, so an empty diff *proves* byte-identical codegen. Plus
+  `verify-warm-rebuild` PASS. These, not a distance metric, are the continuous gates.
+- **Continuous:** ~~the `selfhost-distance` per-unit ratchet~~ — **CUT 2026-07-13**;
+  nothing now enforces "shv2's source stays in core," by decision. Still track `% values
+  promoted to shared` from 2.6 (if it's 40%, static ownership bought nothing).
 - **From Stage 1:** byte-identity on repeat compiles, so Stage 3's fixpoint is a ramp.
 - **Stage 3:** stage-2 == stage-3 byte-identical; stage-2 shv2 passes the suite.
 - **Stage 5:** ≤30 s / ≤1.7 GB / >90% CPU on self-compile.
 
 ## Critical files
 
-- **New:** `maxon-shv2/Testing/{SpecParser,SpecRunner}.maxon`;
-  `maxon-shv2/Compiler/SelfhostDistance.maxon`; `maxon-shv2/Compiler/IR/LayoutDescriptor.maxon`;
-  `maxon-shv2/Compiler/IR/Own/{OwnDialect,OwnershipInfer,OwnershipCheck,EscapeAnalysis,InsertDrops}.maxon`;
-  `stdlib-shv2/stdlib/` (leaf name **must** be `stdlib`).
-- **Modified:** [0-Compiler.cs:846](maxon-sharp/Compiler/0-Compiler.cs#L846) (`MAXON_STDLIB`);
-  [Main.maxon](maxon-shv2/Main.maxon) (`spec-test`, `selfhost-distance`);
-  [Parser.maxon](maxon-shv2/Compiler/Parser.maxon) (recovery mode; grows every milestone);
-  [Compiler.maxon](maxon-shv2/Compiler/Compiler.maxon) (`compileSource`);
+- **New:** ~~`maxon-shv2/Compiler/SelfhostDistance.maxon`~~ (**cut — never written**);
+  `maxon-shv2/Compiler/IR/LayoutDescriptor.maxon`;
+  `maxon-shv2/Compiler/IR/Own/{OwnDialect,OwnershipInfer,OwnershipCheck,EscapeAnalysis,InsertDrops}.maxon`.
+  ✅ done: `maxon-shv2/Testing/{SpecParser,SpecRunner}.maxon`. Deferred: `stdlib-shv2/stdlib/`
+  (leaf name **must** be `stdlib`).
+- **Modified:** [Parser.maxon](maxon-shv2/Compiler/Parser.maxon) (grows every milestone; **no
+  recovery mode** — that was the compass's requirement);
+  [Compiler.maxon](maxon-shv2/Compiler/Compiler.maxon) (`compileSource` ✅);
+  [Main.maxon](maxon-shv2/Main.maxon) (`spec-test` ✅). At **Stage 3**, not Stage 0:
   [GlobalDataTable.maxon:23](maxon-shv2/Compiler/Targets/Shared/GlobalDataTable.maxon#L23) +
-  [Logger.maxon:35](maxon-shv2/Compiler/Logger.maxon#L35) +
-  [IrModule.maxon:18](maxon-shv2/Compiler/IR/IrModule.maxon#L18) (the 9 core-violating sites);
-  [maxon-shv2/PLAN.md](maxon-shv2/PLAN.md) (replaced by this; keep a stage↔M mapping so
-  DEVLOG's M-numbered ledger stays interpretable).
+  [Logger.maxon:35](maxon-shv2/Compiler/Logger.maxon#L35) (the core-violating sites).
+  Deferred: [0-Compiler.cs:846](maxon-sharp/Compiler/0-Compiler.cs#L846) (`MAXON_STDLIB`).
 - **Reference (read, don't copy):** `maxon-selfhosted/Compiler/IR/LayoutDescriptor.maxon`,
   `Compiler/Passes/BuildWitnessTables.maxon`, `Compiler/IR/Std/InsertRefcounts.maxon`.

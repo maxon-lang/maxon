@@ -458,14 +458,21 @@ above). The original list here was the pre-adoption M6–M18 numbering, which ha
 at M14 — *reversed*, because `own.drop` on a type-parameter value needs the runtime layout descriptor, and
 `String`/`Array` are themselves generic.
 
-- [ ] **Stage 0 tooling** — the `selfhost-distance` compass (its ranked TOP-UNSUPPORTED table IS the
-  roadmap), the pruned `stdlib-shv2/stdlib/` fork + `MAXON_STDLIB` override, and the 9 core-violating
-  rewrites. This is the loop that gates Stage 2.
+- [x] **Stage 0 tooling** — **CLOSED 2026-07-13, mostly by deletion.** `0.1 spec-test` shipped and is the
+  gate. The `selfhost-distance` **compass is CUT** (PLAN.md → "The compass, and why it is gone"): we know
+  what to implement, so its ranked table bought nothing, and its real price was making `panic()` recoverable
+  at **626** sites. The `stdlib-shv2` fork + `MAXON_STDLIB` are **deferred** — a cold shv2 build measures
+  4.2 s and the fork removes ~1 s. The core-violating rewrites move to **Stage 3**, where shv2 compiling
+  shv2 names them for free. **Nothing in Stage 0 gates Stage 2 any more.**
 - [ ] **Stage 2** — 2.1 structs · 2.2 **generics** (dictionary-passing + layout descriptors + witness
   tables) · 2.3 interfaces · 2.4 **heap + ownership + drops** (Workstream **R1** — the emitted runtime:
   slab / refcount / `__destruct` / DebugStream producer; also what gates mm-trace) · 2.5 moves+borrows ·
-  2.6 escape→refcount · 2.7 Array · 2.8 String (R2) · 2.9 owned payloads · 2.10 Map · 2.11 for-in ·
+  2.6 escape→refcount · 2.7 Array · 2.8 String (R2) · 2.9 owned payloads · 2.10 **Map + Set** · 2.11 for-in ·
   2.12 error handling · 2.13 ranged typealias
+- [ ] **spec: a spilled value forwarded to a phi** — `rewriteEdgeArgsIn` is the compiler's one in-place
+  write to the shared phi model, guarded by its one remaining `.clone()`, and it is reached by **none** of
+  the 126 specs (including the five allocator stress specs). Unexercised, and a missing copy-on-write there
+  is a silent parse-memo corruption. Small, worth doing.
 - [ ] **Stage 3** self-host · [ ] **Stage 4** broaden · [ ] **Stage 5** budget gate (≤30 s / ≤1.7 GB /
   >90% CPU; Workstream **R3** = the GT scheduler)
 
@@ -523,3 +530,42 @@ times at any tier, where it used to pay a copy per edge per boundary.
   `PhiEdgeView`, so the positional `blockArgs[k] ↔ argIds[k]` invariant has exactly one enforcement point.
 - **Gates:** shv2 build clean; **specs-shv2 126/0**; `git status specs-shv2/fragments/` **empty** — the
   goldens are compared, so codegen is **byte-identical**; `verify-warm-rebuild` PASS.
+
+## The `selfhost-distance` compass is CUT — 2026-07-13 (plan change, no code)
+
+**User decision: drop the compass.** "It's a bunch of work and I don't think we need it — we know what we
+need to implement." Nothing in the tree depended on it (`SelfhostDistance.maxon` was never written), so this
+is a PLAN.md/DEVLOG change only. The full rationale lives in **PLAN.md → "The compass, and why it is gone."**
+
+It was sold on two jobs, and the honest accounting kills both:
+
+- **"The ranked TOP-UNSUPPORTED table IS the roadmap."** It isn't. The roadmap is already ordered by a
+  *reason* — dictionary-passing forces generics before ownership; `Array`/`String` are themselves generic. A
+  frequency table saying `412 sites need 'let'` cannot discover that constraint, and would not reorder the
+  2.1 → 2.13 ladder if it could.
+- **"The per-unit ratchet is the only thing enforcing 'shv2's source stays in core.'"** True — and cut with
+  eyes open. **Its price, re-measured:** a ~485-line reporter, a parser recovery mode, and making `panic()`
+  recoverable across the resolve/lower/emit chains at **626** sites. PLAN.md estimated 148 and projected
+  ~600 only by *mid-Stage-2*; we are at 626 at the *end of Stage 1*. That is a lot of plumbing to buy a
+  number rather than a feature.
+
+**Re-measured the core boundary while deciding** (PLAN.md's table was taken at 7,961 lines; shv2 is now
+21,038). Without a ratchet the source drifted out of core exactly as predicted: **closures 7 → 14** (still
+all `log*`), **`panic()` 148 → 626**, and a **second `Set`**. The bet being accepted: discovering this at
+Stage 3 is cheaper than the ratchet, because shv2-compiling-shv2 reports every violation for free and each
+known one is a mechanical rewrite (`log*` guards; a one-line `GlobalDedupMap` key).
+
+**The one thing the drift actually changed — `Set` is now IN core, at 2.10.** It is no longer the single
+incidental `DroppedNameSet` the plan wrote off: `StdValueUseSet = Set with ValueId` is load-bearing in
+`ElimTrivialBlockArgs`, `FoldConstOperands`, `PruneDeadBlockArgs`, and `StdDialect`. Rewriting that is now
+worse than implementing it — and implementing it is nearly free beside `Map`: same multi-param generics, same
+single `Hashable` constraint, no new mechanism. **That reclassification is the signal to watch.** A
+core-violation that stops being a mechanical rewrite and becomes a language feature is the thing the compass
+would have caught early; if a *second* one appears, re-open this decision.
+
+**Also deferred, on measurement:** the `stdlib-shv2/` pruned fork and `MAXON_STDLIB` (old 0.2/0.3). PLAN.md
+called the fork "the iteration-speed mechanism" — but a cold shv2 build is **4.2 s**, of which the ~32%
+stdlib cut is worth about a second. It gates nothing. (It also can no longer drop `Set.maxon`.) Revisit when
+build time hurts; the Stage-0 trap table stays valid for whenever that is.
+
+**Net: Stage 0 is closed, mostly by deletion. The next step is Stage 2.1 — structs, enums, unions, `match`.**
