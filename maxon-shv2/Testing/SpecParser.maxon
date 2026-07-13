@@ -19,6 +19,30 @@
 // `<!-- test: … -->` marker), so they are both out of the scanned region AND
 // carry no marker — belt and suspenders. The specs-shv2 files were rewritten to
 // this convention in lockstep with this parser.
+//
+// DISABLED TESTS — the per-CASE shelf, and the mechanism Workstream S runs on.
+// `## Deferred` shelves at the wrong granularity for a ported spec: a real
+// `/specs` file mixes cases shv2 can already pass with cases it cannot, so
+// deferring the FILE strands the former behind the latter. A case shv2 cannot
+// yet pass is therefore marked `<!-- disabled-test: NAME -->` — the marker the
+// project ALREADY has (v1 skips it at SpecTestRunner.maxon:2233; the C# runner's
+// regex is `<!--\s*(?:disabled-)?test:\s*\S+\s*-->`) — with the RUNG THAT
+// UNLOCKS IT on the following comment line:
+//
+//     <!-- disabled-test: arithmetic.string-concat -->
+//     <!-- P1.2 String -->
+//
+// A disabled case is parsed as a full test BOUNDARY (its blocks are consumed
+// exactly as an active test's are, by the same routine, so the two can never
+// drift on where a test ends) and then discarded: never compiled, never run, and
+// — because it never reaches `SpecFile.tests` — NO `.test` golden is generated
+// for it. Goldens therefore accrete only as cases are ENABLED, which is what
+// keeps the fragment diff reviewable instead of a ten-thousand-file dump.
+//
+// The reasons are the roadmap: `grep -A1 disabled-test:` groups the entire
+// remaining language surface by the milestone that unlocks it, ranked by cases
+// that must actually PASS. And the ratchet is free: an ENABLED case may never be
+// re-disabled.
 
 // --- Spec-markdown grammar tokens ---
 // Named (not inline literals) because these strings are a format contract shared
@@ -31,6 +55,13 @@ let DraftStatus = "draft"
 let TestsHeading = "## Tests"
 let SectionHeadingPrefix = "## "
 let TestMarker = "<!-- test:"
+
+// A case shv2 cannot yet pass — same grammar, opposite verdict. It is NOT a
+// superstring of `TestMarker` ("<!-- disabled-test:" does not contain
+// "<!-- test:"), so the two match orders are independent and neither can swallow
+// the other. Both are still tested explicitly, in one place, so that stays true
+// if either literal is ever edited.
+let DisabledTestMarker = "<!-- disabled-test:"
 let TestMarkerNameSep = ": "
 let TestMarkerEnd = " -->"
 let SourceFence = "```maxon"
@@ -39,6 +70,11 @@ let CompilerErrorFence = "```maxoncstderr"
 let FenceClose = "```"
 
 typealias LineIndex = int(0 to u64.max)
+
+// How many cases in one spec file are shelved behind `<!-- disabled-test: … -->`.
+// Carried (not discarded) because it is the project's progress metric: a rung is
+// DONE when the cases it unlocks have moved out of this count and into the run.
+export typealias DisabledTestCount = int(0 to u64.max)
 
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
 // value the runner reads back, so they compare without a cast. Exported so the
@@ -67,17 +103,32 @@ end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
 
-// A parsed spec file: its frontmatter `status` (the runner skips `draft`) and
-// every active test. (The path is deliberately NOT stored — the caller already
-// holds the FilePath it passed to `parseSpecFile`, so a copy here would be dead.)
+// A parsed spec file: its frontmatter `status` (the runner skips `draft`), every
+// ACTIVE test, and how many cases were shelved behind `<!-- disabled-test: … -->`.
+// (The path is deliberately NOT stored — the caller already holds the FilePath it
+// passed to `parseSpecFile`, so a copy here would be dead.)
 export type SpecFile
 	export let status as String
 	export let tests as SpecTestArray
+	export let disabledCount as DisabledTestCount
 
-	export static function create(status String, tests SpecTestArray) returns SpecFile
-		return Self{status: status, tests: tests}
+	export static function create(status String, tests SpecTestArray, disabledCount DisabledTestCount) returns SpecFile
+		return Self{status: status, tests: tests, disabledCount: disabledCount}
 	end 'create'
 end 'SpecFile'
+
+// What one pass over a spec's `## Tests` region found: the runnable tests, and the
+// count of cases deliberately shelved. Two values, one traversal — returning both
+// keeps `extractTests` a single scan rather than a scan plus a separate re-count,
+// which could disagree with it.
+type ExtractedTests
+	export let tests as SpecTestArray
+	export let disabledCount as DisabledTestCount
+
+	export static function create(tests SpecTestArray, disabledCount DisabledTestCount) returns ExtractedTests
+		return Self{tests: tests, disabledCount: disabledCount}
+	end 'create'
+end 'ExtractedTests'
 
 // One fenced code block: its content (fence lines excluded), and the line index
 // immediately AFTER its closing ``` — the single unit the block reader returns
@@ -98,7 +149,8 @@ end 'FenceBlock'
 export function parseSpecFile(path FilePath) returns SpecFile throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	let lines = content.split("\n")
-	return SpecFile.create(parseStatus(lines), tests: extractTests(lines))
+	let extracted = extractTests(lines)
+	return SpecFile.create(parseStatus(lines), tests: extracted.tests, disabledCount: extracted.disabledCount)
 end 'parseSpecFile'
 
 // Read the `status:` key out of the YAML frontmatter (the leading `--- … ---` block). "" when
@@ -147,12 +199,14 @@ function valueAfterKey(line String, key String) returns String
 	return line.slice(pos, endIndex: line.endIndex()).trim()
 end 'valueAfterKey'
 
-// Extract every ACTIVE test. The scanned region is the `## Tests` section only:
-// from the line after the `## Tests` heading to the next `## ` heading (or EOF).
-// A `## Deferred` heading therefore ends scanning, so no deferred test is ever
-// reached — see the deferred-skip convention at the top of this file.
-function extractTests(lines StringArray) returns SpecTestArray
+// Extract every ACTIVE test, and count the disabled ones. The scanned region is the
+// `## Tests` section only: from the line after the `## Tests` heading to the next
+// `## ` heading (or EOF). A `## Deferred` heading therefore ends scanning, so no
+// deferred test is ever reached — see the deferred-skip convention at the top of
+// this file.
+function extractTests(lines StringArray) returns ExtractedTests
 	var tests = SpecTestArray.create()
+	var disabledCount = 0 as DisabledTestCount
 	let lineCount = lines.count()
 
 	// Locate the `## Tests` heading; the active-test region begins on the next line.
@@ -171,7 +225,7 @@ function extractTests(lines StringArray) returns SpecTestArray
 	end 'find'
 
 	if not inTests 'noTestsSection'
-		return tests
+		return ExtractedTests.create(tests, disabledCount: disabledCount)
 	end 'noTestsSection'
 
 	while i < lineCount 'scan'
@@ -182,23 +236,35 @@ function extractTests(lines StringArray) returns SpecTestArray
 			break
 		end 'sectionEnd'
 
-		if line.contains(TestMarker) 'isMarker'
-			i = appendTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests)
+		// A DISABLED case is scanned by the very same routine as an active one — it
+		// is a full test boundary, just one whose result is thrown away. Sharing the
+		// scan is the point: a second "skip a disabled test" walker would be free to
+		// disagree with this one about where a test's blocks end, and the failure
+		// mode of that disagreement is a shelved case silently RUNNING.
+		if line.contains(DisabledTestMarker) 'isDisabledMarker'
+			disabledCount = disabledCount + 1
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false)
+		end 'isDisabledMarker' else if line.contains(TestMarker) 'isMarker'
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true)
 		end 'isMarker' else 'notMarker'
 			i = i + 1
 		end 'notMarker'
 	end 'scan'
 
-	return tests
+	return ExtractedTests.create(tests, disabledCount: disabledCount)
 end 'extractTests'
 
-// Parse one test starting at its `<!-- test: NAME -->` marker and push it onto
-// `tests`, returning the line index to resume the outer scan from. The test is
-// pushed ONLY when both a ```maxon source block and one expected block were seen
-// before the next marker / section boundary (the "marker + source + expected,
-// contiguous" active-test contract) — an incomplete run of blocks is not a
-// runnable test and is silently left out rather than half-built.
-function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray) returns LineIndex
+// Scan one test starting at its marker line, returning the line index to resume the
+// outer scan from. When `active`, the parsed test is pushed onto `tests`; when not
+// (a `<!-- disabled-test: … -->` case) it is scanned identically and DISCARDED, so
+// the shelved case is skipped by consuming exactly the blocks a live test would
+// have consumed rather than by a separate, driftable walker.
+//
+// A test is pushed ONLY when both a ```maxon source block and one expected block
+// were seen before the next marker / section boundary (the "marker + source +
+// expected, contiguous" active-test contract) — an incomplete run of blocks is not
+// a runnable test and is silently left out rather than half-built.
+function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool) returns LineIndex
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
 	var source = ""
@@ -206,14 +272,16 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
-		let line = try lines.get(i) otherwise panic("SpecParser.appendTestFromMarker: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
+		let line = try lines.get(i) otherwise panic("SpecParser.scanTestFromMarker: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
-		// The next marker / section boundary ends this test. Leave `i` ON that
-		// line so the outer scan re-examines it.
+		// The next marker of EITHER kind, or a section boundary, ends this test. Leave
+		// `i` ON that line so the outer scan re-examines it. Disabled markers must end
+		// a test just as active ones do, or an active case followed by a shelved one
+		// would swallow the shelved case's blocks and mis-read its expectation.
 		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
 			break
 		end 'sectionEnd'
-		if line.contains(TestMarker) 'nextMarker'
+		if line.contains(TestMarker) or line.contains(DisabledTestMarker) 'nextMarker'
 			break
 		end 'nextMarker'
 
@@ -221,7 +289,7 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 		// startsWith "```maxon", so the source arm would otherwise consume it.
 		if line.startsWith(CompilerErrorFence) 'compilerErr'
 			let block = readFence(lines, openIndex: i)
-			if haveSource 'errComplete'
+			if haveSource and active 'errComplete'
 				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(block.text.trim())))
 			end 'errComplete'
 			return block.nextIndex
@@ -232,7 +300,7 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 			let parsed = try int.fromString(block.text.trim()) otherwise 'badExitCode'
 				return block.nextIndex
 			end 'badExitCode'
-			if haveSource 'exitComplete'
+			if haveSource and active 'exitComplete'
 				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.exitCode(parsed)))
 			end 'exitComplete'
 			return block.nextIndex
@@ -250,7 +318,7 @@ function appendTestFromMarker(lines StringArray, markerIndex LineIndex, markerLi
 	end 'blocks'
 
 	return i
-end 'appendTestFromMarker'
+end 'scanTestFromMarker'
 
 // The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
 // " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`.
