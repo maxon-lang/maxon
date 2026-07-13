@@ -490,21 +490,26 @@ function buildFuncTopologyByIndex(module TargetModule, funcIdx FuncIndex) return
 	return buildFuncTopology(module, func: func)
 end 'buildFuncTopologyByIndex'
 
-// Redirect the predecessor's branch to `oldTarget` (a `jcc` body op or the `jmp`
-// terminator) so it targets `newTarget` instead. Exactly one control op matches.
+// Redirect the predecessor's branch to `oldTarget` (its `jcc` conditional branch or its
+// `jmp` terminator) so it targets `newTarget` instead. Exactly one control op matches.
+//
+// Both branches are addressed DIRECTLY, off the block's own `condBranch` / `terminator`
+// indices — the `jcc` used to be found by scanning every op of the predecessor, the same
+// O(ops-in-block) search the CFG builder paid (see `CondBranch`). The rewrite is in place at
+// the op's existing index, so the recorded index stays valid and there is no cached target
+// to invalidate.
 function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
 	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
-	for opIdx in predBlock.opRefs 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: opIdx not in module.ops")
-		match op 'body'
+
+	if predBlock.hasCondBranchOp() 'hasCond'
+		let opIdx = predBlock.condBranchIndex()
+		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: conditional branch op {opIdx} not in module.ops")
+		match op 'cond'
 			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			prologue to jmp then break 'body'
-			movRegImm to idivReg then break 'body'
-			pushReg to popReg then break 'body'
-			storeSlotReg to loadRegSlot then break 'body'
-		end 'body'
-	end 'eachOp'
+			default panic("retargetControlOp: block '{predBlock.label}' records its conditional branch at op {opIdx}, but that op is not a `jcc`")
+		end 'cond'
+	end 'hasCond'
 
 	if predBlock.hasTerminatorOp() 'hasTerm'
 		let ti = predBlock.terminatorIndex()

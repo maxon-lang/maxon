@@ -30,7 +30,7 @@
 // own def is a reuse-def copy (`mov dest, input`, simulated by `applyReuseCopy`) — a transient
 // the op immediately overwrites — so the invariant holds at every value's own program points.
 //
-// Three checks, no CFG fixpoint:
+// Four checks, no CFG fixpoint:
 //   A (interference). Per block, seed the abstract state from the live-in values +
 //     phis (each in its color) — distinct colors, or ALIASING — then walk the ops
 //     asserting each use reads its value and each def writes its register.
@@ -43,6 +43,11 @@
 //     reads the slot holding the value its `ReloadOrigin` names (`confirmReload`). This is
 //     what catches a wrong value reaching a use through a slot chain that is internally
 //     self-consistent op-by-op yet does not carry the original value's identity.
+//   D (the CFG index). Per block, assert against the OPS that `IrBlock.condBranch` names every
+//     conditional branch the block holds — the completeness the O(1) successor derivation rests
+//     on. See `checkCondBranchIndex`; it is the only one of the four that is about the CFG the
+//     allocator was HANDED rather than the allocation it produced, and it is here because a
+//     wrong CFG is absorbed silently by everything downstream.
 
 // The abstract register state: `regState[r]` is the value id currently in register
 // `r`, or the `noValue` sentinel (= valueCount) when the register holds nothing the
@@ -84,6 +89,7 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: local)
+		checkCondBranchIndex(module, block: block, funcName: func.name)
 		var regState = freshRegState(noValue)
 		seedRegState(regState, module: module, liveness: liveness, local: local, alloc: alloc, block: block, noValue: noValue, paramCount: paramCount, funcName: func.name, liveBuf: liveBuf)
 
@@ -123,6 +129,82 @@ export function checkFunctionAllocation(module TargetModule, func IrFunction, al
 		end 'eachSucc'
 	end 'eachPred'
 end 'checkFunctionAllocation'
+
+// CHECK D (the CFG index). The block's `condBranch` names EVERY conditional branch its body
+// holds, and names it correctly — asserted against the OPS, which are the ground truth.
+//
+// Why this has teeth. `collectBlockSuccessorIds` no longer SEARCHES a block's ops for its `jcc`;
+// it reads the recorded index (that search made every CFG build O(total ops), and the allocator
+// builds one twice per function). Correctness therefore rests on the index being COMPLETE: a
+// `jcc` that entered a block without going through `IrModule.appendCondBranch` would leave its
+// then-edge out of the successor graph altogether, and liveness, loop depth, pressure and spill
+// placement would all silently follow a CFG the program does not have — surfacing far from the
+// cause, as an allocator bug. This is the check that makes that unspellable rather than merely
+// unlikely, and it is why the index records only WHERE the branch is: what it TARGETS is always
+// dereferenced from the op, so an in-place retarget has no cache to go stale.
+//
+// The other half of the invariant is enforced in O(1) and is ALWAYS on: `appendCondBranch`
+// refuses a second conditional branch, and `appendOp` refuses to append past one.
+//
+// This check is O(ops in the block) — precisely the scan the index removed — so it lives here,
+// behind `Project.checkAlloc`: `spec-test` and `verify-warm-rebuild` pay it on every function of
+// every run, a production `build` does not. Same policy, same reasoning, as checks A–C.
+function checkCondBranchIndex(module TargetModule, block IrBlock, funcName String)
+	var seen = 0 as ByteCount
+	var seenIdx = 0 as OpIndex
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("checkCondBranchIndex: opIdx {opIdx} not in module.ops")
+		if opIsCondBranch(op) 'isCond'
+			seen = seen + 1
+			seenIdx = opIdx
+		end 'isCond'
+	end 'eachOp'
+
+	if not block.hasCondBranchOp() 'recordsNone'
+		if seen > 0 'unrecorded'
+			panic("AllocChecker: '{funcName}' block '{block.label}' holds {seen} `jcc` op(s) but records NO conditional branch — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator built")
+		end 'unrecorded'
+		return
+	end 'recordsNone'
+
+	let recorded = block.condBranchIndex()
+	if seen != 1 'notExactlyOne'
+		panic("AllocChecker: '{funcName}' block '{block.label}' records a conditional branch at op {recorded} but its body holds {seen} `jcc` op(s) — the index must name the one branch the block has")
+	end 'notExactlyOne'
+	if seenIdx != recorded 'stale'
+		panic("AllocChecker: '{funcName}' block '{block.label}' records its conditional branch at op {recorded}, but the `jcc` in its body is op {seenIdx} — the recorded index is stale")
+	end 'stale'
+
+	// A `jcc` names only the THEN edge; the else edge is the `jmp` terminator. Without one, the
+	// block would contribute a single successor to the CFG while branching two ways at run time.
+	if not terminatorIsJmp(module, block: block) 'noJmpTerminator'
+		panic("AllocChecker: '{funcName}' block '{block.label}' has a conditional branch but its terminator is not a `jmp` — a `jcc` carries only the then-edge, so the else-edge has nowhere to come from")
+	end 'noJmpTerminator'
+end 'checkCondBranchIndex'
+
+function opIsCondBranch(op TargetOp) returns bool
+	return match op 'check'
+		prologue to jmp gives false
+		jcc gives true
+		movRegImm to idivReg gives false
+		pushReg to popReg gives false
+		storeSlotReg to loadRegSlot gives false
+	end 'check'
+end 'opIsCondBranch'
+
+function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorIsJmp: terminator not in module.ops")
+	return match op 'check'
+		prologue to ret gives false
+		jmp gives true
+		jcc to idivReg gives false
+		pushReg to popReg gives false
+		storeSlotReg to loadRegSlot gives false
+	end 'check'
+end 'terminatorIsJmp'
 
 // Map each CFG edge — identified by its slot in the successor CSR list — to the index of its move
 // plan, or `plans.count()` for an edge with no plan (a fully-coalesced one, which has no moves).

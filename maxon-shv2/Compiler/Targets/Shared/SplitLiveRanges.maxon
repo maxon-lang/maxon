@@ -1208,14 +1208,31 @@ function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgInde
 end 'insertReloadBefore'
 
 // Insert `loadRegSlot(freshId, slot)` at the END of `blockLocal`'s body — after every op, ahead of
-// the terminator and so ahead of the branch edge that reads the value. Used when a block's only
+// the branch and so ahead of every branch edge that reads the value. Used when a block's only
 // after-peak use is an EDGE arg: the value is not read by any op there, it is merely forwarded to
 // a phi, so the reload exists purely to hand the edge a live register.
+//
+// "Ahead of the branch" is NOT the end of `opRefs` when the block branches two ways: a `jcc` is a
+// BODY op paired with a `jmp` terminator, so an op past the end of the body sits BETWEEN them and
+// runs only on the not-taken path — the then-edge would then read an unloaded register. The reload
+// goes immediately BEFORE the conditional branch, which dominates both outgoing edges. A
+// `loadRegSlot` is a plain `mov r, [rsp+disp]` and writes no flags, so it is safe between the
+// compare and the `jcc` that reads that compare's EFLAGS.
 function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: "reload", placement: placement)
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	try block.opRefs.insert(block.opRefs.count(), value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadAtBlockEnd: opRefs.insert OOB")
+	let pos = beforeBranchPosition(block)
+	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadAtBlockEnd: opRefs.insert OOB")
 end 'insertReloadAtBlockEnd'
+
+// The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
+// block: past the last real body op, but before the conditional branch when the block has one.
+function beforeBranchPosition(block IrBlock) returns ByteCount
+	if block.hasCondBranchOp() 'twoWay'
+		return positionInBlock(block, opIdx: block.condBranchIndex())
+	end 'twoWay'
+	return block.opRefs.count()
+end 'beforeBranchPosition'
 
 // Append `op` to the module's op table and return its index — the one place a splitter-minted op
 // enters `module.ops`, so the insertion sites above cannot drift on how they mint. APPEND-ONLY is

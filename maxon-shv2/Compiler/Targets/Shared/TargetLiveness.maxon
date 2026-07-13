@@ -56,6 +56,14 @@ export typealias RegMaskColumn = Array with RegMask
 // `localByBlockId` maps a function-local `BlockId` back to a local index — both flat arrays,
 // never a `Map` in a fixpoint (the O(B²·iters) trap v1 fell into).
 //
+// Building one is O(BLOCKS + EDGES), not O(total ops): a block's two control ops are ADDRESSED
+// (`IrBlock.condBranch` / `IrBlock.terminator`), never searched for. Finding the `jcc` by
+// scanning every op of the block made a skeleton build a full pass over every op of the
+// function — and the allocator builds two per function (the critical-edge split, then the RPO
+// reorder), which is what put `blockOrder` + `criticalEdges` on the profile at all. The ops are
+// still the ground truth for every EDGE (see `collectBlockSuccessorIds`); only the SEARCH is
+// gone.
+//
 // This is a TYPE, and not merely a `FuncCfg` with two columns left empty, because the two
 // passes that run BEFORE allocation — the RPO block reorder and the critical-edge split —
 // read only the skeleton, and building the rest for them cost 12% of the WHOLE COMPILE:
@@ -348,9 +356,7 @@ end 'makeRegMaskColumn'
 // RETURNS the reordered topology, which the splitter then completes into its `FuncCfg` — the
 // only pass between the two is nothing, so the skeleton this built is still exactly the
 // function's. Throwing it away meant the very next thing the allocator did was re-derive the
-// same graph from the IR, and finding a block's successors means walking its OPS (they come
-// from the `jcc`/`jmp` ops themselves, the ground truth), so that rebuild was a second full
-// pass over every op of every block for a graph already in hand.
+// same graph from the IR, for a graph already in hand.
 export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) returns FuncTopology
 	let topo = buildFuncTopology(module, func: func)
 	if topo.numBlocks == 0 'empty'
@@ -563,21 +569,27 @@ export function buildFuncCfg(module TargetModule, func IrFunction, topo FuncTopo
 	return FuncCfg.create(topo, loopDepth: loopDepth, valueCount: valueCount)
 end 'buildFuncCfg'
 
-// A block's successor BlockIds: a `jcc` body op names the then-target; the `jmp`
-// terminator names the (unconditional / else) target; `ret` names none. Derived
-// from the ops themselves (the ground truth), NOT from `branchEdges` (which exist
-// only for phi-carrying edges).
+// A block's successor BlockIds: the `jcc` conditional-branch op names the then-target; the
+// `jmp` terminator names the (unconditional / else) target; `ret` names none.
+//
+// Every target here is read OFF THE OP — the ops are the ground truth for the CFG, and
+// `branchEdges` are NOT a substitute (they exist only for phi-CARRYING edges, so a CFG
+// derived from them would silently lose every non-phi edge). What the block caches is only
+// WHERE its two control ops are (`condBranch`, `terminator`), never what they target, so an
+// in-place retarget cannot leave a stale successor behind.
+//
+// That is the whole point: this used to find the `jcc` by SCANNING EVERY OP OF THE BLOCK,
+// so building the CFG skeleton was a full pass over every op of the function — and the
+// allocator builds one twice per function (the critical-edge split, then the RPO reorder).
+// It is now O(1) per block, making a topology build O(blocks + edges).
+// `AllocChecker.checkCondBranchIndex` asserts, against the ops, that the two indices name
+// every branch the block actually has.
 function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
-	for opIdx in block.opRefs 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("collectBlockSuccessorIds: opIdx {opIdx} not in module.ops")
-		match op 'bodyCtrl'
-			jcc(_, target) then out.push(target)
-			prologue to jmp then break 'bodyCtrl'
-			movRegImm to idivReg then break 'bodyCtrl'
-			pushReg to popReg then break 'bodyCtrl'
-			storeSlotReg to loadRegSlot then break 'bodyCtrl'
-		end 'bodyCtrl'
-	end 'eachOp'
+	if block.hasCondBranchOp() 'hasCond'
+		let opIdx = block.condBranchIndex()
+		let op = try module.ops.get(opIdx) otherwise panic("collectBlockSuccessorIds: conditional branch of block '{block.label}' is op {opIdx}, which is not in module.ops")
+		out.push(condBranchTargetOf(op, block: block))
+	end 'hasCond'
 
 	if block.hasTerminatorOp() 'hasTerm'
 		let op = try module.ops.get(block.terminatorIndex()) otherwise panic("collectBlockSuccessorIds: terminator not in module.ops")
@@ -592,6 +604,18 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
+
+// The then-target of the op a block's `condBranch` names. Panics if it is not a `jcc`: the
+// index names the block's conditional branch and nothing else, so any other op there means
+// the index went stale or was set by something that is not a branch. This is the O(1) half
+// of the invariant check — it fires on every CFG build, for every block that has a
+// conditional branch, and needs no scan.
+function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
+	match op 'cond'
+		jcc(_, target) then return target
+		default panic("condBranchTargetOf: block '{block.label}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`")
+	end 'cond'
+end 'condBranchTargetOf'
 
 // The number of distinct value ids in the function (columns for the dense state):
 // max id appearing as an op operand, block-arg, or branch-edge arg, plus one. A

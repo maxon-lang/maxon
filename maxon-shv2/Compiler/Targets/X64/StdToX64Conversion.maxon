@@ -339,9 +339,15 @@ type StdToX64Lowering
 	// (a later pass may elide a fall-through). A `condId` with no recorded predicate
 	// means the `if` condition was not a comparison — the only condition form the M4
 	// slice supports — so it fails loudly rather than emitting a wrong branch.
+	//
+	// `appendCondBranch`, NOT `appendOp`: this is the ONE site in the compiler that makes
+	// a block two-way, so it is the one site that records where the `jcc` landed. Without
+	// that index a block's then-edge is only findable by scanning every op of the block,
+	// which is what made building the CFG skeleton O(total ops) (see `CondBranch`). It
+	// also seals the block: `appendOp` now refuses to append past a conditional branch.
 	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock)
 		let pred = try self.cmpPreds.get(condId) otherwise panic("lowerStdToX64: `condBranch` on value v{condId} which no `cmp` defined — the M4 slice only supports comparison conditions in an `if` (boolean values arrive later)")
-		self.targetModule.appendOp(dstBlock, op: TargetOp.jcc(condCodeForPred(pred), targetBlockId: thenBlockId))
+		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(condCodeForPred(pred), targetBlockId: thenBlockId))
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
 	end 'lowerCondBranch'
 

@@ -271,10 +271,40 @@ export type IrModule uses Op
 	// FileParseArtifact.emitOp), which is also the only caller that cares; every
 	// other tier just wants the op appended, so neither returns the index.
 	export function appendOp(block IrBlock, op Op)
+		// A block's conditional branch is the LAST thing in its body — the `jmp` terminator
+		// that carries the other edge is emitted immediately after it. An op appended past
+		// it would sit BETWEEN the two branches and so execute only on the not-taken path,
+		// which is a miscompile whatever the op is. It would also hide a second successor
+		// behind a body op the CFG builder no longer scans for (see `CondBranch`). Refused
+		// here, at the one append point, in O(1) — the callers that legitimately extend a
+		// block's body (SSA-destruction edge moves, the epilogue) only ever do so on
+		// single-successor / `ret` blocks, which have no conditional branch.
+		if block.hasCondBranchOp() 'pastCondBranch'
+			panic("appendOp: block '{block.label}' already ends in a conditional branch (op {block.condBranchIndex()}) — an op appended after it would run only on the not-taken path. Insert it BEFORE the conditional branch instead.")
+		end 'pastCondBranch'
 		let idx = self.ops.count()
 		self.ops.push(op)
 		block.opRefs.append(idx)
 	end 'appendOp'
+
+	// Append the block's CONDITIONAL-branch body op (x64 `jcc`) and record where it landed.
+	// THE ONLY WAY a conditional branch may enter a block: the recorded index is what makes
+	// a block's second successor O(1) to find instead of a scan of every op in the block,
+	// and a `jcc` appended through plain `appendOp` would leave that index unset — an edge
+	// missing from every CFG the allocator builds. `AllocChecker.checkCondBranchIndex`
+	// asserts, against the ops themselves, that no such op ever got in another way.
+	//
+	// Generic over `Op` like the rest of this container, so it cannot itself check that the
+	// op IS a conditional branch; that check lives with the dialect, in the AllocChecker.
+	export function appendCondBranch(block IrBlock, op Op)
+		if block.hasCondBranchOp() 'second'
+			panic("appendCondBranch: block '{block.label}' already has a conditional branch at op {block.condBranchIndex()} — a block has at most one")
+		end 'second'
+		let idx = self.ops.count()
+		self.ops.push(op)
+		block.opRefs.append(idx)
+		block.condBranch = CondBranch.opIndex(idx)
+	end 'appendCondBranch'
 
 	export function setTerminator(block IrBlock, op Op)
 		let idx = self.ops.count()
@@ -520,6 +550,19 @@ module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArra
 				end 'orphanTerm'
 				block.terminator = Terminator.opIndex(newTerm)
 			end 'rewriteTerm'
+
+			// The conditional branch is an `opRefs` entry, so compaction renumbers it like any
+			// other op — and the index recorded on the block must follow, or it would name a
+			// DIFFERENT op after compaction and the block's second successor would be read off
+			// whatever landed in that slot.
+			if block.hasCondBranchOp() 'rewriteCondBranch'
+				let oldCond = block.condBranchIndex()
+				let newCond = try plan.forward.get(oldCond) otherwise panic("rewriteBlockOpRefs: forward.get OOB at conditional branch {oldCond}")
+				if newCond == plan.deadMarker 'orphanCond'
+					panic("rewriteBlockOpRefs: block '{block.label}' conditional branch references orphaned op {oldCond}")
+				end 'orphanCond'
+				block.condBranch = CondBranch.opIndex(newCond)
+			end 'rewriteCondBranch'
 		end 'rewriteBlock'
 	end 'rewriteFunc'
 end 'rewriteBlockOpRefs'
@@ -579,6 +622,10 @@ function cloneIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
 		fallthrough gives Terminator.fallthrough
 		opIndex(index) gives Terminator.opIndex(index + opOffset)
 	end 'relocate'
+	block.condBranch = match src.condBranch 'relocateCond'
+		none gives CondBranch.none
+		opIndex(index) gives CondBranch.opIndex(index + opOffset)
+	end 'relocateCond'
 	return block
 end 'cloneIrBlock'
 

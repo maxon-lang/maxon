@@ -90,17 +90,48 @@ export union Terminator
 	opIndex(index OpIndex)
 end 'Terminator'
 
+// Where a block's CONDITIONAL branch lives — the second half of the terminator, for
+// the tiers whose two-way branch does not fit one terminator slot.
+//
+//   none           — the block has no conditional branch. Every Maxon- and Std-tier
+//     block (their two-way branch IS the single `condBranch` terminator op), and every
+//     Target-tier block that ends in `ret`, an unconditional `jmp`, or nothing.
+//   opIndex(index) — the block's conditional-branch op lives at this index in the
+//     module's ops array. On x64 that is the `jcc`: a two-way branch lowers to a `jcc`
+//     BODY op naming the then-target, paired with a `jmp` TERMINATOR naming the
+//     else-target, so the block's SECOND successor is named by a body op.
+//
+// This records only WHERE the op is, never what it targets: every reader dereferences
+// the op itself, so the ops stay the single source of truth for the CFG and an
+// in-place retarget (`retargetJcc`) has no cache to invalidate. What it buys is the
+// end of the O(ops-in-block) SEARCH for that one op — finding a block's successors was
+// a scan of every op of every block, and the register allocator builds the CFG
+// skeleton twice per function (the critical-edge split, then the RPO reorder), making
+// CFG construction O(total ops) instead of O(blocks + edges).
+export union CondBranch
+	none
+	opIndex(index OpIndex)
+end 'CondBranch'
+
 export type IrBlock
 	export var id as BlockId
 	export var label as String
 	export var opRefs as OpIndexList
 	export var terminator as Terminator
+	// The block's conditional-branch body op, when it has one. Set ONLY by
+	// `IrModule.appendCondBranch`, which is the only way a conditional branch may enter
+	// a block; `appendOp` refuses to append past it. See `CondBranch`.
+	export var condBranch as CondBranch
 	export var blockArgs as IrBlockArgArray
 	// Outgoing branch-argument lists — the values each successor edge passes to
 	// that successor's block-args (phis). Populated by the PARSER (M4b on-the-fly
 	// SSA, `recordBranchEdge`), carried verbatim through `lowerMaxonToStd` and
 	// `prepareSkeleton`, and consumed by the register allocator's SSA destruction
 	// (after coloring). Empty for a block whose successors carry no phis.
+	//
+	// NOT a successor list: an edge exists here only when it CARRIES PHIS, so a block
+	// whose successors take no block-args has none. Deriving the CFG from these would
+	// silently drop every non-phi edge — which is why successors come from the ops.
 	export var branchEdges as BranchEdgeArray
 
 	export static function create(id BlockId, label String) returns IrBlock
@@ -109,6 +140,7 @@ export type IrBlock
 			label: label,
 			opRefs: OpIndexList.create(),
 			terminator: Terminator.unset,
+			condBranch: CondBranch.none,
 			blockArgs: IrBlockArgArray.create(),
 			branchEdges: BranchEdgeArray.create()
 		}
@@ -147,6 +179,24 @@ export type IrBlock
 			default panic("terminatorIndex: block '{self.label}' has no terminator op")
 		end 'unwrap'
 	end 'terminatorIndex'
+
+	// True when the block has a conditional-branch body op (a second successor named by
+	// something other than the terminator). See `CondBranch`.
+	export function hasCondBranchOp() returns bool
+		return match self.condBranch 'check'
+			none gives false
+			opIndex gives true
+		end 'check'
+	end 'hasCondBranchOp'
+
+	// The op index of the block's conditional branch. Panics when it has none; callers
+	// must guard with `hasCondBranchOp` or match on `condBranch` directly.
+	export function condBranchIndex() returns OpIndex
+		match self.condBranch 'unwrap'
+			opIndex(index) then return index
+			none then panic("condBranchIndex: block '{self.label}' has no conditional-branch op")
+		end 'unwrap'
+	end 'condBranchIndex'
 
 	// Panic if the block was never given a terminator. Called at the end
 	// of the parsing phase to enforce the invariant that every IR block

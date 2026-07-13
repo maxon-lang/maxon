@@ -1177,6 +1177,55 @@ call-heavy one** (750 ms → 94 ms), with the call-heavy case now linear. The ph
 **disjoint** — `splitting` no longer silently includes `liveness`, which was hiding the single
 biggest cost in the wrong bucket.
 
+### The CFG skeleton: ADDRESS the branch, do not SEARCH for it
+
+The same mistake once more, and this time in the CFG rather than the value space. **A block's
+successors were found by walking every op in the block** — `collectBlockSuccessorIds` scanned
+`opRefs` looking for the `jcc`, because on x64 a two-way branch is a `jcc` BODY op (the then-edge)
+paired with a `jmp` TERMINATOR (the else-edge), so a block's second successor is named by a body
+op. Building the skeleton was therefore a **full pass over every op of the function**, and the
+allocator builds two per function (the critical-edge split, then the RPO reorder). That is what put
+`blockOrder` and `criticalEdges` on the profile at all: two phases that allocate nothing and decide
+nothing, costing together as much as coloring.
+
+`IrBlock` now records **where** its conditional branch is (`condBranch: none | opIndex(i)`), so
+`collectBlockSuccessorIds` is O(1) per block and a skeleton build is **O(blocks + edges)**.
+
+**The ops remain the ground truth, and this is the whole design.** The block caches only the
+*position* of its two control ops; every target is dereferenced from the op itself at every read.
+So `retargetJcc` — which rewrites the op in place at the same index — has **no cache to
+invalidate**, and `splitCriticalEdges` (which ADDS blocks and rewires edges) needs no maintenance
+beyond the fresh blocks, which are born with `condBranch: none` and a `jmp` terminator. Caching the
+successor *ids* would have created a second source of truth for the CFG; caching the *index* does
+not. And `branchEdges` is still not the successor list — it holds only phi-CARRYING edges, so
+deriving the CFG from it would silently drop every non-phi edge.
+
+What must hold is that the index is **complete** — a `jcc` that entered a block another way would
+leave its then-edge out of every CFG the allocator builds, and liveness, loop depth, pressure and
+spill placement would all silently follow a CFG the program does not have, surfacing far away as an
+allocator bug. It is enforced in three places, none of them a hope:
+
+| where | cost | what it enforces |
+|---|---|---|
+| `IrModule.appendCondBranch` — the ONLY way a conditional branch enters a block (`lowerCondBranch` is its one caller) | O(1), always | the index is *set*, and a block gets at most one |
+| `IrModule.appendOp` | O(1), always | **no op may be appended past a conditional branch** — it would run only on the not-taken path (a miscompile independent of the CFG), and would hide an edge behind an op the builder no longer scans |
+| `AllocChecker.checkCondBranchIndex` (check D) | O(ops), under `checkAlloc` | against the OPS: the block's `jcc` set is exactly what `condBranch` names, and a two-way block's terminator is a `jmp` |
+
+The O(ops) completeness sweep is the very scan the index removed, which is why it lives behind
+`Project.checkAlloc` — `spec-test` and `verify-warm-rebuild` pay it on every function of every run,
+a production `build` does not. Same policy as the rest of the AllocChecker: the flag decides whether
+a wrong byte is *caught*, never which byte is *produced*.
+
+Two scans died with it. `SsaDestruction.retargetControlOp` was walking a predecessor's whole op list
+to find the `jcc` it had to redirect. And `insertReloadAtBlockEnd` — the splitter's "put the reload
+after every op, ahead of the branch that reads it" — was inserting at the end of `opRefs`, which on
+a two-way block is *between* the `jcc` and the `jmp`: the reload would have run only on the
+not-taken path, leaving the taken edge reading an unloaded register. It now goes before the
+conditional branch, which dominates both edges (a `loadRegSlot` sets no flags, so it is safe between
+the compare and the `jcc`). No program in the suite reaches that placement today — the one test that
+reaches `insertReloadAtBlockEnd` at all does so on a single-successor latch — so this is a latent
+hazard closed, not a miscompile observed.
+
 ### The splitter: one INDEX, not a scan per candidate
 
 The same mistake, one layer up. `chooseVictim` asks a fixed set of questions — *where is this value
