@@ -60,6 +60,14 @@
 // values × 16 registers. Everything else on the per-op path is the O(16) prefix scan, behind a
 // zero-constrained-values gate.
 
+// A value's position in ONE PROGRAM POINT's live-value list — the "values" side of the bipartite
+// matching below, and the key its two inverse maps are stated in. It is NOT a ValueId (the matching
+// renumbers the point's live values 0..live.count()) and NOT a CfgIndex, which is what it used to be
+// typed as: a block index and a live-set position are unrelated spaces that happened to share a
+// representation. `live.count()` is its "no value" sentinel.
+typealias LiveIndex = int(0 to u64.max)
+typealias LiveIndexColumn = Array with LiveIndex
+
 // The registers `valueId` may actually be coloured into: the pool minus every register an op wrote
 // while the value was live across it (`forbidden` — a call's 9 caller-saved, an `idiv`'s RAX/RDX,
 // an argument pre-move's target). This is the ONE definition of a value's effective pool; the
@@ -90,7 +98,7 @@ end 'valueConfinedTo'
 // cost — and it is not a rare case: a compiler's leaf functions are mostly call-free, and the census
 // is stepped over EVERY OPERAND OF EVERY OP.
 export type EffectivePools
-	export var sizes as CfgIndexArray
+	export var sizes as RegCountColumn
 	export var anyConstrained as bool
 
 	export static function of(liveness LivenessResult, pool RegMask) returns EffectivePools
@@ -125,7 +133,7 @@ end 'EffectivePools'
 // remove.
 export type RegPoolCensus
 	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
-	var byPoolSize as CfgIndexArray
+	var byPoolSize as RegCountColumn
 	// Which buckets of `byPoolSize` are NON-EMPTY, as a bitmask. Exists so the SMALLEST effective
 	// pool among the live values is a trailing-zero count instead of a scan for the first non-empty
 	// bucket — see `screenViolates`, which needs it on every op.
@@ -235,7 +243,7 @@ end 'RegPoolCensus'
 // sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
 // is also its use), and counting a single flip twice would corrupt the census for the rest of the
 // block.
-export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, liveCount RegCount, census RegPoolCensus, effPoolSizes CfgIndexArray, fullPoolSize RegCount, ids ValueIdArray, wasLive BoolArray) returns RegCount
+export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, liveCount RegCount, census RegPoolCensus, effPoolSizes RegCountColumn, fullPoolSize RegCount, ids ValueIdArray, wasLive BoolArray) returns RegCount
 	ids.clear()
 	wasLive.clear()
 	for o in buf 'snapshot'
@@ -319,7 +327,7 @@ end 'HallVerdict'
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask) returns HallVerdict
 	let valueCount = live.count()
 	// "No register" / "no value" markers, each one past the last valid index of its side.
-	let noRegister = RegisterFileSize
+	let noRegister = RegisterFileSize as RegNum
 	let noValue = valueCount
 
 	var allowed = RegMaskColumn.create()
@@ -370,15 +378,15 @@ end 'hallVerdictAt'
 // ITERATIVE — a worklist plus one parent link per register — like every other graph walk in the
 // allocator. The parent links are not just an anti-recursion device: they ARE the path the
 // augmentation walks back along.
-function augmentValue(start CfgIndex, allowed RegMaskColumn, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, noRegister CfgIndex, noValue CfgIndex) returns bool
+function augmentValue(start LiveIndex, allowed RegMaskColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, noRegister RegNum, noValue LiveIndex) returns bool
 	// register -> the value position that offered it during THIS search (its predecessor on the
 	// alternating path). Only registers in `visited` have a meaningful entry.
 	var parentOfReg = filledColumn(RegisterFileSize, value: noValue)
 	var visited = 0 as RegMask
-	var queue = CfgIndexArray.create()
+	var queue = LiveIndexColumn.create()
 	queue.push(start)
 
-	var head = 0 as CfgIndex
+	var head = 0 as ColumnLength
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("augmentValue: queue.get OOB at {head}")
 		head = head + 1
@@ -412,7 +420,7 @@ end 'augmentValue'
 // register on it is re-assigned to the value that offered it, and THAT value's previous register —
 // vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
 // register, so the matching finishes one edge larger.
-function applyAugmentingPath(freeReg CfgIndex, start CfgIndex, parentOfReg CfgIndexArray, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, noRegister CfgIndex)
+function applyAugmentingPath(freeReg RegNum, start LiveIndex, parentOfReg LiveIndexColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, noRegister RegNum)
 	var reg = freeReg
 	var reachedStart = false
 	while not reachedStart 'walkBack'
@@ -438,16 +446,16 @@ end 'applyAugmentingPath'
 // set and outnumber it by the deficiency. That is the set Hall's condition fails on, and it is why
 // removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
 // unmatched value augment into the chain.
-function tightRegisterSet(allowed RegMaskColumn, regOfValue CfgIndexArray, valueOfReg CfgIndexArray, valueCount CfgIndex, noRegister CfgIndex, noValue CfgIndex) returns RegMask
+function tightRegisterSet(allowed RegMaskColumn, regOfValue RegNumColumn, valueOfReg LiveIndexColumn, valueCount LiveIndex, noRegister RegNum, noValue LiveIndex) returns RegMask
 	var reachable = 0 as RegMask
-	var queue = CfgIndexArray.create()
+	var queue = LiveIndexColumn.create()
 	for i in 0 upto valueCount 'seedUnmatched'
 		if (try regOfValue.get(i) otherwise panic("tightRegisterSet: regOfValue.get OOB at {i}")) == noRegister 'unmatched'
 			queue.push(i)
 		end 'unmatched'
 	end 'seedUnmatched'
 
-	var head = 0 as CfgIndex
+	var head = 0 as ColumnLength
 	while head < queue.count() 'alternatingPaths'
 		let u = try queue.get(head) otherwise panic("tightRegisterSet: queue.get OOB at {head}")
 		head = head + 1
@@ -477,7 +485,7 @@ end 'tightRegisterSet'
 
 // How many of the point's live values are confined to `witness` — every register they could take
 // lies inside it. This is the set the overflow is about, and the number the deficit is measured from.
-function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount CfgIndex) returns RegCount
+function countConfinedTo(allowed RegMaskColumn, witness RegMask, valueCount LiveIndex) returns RegCount
 	var confined = 0 as RegCount
 	for i in 0 upto valueCount 'eachValue'
 		let mask = try allowed.get(i) otherwise panic("countConfinedTo: allowed.get OOB at {i}")

@@ -20,10 +20,6 @@
 //   - Cache-hit calls ONLY `queryAllModule` between its two probes and never runs
 //     resolveTypes/the backend, so the memoized module is never mutated.
 
-// A byte count or byte offset within an emitted section. Wide range: emitted
-// section sizes have no fixed upper bound.
-typealias EmittedByteCount = int(0 to u64.max)
-
 // The names of the emitted byte arrays compared for byte-identity. `data` is the
 // `dataPrelude` (initial `.data` image); the rest map 1:1 to CodeResult fields.
 // Named so the comparison loop carries intent, not bare string literals.
@@ -42,14 +38,14 @@ let OneQuery = 1 as QueryCount
 // identical (carrying the common byte count for the running total) or a rendered
 // mismatch detail (first differing offset, or a trailing length difference).
 union SectionComparison
-	identical(byteCount EmittedByteCount)
+	identical(byteCount ByteCount)
 	mismatch(detail String)
 end 'SectionComparison'
 
 // The determinism verdict over ALL sections: every section identical (with the
 // summed byte count) or the FIRST section that differed (with its detail).
 union DeterminismOutcome
-	allIdentical(totalBytes EmittedByteCount)
+	allIdentical(totalBytes ByteCount)
 	sectionDiffers(detail String)
 end 'DeterminismOutcome'
 
@@ -118,7 +114,7 @@ function verifyDeterminism(inputPath FilePath, target Target) returns bool throw
 	end 'outcome'
 end 'verifyDeterminism'
 
-function reportDeterminismPass(totalBytes EmittedByteCount) returns bool
+function reportDeterminismPass(totalBytes ByteCount) returns bool
 	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
 	return true
 end 'reportDeterminismPass'
@@ -131,7 +127,7 @@ end 'reportDeterminismFail'
 // Compare every section, summing identical bytes; stop at the FIRST section that
 // differs and report it (that is the actionable failure).
 function compareEmittedSections(sections EmittedSectionArray) returns DeterminismOutcome
-	var totalBytes = 0 as EmittedByteCount
+	var totalBytes = 0 as ByteCount
 
 	for section in sections 'each'
 		match compareSection(section.name, left: section.left, right: section.right) 'result'

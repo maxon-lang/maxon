@@ -39,8 +39,8 @@
 // backstop that guards the invariant the whole contract rests on.
 
 // How many times a blocking value is USED inside the offending loop — the move-cost rank key
-// (fewer in-loop uses => fewer reloads after the array rewrite). A count, not a byte offset:
-// named apart from `ByteCount` so its purpose is legible where a candidate is ranked.
+// (fewer in-loop uses => fewer reloads after the array rewrite). A count of USES, so it is neither a
+// `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
 typealias LoopUseCount = int(0 to u64.max)
 
 // One blocking value the user must consider removing from the loop: its id, the SOURCE span
@@ -59,6 +59,12 @@ type PressureCandidate
 end 'PressureCandidate'
 
 typealias PressureCandidateArray = Array with PressureCandidate
+
+// A candidate's position in the blocking-value list — what `sortedOrder` permutes and
+// `candidateList` walks. It indexes the CANDIDATES, not the CFG (it was a `CfgIndex`, which said
+// "block" about the rank of a value in a worklist).
+typealias CandidateIndex = int(0 to u64.max)
+typealias CandidateOrder = Array with CandidateIndex
 
 // Report the E5001 diagnostic for a HOT register-pressure overflow onto `project.diagnostics`
 // and THROW. The overflow point (`peak`) genuinely needs `peak.pressure` registers but only
@@ -137,7 +143,7 @@ end 'minCount'
 // count. The location is what identifies the value to the user — shv2 carries no value NAMES
 // (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
 // to recover.
-function candidateList(candidates PressureCandidateArray, order CfgIndexArray, filePath String) returns String
+function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String) returns String
 	var out = ""
 	for idx in order 'each'
 		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
@@ -229,8 +235,8 @@ end 'collectCandidates'
 // deterministic. Sorts a SCALAR index array (int copies, never a borrow) via insertion sort,
 // leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
 // register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
-function sortedOrder(candidates PressureCandidateArray) returns CfgIndexArray
-	var order = CfgIndexArray.create()
+function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
+	var order = CandidateOrder.create()
 	for i in 0 upto candidates.count() 'seed'
 		order.push(i)
 	end 'seed'
@@ -250,7 +256,7 @@ end 'sortedOrder'
 
 // True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (uses-in-loop asc, then
 // value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
-function candidateAtGreater(candidates PressureCandidateArray, aIndex CfgIndex, bIndex CfgIndex) returns bool
+function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
 	if a.usesInLoop != b.usesInLoop 'byUses'
@@ -339,7 +345,7 @@ end 'classifyValue'
 // forbids from blocking an allocation. This PANICS naming it rather than emitting a location
 // the user cannot act on. At M5 it is unreachable (the four routes cover every blocking value);
 // it is the backstop guarding the E5001 contract.
-function defRangeOf(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow ByteCount, lineage SplitLineage) returns SourceRange
+function defRangeOf(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
 	var visited = BitWordArray.create()
 	visited.resize(wordsPerRow)
@@ -398,7 +404,7 @@ end 'phiIncomingValues'
 
 // The index of `valueId` in `block.blockArgs`, or `blockArgs.count()` when it is not a block-arg
 // of this block (a total-order "not found" sentinel, one past every valid index).
-function blockArgPosition(block IrBlock, valueId ValueId) returns ByteCount
+function blockArgPosition(block IrBlock, valueId ValueId) returns PhiIndex
 	for k in 0 upto block.blockArgs.count() 'each'
 		let arg = try block.blockArgs.get(k) otherwise panic("blockArgPosition: blockArgs.get OOB")
 		if arg.valueId == valueId 'match'
@@ -410,7 +416,7 @@ end 'blockArgPosition'
 
 // Gather the `position`-th argument of every branch edge targeting `targetBlockId` into `out`
 // (the values predecessors pass to that phi). Uses `PhiEdgeView` only for its arity check.
-function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlockId BlockId, position ByteCount, out ValueIdArray)
+function gatherIncomingAtPosition(module TargetModule, topo FuncTopology, targetBlockId BlockId, position PhiIndex, out ValueIdArray)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
 		for edge in block.branchEdges 'eachEdge'

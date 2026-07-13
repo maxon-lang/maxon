@@ -80,7 +80,7 @@ end 'insertFrameForFunction'
 //     M5). `mrt_start`'s 0x28 IS this formula with pushCount 0, stackSize 0 (32 + 8).
 //   • A LEAF that needs a frame only for locals / callee-saved has no call, so alignment
 //     is irrelevant; it reserves just its (16-rounded) locals. push/pop alone balance rsp.
-function computeFrameBytes(func IrFunction, makesCall bool, pushCount ByteCount) returns StackSize
+function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount) returns StackSize
 	if not makesCall 'leaf'
 		return alignUp(func.stackSize, alignment: StackFrameAlignment)
 	end 'leaf'
@@ -110,7 +110,7 @@ end 'spillSlotBaseDisp'
 // The `sub rsp` size's required residue mod 16 for a caller with `pushCount` callee-saved
 // pushes: 8 when even (entry rsp ≡ 8 stays ≡ 8 after an even number of pushes, so an 8
 // (mod 16) sub reaches ≡ 0), 0 when odd.
-function frameAlignTarget(pushCount ByteCount) returns StackSize
+function frameAlignTarget(pushCount RegCount) returns StackSize
 	if pushCount mod 2 == 0 'even'
 		return 8
 	end 'even'

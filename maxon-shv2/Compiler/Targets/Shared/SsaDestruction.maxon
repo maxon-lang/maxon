@@ -14,6 +14,12 @@
 // register, the phi's consumer computes the wrong answer, and the test's exit-code assertion
 // fails — and, before that, the `.test` golden of every affected function stops matching.
 
+// Which MOVE of a sequenced parallel copy — an index into an `EdgeMovePlan`'s / `MoveSequence`'s
+// three parallel columns, or a count of them. Not an op position and not a phi position: the copy is
+// RESEQUENCED (leaves first, cycles broken with `xchg`), so a move's index says nothing about which
+// phi it serves.
+export typealias MoveIndex = int(0 to u64.max)
+
 // Where an edge's parallel copy may be placed without running on a sibling edge.
 export enum EdgePlacement
 	// Pred has ONE successor: the moves run at the predecessor's end.
@@ -47,19 +53,19 @@ export type EdgeMovePlan
 		return Self{predLocal: predLocal, succLocal: succLocal, predBlockId: predBlockId, succBlockId: succBlockId, predBlockRef: predBlockRef, succBlockRef: succBlockRef, moveDsts: moves.dsts, moveSrcs: moves.srcs, moveIsSwap: moves.isSwap, placement: placement}
 	end 'create'
 
-	export function moveCount() returns ByteCount
+	export function moveCount() returns MoveIndex
 		return self.moveDsts.count()
 	end 'moveCount'
 
-	export function moveDstAt(i ByteCount) returns MachineWord
+	export function moveDstAt(i MoveIndex) returns RegNum
 		return try self.moveDsts.get(i) otherwise panic("EdgeMovePlan.moveDstAt: OOB")
 	end 'moveDstAt'
 
-	export function moveSrcAt(i ByteCount) returns MachineWord
+	export function moveSrcAt(i MoveIndex) returns RegNum
 		return try self.moveSrcs.get(i) otherwise panic("EdgeMovePlan.moveSrcAt: OOB")
 	end 'moveSrcAt'
 
-	export function moveIsSwapAt(i ByteCount) returns bool
+	export function moveIsSwapAt(i MoveIndex) returns bool
 		return try self.moveIsSwap.get(i) otherwise panic("EdgeMovePlan.moveIsSwapAt: OOB")
 	end 'moveIsSwapAt'
 end 'EdgeMovePlan'
@@ -76,13 +82,13 @@ export type MoveSequence
 		return Self{dsts: RegNumColumn.create(), srcs: RegNumColumn.create(), isSwap: BoolArray.create()}
 	end 'create'
 
-	export function pushMove(dst MachineWord, src MachineWord, swap bool)
+	export function pushMove(dst RegNum, src RegNum, swap bool)
 		self.dsts.push(dst)
 		self.srcs.push(src)
 		self.isSwap.push(swap)
 	end 'pushMove'
 
-	export function count() returns ByteCount
+	export function count() returns MoveIndex
 		return self.dsts.count()
 	end 'count'
 end 'MoveSequence'
@@ -181,7 +187,7 @@ end 'sequenceParallelCopy'
 
 // Index of a move whose dst is NOT any pending move's source (safe to emit now), or
 // `pd.count()` if every remaining dst is still needed as a source (a pure cycle).
-function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns ByteCount
+function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns MoveIndex
 	for i in 0 upto pd.count() 'eachMove'
 		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
 		if not isAnySource(ps, reg: d) 'leaf'
@@ -205,7 +211,7 @@ function removeSatisfiedMoves(pd RegNumColumn, ps RegNumColumn)
 	end 'each'
 end 'removeSatisfiedMoves'
 
-function isAnySource(ps RegNumColumn, reg MachineWord) returns bool
+function isAnySource(ps RegNumColumn, reg RegNum) returns bool
 	for s in ps 'each'
 		if s == reg 'match'
 			return true
@@ -214,14 +220,14 @@ function isAnySource(ps RegNumColumn, reg MachineWord) returns bool
 	return false
 end 'isAnySource'
 
-function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx ByteCount)
+function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx MoveIndex)
 	_ = try pd.remove(idx) otherwise panic("removeMoveAt: pd.remove OOB")
 	_ = try ps.remove(idx) otherwise panic("removeMoveAt: ps.remove OOB")
 end 'removeMoveAt'
 
 // After `xchg a, b`, registers a and b hold each other's old contents, so a pending
 // move reading a now finds its value in b and vice-versa.
-function rewriteSourcesThroughSwap(ps RegNumColumn, a MachineWord, b MachineWord)
+function rewriteSourcesThroughSwap(ps RegNumColumn, a RegNum, b RegNum)
 	for i in 0 upto ps.count() 'each'
 		let s = try ps.get(i) otherwise panic("rewriteSourcesThroughSwap: ps.get OOB")
 		if s == a 'wasA'
@@ -254,7 +260,7 @@ end 'applyAllocation'
 // ops then its terminator. That is the `collectBlockOps` numbering the colorer recorded its reuse
 // copies under, so a copy is spliced before exactly the op that could not coalesce into its input.
 function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Allocation, reuseCopies ReuseCopyPlan)
-	var seq = 0 as ByteCount
+	var seq = 0 as OpSeq
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 		let bodyCount = block.opRefs.count()
@@ -285,14 +291,14 @@ end 'colorAndDropSelfMoves'
 // `mov dest, input` the allocator recorded into `newRefs` BEFORE the op's own index —
 // so at run time the destination register holds the reuse input when the two-address
 // op executes. A new op index is minted at the end of `module.ops`.
-function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, seq ByteCount, newRefs OpIndexList)
+function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, seq OpSeq, newRefs OpIndexList)
 	match reuseCopies.at(seq) 'rc'
 		none then break 'rc'
 		copy(destReg, srcReg) then appendReuseCopyOp(module, destReg: destReg, srcReg: srcReg, newRefs: newRefs)
 	end 'rc'
 end 'spliceReuseCopyBefore'
 
-function appendReuseCopyOp(module TargetModule, destReg MachineWord, srcReg MachineWord, newRefs OpIndexList)
+function appendReuseCopyOp(module TargetModule, destReg RegNum, srcReg RegNum, newRefs OpIndexList)
 	let copyOp = TargetOp.movRegReg(X64VReg.physical(regFromNum(destReg)), srcReg: X64VReg.physical(regFromNum(srcReg)))
 	let copyIdx = module.ops.count()
 	module.ops.push(copyOp)
@@ -548,7 +554,7 @@ function retargetJmp(module TargetModule, opIdx OpIndex, target BlockId, oldTarg
 end 'retargetJmp'
 
 // The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
-export function moveOpOf(plan EdgeMovePlan, i ByteCount) returns TargetOp
+export function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp
 	let dst = X64VReg.physical(regFromNum(plan.moveDstAt(i)))
 	let src = X64VReg.physical(regFromNum(plan.moveSrcAt(i)))
 	if plan.moveIsSwapAt(i) 'swap'
@@ -557,7 +563,7 @@ export function moveOpOf(plan EdgeMovePlan, i ByteCount) returns TargetOp
 	return TargetOp.movRegReg(dst, srcReg: src)
 end 'moveOpOf'
 
-function regFromNum(regNum MachineWord) returns X64Register
+function regFromNum(regNum RegNum) returns X64Register
 	return try X64Register.fromRawValue(regNum) otherwise panic("regFromNum: {regNum} is not a valid x64 register number")
 end 'regFromNum'
 

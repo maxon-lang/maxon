@@ -15,6 +15,27 @@
 // row a block's backward sweep mutates, and for `forbiddenPhys`; never as a per-block matrix.
 export typealias BitWordArray = Array with MachineWord
 
+// The index of a BIT within a bitset row — a ValueId, wherever the row is a live set — or, as an
+// exclusive upper bound, the row's width in bits. Distinct in PURPOSE from the WORD index that
+// addresses the 64-bit word holding it, and from the BYTE counts the object writers deal in: they
+// are all non-negative integers, and naming them alike is how a bit index ends up passed where a
+// word offset belongs.
+export typealias BitIndex = int(0 to u64.max)
+
+// The index of one 64-bit WORD inside a `BitWordArray` — a row's BASE, or a word within a row.
+export typealias BitWordIndex = int(0 to u64.max)
+
+// A number of 64-bit WORDS: a row's width (`wordsPerRow`), a matrix's total size.
+export typealias BitWordCount = int(0 to u64.max)
+
+// A bit's position within ONE 64-bit word. HARD BOUND: there are 64 of them, so a value outside
+// 0..63 is a bug in the word arithmetic, not a legal position.
+export typealias WordBitIndex = int(0 to 63)
+
+// How many bits are SET in one 64-bit word. HARD BOUND at 64 — a full word — which is one MORE
+// than `WordBitIndex` admits, so the two are not interchangeable.
+typealias WordBitCount = int(0 to 64)
+
 // 64 bits per word. Naming the divisor/mask keeps the word/bit split in one place.
 let BitsPerWord = 64
 let BitIndexMask = 0x3F
@@ -22,41 +43,41 @@ let BitWordShift = 6
 
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
-export function bitsetWordsFor(bitCount ByteCount) returns ByteCount
+export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
 	let words = (bitCount + BitsPerWord - 1) shr BitWordShift
 	return words if words > 0 else 1
 end 'bitsetWordsFor'
 
-function wordIndexOf(base ByteCount, bit ByteCount) returns ByteCount
+function wordIndexOf(base BitWordIndex, bit BitIndex) returns BitWordIndex
 	return base + (bit shr BitWordShift)
 end 'wordIndexOf'
 
-function bitOf(bit ByteCount) returns MachineWord
+function bitOf(bit BitIndex) returns MachineWord
 	return 1 shl (bit and BitIndexMask)
 end 'bitOf'
 
 // Test bit `bit` of the row starting at word `base`.
-export function bitsetTest(words BitWordArray, base ByteCount, bit ByteCount) returns bool
+export function bitsetTest(words BitWordArray, base BitWordIndex, bit BitIndex) returns bool
 	let w = try words.get(wordIndexOf(base, bit: bit)) otherwise panic("bitsetTest: word index out of range (base={base}, bit={bit}, count={words.count()})")
 	return (w and bitOf(bit)) != 0
 end 'bitsetTest'
 
 // Set bit `bit` of the row starting at word `base`.
-export function bitsetAdd(words BitWordArray, base ByteCount, bit ByteCount)
+export function bitsetAdd(words BitWordArray, base BitWordIndex, bit BitIndex)
 	let idx = wordIndexOf(base, bit: bit)
 	let w = try words.get(idx) otherwise panic("bitsetAdd: word index out of range (base={base}, bit={bit}, count={words.count()})")
 	try words.set(idx, value: w or bitOf(bit)) otherwise panic("bitsetAdd: word index out of range on set")
 end 'bitsetAdd'
 
 // Clear bit `bit` of the row starting at word `base`.
-export function bitsetRemove(words BitWordArray, base ByteCount, bit ByteCount)
+export function bitsetRemove(words BitWordArray, base BitWordIndex, bit BitIndex)
 	let idx = wordIndexOf(base, bit: bit)
 	let w = try words.get(idx) otherwise panic("bitsetRemove: word index out of range (base={base}, bit={bit}, count={words.count()})")
 	try words.set(idx, value: w and not bitOf(bit)) otherwise panic("bitsetRemove: word index out of range on set")
 end 'bitsetRemove'
 
 // Copy row `src[srcBase..]` into `dst[dstBase..]` over `wordsPerRow` words.
-export function bitsetCopyRow(dst BitWordArray, dstBase ByteCount, src BitWordArray, srcBase ByteCount, wordsPerRow ByteCount)
+export function bitsetCopyRow(dst BitWordArray, dstBase BitWordIndex, src BitWordArray, srcBase BitWordIndex, wordsPerRow BitWordCount)
 	for i in 0 upto wordsPerRow 'eachWord'
 		let s = try src.get(srcBase + i) otherwise panic("bitsetCopyRow: src word out of range")
 		try dst.set(dstBase + i, value: s) otherwise panic("bitsetCopyRow: dst set out of range")
@@ -77,7 +98,7 @@ end 'bitsetCopyRow'
 // Word-parallel: a word with no live bits costs one compare, so an empty stretch of the value
 // space is skipped 64 ids at a time. `out` is CLEARED first and is meant to be a reusable scratch
 // buffer — pass the same one across blocks so the walk allocates nothing in the hot path.
-export function bitsetCollectRow(words BitWordArray, base ByteCount, wordsPerRow ByteCount, out ValueIdArray)
+export function bitsetCollectRow(words BitWordArray, base BitWordIndex, wordsPerRow BitWordCount, out ValueIdArray)
 	out.clear()
 	for w in 0 upto wordsPerRow 'eachWord'
 		var word = try words.get(base + w) otherwise panic("bitsetCollectRow: word out of range")
@@ -95,10 +116,11 @@ end 'bitsetCollectRow'
 // The index of the LOWEST set bit of `word`, i.e. its trailing-zero count. Undefined for zero —
 // every caller must exclude it (`bitsetCollectRow` only calls it on a non-zero word; the Hall
 // census guards on an empty live set).
-// Binary search over the word width — 6 compares, no loop over 64 bits.
-export function trailingZeroCount(word MachineWord) returns ByteCount
+// Binary search over the word width — 6 compares, no loop over 64 bits. The six increments below
+// sum to at most 32+16+8+4+2+1 = 63, which is why the result fits `WordBitIndex` by construction.
+export function trailingZeroCount(word MachineWord) returns WordBitIndex
 	var w = word
-	var count = 0 as ByteCount
+	var count = 0 as WordBitIndex
 	if (w and 0xFFFFFFFF) == 0 'hi32'
 		w = w shr 32
 		count = count + 32
@@ -127,9 +149,9 @@ end 'trailingZeroCount'
 
 // Bits set in one word (Kernighan's clear-lowest-set loop — fine for the sparse
 // live words M5.1 produces; a table/intrinsic is a later perf refinement).
-function popcountWord(word MachineWord) returns ByteCount
+function popcountWord(word MachineWord) returns WordBitCount
 	var w = word
-	var count = 0 as ByteCount
+	var count = 0 as WordBitCount
 	while w != 0 'clearLowest'
 		w = w and (w - 1)
 		count = count + 1
@@ -142,6 +164,12 @@ end 'popcountWord'
 // ==========================================================================
 
 // The 16 x64 GPRs. A RegMask (TargetDialect) is a bit per register number.
+//
+// `RegNum`'s upper bound is this same 16, RESPELLED as a literal because a typealias range bound
+// must be a literal (E2010) — a range cannot name a constant. The two must move together; the
+// `fullRegisterMask` / `RegNum` pair is the whole of what "the register file is 16 wide" means
+// here, and a widened file with a stale `RegNum` would range-check-panic on the new registers
+// rather than silently mis-encode them.
 export let RegisterFileSize = 16
 
 // Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
@@ -156,6 +184,20 @@ export let SpillSlotBytes = 8 as StackSize
 // PURPOSE from a byte count or a CFG index even though all are non-negative ints.
 export typealias RegCount = int(0 to u64.max)
 
+// A PHYSICAL REGISTER NUMBER: an `X64Register`'s raw value, and the key every register mask, the
+// coloring column and the parallel-move plans are stated in.
+//
+// BOUNDED BY THE REGISTER FILE, and the bound goes to `RegisterFileSize` INCLUSIVE — 16, not 15 —
+// because one-past-the-last-register is the "no register" value three sentinels share:
+// `lowestClearRegister`'s "every register is blocked", the colorer's `Uncolored`, and its
+// `NoFixedHint`. Admitting exactly that one extra value is what lets those sentinels live in the
+// same column as real registers without a second type.
+//
+// It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
+// IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
+// of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
+export typealias RegNum = int(0 to 16)
+
 // The mask with every allocatable-file bit set (bits 0..RegisterFileSize-1). Derived
 // from `RegisterFileSize` so the file width lives in exactly one place; the "not in
 // the pool" complement is `fullRegisterMask() and not pool`.
@@ -164,17 +206,17 @@ export function fullRegisterMask() returns RegMask
 end 'fullRegisterMask'
 
 // True iff register number `regNum` is in `mask`.
-export function regMaskContains(mask RegMask, regNum MachineWord) returns bool
+export function regMaskContains(mask RegMask, regNum RegNum) returns bool
 	return ((mask shr regNum) and 1) != 0
 end 'regMaskContains'
 
 // `mask` with register number `regNum` added.
-export function regMaskAdd(mask RegMask, regNum MachineWord) returns RegMask
+export function regMaskAdd(mask RegMask, regNum RegNum) returns RegMask
 	return mask or (1 shl regNum)
 end 'regMaskAdd'
 
 // `mask` with register number `regNum` removed.
-export function regMaskRemove(mask RegMask, regNum MachineWord) returns RegMask
+export function regMaskRemove(mask RegMask, regNum RegNum) returns RegMask
 	return mask and not (1 shl regNum)
 end 'regMaskRemove'
 
@@ -191,7 +233,7 @@ end 'regMaskPopcount'
 // The LOWEST register number (0..15) whose bit is CLEAR in `blocked`, or
 // `RegisterFileSize` (16) if every register is blocked. Picking a register is this
 // single call — no set iteration, no interference-graph neighbour walk.
-export function lowestClearRegister(blocked RegMask) returns MachineWord
+export function lowestClearRegister(blocked RegMask) returns RegNum
 	for regNum in 0 upto RegisterFileSize 'scan'
 		if not regMaskContains(blocked, regNum: regNum) 'free'
 			return regNum

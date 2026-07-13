@@ -109,6 +109,17 @@
 // live sets to be editable in place, which the CSR representation is deliberately not; that is
 // the remaining super-linear term (O(function × splits)) and the natural next step.
 
+// One memoized reachability ROW of `ReachCache` — one per distinct DEF BLOCK the peak's candidates
+// have, so there are at most `numBlocks` of them and `numBlocks` is the "not walked yet" sentinel.
+// It shares the CFG's dense numbering space but is NOT a block index: row 3 is "the walk for the
+// third def block we met", not "block 3".
+typealias ReachRow = int(0 to u64.max)
+typealias ReachRowColumn = Array with ReachRow
+
+// A flat index into `ReachCache.rows`, which lays its rows out ROW-MAJOR as
+// `row * numBlocks + blockLocal`. A row BASE is one of these with `blockLocal = 0`.
+typealias ReachSlot = int(0 to u64.max)
+
 // The outcome of a lineage lookup: `source(id)` for a splitter-minted fresh value (the
 // value it derives from), `none` for any value the splitter did not mint. A union rather
 // than a sentinel id — a real ValueId 0 would be indistinguishable from "not found".
@@ -166,7 +177,7 @@ export type PressurePeak
 	export var pressure as RegCount
 	export var blockLocal as CfgIndex
 	export var liveBefore as BitWordArray
-	export var peakSeq as ByteCount
+	export var peakSeq as OpSeq
 	// Which of the two overflows this point is — the distinction the amended Rule 2 turns on.
 	//
 	//  • CLOBBER-ONLY (`true`): the live values fit the FULL pool, but more of them are CONFINED to
@@ -200,7 +211,7 @@ export type PressurePeak
 	// tie-break — see `peakOutranks`.
 	export var atFixedRegisterOp as bool
 
-	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
 		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
 end 'PressurePeak'
@@ -268,9 +279,9 @@ end 'keepsOriginalBeforePeak'
 // backward step, the peak's live-before after it — so the two are never recomputed separately.
 type PressureAnalysis
 	export var peak as PressurePeak
-	export var defLiveAfter as CfgIndexArray
+	export var defLiveAfter as RegCountColumn
 
-	static function create(peak PressurePeak, defLiveAfter CfgIndexArray) returns PressureAnalysis
+	static function create(peak PressurePeak, defLiveAfter RegCountColumn) returns PressureAnalysis
 		return Self{peak: peak, defLiveAfter: defLiveAfter}
 	end 'create'
 end 'PressureAnalysis'
@@ -341,7 +352,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
 	// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
 	let iterationBound = liveness.useIndex.totalOps * (liveness.valueCount + 1) + RegisterFileSize
-	var iterations = 0 as ByteCount
+	var iterations = 0 as EventCount
 
 	// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
 	// its OWN pool (the full pool for a normal op, the reduced `pool ∖ implicitDefs` at a fixed-
@@ -530,7 +541,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// A value with no op-def (a phi / a value never defined by an op) keeps this sentinel
 	// (`valueCount + 1`, above any real count) so it is never mistaken for store-safe.
 	var defLiveAfter = filledColumn(valueCount, value: valueCount + 1)
-	var blockBaseSeq = 0 as ByteCount
+	var blockBaseSeq = 0 as OpSeq
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
@@ -640,7 +651,7 @@ end 'analyzePressure'
 // (the forbidden masks are not laminar — see `HallCondition`), so the exact verdict decides. A false
 // peak here would spill a value the program could have coloured, which is the same class of harm as
 // a false E5001 in a smaller key: pressure relief added to code that was already fine.
-function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PressurePeak, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, atFixedRegisterOp bool, wordsPerRow ByteCount) returns PressurePeak
+function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PressurePeak, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, atFixedRegisterOp bool, wordsPerRow BitWordCount) returns PressurePeak
 	return match hallVerdictAt(liveness, live: live, pool: pool) 'verdict'
 		feasible gives best
 		overflow(witness, tight) gives betterPeak(best, pressure: tight, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: true, witness: witness, atFixedRegisterOp: atFixedRegisterOp, wordsPerRow: wordsPerRow)
@@ -651,7 +662,7 @@ end 'confinedPeakAt'
 // `PressurePeak` is minted from a candidate, so both overflow kinds agree on the ranking and on
 // snapshotting the live row (which only the WINNER pays for — `copyOfRow` is a full row copy, and
 // doing it before the rank test would cost one per overflowing op rather than one per new peak).
-function betterPeak(best PressurePeak, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq ByteCount, clobberOnly bool, witness RegMask, atFixedRegisterOp bool, wordsPerRow ByteCount) returns PressurePeak
+function betterPeak(best PressurePeak, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool, wordsPerRow BitWordCount) returns PressurePeak
 	if not peakOutranks(not clobberOnly, atFixedRegisterOp: atFixedRegisterOp, pressure: pressure, best: best) 'keepBest'
 		return best
 	end 'keepBest'
@@ -708,7 +719,7 @@ function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCou
 end 'peakOutranks'
 
 // Record each block-arg's def-point live count — the block's live-in population (see the caller).
-function recordPhiDefLiveAfter(defLiveAfter CfgIndexArray, block IrBlock, liveInCount RegCount)
+function recordPhiDefLiveAfter(defLiveAfter RegCountColumn, block IrBlock, liveInCount RegCount)
 	for arg in block.blockArgs 'eachPhi'
 		try defLiveAfter.set(arg.valueId, value: liveInCount) otherwise panic("recordPhiDefLiveAfter: defLiveAfter.set OOB for phi {arg.valueId}")
 	end 'eachPhi'
@@ -716,7 +727,7 @@ end 'recordPhiDefLiveAfter'
 
 // Record each of the op's virtual defs as living-after at `afterCount` (its store point). `buf`
 // already holds the op's operands.
-function recordDefLiveAfter(defLiveAfter CfgIndexArray, buf OperandList, afterCount RegCount)
+function recordDefLiveAfter(defLiveAfter RegCountColumn, buf OperandList, afterCount RegCount)
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
 			try defLiveAfter.set(operandValueId(o), value: afterCount) otherwise panic("recordDefLiveAfter: set OOB")
@@ -724,13 +735,13 @@ function recordDefLiveAfter(defLiveAfter CfgIndexArray, buf OperandList, afterCo
 	end 'eachOperand'
 end 'recordDefLiveAfter'
 
-function zeroRow(wordsPerRow ByteCount) returns BitWordArray
+function zeroRow(wordsPerRow BitWordCount) returns BitWordArray
 	var row = BitWordArray.create()
 	row.resize(wordsPerRow)
 	return row
 end 'zeroRow'
 
-function copyOfRow(src BitWordArray, wordsPerRow ByteCount) returns BitWordArray
+function copyOfRow(src BitWordArray, wordsPerRow BitWordCount) returns BitWordArray
 	var row = zeroRow(wordsPerRow)
 	bitsetCopyRow(row, dstBase: 0, src: src, srcBase: 0, wordsPerRow: wordsPerRow)
 	return row
@@ -780,7 +791,7 @@ end 'copyOfRow'
 // to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
-function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter CfgIndexArray, pool RegMask, poolSize RegCount) returns SpillChoice
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, poolSize RegCount) returns SpillChoice
 	let topo = liveness.cfg.topo
 	let placement = placementOf(peak)
 	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak)
@@ -851,7 +862,7 @@ end 'chooseVictim'
 type BeladyBest
 	export var found as bool
 	export var valueId as ValueId
-	var farthestNextUse as ByteCount
+	var farthestNextUse as OpSeq
 
 	export static function create() returns BeladyBest
 		return Self{found: false, valueId: 0, farthestNextUse: 0}
@@ -860,7 +871,7 @@ type BeladyBest
 	// Offer a candidate. It wins iff it is the first, or its next use is STRICTLY farther away —
 	// strict, and `chooseVictim` offers candidates in ascending id order, so ties resolve to the
 	// LOWEST value id and the choice is deterministic.
-	export function offer(candidate ValueId, nextUse ByteCount)
+	export function offer(candidate ValueId, nextUse OpSeq)
 		if self.found and nextUse <= self.farthestNextUse 'noImprovement'
 			return
 		end 'noImprovement'
@@ -886,7 +897,7 @@ end 'BeladyBest'
 //
 // The value's use entries are in ascending sequence order (the CSR was filled in layout order), so
 // the FIRST one past the peak is the nearest — O(uses of this one value), never a sweep.
-function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq ByteCount) returns ByteCount
+function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq OpSeq) returns OpSeq
 	for j in 0 upto index.useCount(valueId) 'each'
 		let record = index.useRecordAt(valueId, k: j)
 		match index.useKindAt(record) 'kind'
@@ -910,7 +921,7 @@ end 'nextUseAfterPeak'
 // this gate cannot refuse anything).
 //
 // A value already IN a slot skips this gate entirely — its store exists and is not re-emitted.
-function storeFitsPool(defLiveAfter CfgIndexArray, valueId ValueId, poolSize RegCount) returns bool
+function storeFitsPool(defLiveAfter RegCountColumn, valueId ValueId, poolSize RegCount) returns bool
 	let after = try defLiveAfter.get(valueId) otherwise panic("storeFitsPool: defLiveAfter.get OOB for value {valueId}")
 	return after <= poolSize
 end 'storeFitsPool'
@@ -978,7 +989,7 @@ end 'isRematVictim'
 //                          the splitter emits stores that relieve nothing (see `killsValueAtPeak`).
 //                          A value that fails HERE is not un-relievable — at a confined peak the FULL
 //                          split still kills it (tier 4) — it just cannot be relieved this cheaply.
-function isSpillVictim(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount, reach ReachCache) returns bool
+function isSpillVictim(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, placement SpillPlacement, defLiveAfter RegCountColumn, poolSize RegCount, reach ReachCache) returns bool
 	if index.hasSpillStore(valueId) 'alreadyStored'
 		return false
 	end 'alreadyStored'
@@ -1014,7 +1025,7 @@ end 'isFullRematVictim'
 //
 // CONFINED peaks only, for the same reason tier 3 is: at a FULL-pool peak, reloading a value the loop
 // uses at every one of its uses is exactly the per-iteration cost E5001 refuses to pay silently.
-function isForcedBracketVictim(index UseIndex, valueId ValueId, placement SpillPlacement, defLiveAfter CfgIndexArray, poolSize RegCount) returns bool
+function isForcedBracketVictim(index UseIndex, valueId ValueId, placement SpillPlacement, defLiveAfter RegCountColumn, poolSize RegCount) returns bool
 	if not isForcedPlacement(placement) 'coldPeak'
 		return false
 	end 'coldPeak'
@@ -1184,9 +1195,9 @@ type ReachCache
 	var numBlocks as CfgIndex
 	// defBlock -> its row index in `rows`, or `numBlocks` for "not walked yet" (no row index can
 	// equal numBlocks: there are at most numBlocks distinct def blocks, so rows are 0..numBlocks-1).
-	var rowOf as CfgIndexArray
+	var rowOf as ReachRowColumn
 	var rows as BoolArray
-	var rowCount as CfgIndex
+	var rowCount as ReachRow
 
 	static function create(numBlocks CfgIndex) returns ReachCache
 		return Self{numBlocks: numBlocks, rowOf: filledColumn(numBlocks, value: numBlocks), rows: BoolArray.create(), rowCount: 0}
@@ -1195,10 +1206,16 @@ type ReachCache
 	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
 	export function reachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
 		let row = self.rowFor(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock)
-		return try self.rows.get(row * self.numBlocks + block) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
+		return try self.rows.get(self.slotOf(row, block: block)) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
 	end 'reachableFromPeak'
 
-	function rowFor(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex) returns CfgIndex
+	// The flat index of `(row, block)` in the row-major `rows` matrix — the ONE place its layout is
+	// spelled, so the read above and the walk that fills a row cannot disagree about it.
+	function slotOf(row ReachRow, block CfgIndex) returns ReachSlot
+		return row * self.numBlocks + block
+	end 'slotOf'
+
+	function rowFor(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex) returns ReachRow
 		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
 		if cached != self.numBlocks 'hit'
 			return cached
@@ -1207,7 +1224,7 @@ type ReachCache
 		let row = self.rowCount
 		self.rowCount = row + 1
 		self.rows.resize(self.rowCount * self.numBlocks)
-		markBlocksReachableFromPeak(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: row * self.numBlocks)
+		markBlocksReachableFromPeak(topo, peakBlockLocal: peakBlockLocal, defBlock: defBlock, rows: self.rows, base: self.slotOf(row, block: 0))
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row
 	end 'rowFor'
@@ -1218,7 +1235,7 @@ end 'ReachCache'
 // definition. The walk starts at the peak block's SUCCESSORS (so the peak's own block is reached
 // only via a genuine cycle) and never expands into `defBlock` (entering it redefines the value;
 // see `killsValueAtPeak`). Worklist-driven: no CFG traversal in the allocator may recurse.
-function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ByteCount)
+function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ReachSlot)
 	var worklist = CfgIndexArray.create()
 	let deg = topo.succ.degree(peakBlockLocal)
 	for k in 0 upto deg 'seed'
@@ -1318,9 +1335,9 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 	// in its original register, for free. An `everyUse` split rewrites them too, which is what leaves
 	// the original with no reader but its own store — see `SplitScope`.
 	var freshId = nextValueId
-	var reloadCount = 0 as ByteCount
+	var reloadCount = 0 as EventCount
 	var buf = OperandList.create()
-	var j = 0 as ByteCount
+	var j = 0 as UseOrdinal
 	while j < useCount 'eachUse'
 		let record = index.useRecordAt(valueId, k: j)
 		let afterPeak = index.useSeqAt(record) >= peakSeq
@@ -1361,7 +1378,7 @@ end 'spillOneValue'
 // peak? A run may NOT straddle the peak: a reload placed before a block's before-peak use would then
 // serve its after-peak uses too, and that reloaded value would span the peak, so the pressure there
 // would never drop. (That is the whole-range-reload failure the file header names, in the small.)
-function useIsInRun(index UseIndex, valueId ValueId, k ByteCount, blockLocal CfgIndex, afterPeak bool, peakSeq ByteCount) returns bool
+function useIsInRun(index UseIndex, valueId ValueId, k UseOrdinal, blockLocal CfgIndex, afterPeak bool, peakSeq OpSeq) returns bool
 	let record = index.useRecordAt(valueId, k: k)
 	if index.useBlockAt(record) != blockLocal 'otherBlock'
 		return false
@@ -1394,7 +1411,7 @@ end 'insertStore'
 // after-peak op use at all (op uses precede the edge use in the index), so the value is only
 // forwarded to a phi — the reload goes at the END of the block's body, still ahead of the edge
 // that reads it.
-function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRecord ByteCount, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
+function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRecord UseRecordIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	let blockLocal = index.useBlockAt(useRecord)
 	match index.useKindAt(useRecord) 'k'
 		op then insertReloadBefore(module, cfg: cfg, blockLocal: blockLocal, beforeOpIdx: index.useOpAt(useRecord), valueId: valueId, freshId: freshId, slot: slot, placement: placement)
@@ -1465,7 +1482,7 @@ end 'insertReloadAtBlockEnd'
 
 // The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
 // block: past the last real body op, but before the conditional branch when the block has one.
-function beforeBranchPosition(block IrBlock) returns ByteCount
+function beforeBranchPosition(block IrBlock) returns BlockOpPos
 	if block.hasCondBranchOp() 'twoWay'
 		return positionInBlock(block, opIdx: block.condBranchIndex())
 	end 'twoWay'
@@ -1498,7 +1515,7 @@ end 'appendOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it any more.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq ByteCount, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	let constValue = constValueOfDef(module, opIdx: defOpIdx)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
@@ -1644,7 +1661,7 @@ end 'substituteValueInOp'
 // The position of `opIdx` within `block.opRefs` (body ops only — spill/reload/remat are always
 // body ops, never terminators). Re-derived at every insertion because the positions SHIFT as ops
 // are spliced in, which is exactly why the index does not cache them.
-function positionInBlock(block IrBlock, opIdx OpIndex) returns ByteCount
+function positionInBlock(block IrBlock, opIdx OpIndex) returns BlockOpPos
 	for pos in 0 upto block.opRefs.count() 'each'
 		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
 			return pos

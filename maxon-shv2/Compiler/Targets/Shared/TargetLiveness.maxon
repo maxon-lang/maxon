@@ -11,23 +11,100 @@
 // The old iterative fixpoint re-swept every block's FULL value-space row every round and was the
 // last superlinear term in register allocation.
 
-// A dense function-local index: a block's position in `func.blockRefs`, or a count.
+// ==========================================================================
+// THE ALLOCATOR'S INDEX SPACES
+// ==========================================================================
+//
+// Every quantity below is a non-negative integer, and that is exactly the problem: nothing stops a
+// BIT index being passed where an OP SEQUENCE number belongs, or a CSR record index where a word
+// offset does. They are named apart so the SITE reads correctly and a mismatch is legible on the
+// page — which is the only place it can be caught, since a Maxon `typealias` is transparent (two
+// aliases over the same range are the same type, so the compiler enforces nothing between them; only
+// a NARROWER range, like `RegNum`, is checked, and then at run time).
+//
+// The columns all share ONE representation — a flat `Array` of non-negative ints — which is what
+// lets `filledColumn` / `zeroColumn` / `buildCsr` be one implementation each rather than one per
+// column. The names say what the ENTRIES MEAN; the representation is common on purpose.
+
+// The non-negative-integer REPRESENTATION every index space in this file shares, and the dense
+// column built out of it. Every purpose-named column below IS a `DenseColumn` under a name that says
+// what its entries mean, and they interconvert freely.
+//
+// A QUANTITY is always spelled with its purpose alias. `DenseInt` appears only where the code is
+// deliberately generic OVER those spaces and has no one purpose to name — the column builders, which
+// fill a colour column and a Hall matching alike, and `maxOf`, which takes the larger of a value id
+// or of a register pressure.
+export typealias DenseInt = int(0 to u64.max)
+export typealias DenseColumn = Array with DenseInt
+
+// How many entries a dense column has — the argument the builders below size one with, and the
+// cursor a worklist walks one with.
+export typealias ColumnLength = int(0 to u64.max)
+
+// A dense function-local index: a block's position in `func.blockRefs`, or a count of blocks.
 export typealias CfgIndex = int(0 to u64.max)
 export typealias CfgIndexArray = Array with CfgIndex
 
-// A dense column of physical register NUMBERS (0..15), indexed by value id or by
-// parallel-move slot — a coloring, a fixed-register hint, or an edge-move operand
-// list. Same dense-int representation as `CfgIndexArray` (they interconvert freely),
-// named apart because it holds register numbers, not CFG indices (the misleading reuse
-// the review flagged).
-export typealias RegNumColumn = Array with MachineWord
+// A block's LOOP NESTING DEPTH: 0 outside every loop, +1 per enclosing natural loop. Rule 2 turns on
+// it — a COLD spill may only be placed where this is 0 — so it is not a block index and must not be
+// mistaken for one.
+export typealias LoopDepth = int(0 to u64.max)
+export typealias LoopDepthArray = Array with LoopDepth
 
-// Build a dense `CfgIndexArray` of `count` entries, every entry set to `value` — the
-// "resize a column then fill a sentinel" pattern the allocator's color/hint columns,
-// the flat BlockId index, and the checker's register-state rows all share. The result
-// unifies with any `Array with <non-negative int>` column (RegNumColumn, RegStateRow).
-export function filledColumn(count ByteCount, value CfgIndex) returns CfgIndexArray
-	var col = CfgIndexArray.create()
+// The FORWARD LAYOUT SEQUENCE number of an op within one function: blocks in `func.blockRefs` order,
+// each block's body ops then its terminator (the `collectBlockOps` numbering). It is the ONE
+// numbering the `UseIndex`, the splitter's peak, and the colorer's reuse-copy plan all key on, so
+// they can compare "before/after the peak" at all — and it is GLOBAL to the function, unlike
+// `BlockOpPos`, which restarts at every block. `UseIndex.totalOps` is its exclusive upper bound (and
+// therefore doubles as the "no later use" sentinel Belady ranks with).
+export typealias OpSeq = int(0 to u64.max)
+export typealias OpSeqArray = Array with OpSeq
+
+// An op's position WITHIN ONE BLOCK — an index into `block.opRefs` (or into the `collectBlockOps`
+// list, which appends the terminator). Restarts at 0 in every block, and SHIFTS whenever the
+// splitter splices an op in, which is why nothing caches one.
+export typealias BlockOpPos = int(0 to u64.max)
+
+// A BLOCK-ARG's position among a block's phis — which is also the position of the value each
+// predecessor passes it on an edge, because `blockArgs` and an edge's `argIds` are paired
+// POSITIONALLY (`PhiEdgeView`). A count of phis, as an exclusive bound.
+export typealias PhiIndex = int(0 to u64.max)
+
+// An index into the `UseIndex`'s parallel USE-RECORD columns — one record per (op, value) use site
+// of the whole function, in layout order. This is what a `useCsr` neighbour list holds.
+export typealias UseRecordIndex = int(0 to u64.max)
+
+// Which use OF ONE VALUE: the `k` of "value `v`'s k-th use", 0 .. `useCount(v)`. It is NOT a
+// `UseRecordIndex` — `useRecordAt` is the map from one to the other — and confusing them would read
+// another value's use record with this value's ordinal.
+export typealias UseOrdinal = int(0 to u64.max)
+
+// A count of things the allocator DID: functions allocated, copies inserted, hints honoured, values
+// split, liveness mark-steps taken, splitter iterations run. A statistic, never an index into
+// anything — so it is named apart from every index space above.
+export typealias EventCount = int(0 to u64.max)
+
+// A VERSION STAMP: the 1-BASED id of the thing last written to a slot, so 0 means "never written"
+// and the column needs no clearing between passes over it (clearing is the O(blocks × values) cost
+// the stamps exist to remove). It is deliberately NOT the id itself — `stamp == v + 1` is the test,
+// and a stamp read as a bare id is off by one everywhere.
+typealias VersionStamp = int(0 to u64.max)
+typealias VersionStampColumn = Array with VersionStamp
+
+// A dense column of physical register NUMBERS, indexed by value id or by parallel-move slot — a
+// coloring, a fixed-register hint, or an edge-move operand list.
+export typealias RegNumColumn = Array with RegNum
+
+// A dense column of REGISTER COUNTS (a pressure, an effective-pool size, a dead-phi tally), indexed
+// by value id, by block, or by pool size. Its entries are quantities of REGISTERS — it was a
+// `CfgIndexArray`, which said "block index" about numbers that are nothing of the sort.
+export typealias RegCountColumn = Array with RegCount
+
+// Build a dense column of `count` entries, every entry set to `value` — the "resize a column then
+// fill a sentinel" pattern the allocator's color/hint columns, the flat BlockId index, and the Hall
+// matching's two inverse maps all share. The result unifies with every purpose-named column above.
+export function filledColumn(count ColumnLength, value DenseInt) returns DenseColumn
+	var col = DenseColumn.create()
 	col.resize(count)
 	for i in 0 upto count 'fill'
 		try col.set(i, value: value) otherwise panic("filledColumn: set OOB")
@@ -40,8 +117,8 @@ end 'filledColumn'
 // column doing bounds-checked writes to store zeroes over zeroes. The counting sorts and version
 // stamps allocate several of these per function, so on the many-small-functions shape (which is what
 // a real codebase, and this compiler's own source, looks like) that redundant pass is pure loss.
-export function zeroColumn(count ByteCount) returns CfgIndexArray
-	var col = CfgIndexArray.create()
+export function zeroColumn(count ColumnLength) returns DenseColumn
+	var col = DenseColumn.create()
 	col.resize(count)
 	return col
 end 'zeroColumn'
@@ -99,17 +176,17 @@ end 'FuncTopology'
 // iteration (see `splitLiveRanges`).
 export type FuncCfg
 	export var topo as FuncTopology
-	export var loopDepth as CfgIndexArray
+	export var loopDepth as LoopDepthArray
 	export var valueCount as ValueId
 
-	export static function create(topo FuncTopology, loopDepth CfgIndexArray, valueCount ValueId) returns FuncCfg
+	export static function create(topo FuncTopology, loopDepth LoopDepthArray, valueCount ValueId) returns FuncCfg
 		return Self{topo: topo, loopDepth: loopDepth, valueCount: valueCount}
 	end 'create'
 
 	// The maximum loop nesting depth over all blocks (a stat + a health check that
 	// the parser's structured loops were recognised).
-	export function maxLoopDepth() returns CfgIndex
-		var m = 0 as CfgIndex
+	export function maxLoopDepth() returns LoopDepth
+		var m = 0 as LoopDepth
 		for d in self.loopDepth 'each'
 			if d > m 'deeper'
 				m = d
@@ -131,12 +208,12 @@ end 'FuncCfg'
 // term in register allocation. These lists are proportional to the liveness that actually exists —
 // which is what the SSA path exploration computes directly, so nothing is thrown away to build them.
 export type LiveSets
-	export var inStart as CfgIndexArray
+	export var inStart as CsrColumn
 	export var inList as ValueIdArray
-	export var outStart as CfgIndexArray
+	export var outStart as CsrColumn
 	export var outList as ValueIdArray
 
-	export static function create(inStart CfgIndexArray, inList ValueIdArray, outStart CfgIndexArray, outList ValueIdArray) returns LiveSets
+	export static function create(inStart CsrColumn, inList ValueIdArray, outStart CsrColumn, outList ValueIdArray) returns LiveSets
 		return Self{inStart: inStart, inList: inList, outStart: outStart, outList: outList}
 	end 'create'
 end 'LiveSets'
@@ -148,13 +225,13 @@ end 'LiveSets'
 export type LivenessResult
 	export var cfg as FuncCfg
 	export var valueCount as ValueId
-	export var wordsPerRow as ByteCount
+	export var wordsPerRow as BitWordCount
 	export var live as LiveSets
 	export var forbidden as RegMaskColumn
 	export var maxPressure as RegCount
 	// Block-marking steps taken by the SSA path exploration — the honest cost counter. (There is
 	// no fixpoint, so there is no iteration count to report.)
-	export var livenessMarkSteps as ByteCount
+	export var livenessMarkSteps as EventCount
 	// Per-block DEAD block-arg count — a block-arg with no use in the block and not live-out. The
 	// colorer still reserves a register for each across the WHOLE block (a dead phi never appears
 	// as an operand, so it never dies and its register frees only at the block boundary), so it
@@ -163,13 +240,13 @@ export type LivenessResult
 	// Recorded HERE, for free, by the backward sweep that already computes it — the splitter's
 	// peak-finder needs the same number at every op of every block, and recomputing it per block
 	// meant re-sweeping the whole block and heap-allocating two arrays per call.
-	export var deadPhis as CfgIndexArray
+	export var deadPhis as RegCountColumn
 	// The function's per-value index — def sites, use sites, per-value flags, the layout op
 	// numbering. The liveness walk builds it (it needs the use lists), and the cold-spill splitter
 	// answers EVERY per-value question from it rather than re-walking the function per candidate.
 	export var useIndex as UseIndex
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ByteCount, live LiveSets, forbidden RegMaskColumn, maxPressure RegCount, livenessMarkSteps ByteCount, deadPhis CfgIndexArray, useIndex UseIndex) returns LivenessResult
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, maxPressure RegCount, livenessMarkSteps EventCount, deadPhis RegCountColumn, useIndex UseIndex) returns LivenessResult
 		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, useIndex: useIndex}
 	end 'create'
 
@@ -223,7 +300,7 @@ export type LivenessResult
 end 'LivenessResult'
 
 // Copy CSR node `node`'s range into `out` (cleared first).
-function copyCsrRange(start CfgIndexArray, list ValueIdArray, node CfgIndex, out ValueIdArray)
+function copyCsrRange(start CsrColumn, list ValueIdArray, node CfgIndex, out ValueIdArray)
 	out.clear()
 	let lo = try start.get(node) otherwise panic("copyCsrRange: start.get({node}) out of range")
 	let hi = try start.get(node + 1) otherwise panic("copyCsrRange: start.get({node}+1) out of range")
@@ -256,7 +333,7 @@ end 'localOfBlockId'
 export type PhiEdgeView
 	export var blockArgs as IrBlockArgArray
 	export var argIds as ValueIdArray
-	export var count as ByteCount
+	export var count as PhiIndex
 
 	// Resolve + arity-check the phi edge into `targetBlock` carrying `argIds`. `context`
 	// names the caller for the panic. A mismatch is a malformed SSA edge — the ONE
@@ -270,21 +347,26 @@ export type PhiEdgeView
 	end 'resolve'
 
 	// The value id of the k-th phi (block-arg) of the target block.
-	export function phiValueIdAt(k ByteCount) returns ValueId
+	export function phiValueIdAt(k PhiIndex) returns ValueId
 		let arg = try self.blockArgs.get(k) otherwise panic("PhiEdgeView.phiValueIdAt: OOB")
 		return arg.valueId
 	end 'phiValueIdAt'
 
 	// The value id the predecessor passes to the k-th phi on this edge.
-	export function incomingAt(k ByteCount) returns ValueId
+	export function incomingAt(k PhiIndex) returns ValueId
 		return try self.argIds.get(k) otherwise panic("PhiEdgeView.incomingAt: OOB")
 	end 'incomingAt'
 end 'PhiEdgeView'
 
-// DFS coloring for back-edge detection.
-let DfsWhite = 0
-let DfsGray = 1
-let DfsBlack = 2
+// DFS coloring for back-edge detection: WHITE = not yet reached, GRAY = still on the current DFS
+// path (an edge to one is a retreating edge, i.e. a back edge in a reducible CFG), BLACK = closed.
+// Three states and no more, which is the whole bound.
+typealias DfsColor = int(0 to 2)
+typealias DfsColorArray = Array with DfsColor
+
+let DfsWhite = 0 as DfsColor
+let DfsGray = 1 as DfsColor
+let DfsBlack = 2 as DfsColor
 
 // Compute liveness on a CFG the CALLER owns, and whose `valueCount` the caller keeps current.
 //
@@ -315,7 +397,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 end 'computeLivenessOn'
 
 // A zeroed word matrix of `wordCount` words.
-function makeMatrix(wordCount ByteCount) returns BitWordArray
+function makeMatrix(wordCount BitWordCount) returns BitWordArray
 	var m = BitWordArray.create()
 	m.resize(wordCount)
 	return m
@@ -601,7 +683,7 @@ end 'assertCondBranchIndicesComplete'
 // always dereferenced from the op — so an in-place retarget (`retargetJcc`) has no cache to go
 // stale, and the only things that CAN go wrong are the four this asserts.
 function checkCondBranchIndex(module TargetModule, block IrBlock, funcName String)
-	var seen = 0 as ByteCount
+	var seen = 0 as OpCount
 	var seenIdx = 0 as OpIndex
 	for opIdx in block.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("checkCondBranchIndex: opIdx {opIdx} not in module.ops")
@@ -744,14 +826,14 @@ end 'scanFunctionValueCount'
 // so every DFS retreating edge is a genuine back edge; each back edge's natural
 // loop is the header plus every block that reaches the tail without leaving through
 // the header. Back edges sharing a header (a loop with `continue`) form ONE loop.
-function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) returns CfgIndexArray
-	var depth = CfgIndexArray.create()
+function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks CfgIndex) returns LoopDepthArray
+	var depth = LoopDepthArray.create()
 	depth.resize(numBlocks)
 	if numBlocks == 0 'empty'
 		return depth
 	end 'empty'
 
-	var colors = CfgIndexArray.create()
+	var colors = DfsColorArray.create()
 	colors.resize(numBlocks)
 	var backTails = CfgIndexArray.create()
 	var backHeads = CfgIndexArray.create()
@@ -785,7 +867,7 @@ end 'computeLoopDepth'
 // The stack holds a (node, next-successor-index) pair per open node — the explicit form of a
 // recursive call's resume point — so a node turns BLACK only once every successor has been visited,
 // which is what makes the GRAY test mean "still on the current DFS path".
-function dfsBackEdges(succ CsrGraph, root CfgIndex, colors CfgIndexArray, backTails CfgIndexArray, backHeads CfgIndexArray)
+function dfsBackEdges(succ CsrGraph, root CfgIndex, colors DfsColorArray, backTails CfgIndexArray, backHeads CfgIndexArray)
 	var stackNode = CfgIndexArray.create()
 	var stackNextSucc = CfgIndexArray.create()
 
@@ -824,7 +906,7 @@ end 'dfsBackEdges'
 // Bump `depth` by 1 for every block in the natural loop of `header` (the union over
 // all back edges targeting `header`): the header, plus everything reaching a tail
 // through predecessors without passing back through the header.
-function bumpNaturalLoopDepth(pred CsrGraph, header CfgIndex, backTails CfgIndexArray, backHeads CfgIndexArray, numBlocks CfgIndex, depth CfgIndexArray)
+function bumpNaturalLoopDepth(pred CsrGraph, header CfgIndex, backTails CfgIndexArray, backHeads CfgIndexArray, numBlocks CfgIndex, depth LoopDepthArray)
 	var member = BoolArray.create()
 	member.resize(numBlocks)
 	try member.set(header, value: true) otherwise panic("bumpNaturalLoopDepth: member.set(header) OOB")
@@ -967,8 +1049,10 @@ end 'ValueSpillSlot'
 export type UseIndex
 	export var valueCount as ValueId
 	export var numBlocks as CfgIndex
-	// Layout-ordered op count: body ops + terminators, over all blocks.
-	export var totalOps as ByteCount
+	// Layout-ordered op count: body ops + terminators, over all blocks. It is the EXCLUSIVE UPPER
+	// BOUND of the function's `OpSeq` space, which is why Belady can use it as its "no later use"
+	// sentinel and still compare correctly under `>`.
+	export var totalOps as OpSeq
 
 	// Use sites. The RECORDS are four parallel columns in LAYOUT order; `useCsr` groups them by
 	// value id — `useCsr` node `v`'s neighbours are the record indices of `v`'s uses. `buildCsr`
@@ -978,7 +1062,7 @@ export type UseIndex
 	var useCsr as CsrGraph
 	var useBlock as CfgIndexArray
 	var useOpIdx as OpIndexArray
-	var useSeq as CfgIndexArray
+	var useSeq as OpSeqArray
 	var useOnEdge as BoolArray
 
 	// Def site: an op def (`hasOpDef` + where), a phi (`isPhi` + its block), or neither.
@@ -1000,41 +1084,43 @@ export type UseIndex
 	// Global layout sequence -> module op index (the inverse of the numbering above).
 	var opBySeq as OpIndexArray
 
-	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps ByteCount, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
+	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps OpSeq, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
 		return Self{valueCount: valueCount, numBlocks: numBlocks, totalOps: totalOps, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop, opBySeq: opBySeq}
 	end 'create'
 
 	// How many use sites `valueId` has. Walk them with `useRecordAt(valueId, k)` for k in 0..count.
-	export function useCount(valueId ValueId) returns ByteCount
+	export function useCount(valueId ValueId) returns UseOrdinal
 		return self.useCsr.degree(valueId)
 	end 'useCount'
 
 	// The record index of `valueId`'s `k`-th use — the key the four `use*At` columns are read with.
-	export function useRecordAt(valueId ValueId, k ByteCount) returns ByteCount
+	// The two index spaces are DIFFERENT and this is the one hop between them: `k` counts within one
+	// value's use list, `UseRecordIndex` addresses the function-wide record columns.
+	export function useRecordAt(valueId ValueId, k UseOrdinal) returns UseRecordIndex
 		return self.useCsr.neighbour(valueId, k: k)
 	end 'useRecordAt'
 
-	export function useBlockAt(record ByteCount) returns CfgIndex
+	export function useBlockAt(record UseRecordIndex) returns CfgIndex
 		return try self.useBlock.get(record) otherwise panic("UseIndex.useBlockAt: use record {record} out of range")
 	end 'useBlockAt'
 
 	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
 	// the edge is read after every body op).
-	export function useOpAt(record ByteCount) returns OpIndex
+	export function useOpAt(record UseRecordIndex) returns OpIndex
 		return try self.useOpIdx.get(record) otherwise panic("UseIndex.useOpAt: use record {record} out of range")
 	end 'useOpAt'
 
-	export function useSeqAt(record ByteCount) returns ByteCount
+	export function useSeqAt(record UseRecordIndex) returns OpSeq
 		return try self.useSeq.get(record) otherwise panic("UseIndex.useSeqAt: use record {record} out of range")
 	end 'useSeqAt'
 
-	export function useKindAt(record ByteCount) returns UseKind
+	export function useKindAt(record UseRecordIndex) returns UseKind
 		let onEdge = try self.useOnEdge.get(record) otherwise panic("UseIndex.useKindAt: use record {record} out of range")
 		return UseKind.edge if onEdge else UseKind.op
 	end 'useKindAt'
 
 	// The module op index at global layout sequence `seq`.
-	export function opAtSequence(seq ByteCount) returns OpIndex
+	export function opAtSequence(seq OpSeq) returns OpIndex
 		return try self.opBySeq.get(seq) otherwise panic("UseIndex.opAtSequence: sequence {seq} past the end of the function")
 	end 'opAtSequence'
 
@@ -1114,7 +1200,7 @@ export type UseIndex
 end 'UseIndex'
 
 // A fresh BoolArray of `count` false entries (`resize` zero-fills).
-function falseColumn(count ByteCount) returns BoolArray
+function falseColumn(count ColumnLength) returns BoolArray
 	var col = BoolArray.create()
 	col.resize(count)
 	return col
@@ -1146,7 +1232,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	var recordIndex = CsrColumn.create()
 	var useBlock = CfgIndexArray.create()
 	var useOpIdx = OpIndexArray.create()
-	var useSeq = CfgIndexArray.create()
+	var useSeq = OpSeqArray.create()
 	var useOnEdge = BoolArray.create()
 
 	// "Has this block already recorded an EDGE use of this value?" — a VERSION STAMP holding
@@ -1158,7 +1244,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 
 	var buf = OperandList.create()
 	var ordered = OpIndexArray.create()
-	var seq = 0 as ByteCount
+	var seq = 0 as OpSeq
 
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: cfg.topo, local: i)
@@ -1248,7 +1334,7 @@ end 'recordSpillStoreSlot'
 
 // Append one use record and its CSR key. The record's index IS its position in the four parallel
 // columns, so the CSR built from (value, index) groups the records by value with no extra table.
-function pushUseRecord(recordValue CsrColumn, recordIndex CsrColumn, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq CfgIndexArray, useOnEdge BoolArray, v ValueId, blockLocal CfgIndex, opIdx OpIndex, seq ByteCount, onEdge bool)
+function pushUseRecord(recordValue CsrColumn, recordIndex CsrColumn, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, v ValueId, blockLocal CfgIndex, opIdx OpIndex, seq OpSeq, onEdge bool)
 	recordValue.push(v)
 	recordIndex.push(useBlock.count())
 	useBlock.push(blockLocal)
@@ -1259,7 +1345,7 @@ end 'pushUseRecord'
 
 // Has `blockLocal` already recorded an edge use of `valueId`? Stamps it if not. The stamp holds
 // `blockLocal + 1` so 0 means "never stamped" and no clearing between blocks is needed.
-function alreadyStampedForBlock(stamp CfgIndexArray, valueId ValueId, blockLocal CfgIndex) returns bool
+function alreadyStampedForBlock(stamp VersionStampColumn, valueId ValueId, blockLocal CfgIndex) returns bool
 	let cur = try stamp.get(valueId) otherwise panic("alreadyStampedForBlock: stamp.get OOB for value {valueId}")
 	if cur == blockLocal + 1 'already'
 		return true
@@ -1271,7 +1357,7 @@ end 'alreadyStampedForBlock'
 // Is operand `k` the FIRST virtual USE of its value in this op? An op reading one value twice must
 // still yield ONE use site — the per-OP granularity a split's before/after-the-peak partition is
 // stated in. Operand lists are at most four entries, so the inner scan is a constant.
-function isFirstUseOfValueInOp(buf OperandList, upto ByteCount, valueId ValueId) returns bool
+function isFirstUseOfValueInOp(buf OperandList, upto OperandIndex, valueId ValueId) returns bool
 	for j in 0 upto upto 'earlier'
 		let o = try buf.get(j) otherwise panic("isFirstUseOfValueInOp: buf.get OOB")
 		if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'seenAlready'
@@ -1302,9 +1388,9 @@ end 'LivePairs'
 // iteration count (there is no fixpoint). Returned alongside the sets.
 type LivenessWalk
 	export var live as LiveSets
-	export var markSteps as ByteCount
+	export var markSteps as EventCount
 
-	static function create(live LiveSets, markSteps ByteCount) returns LivenessWalk
+	static function create(live LiveSets, markSteps EventCount) returns LivenessWalk
 		return Self{live: live, markSteps: markSteps}
 	end 'create'
 end 'LivenessWalk'
@@ -1321,7 +1407,7 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 	var inPairs = LivePairs.create()
 	var outPairs = LivePairs.create()
 	var worklist = CfgIndexArray.create()
-	var markSteps = 0 as ByteCount
+	var markSteps = 0 as EventCount
 
 	for v in 0 upto valueCount 'eachValue'
 		let useCount = useIndex.useCount(v)
@@ -1391,7 +1477,7 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 end 'solveLivenessSsa'
 
 // Record `v` as live-out of `blockLocal`, at most once (the version stamp dedupes).
-function markLiveOut(outPairs LivePairs, stamp CfgIndexArray, blockLocal CfgIndex, v ValueId)
+function markLiveOut(outPairs LivePairs, stamp VersionStampColumn, blockLocal CfgIndex, v ValueId)
 	let cur = try stamp.get(blockLocal) otherwise panic("markLiveOut: stamp.get OOB")
 	if cur == v + 1 'already'
 		return
@@ -1407,7 +1493,7 @@ end 'markLiveOut'
 // Backward per-op sweep: track the exact live set at each program point, taking
 // `maxPressure` (the χ = ω the feasibility decision needs) and folding each op's
 // physical/implicit register writes into `forbidden` for every value live across.
-function computePressureAndForbidden(module TargetModule, topo FuncTopology, live LiveSets, forbidden RegMaskColumn, wordsPerRow ByteCount, deadPhis CfgIndexArray) returns RegCount
+function computePressureAndForbidden(module TargetModule, topo FuncTopology, live LiveSets, forbidden RegMaskColumn, wordsPerRow BitWordCount, deadPhis RegCountColumn) returns RegCount
 	// ONE dense working row (not a matrix) — bits flip at every op, so a bitset is the right shape
 	// INSIDE a block. It is seeded from the sparse live-out list and cleared back to zero in
 	// O(live) at the end of the block, never copied or cleared a full value-space row at a time.
@@ -1496,9 +1582,9 @@ end 'countDeadPhis'
 // cross-param register forbidding below.
 export type ParamCapture
 	export var valueId as ValueId
-	export var incomingReg as MachineWord
+	export var incomingReg as RegNum
 
-	export static function create(valueId ValueId, incomingReg MachineWord) returns ParamCapture
+	export static function create(valueId ValueId, incomingReg RegNum) returns ParamCapture
 		return Self{valueId: valueId, incomingReg: incomingReg}
 	end 'create'
 end 'ParamCapture'
@@ -1582,7 +1668,7 @@ end 'forbidEntryParamCrossRegisters'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow ByteCount, liveBuf ValueIdArray, liveCount RegCount) returns OpPressure
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveCount RegCount) returns OpPressure
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -1676,7 +1762,7 @@ end 'OpPressure'
 // instead would be O(values/64) at EVERY op — O(ops × values/64) per function, the last quadratic in
 // the allocator and, on a large function, the single biggest remaining cost. A step flips at most
 // the op's own operands, so the count is O(operands).
-export function stepRowBackwardOverOperands(row BitWordArray, base ByteCount, buf OperandList, liveCount RegCount) returns RegCount
+export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex, buf OperandList, liveCount RegCount) returns RegCount
 	var count = liveCount
 
 	for o in buf 'removeDefs'
@@ -1709,7 +1795,7 @@ end 'stepRowBackwardOverOperands'
 // call, every `idiv` — so testing each value id here would be O(clobber-ops × values), which on a
 // call-heavy function (this compiler's own) is a quadratic and measurably the dominant cost of the
 // liveness pass. A live set is sparse; the walk is O(live). `liveBuf` is scratch reused across ops.
-function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow ByteCount, liveBuf ValueIdArray)
+function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
 	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
 	for v in liveBuf 'eachLive'
 		if operandDefinesValue(buf, v: v) 'ownDef'
@@ -1783,9 +1869,10 @@ export function collectBlockOps(block IrBlock, out OpIndexArray)
 	end 'hasTerm'
 end 'collectBlockOps'
 
-// Larger of two non-negative counts (a value id and a count share the same
-// `int(0 to u64.max)` type, so this serves the value-count scan and maxPressure both).
-function maxOf(a ByteCount, b ByteCount) returns ByteCount
+// Larger of two non-negative integers. Stated in the shared REPRESENTATION (`DenseInt`) rather than
+// in any one index space, because it is genuinely generic over several: the value-count scan takes
+// the max of two ValueIds with it, the pressure sweep the max of two RegCounts. See `DenseInt`.
+function maxOf(a DenseInt, b DenseInt) returns DenseInt
 	return a if a >= b else b
 end 'maxOf'
 

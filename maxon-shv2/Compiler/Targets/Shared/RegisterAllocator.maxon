@@ -59,8 +59,9 @@
 // NOT a panic: it is the E5001 compile error, source-mapped via `ValueOrigin` and rendered by
 // `RegisterPressureDiagnostic`. Hence `throws CompileError` down this whole path.
 
-// The color column's "not yet colored" sentinel: one past the last real register.
-let Uncolored = RegisterFileSize
+// The color column's "not yet colored" sentinel: one past the last real register — the one value a
+// `RegNum` holds that is not a register (see `RegNum`).
+let Uncolored = RegisterFileSize as RegNum
 
 // A per-function coloring: value id → physical register number (0..15), dense. With
 // no live-range splitting at M5.1 a value holds ONE register for its whole range, so
@@ -78,7 +79,7 @@ export type Allocation
 	end 'isColored'
 
 	// The register NUMBER assigned to `v` (panics if uncolored — a coloring bug).
-	export function regNumOf(v ValueId) returns MachineWord
+	export function regNumOf(v ValueId) returns RegNum
 		let c = try self.color.get(v) otherwise panic("Allocation.regNumOf: value {v} out of range")
 		if c == Uncolored 'uncolored'
 			panic("Allocation.regNumOf: value {v} is uncolored — a use was reached before its def was colored (dominance-order violation)")
@@ -91,7 +92,7 @@ export type Allocation
 		return try X64Register.fromRawValue(self.regNumOf(v)) otherwise panic("Allocation.colorOf: value {v} colored to invalid register number")
 	end 'colorOf'
 
-	export function assign(v ValueId, regNum MachineWord)
+	export function assign(v ValueId, regNum RegNum)
 		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
 	end 'assign'
 end 'Allocation'
@@ -100,7 +101,7 @@ end 'Allocation'
 // input's register records nothing, so most ops have none.
 export union ReuseCopyLookup
 	none
-	copy(destReg MachineWord, srcReg MachineWord)
+	copy(destReg RegNum, srcReg RegNum)
 end 'ReuseCopyLookup'
 
 // The reuse-def copies the allocator must MATERIALIZE: `mov destReg, srcReg` spliced in BEFORE
@@ -133,7 +134,7 @@ export type ReuseCopyPlan
 
 	// Record the copy for the op at layout sequence `seq`. The columns grow to fit rather than
 	// being sized up front: a function with no reuse copy at all then allocates nothing.
-	export function record(seq ByteCount, destReg MachineWord, srcReg MachineWord)
+	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
 		if seq >= self.present.count() 'grow'
 			self.present.resize(seq + 1)
 			self.destRegs.resize(seq + 1)
@@ -146,7 +147,7 @@ export type ReuseCopyPlan
 
 	// The copy to splice before the op at layout sequence `seq`, or `none`. A sequence past the
 	// last recorded copy carries none by construction (the columns only grow to the last one).
-	export function at(seq ByteCount) returns ReuseCopyLookup
+	export function at(seq OpSeq) returns ReuseCopyLookup
 		if seq >= self.present.count() 'pastLastCopy'
 			return ReuseCopyLookup.none
 		end 'pastLastCopy'
@@ -190,29 +191,29 @@ export typealias DurationNanosArray = Array with DurationNanos
 // than the clock at M5.1's sub-millisecond functions (design §"Stats").
 export type RegAllocStats
 	export var phaseNanos as DurationNanosArray
-	export var functionsAllocated as ByteCount
+	export var functionsAllocated as EventCount
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
-	export var livenessMarkStepsTotal as ByteCount
-	export var livenessMarkStepsMax as ByteCount
+	export var livenessMarkStepsTotal as EventCount
+	export var livenessMarkStepsMax as EventCount
 	export var maxPressure as RegCount
 	export var maxPressureFunc as String
-	export var maxLoopDepth as CfgIndex
-	export var copiesInserted as ByteCount
-	export var hintsHonoured as ByteCount
-	export var hintsMissed as ByteCount
-	export var valuesColored as ByteCount
+	export var maxLoopDepth as LoopDepth
+	export var copiesInserted as EventCount
+	export var hintsHonoured as EventCount
+	export var hintsMissed as EventCount
+	export var valuesColored as EventCount
 	export var registersUsed as RegMask
 	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
 	// them (one per use-block), and constants rematerialized instead of spilled.
-	export var valuesSplit as ByteCount
-	export var reloadsInserted as ByteCount
-	export var rematerialized as ByteCount
+	export var valuesSplit as EventCount
+	export var reloadsInserted as EventCount
+	export var rematerialized as EventCount
 	// Of `valuesSplit`, how many were FORCED spills at a fixed-register point (a call / `idiv`)
 	// rather than COLD splits of an idle value — the amended Rule 2's mechanism. These are the
 	// spills permitted INSIDE a loop, so this is the counter to watch: it is the number of
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
-	export var forcedSpills as ByteCount
+	export var forcedSpills as EventCount
 
 	export static function create() returns RegAllocStats
 		var phaseNanos = DurationNanosArray.create()
@@ -230,7 +231,7 @@ export type RegAllocStats
 		return try self.phaseNanos.get(phase.ordinal) otherwise panic("RegAllocStats.phaseNanosOf: phase index OOB")
 	end 'phaseNanosOf'
 
-	export function recordLivenessMarkSteps(steps ByteCount)
+	export function recordLivenessMarkSteps(steps EventCount)
 		self.livenessMarkStepsTotal = self.livenessMarkStepsTotal + steps
 		if steps > self.livenessMarkStepsMax 'newMax'
 			self.livenessMarkStepsMax = steps
@@ -244,13 +245,13 @@ export type RegAllocStats
 		end 'newMax'
 	end 'recordPressure'
 
-	export function recordLoopDepth(depth CfgIndex)
+	export function recordLoopDepth(depth LoopDepth)
 		if depth > self.maxLoopDepth 'newMax'
 			self.maxLoopDepth = depth
 		end 'newMax'
 	end 'recordLoopDepth'
 
-	export function noteRegisterUse(regNum MachineWord)
+	export function noteRegisterUse(regNum RegNum)
 		self.registersUsed = regMaskAdd(self.registersUsed, regNum: regNum)
 	end 'noteRegisterUse'
 end 'RegAllocStats'
@@ -422,8 +423,9 @@ end 'allocateFunction'
 // Register hints (biased coloring) — a CORRECTNESS obligation, not an optimization
 // ==========================================================================
 
-// The "no fixed-register hint" sentinel (a copy-partner uses valueCount).
-let NoFixedHint = RegisterFileSize
+// The "no fixed-register hint" sentinel (a copy-partner uses valueCount) — the same
+// one-past-the-last-register value `Uncolored` uses, and the reason `RegNum` runs to 16.
+let NoFixedHint = RegisterFileSize as RegNum
 
 // Per-value coloring hints: a FIXED physical register (a value copied to/from a
 // pinned register — the R8 return value), and a COPY PARTNER value (a two-address
@@ -442,7 +444,7 @@ type ColorHints
 		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
 	end 'create'
 
-	function setFixedIfUnset(v ValueId, regNum MachineWord)
+	function setFixedIfUnset(v ValueId, regNum RegNum)
 		let cur = try self.fixedHint.get(v) otherwise panic("ColorHints.setFixedIfUnset: OOB")
 		if cur == NoFixedHint 'unset'
 			try self.fixedHint.set(v, value: regNum) otherwise panic("ColorHints.setFixedIfUnset: set OOB")
@@ -459,7 +461,7 @@ type ColorHints
 		end 'unset'
 	end 'setCopyIfUnset'
 
-	export function fixedOf(v ValueId) returns MachineWord
+	export function fixedOf(v ValueId) returns RegNum
 		return try self.fixedHint.get(v) otherwise panic("ColorHints.fixedOf: OOB")
 	end 'fixedOf'
 
@@ -595,7 +597,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	seenBelow.resize(wordsPerRow)
 	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
 	// under, and the same numbering the rewrite re-derives from `collectBlockOps`.
-	var blockBaseSeq = 0 as ByteCount
+	var blockBaseSeq = 0 as OpSeq
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: local)
@@ -694,7 +696,7 @@ end 'allocateDef'
 // problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce class
 // is protected. Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
-function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns MachineWord
+function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
 	// The class is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
 	let takeable = preferredClassMask(groupBlocked) or dyingRegs
@@ -759,7 +761,7 @@ end 'chooseRegister'
 // It is safe even when the prediction is WRONG (the partner's pin turns out to be occupied at its
 // own def, so the two do not coalesce after all): `v` still only ever takes a register that
 // `hintIsTakeable` has cleared for `v` itself, so the worst case is the copy we already had.
-function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns MachineWord
+function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegNum
 	if not hints.hasCopy(v) 'noPartner'
 		return NoFixedHint
 	end 'noPartner'
@@ -831,7 +833,7 @@ end 'preferredClassMask'
 // A hinted register is takeable iff it is free AND either inside the value's preferred class or
 // being VACATED at this op — those are different acts, and only allocating outside the class is
 // harmful (see `chooseRegister`).
-function hintIsTakeable(reg MachineWord, blocked RegMask, takeable RegMask) returns bool
+function hintIsTakeable(reg RegNum, blocked RegMask, takeable RegMask) returns bool
 	if regMaskContains(blocked, regNum: reg) 'notFree'
 		return false
 	end 'notFree'
@@ -844,7 +846,7 @@ end 'hintIsTakeable'
 // the pick falls through to the full pool — landing it in the callee-saved half, which
 // the prologue then preserves. This is the standard "allocate volatiles first" bias; it
 // keeps leaf and call-free functions off the callee-saved registers entirely.
-function pickPreferredRegister(blocked RegMask) returns MachineWord
+function pickPreferredRegister(blocked RegMask) returns RegNum
 	let nonCallerSaved = fullRegisterMask() and not callerSavedMask()
 	let callerPick = lowestClearRegister(blocked or nonCallerSaved)
 	if callerPick != RegisterFileSize 'gotCaller'
@@ -857,7 +859,7 @@ end 'pickPreferredRegister'
 // that die here (so a def may reuse a dying use's register), allocate the def (a reuse
 // def goes through `allocateReuseDef`, which may record a copy), then return the
 // block's in-use mask for the point AFTER the op.
-function colorOpForward(module TargetModule, opIdx OpIndex, pos ByteCount, seq ByteCount, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyPlan) returns RegMask
+function colorOpForward(module TargetModule, opIdx OpIndex, pos BlockOpPos, seq OpSeq, inUse RegMask, deaths BlockDeaths, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, buf OperandList, reuseCopies ReuseCopyPlan) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("colorOpForward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -904,7 +906,7 @@ end 'colorOpForward'
 // register (never another dying operand's — a copy into it would clobber a value the op
 // still reads); when the input OUTLIVES, no operand register is free before the op, so
 // the dest may reuse none. `defDyingRegs` encodes exactly that.
-function allocateReuseDef(o Operand, seq ByteCount, pos ByteCount, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns RegMask
+function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeaths, buf OperandList, working RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns RegMask
 	let destId = operandValueId(o)
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
@@ -947,7 +949,7 @@ type BlockDeaths
 
 	// True iff `v` dies at op position `pos`. A linear scan of the op's dying values — at most the
 	// op's operand count, so this is O(1) in practice.
-	export function dies(pos ByteCount, v ValueId) returns bool
+	export function dies(pos BlockOpPos, v ValueId) returns bool
 		for k in 0 upto self.byPos.degree(pos) 'each'
 			if self.byPos.neighbour(pos, k: k) == v 'match'
 				return true
@@ -958,7 +960,7 @@ type BlockDeaths
 
 	// The register mask of every COLORED value dying at op `pos` — the registers a def at this op
 	// may reuse. (An uncolored dead def is handled by the caller's live-def computation, not here.)
-	export function dyingRegsAt(pos ByteCount, alloc Allocation) returns RegMask
+	export function dyingRegsAt(pos BlockOpPos, alloc Allocation) returns RegMask
 		var mask = 0 as RegMask
 		for k in 0 upto self.byPos.degree(pos) 'each'
 			let v = self.byPos.neighbour(pos, k: k)
@@ -986,8 +988,9 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	var liveCount = seedBuf.count()
 
 	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
-	// in reverse, and a counting sort restores order in O(pairs + ops).
-	var posOf = CfgIndexArray.create()
+	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
+	// (its entries are `BlockOpPos`), `valueOf` the value column.
+	var posOf = CsrColumn.create()
 	var valueOf = ValueIdArray.create()
 
 	for ri in 0 upto n 'eachOpRev'
