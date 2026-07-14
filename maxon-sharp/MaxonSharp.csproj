@@ -64,4 +64,13 @@
       Condition="('$(_CopyExitCode)' != '0' AND '$(_CopyExitCode)' != '') OR ('@(_CopiedFiles)' == '' AND '$(_CopyExitCode)' == '')" />
   </Target>
 
+  <!-- THE GUARD. docs/error-codes.txt is the single source of truth for the 4-digit
+       error-code space; ErrorCode.g.cs and the two Maxon registries are generated from
+       it. This fails the build if a number is claimed twice (naming both claimants), or
+       if a generated file has drifted from the registry. It runs the compiler we just
+       built, so it cannot check a stale binary. -->
+  <Target Name="CheckErrorCodeRegistry" AfterTargets="CopyToBin">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; error-codes check &quot;$(ProjectDir)..&quot;" />
+  </Target>
+
 </Project>

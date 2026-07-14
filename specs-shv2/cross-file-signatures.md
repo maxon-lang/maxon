@@ -53,7 +53,7 @@ word operator whose operands *agree only because one of them deferred* takes the
 ### A callee no file declares
 
 `unresolved` is still reachable, for exactly one thing: a call to a function that does not exist.
-That program is rejected — `E3030: call to undefined function` — so the deferral has nothing left
+That program is rejected — `E3004: call to undefined function` — so the deferral has nothing left
 to lie to.
 
 ## Tests
@@ -207,5 +207,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3030: <fragment>:3:9: call to undefined function 'bogus'
+error E3004: <fragment>:3:9: call to undefined function 'bogus'
 ```

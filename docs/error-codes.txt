@@ -1,0 +1,917 @@
+# The Maxon error-code registry -- the SINGLE SOURCE OF TRUTH for the 4-digit
+# error-code space, shared by all three compilers.
+#
+# THIS FILE IS AUTHORED. The three compiler registries are GENERATED FROM IT:
+#
+#   maxon-sharp/Compiler/ErrorCode.g.cs           (the C# bootstrap)
+#   maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon   (v1, deprecated)
+#   maxon-shv2/Compiler/ErrorCodeRegistry.maxon         (shv2)
+#
+# Regenerate them with:  maxon error-codes generate
+# Verify them with:      maxon error-codes check     <- run by every `dotnet build`
+#
+# A duplicate number FAILS THE BUILD, naming both claimants. That is the whole
+# point: this file exists because the number space used to be written down three
+# times, and two agents took E3099 on the same day, each having correctly
+# grepped a different copy.
+#
+# FORMAT
+#   E<nnnn> <CanonicalName>        an entry; the canonical name IS the meaning
+#       csharp     <MemberName>    this compiler declares the code, spelled thus
+#       selfhosted <memberName>
+#       shv2       <memberName>
+#       reserved   <why>           nobody declares it YET -- but it is TAKEN
+#       doc        <prose>         repeatable; the text `lookup_error_code` returns
+#
+#   `#` comments and blank lines are ignored. Keys are tab-indented.
+#
+# RULES THE CHECKER ENFORCES
+#   - a number appears at most once
+#   - a canonical name appears at most once
+#   - one compiler never spells two codes with the same member name
+#   - an entry is either `reserved` (no compiler claims it) or claimed by >= 1
+#   - the generated files match, byte for byte
+#
+# The STAGE is DERIVED from the leading digit -- it is never written down:
+#   1xxx lexer   2xxx parser   3xxx semantic   4xxx IR   5xxx code emitter
+#   6xxx PE writer                                       9xxx internal
+#
+# TO ADD A CODE: take the next free number in the right band, add an entry here,
+# run `maxon error-codes generate`, and use the member it emits. Do not hand-edit
+# a generated file -- the check will catch you, which is the idea.
+
+E1001 LexerUnexpectedCharacter
+	csharp LexerUnexpectedCharacter
+	selfhosted lexerUnexpectedCharacter
+	doc The lexer met a character that cannot begin any token.
+
+E1002 LexerUnterminatedString
+	csharp LexerUnterminatedString
+	selfhosted lexerUnterminatedString
+	shv2 lexerUnterminatedString
+	doc A string literal reached end-of-line or end-of-file with no closing quote.
+
+E1003 LexerUnterminatedChar
+	csharp LexerUnterminatedChar
+	doc A character literal reached end-of-line or end-of-file with no closing quote.
+
+E1004 LexerInvalidEscape
+	csharp LexerInvalidEscape
+	selfhosted lexerInvalidEscape
+	doc A backslash escape in a string or character literal names no known escape.
+
+E1005 LexerInvalidNumber
+	csharp LexerInvalidNumber
+	doc A numeric literal is malformed (a stray radix prefix, a digit outside the radix, or a misplaced separator).
+
+E1006 LexerUnescapedBrace
+	csharp LexerUnescapedBrace
+	selfhosted lexerUnescapedBrace
+	shv2 lexerUnescapedBrace
+	doc A literal brace appears unescaped in a string literal. Braces open interpolation, so a literal brace must be doubled.
+
+E1007 LexerUnterminatedBlockComment
+	csharp LexerUnterminatedBlockComment
+	selfhosted lexerUnterminatedBlockComment
+	shv2 lexerUnterminatedBlockComment
+	doc A block comment reached end-of-file with no closing delimiter.
+
+E1008 LexerUnexpectedEof
+	shv2 lexerUnexpectedEof
+	doc The lexer reached end-of-file in the middle of a token.
+
+E1009 LexerUnknownDirective
+	shv2 lexerUnknownDirective
+	doc A '#' compiler directive names a directive the lexer does not know.
+
+E2001 ParserUnexpectedToken
+	csharp ParserUnexpectedToken
+	selfhosted parserUnexpectedToken
+	doc The parser met a token that cannot appear at this point in the grammar.
+
+E2002 ParserExpectedIdentifier
+	csharp ParserExpectedIdentifier
+	doc An identifier was required here (a declaration name, a parameter name, a field name).
+
+E2003 ParserExpectedType
+	csharp ParserExpectedType
+	selfhosted parserExpectedType
+	doc A type was required here and the token stream had something else.
+
+E2004 ParserExpectedExpression
+	csharp ParserExpectedExpression
+	selfhosted parserExpectedExpression
+	shv2 parserExpressionError
+	doc An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
+
+E2005 ParserExpectedStatement
+	csharp ParserExpectedStatement
+	doc A statement was required here and the token stream had something else.
+
+E2006 ParserExpectedEnd
+	csharp ParserExpectedEnd
+	doc A block was left unterminated: its 'end' is missing.
+
+E2007 ParserUnexpectedEof
+	csharp ParserUnexpectedEof
+	selfhosted parserUnexpectedEof
+	shv2 parserUnexpectedEof
+	doc The parser reached end-of-file with a construct still open.
+
+E2008 ParserMismatchedEndLabel
+	csharp ParserMismatchedEndLabel
+	doc A block's 'end' label does not match the label its header opened.
+
+E2009 ParserInvalidAssignment
+	csharp ParserInvalidAssignment
+	doc The left side of an assignment is not an assignable place.
+
+E2010 ParserExpectedToken
+	csharp ParserExpectedToken
+	selfhosted parserExpectedToken
+	shv2 parserExpectedToken
+	doc A specific token was required here. Reports as: Expected 'X' but got 'Y'.
+
+E2011 ParserLiteralOverflow
+	csharp ParserLiteralOverflow
+	selfhosted parserLiteralOverflow
+	shv2 parserLiteralOverflow
+	doc An integer literal does not fit the range of its type.
+
+E2012 ParserCircularDependency
+	csharp ParserCircularDependency
+	selfhosted parserCircularDependency
+	doc Two or more source files import each other in a cycle.
+
+E2013 ParserImmutableVariable
+	csharp ParserImmutableVariable
+	selfhosted parserImmutableVariable
+	shv2 assignToImmutable
+	doc An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
+
+E2014 ParserDuplicateParameter
+	shv2 duplicateParameter
+	doc One parameter list declares the same name twice. The second parameter would be dead and uncallable.
+
+E2015 ParserUnsupportedFeature
+	shv2 parserUnsupportedFeature
+	doc The source uses a language construct this compiler does not implement yet.
+
+E2016 ParserInvalidCharacterLiteral
+	shv2 parserInvalidCharacterLiteral
+	doc A character literal is malformed (empty, or holding more than one character).
+
+E2025 ParserMatchFallthroughWithReturn
+	csharp ParserMatchFallthroughWithReturn
+	selfhosted parserMatchFallthroughWithReturn
+	doc A match arm falls through to the next arm while the enclosing function still owes a return.
+
+E2026 ParserMatchNotExhaustive
+	csharp ParserMatchNotExhaustive
+	selfhosted parserMatchNotExhaustive
+	doc A match does not cover every case of its scrutinee and has no default arm.
+
+E2027 ParserMatchDuplicatePattern
+	csharp ParserMatchDuplicatePattern
+	selfhosted parserMatchDuplicatePattern
+	doc Two match arms test the same pattern; the second can never run.
+
+E2028 ParserMatchTypeMismatch
+	csharp ParserMatchTypeMismatch
+	selfhosted parserMatchTypeMismatch
+	doc A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
+	doc a match arm or postfix-ternary's two arms produce different types,
+	doc or a ternary condition is not bool. Mirrors the C# bootstrap's
+	doc ParserMatchTypeMismatch -- thrown at parse time so it wins over the
+	doc body-finish unused-variable check (E3012).
+
+E2029 ParserMatchDefaultNotLast
+	csharp ParserMatchDefaultNotLast
+	selfhosted parserMatchDefaultNotLast
+	doc A match's 'default' arm is not the last arm.
+
+E2042 ParserMatchMissingBlockId
+	csharp ParserMatchMissingBlockId
+	selfhosted parserMatchMissingBlockId
+	doc A match arm opens a block but gives it no block label.
+
+E2043 ParserMatchMismatchedBlockId
+	csharp ParserMatchMismatchedBlockId
+	selfhosted parserMatchMismatchedBlockId
+	doc A match arm's block label does not match the label its arm opened.
+
+E2044 ParserMatchDefaultWithEnum
+	csharp ParserMatchDefaultWithEnum
+	doc A match over an enum has a 'default' arm. Enums are matched exhaustively so that adding a case forces every site to handle it.
+
+E2045 ParserNonConstantInitializer
+	csharp ParserNonConstantInitializer
+	selfhosted parserNonConstantInitializer
+	doc A top-level constant's initializer is not a compile-time constant.
+
+E2046 ParserMatchDefaultEnumMustThrow
+	csharp ParserMatchDefaultEnumMustThrow
+	selfhosted parserMatchDefaultEnumMustThrow
+	doc A match over an enum may only carry a 'default' arm if that arm throws.
+
+E2047 ParserControlOutsideLoop
+	shv2 controlOutsideLoop
+	doc 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
+
+E2048 ParserRedundantLoopLabel
+	csharp ParserRedundantLoopLabel
+	selfhosted parserRedundantLoopLabel
+	shv2 labelTargetsOwnLoop
+	doc 'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant.
+	doc `break 'lab'` / `continue 'lab'` where `lab` names the
+	doc innermost enclosing loop (with no intervening match for `break`). The
+	doc label is redundant -- unlabeled `break`/`continue` already targets
+	doc that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+
+E2049 ParserMatchBlockStatement
+	csharp ParserMatchBlockStatement
+	selfhosted parserMatchBlockStatementNotAllowed
+	doc A match arm's body is a block-opening statement. Each arm body must be a single statement.
+	doc Phase 9 Stage 0: a match arm body cannot be a block-opening
+	doc statement (`if` / `while` / `for` / `match` / block-form `try`).
+	doc Each arm body is a single statement; block-form constructs would
+	doc allocate persistent slots that leak on every error path through
+	doc the match.
+
+E2050 ParserOtherwiseBlockMissingBinding
+	csharp ParserOtherwiseBlockMissingBinding
+	doc An 'otherwise' block form declares no error binding.
+
+E2051 ParserReservedIdentifier
+	csharp ParserReservedIdentifier
+	selfhosted parserReservedIdentifier
+	doc A declaration uses a name reserved by the compiler.
+
+E2052 ParserFirstArgCannotBeNamed
+	csharp ParserFirstArgCannotBeNamed
+	selfhosted parserFirstArgCannotBeNamed
+	shv2 callFirstArgNamed
+	doc A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
+	doc a call site labeled its first argument (`f(name: value, ...)`).
+	doc The first argument is positional-only; only the second and subsequent
+	doc arguments may be labeled.
+
+E2053 ParserCallArgMissingLabel
+	shv2 callArgMissingLabel
+	doc A call leaves a second-or-later argument unlabeled. Every argument after the first must carry its 'name:' label.
+
+E2054 ParserShiftCountOutOfRange
+	csharp ParserShiftCountOutOfRange
+	selfhosted parserShiftCountOutOfRange
+	shv2 shiftCountOutOfRange
+	doc A shift ('shl'/'shr') whose count is a LITERAL outside 0..63. An int is 64 bits,
+	doc so no other distance names a distinct shift, and the hardware silently MASKS the
+	doc count into that range -- which turned 'a shl -1', which a human reads as "shift
+	doc the other way", into the MAXIMUM LEFT shift. A shift by a RUNTIME value is
+	doc untouched and still legal: the compiler cannot see the count, and both lowerings
+	doc agree on what the hardware will do with it. A PARSE-time check, positioned at the
+	doc literal.
+
+E3001 SemanticNoMain
+	csharp SemanticNoMain
+	selfhosted semanticNoMain
+	shv2 noMainFunction
+	doc The program declares no 'main' function.
+
+E3002 SemanticMainWrongReturnType
+	csharp SemanticMainWrongReturnType
+	selfhosted semanticMainWrongReturnType
+	shv2 mainWrongReturnType
+	doc 'main' declares a return type other than ExitCode.
+
+E3003 SemanticUndefinedVariable
+	csharp SemanticUndefinedVariable
+	selfhosted semanticUndefinedVariable
+	doc A name used in an expression has no binding in scope.
+
+E3004 SemanticUndefinedFunction
+	csharp SemanticUndefinedFunction
+	shv2 callUnknownFunction
+	doc A call names a function that does not exist -- a typo, or a callee not visible from here.
+
+E3005 SemanticTypeMismatch
+	csharp SemanticTypeMismatch
+	selfhosted semanticTypeMismatch
+	shv2 typeMismatch
+	doc A value's type does not match the type required at this position.
+
+E3006 SemanticDuplicateDefinition
+	csharp SemanticDuplicateDefinition
+	selfhosted semanticDuplicateDefinition
+	shv2 duplicateFunction
+	doc A name is declared twice where exactly one binding is legal: two functions with the same signature, or a local shadowing a 'self' field.
+	doc a duplicate definition or a local-vs-self-field shadow. Two
+	doc shapes share the code: (a) two function definitions with the same
+	doc name and signature -- fires from `reportDuplicateFunction` in the
+	doc parser for same-file duplicates and from the project-level main
+	doc registration for cross-file `main` collisions; (b) a local
+	doc declaration inside an instance method whose name collides with a
+	doc `self.field` (matches the C# bootstrap's broader interpretation of
+	doc "duplicate definition" -- the local would silently shadow the field).
+
+E3007 SemanticAmbiguousFunctionCall
+	csharp SemanticAmbiguousFunctionCall
+	selfhosted semanticAmbiguousOverload
+	doc A call cannot pick a unique overload: two or more candidates match it indistinguishably.
+	doc call site cannot pick a unique overload because multiple
+	doc variants have indistinguishable signatures at this call. Emitted when
+	doc two overloads share the same parameter types and the caller doesn't
+	doc disambiguate with named arguments. Matches the C# bootstrap wording.
+
+E3008 SemanticSymbolNotExported
+	csharp SemanticSymbolNotExported
+	selfhosted semanticSymbolNotExported
+	doc A symbol is referenced from another file but is not declared 'export'.
+
+E3009 SemanticUnsafeCast
+	csharp SemanticUnsafeCast
+	selfhosted semanticInvalidCast
+	doc A cast cannot be proven safe -- the source range does not fit the destination.
+
+E3010 SemanticUnneededCast
+	csharp SemanticUnneededCast
+	selfhosted semanticUnneededCast
+	doc A cast is redundant: the value already has the destination type.
+
+E3011 SemanticUnknownType
+	csharp SemanticUnknownType
+	selfhosted semanticUnknownType
+	shv2 unknownType
+	doc A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
+
+E3012 SemanticUnusedVariable
+	csharp SemanticUnusedVariable
+	selfhosted semanticUnusedVariable
+	doc A local binding is declared and never read.
+
+E3013 SemanticMissingReturn
+	csharp SemanticMissingReturn
+	selfhosted semanticMissingReturn
+	shv2 missingReturn
+	doc A value-returning function can reach its end without returning, or a 'return' in it carries no value.
+
+E3014 SemanticUnexportedFieldAccess
+	csharp SemanticUnexportedFieldAccess
+	selfhosted semanticUnexportedFieldAccess
+	doc A field is read from another file but is not declared 'export'.
+	doc (was internally `semanticTypeResolutionCycle` while the
+	doc unexported-field-access check was unimplemented). Bootstrap parity
+	doc reclaims 3014 for the field-visibility diagnostic; the typealias-cycle
+	doc diagnostic moves to 3091 (a code unused on both sides).
+
+E3015 SemanticUnknownInterface
+	selfhosted semanticUnknownInterface
+	doc An 'implements' clause names an interface that does not exist.
+
+E3016 SemanticPartialInterfaceImpl
+	csharp SemanticPartialInterfaceImpl
+	selfhosted semanticPartialInterfaceImpl
+	doc A type claims to implement an interface but does not define all of its members.
+
+E3017 SemanticWhereConstraintViolation
+	csharp SemanticWhereConstraintViolation
+	selfhosted semanticConstraintViolation
+	doc A generic argument violates the 'where' constraint declared on the type parameter.
+
+E3018 SemanticUnknownField
+	csharp SemanticUnknownField
+	doc A field access names a field the type does not have.
+
+E3019 SemanticImmutableRefToMutatingParam
+	csharp SemanticImmutableRefToMutatingParam
+	selfhosted semanticImmutableRefToMutatingParam
+	doc An immutable ('let') binding is passed to a parameter the callee mutates, or a mutating method is called on it.
+	doc a mutating method (push/pop/set/append/...) or a parameter-mutating
+	doc function is called on an immutable (`let`-bound) receiver/argument. The
+	doc receiver's data would be modified through a binding the user declared
+	doc immutable. Emitted by the Maxon-tier borrow/mutation check.
+
+E3030 SemanticEnumDuplicateCase
+	csharp SemanticEnumDuplicateCase
+	selfhosted semanticEnumDuplicateCase
+	doc An enum declares the same case name twice.
+
+E3031 SemanticEnumDuplicateRawValue
+	csharp SemanticEnumDuplicateRawValue
+	selfhosted semanticEnumDuplicateRawValue
+	doc Two enum cases declare the same raw value.
+
+E3032 SemanticEnumRawValueTypeMismatch
+	csharp SemanticEnumRawValueTypeMismatch
+	selfhosted semanticEnumRawValueTypeMismatch
+	doc An enum case's raw value has a type other than the enum's declared raw-value type.
+
+E3034 SemanticEnumUnknownCase
+	csharp SemanticEnumUnknownCase
+	selfhosted semanticEnumUnknownCase
+	doc A match arm names a case the scrutinee's enum does not have.
+
+E3035 SemanticEnumWrongBindingCount
+	csharp SemanticEnumWrongBindingCount
+	selfhosted semanticMatchPayloadArityMismatch
+	doc A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
+	doc a match-arm payload-binding pattern (`case(x, y)`) supplies
+	doc the wrong number of bindings for the case's declared payload. Emitted
+	doc by `parseCaseBindingPattern` when an arity check can be performed at
+	doc parse time, or deferred to TypeResolution when the case's owning
+	doc union isn't yet known.
+
+E3036 SemanticWrongArgCount
+	csharp SemanticWrongArgCount
+	selfhosted semanticWrongArgCount
+	shv2 callArgCountMismatch
+	doc A call passes a different number of arguments than the callee declares parameters.
+
+E3037 SemanticCallUnknownArgLabel
+	shv2 callUnknownArgLabel
+	doc A call's 'name:' label names no parameter of the callee.
+
+E3038 SemanticCallDuplicateArg
+	shv2 callDuplicateArg
+	doc Two arguments of one call target the same parameter.
+
+E3054 SemanticMainCannotThrow
+	csharp SemanticMainCannotThrow
+	selfhosted semanticMainCannotThrow
+	doc 'main' is declared 'throws'. There is no caller left to handle the error.
+
+E3055 SemanticTryRequiresThrowingFunction
+	csharp SemanticTryRequiresThrowingFunction
+	selfhosted semanticTryRequiresThrowingFunction
+	doc 'try' is applied to a call that cannot throw.
+
+E3057 SemanticThrowingFunctionRequiresTry
+	csharp SemanticThrowingFunctionRequiresTry
+	selfhosted semanticThrowingFunctionRequiresTry
+	doc A throwing call is made without 'try'.
+
+E3058 SemanticOtherwiseRequiresTry
+	csharp SemanticOtherwiseRequiresTry
+	selfhosted semanticOtherwiseRequiresTry
+	doc 'otherwise' is written without a 'try'.
+
+E3059 SemanticErrorTypeMismatch
+	csharp SemanticErrorTypeMismatch
+	selfhosted semanticOtherwiseTypeMismatch
+	doc An 'otherwise' handler's value has a type other than the 'try' expression's type.
+
+E3060 SemanticAmbiguousTypeReference
+	csharp SemanticAmbiguousTypeReference
+	doc A bare type name has more than one reachable definition; qualify it.
+
+E3061 SemanticDuplicateTypeAlias
+	csharp SemanticDuplicateTypeAlias
+	selfhosted semanticDuplicateTypeAlias
+	doc Two typealiases in scope declare the same name.
+
+E3062 SemanticUnusedTypeAlias
+	csharp SemanticUnusedTypeAlias
+	selfhosted semanticUnusedTypeAlias
+	doc A typealias is declared and never used.
+
+E3063 SemanticAmbiguousTypeAlias
+	csharp SemanticAmbiguousTypeAlias
+	selfhosted semanticAmbiguousTypeAlias
+	doc a bare-name type reference has more than one reachable
+	doc typealias definition under directory-as-module rules. The user must
+	doc write the directory-qualified form (`dir.Name`) to disambiguate.
+	doc Mirrors E3095 (functions) but operates on the typealias registry.
+
+E3064 SemanticDiscardedPureResult
+	csharp SemanticDiscardedPureResult
+	selfhosted semanticDiscardedPureResult
+	doc a pure-function call's result was discarded. Pure callees must
+	doc have their result used -- neither bare `foo()` nor `_ = foo()` is
+	doc permitted. Fires from `checkDiscardedResults`.
+
+E3065 SemanticDiscardedImpureResult
+	csharp SemanticDiscardedImpureResult
+	selfhosted semanticDiscardedImpureResult
+	doc an impure-function call's result was discarded without the
+	doc explicit `_ =` opt-in. The impure-call result still has to flow into
+	doc either a binding (`let r = foo()`) or an explicit discard
+	doc (`_ = foo()`). Fires from `checkDiscardedResults`.
+
+E3066 SemanticEnumNotComparable
+	csharp SemanticEnumNotComparable
+	selfhosted semanticEnumNotComparable
+	doc A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
+	doc a `union` value was compared with `==` / `!=`. Unions carry no
+	doc synthesized equality -- a new case can't be added without every match site
+	doc being forced to handle it, so the only way to inspect a union is `match`.
+	doc Enums (which auto-implement Equatable) are unaffected. Stdlib source is
+	doc exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution;
+	doc mirrors the C# bootstrap's `SemanticEnumNotComparable`.
+
+E3067 SemanticSelfAssignment
+	csharp SemanticSelfAssignment
+	selfhosted semanticSelfAssignment
+	doc a textual self-assignment (`x = x`, `p.x = p.x`) or a
+	doc discard-assignment whose RHS isn't a function call (`_ = 42`). The
+	doc former has no effect; the latter is the historic shape for opting out
+	doc of a "discarded result" warning, but a non-call RHS makes the discard
+	doc nonsensical. Emitted from `parseVarAssignment`,
+	doc `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
+
+E3068 SemanticRefIdentityOnPrimitive
+	csharp SemanticRefIdentityOnPrimitive
+	selfhosted semanticRefIdentityOnPrimitive
+	doc The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
+	doc the `is` / `is not` reference-identity operator was applied to a
+	doc primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
+	doc meaning for reference types (structs are heap pointers); primitives are
+	doc values with no object identity. Emitted from the `is`-operand type check
+	doc in TypeResolution. Mirrors the C# bootstrap's
+	doc `SemanticRefIdentityOnPrimitive`.
+
+E3069 SemanticEqRequiresEquatable
+	csharp SemanticEqRequiresEquatable
+	selfhosted semanticEqualsRequiresEquatable
+	doc '=='/'!=' is applied to a type that does not implement Equatable.
+
+E3070 SemanticBorrowConflict
+	csharp SemanticBorrowConflict
+	selfhosted semanticBorrowConflict
+	doc borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
+	doc while a reference into its backing buffer is still live (e.g.
+	doc `let s = try arr.get(0) ...`). A growth could reallocate the buffer
+	doc and dangle the outstanding reference. Emitted by the Maxon-tier
+	doc `runMaxonBorrowCheck` pass. Mirrors the C# bootstrap's
+	doc `SemanticBorrowConflict` (same code, same message format).
+
+E3071 SemanticUnreachableCode
+	csharp SemanticUnreachableCode
+	selfhosted semanticUnreachableCode
+	doc a statement appears in the same straight-line block body
+	doc immediately after a `return`, `throw`, or `panic(...)`. The trailing
+	doc statement is unreachable -- control never falls through a
+	doc function-terminating statement -- so it is dead code. Emitted by the
+	doc parser's statement-list loop when a terminator is not the last
+	doc statement of its block. Control-flow that creates separate blocks
+	doc (a `return` inside an `if`, with code after the `if`) does NOT trigger
+	doc this: that following code is reachable on the else path. Mirrors the C#
+	doc bootstrap's `SemanticUnreachableCode` (same code, same message format).
+
+E3072 SemanticBuiltinTypeConstruction
+	csharp SemanticBuiltinTypeConstruction
+	selfhosted semanticBuiltinTypeConstruction
+	doc a struct-literal names a compiler builtin managed type
+	doc (`__ManagedFile`, `__ManagedMemory`, `__ManagedDirectory`, ...). These
+	doc carry an opaque runtime handle and must be obtained through their static
+	doc factory methods (e.g. `__ManagedFile.openRead`), never built directly.
+	doc Emitted by the parser at the struct-literal site. Mirrors the C#
+	doc bootstrap's `SemanticBuiltinTypeConstruction`.
+
+E3073 AsyncNonYielding
+	csharp AsyncNonYielding
+	selfhosted asyncNonYielding
+	doc an `async f()` call targets a function that never yields (contains
+	doc no await / I/O stub call, transitively). `async` is only for I/O-concurrent
+	doc work -- a non-yielding callee would run to completion synchronously on the
+	doc spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
+	doc Mirrors the C# bootstrap's `AsyncNonYielding`.
+
+E3074 SemanticSubprocessUnsupportedTarget
+	selfhosted semanticSubprocessUnsupportedTarget
+	doc A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively
+	doc calling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so
+	doc subprocess cannot exist on that target -- rather than silently throwing
+	doc 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call
+	doc with `#if not os(Wasi)` to exclude it from the wasm build.
+	doc Self-hosted only: the C# bootstrap has no such check, so it declares no member.
+	doc The number is held by THIS ROW, not by a comment -- which is how it used to be
+	doc held, and why an agent grepping `= 307` saw it free. (Originally
+	doc SemanticDiscardedEnumeratedIndex, retired with the withIterator redesign.)
+
+E3075 SemanticMatchQualifiedCaseName
+	csharp SemanticMatchQualifiedCaseName
+	selfhosted semanticMatchQualifiedCaseName
+	doc A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
+	doc is already known at the arm, so the bare case name suffices.
+
+E3076 SemanticConstructorRestriction
+	csharp SemanticConstructorRestriction
+	selfhosted semanticConstructorRestriction
+	doc a struct literal (`Type{...}`) is written outside the type's own
+	doc methods. Construction is restricted to the type's own methods / static
+	doc factories so invariants can be enforced at the single construction point;
+	doc external callers must go through a `static function create(...)`. Exempt:
+	doc `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction
+	doc through a typealias visible at the site (inner alias of the current
+	doc type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+	doc Mirrors the C# bootstrap's `SemanticConstructorRestriction`.
+
+E3077 SemanticVarShouldBeLet
+	csharp SemanticVarShouldBeLet
+	selfhosted semanticVarShouldBeLet
+	doc a local declared with `var` is never reassigned, so it should
+	doc be a `let`. Detected after type resolution by
+	doc `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
+	doc per-function reassigned-var set). E3012 (unused variable) takes
+	doc precedence -- an unused `var` reports as unused, not as should-be-let.
+	doc Mirrors the C# bootstrap's `SemanticVarShouldBeLet`.
+
+E3078 SemanticVarFromImmutable
+	csharp SemanticVarFromImmutable
+	selfhosted semanticVarFromImmutable
+	doc `var b = a` (or `var b = a.field`) where the source `a` is an
+	doc immutable (`let`) binding of a reference type (struct / enum /
+	doc function). Copying an immutable reference-type binding into a mutable
+	doc one would alias the same heap value through a writable name; the user
+	doc must either keep `b` immutable (`let`) or take an independent copy via
+	doc `clone()`. Value-typed sources (int/float/bool/byte) are independent
+	doc copies and are allowed. Detected after type resolution by
+	doc `checkVarFromImmutableForEntry`. Mirrors the C# bootstrap's
+	doc `SemanticVarFromImmutable`.
+
+E3079 SemanticEnumCannotHaveAssociatedValues
+	csharp SemanticEnumCannotHaveAssociatedValues
+	doc An 'enum' declares a case with associated values. Cases with payloads make it a 'union'.
+
+E3080 SemanticUnionCannotHaveRawValues
+	csharp SemanticUnionCannotHaveRawValues
+	doc A 'union' declares raw values. Raw values belong to 'enum'.
+
+E3081 SemanticMatchDiscardedBindings
+	csharp SemanticMatchDiscardedBindings
+	selfhosted semanticMatchDiscardedBindings
+	doc A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
+
+E3082 SemanticEmptyBlock
+	csharp SemanticEmptyBlock
+	selfhosted semanticEmptyBlock
+	doc a labeled control-flow block (`if`/`else`/`while`/`for`) has no
+	doc statements between its header and matching `end`. The C# bootstrap
+	doc rejects this so dead control-flow can't sneak past a refactor; emitted
+	doc from `parseBodyOrEmpty` after `parseScopedStatements` reports no
+	doc statements were consumed.
+
+E3083 SemanticTryBlockNoThrows
+	csharp SemanticTryBlockNoThrows
+	selfhosted semanticTryBlockNoThrows
+	doc a block-form `try 'label' ... end` body contains no throwing
+	doc calls (no bare throwing call/methodCall, no routed `throw`). The
+	doc construct exists to funnel multiple throwing calls into one handler;
+	doc a body that can never fail has no error to route, so the `otherwise`
+	doc handler is dead. Mirrors the C# bootstrap's `SemanticTryBlockNoThrows`.
+
+E3084 SemanticTryBlockBindingNotMatched
+	csharp SemanticTryBlockBindingNotMatched
+	selfhosted semanticTryBlockBindingNotMatched
+	doc the `otherwise (e) 'label' ... end` handler of a block-form
+	doc try must contain a `match` on the error binding `e`. Without it, the
+	doc synthesized (possibly union) error value is never inspected and the
+	doc handler cannot dispatch on which error occurred. Mirrors the C#
+	doc bootstrap's `SemanticTryBlockBindingNotMatched`.
+
+E3085 SemanticUnionMatchPatternAmbiguous
+	csharp SemanticUnionMatchPatternAmbiguous
+	selfhosted semanticUnionMatchPatternAmbiguous
+	doc a bare case-name pattern in a match on a synthesized error
+	doc union is shared by two or more union members, so it is ambiguous --
+	doc the user must qualify it as `EnumName.case`. Mirrors the C#
+	doc bootstrap's `SemanticUnionMatchPatternAmbiguous`.
+
+E3086 SemanticFieldNotInitialized
+	csharp SemanticFieldNotInitialized
+	selfhosted semanticFieldNotInitialized
+	doc a struct literal omits a field that has no default value, is not a
+	doc compiler-synthesized managed builtin, and (for a return-site `Self{...}`
+	doc in a static factory) was not proven definitely assigned via `self.field =
+	doc expr` on every control-flow path to the literal. Emitted from the parser's
+	doc struct-literal field-init checks and the post-body definite-assignment
+	doc dataflow pass.
+
+E3087 SemanticRedundantContainsGet
+	csharp SemanticRedundantContainsGet
+	selfhosted semanticRedundantContainsGet
+	doc an `if x.contains(k)` whose then-block immediately performs
+	doc `try x.get(k) otherwise ...` on the same receiver/key pair does the
+	doc lookup twice. The compiler asks the user to rewrite as `if let v =
+	doc try x.get(k) ... 'lbl'` (or `if var`) so a single lookup serves both
+	doc the membership test and the value bind.
+
+E3088 SemanticSymbolNotInModuleScope
+	csharp SemanticSymbolNotInModuleScope
+	selfhosted semanticSymbolNotInModuleScope
+	doc A 'module'-visible symbol is accessed from outside its declaring directory subtree.
+	doc Symbol declared with the `module` keyword (visible to the declaring directory
+	doc subtree only) but accessed from outside that subtree.
+
+E3089 SemanticTypeResolutionLeak
+	selfhosted semanticTypeResolutionLeak
+	doc A type-resolution artifact escaped into a later pass. An internal invariant.
+
+E3090 SemanticLibraryDuplicateName
+	selfhosted semanticLibraryDuplicateName
+	doc Two '--library' directories share a basename, so their dir-derived namespaces would alias.
+	doc two external library directories (from `--library=DIR` /
+	doc `build.maxon library("...")`) resolve to the same basename, so their
+	doc dir-derived namespaces would alias and symbols can't be disambiguated.
+
+E3091 SemanticTypeResolutionCycle
+	selfhosted semanticTypeResolutionCycle
+	doc A typealias chain refers back to itself.
+
+E3092 SemanticUnusedExportedSymbol
+	selfhosted semanticUnusedExportedSymbol
+	doc An 'export' symbol is never referenced outside its declaring file. Drop the modifier, or make it 'module'.
+	doc an `export` (global) decl is never referenced from any file
+	doc outside its declaring file. The decl could be file-private (drop the
+	doc modifier) or `module`-visible. Applies to functions, types, enums,
+	doc typealiases, top-level constants, top-level vars, and exported struct
+	doc fields. Emitted by `checkUnusedExports` after all files have been
+	doc parsed and type-resolved.
+
+E3093 SemanticExportableAsModule
+	selfhosted semanticExportableAsModule
+	doc An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module'.
+	doc an `export` (global) decl is referenced only from files inside
+	doc its declaring directory subtree. The decl could be downgraded to
+	doc `module`-visible. Emitted by `checkUnusedExports`.
+
+E3094 SemanticUnusedModuleSymbol
+	selfhosted semanticUnusedModuleSymbol
+	doc A 'module' symbol is never referenced outside its declaring file. It could be file-private.
+	doc a `module` decl is never referenced from any file other than
+	doc the one it was declared in. The decl could be file-private (drop the
+	doc `module` modifier). Emitted by `checkUnusedExports`.
+
+E3095 SemanticAmbiguousCrossFileCall
+	selfhosted semanticAmbiguousCrossFileCall
+	doc A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
+	doc a bare-name function call has more than one reachable
+	doc definition under directory-as-module rules. The user must write the
+	doc directory-qualified form (`dir.name()`) to disambiguate. Emitted by
+	doc the cross-file fallback in `qualifyCalleeForContextWithType` when
+	doc `methodNameIndex` returns multiple distinct visible candidates.
+
+E3096 SemanticLibraryNotFound
+	selfhosted semanticLibraryNotFound
+	doc A '--library' directory does not exist on disk.
+	doc an external library directory named via `--library=DIR` /
+	doc `build.maxon library("...")` does not exist on disk.
+
+E3097 SemanticEnumAccessorComparison
+	csharp SemanticEnumAccessorComparison
+	selfhosted semanticEnumAccessorComparison
+	doc `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+	doc `.rawValue` accessor. Such a comparison is checking which case a value
+	doc is, which must be done on the value itself (`value == Type.case` for a
+	doc payload-free case, or `match value` for a union variant -- so adding a
+	doc case forces every site to handle it instead of silently slipping
+	doc through). Comparing the derived string/int accessor bypasses that.
+	doc 3089-3096 are taken on the self-hosted side (semanticTypeResolutionLeak
+	doc onward), so this shared diagnostic takes the next code free on both
+	doc sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
+
+E3098 SemanticPromiseErrorTypeMismatch
+	csharp SemanticPromiseErrorTypeMismatch
+	selfhosted semanticPromiseErrorTypeMismatch
+	doc A promise is stored in a Promise type that does not name the error its thunk throws.
+	doc `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
+	doc `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
+	doc Storing a promise in the wrong one is refused here -- including, in particular, storing
+	doc a THROWING promise in a `Promise with T`, which is what used to erase the error type.
+	doc That erasure was the root of a family of bugs, all of which this refusal (plus the
+	doc two-parameter form that makes it avoidable) turns into impossibilities:
+	doc - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
+	doc promise handle typed `int`;
+	doc - an associated-value error's payload had no static type to mm_decref, so it LEAKED
+	doc (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
+	doc - propagation (a bare `try await p` inside a `throws` function) had no error type to
+	doc check the enclosing function's `throws` against, so a thunk throwing A could be
+	doc awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
+	doc The fix a diagnostic can name is the point: it says which two-parameter type to write.
+
+E3099 SemanticCapturingClosureEscapes
+	csharp SemanticCapturingClosureEscapes
+	selfhosted semanticCapturingClosureEscapes
+	doc A closure that CAPTURES, ESCAPING the frame its captures point into.
+	doc THE RULE: a closure that captures may not escape its defining frame.
+	doc A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
+	doc fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
+	doc through a capture see later mutations of the captured variable. The environment is
+	doc therefore only meaningful while that frame is alive. Let the closure outlive the
+	doc frame and every captured read dereferences a dead frame -- the classic upward-funarg
+	doc problem. It compiles clean and dies at runtime, so it is refused where the mistake
+	doc is still legible rather than left to fault inside emitted code the author never wrote.
+	doc The routes refused are every store the parser can see WITHOUT interprocedural
+	doc analysis:
+	doc - RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and
+	doc the reason this exists). Returning a closure an OUTER frame built is fine and is
+	doc allowed: that environment points into a frame that is still alive.
+	doc - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
+	doc element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
+	doc looks like a plain local but is an alias INTO the enum's heap box, so assigning
+	doc through it writes back). Each is one 8-byte slot holding the code pointer alone,
+	doc and each is heap memory outliving every frame, so the store drops the environment;
+	doc the call then passes env=0 and the first captured read dereferences null.
+	doc DELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a
+	doc CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
+	doc bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
+	doc that store the value is a *parameter*, and whether it carries an environment is a fact
+	doc about the CALLER -- deciding it needs a per-parameter escape summary propagated over
+	doc the call graph, i.e. escape analysis proper. That is scoped OUT of the bootstrap and
+	doc stays a runtime nil-deref. Passing a capturing closure DOWN to a callee that only
+	doc CALLS it is perfectly safe and must keep working.
+	doc A NON-capturing closure is unaffected and must keep working -- it lowers to a plain
+	doc MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
+	doc CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
+	doc or passes keyed by a struct field is built from.
+	doc What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
+	doc capture, so a closure's environment outlives the frame that built it. That is a real
+	doc language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
+	doc by-reference capture semantics the closure specs currently pin. shv2 schedules it at
+	doc P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
+
+E3100 SemanticPromiseAlreadyAwaited
+	csharp SemanticPromiseAlreadyAwaited
+	selfhosted semanticPromiseAlreadyAwaited
+	doc A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
+	doc 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
+	doc this was in review. Both of us picked "the next code free" and both of us were right, because
+	doc the registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --
+	doc and neither copy sees the other's pending codes. Same disease as the promise's two bits, one
+	doc level up. Keep the two files in step until there is only one of them.
+	doc The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
+	doc language already has everywhere else. A second await would take a second +1 on a payload the
+	doc thunk only ever owned once, and the two releases underflow the refcount and free it twice
+	doc ("mm_decref: refcount underflow (already zero)"). It is not an error-handling bug and does
+	doc not need a throwing thunk: a plain `async` returning a String double-frees identically.
+	doc So the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --
+	doc two awaits of the same promise in mutually exclusive branches are each the only await on
+	doc their own path, and are allowed; what is refused is a second await REACHABLE from a first.
+
+E4001 IrUnsupportedExpression
+	csharp IrUnsupportedExpression
+	doc The IR builder met an expression form it cannot lower.
+
+E4002 IrUnsupportedStatement
+	csharp IrUnsupportedStatement
+	doc The IR builder met a statement form it cannot lower.
+
+E4003 IrUndefinedType
+	csharp IrUndefinedType
+	doc A type reached the IR builder unresolved.
+
+E4004 IrUndefinedVariable
+	csharp IrUndefinedVariable
+	doc A variable reached the IR builder unresolved.
+
+E4005 IrUndefinedFunction
+	csharp IrUndefinedFunction
+	doc A function reached the IR builder unresolved.
+
+E4006 IrInvalidFieldAccess
+	csharp IrInvalidFieldAccess
+	selfhosted irInvalidFieldAccess
+	doc A field access could not be lowered: the base is not a struct, or the field has no slot.
+
+E4007 IrInvalidMethodCall
+	csharp IrInvalidMethodCall
+	doc A method call could not be lowered.
+
+E4008 IrUnsupportedInstruction
+	csharp IrUnsupportedInstruction
+	doc A lowering pass met an IR instruction it does not handle.
+
+E4014 IrTypeCycle
+	csharp IrTypeCycle
+	selfhosted irTypeCycle
+	doc a type definition contains a reference cycle -- it transitively
+	doc contains itself through struct fields, union associated values, or
+	doc container element types. Maxon's ownership model requires acyclic type
+	doc graphs for deterministic destruction, so recursive type references are
+	doc rejected. Emitted by the type-cycle check after type resolution. Mirrors
+	doc the C# bootstrap's `IrTypeCycle` (same code, same message format).
+
+E4099 IrUnresolvedCall
+	selfhosted irUnresolvedCall
+	doc internal compiler-invariant violation -- a `call` / `methodCall`
+	doc / `tryCall` / `tryMethodCall` op survived past TypeResolution without an
+	doc entry in `project.resolvedCallees` and without an "intentionally dynamic"
+	doc dispatch shape (interface receiver / type-parameter receiver). Indicates
+	doc a resolver-or-propagation gap; surfacing it here catches future
+	doc regressions before lowering trips its own panic.
+
+E5001 CodeEmitterRegisterPressure
+	shv2 registerPressure
+	doc Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
+
+E5002 CodeEmitterUnsupportedInstruction
+	csharp CodeEmitterUnsupportedInstruction
+	doc The code emitter met an IR instruction it cannot encode for this target.
+
+E6001 PeWriteError
+	csharp PeWriteError
+	doc The PE writer could not produce the output image.
+
+E9001 InternalError
+	csharp InternalError
+	doc An internal compiler invariant was violated. This is a compiler bug.

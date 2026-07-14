@@ -1,0 +1,92 @@
+// GENERATED FROM docs/error-codes.txt. DO NOT EDIT.
+//
+// Add or change a code in that file, then run `maxon error-codes generate`.
+// `maxon error-codes check` (run by every `dotnet build`) fails if this file drifts.
+
+// Error codes grouped by compilation stage:
+// 1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx code emitter,
+// 6xxx PE writer, 9xxx internal.
+export enum ErrorCode
+	// A string literal reached end-of-line or end-of-file with no closing quote.
+	lexerUnterminatedString = "E1002"
+	// A literal brace appears unescaped in a string literal. Braces open interpolation, so a literal brace must be doubled.
+	lexerUnescapedBrace = "E1006"
+	// A block comment reached end-of-file with no closing delimiter.
+	lexerUnterminatedBlockComment = "E1007"
+	// The lexer reached end-of-file in the middle of a token.
+	lexerUnexpectedEof = "E1008"
+	// A '#' compiler directive names a directive the lexer does not know.
+	lexerUnknownDirective = "E1009"
+
+	// An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
+	parserExpressionError = "E2004"
+	// The parser reached end-of-file with a construct still open.
+	parserUnexpectedEof = "E2007"
+	// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
+	parserExpectedToken = "E2010"
+	// An integer literal does not fit the range of its type.
+	parserLiteralOverflow = "E2011"
+	// An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
+	assignToImmutable = "E2013"
+	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.
+	duplicateParameter = "E2014"
+	// The source uses a language construct this compiler does not implement yet.
+	parserUnsupportedFeature = "E2015"
+	// A character literal is malformed (empty, or holding more than one character).
+	parserInvalidCharacterLiteral = "E2016"
+	// 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
+	controlOutsideLoop = "E2047"
+	// 'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant.
+	// `break 'lab'` / `continue 'lab'` where `lab` names the
+	// innermost enclosing loop (with no intervening match for `break`). The
+	// label is redundant -- unlabeled `break`/`continue` already targets
+	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+	labelTargetsOwnLoop = "E2048"
+	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
+	// a call site labeled its first argument (`f(name: value, ...)`).
+	// The first argument is positional-only; only the second and subsequent
+	// arguments may be labeled.
+	callFirstArgNamed = "E2052"
+	// A call leaves a second-or-later argument unlabeled. Every argument after the first must carry its 'name:' label.
+	callArgMissingLabel = "E2053"
+	// A shift ('shl'/'shr') whose count is a LITERAL outside 0..63. An int is 64 bits,
+	// so no other distance names a distinct shift, and the hardware silently MASKS the
+	// count into that range -- which turned 'a shl -1', which a human reads as "shift
+	// the other way", into the MAXIMUM LEFT shift. A shift by a RUNTIME value is
+	// untouched and still legal: the compiler cannot see the count, and both lowerings
+	// agree on what the hardware will do with it. A PARSE-time check, positioned at the
+	// literal.
+	shiftCountOutOfRange = "E2054"
+
+	// The program declares no 'main' function.
+	noMainFunction = "E3001"
+	// 'main' declares a return type other than ExitCode.
+	mainWrongReturnType = "E3002"
+	// A call names a function that does not exist -- a typo, or a callee not visible from here.
+	callUnknownFunction = "E3004"
+	// A value's type does not match the type required at this position.
+	typeMismatch = "E3005"
+	// A name is declared twice where exactly one binding is legal: two functions with the same signature, or a local shadowing a 'self' field.
+	// a duplicate definition or a local-vs-self-field shadow. Two
+	// shapes share the code: (a) two function definitions with the same
+	// name and signature -- fires from `reportDuplicateFunction` in the
+	// parser for same-file duplicates and from the project-level main
+	// registration for cross-file `main` collisions; (b) a local
+	// declaration inside an instance method whose name collides with a
+	// `self.field` (matches the C# bootstrap's broader interpretation of
+	// "duplicate definition" -- the local would silently shadow the field).
+	duplicateFunction = "E3006"
+	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
+	unknownType = "E3011"
+	// A value-returning function can reach its end without returning, or a 'return' in it carries no value.
+	missingReturn = "E3013"
+	// A call passes a different number of arguments than the callee declares parameters.
+	callArgCountMismatch = "E3036"
+	// A call's 'name:' label names no parameter of the callee.
+	callUnknownArgLabel = "E3037"
+	// Two arguments of one call target the same parameter.
+	callDuplicateArg = "E3038"
+
+	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
+	registerPressure = "E5001"
+end 'ErrorCode'

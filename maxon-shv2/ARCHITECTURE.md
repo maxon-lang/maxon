@@ -64,9 +64,13 @@ allocator under it:
 - Types: the `int`/`bool`/`float` keywords and the `ExitCode` builtin alias. No
   user types.
 
-Everything outside that slice is rejected with a positioned diagnostic (the E-code
-registry lives in `Compiler/Diagnostics.maxon`; `E3010` is the catch-all for
-"unsupported construct").
+Everything outside that slice is rejected with a positioned diagnostic. The E-code
+registry is `docs/error-codes.txt` at the repo root — the single source of truth for
+all three compilers — and `Compiler/ErrorCodeRegistry.maxon` is GENERATED from it by
+`maxon error-codes generate`. `E2015` is the catch-all for "unsupported construct".
+(It used to be `E3010`, a *semantic*-band number that the other two compilers spend on
+`SemanticUnneededCast`: shv2 kept its own copy of the number space, so the same number
+meant two things.)
 
 **Not built yet:** heap/ownership/drops, structs, generics, interfaces,
 strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
@@ -318,7 +322,7 @@ artifact)`, **the single writer** of the shared `Project` registries. `mergeArti
 2. offset-merges the `MaxonModule` fragment into the accumulator (`IrModule.merge`);
 3. appends the artifact's `SourceRangeTable` in lockstep (asserting the op counts agree);
 4. commits each registry contribution — `funcReturnTypes` (upsert) and `funcSignatures`
-   (which carries the **whole-program duplicate-function check**, `E2001`).
+   (which carries the **whole-program duplicate-function check**, `E3006`).
 
 Because the parser wrote nothing to `Project` speculatively, there is no ParseDelta
 rollback dance. Each new registry family arrives the same way: an ordered contribution
@@ -428,8 +432,8 @@ typealias registry and user types arrive with the struct/generics stages.
 
 `SemanticCheck.semanticCheck(project)` runs the whole-program checks:
 - **E3001** — no `main`; **E3002** — `main` does not return `ExitCode`.
-- **Call validation** against `funcSignatures` — **E3030** unknown function, **E3031** arity,
-  **E3032** unknown argument label, **E3033** duplicate argument — via the shared
+- **Call validation** against `funcSignatures` — **E3004** unknown function, **E3036** arity,
+  **E3037** unknown argument label, **E3038** duplicate argument — via the shared
   `slotCallArgs`, which is the ONE label→position mapping (lowering uses the same function,
   so a call cannot be validated against one slotting and lowered against another).
 

@@ -29,8 +29,8 @@ end 'add'
 ```
 
 A first argument that carries a label is `E2052`; a later argument that omits one is
-`E2053`. Calling an undefined function is `E3030`, a wrong argument count is `E3031`,
-and a label that names no parameter is `E3032`.
+`E2053`. Calling an undefined function is `E3004`, a wrong argument count is `E3036`,
+and a label that names no parameter is `E3037`.
 
 ### Calls across the register allocator
 
@@ -318,7 +318,7 @@ error E2053: <fragment>:7:16: the second and later arguments must be named ('nam
 ```
 
 <!-- test: arity-mismatch -->
-The argument count must match the callee's parameter count — E3031.
+The argument count must match the callee's parameter count — E3036.
 ```maxon
 function add(a int, b int) returns int
 	return a + b
@@ -329,22 +329,22 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3031: <fragment>:7:9: 'add' expects 2 argument(s) but 1 were provided
+error E3036: <fragment>:7:9: 'add' expects 2 argument(s) but 1 were provided
 ```
 
 <!-- test: unknown-function -->
-A call to a function that does not exist is E3030.
+A call to a function that does not exist is E3004.
 ```maxon
 function main() returns ExitCode
 	return frobnicate(2)
 end 'main'
 ```
 ```maxoncstderr
-error E3030: <fragment>:3:9: call to undefined function 'frobnicate'
+error E3004: <fragment>:3:9: call to undefined function 'frobnicate'
 ```
 
 <!-- test: unknown-label -->
-A `name:` label that matches no parameter is E3032.
+A `name:` label that matches no parameter is E3037.
 ```maxon
 function add(a int, b int) returns int
 	return a + b
@@ -355,5 +355,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: <fragment>:7:16: 'add' has no parameter named 'zzz'
+error E3037: <fragment>:7:16: 'add' has no parameter named 'zzz'
 ```

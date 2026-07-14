@@ -190,7 +190,38 @@ Apply these standards when writing or reviewing any code:
 - **Blank lines for readability** — add blank lines around control flow statements and between logical sections.
 - **No magic values** — replace bare literal constants (numbers, strings) with named `static` constants that describe their meaning. When a set of related constants belongs together, group them into a `static enum` instead of scattering individual constants.
 
+## Error codes — ONE registry, and it is not a compiler's
+
+**`docs/error-codes.txt` is the single source of truth for the 4-digit error-code space.**
+All three compiler enums are **GENERATED** from it and must never be hand-edited:
+
+```
+maxon-sharp/Compiler/ErrorCode.g.cs             (C# bootstrap)
+maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon   (v1)
+maxon-shv2/Compiler/ErrorCodeRegistry.maxon         (shv2)
+```
+
+**To add a diagnostic:** take the next free number in the right band, add an entry to
+`docs/error-codes.txt` (canonical name + `doc` + a `csharp`/`selfhosted`/`shv2` line per
+compiler that will emit it), run **`maxon error-codes generate`**, and use the member it
+emits. Commit the regenerated files with your change.
+
+- **`maxon error-codes check` runs on every `dotnet build` and FAILS THE BUILD** on a
+  duplicate number (naming both claimants and their lines), a duplicate name, or a
+  generated file that has drifted. Do not grep an enum to find a free number — the enums
+  are derived, and grepping one of three copies is exactly how two agents took E3099 on
+  the same day.
+- **A reserved number is a real entry** (`reserved <why>`, no compiler claims). It occupies
+  the number space. A reservation written in a comment is not a reservation.
+- **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never
+  written down, so it cannot disagree.
+- **`lookup_error_code` reads the registry**, so it reports a code's one meaning plus which
+  compilers emit it (`emittedBy`, each with its own spelling) and which do not
+  (`notEmittedBy`). It can no longer answer for the wrong compiler.
+
 ## Spec Files
 
 - Old 3-digit error codes (e.g. `E022`) in spec files must be updated to the new 4-digit codes.
 - If tests that use RequiredIR fail, regenerate with `--update-required`.
+- shv2's `--update-required` regenerates RequiredIR but **not** `maxoncstderr` blocks — an
+  error-code renumber moves those by hand.

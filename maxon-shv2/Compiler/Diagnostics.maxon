@@ -5,108 +5,16 @@
 // position, accumulated on `Project.diagnostics` by the semantic checker (and,
 // as the pipeline grows, by every reporting pass). The driver prints them and
 // bails. v1's richer diagnostic machinery (severity tiers, related-note spans,
-// first-error suppression, the full 4-digit ErrorCode registry) grows back as
-// consumers need it; M1 needs exactly the two `basics.md` semantic errors.
-
-// The 4-digit error codes M1 emits. Named constants, not bare string literals —
-// the exact code text is part of the spec contract (`specs-shv2/basics.md`), so
-// it lives in one place. Grows into a full ErrorCode registry as more checks
-// land (v1 has hundreds).
+// first-error suppression) grows back as consumers need it.
 //
-// `noMainFunction` / `mainWrongReturnType` are the two `basics.md` semantic
-// codes with exact spec-gated text. `parserExpectedToken` (E2010) is the
-// positioned "Expected X but got Y" parse diagnostic that `variables.md`'s
-// type-annotation-rejection tests gate on. `parserExpressionError` (E2004) is the
-// EXPRESSION-LEVEL parse failure. Both reference registries name it
-// `ParserExpectedExpression` (`maxon-sharp` ErrorCode.cs:27, `maxon-selfhosted`
-// ErrorCode.maxon:19, both `= 2004`) and both then report FOUR distinct messages under
-// it, so the code is broader than that name — it is "this expression is not well
-// formed", and shv2 names it for what it IS rather than for one of its four uses:
-//   • "Expected expression but got X" — a primary was required and the token stream had
-//     something else (`unary-operators.md`'s `- -x`);
-//   • "Undefined variable 'x'" — a name in an expression has no binding in scope
-//     (`block-scoping.md`, every case that reaches past a closed block);
-//   • "Cannot operate on int and bool" — a binary arithmetic / shift operator with a
-//     non-numeric operand (the C# bootstrap's own text, 2-Parser.cs:17785);
-//   • "Cannot negate bool" — the same rule, asked of a unary `-`.
-// `lexerError` / `parserError` are generic placeholders the query layer reports the
-// remaining front-end failures under — the authored specs never trigger them (every
-// other authored program lexes and parses cleanly), so they carry no spec-gated text
-// yet and split into specific codes when a spec needs a particular front-end diagnostic.
-export enum ErrorCode
-	// Duplicate-definition codes — a name declared twice where exactly one binding is
-	// legal. `duplicateFunction` (E2001) fires at MERGE time when two functions share a
-	// name (the second would silently overwrite the first in `funcSignatures`, so a call
-	// would validate against the wrong signature); `duplicateParameter` (E2002) fires at
-	// PARSE time when one parameter list repeats a name (a dead, uncallable parameter).
-	// Both are positioned at the offending (later) declaration.
-	duplicateFunction = "E2001"
-	duplicateParameter = "E2002"
-	noMainFunction = "E3001"
-	mainWrongReturnType = "E3002"
-	parserExpressionError = "E2004"
-	parserExpectedToken = "E2010"
-	lexerError = "E1001"
-	parserError = "E3010"
-	// M4b control-flow / mutation codes. `assignToImmutable` (E2013) matches the
-	// C# compiler's "cannot assign to immutable variable" code; `controlOutsideLoop`
-	// (E2047) and `labelTargetsOwnLoop` (E2048) are the break/continue placement
-	// diagnostics (`specs/break.md` gates the own-label text on E2048).
-	assignToImmutable = "E2013"
-	controlOutsideLoop = "E2047"
-	labelTargetsOwnLoop = "E2048"
-	// A value-returning function whose body can fall off its end without returning
-	// (`specs/missing-return-error.md`), positioned at the function's NAME. Raised by
-	// the parser, which is where the fall-through is visible: the block its last
-	// statement left control in is un-terminated. The VOID twin of this case is not an
-	// error at all — the parser synthesizes the implicit `return` (see
-	// `Parser.closeFunctionBody`). A BARE `return` in a value-returning function reports
-	// under this code too, positioned at the `return`: a path that leaves the function
-	// with no value is the same defect whether or not it spelled the keyword.
-	missingReturn = "E3013"
-	// A `return <expr>` in a function that declares no return type — its declared result
-	// is nothing, and a value is not nothing. `SemanticTypeMismatch` in both reference
-	// registries (`maxon-sharp` ErrorCode.cs:58, `maxon-selfhosted` ErrorCode.maxon),
-	// which is what this is: the returned value has no declared type to match.
-	typeMismatch = "E3005"
-	// A named type that resolves to neither the `ExitCode` builtin nor a declared ranged
-	// typealias — a typo (`Scor` for `Score`), a bare sized type (`u8` is not a type in
-	// Maxon; a ranged alias OVER it is), or a user-defined type this slice does not have.
-	// `SemanticUnknownType` in both reference registries. A USER error, and so a
-	// diagnostic: before typealiases existed the only legal named type was `ExitCode` and
-	// anything else panicked, which is a bargain that stops being acceptable the moment
-	// naming a type becomes the most common thing a source file does.
-	unknownType = "E3011"
-	// M5 call-argument codes. The two `E205x` codes are PARSE-time argument-label
-	// syntax errors (positioned at the offending token by the parser): a first
-	// argument cannot carry a `name:` label, and every argument after the first must.
-	// The four `E303x` codes are SEMANTIC-time call checks (positioned at the call
-	// site / the offending argument by SemanticCheck, which alone has the callee's
-	// signature): the callee must exist, the argument count must match, every `name:`
-	// label must name a parameter, and no two arguments may target one parameter.
-	callFirstArgNamed = "E2052"
-	callArgMissingLabel = "E2053"
-	// A `shl`/`shr` whose count is a LITERAL outside the shift-count domain (TypeRules'
-	// `shiftCountInRange` — `0..63`, because an `int` is 64 bits). A PARSE-time check,
-	// positioned at the literal: the parser is holding the count, so it is the tier that can
-	// see the defect. Before it existed, the hardware's masking silently answered `a shl -1`
-	// with `a shl 63` — the MAXIMUM left shift, from something that reads as a right one.
-	// A shift by a RUNTIME value is untouched and still legal.
-	shiftCountOutOfRange = "E2054"
-	callUnknownFunction = "E3030"
-	callArgCountMismatch = "E3031"
-	callUnknownArgLabel = "E3032"
-	callDuplicateArg = "E3033"
-	// The `5xxx` "code emitter" band (register allocation / machine-code emission).
-	// `registerPressure` (E5001) is the one occupant so far: a loop (or a value set
-	// live across a call/idiv) genuinely needs more registers than exist, AFTER the
-	// cold-spill splitter has moved every idle value out and rematerialized every
-	// constant — a HOT overflow only the programmer can resolve (see
-	// RegisterPressureDiagnostic + ARCHITECTURE.md's register-allocator section). Its message is
-	// MULTI-LINE and whole-program-anchored (line 0), so `render` emits `error E5001:`
-	// once and the body — which embeds each source location itself — flows through.
-	registerPressure = "E5001"
-end 'ErrorCode'
+// The `ErrorCode` enum itself is NOT here: it is GENERATED into
+// `ErrorCodeRegistry.maxon` from `docs/error-codes.txt`, the single source of
+// truth for the 4-digit code space shared by all three compilers. shv2 used to
+// keep its own copy, which is how it came to spell E3030 `callUnknownFunction`
+// while the other two spelled it `SemanticEnumDuplicateCase` — one number, two
+// meanings, and a `lookup_error_code` that answered confidently from the wrong
+// registry. To add a code: edit `docs/error-codes.txt`, run
+// `maxon error-codes generate`.
 
 // One reported problem. `line` / `column` are 1-based source positions, or 0
 // when the diagnostic has no single anchor (E3001 "no main" is whole-program).

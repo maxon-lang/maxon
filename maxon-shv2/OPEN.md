@@ -43,7 +43,7 @@ is never the answer for a callee some file declares.
 **THE DEFERRAL WAS KEPT** (refusing an `unresolved` operand would reject `crossFileInt() + 1`, a *correct*
 program) and `wordOpResultTag` still checks `bool` first. Both traps recorded here were real; both are now
 pinned by specs that must keep **compiling**, not just failing. **`unresolved` now means exactly ONE thing:
-a callee NO file declares** — which `SemanticCheck` rejects (E3030), so it can never reach codegen. That is
+a callee NO file declares** — which `SemanticCheck` rejects (E3004), so it can never reach codegen. That is
 what makes the false tag *unreachable* rather than merely *fixed*.
 
 **The memo re-keying was the load-bearing half, and it is now GATED.** A parse reads two inputs, so

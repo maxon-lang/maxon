@@ -1,0 +1,457 @@
+// GENERATED FROM docs/error-codes.txt. DO NOT EDIT.
+//
+// Add or change a code in that file, then run `maxon error-codes generate`.
+// `maxon error-codes check` (run by every `dotnet build`) fails if this file drifts.
+
+// Error codes grouped by compilation stage:
+// 1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx code emitter,
+// 6xxx PE writer, 9xxx internal.
+export enum ErrorCode
+	// The lexer met a character that cannot begin any token.
+	lexerUnexpectedCharacter = 1001
+	// A string literal reached end-of-line or end-of-file with no closing quote.
+	lexerUnterminatedString = 1002
+	// A backslash escape in a string or character literal names no known escape.
+	lexerInvalidEscape = 1004
+	// A literal brace appears unescaped in a string literal. Braces open interpolation, so a literal brace must be doubled.
+	lexerUnescapedBrace = 1006
+	// A block comment reached end-of-file with no closing delimiter.
+	lexerUnterminatedBlockComment = 1007
+
+	// The parser met a token that cannot appear at this point in the grammar.
+	parserUnexpectedToken = 2001
+	// A type was required here and the token stream had something else.
+	parserExpectedType = 2003
+	// An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
+	parserExpectedExpression = 2004
+	// The parser reached end-of-file with a construct still open.
+	parserUnexpectedEof = 2007
+	// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
+	parserExpectedToken = 2010
+	// An integer literal does not fit the range of its type.
+	parserLiteralOverflow = 2011
+	// Two or more source files import each other in a cycle.
+	parserCircularDependency = 2012
+	// An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
+	parserImmutableVariable = 2013
+	// A match arm falls through to the next arm while the enclosing function still owes a return.
+	parserMatchFallthroughWithReturn = 2025
+	// A match does not cover every case of its scrutinee and has no default arm.
+	parserMatchNotExhaustive = 2026
+	// Two match arms test the same pattern; the second can never run.
+	parserMatchDuplicatePattern = 2027
+	// A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
+	// a match arm or postfix-ternary's two arms produce different types,
+	// or a ternary condition is not bool. Mirrors the C# bootstrap's
+	// ParserMatchTypeMismatch -- thrown at parse time so it wins over the
+	// body-finish unused-variable check (E3012).
+	parserMatchTypeMismatch = 2028
+	// A match's 'default' arm is not the last arm.
+	parserMatchDefaultNotLast = 2029
+	// A match arm opens a block but gives it no block label.
+	parserMatchMissingBlockId = 2042
+	// A match arm's block label does not match the label its arm opened.
+	parserMatchMismatchedBlockId = 2043
+	// A top-level constant's initializer is not a compile-time constant.
+	parserNonConstantInitializer = 2045
+	// A match over an enum may only carry a 'default' arm if that arm throws.
+	parserMatchDefaultEnumMustThrow = 2046
+	// 'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant.
+	// `break 'lab'` / `continue 'lab'` where `lab` names the
+	// innermost enclosing loop (with no intervening match for `break`). The
+	// label is redundant -- unlabeled `break`/`continue` already targets
+	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+	parserRedundantLoopLabel = 2048
+	// A match arm's body is a block-opening statement. Each arm body must be a single statement.
+	// Phase 9 Stage 0: a match arm body cannot be a block-opening
+	// statement (`if` / `while` / `for` / `match` / block-form `try`).
+	// Each arm body is a single statement; block-form constructs would
+	// allocate persistent slots that leak on every error path through
+	// the match.
+	parserMatchBlockStatementNotAllowed = 2049
+	// A declaration uses a name reserved by the compiler.
+	parserReservedIdentifier = 2051
+	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
+	// a call site labeled its first argument (`f(name: value, ...)`).
+	// The first argument is positional-only; only the second and subsequent
+	// arguments may be labeled.
+	parserFirstArgCannotBeNamed = 2052
+	// A shift ('shl'/'shr') whose count is a LITERAL outside 0..63. An int is 64 bits,
+	// so no other distance names a distinct shift, and the hardware silently MASKS the
+	// count into that range -- which turned 'a shl -1', which a human reads as "shift
+	// the other way", into the MAXIMUM LEFT shift. A shift by a RUNTIME value is
+	// untouched and still legal: the compiler cannot see the count, and both lowerings
+	// agree on what the hardware will do with it. A PARSE-time check, positioned at the
+	// literal.
+	parserShiftCountOutOfRange = 2054
+
+	// The program declares no 'main' function.
+	semanticNoMain = 3001
+	// 'main' declares a return type other than ExitCode.
+	semanticMainWrongReturnType = 3002
+	// A name used in an expression has no binding in scope.
+	semanticUndefinedVariable = 3003
+	// A value's type does not match the type required at this position.
+	semanticTypeMismatch = 3005
+	// A name is declared twice where exactly one binding is legal: two functions with the same signature, or a local shadowing a 'self' field.
+	// a duplicate definition or a local-vs-self-field shadow. Two
+	// shapes share the code: (a) two function definitions with the same
+	// name and signature -- fires from `reportDuplicateFunction` in the
+	// parser for same-file duplicates and from the project-level main
+	// registration for cross-file `main` collisions; (b) a local
+	// declaration inside an instance method whose name collides with a
+	// `self.field` (matches the C# bootstrap's broader interpretation of
+	// "duplicate definition" -- the local would silently shadow the field).
+	semanticDuplicateDefinition = 3006
+	// A call cannot pick a unique overload: two or more candidates match it indistinguishably.
+	// call site cannot pick a unique overload because multiple
+	// variants have indistinguishable signatures at this call. Emitted when
+	// two overloads share the same parameter types and the caller doesn't
+	// disambiguate with named arguments. Matches the C# bootstrap wording.
+	semanticAmbiguousOverload = 3007
+	// A symbol is referenced from another file but is not declared 'export'.
+	semanticSymbolNotExported = 3008
+	// A cast cannot be proven safe -- the source range does not fit the destination.
+	semanticInvalidCast = 3009
+	// A cast is redundant: the value already has the destination type.
+	semanticUnneededCast = 3010
+	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
+	semanticUnknownType = 3011
+	// A local binding is declared and never read.
+	semanticUnusedVariable = 3012
+	// A value-returning function can reach its end without returning, or a 'return' in it carries no value.
+	semanticMissingReturn = 3013
+	// A field is read from another file but is not declared 'export'.
+	// (was internally `semanticTypeResolutionCycle` while the
+	// unexported-field-access check was unimplemented). Bootstrap parity
+	// reclaims 3014 for the field-visibility diagnostic; the typealias-cycle
+	// diagnostic moves to 3091 (a code unused on both sides).
+	semanticUnexportedFieldAccess = 3014
+	// An 'implements' clause names an interface that does not exist.
+	semanticUnknownInterface = 3015
+	// A type claims to implement an interface but does not define all of its members.
+	semanticPartialInterfaceImpl = 3016
+	// A generic argument violates the 'where' constraint declared on the type parameter.
+	semanticConstraintViolation = 3017
+	// An immutable ('let') binding is passed to a parameter the callee mutates, or a mutating method is called on it.
+	// a mutating method (push/pop/set/append/...) or a parameter-mutating
+	// function is called on an immutable (`let`-bound) receiver/argument. The
+	// receiver's data would be modified through a binding the user declared
+	// immutable. Emitted by the Maxon-tier borrow/mutation check.
+	semanticImmutableRefToMutatingParam = 3019
+	// An enum declares the same case name twice.
+	semanticEnumDuplicateCase = 3030
+	// Two enum cases declare the same raw value.
+	semanticEnumDuplicateRawValue = 3031
+	// An enum case's raw value has a type other than the enum's declared raw-value type.
+	semanticEnumRawValueTypeMismatch = 3032
+	// A match arm names a case the scrutinee's enum does not have.
+	semanticEnumUnknownCase = 3034
+	// A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
+	// a match-arm payload-binding pattern (`case(x, y)`) supplies
+	// the wrong number of bindings for the case's declared payload. Emitted
+	// by `parseCaseBindingPattern` when an arity check can be performed at
+	// parse time, or deferred to TypeResolution when the case's owning
+	// union isn't yet known.
+	semanticMatchPayloadArityMismatch = 3035
+	// A call passes a different number of arguments than the callee declares parameters.
+	semanticWrongArgCount = 3036
+	// 'main' is declared 'throws'. There is no caller left to handle the error.
+	semanticMainCannotThrow = 3054
+	// 'try' is applied to a call that cannot throw.
+	semanticTryRequiresThrowingFunction = 3055
+	// A throwing call is made without 'try'.
+	semanticThrowingFunctionRequiresTry = 3057
+	// 'otherwise' is written without a 'try'.
+	semanticOtherwiseRequiresTry = 3058
+	// An 'otherwise' handler's value has a type other than the 'try' expression's type.
+	semanticOtherwiseTypeMismatch = 3059
+	// Two typealiases in scope declare the same name.
+	semanticDuplicateTypeAlias = 3061
+	// A typealias is declared and never used.
+	semanticUnusedTypeAlias = 3062
+	// a bare-name type reference has more than one reachable
+	// typealias definition under directory-as-module rules. The user must
+	// write the directory-qualified form (`dir.Name`) to disambiguate.
+	// Mirrors E3095 (functions) but operates on the typealias registry.
+	semanticAmbiguousTypeAlias = 3063
+	// a pure-function call's result was discarded. Pure callees must
+	// have their result used -- neither bare `foo()` nor `_ = foo()` is
+	// permitted. Fires from `checkDiscardedResults`.
+	semanticDiscardedPureResult = 3064
+	// an impure-function call's result was discarded without the
+	// explicit `_ =` opt-in. The impure-call result still has to flow into
+	// either a binding (`let r = foo()`) or an explicit discard
+	// (`_ = foo()`). Fires from `checkDiscardedResults`.
+	semanticDiscardedImpureResult = 3065
+	// A 'union' value is compared with '=='/'!='. Unions carry no synthesized equality; use 'match'.
+	// a `union` value was compared with `==` / `!=`. Unions carry no
+	// synthesized equality -- a new case can't be added without every match site
+	// being forced to handle it, so the only way to inspect a union is `match`.
+	// Enums (which auto-implement Equatable) are unaffected. Stdlib source is
+	// exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution;
+	// mirrors the C# bootstrap's `SemanticEnumNotComparable`.
+	semanticEnumNotComparable = 3066
+	// a textual self-assignment (`x = x`, `p.x = p.x`) or a
+	// discard-assignment whose RHS isn't a function call (`_ = 42`). The
+	// former has no effect; the latter is the historic shape for opting out
+	// of a "discarded result" warning, but a non-call RHS makes the discard
+	// nonsensical. Emitted from `parseVarAssignment`,
+	// `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
+	semanticSelfAssignment = 3067
+	// The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
+	// the `is` / `is not` reference-identity operator was applied to a
+	// primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
+	// meaning for reference types (structs are heap pointers); primitives are
+	// values with no object identity. Emitted from the `is`-operand type check
+	// in TypeResolution. Mirrors the C# bootstrap's
+	// `SemanticRefIdentityOnPrimitive`.
+	semanticRefIdentityOnPrimitive = 3068
+	// '=='/'!=' is applied to a type that does not implement Equatable.
+	semanticEqualsRequiresEquatable = 3069
+	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
+	// while a reference into its backing buffer is still live (e.g.
+	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
+	// and dangle the outstanding reference. Emitted by the Maxon-tier
+	// `runMaxonBorrowCheck` pass. Mirrors the C# bootstrap's
+	// `SemanticBorrowConflict` (same code, same message format).
+	semanticBorrowConflict = 3070
+	// a statement appears in the same straight-line block body
+	// immediately after a `return`, `throw`, or `panic(...)`. The trailing
+	// statement is unreachable -- control never falls through a
+	// function-terminating statement -- so it is dead code. Emitted by the
+	// parser's statement-list loop when a terminator is not the last
+	// statement of its block. Control-flow that creates separate blocks
+	// (a `return` inside an `if`, with code after the `if`) does NOT trigger
+	// this: that following code is reachable on the else path. Mirrors the C#
+	// bootstrap's `SemanticUnreachableCode` (same code, same message format).
+	semanticUnreachableCode = 3071
+	// a struct-literal names a compiler builtin managed type
+	// (`__ManagedFile`, `__ManagedMemory`, `__ManagedDirectory`, ...). These
+	// carry an opaque runtime handle and must be obtained through their static
+	// factory methods (e.g. `__ManagedFile.openRead`), never built directly.
+	// Emitted by the parser at the struct-literal site. Mirrors the C#
+	// bootstrap's `SemanticBuiltinTypeConstruction`.
+	semanticBuiltinTypeConstruction = 3072
+	// an `async f()` call targets a function that never yields (contains
+	// no await / I/O stub call, transitively). `async` is only for I/O-concurrent
+	// work -- a non-yielding callee would run to completion synchronously on the
+	// spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
+	// Mirrors the C# bootstrap's `AsyncNonYielding`.
+	asyncNonYielding = 3073
+	// A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively
+	// calling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so
+	// subprocess cannot exist on that target -- rather than silently throwing
+	// 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call
+	// with `#if not os(Wasi)` to exclude it from the wasm build.
+	// Self-hosted only: the C# bootstrap has no such check, so it declares no member.
+	// The number is held by THIS ROW, not by a comment -- which is how it used to be
+	// held, and why an agent grepping `= 307` saw it free. (Originally
+	// SemanticDiscardedEnumeratedIndex, retired with the withIterator redesign.)
+	semanticSubprocessUnsupportedTarget = 3074
+	// A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
+	// is already known at the arm, so the bare case name suffices.
+	semanticMatchQualifiedCaseName = 3075
+	// a struct literal (`Type{...}`) is written outside the type's own
+	// methods. Construction is restricted to the type's own methods / static
+	// factories so invariants can be enforced at the single construction point;
+	// external callers must go through a `static function create(...)`. Exempt:
+	// `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction
+	// through a typealias visible at the site (inner alias of the current
+	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+	// Mirrors the C# bootstrap's `SemanticConstructorRestriction`.
+	semanticConstructorRestriction = 3076
+	// a local declared with `var` is never reassigned, so it should
+	// be a `let`. Detected after type resolution by
+	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
+	// per-function reassigned-var set). E3012 (unused variable) takes
+	// precedence -- an unused `var` reports as unused, not as should-be-let.
+	// Mirrors the C# bootstrap's `SemanticVarShouldBeLet`.
+	semanticVarShouldBeLet = 3077
+	// `var b = a` (or `var b = a.field`) where the source `a` is an
+	// immutable (`let`) binding of a reference type (struct / enum /
+	// function). Copying an immutable reference-type binding into a mutable
+	// one would alias the same heap value through a writable name; the user
+	// must either keep `b` immutable (`let`) or take an independent copy via
+	// `clone()`. Value-typed sources (int/float/bool/byte) are independent
+	// copies and are allowed. Detected after type resolution by
+	// `checkVarFromImmutableForEntry`. Mirrors the C# bootstrap's
+	// `SemanticVarFromImmutable`.
+	semanticVarFromImmutable = 3078
+	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
+	semanticMatchDiscardedBindings = 3081
+	// a labeled control-flow block (`if`/`else`/`while`/`for`) has no
+	// statements between its header and matching `end`. The C# bootstrap
+	// rejects this so dead control-flow can't sneak past a refactor; emitted
+	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
+	// statements were consumed.
+	semanticEmptyBlock = 3082
+	// a block-form `try 'label' ... end` body contains no throwing
+	// calls (no bare throwing call/methodCall, no routed `throw`). The
+	// construct exists to funnel multiple throwing calls into one handler;
+	// a body that can never fail has no error to route, so the `otherwise`
+	// handler is dead. Mirrors the C# bootstrap's `SemanticTryBlockNoThrows`.
+	semanticTryBlockNoThrows = 3083
+	// the `otherwise (e) 'label' ... end` handler of a block-form
+	// try must contain a `match` on the error binding `e`. Without it, the
+	// synthesized (possibly union) error value is never inspected and the
+	// handler cannot dispatch on which error occurred. Mirrors the C#
+	// bootstrap's `SemanticTryBlockBindingNotMatched`.
+	semanticTryBlockBindingNotMatched = 3084
+	// a bare case-name pattern in a match on a synthesized error
+	// union is shared by two or more union members, so it is ambiguous --
+	// the user must qualify it as `EnumName.case`. Mirrors the C#
+	// bootstrap's `SemanticUnionMatchPatternAmbiguous`.
+	semanticUnionMatchPatternAmbiguous = 3085
+	// a struct literal omits a field that has no default value, is not a
+	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
+	// in a static factory) was not proven definitely assigned via `self.field =
+	// expr` on every control-flow path to the literal. Emitted from the parser's
+	// struct-literal field-init checks and the post-body definite-assignment
+	// dataflow pass.
+	semanticFieldNotInitialized = 3086
+	// an `if x.contains(k)` whose then-block immediately performs
+	// `try x.get(k) otherwise ...` on the same receiver/key pair does the
+	// lookup twice. The compiler asks the user to rewrite as `if let v =
+	// try x.get(k) ... 'lbl'` (or `if var`) so a single lookup serves both
+	// the membership test and the value bind.
+	semanticRedundantContainsGet = 3087
+	// A 'module'-visible symbol is accessed from outside its declaring directory subtree.
+	// Symbol declared with the `module` keyword (visible to the declaring directory
+	// subtree only) but accessed from outside that subtree.
+	semanticSymbolNotInModuleScope = 3088
+	// A type-resolution artifact escaped into a later pass. An internal invariant.
+	semanticTypeResolutionLeak = 3089
+	// Two '--library' directories share a basename, so their dir-derived namespaces would alias.
+	// two external library directories (from `--library=DIR` /
+	// `build.maxon library("...")`) resolve to the same basename, so their
+	// dir-derived namespaces would alias and symbols can't be disambiguated.
+	semanticLibraryDuplicateName = 3090
+	// A typealias chain refers back to itself.
+	semanticTypeResolutionCycle = 3091
+	// An 'export' symbol is never referenced outside its declaring file. Drop the modifier, or make it 'module'.
+	// an `export` (global) decl is never referenced from any file
+	// outside its declaring file. The decl could be file-private (drop the
+	// modifier) or `module`-visible. Applies to functions, types, enums,
+	// typealiases, top-level constants, top-level vars, and exported struct
+	// fields. Emitted by `checkUnusedExports` after all files have been
+	// parsed and type-resolved.
+	semanticUnusedExportedSymbol = 3092
+	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module'.
+	// an `export` (global) decl is referenced only from files inside
+	// its declaring directory subtree. The decl could be downgraded to
+	// `module`-visible. Emitted by `checkUnusedExports`.
+	semanticExportableAsModule = 3093
+	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
+	// a `module` decl is never referenced from any file other than
+	// the one it was declared in. The decl could be file-private (drop the
+	// `module` modifier). Emitted by `checkUnusedExports`.
+	semanticUnusedModuleSymbol = 3094
+	// A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
+	// a bare-name function call has more than one reachable
+	// definition under directory-as-module rules. The user must write the
+	// directory-qualified form (`dir.name()`) to disambiguate. Emitted by
+	// the cross-file fallback in `qualifyCalleeForContextWithType` when
+	// `methodNameIndex` returns multiple distinct visible candidates.
+	semanticAmbiguousCrossFileCall = 3095
+	// A '--library' directory does not exist on disk.
+	// an external library directory named via `--library=DIR` /
+	// `build.maxon library("...")` does not exist on disk.
+	semanticLibraryNotFound = 3096
+	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
+	// `.rawValue` accessor. Such a comparison is checking which case a value
+	// is, which must be done on the value itself (`value == Type.case` for a
+	// payload-free case, or `match value` for a union variant -- so adding a
+	// case forces every site to handle it instead of silently slipping
+	// through). Comparing the derived string/int accessor bypasses that.
+	// 3089-3096 are taken on the self-hosted side (semanticTypeResolutionLeak
+	// onward), so this shared diagnostic takes the next code free on both
+	// sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
+	semanticEnumAccessorComparison = 3097
+	// A promise is stored in a Promise type that does not name the error its thunk throws.
+	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
+	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
+	// Storing a promise in the wrong one is refused here -- including, in particular, storing
+	// a THROWING promise in a `Promise with T`, which is what used to erase the error type.
+	// That erasure was the root of a family of bugs, all of which this refusal (plus the
+	// two-parameter form that makes it avoidable) turns into impossibilities:
+	// - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
+	// promise handle typed `int`;
+	// - an associated-value error's payload had no static type to mm_decref, so it LEAKED
+	// (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
+	// - propagation (a bare `try await p` inside a `throws` function) had no error type to
+	// check the enclosing function's `throws` against, so a thunk throwing A could be
+	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
+	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
+	semanticPromiseErrorTypeMismatch = 3098
+	// A closure that CAPTURES, ESCAPING the frame its captures point into.
+	// THE RULE: a closure that captures may not escape its defining frame.
+	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
+	// fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
+	// through a capture see later mutations of the captured variable. The environment is
+	// therefore only meaningful while that frame is alive. Let the closure outlive the
+	// frame and every captured read dereferences a dead frame -- the classic upward-funarg
+	// problem. It compiles clean and dies at runtime, so it is refused where the mistake
+	// is still legible rather than left to fault inside emitted code the author never wrote.
+	// The routes refused are every store the parser can see WITHOUT interprocedural
+	// analysis:
+	// - RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and
+	// the reason this exists). Returning a closure an OUTER frame built is fine and is
+	// allowed: that environment points into a frame that is still alive.
+	// - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
+	// element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
+	// looks like a plain local but is an alias INTO the enum's heap box, so assigning
+	// through it writes back). Each is one 8-byte slot holding the code pointer alone,
+	// and each is heap memory outliving every frame, so the store drops the environment;
+	// the call then passes env=0 and the first captured read dereferences null.
+	// DELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a
+	// CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
+	// bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
+	// that store the value is a *parameter*, and whether it carries an environment is a fact
+	// about the CALLER -- deciding it needs a per-parameter escape summary propagated over
+	// the call graph, i.e. escape analysis proper. That is scoped OUT of the bootstrap and
+	// stays a runtime nil-deref. Passing a capturing closure DOWN to a callee that only
+	// CALLS it is perfectly safe and must keep working.
+	// A NON-capturing closure is unaffected and must keep working -- it lowers to a plain
+	// MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
+	// CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
+	// or passes keyed by a struct field is built from.
+	// What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
+	// capture, so a closure's environment outlives the frame that built it. That is a real
+	// language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
+	// by-reference capture semantics the closure specs currently pin. shv2 schedules it at
+	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
+	semanticCapturingClosureEscapes = 3099
+	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
+	// 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
+	// this was in review. Both of us picked "the next code free" and both of us were right, because
+	// the registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --
+	// and neither copy sees the other's pending codes. Same disease as the promise's two bits, one
+	// level up. Keep the two files in step until there is only one of them.
+	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
+	// language already has everywhere else. A second await would take a second +1 on a payload the
+	// thunk only ever owned once, and the two releases underflow the refcount and free it twice
+	// ("mm_decref: refcount underflow (already zero)"). It is not an error-handling bug and does
+	// not need a throwing thunk: a plain `async` returning a String double-frees identically.
+	// So the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --
+	// two awaits of the same promise in mutually exclusive branches are each the only await on
+	// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
+	semanticPromiseAlreadyAwaited = 3100
+
+	// A field access could not be lowered: the base is not a struct, or the field has no slot.
+	irInvalidFieldAccess = 4006
+	// a type definition contains a reference cycle -- it transitively
+	// contains itself through struct fields, union associated values, or
+	// container element types. Maxon's ownership model requires acyclic type
+	// graphs for deterministic destruction, so recursive type references are
+	// rejected. Emitted by the type-cycle check after type resolution. Mirrors
+	// the C# bootstrap's `IrTypeCycle` (same code, same message format).
+	irTypeCycle = 4014
+	// internal compiler-invariant violation -- a `call` / `methodCall`
+	// / `tryCall` / `tryMethodCall` op survived past TypeResolution without an
+	// entry in `project.resolvedCallees` and without an "intentionally dynamic"
+	// dispatch shape (interface receiver / type-parameter receiver). Indicates
+	// a resolver-or-propagation gap; surfacing it here catches future
+	// regressions before lowering trips its own panic.
+	irUnresolvedCall = 4099
+end 'ErrorCode'

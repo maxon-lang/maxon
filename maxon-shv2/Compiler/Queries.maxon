@@ -254,16 +254,18 @@ function resetMergeTargets(project Project)
 	project.opRanges = SourceRangeTable.create()
 end 'resetMergeTargets'
 
-// Map a fatal LexerError to a project diagnostic. M1 reports every kind under a
-// single generic lexer code (the authored specs never trigger these; specific
-// codes grow when a spec needs a particular lexer diagnostic).
+// Map a fatal LexerError to a project diagnostic. Each kind reports under the code
+// that means exactly it. These used to share one generic `lexerError` code, which
+// happened to be E1001 - the number the other two compilers spend on
+// `LexerUnexpectedCharacter`. Three of the five kinds already HAD codes in the shared
+// number space (E1002/E1006/E1007); shv2 was simply not using them.
 function reportLexerError(project Project, path FilePath, error LexerError)
 	match error 'kind'
-		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unexpected end of input", line: line, column: column, filePath: path)
-		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unterminated string literal", line: line, column: column, filePath: path)
-		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unterminated block comment", line: line, column: column, filePath: path)
-		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unescaped '\{' in string literal", line: line, column: column, filePath: path)
-		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerError, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
+		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
+		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
+		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal", line: line, column: column, filePath: path)
+		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportLexerError'
 
@@ -273,16 +275,18 @@ end 'reportLexerError'
 // type-annotation-rejection tests. `undefinedVariable` joins `expectedExpression`
 // under E2004: both are EXPRESSION-level parse failures, and E2004 is the code the
 // corpus (and both reference compilers) use for a name with no binding in scope —
-// see ErrorCode. The remaining arms have no spec-gated text yet, so they report
-// under the generic parser code and split off as specs need them (mirrors
-// reportLexerError).
+// see the registry (docs/error-codes.txt). The arms that once shared a generic
+// `parserError` code now each report under the code that means them: that generic code
+// was E3010, a SEMANTIC-band number the other two compilers spend on
+// `SemanticUnneededCast` - a parser error wearing a semantic number, and colliding
+// while it did so.
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
 		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected '{expected}' but got '{got}'", line: line, column: column, filePath: path)
 		expectedExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
-		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unexpected end of input", line: line, column: column, filePath: path)
-		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Integer literal out of range", line: line, column: column, filePath: path)
-		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
+		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal out of range", line: line, column: column, filePath: path)
+		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 		missingReturn(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
@@ -302,7 +306,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		nonBoolCondition(keyword, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
 		assignTypeMismatch(name, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign '{got}' to variable '{name}' of type '{expected}'", line: line, column: column, filePath: path)
 		returnTypeMismatch(got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
-		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
+		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
 		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
 		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
 	end 'kind'

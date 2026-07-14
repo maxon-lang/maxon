@@ -1,31 +1,46 @@
-// `lookup_error_code` MCP tool. Given a 4-digit Maxon error code (e.g.
-// `3014`, `"3014"`, or `"E3014"`), returns the source-of-truth doc comment
-// from `maxon-selfhosted/Compiler/ErrorCode.maxon` plus the spec files that
-// exercise it.
+// `lookup_error_code` MCP tool. Given a 4-digit Maxon error code (e.g. `3014`,
+// `"3014"`, or `"E3014"`), returns its meaning from `docs/error-codes.txt` — the
+// SINGLE SOURCE OF TRUTH for the code space — naming, per compiler, the member each
+// one spells it with, plus the spec files that exercise it.
 //
-// That registry lives in the DEPRECATED v1 self-hosted tree, and deliberately so:
-// it is the only complete one. The bootstrap's `ErrorCode.cs` lists the same codes
-// with no per-code prose, and shv2's `Diagnostics.maxon` carries only the handful
-// of codes its specs gate on. Reading the file is a data read — this server no
-// longer BUILDS or RUNS maxon-selfhosted (see Compilers.maxon) — so the lookup
-// survives the compiler's retirement. It moves the day a live compiler owns an
-// equally complete registry.
+// It used to read `maxon-selfhosted/Compiler/ErrorCode.maxon`: one of THREE registries
+// that disagreed with each other. E3030 was `SemanticEnumDuplicateCase` there and
+// `callUnknownFunction` in shv2 — so an agent debugging shv2 who hit E3030 was told,
+// confidently, that an enum had declared a case twice. An instrument that lies is worse
+// than no instrument at all.
+//
+// Now there is one registry, a number has exactly one meaning, and the answer names
+// which compilers EMIT the code and which do NOT. The tool cannot answer for the wrong
+// compiler, because it no longer answers for A compiler — it answers for the number.
+//
+// ⚠ THIS IS THE SECOND READER of the registry format. The first is
+// `maxon-sharp/Compiler/ErrorCodeRegistry.cs`, which also VALIDATES the file and
+// generates the three enums from it. Two readers of one format is a deliberate trade:
+// this one must work as a pure DATA READ, with no dependency on a built compiler — a
+// tool that needs the compiler in order to explain the compiler's own errors is useless
+// at exactly the moment you need it (v1 does not build today, and this lookup still
+// answers for it). The format is frozen and trivial, the C# side is the one that
+// ENFORCES it, and this side refuses an unknown key rather than skipping it — so the
+// two cannot drift quietly.
 
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias CodeNumber = int(1000 to 9999)
 typealias LineCount = int(0 to u64.max)
 
+// The registry, relative to the repo root. The one place a code's meaning is written.
+let ErrorCodeRegistryPath = "docs/error-codes.txt"
+
 /// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
-/// `ErrorCode.maxon` and `specs/` are read — resolved and validated by the dispatcher.
+/// registry and specs are read — resolved and validated by the dispatcher.
 export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let code = try resolveCode(argsDoc, argsId: argsId) otherwise (err) 'bad'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {errorReason(err)}")
 	end 'bad'
 
-	let entry = try lookupInErrorCodeFile(repoRoot, code: code) otherwise (err) 'notInSrc'
+	let entry = try lookupInRegistry(repoRoot, code: code) otherwise (err) 'notInRegistry'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {registryErrorReason(err, code: code)}")
-	end 'notInSrc'
+	end 'notInRegistry'
 
 	let specFiles = collectSpecFilesReferencing(repoRoot, code: code)
 	return buildOutcome(code, entry: entry, specFiles: specFiles)
@@ -101,18 +116,8 @@ function clampToCodeRange(value JsonInt) returns CodeNumber throws LookupArgErro
 end 'clampToCodeRange'
 
 // =============================================================================
-// ErrorCode.maxon parsing
+// Registry parsing
 // =============================================================================
-
-type ErrorEntry
-	export var name as String
-	export var stage as String
-	export var docComment as String
-
-	export static function create(name String, stage String, docComment String) returns ErrorEntry
-		return Self{name: name, stage: stage, docComment: docComment}
-	end 'create'
-end 'ErrorEntry'
 
 // Why a code lookup came back empty. The registry being UNREADABLE and the code
 // being ABSENT from it are different facts and get different messages: the first
@@ -123,198 +128,236 @@ enum RegistryLookupError implements Error
 	codeAbsent
 end 'RegistryLookupError'
 
-let ErrorCodeRegistryPath = "maxon-selfhosted/Compiler/ErrorCode.maxon"
-
 function registryErrorReason(err RegistryLookupError, code CodeNumber) returns String
 	return match err 'r'
-		registryUnreadable gives "cannot read `{ErrorCodeRegistryPath}` in the tree being used. The 4-digit registry lives in the (deprecated, still-checked-out) v1 tree; a checkout without it cannot answer this."
-		codeAbsent gives "code E{code} not found in `{ErrorCodeRegistryPath}`"
+		registryUnreadable gives "cannot read `{ErrorCodeRegistryPath}` in the tree being used. That file is the single source of truth for the 4-digit code space; a checkout without it cannot answer this."
+		codeAbsent gives "E{code} is not in `{ErrorCodeRegistryPath}`. The number is FREE: no compiler declares it and nothing reserves it."
 	end 'r'
 end 'registryErrorReason'
 
-// Reads the registry out of the CALLER'S tree, which is why the unreadable case is
-// an error and not a panic: `repoRoot` now comes from the wire, and a panic here
-// would tear down the stdio connection for every subsequent request on behalf of one
-// bad lookup.
-function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns ErrorEntry throws RegistryLookupError
+// One compiler's claim on a code: it declares the number, and spells it thus. The
+// three compilers name the same meaning differently (E3005 is `SemanticTypeMismatch`
+// to the bootstrap and `typeMismatch` to shv2), so the spelling is per-compiler data
+// while the number and the meaning are not.
+type CompilerClaim
+	export var compiler as String
+	export var memberName as String
+
+	export static function create(compiler String, memberName String) returns CompilerClaim
+		return Self{compiler: compiler, memberName: memberName}
+	end 'create'
+end 'CompilerClaim'
+
+typealias CompilerClaimArray = Array with CompilerClaim
+
+// A code, as the registry states it. `isReserved` is true exactly when NO compiler
+// declares the number yet — an in-flight claim from an unmerged branch, or a retired
+// meaning. Such a code still occupies the number space, which is the point of it.
+type RegistryEntry
+	export var number as CodeNumber
+	export var canonicalName as String
+	export var claims as CompilerClaimArray
+	export var isReserved as bool
+	export var reservedReason as String
+	export var doc as String
+
+	export static function create(number CodeNumber, canonicalName String, claims CompilerClaimArray, isReserved bool, reservedReason String, doc String) returns RegistryEntry
+		return Self{number: number, canonicalName: canonicalName, claims: claims, isReserved: isReserved, reservedReason: reservedReason, doc: doc}
+	end 'create'
+end 'RegistryEntry'
+
+type EntryHeader
+	export var number as CodeNumber
+	export var canonicalName as String
+
+	export static function create(number CodeNumber, canonicalName String) returns EntryHeader
+		return Self{number: number, canonicalName: canonicalName}
+	end 'create'
+end 'EntryHeader'
+
+type KeyValue
+	export var key as String
+	export var value as String
+
+	export static function create(key String, value String) returns KeyValue
+		return Self{key: key, value: value}
+	end 'create'
+end 'KeyValue'
+
+// The three compilers the registry knows, in the order the answer lists them.
+function allCompilerNames() returns StringArray
+	var out = StringArray.create()
+	out.push("csharp")
+	out.push("selfhosted")
+	out.push("shv2")
+	return out
+end 'allCompilerNames'
+
+// Reads the registry out of the CALLER'S tree, which is why the unreadable case is an
+// error and not a panic: `repoRoot` comes from the wire, and a panic here would tear
+// down the stdio connection for every subsequent request on behalf of one bad lookup.
+function lookupInRegistry(repoRoot FilePath, code CodeNumber) returns RegistryEntry throws RegistryLookupError
 	let path = childPath(repoRoot, segment: ErrorCodeRegistryPath)
 	let content = try File.readText(path) otherwise 'readErr'
 		throw RegistryLookupError.registryUnreadable
 	end 'readErr'
 	let lines = content.split("\n")
 	let total = lines.count()
-	let needleSuffix = "= {code}"
 	for i in 0 upto total 'scan'
 		let line = try lines.get(i) otherwise 'gErr'
-			panic("lookupInErrorCodeFile: lines.get OOB — i bounded by total")
+			panic("lookupInRegistry: lines.get OOB — i bounded by total")
 		end 'gErr'
-		if not line.contains(needleSuffix) 'noMatch'
+		let header = try parseEntryHeader(line) otherwise 'notHeader'
 			continue
-		end 'noMatch'
-		let parsed = try parseVariantLine(line) otherwise 'badLine'
+		end 'notHeader'
+		if header.number != code 'otherCode'
 			continue
-		end 'badLine'
-		// Walk backwards to harvest the contiguous `//` comment block
-		// immediately above the variant.
-		let docComment = collectDocComment(lines, before: i)
-		return ErrorEntry.create(parsed.name, stage: stageFor(code), docComment: docComment)
+		end 'otherCode'
+		return readEntryBody(lines, header: header, from: i + 1)
 	end 'scan'
 	throw RegistryLookupError.codeAbsent
-end 'lookupInErrorCodeFile'
+end 'lookupInRegistry'
 
-type VariantParse
-	export var name as String
-	export var code as CodeNumber
-
-	export static function create(name String, code CodeNumber) returns VariantParse
-		return Self{name: name, code: code}
-	end 'create'
-end 'VariantParse'
-
-// Match `\tnameCamelCase = NNNN` (any whitespace prefix; the `=` may be
-// surrounded by spaces). Throws NotFound if the line doesn't match the
-// expected variant shape — e.g. comment lines, blank lines, the `union`
-// header, etc.
-function parseVariantLine(line String) returns VariantParse throws NotFound
+// An entry header sits at column 0: `E<nnnn> <CanonicalName>`. Anything indented is a
+// key line belonging to the entry above; anything else is a `#` comment or a blank.
+function parseEntryHeader(line String) returns EntryHeader throws NotFound
 	let bytes = line.toByteArray()
 	let n = bytes.count()
-	var i = 0
-	// Skip leading whitespace.
-	while i < n 'skipWs'
+	// "E1001 X" is the shortest legal header: 5 code bytes, a space, >= 1 name byte.
+	if n < 7 'tooShort'
+		throw NotFound.notFound
+	end 'tooShort'
+	let first = try bytes.get(0) otherwise 'gErr'
+		panic("parseEntryHeader: bytes.get(0) OOB — n >= 7 just checked")
+	end 'gErr'
+	if first != 0x45 'notE'
+		throw NotFound.notFound
+	end 'notE'
+	var value = 0
+	for i in 1 upto 5 'digits'
+		let b = try bytes.get(i) otherwise 'gErr2'
+			panic("parseEntryHeader: bytes.get OOB — n >= 7 just checked")
+		end 'gErr2'
+		if not isAsciiDigit(b) 'notDigit'
+			throw NotFound.notFound
+		end 'notDigit'
+		value = value * 10 + (b - 0x30)
+	end 'digits'
+	if value < 1000 or value > 9999 'oob'
+		throw NotFound.notFound
+	end 'oob'
+	let space = try bytes.get(5) otherwise 'gErr3'
+		panic("parseEntryHeader: bytes.get(5) OOB — n >= 7 just checked")
+	end 'gErr3'
+	if space != 0x20 'noSpace'
+		throw NotFound.notFound
+	end 'noSpace'
+	let name = sliceBytes(bytes, from: 6, until: n)
+	if name.isEmpty() 'noName'
+		throw NotFound.notFound
+	end 'noName'
+	return EntryHeader.create(value as CodeNumber, canonicalName: name)
+end 'parseEntryHeader'
+
+// Collect the entry's indented key lines, stopping at the next column-0 line.
+function readEntryBody(lines StringArray, header EntryHeader, from LineCount) returns RegistryEntry
+	var claims = CompilerClaimArray.create()
+	var isReserved = false
+	var reservedReason = ""
+	var doc = ""
+	let total = lines.count()
+	for i in from upto total 'walk'
+		let line = try lines.get(i) otherwise 'gErr'
+			panic("readEntryBody: lines.get OOB — i bounded by total")
+		end 'gErr'
+		if not isIndented(line) 'endOfEntry'
+			break
+		end 'endOfEntry'
+		let kv = try splitKeyValue(line) otherwise 'whitespaceOnly'
+			continue
+		end 'whitespaceOnly'
+
+		if kv.key == "doc" 'docLine'
+			if not doc.isEmpty() 'sep'
+				doc.append("\n")
+			end 'sep'
+			doc.append(kv.value)
+			continue
+		end 'docLine'
+
+		if kv.key == "reserved" 'reservedLine'
+			isReserved = true
+			reservedReason = kv.value
+			continue
+		end 'reservedLine'
+
+		if kv.key == "csharp" or kv.key == "selfhosted" or kv.key == "shv2" 'claimLine'
+			claims.push(CompilerClaim.create(kv.key, memberName: kv.value))
+			continue
+		end 'claimLine'
+
+		// `maxon error-codes check` rejects an unknown key and fails the build, so
+		// reaching one here means this tool is reading a registry the gate never saw.
+		panic("readEntryBody: unknown registry key '{kv.key}' on E{header.number} — run `maxon error-codes check`")
+	end 'walk'
+	return RegistryEntry.create(header.number, canonicalName: header.canonicalName, claims: claims, isReserved: isReserved, reservedReason: reservedReason, doc: doc)
+end 'readEntryBody'
+
+function isIndented(line String) returns bool
+	let bytes = line.toByteArray()
+	if bytes.count() == 0 'empty'
+		return false
+	end 'empty'
+	let first = try bytes.get(0) otherwise 'gErr'
+		panic("isIndented: bytes.get(0) OOB — count > 0 just checked")
+	end 'gErr'
+	return first == 0x20 or first == 0x09
+end 'isIndented'
+
+// Split an indented `key value...` line at the whitespace run after the key. Throws
+// NotFound for a whitespace-only line (no key), which the caller skips.
+function splitKeyValue(line String) returns KeyValue throws NotFound
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	var i = skipWhitespace(bytes, from: 0)
+	let keyStart = i
+	while i < n 'scanKey'
 		let b = try bytes.get(i) otherwise 'gErr'
-			panic("parseVariantLine: bytes.get OOB during whitespace skip")
+			panic("splitKeyValue: bytes.get OOB during key scan")
+		end 'gErr'
+		if b == 0x20 or b == 0x09 'endKey'
+			break
+		end 'endKey'
+		i = i + 1
+	end 'scanKey'
+	if i == keyStart 'noKey'
+		throw NotFound.notFound
+	end 'noKey'
+	let key = sliceBytes(bytes, from: keyStart, until: i)
+	let valueStart = skipWhitespace(bytes, from: i)
+	if valueStart >= n 'noValue'
+		throw NotFound.notFound
+	end 'noValue'
+	return KeyValue.create(key, value: sliceBytes(bytes, from: valueStart, until: n))
+end 'splitKeyValue'
+
+function skipWhitespace(bytes ByteArray, from LineCount) returns LineCount
+	let n = bytes.count()
+	var i = from
+	while i < n 'skip'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("skipWhitespace: bytes.get OOB — i bounded by n")
 		end 'gErr'
 		if b != 0x20 and b != 0x09 'notWs'
 			break
 		end 'notWs'
 		i = i + 1
-	end 'skipWs'
-	let nameStart = i
-	// Identifier: [A-Za-z][A-Za-z0-9]*
-	if i >= n 'noName'
-		throw NotFound.notFound
-	end 'noName'
-	let firstChar = try bytes.get(i) otherwise 'gErr2'
-		panic("parseVariantLine: bytes.get OOB at nameStart")
-	end 'gErr2'
-	if not isAsciiLetter(firstChar) 'notIdent'
-		throw NotFound.notFound
-	end 'notIdent'
-	i = i + 1
-	while i < n 'scanIdent'
-		let b = try bytes.get(i) otherwise 'gErr3'
-			panic("parseVariantLine: bytes.get OOB during identifier scan")
-		end 'gErr3'
-		if not isAsciiLetter(b) and not isAsciiDigit(b) 'stop'
-			break
-		end 'stop'
-		i = i + 1
-	end 'scanIdent'
-	let name = sliceBytes(bytes, from: nameStart, until: i)
-	// Skip whitespace.
-	while i < n 'skipWs2'
-		let b = try bytes.get(i) otherwise 'gErr4'
-			panic("parseVariantLine: bytes.get OOB during second whitespace skip")
-		end 'gErr4'
-		if b != 0x20 and b != 0x09 'notWs2'
-			break
-		end 'notWs2'
-		i = i + 1
-	end 'skipWs2'
-	if i >= n 'noEq'
-		throw NotFound.notFound
-	end 'noEq'
-	let eqByte = try bytes.get(i) otherwise 'gErr5'
-		panic("parseVariantLine: bytes.get OOB at expected '='")
-	end 'gErr5'
-	if eqByte != 0x3D 'notEq'
-		throw NotFound.notFound
-	end 'notEq'
-	i = i + 1
-	while i < n 'skipWs3'
-		let b = try bytes.get(i) otherwise 'gErr6'
-			panic("parseVariantLine: bytes.get OOB during third whitespace skip")
-		end 'gErr6'
-		if b != 0x20 and b != 0x09 'notWs3'
-			break
-		end 'notWs3'
-		i = i + 1
-	end 'skipWs3'
-	let digitStart = i
-	while i < n 'scanDigits'
-		let b = try bytes.get(i) otherwise 'gErr7'
-			panic("parseVariantLine: bytes.get OOB during digit scan")
-		end 'gErr7'
-		if not isAsciiDigit(b) 'stop2'
-			break
-		end 'stop2'
-		i = i + 1
-	end 'scanDigits'
-	let digitLen = i - digitStart
-	if digitLen != 4 'notFourDigits'
-		throw NotFound.notFound
-	end 'notFourDigits'
-	var value = 0
-	for j in digitStart upto i 'acc'
-		let b = try bytes.get(j) otherwise 'gErr8'
-			panic("parseVariantLine: bytes.get OOB during digit accumulation")
-		end 'gErr8'
-		value = value * 10 + (b - 0x30)
-	end 'acc'
-	if value < 1000 or value > 9999 'oob'
-		throw NotFound.notFound
-	end 'oob'
-	return VariantParse.create(name, code: value as CodeNumber)
-end 'parseVariantLine'
+	end 'skip'
+	return i
+end 'skipWhitespace'
 
-function isAsciiLetter(b Byte) returns bool
-	return (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A) or b == 0x5F
-end 'isAsciiLetter'
-
-// Walk backwards from `before` collecting contiguous `//` comment lines.
-// Stops at the first non-comment line. Returns the comments joined with `\n`
-// (or an empty string when no doc precedes the variant).
-function collectDocComment(lines StringArray, before LineCount) returns String
-	if before == 0 'top'
-		return ""
-	end 'top'
-	var startIndex = before
-	var i = before
-	while i > 0 'walk'
-		i = i - 1
-		let line = try lines.get(i) otherwise 'gErr'
-			panic("collectDocComment: lines.get OOB — i bounded by before")
-		end 'gErr'
-		if not isCommentLine(line) 'stop'
-			startIndex = i + 1
-			break
-		end 'stop'
-		startIndex = i
-		if i == 0 'wentToTop'
-			break
-		end 'wentToTop'
-	end 'walk'
-	if startIndex >= before 'noDoc'
-		return ""
-	end 'noDoc'
-	var result = ""
-	for j in startIndex upto before 'each'
-		let line = try lines.get(j) otherwise 'gErr2'
-			panic("collectDocComment: lines.get OOB during join")
-		end 'gErr2'
-		if not result.isEmpty() 'sep'
-			result.append("\n")
-		end 'sep'
-		result.append(line)
-	end 'each'
-	return result
-end 'collectDocComment'
-
-function isCommentLine(line String) returns bool
-	let trimmed = line.trim()
-	return trimmed.startsWith("//")
-end 'isCommentLine'
-
+// The stage is DERIVED from the leading digit — it is never written in the registry,
+// so it cannot disagree with the number.
 function stageFor(code CodeNumber) returns String
 	let leading = code / 1000
 	return match leading 'pick'
@@ -324,25 +367,47 @@ function stageFor(code CodeNumber) returns String
 		4 gives "ir"
 		5 gives "codegen"
 		6 gives "pewriter"
-		default gives "unknown"
+		9 gives "internal"
+		default panic("stageFor: E{code} is in the {leading}xxx band, which names no compilation stage")
 	end 'pick'
 end 'stageFor'
+
+function claimsContain(claims CompilerClaimArray, compiler String) returns bool
+	for claim in claims 'each'
+		if claim.compiler == compiler 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'claimsContain'
 
 // =============================================================================
 // Spec-file scan
 // =============================================================================
 
+// Both suites: `specs/` is the bootstrap's, `specs-shv2/` is shv2's. Scanning only the
+// first was part of the same bug — it made shv2's codes look unexercised.
 function collectSpecFilesReferencing(repoRoot FilePath, code CodeNumber) returns StringArray
-	let specsDir = childPath(repoRoot, segment: "specs")
 	var matches = StringArray.create()
+	var suites = StringArray.create()
+	suites.push("specs")
+	suites.push("specs-shv2")
+	for suite in suites 'eachSuite'
+		appendSpecMatches(repoRoot, suite: suite, code: code, into: matches)
+	end 'eachSuite'
+	return matches
+end 'collectSpecFilesReferencing'
+
+function appendSpecMatches(repoRoot FilePath, suite String, code CodeNumber, into StringArray)
+	let specsDir = childPath(repoRoot, segment: suite)
 	let files = try Directory.list(specsDir) otherwise 'listErr'
-		return matches
+		return
 	end 'listErr'
 	let needle = "E{code}"
 	let n = files.count()
 	for i in 0 upto n 'each'
 		let entry = try files.get(i) otherwise 'gErr'
-			panic("collectSpecFilesReferencing: files.get OOB — i bounded by n")
+			panic("appendSpecMatches: files.get OOB — i bounded by n")
 		end 'gErr'
 		if not entry.path.endsWith(".md") 'notMd'
 			continue
@@ -351,32 +416,51 @@ function collectSpecFilesReferencing(repoRoot FilePath, code CodeNumber) returns
 			continue
 		end 'readErr'
 		if content.contains(needle) 'hit'
-			matches.push(entry.path)
+			into.push(entry.path)
 		end 'hit'
 	end 'each'
-	return matches
-end 'collectSpecFilesReferencing'
+end 'appendSpecMatches'
 
 // =============================================================================
 // Outcome construction
 // =============================================================================
 
-function buildOutcome(code CodeNumber, entry ErrorEntry, specFiles StringArray) returns ToolOutcome
+function buildOutcome(code CodeNumber, entry RegistryEntry, specFiles StringArray) returns ToolOutcome
 	var doc = JsonDoc.create()
 	let codeId = doc.add(JsonNode.numberNode(code))
 	let tagId = doc.add(JsonNode.stringNode("E{code}"))
-	let nameId = doc.add(JsonNode.stringNode(entry.name))
-	let stageId = doc.add(JsonNode.stringNode(entry.stage))
-	let docId = doc.add(JsonNode.stringNode(entry.docComment))
+	let nameId = doc.add(JsonNode.stringNode(entry.canonicalName))
+	let stageId = doc.add(JsonNode.stringNode(stageFor(code)))
+	let docId = doc.add(JsonNode.stringNode(entry.doc))
+
+	// `emittedBy` maps each claiming compiler to ITS OWN spelling of this code;
+	// `notEmittedBy` names the compilers that do not emit it at all. Together they are
+	// why this answer cannot be about the wrong compiler.
+	var claimKeys = StringArray.create()
+	var claimVals = JsonNodeIdArray.create()
+	for claim in entry.claims 'eachClaim'
+		claimKeys.push(claim.compiler)
+		claimVals.push(doc.add(JsonNode.stringNode(claim.memberName)))
+	end 'eachClaim'
+	let emittedById = doc.add(JsonNode.objectNode(claimKeys, children: claimVals))
+
+	var absentIds = JsonNodeIdArray.create()
+	let compilers = allCompilerNames()
+	for name in compilers 'eachCompiler'
+		if not claimsContain(entry.claims, compiler: name) 'absent'
+			absentIds.push(doc.add(JsonNode.stringNode(name)))
+		end 'absent'
+	end 'eachCompiler'
+	let notEmittedById = doc.add(JsonNode.arrayNode(absentIds))
 
 	var specIds = JsonNodeIdArray.create()
 	let sn = specFiles.count()
-	for i in 0 upto sn 'each'
+	for i in 0 upto sn 'eachSpec'
 		let path = try specFiles.get(i) otherwise 'gErr'
 			panic("buildOutcome: specFiles.get OOB — i bounded by sn")
 		end 'gErr'
 		specIds.push(doc.add(JsonNode.stringNode(path)))
-	end 'each'
+	end 'eachSpec'
 	let specsArr = doc.add(JsonNode.arrayNode(specIds))
 
 	var keys = StringArray.create()
@@ -389,8 +473,20 @@ function buildOutcome(code CodeNumber, entry ErrorEntry, specFiles StringArray) 
 	children.push(nameId)
 	keys.push("stage")
 	children.push(stageId)
-	keys.push("docComment")
+	keys.push("doc")
 	children.push(docId)
+	keys.push("emittedBy")
+	children.push(emittedById)
+	keys.push("notEmittedBy")
+	children.push(notEmittedById)
+
+	// Present only when the number is claimed but not yet declared — the field's very
+	// presence is the answer to "may I take this number?".
+	if entry.isReserved 'reserved'
+		keys.push("reserved")
+		children.push(doc.add(JsonNode.stringNode(entry.reservedReason)))
+	end 'reserved'
+
 	keys.push("specFiles")
 	children.push(specsArr)
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))

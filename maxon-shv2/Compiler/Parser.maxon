@@ -62,7 +62,7 @@ export union ParseError implements Error
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
-	// Renders as E2002, positioned at the repeated name.
+	// Renders as E2014, positioned at the repeated name.
 	duplicateParameter(name String, line LineNumber, column ColumnNumber)
 	// A reference to a name with no binding in scope. Distinct from
 	// `unexpectedToken` (a syntactic mismatch): this is a name-resolution failure,
@@ -160,7 +160,7 @@ export union ParseError implements Error
 	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
 	// A `not` whose operand's type the parser cannot determine. Since the whole-program signature
 	// index landed, that is reachable only for a call to a function NO FILE DECLARES — a program
-	// already doomed (E3030). Renders as E3005, positioned at the `not`. It is a REJECTION rather
+	// already doomed (E3004). Renders as E3005, positioned at the `not`. It is a REJECTION rather
 	// than a guess because `not`'s two readings disagree about the VALUE: the bitwise complement
 	// of a bool is -1 or -2, and both read as TRUE (see `notOperatorFor`).
 	notOnUnknownType(line LineNumber, column ColumnNumber)
@@ -181,7 +181,7 @@ export union ParseError implements Error
 	// meanings. `ValueTypeTag.void` is now the other one.
 	voidCallResultUsed(name String, line LineNumber, column ColumnNumber)
 	// A character literal whose body is not one character: `''`, or a `\` escape the
-	// decoder does not know. Renders as E3010, positioned at the literal. (A literal that
+	// decoder does not know. Renders as E2016, positioned at the literal. (A literal that
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
@@ -2779,7 +2779,7 @@ export type Parser
 		match self.signatures.returnTypeOf(calleeTok.value, into: self.artifact.typeNames) 'callee'
 			declared(returnType) then return try self.mintDeclaredCallResult(calleeTok, returnType: returnType, resultUsed: resultUsed)
 			// NO file declares this callee. DEFER, and keep deferring: `SemanticCheck.validateCall` owns
-			// that diagnostic (E3030, "call to undefined function") because it reads the registry the
+			// that diagnostic (E3004, "call to undefined function") because it reads the registry the
 			// REAL parse built, and this sweep is the tolerant half of the pair — see
 			// `CalleeReturn.undeclared`. So the program is rejected, just not here, and `unresolved`
 			// therefore never reaches codegen.

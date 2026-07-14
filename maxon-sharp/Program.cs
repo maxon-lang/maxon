@@ -24,6 +24,7 @@ class Program {
       "fmt" => RunFmt(args[1..]),
       "monitor" => RunMonitor(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
+      "error-codes" => ErrorCodeRegistry.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
@@ -39,6 +40,8 @@ class Program {
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
     Console.WriteLine("  spec-test [options]      Run spec tests");
+    Console.WriteLine("  error-codes <check|generate>");
+    Console.WriteLine("                           Verify or regenerate the error-code registry");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
     Console.WriteLine("Build options (build, run):");
