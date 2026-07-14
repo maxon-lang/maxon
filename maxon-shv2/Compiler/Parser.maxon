@@ -654,7 +654,12 @@ typealias MutableVarMark = int(0 to u64.max)
 // A loop-header (or loop-exit) phi: the mutable BINDING it carries, paired with the
 // block-arg ValueId minted for it. POSITIONAL — the k-th phi var corresponds to
 // `blockArgs[k]` on the merge block and to `argIds[k]` on every predecessor's
-// `BranchEdge`, so all three follow one order (mutable-binding declaration order).
+// `BranchEdge`, so all three follow one order.
+//
+// That order is declaration order over the bindings the loop CARRIES — the mutable vars in
+// scope that its body assigns (`parseWhileStatement`) — which is a SUBSET of `mutableVars`,
+// not a copy of it. So a phi list is indexed by phi position and never by a binding's index
+// in `mutableVars`; the two coincided once and no longer do.
 //
 // The binding is held as the `VarInfo` OBJECT, not as its name. A name cannot address
 // it: a block nested inside the loop may SHADOW the name, and then a name-keyed read
@@ -671,6 +676,12 @@ type LoopPhiVar
 end 'LoopPhiVar'
 
 typealias LoopPhiVarArray = Array with LoopPhiVar
+
+// The variable names a loop's token extent ASSIGNS — the set `parseWhileStatement` intersects
+// with the mutable bindings in scope to decide which ones the loop carries a phi for. Keyed by
+// the identifier's raw source slice, which is how every other name lookup in the parser is keyed
+// (`ByteArray` hashes and compares by content — see Token.value).
+typealias AssignedNameSet = Set with ByteArray
 
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
@@ -717,17 +728,27 @@ export type Parser
 	// where value numbering is BORN — see MaxonDialect's MaxonOp header.
 	var valueIds as ValueIdRef
 	// The `var` bindings currently IN SCOPE, in declaration order (M4b) — held as the
-	// `VarInfo` objects, for the reason LoopPhiVar documents. A loop header mints one
-	// phi per mutable binding in scope, and the phi order follows this list so that
-	// block-args and every predecessor's BranchEdge argIds stay positionally aligned.
+	// `VarInfo` objects, for the reason LoopPhiVar documents. A loop header mints a phi for
+	// the SUBSET of these its body assigns, in this list's order, so that block-args and
+	// every predecessor's BranchEdge argIds stay positionally aligned with each other.
 	// `let` bindings never appear (they cannot be reassigned, so they carry no
 	// loop-carried phi). A block's `var`s are drained off the end of this list at the
 	// block's `end` (see closeBlock). Reset per function.
+	//
+	// An `if`'s merge snapshots, by contrast, ARE positional over this whole list — they
+	// compare the two paths' values and mint a phi only where they differ, so an untouched
+	// var costs a snapshot slot but no ValueId (see mergeAtContinuation).
 	var mutableVars as VarInfoArray
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
+	// The token index of the `end` most recently consumed by `parseBlockBody`. It exists for
+	// ONE reader: `parseWhileStatement`'s drift guard, which checks the `end` the parser really
+	// closed a loop body with against the one `loopBodyEndIndex` predicted from the tokens. A
+	// nested block finishes — and writes this — before its enclosing one does, so by the time a
+	// `parseBlockBody` call returns it holds that call's OWN `end`, which is what the guard reads.
+	var lastBlockBodyEnd as TokenIndex
 	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
 	// expression always ended in the block it started in, so "where do ops go" could be a
 	// parameter threaded down from the statement. A short-circuit `and`/`or` ends that: it
@@ -793,6 +814,7 @@ export type Parser
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
 			loops: LoopContextArray.create(),
+			lastBlockBodyEnd: 0,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
@@ -1285,9 +1307,10 @@ export type Parser
 			try self.parseBreakStatement(block)
 		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
 			try self.parseContinueStatement(block)
-		end 'continueStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.equals 'assign'
+		end 'continueStmt' else if self.assignsAt(self.pos) 'assign'
 			// An identifier followed by `=` is a reassignment. The two-token lookahead
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
+			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
 			try self.parseAssignment(func, block: block)
 		end 'assign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is
@@ -1366,6 +1389,10 @@ export type Parser
 		let mark = self.openBlock()
 		self.skipNewlines()
 		let bodyEnd = try self.parseStatements(func, block: block)
+
+		// Published for `parseWhileStatement`'s drift guard — the cursor is ON the `end` here,
+		// which is the one place the block's closing token index is known.
+		self.lastBlockBodyEnd = self.pos
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 		self.closeBlock(mark)
@@ -1715,43 +1742,81 @@ export type Parser
 	// to the exit, `continue` to the header. `resolveBlockJumps` already patches
 	// backward rel32, so no new encoder work is needed.
 	//
-	// On-the-fly SSA: the header carries one PHI (block-arg) per mutable var in scope,
-	// created eagerly BEFORE the body is parsed (the set of body-mutated vars is not yet
-	// known). Each phi becomes the var's current value, so the condition and body read
-	// the loop-carried value; the preheader and every back-edge feed the phis via the
-	// predecessor's `branchEdges`. Returns the EXIT block — the continuation.
+	// On-the-fly SSA: the header carries one PHI (block-arg) per mutable var the loop
+	// ASSIGNS, minted eagerly BEFORE the body is parsed. Each phi becomes the var's current
+	// value, so the condition and body read the loop-carried value; the preheader and every
+	// back-edge feed the phis via the predecessor's `branchEdges`. Returns the EXIT block.
 	//
-	// Minting one phi per var in scope OVER-PRODUCES, and the surplus is not free:
+	// **THE CARRIED SET IS THE VARS THE LOOP ASSIGNS — AND EAGER MINTING IS WHAT MAKES THAT
+	// THE RIGHT QUESTION.** A var the loop never assigns holds the same value on every
+	// iteration, so its pre-loop definition DOMINATES the header and a read inside the body
+	// binds it correctly with no phi at all. A var the loop DOES assign needs one, and it
+	// must exist before the body is parsed — because every read in the body, and every value
+	// SNAPSHOT taken inside it (`parseIfStatement`'s entry/then/else snapshots, a nested
+	// loop's preheader), captures whatever the binding holds AT THAT MOMENT. Mint the phi
+	// later — on the var's first mention, say — and every snapshot already taken inside the
+	// loop is holding the stale PRE-LOOP value, and an `if` merge in the body would carry it
+	// onto the not-taken path. That is a silent miscompile on iteration 2, and it is why the
+	// carried set is decided UP FRONT rather than discovered as the body is parsed:
+	//
+	//     var x = 1
+	//     while c 'l'
+	//         if d 'b'      // entry snapshot of x taken HERE
+	//             x = 2     // a phi minted only now is invisible to that snapshot
+	//         end 'b'       // ⇒ the false edge would carry 1, resetting x every iteration
+	//     end 'l'
+	//
+	// So the set is read off the TOKENS, before a single op is emitted: `namesAssignedIn`
+	// over the loop's token extent. It is an over-approximation on purpose (a shadowed inner
+	// declaration of the same name counts, and so does a `let`), and over-approximating is
+	// FREE while under-approximating is a miscompile — a surplus phi costs nothing:
 	//   • a var the loop never READS gets a phi nothing reads — but the back edge passes
 	//     that phi to ITSELF, so it is self-sustaining and liveness holds it live around
 	//     the whole loop. `pruneDeadBlockArgs` (a Std pass) deletes those; without it, two
 	//     sequential loops inflate maxlive by one per dead var and can FALSE-E5001.
 	//   • a var the loop reads but never WRITES gets a phi that copies a value which never
-	//     changes. That one is left in place: biased coloring coalesces it with its
-	//     incoming value into one register and the edge copy self-elides, so it costs
-	//     nothing (see RegisterAllocator.copyGroupBlocked).
+	//     changes. Biased coloring coalesces it with its incoming value into one register
+	//     and the edge copy self-elides (see RegisterAllocator.copyGroupBlocked).
+	//
+	// What this REPLACES is a phi for every mutable var IN SCOPE, which was quadratic in the
+	// program: a function's `var`s accumulate as it goes, so the Nth loop minted phis for all
+	// ~N of them and assigned a ValueId to each — including every one `pruneDeadBlockArgs`
+	// then deleted. `blockArgIdBound`, and every dense column sized by it, is O(ValueIds), so
+	// the phis nobody kept were still being paid for in bytes at every later pass.
 	function parseWhileStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let whileIndex = self.pos
 		let whileTok = try self.consume(TokenKind.while)
 
-		// Snapshot each mutable var's value BEFORE the header phis overwrite the
-		// current values — the preheader→header block-arg list (their pre-loop values).
-		let preheaderVals = self.snapshotMutableValues()
+		// Decided from the tokens, before anything is emitted — see the header.
+		let bodyEndIndex = self.loopBodyEndIndex(whileIndex)
+		let assigned = self.namesAssignedIn(whileIndex, endIndex: bodyEndIndex)
 
 		var header = self.newBlock(func, label: b"whilehdr", line: whileTok.line)
-		self.recordBranchEdge(block, targetId: header.id, argIds: preheaderVals)
-		self.emitBranch(block, targetId: header.id)
 
-		// Mint the header phis (one per mutable binding in scope, in declaration order so
-		// blockArgs and every predecessor's branchEdge argIds stay aligned). Index-based
-		// so each binding is a MUTABLE reference — a `for x in …` loop variable is
+		// Mint the header phis for the carried bindings, in declaration order, capturing each
+		// one's PRE-LOOP value as it goes — `preheaderVals` is the preheader→header block-arg
+		// list, so it is positional over `phiVars` (NOT over `mutableVars`, which now holds
+		// bindings this loop does not carry). Reading `boundValue` before the phi overwrites
+		// it is what keeps the two in step within the single pass.
+		//
+		// Index-based so each binding is a MUTABLE reference — a `for x in …` loop variable is
 		// immutable, and installing the phi writes through the binding.
 		var phiVars = LoopPhiVarArray.create()
+		var preheaderVals = ValueIdArray.create()
 		for k in 0 upto self.mutableVars.count() 'mkPhi'
 			var binding = try self.mutableVars.get(k) otherwise panic("parseWhileStatement: mutableVars.get OOB at {k}")
+			if not assigned.contains(binding.name) 'neverAssigned'
+				continue
+			end 'neverAssigned'
+
+			preheaderVals.push(binding.boundValue)
 			let phiId = self.mintPhiForBinding(header, binding: binding)
 			phiVars.push(LoopPhiVar.create(binding, phiId: phiId))
 			binding.boundValue = phiId
 		end 'mkPhi'
+
+		self.recordBranchEdge(block, targetId: header.id, argIds: preheaderVals)
+		self.emitBranch(block, targetId: header.id)
 
 		// Condition, evaluated in the header — so `continue` and the back edge, which both
 		// target the header, re-evaluate it. A short-circuit `and`/`or` in the condition
@@ -1774,6 +1839,20 @@ export type Parser
 		// loop's own phi bindings and never a body-local shadow.
 		var bodyEnd = try self.parseBlockBody(func, block: body)
 
+		// THE GUARD ON THE TOKEN SCAN. `loopBodyEndIndex` re-derives Maxon's block structure at
+		// the token level, so it holds a SECOND copy of a fact the recursive-descent parser owns
+		// — and if the two ever disagree, the scan's extent is too SHORT, the carried set is a
+		// SUBSET, and a loop-carried var silently loses its phi. That failure is a wrong answer
+		// with no diagnostic, so it is converted into a loud one here: the `end` the parser
+		// actually consumed to close this body must be the one the scan predicted.
+		//
+		// This is what makes the duplication safe to keep. A future block statement (`for`,
+		// `match`) added to `parseStatement` without teaching `opensBlockAt` about it trips this
+		// panic on the first spec that nests it inside a loop, instead of miscompiling it.
+		if self.lastBlockBodyEnd != bodyEndIndex 'scanDrifted'
+			panic("parseWhileStatement: the token scan predicted this loop's `end` at token {bodyEndIndex} but the parser closed the body at token {self.lastBlockBodyEnd} — `opensBlockAt` does not know every statement that opens a block, so the carried-variable set it computed may be missing a loop-carried var")
+		end 'scanDrifted'
+
 		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
 		// Normal back-edge: a body that falls through returns to the header with its
@@ -1787,6 +1866,87 @@ export type Parser
 		self.wireLoopExit(condExit, exit: exit, ctx: ctx)
 		return exit
 	end 'parseWhileStatement'
+
+	// The index of the `end` token that closes the `while` at `whileIndex`, found by counting
+	// block openers against `end`s — the same depth-counted token walk `skipBalancedParens`
+	// does for `(`/`)`, and run for the same reason: the answer is needed BEFORE the real parse
+	// reaches it. The cursor is not moved.
+	//
+	// Deliberately TOLERANT of a malformed tail, like `scanFunctionSignatures`: an unterminated
+	// loop yields the end of the token stream rather than a diagnostic. That over-approximates
+	// the extent, which is the SAFE direction (see `parseWhileStatement`), and the real parse
+	// runs next and reports the unexpected EOF with a position.
+	function loopBodyEndIndex(whileIndex TokenIndex) returns TokenIndex
+		let count = self.tokens.count()
+		var depth = 0
+		var i = whileIndex
+		while i < count 'scan'
+			if self.opensBlockAt(i) 'open'
+				depth = depth + 1
+			end 'open' else if self.kindAt(i) == TokenKind.end 'close'
+				depth = depth - 1
+				if depth == 0 'matched'
+					return i
+				end 'matched'
+			end 'close'
+
+			i = i + 1
+		end 'scan'
+		return count
+	end 'loopBodyEndIndex'
+
+	// Does the token at `index` open a block that a matching `end` closes?
+	//
+	// THIS IS MAXON'S BLOCK STRUCTURE, WRITTEN DOWN A SECOND TIME — `parseStatement` and
+	// `parseBlockBody` own the first copy. It is kept honest by the drift panic in
+	// `parseWhileStatement` rather than by hope: get this wrong and that panic fires, loudly,
+	// on the first program that nests the missing construct in a loop.
+	//
+	// `else` is the subtle one. A plain `else 'label'` opens a block body of its own, but an
+	// `else if` does NOT — the else branch simply IS a nested `if` statement (parseElseBody),
+	// and that `if` is the opener whose `end` closes it. Counting `else if` as an opener would
+	// leave one `end` unaccounted for and run the extent past the loop, which is safe but
+	// wrong; counting it correctly keeps the scan exact and the drift guard meaningful.
+	function opensBlockAt(index TokenIndex) returns bool
+		let kind = self.kindAt(index)
+		if kind == TokenKind.if or kind == TokenKind.while 'alwaysOpens'
+			return true
+		end 'alwaysOpens'
+
+		if kind != TokenKind.else 'notElse'
+			return false
+		end 'notElse'
+
+		return self.kindAt(index + 1) != TokenKind.if
+	end 'opensBlockAt'
+
+	// The names ASSIGNED anywhere in `[startIndex, endIndex)` — the loop's carried-variable
+	// set, read straight off the tokens (see `parseWhileStatement` for why it must be known
+	// before the body is parsed).
+	//
+	// A reassignment is the ONLY way a `var` already in scope changes value, and its syntax is
+	// exactly `identifier =` (parseStatement's two-token lookahead). `==` is a single
+	// `equalsEquals` token, so a comparison cannot be mistaken for one.
+	//
+	// It OVER-approximates, and every case where it does is harmless because a surplus phi is
+	// harmless while a missing one is a miscompile:
+	//   • `let r = …` / `var t = …` inside the loop match the shape too. Those names are not
+	//     mutable bindings in scope at the header, so they select nothing — unless an outer var
+	//     of the same name is being SHADOWED, in which case the outer one gets a phi it does not
+	//     need. Costs one coalesced copy; the alternative is tracking shadowing at token level,
+	//     which is the block structure written down a THIRD time.
+	function namesAssignedIn(startIndex TokenIndex, endIndex TokenIndex) returns AssignedNameSet
+		var assigned = AssignedNameSet.create()
+		var i = startIndex
+		while i < endIndex 'scan'
+			if self.assignsAt(i) 'assignment'
+				assigned.insert(self.tokenAt(i).value)
+			end 'assignment'
+
+			i = i + 1
+		end 'scan'
+		return assigned
+	end 'namesAssignedIn'
 
 	// Set up the exit block's post-loop variable values. With no `break`, the exit is
 	// reached only from the condition's false edge, so each var's value there IS its
@@ -2564,30 +2724,57 @@ export type Parser
 
 	// --- token cursor ---
 
-	// The token at the cursor, or a synthetic EOF once past the end. The lexer
-	// already appends a real EOF, so this is only a belt-and-suspenders guard.
+	// The token at an ABSOLUTE index, or a synthetic EOF once past the end. THE one place the
+	// past-the-end rule is written down — `current`, `at`, `kindAt` and `peekKind` are all views
+	// over this, so a cursor read and a scan read can never disagree about where the tokens stop.
+	// The lexer already appends a real EOF, so the synthetic one is a belt-and-suspenders guard.
+	function tokenAt(index TokenIndex) returns Token
+		if index >= self.tokens.count() 'pastEnd'
+			return Token.eof()
+		end 'pastEnd'
+
+		return try self.tokens.get(index) otherwise panic("Parser.tokenAt: index<count just checked but tokens.get({index}) failed")
+	end 'tokenAt'
+
+	// The token at the cursor.
 	function current() returns Token
-		if self.pos < self.tokens.count() 'inRange'
-			return try self.tokens.get(self.pos) otherwise panic("Parser.current: pos<count just checked but get({self.pos}) failed")
-		end 'inRange'
-		return Token.eof()
+		return self.tokenAt(self.pos)
 	end 'current'
 
 	function at(kind TokenKind) returns bool
 		return self.current().kind == kind
 	end 'at'
 
-	// The kind of the token ONE past the cursor (or eof past the end). The parser's
-	// only two-token lookahead: distinguishing a reassignment (`ident =`) from a bare
-	// identifier statement (`ident …`) needs to see the `=` without committing to
-	// consuming the identifier first.
+	// The kind of the token at an ABSOLUTE index. The cursor-independent read the loop's token
+	// scan needs — `loopBodyEndIndex`, `namesAssignedIn` and `opensBlockAt` all walk the token
+	// array without moving `pos`.
+	function kindAt(index TokenIndex) returns TokenKind
+		return self.tokenAt(index).kind
+	end 'kindAt'
+
+	// **THE token shape of a reassignment, asked at an ABSOLUTE index — and there is exactly ONE
+	// of these on purpose.** Two callers ask it and they must never disagree:
+	//
+	//   • `parseStatement`, deciding that this statement IS a reassignment, and
+	//   • `namesAssignedIn`, deciding which vars a loop CARRIES A PHI FOR.
+	//
+	// Written down twice, a new write form (a compound assignment, a store through a field) taught
+	// to the dispatcher and not to the scan would compile: the statement would assign the var, the
+	// loop would mint no phi for it, and the var would reset to its pre-loop value on every
+	// iteration. A SILENT MISCOMPILE — and, unlike a `loopBodyEndIndex` mismatch, one no drift
+	// guard can see, because the loop's EXTENT would still be perfectly correct. Teaching this one
+	// predicate teaches both.
+	function assignsAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
+	end 'assignsAt'
+
+	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
+	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
+	// needs to see the `=` without committing to consuming the identifier first — and it is
+	// the same question `namesAssignedIn` asks of every token in a loop's extent, which is why
+	// both read it through `kindAt` and the past-the-end rule lives in exactly one place.
 	function peekKind() returns TokenKind
-		let next = self.pos + 1
-		if next < self.tokens.count() 'inRange'
-			let tok = try self.tokens.get(next) otherwise panic("Parser.peekKind: next<count just checked but get({next}) failed")
-			return tok.kind
-		end 'inRange'
-		return TokenKind.eof
+		return self.kindAt(self.pos + 1)
 	end 'peekKind'
 
 	function isEof() returns bool

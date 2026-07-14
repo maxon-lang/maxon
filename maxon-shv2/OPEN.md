@@ -74,11 +74,12 @@ right operand is SKIPPED** (an eager `and` returns the *same answer* on every in
 can see it). `specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by
 zero**, so a clean exit *is* the proof. **Retire that spec when globals land.**
 
-### 5. The parser's SSA construction is **O(V·B)** — and the corpus is BLIND to it
-Each `if` snapshots the whole mutable-var set; each `while` mints a phi per mutable var in scope.
-**Measured:** dead block-args go **54 → 252 → 1080 → 4464** across a doubling ladder — a ratio
-converging on **x4.00 while the program only DOUBLES**. ValueIds are minted even for phis that are later
-pruned, so `blockArgIdBound` (and every dense column sized by it) is **O(L²)**.
+### 5. ✅ FIXED — the `while` half. The parser's loop phis were **O(V·B)**
+`while` minted a phi per mutable var **in scope**, and a function's `var`s accumulate, so the Nth loop
+minted ~N phis and burned a ValueId on each — including every one `pruneDeadBlockArgs` later deleted.
+`blockArgIdBound`, and every dense column sized by it, is O(ValueIds), so phis nobody kept were paid for
+in **bytes** by every pass in between. **This is why the ALLOC column stayed linear while the BYTE column
+bent** — the allocations were not more numerous, they were BIGGER.
 
 ⇒ **FIX THE CORPUS'S REALISM, NOT THE PROBE** (user directive). ✅ **CORPUS DONE (`f76a145fd`)** —
 `longFunction`/`deepBlocks` emitted `var acc = a` then N `if`s all mutating that **ONE** accumulator, so
@@ -101,19 +102,44 @@ x1.98 x1.99 x1.995 x1.997 x1.999 — *dead linear* — while its **BYTES** grow 
 **x2.17**. Allocation COUNT linear while BYTES bend means **the allocations are getting BIGGER**: the
 dense columns sized by `blockArgIdBound`. `phase:parse` bends the same way, x1.97 → **x2.06**.
 **THE BYTE COLUMN CAUGHT WHAT THE ALLOC COLUMN COULD NOT** — for the second time (see the 2026-07-14 rows
-of `docs/optimization-log.md`). ⏳ The write-trail fix is in progress against this baseline.
+of `docs/optimization-log.md`). *(Those are the BEFORE numbers; the fix's are below.)*
 
-**Where the cost actually is, measured:** the `if` path is **already correct** — `mergeAtContinuation`
-mints a phi only when the value genuinely *differs* across the two paths. **`parseWhileStatement` is the
-sole ID inflater:** it mints a header phi for **every mutable var in scope**, unconditionally, *before the
-body is parsed*, so it cannot know which vars the body touches. ⇒ The fix is to mint a loop phi **lazily,
-on a var's first MENTION (read or write) inside the loop** — *not* first write, which is unsound
-(`z = x + 1` reads `x` before `x = z` would trigger the mint, so the read binds the stale pre-loop value
-and iteration 2 is wrong).
+**Where the cost was, measured:** the `if` path is **already correct** — `mergeAtContinuation` mints a phi
+only when the value genuinely *differs* across the two paths. **`parseWhileStatement` was the sole ID
+inflater:** it minted a header phi for **every mutable var in scope**, unconditionally, *before the body
+was parsed*, so it could not know which vars the body touches.
 
-⚠ The real fix (a write-trail, so a merge costs O(assignments-in-branch)) **cannot be byte-identical on
-the loop half** — minting fewer phis renumbers values, so fragments WILL move. That is a reviewable
-codegen diff, not a regression.
+⇒ **Fixed by deciding the carried set UP FRONT, from the TOKENS** (`Parser.parseWhileStatement` →
+`namesAssignedIn` / `loopBodyEndIndex`): a loop carries a phi only for the mutable vars its extent
+**assigns**. `pruneDeadBlockArgs` bytes **x2.17 → x1.99**, `phase:parse` **x2.06 → x1.99**,
+`elimTrivialBlockArgs` **x2.17 → x1.99**, `regalloc:splitting` **x2.34 → x2.03** (fewer dead phis ⇒ lower
+maxlive ⇒ fewer forced splits). Eight sequential pressured loops minted **332** header phis of which
+**260** were surplus; they now mint exactly **72**. Goldens did **not** move: `pruneDeadBlockArgs` and
+`elimTrivialBlockArgs` were already deleting precisely this surplus, so the emitted code was always
+identical — the whole cost was intermediate. Both passes stay, on a strictly smaller input.
+
+> ⚠ **THE DESIGN TRAP, and it is worth remembering.** The obvious fix — mint the phi LAZILY, on the
+> var's first mention inside the loop — is **UNSOUND**, and not for the reason people reach for first
+> (a read before the write; that one is real, and "first *mention*" fixes it). It is unsound because
+> **`parseIfStatement` snapshots the mutable-var set into local `ValueId` arrays**, and a phi minted
+> lazily *after* such a snapshot retroactively changes the value that was live where it was taken. The
+> snapshot is on the Maxon call stack, unreachable from the Parser, so nothing can patch it:
+> ```maxon
+> var x = 1
+> while c 'l'
+>     if d 'b'      // entry snapshot of x taken HERE — x has no phi yet, so it captures 1
+>         x = 2     // a lazily-minted phi is invisible to that snapshot
+>     end 'b'       // ⇒ the if's FALSE edge carries 1, resetting x every iteration. Returns 1, not 2.
+> end 'l'
+> ```
+> **EAGER minting is what makes the snapshots true**, and once minting is eager the criterion is
+> *assignments*, not mentions: a var the loop never assigns keeps its pre-loop value on every iteration,
+> and that definition **dominates** the header, so a read binds it correctly with no phi at all.
+
+**The `if` half remains** and is *not* fixed: each `if` still copies the whole mutable-var set three
+times (entry/then/else). Those snapshots mint **no ValueIds**, so they inflate no dense column — the cost
+is O(V) array copies per `if`, linear in the program for a fixed V. Left alone deliberately;
+`mergeAtContinuation` already mints a phi only where the two paths DIFFER.
 
 *(Confirmed NOT a multiplier: `emitShortCircuit` mints one phi and takes no snapshot — exactly 58 parse
 allocations at V = 8, 32, 128 and 256.)*

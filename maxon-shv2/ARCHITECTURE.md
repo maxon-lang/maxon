@@ -532,11 +532,24 @@ because there is no machine tier.
 
 ### `pruneDeadBlockArgs` (a register-allocator obligation, not an optimization)
 
-**The front end over-produces phis, and the surplus is what a FALSE `E5001` was made of.**
-On-the-fly SSA must mint a loop header's phis *before* it parses the body — the set of vars the
-body writes is not yet known — so `Parser.parseWhileStatement` mints one per mutable var **in
-scope**. Every `var` declared before a loop gets a loop-carried phi, including vars the loop
-never touches and vars that are already dead when the loop is reached.
+**The front end used to over-produce phis, and the surplus is what a FALSE `E5001` was made of.**
+On-the-fly SSA must mint a loop header's phis *before* it parses the body, and it once minted one
+per mutable var **in scope** — so every `var` declared before a loop got a loop-carried phi,
+including vars the loop never touches and vars already dead when the loop is reached.
+
+⚠ **It does not any more.** `Parser.parseWhileStatement` reads the loop's **assigned names** off
+the TOKENS before emitting anything and carries a phi only for those. The old rule was *quadratic
+in the program* — a function's `var`s accumulate, so the Nth loop minted ~N phis and burned a
+ValueId on each, and `blockArgIdBound` (with every dense column sized by it) is O(ValueIds), so
+phis that were deleted three passes later were still paid for in bytes by every pass in between.
+Measured on the scale corpus: `pruneDeadBlockArgs` bytes grew **x2.17** per doubling and now grow
+**x1.99**; eight sequential pressured loops minted **332** header phis of which **260** were
+surplus, and now mint exactly **72**.
+
+**Both Std passes below stay, on a strictly smaller input**, because "which names does the loop
+assign" is a question about tokens and "is this phi read / does it carry anything" is a question
+about the IR the parser has not finished building. The front end no longer over-produces; these
+delete what is genuinely dead or genuinely trivial.
 
 A phi for a var the loop never reads is not merely useless, it is **self-sustaining**: the back
 edge passes it to itself, so it *has* a use, and liveness holds it live around the **entire
@@ -1655,11 +1668,12 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
    > and copies-emitted, which is worth having, but it is not what makes the pressure model
    > honest.
 
-   The real surplus was **dead loop-header phis**: on-the-fly SSA mints one phi per mutable var in
+   The real surplus was **dead loop-header phis**: on-the-fly SSA minted one phi per mutable var in
    scope, a phi the loop never reads is *self-sustaining* through its own back edge, and liveness
-   correctly holds it live around the whole loop. `pruneDeadBlockArgs` deletes them (see the Std
-   passes). Two sequential loops with six accumulators each demanded **17** registers where the
-   true working set is **9**.
+   correctly holds it live around the whole loop. Two sequential loops with six accumulators each
+   demanded **17** registers where the true working set is **9**. The parser now carries a phi only
+   for the names the loop ASSIGNS, so it does not mint them at all, and `pruneDeadBlockArgs` deletes
+   the ones that survive that (see the Std passes).
 
    Every other put-a-surplus-value-in-the-IR path is likewise a contract bug, not a limitation: a
    literal in a register (→ immediates, `foldConstOperands`), a witness table in a register (→

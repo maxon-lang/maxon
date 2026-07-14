@@ -267,6 +267,87 @@ end 'main'
 11
 ```
 
+<!-- test: while-loops.carried-var-assigned-only-inside-an-if -->
+**The guard on WHEN a loop-header phi is minted, and it is a wrong-answer test, not a crash test.**
+
+A loop carries a phi only for the mutable vars its body ASSIGNS (`Parser.parseWhileStatement` reads
+them off the tokens). The tempting way to compute that set is *lazily* — mint the phi at the var's
+first mention while parsing the body — and this program is why that is **unsound**.
+
+`parseIfStatement` snapshots every mutable var's value into a local `ValueId` array *before* it parses
+the then-branch. Here that snapshot is taken while `x` still has no phi, so it captures `x`'s
+**pre-loop** value. A phi minted later, when `x = 2` is finally reached, is invisible to it — and the
+`if`'s false edge would then carry `1` into the merge, resetting `x` on every iteration where `i != 1`.
+The loop would return **1**. The snapshot lives on the parser's call stack, so nothing can retroactively
+patch it; **minting eagerly, before the body is parsed, is what makes every snapshot inside it true.**
+
+`x` becomes 2 on the iteration `i == 1` and must STAY 2 through `i == 2`.
+```maxon
+function main() returns ExitCode
+	var x = 1
+	var i = 0
+	while i < 3 'l'
+		if i == 1 'b'
+			x = 2
+		end 'b'
+		i = i + 1
+	end 'l'
+	return x
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: while-loops.loop-reads-a-var-it-never-assigns -->
+**A var the loop READS but never ASSIGNS gets no phi at all — and that is correct, not a shortcut.**
+
+Its value cannot change across iterations, so its pre-loop definition **dominates** the header and the
+read binds it directly. (This is why the carried set is keyed on *assignments* rather than *mentions*:
+once minting is eager, a read needs no phi to be correct.)
+
+`limit` is 6, so the loop runs 6 times adding 6 each: `acc = 36`.
+```maxon
+function main() returns ExitCode
+	var limit = 6
+	var i = 0
+	var acc = 0
+	while i < limit 'l'
+		acc = acc + limit
+		i = i + 1
+	end 'l'
+	return acc
+end 'main'
+```
+```exitcode
+36
+```
+
+<!-- test: while-loops.inner-declaration-shadows-a-carried-var -->
+**The token scan OVER-approximates, on purpose, and this is the case that proves it is harmless.**
+
+The inner `var t` shadows the outer one, and at token level `t =` is indistinguishable from a
+reassignment — so the OUTER `t` is given a header phi it does not need. That is the safe direction: a
+surplus phi is φ(preheader: v, back-edge: v), which `elimTrivialBlockArgs` folds away and biased coloring
+would coalesce regardless. A MISSING phi would be a silent miscompile, so the scan is built to err this
+way and never the other.
+
+The outer `t` is never actually written, so it must still be 100.
+```maxon
+function main() returns ExitCode
+	var t = 100
+	var i = 0
+	while i < 3 'l'
+		var t = i + 1
+		i = i + t
+	end 'l'
+	return t
+end 'main'
+```
+```exitcode
+100
+```
+
 
 ## Deferred
 

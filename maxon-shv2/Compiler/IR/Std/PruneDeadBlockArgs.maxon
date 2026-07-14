@@ -3,11 +3,22 @@
 // WHY IT EXISTS: a FALSE E5001 is the worst bug this compiler can have (ARCHITECTURE.md,
 // register allocator §"the contract"), and this is where one came from.
 //
-// The parser builds SSA on the fly, and a loop header's phis must be minted BEFORE the body
-// is parsed — the set of vars the body writes is not yet known. So it mints one phi per
-// mutable var IN SCOPE (`Parser.parseWhileStatement`). Every `var` declared before a loop
-// therefore gets a loop-carried phi, INCLUDING the ones the loop neither reads nor writes,
-// and including the ones that are already dead by the time the loop is reached.
+// The parser builds SSA on the fly, and a loop header's phis must be minted BEFORE the body is
+// parsed. It once minted one per mutable var IN SCOPE, so every `var` declared before a loop got
+// a loop-carried phi — including the ones the loop never touches, and the ones already dead by
+// the time the loop is reached. That is what this pass was built to clean up.
+//
+// ⚠ THE PARSER NO LONGER MINTS THOSE. It reads the loop's ASSIGNED names off the tokens first and
+// carries a phi only for those (`Parser.parseWhileStatement`), so the surplus this pass existed to
+// delete is not created any more — the quadratic that produced it is gone at the source.
+//
+// THE PASS STAYS, AND IT STILL DELETES THINGS. A var the loop ASSIGNS but whose phi nothing reads
+// is still a dead phi (`while … 'l' / junk = a + 5 / end 'l'`, with `junk` never read: the back
+// edge carries the sum, not the phi, so nothing reads the phi at all). The parser cannot know that
+// — "is it assigned" is a question about tokens, "is the phi read" is a question about the IR it
+// has not finished building. So the two are a front end that does not OVERPRODUCE and a Std pass
+// that removes what is genuinely DEAD, and the paragraphs below — the false E5001 they were both
+// written to prevent — are why neither may be dropped.
 //
 // Such a phi is not merely useless — it is SELF-SUSTAINING. The back edge passes the phi to
 // itself, so the phi HAS a use, and liveness keeps it live around the ENTIRE loop. Two

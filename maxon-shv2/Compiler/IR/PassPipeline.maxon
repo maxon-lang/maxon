@@ -39,9 +39,8 @@ export union PassKind
 	lowerMaxonToStd
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
-	// `pruneDeadBlockArgs` deletes the loop-header phis the on-the-fly SSA construction
-	// must mint speculatively (one per mutable var in scope, before the body is parsed)
-	// and that nothing ever reads. It runs FIRST of the Std passes because a dead phi is
+	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
+	// ASSIGNS (so the parser carries a phi for it) but whose phi has no reader. It runs FIRST of the Std passes because a dead phi is
 	// SELF-SUSTAINING — its back edge keeps it live around the whole loop — so it inflates
 	// the register allocator's maxlive and can raise a FALSE E5001; and because dropping
 	// its edge args is what lets `foldConstOperands`'s const DCE (below) then drop a
@@ -49,8 +48,9 @@ export union PassKind
 	//
 	// `elimTrivialBlockArgs` folds away the phis that CARRY NOTHING — one whose every
 	// incoming value, self-references discounted, is the same value. Those are the phis the
-	// parser mints for a var it must assume the loop body might write and that the body then
-	// never writes. They are not dead (something reads them), so `pruneDeadBlockArgs` leaves
+	// parser's token scan OVER-approximates into existence: a `var`/`let` declared inside the
+	// loop that shadows an outer var of the same name reads as an assignment to the outer one.
+	// They are not dead (something reads them), so `pruneDeadBlockArgs` leaves
 	// them; but a PHI is exactly what the cold-spill splitter may not spill, so an idle `var`
 	// across a loop was pinned in a register where an idle `let` was spilled for free — and
 	// past the pool, a FALSE E5001. It runs after the prune (which is cheaper and removes the

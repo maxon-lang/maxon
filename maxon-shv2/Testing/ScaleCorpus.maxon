@@ -161,12 +161,17 @@ let PressuredLoopsBase = 2 as KnobSize
 // realistic number, and that is the whole point.
 //
 // ⚠ THIS EXISTS BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION THAT MATTERS.
-// The parser builds SSA on the fly, and it costs **O(vars-in-scope)** at every branch: each `if`
-// SNAPSHOTS the whole mutable-var set, and each `while` MINTS A PHI PER MUTABLE VAR IN SCOPE. So the
-// real cost is O(V x B) — and `longFunction` and `deepBlocks` each declared exactly **ONE**
+// The parser builds SSA on the fly, and it cost **O(vars-in-scope)** at every branch: each `if`
+// SNAPSHOTS the whole mutable-var set, and each `while` MINTED A PHI PER MUTABLE VAR IN SCOPE. So the
+// real cost was O(V x B) — and `longFunction` and `deepBlocks` each declared exactly **ONE**
 // accumulator and mutated it in every branch. **V = 1, so O(V x B) collapsed to O(B), and the entire
 // V dimension was unmeasurable.** The knob named for growing branches could not see the cost of
 // growing branches.
+//
+// ⇒ It saw it the moment it stopped being blind: the `while` half is FIXED (a loop now carries a phi
+// only for the vars its token extent ASSIGNS — see Parser.parseWhileStatement), which took
+// `pruneDeadBlockArgs` from x2.17 bytes per doubling to x1.99. **KEEP THIS KNOB HONEST ANYWAY.** The
+// `if` half is still O(V) snapshots per branch, and this is the only thing that can see it.
 //
 // A knob built to expose a bug you already found only finds bugs you already found. So the fix is to
 // make the generated functions REALISTIC — real Maxon functions carry a handful of locals mutated

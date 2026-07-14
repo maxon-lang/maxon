@@ -12,11 +12,22 @@
 // nothing: biased coloring coalesces it with its incoming value into one register and SSA
 // destruction drops the self-move".
 //
-// That is true of the REGISTER COUNT and false of everything else. The parser mints one phi per
-// mutable var in scope, BEFORE the body is parsed (the set of body-written vars is not yet
-// known — `Parser.parseWhileStatement`). So every `var` declared before a loop and read after it
-// becomes a loop-carried phi, self-sustaining through the back edge and therefore live across the
-// ENTIRE loop. And a phi is precisely what the cold-spill splitter may NOT spill:
+// That is true of the REGISTER COUNT and false of everything else. The parser once minted one phi
+// per mutable var in scope, so every `var` declared before a loop and read after it became a
+// loop-carried phi, self-sustaining through the back edge and therefore live across the ENTIRE
+// loop.
+//
+// ⚠ THE PARSER NO LONGER MINTS THOSE EITHER. It carries a phi only for the names the loop's token
+// extent ASSIGNS (`Parser.parseWhileStatement`), and a var that is only READ is not among them.
+//
+// THE PASS STAYS, because that token scan deliberately OVER-approximates: a `var`/`let` declared
+// INSIDE the loop that SHADOWS an outer var of the same name matches the `identifier =` shape, so
+// the outer var gets a header phi it does not need — φ(preheader: v, back-edge: v) — and this is
+// what folds it. Over-approximating is the safe direction (a surplus phi is a coalesced copy; a
+// MISSING one is a miscompile), and this pass is what makes that trade cost nothing. The
+// paragraphs below are why it must not simply be tolerated instead:
+//
+// a phi is precisely what the cold-spill splitter may NOT spill:
 // `isColdSpillable` requires a value that is not a phi and not edge-passed, because a cold store
 // goes in the PREHEADER and a phi's def is the header itself. So those values are pinned in
 // registers across a loop that never touches them, and once they outnumber the pool the compiler
