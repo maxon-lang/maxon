@@ -61,17 +61,43 @@ var b = a shl 3  // 1000 = 8
 
 ### Right Shift (`shr`)
 
-Shifts bits right by the specified amount. `shr` is an **arithmetic** (sign-propagating) shift:
-every Maxon `int` is a *signed* 64-bit integer, so the vacated high bits are filled with the sign
-bit, not with zeros.
+**The LEFT operand's type decides how a right shift fills, and nothing else does.** This is Go's
+rule: *arithmetic* (sign-propagating) when the left operand is signed, *logical* (zero-filling) when
+it is unsigned. A shift is not symmetric in its operands — the right one is a **distance**, and its
+type says nothing about how the shift fills.
+
+A bare `int` is a signed 64-bit integer, so `shr` sign-propagates by default:
 
 ```maxon
 var a = 16
-var b = a shr 2       // 0100 = 4      — a non-negative value zero-fills naturally
+var b = a shr 2       // 4       — a non-negative value fills with zeros either way
 var c = (0 - 8) shr 1 // -4, not 9223372036854775804
 ```
 
-Only a value whose ranged type is *unsigned* (`int(0 to u64.max)`) zero-fills.
+**Maxon's unsigned type is a ranged alias whose low bound is 0.** `int(0 to u64.max)` is Maxon's
+`uint64`: it holds values whose top bit is set while the type calls them non-negative. A right shift
+of one **zero-fills**.
+
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function shiftIt(v Wide) returns Wide
+	return v shr 60
+end 'shiftIt'
+
+shiftIt(u64.max)      // 15 — NOT -1. An unsigned left operand fills with zeros.
+```
+
+`int(0 to u64.max)` is the *only* range on which the two readings can be told apart: a value of
+`int(0 to 100)` is provably non-negative, so an arithmetic and a logical shift of it agree bit for
+bit. Any case that means to pin this rule has to use it — which is why `8 shr 2` cannot, and why
+this went unnoticed in both compilers.
+
+**A shift is 64 bits wide.** A ranged left operand decides a shift's *fill*; it never decides its
+*width*. `x shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits to hold its answer, and it
+gets them — the operand is not truncated to its declared type's storage size, and the count is not
+masked to that size's shift width.
+
 
 ### Shift Count
 
@@ -756,4 +782,295 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: shr-unsigned-operand-zero-fills -->
+⭐ **THE CASE THAT DISCRIMINATES.** `u64.max shr 60` is **15** under the logical reading and **-1**
+under the arithmetic one, so it is the one shift that can tell the two compilers apart — and until
+it was written down, they *were* apart: the bootstrap answered 15 and shv2 answered -1, for this
+program.
+
+`8 shr 2` cannot catch this, and neither can any shift of a value that fits in 63 bits: such a value
+is non-negative, so both readings agree bit for bit and **the test passes under the wrong rule**. A
+spec that cannot fail is what let this through, and `int(0 to u64.max)` is the only range that fixes
+that.
+
+The count is shifted both as a **constant** (which the compiler folds) and as a **parameter** (which
+it cannot see, and must guard at run time). Both must give 15: the fold and the codegen are two
+readings of one rule, and a rule with two readers is a rule that will be read two ways.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Wide) returns Wide
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Wide, d Num) returns Wide
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Wide) returns Wide
+	return v shr 64
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	// An UNSIGNED left operand zero-fills. Folded count, then a count the compiler cannot see.
+	if shrConst(u64.max) != 15 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(u64.max, d: 60) != 15 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// Zero-filling, so shifting every bit out leaves 0 — NOT the sign, and NOT the masked shift
+	// the hardware would have performed.
+	if shrPastWidth(u64.max) != 0 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(u64.max, d: 100) != 0 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	// A count of 0 is the identity, under either fill.
+	if shrDynamic(u64.max, d: 0) != u64.max 'zeroCount'
+		return 5
+	end 'zeroCount'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shr-signed-operand-still-sign-fills -->
+The other half of the same sentence, and the reason the unsigned case above is a *narrowing* of the
+rule rather than a reversal of it: a **signed** left operand still shifts arithmetically. Both
+compilers must keep answering -1 here while answering 15 above — the operand's type is the only
+thing that changed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Num) returns Num
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Num, d Num) returns Num
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Num) returns Num
+	return v shr 100
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	if shrConst(0 - 8) != 0 - 1 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(0 - 8, d: 60) != 0 - 1 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// A sign-filling shift saturates to the SIGN, not to 0: `x shr 63` already IS the sign.
+	if shrPastWidth(0 - 8) != 0 - 1 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(0 - 8, d: 100) != 0 - 1 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shl-zero-fills-whatever-the-operand-signedness -->
+A LEFT shift vacates the *low* bits and always fills them with zeros — an unsigned left operand
+changes nothing about it. Pinned so that "the left operand's type decides the fill" is not
+over-applied to the one shift whose fill is not in question.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shlDynamic(v Wide, d Num) returns Wide
+	return v shl d
+end 'shlDynamic'
+
+function shlPastWidth(v Wide) returns Wide
+	return v shl 64
+end 'shlPastWidth'
+
+function main() returns ExitCode
+	if shlDynamic(u64.max, d: 63) != i64.min 'topBitOnly'
+		return 1
+	end 'topBitOnly'
+	if shlPastWidth(u64.max) != 0 'everyBitOut'
+		return 2
+	end 'everyBitOut'
+	if shlDynamic(u64.max, d: 100) != 0 'everyBitOutDynamic'
+		return 3
+	end 'everyBitOutDynamic'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shift-signedness-survives-a-branch -->
+⚠ A shift's fill is a property of its LEFT OPERAND'S TYPE, so it cannot depend on **which block the
+operand is read in**. It did, in the bootstrap: reading a variable outside the block that assigned
+it mints a fresh SSA value, and the compiler resolved a ranged type by *searching for a variable
+currently bound to that value* — which found nothing, concluded "not a ranged type", and therefore
+"signed". `u64.max shr 60` was **15** in the entry block and **-1** after an `if`.
+
+The same shift, on the same variable, in two blocks. It must give one answer.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function afterBranch(v Wide, flag bool) returns Wide
+	if flag 'taken'
+		return v shr 60
+	end 'taken'
+	return 0
+end 'afterBranch'
+
+function insideLoop(v Wide, n Num) returns Wide
+	var acc = 0
+	var i = 0
+	while i < n 'each'
+		acc = v shr 60
+		i = i + 1
+	end 'each'
+	return acc
+end 'insideLoop'
+
+function main() returns ExitCode
+	if afterBranch(u64.max, flag: true) != 15 'branch'
+		return 1
+	end 'branch'
+	if insideLoop(u64.max, n: 3) != 15 'loop'
+		return 2
+	end 'loop'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shift-ranged-operand-is-64-bit -->
+⭐ **A RANGED LEFT OPERAND DECIDES A SHIFT'S FILL, NEVER ITS WIDTH.** The compiler used to conflate
+the two: a shift whose operands fit a narrow ranged type was lowered as a **32-bit** op, which
+truncated the shift's *value*. `(0-8) shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits
+to hold its answer and got 32, so it answered **0** — while the identical shift by a count the
+compiler could not fold (and so lowered at 64 bits) answered **-4294967296**.
+
+**Same value, same count, same program, two answers.** The folded path and the emitted path had
+become two opinions.
+
+Nothing in the suite shifted a ranged operand, which is why nothing caught it: every existing shift
+case uses a bare `int`, and a bare `int` never narrows. Each case below therefore compares the two
+paths *against each other* — a folded count against a count passed as a parameter — so it fails if
+they ever diverge again, whatever they diverge to.
+```maxon
+typealias I32 = int(-2147483648 to 2147483647)
+typealias U32 = int(0 to 4294967295)
+typealias Num = int(i64.min to i64.max)
+
+function shlBy(v Num, d Num) returns Num
+	return v shl d
+end 'shlBy'
+
+function shrBy(v Num, d Num) returns Num
+	return v shr d
+end 'shrBy'
+
+function main() returns ExitCode
+	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
+	// answer needs all 64.
+	let narrow = 0 - 8 as I32
+	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+		return 1
+	end 'signedFoldVsEmitted'
+	if narrow shl 29 != 0 - 4294967296 'signedValue'
+		return 2
+	end 'signedValue'
+
+	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
+	// `shr 33` would have quietly become `shr 1`.
+	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+		return 3
+	end 'signedCountFoldVsEmitted'
+	if narrow shr 33 != 0 - 1 'signedCountValue'
+		return 4
+	end 'signedCountValue'
+
+	// NARROW UNSIGNED. Zero-filling, and still 64 bits wide.
+	let wide = 4294967295 as U32
+	if wide shl 33 != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
+		return 5
+	end 'unsignedFoldVsEmitted'
+	if wide shr 4 != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
+		return 6
+	end 'unsignedShrFoldVsEmitted'
+	if wide shr 4 != 268435455 'unsignedShrValue'
+		return 7
+	end 'unsignedShrValue'
+
+	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
+	// agree with it rather than merely with each other.
+	let plain = 0 - 8 as Num
+	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
+		return 8
+	end 'rangedAgreesWithPlain'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shift-signedness-follows-the-cast -->
+⚠ A cast to a ranged type emits no op, so `let w = p as Wide` leaves `w` and `p` **sharing one SSA
+value** with two different declared types. The bootstrap resolved a shift's ranged type by searching
+for a variable bound to that value, and returned whichever the search reached first — `p`'s. So
+`w shr 60` sign-filled a type declared unsigned, and answered **-1** where the same shift on a
+parameter declared `Wide` answered **15**.
+
+The cast is the whole of what the programmer wrote to say "treat this as unsigned". It has to be
+what the shift reads.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function viaCast(p Num) returns Wide
+	let w = p as Wide
+	return w shr 60
+end 'viaCast'
+
+function viaParam(w Wide) returns Wide
+	return w shr 60
+end 'viaParam'
+
+function main() returns ExitCode
+	if viaParam(u64.max) != 15 'declaredParam'
+		return 1
+	end 'declaredParam'
+	if viaCast(u64.max) != 15 'castLocal'
+		return 2
+	end 'castLocal'
+	if viaCast(u64.max) != viaParam(u64.max) 'twoRoutesOneType'
+		return 3
+	end 'twoRoutesOneType'
+	return 42
+end 'main'
+```
+```exitcode
+42
 ```

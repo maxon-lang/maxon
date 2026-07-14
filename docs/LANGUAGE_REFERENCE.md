@@ -2702,13 +2702,24 @@ Shift operators work on integers only.
 | `shl` | Shift left | `1 shl 4` (result: 16) |
 | `shr` | Shift right | `256 shr 4` (result: 16) |
 
-An `int` is 64 bits, so the only shift distances that name distinct results are `0` through
-`63`. A shift count written as a **literal** outside that range is rejected with **E2054** —
-the hardware would otherwise mask it into range and hand back a plausible wrong answer
-(`a shl -1` reads as "shift the other way" and would silently compute `a shl 63`, the *maximum
-left shift*; `a shl 64` would silently leave `a` unchanged). A shift by a **runtime value** is
-unaffected: the count goes through `cl`, the hardware masks it, and the compiler has no fact
-to check.
+**`shr` fills by the LEFT operand's signedness — arithmetic on a signed operand, logical on an
+unsigned one.** This is Go's rule, and a shift is not symmetric in its operands: the right one is
+a *distance*, and only the left one decides the fill. A bare `int` is signed, so `shr`
+sign-propagates: `(0 - 8) shr 1` is `-4`. A value whose ranged type is unsigned — a range with a
+low bound of 0, `int(0 to u64.max)` being Maxon's `uint64` — zero-fills instead: `u64.max shr 60`
+is `15`, not `-1`. `shl` always fills the vacated low bits with zeros, whatever the signedness.
+
+**The count is not masked, and there is no upper limit on it.** A shift by `n` behaves as if the
+value were shifted one place `n` times, so a count of 64 or more shifts *every bit out* — `a shl 64`
+is `0`, and that is legal, not an error. This matters because the hardware *masks* the count into
+`0..63` instead: unguarded, `a shl 64` would compute `a shl 0` (leaving `a` unchanged). The compiler
+saturates the count so that never happens — folding it when it can see it, and guarding it at run
+time (through `cl`) when it cannot.
+
+**A negative count is an error.** It is not a shift the other way: masked, `a shl -1` would silently
+compute `a shl 63`, the *maximum left shift* — a wrong answer with the opposite sign. A count the
+compiler can fold (a literal, a named constant, or constant arithmetic) is rejected with **E2054**;
+a count that only appears at run time panics.
 
 ### Unary Operators
 

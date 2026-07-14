@@ -1,0 +1,159 @@
+// Test: shr-signed-operand-still-sign-fills
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Num) returns Num
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Num, d Num) returns Num
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Num) returns Num
+	return v shr 100
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	if shrConst(0 - 8) != 0 - 1 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(0 - 8, d: 60) != 0 - 1 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// A sign-filling shift saturates to the SIGN, not to 0: `x shr 63` already IS the sign.
+	if shrPastWidth(0 - 8) != 0 - 1 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(0 - 8, d: 100) != 0 - 1 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shrConst(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 60
+    x64.mov rdx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, rax
+    x64.sar rdx, cl
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @shrDynamic(v: i64, d: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jge shrDynamic.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rax, 64
+    x64.cmp rdx, rax
+    x64.setb rax
+    x64.movzx rax, raxb
+    x64.mov rbx, 63
+    x64.test rax, rax
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.mov rax, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, rsi
+    x64.sar rax, cl
+    x64.epilogue
+    x64.ret
+  }
+  func @shrPastWidth(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 63
+    x64.mov rdx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, rax
+    x64.sar rdx, cl
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rcx, rax
+    x64.call shrConst
+    x64.xor edx, edx
+    x64.mov rbx, 1
+    x64.sub rdx, rbx
+    x64.cmp rax, rdx
+    x64.je main.foldedCount_0.after
+  foldedCount_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  foldedCount_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rcx, rax
+    x64.mov rdx, 60
+    x64.call shrDynamic
+    x64.xor edx, edx
+    x64.mov rbx, 1
+    x64.sub rdx, rbx
+    x64.cmp rax, rdx
+    x64.je main.dynamicCount_0.after
+  dynamicCount_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  dynamicCount_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rcx, rax
+    x64.call shrPastWidth
+    x64.xor edx, edx
+    x64.mov rbx, 1
+    x64.sub rdx, rbx
+    x64.cmp rax, rdx
+    x64.je main.foldedPastWidth_0.after
+  foldedPastWidth_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  foldedPastWidth_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.sub rax, rcx
+    x64.mov rcx, rax
+    x64.mov rdx, 100
+    x64.call shrDynamic
+    x64.xor edx, edx
+    x64.mov rbx, 1
+    x64.sub rdx, rbx
+    x64.cmp rax, rdx
+    x64.je main.dynamicPastWidth_0.after
+  dynamicPastWidth_0:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  dynamicPastWidth_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

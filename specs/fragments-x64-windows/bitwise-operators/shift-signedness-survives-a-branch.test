@@ -1,0 +1,118 @@
+// Test: shift-signedness-survives-a-branch
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function afterBranch(v Wide, flag bool) returns Wide
+	if flag 'taken'
+		return v shr 60
+	end 'taken'
+	return 0
+end 'afterBranch'
+
+function insideLoop(v Wide, n Num) returns Wide
+	var acc = 0
+	var i = 0
+	while i < n 'each'
+		acc = v shr 60
+		i = i + 1
+	end 'each'
+	return acc
+end 'insideLoop'
+
+function main() returns ExitCode
+	if afterBranch(u64.max, flag: true) != 15 'branch'
+		return 1
+	end 'branch'
+	if insideLoop(u64.max, n: 3) != 15 'loop'
+		return 2
+	end 'loop'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @afterBranch(v: i64, flag: i1) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.test rdx, rdx
+    x64.je afterBranch.taken_0.after
+  taken_0:
+    x64.mov rax, 60
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rcx
+    x64.mov rcx, rax
+    x64.shr rdx, cl
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  taken_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @insideLoop(v: i64, n: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.jmp insideLoop.each_0.header
+  each_0.header:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jge insideLoop.each_0.exit
+  each_0:
+    x64.mov rax, 60
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rcx
+    x64.mov rcx, rax
+    x64.shr rdx, cl
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, 1
+    x64.mov rsi, [rbp-32]
+    x64.add rsi, rbx
+    x64.mov [rbp-32], rsi
+    x64.jmp insideLoop.each_0.header
+  each_0.exit:
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -1
+    x64.mov rdx, 1
+    x64.call afterBranch
+    x64.mov rcx, 15
+    x64.cmp rax, rcx
+    x64.je main.branch_0.after
+  branch_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  branch_0.after:
+    x64.mov rcx, -1
+    x64.mov rdx, 3
+    x64.call insideLoop
+    x64.mov rcx, 15
+    x64.cmp rax, rcx
+    x64.je main.loop_0.after
+  loop_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  loop_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -177,7 +177,7 @@ export function wordOperator(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to mod gives false
 		bitAnd to bitXor gives true
-		shl to shr gives false
+		shl to shrLogical gives false
 	end 'k'
 end 'wordOperator'
 
@@ -186,7 +186,7 @@ end 'wordOperator'
 export function shiftOperator(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to bitXor gives false
-		shl to shr gives true
+		shl to shrLogical gives true
 	end 'k'
 end 'shiftOperator'
 
@@ -210,9 +210,28 @@ end 'shiftOperator'
 //     64-bit shift's count to its low 6 bits, so `x shl 64` computes `x shl 0` (x, UNCHANGED) and
 //     `x shl 100` computes `x shl 36`. Fighting that masking is the whole content of this rule.
 //
-//   • **`shr` IS ARITHMETIC.** Go shifts a SIGNED left operand arithmetically, and every Maxon
-//     `int` is a signed i64 — there is no unsigned integer type. So `shr` sign-propagates:
-//     `(0-8) shr 60` is -1, not 15.
+//   • **THE LEFT OPERAND'S TYPE DECIDES HOW A RIGHT SHIFT FILLS.** Go: "the shift operators
+//     implement arithmetic shifts if the left operand is a signed integer and logical shifts if
+//     it is an unsigned integer". A shift is NOT symmetric in its operands — the right one is a
+//     DISTANCE, and its type says nothing about anything (a count declared `int(0 to 63)` is the
+//     most natural way there is to write one, and it made the BOOTSTRAP zero-fill a signed
+//     `shr`). Only the value being SHIFTED decides.
+//
+//     **And Maxon HAS an unsigned type: a ranged alias whose LOW BOUND IS 0.** `int(0 to u64.max)`
+//     is Maxon's `uint64` — it holds values whose bit 63 is set while the type calls them
+//     non-negative — so `u64.max shr 60` is **15**, not -1. `rangeIsUnsigned` is the one place
+//     that is decided, and `shiftFillsWithSign` the one place it is applied.
+//
+//     Every other range answers the same either way, and that is worth knowing rather than
+//     relying on: a value of `int(0 to 100)` is provably non-negative, so an arithmetic and a
+//     logical shift of it agree bit for bit. `int(0 to u64.max)` is the ONLY range on which the
+//     two readings can be told apart — which is exactly why it went unnoticed, and why the spec
+//     case that pins it must use it.
+//
+//     It was written down TWICE and the two copies disagreed: this comment used to say "every
+//     Maxon int is signed — there is no unsigned integer type", while `Parser.parseTypeAlias`
+//     accepted `int(0 to u64.max)` and the bootstrap zero-filled it. shv2 answered -1 and the
+//     bootstrap 15, for the same program.
 //
 //   • **A NEGATIVE COUNT IS AN ERROR**, never a shift the other way — masked, `a shl -1` silently
 //     computed `a shl 63`, the MAXIMUM LEFT shift, a wrong answer with the opposite sign. A
@@ -244,36 +263,108 @@ export function shiftCountIsUnguarded(count ParsedInt) returns bool
 	return count >= MinShiftCount and count <= MaxUnguardedShiftCount
 end 'shiftCountIsUnguarded'
 
-// Fold `lhs <op> count` under the rule above. `count` MUST be non-negative — a negative one is
-// E2054, and is never folded.
+// **IS THIS RANGED TYPE UNSIGNED?** THE one place that is answered, for the whole compiler.
 //
-// The saturation is the whole of it, and it has two shapes because a shift has two fills: a shift
-// that fills with ZEROS shifts every bit out, so it saturates to 0; a shift that fills with the
-// SIGN leaves the sign behind, and `lhs shr 63` already IS the sign — which is why an out-of-range
-// arithmetic right shift is a CLAMP OF THE COUNT and not a select of the result.
+// A range whose low bound is 0 or above describes only non-negative values, which is what
+// "unsigned" means. The bootstrap decides it the same way and from the same fact — its
+// `ComputeOptimalIntType` picks a U8/U16/U32/U64 storage type exactly when `lower >= 0` — so the
+// two compilers cannot disagree about which types zero-fill.
+//
+// It takes the LOW bound alone, and never the high one: `int(0 to 100)` and `int(0 to u64.max)`
+// are both unsigned, and the difference between them is a WIDTH question that no rule in this
+// file asks.
+export function rangeIsUnsigned(low ParsedInt) returns bool
+	return low >= 0
+end 'rangeIsUnsigned'
+
+// **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the
+// question `evalShift` (the fold), `Parser.emitShift` (the opcode) and `Parser.emitGuardedShift`
+// (the runtime saturation) must never answer differently, because a fold and a codegen that
+// disagree is a silent wrong answer.
+//
+// Only an ARITHMETIC right shift fills with the sign. A left shift vacates the LOW bits and always
+// fills them with zeros, whatever the operand's signedness — so its fill is not a question at all.
+//
+// ⚠ `leftOperandIsUnsigned` is a property of the value being SHIFTED and NEVER of the count.
+export function shiftFillsWithSign(op MaxonBinOp, leftOperandIsUnsigned bool) returns bool
+	return op == MaxonBinOp.shr and not leftOperandIsUnsigned
+end 'shiftFillsWithSign'
+
+// The opcode a SOURCE shift emits, once its fill is known — the one place the answer above is
+// turned into an instruction. `shl` fills the vacated LOW bits with zeros whatever its operand's
+// signedness, so it is never in question; only a right shift splits, into the arithmetic `shr`
+// and the logical `shrLogical`.
+//
+// `infixMaxonOp` maps the token `shr` to `MaxonBinOp.shr` unconditionally — it has no operand to
+// look at — so this is where a `shrLogical` is ever born, and `Parser.emitShift` is its only
+// caller.
+export function shiftOpcodeFor(op MaxonBinOp, signFills bool) returns MaxonBinOp
+	if op == MaxonBinOp.shl 'left'
+		return MaxonBinOp.shl
+	end 'left'
+
+	if not shiftOperator(op) 'notAShift'
+		panic("shiftOpcodeFor: {op.rawValue} is not a shift — only `shl`/`shr` reach here from `infixMaxonOp`")
+	end 'notAShift'
+
+	if signFills 'arithmetic'
+		return MaxonBinOp.shr
+	end 'arithmetic'
+
+	return MaxonBinOp.shrLogical
+end 'shiftOpcodeFor'
+
+// Fold `lhs <op> count`, where `op` is an EMITTED shift opcode — `shiftOpcodeFor`'s answer, not the
+// source token. `count` MUST be non-negative: a negative one is E2054, and is never folded.
+//
+// It takes NO `signFills` flag, and that is the point. The opcode already IS the decision — the
+// rule was asked once, of the left operand, and written into it — so the fold and the codegen read
+// one fact rather than two that could drift. `shr` is the arithmetic right shift by definition of
+// the enum; asking it is not re-deciding anything.
+//
+// The saturation has two shapes because a shift has two fills: one that fills with ZEROS shifts
+// every bit out, and so saturates to 0; one that fills with the SIGN leaves the sign behind, and
+// `lhs shr 63` already IS the sign — which is why an out-of-range arithmetic right shift is a CLAMP
+// OF THE COUNT and not a select of the result.
 export function evalShift(lhs ParsedInt, count ParsedInt, op MaxonBinOp) returns ParsedInt
 	if shiftCountIsNegative(count) 'negative'
 		panic("evalShift: negative count {count} — a negative count is E2054 and must never reach the folder")
 	end 'negative'
 
-	if op == MaxonBinOp.shl 'left'
-		if count >= ShiftCountBits 'shiftedOut'
-			return 0
-		end 'shiftedOut'
+	if op == MaxonBinOp.shr 'arithmetic'
+		// The clamp IS the saturation: `lhs shr 63` already is the sign, repeated, which is
+		// exactly what shifting every bit out of a signed value leaves behind.
+		if count >= ShiftCountBits 'saturate'
+			return lhs shr MaxUnguardedShiftCount
+		end 'saturate'
 
+		return lhs shr count
+	end 'arithmetic'
+
+	if not shiftOperator(op) 'notAShift'
+		panic("evalShift: {op.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` have a count")
+	end 'notAShift'
+
+	// Both ZERO-FILLING shifts — `shl` and `shrLogical` — shift every bit out for an out-of-range
+	// count, so both saturate to 0.
+	if count >= ShiftCountBits 'shiftedOut'
+		return 0
+	end 'shiftedOut'
+
+	if op == MaxonBinOp.shl 'left'
 		return lhs shl count
 	end 'left'
 
-	if op != MaxonBinOp.shr 'notAShift'
-		panic("evalShift: {op.rawValue} is not a shift — only `shl`/`shr` have a count")
-	end 'notAShift'
-
-	// Arithmetic: every Maxon int is signed, so `shr` sign-fills and the clamp gives the sign.
-	if count >= ShiftCountBits 'saturate'
-		return lhs shr MaxUnguardedShiftCount
-	end 'saturate'
-
-	return lhs shr count
+	// A LOGICAL right shift, folded with the only right shift a `ParsedInt` HAS — which is the
+	// ARITHMETIC one, because a `ParsedInt` is signed. So: shift, then CLEAR the high bits the sign
+	// replicated into. `64 - count` bits survive a shift by `count`, and the mask keeps exactly
+	// those.
+	//
+	// `count == 0` needs no special case, and that is not luck — it is this language's own rule,
+	// stated at the top of this file: `1 shl 64` shifts every bit out and is 0, so the mask is
+	// `0 - 1`, every bit kept, and the shift is the identity it should be.
+	let survivingBits = (1 shl (ShiftCountBits - count)) - 1
+	return (lhs shr count) and survivingBits
 end 'evalShift'
 
 // The result of asking the parser's constant folder to evaluate an operator: either the integer it
@@ -301,7 +392,7 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 		bitAnd gives FoldedInt.folded(lhs and rhs)
 		bitOr gives FoldedInt.folded(lhs or rhs)
 		bitXor gives FoldedInt.folded(lhs xor rhs)
-		shl to shr gives FoldedInt.notFoldable
+		shl to shrLogical gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntBinOp'
 
@@ -376,7 +467,7 @@ export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueType
 	return match op 'k'
 		add to mod gives ValueTypeTag.integer
 		bitAnd to bitXor gives wordOpResultTag(left, right: right)
-		shl to shr gives ValueTypeTag.integer
+		shl to shrLogical gives ValueTypeTag.integer
 	end 'k'
 end 'binOpResultTag'
 

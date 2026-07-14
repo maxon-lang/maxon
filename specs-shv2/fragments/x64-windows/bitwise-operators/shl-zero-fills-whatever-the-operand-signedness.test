@@ -1,0 +1,91 @@
+// Test: shl-zero-fills-whatever-the-operand-signedness
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shlDynamic(v Wide, d Num) returns Wide
+	return v shl d
+end 'shlDynamic'
+
+function shlPastWidth(v Wide) returns Wide
+	return v shl 64
+end 'shlPastWidth'
+
+function main() returns ExitCode
+	if shlDynamic(u64.max, d: 63) != i64.min 'topBitOnly'
+		return 1
+	end 'topBitOnly'
+	if shlPastWidth(u64.max) != 0 'everyBitOut'
+		return 2
+	end 'everyBitOut'
+	if shlDynamic(u64.max, d: 100) != 0 'everyBitOutDynamic'
+		return 3
+	end 'everyBitOutDynamic'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlDynamic {
+  entry:
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.ret
+}
+
+func @shlPastWidth {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 63
+    x64.callDirect shlDynamic
+    x64.movRegImm rax, -9223372036854775808
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, topBitOnly
+    x64.jmp ifcont
+  topBitOnly:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect shlPastWidth
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, everyBitOut
+    x64.jmp ifcont
+  everyBitOut:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 100
+    x64.callDirect shlDynamic
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, everyBitOutDynamic
+    x64.jmp ifcont
+  everyBitOutDynamic:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+}

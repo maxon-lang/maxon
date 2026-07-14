@@ -1,0 +1,95 @@
+// Test: shift-signedness-survives-a-branch
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function afterBranch(v Wide, flag bool) returns Wide
+	if flag 'taken'
+		return v shr 60
+	end 'taken'
+	return 0
+end 'afterBranch'
+
+function insideLoop(v Wide, n Num) returns Wide
+	var acc = 0
+	var i = 0
+	while i < n 'each'
+		acc = v shr 60
+		i = i + 1
+	end 'each'
+	return acc
+end 'insideLoop'
+
+function main() returns ExitCode
+	if afterBranch(u64.max, flag: true) != 15 'branch'
+		return 1
+	end 'branch'
+	if insideLoop(u64.max, n: 3) != 15 'loop'
+		return 2
+	end 'loop'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @afterBranch {
+  entry:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, taken
+    x64.jmp ifcont
+  taken:
+    x64.movRegReg r8, rcx
+    x64.shrRegImm8 r8, rcx, 60
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @insideLoop {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, each
+    x64.jmp whileexit
+  each:
+    x64.movRegReg rsi, rcx
+    x64.shrRegImm8 rsi, rcx, 60
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r8, rsi
+    x64.jmp whilehdr
+  whileexit:
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 1
+    x64.callDirect afterBranch
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, branch
+    x64.jmp ifcont
+  branch:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 3
+    x64.callDirect insideLoop
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, loop
+    x64.jmp ifcont
+  loop:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+}

@@ -1,0 +1,102 @@
+// Test: shl-zero-fills-whatever-the-operand-signedness
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shlDynamic(v Wide, d Num) returns Wide
+	return v shl d
+end 'shlDynamic'
+
+function shlPastWidth(v Wide) returns Wide
+	return v shl 64
+end 'shlPastWidth'
+
+function main() returns ExitCode
+	if shlDynamic(u64.max, d: 63) != i64.min 'topBitOnly'
+		return 1
+	end 'topBitOnly'
+	if shlPastWidth(u64.max) != 0 'everyBitOut'
+		return 2
+	end 'everyBitOut'
+	if shlDynamic(u64.max, d: 100) != 0 'everyBitOutDynamic'
+		return 3
+	end 'everyBitOutDynamic'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlDynamic(v: i64, d: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jge shlDynamic.__shift_count_ok_0
+  __shift_count_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __shift_count_ok_0:
+    x64.mov rax, 64
+    x64.cmp rdx, rax
+    x64.setb rax
+    x64.movzx rax, raxb
+    x64.mov rbx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, rdx
+    x64.shl rbx, cl
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rdx, rcx
+    x64.cmovne rdx, rbx
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @shlPastWidth(v: i64) -> u64 {
+  entry:
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -1
+    x64.mov rdx, 63
+    x64.call shlDynamic
+    x64.mov rcx, -9223372036854775808
+    x64.cmp rax, rcx
+    x64.je main.topBitOnly_0.after
+  topBitOnly_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  topBitOnly_0.after:
+    x64.mov rcx, -1
+    x64.call shlPastWidth
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.everyBitOut_0.after
+  everyBitOut_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  everyBitOut_0.after:
+    x64.mov rcx, -1
+    x64.mov rdx, 100
+    x64.call shlDynamic
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.everyBitOutDynamic_0.after
+  everyBitOutDynamic_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  everyBitOutDynamic_0.after:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+}
+---

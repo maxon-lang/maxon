@@ -52,8 +52,6 @@ public static partial class MaxonToStandardConversion {
       case MaxonBinOperator.BitAnd: { var o = new StdAndI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitOr: { var o = new StdOrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitXor: { var o = new StdXorI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shl: { var o = new StdShlI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shr: { var o = new StdShrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       default: throw new InvalidOperationException($"Unsupported signed i32 binop: {op}");
     }
     return (stdOp, result);
@@ -78,8 +76,6 @@ public static partial class MaxonToStandardConversion {
       case MaxonBinOperator.BitAnd: { var o = new StdAndI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitOr: { var o = new StdOrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitXor: { var o = new StdXorI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shl: { var o = new StdShlI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shr: { var o = new StdShrU32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       default: throw new InvalidOperationException($"Unsupported unsigned i32 binop: {op}");
     }
     return (stdOp, result);
@@ -108,8 +104,6 @@ public static partial class MaxonToStandardConversion {
       case MaxonBinOperator.BitAnd: { var o = new StdAndI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitOr: { var o = new StdOrI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       case MaxonBinOperator.BitXor: { var o = new StdXorI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shl: { var o = new StdShlI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
-      case MaxonBinOperator.Shr: { var o = new StdShrU64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
       default: throw new InvalidOperationException($"Unsupported unsigned int binop: {op}");
     }
     return (stdOp, result);
@@ -152,11 +146,6 @@ public static partial class MaxonToStandardConversion {
     { (MaxonBinOperator.BitAnd, MaxonValueKind.Integer), (l, r) => { var op = new StdAndI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitOr, MaxonValueKind.Integer), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitXor, MaxonValueKind.Integer), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  { (MaxonBinOperator.Shl, MaxonValueKind.Integer), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  // ARITHMETIC (`arith.shrsi` → x64 SAR / arm64 ASR), not logical. A Maxon `int` is a SIGNED
-  // 64-bit integer, and Go shifts a signed left operand arithmetically: `(0-8) shr 60` is -1, not
-  // 15. Only the UNSIGNED factories below zero-fill — see CreateUnsignedIntBinOp.
-  { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Byte operations (bytes are represented as I64 at standard level)
     { (MaxonBinOperator.Eq, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.Ne, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },
@@ -181,9 +170,6 @@ public static partial class MaxonToStandardConversion {
   { (MaxonBinOperator.BitAnd, MaxonValueKind.Short), (l, r) => { var op = new StdAndI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitOr, MaxonValueKind.Short), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitXor, MaxonValueKind.Short), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  { (MaxonBinOperator.Shl, MaxonValueKind.Short), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  // A Short is an i64 at this tier and is SIGNED, so its right shift sign-propagates too.
-  { (MaxonBinOperator.Shr, MaxonValueKind.Short), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Logical operations (bool)
     { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
   { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
@@ -208,80 +194,107 @@ public static partial class MaxonToStandardConversion {
       ? lit.IntValue
       : null;
 
-  /// True iff this op is a shift whose count the instruction may NOT be handed as written — i.e.
-  /// any count the compiler cannot fold, plus (defensively) a folded one the parser somehow did
-  /// not normalize. A shift by a constant the hardware accepts needs nothing and gets nothing.
-  private static bool ShiftNeedsGuard(MaxonBinOp binOp, Dictionary<MaxonValue, MaxonLiteralOp> literalMap) {
-    if (binOp.Operator is not (MaxonBinOperator.Shl or MaxonBinOperator.Shr))
-      return false;
-    if (binOp.OperandKind is not (MaxonValueKind.Integer or MaxonValueKind.Short))
-      return false;
+  /// True iff this op is an integer shift — the ops <see cref="EmitShift"/> owns, and the ops that
+  /// therefore never reach the width dispatch that would narrow them.
+  private static bool IsIntegerShift(MaxonBinOp binOp) =>
+    binOp.Operator is MaxonBinOperator.Shl or MaxonBinOperator.Shr
+    && binOp.OperandKind is MaxonValueKind.Integer or MaxonValueKind.Short;
 
-    return ShiftCountOf(binOp, literalMap) is not { } count || !ShiftSemantics.IsUnguardedCount(count);
-  }
+  /// ⭐ Build a shift — THE one place a Std-tier shift is emitted, and the runtime half of
+  /// <see cref="ShiftSemantics"/>. Every integer shift comes here, whether or not its count is a
+  /// constant, and the reason is the whole point of the routine:
+  ///
+  ///   **ONE WIDTH.** A shift is 64 bits (see ShiftSemantics' width bullet). Its operands are
+  ///   widened to i64 and its result IS an i64, whatever ranged type the left operand carries.
+  ///   There used to be a second path — a constant count in 0..63 fell through to the ordinary
+  ///   width dispatch, which narrows an op to i32 when `OptimalType` says the operands fit — and it
+  ///   truncated the shift's VALUE: `(0-8) shl 29` on an `int(-2^31 to 2^31-1)` answered **0**,
+  ///   while the identical shift by a count the compiler could not see answered **-4294967296**.
+  ///   The fold and the codegen were two opinions. The narrowing is gone, and with it the second
+  ///   path: the FILL is the only thing a ranged type decides here.
+  ///
+  ///   **ONE SATURATION.** x64 masks a 64-bit shift's count to its low 6 bits, and arm64's
+  ///   LSLV/ASRV do the same, so a count the compiler cannot see cannot be handed to the
+  ///   instruction as written: `x shl 64` would compute `x shl 0` (x, UNCHANGED) and `x shl 100`
+  ///   would compute `x shl 36`. Such a count is SATURATED first, by the rule
+  ///   <see cref="ShiftSemantics.Eval"/> folds by:
+  ///
+  ///     • a shift that fills with ZEROS (`shl`, and an UNSIGNED `shr`) shifts every bit out, so
+  ///       its out-of-range value is the constant **0** — a select on the RESULT.
+  ///     • a shift that fills with the SIGN (a signed `shr`) leaves the sign behind, and `x sar 63`
+  ///       already IS the sign — so its out-of-range value is a **clamp of the COUNT** to 63. No
+  ///       select of the result is needed, and none is emitted.
+  ///
+  ///   The range test is UNSIGNED, which is why one compare covers both ends: a negative count is a
+  ///   huge unsigned one, so it reads as out-of-range. It is belt-and-braces — the parser has
+  ///   already emitted the panic Go requires for a negative count (Parser.EmitNegativeShiftCountCheck)
+  ///   — but it means the expression is correct standing alone rather than by an invariant
+  ///   established two passes away.
+  ///
+  /// A count the compiler CAN see and the instruction accepts as written pays none of the
+  /// saturation: it gets the bare shift, and that is the only thing constant-count lowering still
+  /// buys. Everything else about the two is identical, which is why they are one routine.
+  private static StdValue EmitShift(
+    MaxonBinOp binOp, StdValue lhs, StdValue rhs,
+    Dictionary<MaxonValue, MaxonLiteralOp> literalMap, IrBlock<StandardOp> block) {
 
-  /// ⭐ Build a shift whose count the compiler could NOT fold — the runtime half of
-  /// <see cref="ShiftSemantics"/>, and the half that has to fight the hardware.
-  ///
-  /// x64 masks a 64-bit shift's count to its low 6 bits, and arm64's LSLV/ASRV do the same. So the
-  /// instruction cannot be handed the count as written: `x shl 64` would compute `x shl 0` (x,
-  /// UNCHANGED) and `x shl 100` would compute `x shl 36`. The count must be SATURATED before the
-  /// instruction sees it, and the saturation is the same one the folder applies:
-  ///
-  ///   • a shift that fills with ZEROS (`shl`, and an UNSIGNED `shr`) shifts every bit out, so its
-  ///     out-of-range value is the constant **0** — a select on the RESULT.
-  ///   • a shift that fills with the SIGN (a signed `shr`) leaves the sign behind, and `x sar 63`
-  ///     already IS the sign — so its out-of-range value is a **clamp of the COUNT** to 63. No
-  ///     select of the result is needed, and none is emitted.
-  ///
-  /// The range test is UNSIGNED, which is why one compare covers both ends: a negative count is a
-  /// huge unsigned one, so it reads as out-of-range. It is belt-and-braces — the parser has
-  /// already emitted the panic Go requires for a negative count (Parser.EmitNegativeShiftCountCheck)
-  /// — but it means this expression is correct standing alone rather than by an invariant
-  /// established two passes away.
-  ///
-  /// Cost, on top of the shift: one const + one compare + one select. Only a count the compiler
-  /// cannot see pays it. A constant count in 0..63 — every `x shr 8`, every `x shl 3` — does not
-  /// come here at all, and its codegen is untouched.
-  private static StdValue EmitGuardedShift(
-    MaxonBinOp binOp, StdValue lhs, StdValue rhs, IrBlock<StandardOp> block) {
+    // ASKED, not restated — the same classifier the parser's fold reads (Parser.EmitShift), over
+    // the same `OptimalType`, so the folded and the emitted path cannot come to different
+    // conclusions about which way this shift fills.
+    var kind = ShiftSemantics.KindOf(binOp.Operator, binOp.IsUnsigned);
 
-    var isRightShift = binOp.Operator == MaxonBinOperator.Shr;
-    // ASKED, not restated — the same call the parser's fold makes (Parser.EmitShift), over the
-    // same `OptimalType`, so the folded and the guarded path cannot come to different conclusions
-    // about which way this shift fills.
-    var signFills = ShiftSemantics.SignFills(isRightShift, binOp.IsUnsigned);
-
-    // The guard reasons about the count as a full 64-bit value: a narrowed one would truncate
-    // `x shl 4294967296` to `x shl 0`, which is the very mistake being fixed.
     var lhs64 = EnsureI64(lhs, block, signExtend: !binOp.IsUnsigned);
     var count64 = EnsureI64(rhs, block, signExtend: true);
+
+    var foldedCount = ShiftCountOf(binOp, literalMap);
+
+    // `x shl 0` / `x shr 0` is `x`. Recognized HERE rather than among the algebraic identities,
+    // because only here is the operand already widened: the identity used to hand back the left
+    // operand at ITS width, which for a narrow ranged local was an i32 — a shift result that was
+    // not 64 bits wide, which is exactly the invariant above.
+    if (foldedCount == ShiftSemantics.MinShiftCount)
+      return lhs64;
+
+    if (foldedCount is { } count && ShiftSemantics.IsUnguardedCount(count))
+      return EmitRawShift(lhs64, count64, kind, block);
 
     var widthConst = new StdConstI64Op(ShiftSemantics.ShiftCountBits);
     block.AddOp(widthConst);
     var countFits = new StdCmpU64Op("ult", count64, widthConst.Result);
     block.AddOp(countFits);
 
-    if (signFills) {
+    // A sign-filling shift saturates by CLAMPING the count to 63 — `x sar 63` already IS the sign,
+    // so no select of the result is needed. A zero-filling one saturates the RESULT to 0.
+    if (!ShiftSemantics.ZeroFills(kind)) {
       var maxCount = new StdConstI64Op(ShiftSemantics.MaxUnguardedShiftCount);
       block.AddOp(maxCount);
       var clamped = new StdSelectI64Op(countFits.Result, count64, maxCount.Result);
       block.AddOp(clamped);
-      var sar = new StdShrI64Op(lhs64, clamped.Result);
-      block.AddOp(sar);
-      return sar.Result;
+      return EmitRawShift(lhs64, clamped.Result, kind, block);
     }
 
-    StdBinaryI64Op rawShift = isRightShift
-      ? new StdShrU64Op(lhs64, count64)
-      : new StdShlI64Op(lhs64, count64);
-    block.AddOp(rawShift);
-
+    var rawShift = EmitRawShift(lhs64, count64, kind, block);
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
-    var saturated = new StdSelectI64Op(countFits.Result, rawShift.Result, zero.Result);
+    var saturated = new StdSelectI64Op(countFits.Result, rawShift, zero.Result);
     block.AddOp(saturated);
     return saturated.Result;
+  }
+
+  /// The shift INSTRUCTION, at 64 bits, one per <see cref="ShiftSemantics.ShiftKind"/>. The count
+  /// must already be one the hardware's mask is a no-op on — a folded count in 0..63, or one
+  /// <see cref="EmitShift"/> has saturated.
+  private static StdI64 EmitRawShift(
+    StdI64 lhs, StdI64 count, ShiftSemantics.ShiftKind kind, IrBlock<StandardOp> block) {
+
+    StdBinaryI64Op shift = kind switch {
+      ShiftSemantics.ShiftKind.Left => new StdShlI64Op(lhs, count),
+      ShiftSemantics.ShiftKind.ArithmeticRight => new StdShrI64Op(lhs, count),
+      ShiftSemantics.ShiftKind.LogicalRight => new StdShrU64Op(lhs, count),
+      _ => throw new InvalidOperationException($"EmitRawShift: unhandled ShiftKind {kind}"),
+    };
+    block.AddOp(shift);
+    return shift.Result;
   }
 
   // ============================================================================
@@ -348,10 +361,6 @@ public static partial class MaxonToStandardConversion {
         case MaxonBinOperator.BitXor:
           if (rVal == 0) { result = lhsStd; return true; }
           if (lVal == 0) { result = rhsStd; return true; }
-          break;
-        case MaxonBinOperator.Shl:
-        case MaxonBinOperator.Shr:
-          if (rVal == 0) { result = lhsStd; return true; }
           break;
       }
     }

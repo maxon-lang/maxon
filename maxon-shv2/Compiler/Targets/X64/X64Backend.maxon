@@ -144,6 +144,7 @@ let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 // (/5) is therefore deliberately absent — nothing in the language reaches it.
 let Grp2ExtShl = 4  // SHL r/m, count
 let Grp2ExtSar = 7  // SAR r/m, count — ARITHMETIC right shift (sign-replicating)
+let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filling)
 
 // Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
 let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
@@ -695,10 +696,12 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		xorRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtXor, reg: resolvePhysical(dest), imm: imm)
 		shlRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShl, reg: resolvePhysical(dest), count: imm)
 		sarRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtSar, reg: resolvePhysical(dest), count: imm)
+		shrRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: resolvePhysical(dest), count: imm)
 		// The variable-count shifts read their count from CL, which the lowering has already
 		// loaded — so, like the immediate forms, the encoded instruction names only `dest`.
 		shlRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShl, reg: resolvePhysical(dest))
 		sarRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtSar, reg: resolvePhysical(dest))
+		shrRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShr, reg: resolvePhysical(dest))
 		setccReg(dest, cond) then encodeSetccReg(code, dest: resolvePhysical(dest), cond: cond)
 	end 'emit'
 end 'emitTargetOp'

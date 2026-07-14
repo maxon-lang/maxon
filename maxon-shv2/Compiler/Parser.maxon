@@ -914,20 +914,27 @@ export type Parser
 	// cursor, so it is invisible to everything downstream.
 	export function foldDeclaredSignaturesInto(index ProgramSignatures)
 		var entries = FuncReturnTypeEntryArray.create()
+		var aliases = RangedTypeAliasArray.create()
 
 		let resume = self.pos
 		self.pos = 0
 		while not self.isEof() 'scan'
-			if not self.at(TokenKind.function) 'notAFunction'
+			if self.at(TokenKind.function) 'isFunction'
 				self.advance()
+				self.recordScannedSignature(entries)
 				continue
-			end 'notAFunction'
+			end 'isFunction'
+
+			if self.at(TokenKind.typealias) 'isTypeAlias'
+				self.recordScannedTypeAlias(aliases)
+				continue
+			end 'isTypeAlias'
+
 			self.advance()
-			self.recordScannedSignature(entries)
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Cursor is just past `function`. Append the declared return type of the function whose
@@ -944,6 +951,22 @@ export type Parser
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		entries.push(FuncReturnTypeEntry.create(nameTok.value, returnType: returnType))
 	end 'recordScannedSignature'
+
+	// Cursor is AT `typealias`. Append the alias the declaration names, if it is well-formed enough
+	// to read one off.
+	//
+	// TOLERANT, exactly as `recordScannedSignature` is, and for the same reason: a malformed alias
+	// is the REAL parse's to report, with a position; a sweep that could veto would reject a correct
+	// program the moment it failed to recognize something the parser accepts.
+	//
+	// It reads through `readTypeAliasDeclaration` — the very routine the real parse reads with — so
+	// the sweep and the parse cannot drift into two opinions of what a range MEANS. That shared
+	// routine consumes the `typealias` keyword before it can fail, so the cursor always advances and
+	// the caller's loop cannot spin.
+	function recordScannedTypeAlias(aliases RangedTypeAliasArray)
+		let alias = try self.readTypeAliasDeclaration() otherwise return
+		aliases.push(alias)
+	end 'recordScannedTypeAlias'
 
 	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
 	// cursor where it stopped — when the token stream does not hold one, which the real
@@ -987,7 +1010,7 @@ export type Parser
 		if self.at(TokenKind.function) 'isFunction'
 			try self.parseFunction(visibility)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			try self.parseTypeAlias()
+			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
 		end 'isTypeAlias' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
@@ -1000,16 +1023,21 @@ export type Parser
 	// most of the corpus.
 	//
 	// It emits NO op: an alias is a DECLARATION, and its whole effect is the registry
-	// entry recorded here, which TypeResolution substitutes for every `MaxonType.named`
+	// entry its caller records, which TypeResolution substitutes for every `MaxonType.named`
 	// use of the name. Two aliases over the same range are therefore the SAME type — an
 	// alias creates no nominal distinction — and a use in a type position needs no parser
 	// change at all (`parseTypeReference` already interns a bare identifier).
 	//
-	// The RANGE is recorded but not yet enforced: a narrowing conversion into a ranged
-	// alias is checked at run time, and that check is a later milestone. The corpus's
-	// ranges are overwhelmingly WIDE (`i64.min to i64.max`, `0 to u64.max`), for which no
-	// check would be emitted regardless.
-	function parseTypeAlias() throws ParseError
+	// It READS and does not RECORD, because it has two callers that record differently: the real
+	// parse files the alias in this file's artifact, and the whole-program declaration sweep
+	// (`recordScannedTypeAlias`) folds it into the cross-file index the shift rule reads. One
+	// reader, so the two can never disagree about what a range means.
+	//
+	// The RANGE is not yet enforced as a bound: a narrowing conversion into a ranged alias is
+	// checked at run time, and that check is a later milestone. It IS read, and by more than the
+	// registry — a range whose low bound is 0 declares an UNSIGNED type, and that decides how every
+	// `shr` on a value of it fills (TypeRules' `rangeIsUnsigned`).
+	function readTypeAliasDeclaration() returns RangedTypeAlias throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
@@ -1029,8 +1057,8 @@ export type Parser
 		let high = try self.parseRangeUpperBound()
 		try self.consume(TokenKind.rightParen)
 
-		self.artifact.recordTypeAlias(RangedTypeAlias.create(nameTok.value, underlying: MaxonType.integer, low: low, high: high))
-	end 'parseTypeAlias'
+		return RangedTypeAlias.create(nameTok.value, underlying: MaxonType.integer, low: low, high: high)
+	end 'readTypeAliasDeclaration'
 
 	// The `to <high>` / `upto <high>` half of a range, returned as an INCLUSIVE upper
 	// bound: `upto` is exclusive, so it normalizes to `high - 1` here and the registry
@@ -2225,6 +2253,46 @@ export type Parser
 		return try self.valueTags.get(value) otherwise panic("Parser.tagOf: value v{value} has no recorded type — every SSA value must be minted through mintValue")
 	end 'tagOf'
 
+	// **IS THIS VALUE'S TYPE UNSIGNED?** The question THE SHIFT RULE asks of a shift's LEFT operand,
+	// and the only thing that decides whether `shr` fills with the sign or with zeros. Exhaustive
+	// over `ValueTypeTag`, so a new type cannot be added without being placed on one side of it.
+	//
+	//   • `named`    — a ranged typealias, and unsigned exactly when its LOW BOUND is 0 or above
+	//                  (`rangeIsUnsigned`). The alias is looked up in the WHOLE-PROGRAM declaration
+	//                  index, never in this file's artifact: an alias declared in another file is
+	//                  still an unsigned type here, and a file-local table would answer "signed" and
+	//                  emit the wrong instruction. It is order-independent within a file too, which
+	//                  the artifact table — filled as declarations are parsed — would not be.
+	//   • `exitCode` — `int(0 to u32.max)`. Unsigned, by the same low-bound rule its range would
+	//                  give if it were spelled as one.
+	//   • `integer`  — a bare `int` is `i64.min to i64.max`. SIGNED, and it is the default every
+	//                  shift in the language sign-fills under.
+	//   • the rest   — not a number, so not a shift operand at all: `requireBinOpOperands` has
+	//                  already rejected the program, and `emitShift` asks it BEFORE this is reached.
+	//                  Answering "signed" costs nothing, because no code is kept.
+	function valueIsUnsigned(value ValueId) returns bool
+		let tag = self.tagOf(value)
+		if tag == ValueTypeTag.exitCode 'exitCode'
+			return true
+		end 'exitCode'
+
+		if tag != ValueTypeTag.named 'notAnAlias'
+			return false
+		end 'notAnAlias'
+
+		let nameId = try self.valueNameIds.get(value) otherwise panic("Parser.valueIsUnsigned: value v{value} has no recorded type name — the two type columns fell out of lockstep")
+		let name = try self.artifact.typeNames.nameOf(nameId) otherwise panic("Parser.valueIsUnsigned: type-name id {nameId} is not in this file's interner — every `named` tag is minted with an id from it")
+
+		// An alias NO file declares is a user error (E3011, reported by TypeResolution against the
+		// merged registry, which is the authority). It is not this rule's to report — the sweep is
+		// deliberately tolerant — and the program is rejected before anything emitted here can run,
+		// so "signed" is the harmless reading and never a silent wrong answer.
+		return match self.signatures.aliasOf(name) 'a'
+			declared(alias) gives rangeIsUnsigned(alias.low)
+			undeclared gives false
+		end 'a'
+	end 'valueIsUnsigned'
+
 	// The full `MaxonType` of an SSA value, REBUILT from the two columns. It CONSTRUCTS a
 	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
 	// STORED (a binding's declared type), and never on a per-value or per-operator path.
@@ -2400,8 +2468,14 @@ export type Parser
 		// must also leave no ops behind.
 		try requireBinOpOperands(op, left: self.tagOf(lhs), right: self.tagOf(count), opTok: opTok)
 
+		// ⭐ THE SHIFT RULE's one question, asked ONCE, of the LEFT operand — and then CARRIED: to
+		// the opcode, to the fold, and to the guard. Never re-derived, because the whole class of
+		// bug this file has already paid for is two readers of one rule reaching two answers.
+		let signFills = shiftFillsWithSign(op, leftOperandIsUnsigned: self.valueIsUnsigned(lhs))
+		let shiftOp = shiftOpcodeFor(op, signFills: signFills)
+
 		if not self.constIsKnown(count) 'dynamic'
-			return try self.emitGuardedShift(lhs, count: count, op: op, opTok: opTok)
+			return try self.emitGuardedShift(lhs, count: count, op: shiftOp, opTok: opTok)
 		end 'dynamic'
 
 		let folded = self.constOf(count)
@@ -2416,31 +2490,33 @@ export type Parser
 		if not shiftCountIsUnguarded(folded) 'shiftedOut'
 			// A count that shifts every bit out. There is no instruction for it — the hardware
 			// would mask it straight back into range — so the compiler writes down what it MEANS.
-			// `shl` fills with ZEROS, so shifting every bit out leaves the constant 0. `shr` fills
-			// with the SIGN, and `x shr 63` already IS the sign, so it becomes a shift by
-			// `MaxUnguardedShiftCount`. Neither is the masked shift the hardware would have
-			// performed (`x shl 64` == `x`, `x shl 100` == `x shl 36`).
+			// A shift that fills with ZEROS (`shl`, and an unsigned `shrLogical`) leaves the constant
+			// 0. One that fills with the SIGN leaves the sign, and `x shr 63` already IS the sign, so
+			// it becomes a shift by `MaxUnguardedShiftCount`. Neither is the masked shift the
+			// hardware would have performed (`x shl 64` == `x`, `x shl 100` == `x shl 36`).
 			//
 			// `lhs` keeps its ops either way: they may have side effects, and Go evaluates the
 			// left operand of a shift whatever the count turns out to be.
-			if op == MaxonBinOp.shl 'zeroFill'
+			if not signFills 'zeroFill'
 				return self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
 			end 'zeroFill'
 
 			let clamped = self.emitLiteral(MaxUnguardedShiftCount, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
-			return try self.emitBinOp(lhs, rhs: clamped, op: op, opTok: opTok)
+			return try self.emitBinOp(lhs, rhs: clamped, op: shiftOp, opTok: opTok)
 		end 'shiftedOut'
 
 		// A count the instruction takes as written; the hardware's mask is a no-op on it. The
 		// operand is emitted UNCHANGED — this compiler folds no constant expression INTO the IR
 		// (`1 + 2` still emits an `add`; see FoldConstOperands' header), and a shift count that
 		// folds to 3 is a shift by 3 whether it arrives as a literal or as an `add`.
-		let result = try self.emitBinOp(lhs, rhs: count, op: op, opTok: opTok)
+		let result = try self.emitBinOp(lhs, rhs: count, op: shiftOp, opTok: opTok)
 
 		// The shift's own value, when the parser holds both sides — RECORDED, not rewritten. It is
-		// what makes `let A = 1 shl 4` a count that `x shl A` can see.
+		// what makes `let A = 1 shl 4` a count that `x shl A` can see. It folds under the OPCODE the
+		// rule already chose, so the constant recorded here and the instruction that opcode emits
+		// cannot answer differently — there is one fact, not two.
 		if self.constIsKnown(lhs) 'bothKnown'
-			self.recordConst(result, folded: evalShift(self.constOf(lhs), count: folded, op: op))
+			self.recordConst(result, folded: evalShift(self.constOf(lhs), count: folded, op: shiftOp))
 		end 'bothKnown'
 
 		return result
@@ -2461,12 +2537,18 @@ export type Parser
 	//                                              set, so it lands out-of-range too.
 	//   mask       = (t or -t) shr 63            — an ARITHMETIC shr turns "t is non-zero" into
 	//                                              all-ones, and "t is zero" into all-zeros.
-	//   shl: (x shl count) and not mask          — a zero-filling shift saturates to 0.
-	//   shr: x shr (count or mask)               — a sign-filling shift saturates to the SIGN, and
-	//                                              a count of -1 masks to 63, which IS the sign.
+	//   ZERO-FILL: (x <shift> count) and not mask   — `shl`, and an UNSIGNED `shrLogical`. Both
+	//                                                 shift every bit out, so both saturate to 0.
+	//   SIGN-FILL: x shr (count or mask)            — a signed `shr` saturates to the SIGN, and a
+	//                                                 count of -1 masks to 63, which IS the sign.
 	//
-	// Cost, on top of the shift: 4 ops for the mask, plus 2 (`shl`) or 1 (`shr`). Only a count the
-	// compiler cannot see pays it — every `x shr 8` and `x shl 3` is folded and untouched.
+	// Which one applies is read off the OPCODE, which is where `emitShift` already wrote the answer:
+	// `shr` is the arithmetic right shift by definition of the enum, and every other shift opcode
+	// zero-fills. THE SHIFT RULE was asked once, of the left operand; this is not a second reading
+	// of it but a reading of its result.
+	//
+	// Cost, on top of the shift: 4 ops for the mask, plus 2 (zero-fill) or 1 (sign-fill). Only a
+	// count the compiler cannot see pays it — every `x shr 8` and `x shl 3` is folded and untouched.
 	//
 	// ⚠ TODO — Go PANICS on a negative count at run time ("if the shift count is negative at run
 	// time, a run-time panic occurs"), and shv2 CANNOT: it has no panic runtime, no trap op, and
@@ -2486,16 +2568,24 @@ export type Parser
 		let negatedBits = self.emitUnaryOp(bitsAboveCount, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, opTok: opTok)
 		let signCarrier = try self.emitBinOp(bitsAboveCount, rhs: negatedBits, op: MaxonBinOp.bitOr, opTok: opTok)
 		let signBit = self.emitLiteral(MaxUnguardedShiftCount, valueType: MaxonType.integer, range: range)
+		// ARITHMETIC, and unconditionally so: this `shr` is not the user's shift but the MASK's, and
+		// it works precisely BECAUSE it replicates the sign — `signCarrier shr 63` is all-ones when
+		// the count is out of range and all-zeros when it is not. It is a fact about `signCarrier`
+		// (a plain `int`, and therefore signed) and never about `lhs`, so the user's shift opcode has
+		// no say in it.
 		let mask = try self.emitBinOp(signCarrier, rhs: signBit, op: MaxonBinOp.shr, opTok: opTok)
 
 		if op == MaxonBinOp.shr 'signFilling'
 			// A count of -1 masks to 63 in the hardware, and `x shr 63` IS the sign — so saturating
 			// a sign-filling shift is a CLAMP OF THE COUNT, and needs no select of the result.
 			let saturatedCount = try self.emitBinOp(count, rhs: mask, op: MaxonBinOp.bitOr, opTok: opTok)
-			return try self.emitBinOp(lhs, rhs: saturatedCount, op: MaxonBinOp.shr, opTok: opTok)
+			return try self.emitBinOp(lhs, rhs: saturatedCount, op: op, opTok: opTok)
 		end 'signFilling'
 
-		let raw = try self.emitBinOp(lhs, rhs: count, op: MaxonBinOp.shl, opTok: opTok)
+		// A zero-filling shift — `shl`, or an unsigned `shrLogical`. Both shift every bit out for
+		// an out-of-range count, so both saturate to 0 by masking the RESULT. The shift itself is
+		// `op`, which is why one branch now serves the two of them.
+		let raw = try self.emitBinOp(lhs, rhs: count, op: op, opTok: opTok)
 		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, opTok: opTok)
 		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
 	end 'emitGuardedShift'

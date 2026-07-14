@@ -1,3 +1,5 @@
+using MaxonSharp.Compiler.Ir.Dialects;
+
 namespace MaxonSharp.Compiler;
 
 /// ⭐ THE SHIFT RULE — the canonical statement of what `shl`/`shr` MEAN in this compiler, and the
@@ -16,13 +18,32 @@ namespace MaxonSharp.Compiler;
 ///     hardware wraps.
 ///
 ///   • **A right shift is ARITHMETIC when the left operand is signed**, logical when it is unsigned.
-///     Every Maxon `int` is a signed 64-bit integer, so `shr` sign-propagates: `(0-8) shr 60` is -1,
-///     not 15. Only a value whose ranged type is unsigned (`int(0 to u64.max)`) zero-fills.
+///     A bare `int` is signed, so `shr` sign-propagates on one: `(0-8) shr 60` is -1, not 15. A
+///     value whose ranged type is unsigned — a range with a low bound of 0, `int(0 to u64.max)`
+///     being Maxon's `uint64` — zero-fills instead: `u64.max shr 60` is 15. <see cref="KindOf"/>
+///     is the one place that decision is made.
+///
+///   • **A SHIFT IS 64 BITS WIDE.** Its operands and its result are i64, whatever ranged type the
+///     left operand carries. A ranged type decides a shift's FILL (see <see cref="KindOf"/>) and
+///     NEVER its WIDTH — those are two different questions, and answering the second from the first
+///     is a wrong answer twice over:
+///
+///       – it truncates the VALUE. `x shl 29` on an `int(-2^31 to 2^31-1)` needs 61 bits to hold
+///         its answer; narrowed to a 32-bit op, `(0-8) shl 29` was **0** while the same shift by a
+///         count the compiler could not see answered **-4294967296**. Same value, same count, two
+///         answers — the folder and the emitted code disagreeing, which is what this file exists to
+///         make impossible.
+///       – it masks the COUNT to FIVE bits. A 32-bit shift instruction takes its count mod 32
+///         (`sar r32, cl`), so `x shr 33` — a count this file calls perfectly ordinary, and which
+///         therefore reaches the instruction unguarded — would have computed `x shr 1`.
+///
+///     <see cref="Eval"/> computes in `long`, and there is exactly one width for the emitted code to
+///     agree with it in.
 ///
 ///   • **A negative count is an ERROR**, never a shift the other way. A constant one is a compile
 ///     error (E2054); a runtime one panics.
 ///
-/// The saturation follows from the two bullets together, and is the whole content of this file:
+/// The saturation follows from the bullets together, and is the whole content of this file:
 /// a shift that fills with ZEROS saturates to zero, and a shift that fills with the SIGN saturates
 /// to the sign. `x sar 63` IS the sign, which is why an out-of-range arithmetic right shift is
 /// expressed as a CLAMP of the count rather than a select of the result.
@@ -49,22 +70,50 @@ public static class ShiftSemantics {
   public static bool IsUnguardedCount(long count) =>
     count >= MinShiftCount && count <= MaxUnguardedShiftCount;
 
-  /// True iff this shift fills the bits it vacates with the SIGN rather than with zeros. THE one
-  /// place that question is answered, because it is the question the fold (<see cref="Eval"/>) and
-  /// the guarded lowering must never answer differently: it alone decides whether an out-of-range
-  /// count saturates the RESULT to 0 or CLAMPS the count to <see cref="MaxUnguardedShiftCount"/>.
+  /// The three shifts the hardware has, and the whole of what a shift's FILL amounts to. A single
+  /// three-valued fact, replacing the `(isRightShift, signFills)` pair that used to carry it — that
+  /// pair has FOUR states, and the fourth ("a left shift that fills with the sign") names nothing,
+  /// so every reader had to know not to build it and every function taking it had to trust that no
+  /// one did. This is the C# twin of maxon-shv2's three shift opcodes (`shl` / `shr` /
+  /// `shrLogical`), and it exists for the same reason: the fill is decided ONCE, from the left
+  /// operand's type, and then CARRIED — never re-derived at each site that acts on it.
+  public enum ShiftKind {
+    /// `shl` — vacates the LOW bits and fills them with zeros, whatever the operand's signedness.
+    Left,
+
+    /// `shr` on a SIGNED left operand — x64 SAR / arm64 ASR. Fills with the sign, so an
+    /// out-of-range count saturates to the sign (a CLAMP of the count; `x sar 63` already IS it).
+    ArithmeticRight,
+
+    /// `shr` on an UNSIGNED left operand — x64 SHR / arm64 LSR. Fills with zeros, so an
+    /// out-of-range count saturates the RESULT to 0.
+    LogicalRight,
+  }
+
+  /// The shift `op` performs on a left operand of the given signedness — THE one place Go's rule
+  /// becomes a concrete choice, and the question the fold (<see cref="Eval"/>) and the codegen
+  /// (MaxonToStandardConversion.EmitShift) must never answer differently. Every reader takes the
+  /// answer FROM here rather than re-deriving it from `(op, IsUnsigned)`.
   ///
   /// Go's rule: a right shift is arithmetic when its LEFT operand is signed, logical when it is
-  /// unsigned. A left shift vacates the low bits and always fills them with zeros, whatever the
-  /// operand's signedness.
+  /// unsigned. A left shift always zero-fills, whatever the operand's signedness.
   ///
   /// ⚠ `leftOperandIsUnsigned` is a property of the value being SHIFTED and NEVER of the count.
   /// The parser used to take a shift's `OptimalType` from `lhs ?? rhs`, so a count declared
   /// `int(0 to 63)` — an unsigned optimal type, and the most natural way there is to declare a
   /// shift distance — made a SIGNED `shr` zero-fill: `(0-8) shr n` answered 15 for that `n` and -1
   /// for a plain `int` one. A shift is not symmetric in its operands, and this is where that bites.
-  public static bool SignFills(bool isRightShift, bool leftOperandIsUnsigned) =>
-    isRightShift && !leftOperandIsUnsigned;
+  public static ShiftKind KindOf(MaxonBinOperator op, bool leftOperandIsUnsigned) => op switch {
+    MaxonBinOperator.Shl => ShiftKind.Left,
+    MaxonBinOperator.Shr => leftOperandIsUnsigned ? ShiftKind.LogicalRight : ShiftKind.ArithmeticRight,
+    _ => throw new InvalidOperationException(
+      $"ShiftSemantics.KindOf: {op} is not a shift — only `shl`/`shr` have a fill"),
+  };
+
+  /// True iff a shift of this kind fills the bits it vacates with ZEROS — a left shift, or a
+  /// logical right one. The zero-fillers saturate an out-of-range count to 0; the sign-filler
+  /// (<see cref="ShiftKind.ArithmeticRight"/>) is the one exception, and clamps the count instead.
+  public static bool ZeroFills(ShiftKind kind) => kind is not ShiftKind.ArithmeticRight;
 
   /// The message E2054 carries, in BOTH compilers (maxon-shv2 renders the same text from
   /// Queries.maxon; the specs gate stderr byte-for-byte, so the two must not drift). It names what
@@ -74,26 +123,23 @@ public static class ShiftSemantics {
     $"Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater "
     + $"(a count of {ShiftCountBits} or more is legal — it shifts every bit out)";
 
-  /// Fold `lhs <op> count` under the rule above. `count` MUST be non-negative — a negative one is
-  /// E2054 at compile time and a panic at run time, and is never folded.
-  ///
-  /// `signFills` is true for an ARITHMETIC right shift (a signed `shr`) — the only shift whose
-  /// vacated bits are not zeros, and so the only one that does not saturate to 0.
-  public static long Eval(long lhs, long count, bool isRightShift, bool signFills) {
+  /// Fold `lhs <kind> count`. `count` MUST be non-negative — a negative one is E2054 at compile
+  /// time and a panic at run time, and is never folded. `kind` is <see cref="KindOf"/>'s answer,
+  /// which is the same one the codegen reads, so this fold cannot disagree with the emitted shift.
+  public static long Eval(long lhs, long count, ShiftKind kind) {
     if (IsNegativeCount(count))
       throw new InvalidOperationException(
         $"ShiftSemantics.Eval: negative count {count} — a negative count is E2054 at compile time "
         + "and a runtime panic otherwise; it must never reach the folder");
 
-    if (!isRightShift)
-      return count >= ShiftCountBits ? 0L : lhs << (int)count;
-
-    if (signFills)
+    return kind switch {
+      ShiftKind.Left => count >= ShiftCountBits ? 0L : lhs << (int)count,
+      ShiftKind.LogicalRight => count >= ShiftCountBits ? 0L : (long)((ulong)lhs >> (int)count),
       // Saturating a sign-filling shift is a CLAMP of the count, not a select of the result:
       // `lhs >> 63` already IS the sign, repeated, which is exactly what shifting every bit out
       // of a signed value leaves behind.
-      return lhs >> (int)Math.Min(count, MaxUnguardedShiftCount);
-
-    return count >= ShiftCountBits ? 0L : (long)((ulong)lhs >> (int)count);
+      ShiftKind.ArithmeticRight => lhs >> (int)Math.Min(count, MaxUnguardedShiftCount),
+      _ => throw new InvalidOperationException($"ShiftSemantics.Eval: unhandled ShiftKind {kind}"),
+    };
   }
 }

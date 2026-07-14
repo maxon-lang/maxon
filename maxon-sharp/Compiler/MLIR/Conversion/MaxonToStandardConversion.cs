@@ -1534,15 +1534,18 @@ public static partial class MaxonToStandardConversion {
               if (rhs is StdHeapPtr rhsHpBinOp)
                 rhs = EmitLoad(newBlock, rhsHpBinOp.VarName!, varTypes);
 
-              // A shift whose count the compiler cannot see must GUARD that count: the hardware
-              // masks it, and Maxon's rule (Go's) does not. A count that IS a compile-time literal
-              // the instruction accepts as written — every `x shr 8`, every `x shl 3` — falls
-              // through to the ordinary width dispatch below, and its codegen is untouched.
-              //
-              // Placed BEFORE the narrowing on purpose: the guard reasons at full i64 width, and a
-              // count truncated to i32 would turn `x shl 4294967296` into `x shl 0`.
-              if (ShiftNeedsGuard(binOp, literalMap)) {
-                valueMap[binOp.Result] = EmitGuardedShift(binOp, lhs, rhs, newBlock);
+              // EVERY integer shift is built by EmitShift, and none of them reaches the width
+              // dispatch below. A shift is 64 bits wide (ShiftSemantics' width bullet): a ranged
+              // left operand decides how the shift FILLS and never how WIDE it is, and the two
+              // questions were conflated here. A constant count in 0..63 used to fall through to
+              // the narrowing, which truncated the shift's VALUE — `(0-8) shl 29` on an
+              // `int(-2^31 to 2^31-1)` answered 0, where the same shift by a count the compiler
+              // could not see answered -4294967296. (The count survived only by luck: a 32-bit
+              // shift op MEANS a 5-bit count mask, but the x86/arm64 lowering of one emitted a
+              // 64-bit `shl reg, cl` regardless, so the mask that would have made `x shr 33` into
+              // `x shr 1` never bit. A latent wrong answer, one op away from a real one.)
+              if (IsIntegerShift(binOp)) {
+                valueMap[binOp.Result] = EmitShift(binOp, lhs, rhs, literalMap, newBlock);
                 break;
               }
 

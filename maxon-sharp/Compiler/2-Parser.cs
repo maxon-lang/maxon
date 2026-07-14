@@ -814,17 +814,61 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     { "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
   };
 
+  /// The OptimalType a ranged typealias NAME denotes — THE one place a type name becomes a width
+  /// and a signedness. Null for a name that is not a ranged primitive (a struct, an enum, or no
+  /// name at all).
+  private IrType? RangedOptimalTypeOf(string? typeName) =>
+    typeName != null
+    && _typeRegistry.TryGetValue(typeName, out var rt)
+    && rt is IrRangedPrimitiveType rpt
+      ? rpt.OptimalType
+      : null;
+
+  /// The ranged type of the VALUE `value` currently holds, found by asking which variable is bound
+  /// to it. See <see cref="GetShiftOperandOptimalType"/> for what this cannot answer, and why a
+  /// shift may not ask it.
   private IrType? GetOptimalType(MaxonValue value) {
-    // Look up the variable's ranged type to get the optimal type for codegen
     foreach (var info in _variables.Values) {
-      if (info.Value.Id == value.Id && info.StructTypeName != null
-          && _typeRegistry.TryGetValue(info.StructTypeName, out var rt)
-          && rt is IrRangedPrimitiveType rpt) {
-        return rpt.OptimalType;
-      }
+      if (info.Value.Id == value.Id && RangedOptimalTypeOf(info.StructTypeName) is { } optimal)
+        return optimal;
     }
     return null;
   }
+
+  /// ⭐ The ranged type of a SHIFT's LEFT OPERAND — the only thing that decides how a right shift
+  /// FILLS (<see cref="ShiftSemantics.KindOf"/>), and therefore something that must not depend on
+  /// WHERE the operand is read, or on what else happens to share its SSA value.
+  ///
+  /// It asks the EXPRESSION, not the value, and that is the whole of it. <see cref="GetOptimalType"/>
+  /// answers by scanning `_variables` for a VarInfo whose CURRENT value has the same SSA id, and
+  /// that scan is wrong in two ways — both of which surfaced as a SIGNED shift of an UNSIGNED type,
+  /// silently:
+  ///
+  ///   • **A CROSS-BLOCK READ MINTS A FRESH SSA ID.** Reading a variable in a block other than the
+  ///     one that assigned it emits a `maxon.var_ref` with a new id, which no VarInfo's `Value`
+  ///     matches — so the scan answered null, "not ranged", "signed". `u64.max shr 60` was **15** in
+  ///     the entry block and **-1** after an `if`: the same variable, the same shift, two answers.
+  ///     That very load already carries a promise's type metadata and a closure's environment frame
+  ///     across, for exactly this reason. The ranged type was the one fact left behind.
+  ///
+  ///   • **A CAST BINDS A SECOND NAME TO ONE VALUE.** `let w = p as Wide` emits no op — `w` and `p`
+  ///     ARE the same SSA value, with two different declared types — so the scan returned whichever
+  ///     VarInfo the dictionary happened to yield first. `p`'s: `w shr 60` answered **-1** for a
+  ///     type declared unsigned.
+  ///
+  /// A variable reference carries its OWN VarInfo, so it answers from the DECLARATION — once,
+  /// unambiguously, and identically in every block. Anything else (a call result, a literal, a
+  /// nested expression) is not a variable, has no declaration to read, and keeps the value scan.
+  ///
+  /// ⚠ Only the SHIFT asks through here. The symmetric arithmetic operators still take their
+  /// OptimalType from the value scan, and deliberately: for them it selects a narrower op, and the
+  /// scan's two holes make it answer null — i.e. "stay at i64", the WIDE and conservative reading.
+  /// Widening what they can see would newly narrow ops that run at 64 bits today, which is a
+  /// different question with a different risk, and not one a shift fix gets to decide.
+  private IrType? GetShiftOperandOptimalType(ExprResult expr) =>
+    expr is ExprResult.VarRef v
+      ? RangedOptimalTypeOf(v.Info.StructTypeName)
+      : GetOptimalType(ResolveExprValue(expr));
 
   // Tracks captured variables during closure parsing
   private record CaptureInfo(string Name, MaxonValueKind Kind, MaxonValue OuterValue, string? StructTypeName);
@@ -5020,12 +5064,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // that was holding the 100.
       //
       // A const-decl carries no ranged type — it is a bare integer literal expression — so its
-      // left operand is signed by construction, and `SignFills` is asked rather than assumed only
-      // so that a future unsigned const-decl cannot answer this question differently here than the
+      // left operand is signed by construction, and `KindOf` is asked rather than assumed only so
+      // that a future unsigned const-decl cannot answer this question differently here than the
       // expression parser answers it there.
-      var isRightShift = op == TokenType.Shr;
-      lhs = ShiftSemantics.Eval(ll, rl, isRightShift,
-        ShiftSemantics.SignFills(isRightShift, leftOperandIsUnsigned: false));
+      var shiftOp = op == TokenType.Shr ? MaxonBinOperator.Shr : MaxonBinOperator.Shl;
+      lhs = ShiftSemantics.Eval(ll, rl, ShiftSemantics.KindOf(shiftOp, leftOperandIsUnsigned: false));
     }
     return lhs;
   }
@@ -15030,8 +15073,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // and 15 for one declared `int(0 to 63)` — an unsigned optimal type, and the most natural
         // way there is to declare a shift distance — because `MaxonBinOp.IsUnsigned` then reported
         // the whole SHIFT as unsigned and both ShiftSemantics readers zero-filled it.
+        //
+        // The shift asks its own accessor, and the difference is not cosmetic: it reads the
+        // operand's DECLARATION rather than searching for a variable that currently happens to hold
+        // its SSA value. A shift is the one operator whose ANSWER (not merely its width) turns on
+        // this, so it is the one that cannot tolerate the search's blind spots — see
+        // GetShiftOperandOptimalType for the two it has, and for why the symmetric operators keep
+        // the search.
         optimalType = resolvedOp is MaxonBinOperator.Shl or MaxonBinOperator.Shr
-          ? GetOptimalType(promotedLhs)
+          ? GetShiftOperandOptimalType(lhs)
           : GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
       }
       // A shift's right operand is not an ordinary number but a DISTANCE, and Maxon's rule for it
@@ -21288,16 +21338,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///
   ///   **VALUE.** A folded count is rewritten into the shift its semantics define, so no count
   ///   above `MaxUnguardedShiftCount` ever reaches codegen and the hardware's masking is never
-  ///   consulted. A count that could NOT be folded is left alone, and the guarded lowering
-  ///   (MaxonToStandardConversion.EmitGuardedShift) saturates it at run time — to the SAME answer.
-  ///   That the two agree is not a coincidence: both are readings of `ShiftSemantics.Eval`.
+  ///   consulted. A count that could NOT be folded is left alone, and the lowering
+  ///   (MaxonToStandardConversion.EmitShift) saturates it at run time — to the SAME answer.
+  ///
+  ///   ⚠ That the two agree is a PROPERTY OF THE LOWERING, not a theorem about this file. It used
+  ///   to be neither: this comment claimed both paths were "readings of ShiftSemantics.Eval", and
+  ///   the unguarded one was not a reading of anything — a constant count in 0..63 fell through to
+  ///   a width dispatch that narrowed the op to i32 and TRUNCATED the shift's value, so
+  ///   `(0-8) shl 29` folded to 0 here and emitted -4294967296 there. The lowering now routes every
+  ///   shift through one 64-bit emitter, which is what makes the sentence true. A comment cannot
+  ///   establish an invariant; it can only describe one that the code holds up.
   private MaxonValue EmitShift(MaxonBinOperator op, MaxonValue lhs, MaxonValue count,
       MaxonValueKind kind, IrType? optimalType, int countTokenStart, int countTokenEnd) {
-    var isRightShift = op == MaxonBinOperator.Shr;
     // ASKED, not restated. `optimalType` is the LEFT operand's ranged type (a shift takes it from
     // nowhere else — see the shift arm of the OptimalType selection in ParseExpression), so this
-    // is the same question MaxonToStandardConversion.EmitGuardedShift asks of the same op.
-    var signFills = ShiftSemantics.SignFills(isRightShift, optimalType?.IsUnsigned ?? false);
+    // is the same classifier MaxonToStandardConversion.EmitShift reads of the same op.
+    var shiftKind = ShiftSemantics.KindOf(op, optimalType?.IsUnsigned ?? false);
 
     if (TryFoldIntConst(count) is not { } folded) {
       EmitNegativeShiftCountCheck(count, _tokens[countTokenStart].Line);
@@ -21317,7 +21373,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       //
       // `lhs` keeps its ops either way: they may have side effects, and Go evaluates the left
       // operand of a shift whatever the count turns out to be.
-      if (!signFills)
+      if (ShiftSemantics.ZeroFills(shiftKind))
         return EmitIntLiteral(0L);
 
       count = EmitIntLiteral(ShiftSemantics.MaxUnguardedShiftCount);
@@ -21338,7 +21394,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // see, and it costs one map entry.
     if (TryFoldIntConst(lhs) is { } foldedLhs)
       _intConstValues[result] = new FoldedInt(
-        ShiftSemantics.Eval(foldedLhs.Value, folded.Value, isRightShift, signFills), IsLiteralOp: false);
+        ShiftSemantics.Eval(foldedLhs.Value, folded.Value, shiftKind), IsLiteralOp: false);
 
     return result;
   }

@@ -1,0 +1,135 @@
+// Test: shr-unsigned-operand-zero-fills
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Wide) returns Wide
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Wide, d Num) returns Wide
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Wide) returns Wide
+	return v shr 64
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	// An UNSIGNED left operand zero-fills. Folded count, then a count the compiler cannot see.
+	if shrConst(u64.max) != 15 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(u64.max, d: 60) != 15 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// Zero-filling, so shifting every bit out leaves 0 — NOT the sign, and NOT the masked shift
+	// the hardware would have performed.
+	if shrPastWidth(u64.max) != 0 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(u64.max, d: 100) != 0 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	// A count of 0 is the identity, under either fill.
+	if shrDynamic(u64.max, d: 0) != u64.max 'zeroCount'
+		return 5
+	end 'zeroCount'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shrConst {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.shrRegImm8 r8, rcx, 60
+    x64.ret
+}
+
+func @shrDynamic {
+  entry:
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shrRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.ret
+}
+
+func @shrPastWidth {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm rcx, -1
+    x64.callDirect shrConst
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, foldedCount
+    x64.jmp ifcont
+  foldedCount:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 60
+    x64.callDirect shrDynamic
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, dynamicCount
+    x64.jmp ifcont
+  dynamicCount:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect shrPastWidth
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, foldedPastWidth
+    x64.jmp ifcont
+  foldedPastWidth:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 100
+    x64.callDirect shrDynamic
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, dynamicPastWidth
+    x64.jmp ifcont
+  dynamicPastWidth:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect shrDynamic
+    x64.cmpRegImm32 r8, -1
+    x64.jcc notEqual, zeroCount
+    x64.jmp ifcont
+  zeroCount:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+}

@@ -139,9 +139,15 @@ end 'OpRole'
 // P1.0d.2 appends the BIT band — `bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`. They share
 // `binOp`'s exact operand shape (two values in, one out) and its exact metadata
 // profile (pure, non-trapping, flag-clobbering), so per the header's "flat does NOT
-// mean one variant per opcode" rule they are opcodes, not variants. `shr` is an
-// ARITHMETIC right shift (x64 `sar`): every Std integer is signed i64, so a logical
-// shift would turn `-8 shr 1` into a huge positive number.
+// mean one variant per opcode" rule they are opcodes, not variants.
+//
+// The RIGHT SHIFT is TWO opcodes, and it has to be. A Std value is a typeless i64 — it
+// carries no signedness — so this tier cannot ask which way a right shift fills; it can
+// only be TOLD. `shr` is ARITHMETIC (x64 `sar`, sign-replicating) and `shrLogical` is
+// LOGICAL (x64 `shr`, zero-filling), and the Maxon tier picks between them from the
+// left operand's declared type (TypeRules' ⭐ THE SHIFT RULE — Go's rule: a signed left
+// operand shifts arithmetically, an unsigned one logically). Collapsing them into one
+// opcode is what made `u64.max shr 60` answer -1 in shv2 and 15 in the bootstrap.
 export enum StdBinOpcode
 	add
 	sub
@@ -151,6 +157,7 @@ export enum StdBinOpcode
 	bitXor
 	shl
 	shr
+	shrLogical
 end 'StdBinOpcode'
 
 // The Std-tier unary-operation opcodes carried by `StdOp.unaryOp`. M3 lands `neg`

@@ -253,12 +253,14 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		xorRegImm32(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		shlRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		shrRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		// The variable-count shifts take their count in CL and NOWHERE ELSE, so the count is
 		// not an explicit operand at all: StdToX64Conversion pre-moves it into physical RCX
 		// (as `idiv` pre-moves its dividend into RAX) and the op names RCX through its
 		// `implicitUses` mask. What is left here is the two-address `dest ⟸ lhs` pair.
 		shlRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		sarRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		shrRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
 		// A boolean materialization reads EFLAGS — not a tracked register — and writes one
 		// fresh value. So: one plain def, no uses.
 		setccReg(dest, _) then pushDef(buf, vreg: dest)

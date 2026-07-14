@@ -1,11 +1,25 @@
-// SignatureIndex — the WHOLE-PROGRAM function signature index: every function DECLARED in any
-// file, with its declared return type, read straight off the TOKENS before any body is parsed.
+// SignatureIndex — the WHOLE-PROGRAM DECLARATION index: every function and every ranged typealias
+// DECLARED in any file, read straight off the TOKENS before any body is parsed.
 //
-// WHY IT MUST EXIST, AND WHY IN THE PARSER. A call's result type is a decision the parser cannot
-// postpone. A bool `and`/`or` is CONTROL FLOW (`Parser.emitShortCircuit` — blocks and a merge phi,
-// which no later pass can retrofit); `not` picks a different OPCODE per operand type; and every
-// operand rule in TypeRules reads a value's tag. By the time a later pass could supply a callee's
-// return type, every decision that needed it has already been made.
+// WHY IT MUST EXIST, AND WHY IN THE PARSER. Two source-level decisions cannot be postponed past the
+// parser, and each needs a declaration that may live in another file:
+//
+//   • A CALL'S RESULT TYPE. A bool `and`/`or` is CONTROL FLOW (`Parser.emitShortCircuit` — blocks
+//     and a merge phi, which no later pass can retrofit); `not` picks a different OPCODE per
+//     operand type; and every operand rule in TypeRules reads a value's tag. By the time a later
+//     pass could supply a callee's return type, every decision that needed it has already been
+//     made.
+//
+//   • A SHIFT'S FILL. `shr` is ARITHMETIC on a signed left operand and LOGICAL on an unsigned one
+//     (TypeRules' ⭐ THE SHIFT RULE), and Maxon's unsigned type is a ranged alias whose low bound
+//     is 0. The two are DIFFERENT x64 instructions, and the Std tier they lower into is TYPELESS —
+//     an i64 there carries no signedness — so the opcode must be chosen while the declared type is
+//     still in view, which is here. `u64.max shr 60` is 15 or -1 depending on it.
+//
+// So the RANGES travel beside the return types. An alias declared in `a.maxon` and used in
+// `b.maxon` has to reach `b`'s parse, or the shift in `b` is a silent wrong answer — and reading
+// the file-local alias table instead would be the identical mistake this index exists to fix,
+// wearing a different hat.
 //
 // The FILE-LOCAL version of this — one token sweep of the file being parsed — is why the
 // single-file case was right. Cross-file it was not, and the failure was a WRONG ANSWER, not a
@@ -48,6 +62,11 @@ let TypeShapeNamed = 6 as ContentHash
 let TypeShapeExitCode = 7 as ContentHash
 let TypeShapeUnresolved = 8 as ContentHash
 
+// A ranged typealias's declaration, mixed into the same hash as a function's. Its own
+// discriminator, so a file that replaces a function with an alias of the same name moves the hash
+// rather than colliding two differently-shaped declarations on it.
+let DeclShapeAlias = 9 as ContentHash
+
 // What the index knows about a callee — the TWO outcomes the old `MaxonType.unresolved` sentinel
 // collapsed into one, plus the third (`void`) that it dropped on the floor.
 export union CalleeReturn
@@ -67,11 +86,25 @@ export union CalleeReturn
 	undeclared
 end 'CalleeReturn'
 
+// What the index knows about a NAMED type — `CalleeReturn`'s twin, and a union for the same
+// reason: "no file declares this" is an ANSWER, not a failure, and spelling it as a sentinel range
+// (`low: 0`) would make an undeclared name read as UNSIGNED, which is the one thing it must never
+// silently do.
+export union DeclaredAlias
+	declared(alias RangedTypeAlias)
+	undeclared
+end 'DeclaredAlias'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
 	// `commitFuncSignatures` (E3006), which fails the build, so the overwrite is never observed.
 	var returnTypes as FuncReturnTypeMap
+	// Typealias name -> its declaration, with the RANGE the shift rule needs. It carries no
+	// type-name IDS — a ranged alias's underlying type is always the `int` KEYWORD, never a name —
+	// so unlike `returnTypes` it needs no interner and no remap: it travels by name and arrives by
+	// name.
+	var typeAliases as RangedTypeAliasMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -87,7 +120,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeNames: TypeNameInterner.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), typeNames: TypeNameInterner.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -99,7 +132,11 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, fileTypeNames TypeNameInterner)
+		for alias in aliases 'eachAlias'
+			self.recordAlias(alias)
+		end 'eachAlias'
+
 		let remap = self.typeNames.foldInto(fileTypeNames)
 
 		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
@@ -131,6 +168,31 @@ export type ProgramSignatures
 		self.returnTypes.upsert(name, value: returnType)
 		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType)
 	end 'record'
+
+	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
+	// and not merely the name, and that is load-bearing: widening `int(0 to 100)` to
+	// `int(0 to u64.max)` makes the type UNSIGNED, which changes what every `shr` on it MEANS. Every
+	// file must re-parse on that edit, and this is what makes it happen.
+	function recordAlias(alias RangedTypeAlias)
+		self.typeAliases.upsert(alias.name, value: alias)
+
+		// The bounds are SIGNED (`ParsedInt`) and the hash domain is UNSIGNED, so each crosses by an
+		// explicit cast. Bound to locals rather than written inline: as arguments to a nested `mix`
+		// the bootstrap misreads them as already-hashed and rejects the casts as unneeded (E3010) —
+		// a false positive, and one that costs nothing to route around.
+		let low = alias.low as ContentHash
+		let high = alias.high as ContentHash
+
+		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
+		self.hash = mix(mix(named, value: low), value: high)
+	end 'recordAlias'
+
+	// The ranged typealias `name` denotes, declared in ANY file. THE door the shift rule asks
+	// through — see `Parser.valueIsUnsigned`.
+	export function aliasOf(name ByteArray) returns DeclaredAlias
+		let alias = try self.typeAliases.get(name) otherwise return DeclaredAlias.undeclared
+		return DeclaredAlias.declared(alias)
+	end 'aliasOf'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and

@@ -306,6 +306,16 @@ end 'MaxonOpMeta'
 // Appended at the END of the enum, after the trapping `div`/`mod` band, so the
 // existing `add to mul` range arm still names exactly the non-trapping arithmetic set
 // (the band-append invariant above).
+// `shr` and `shrLogical` are the SAME source operator. Which one the parser emits is decided
+// by the LEFT operand's type, and by nothing else (TypeRules' ⭐ THE SHIFT RULE): Go shifts a
+// SIGNED left operand arithmetically and an UNSIGNED one logically, and Maxon's unsigned type is
+// a ranged alias whose low bound is 0 (`int(0 to u64.max)`). `infixMaxonOp` never yields
+// `shrLogical` — only `Parser.emitShift` does, having asked the question.
+//
+// Two opcodes rather than one opcode plus a flag, because the Std tier they lower into is
+// TYPELESS: an i64 there carries no signedness, so a pass that met a single `shr` would have no
+// way left to ask which fill was meant. The decision is a FRONT-END fact, and it is written into
+// the opcode at the one moment it is still knowable.
 export enum MaxonBinOp
 	add
 	sub
@@ -317,6 +327,7 @@ export enum MaxonBinOp
 	bitXor
 	shl
 	shr
+	shrLogical
 end 'MaxonBinOp'
 
 // The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the

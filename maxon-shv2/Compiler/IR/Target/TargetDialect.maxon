@@ -365,12 +365,16 @@ export union TargetOp
 	andRegImm32(dest X64VReg, lhs X64VReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	orRegImm32(dest X64VReg, lhs X64VReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	xorRegImm32(dest X64VReg, lhs X64VReg, imm Imm32) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	// Shift by a CONSTANT count (`shl`/`sar r/m64, imm8` — group-2 `C1 /4` / `C1 /7`).
-	// Two-address ⇒ REUSE-of-`lhs`. `sar` (ARITHMETIC right shift) is what `shr` lowers
-	// to: every Std integer is signed i64, so a LOGICAL `shr` would turn `-8 shr 1` into
-	// 9223372036854775804 instead of -4.
+	// Shift by a CONSTANT count (group-2 `C1 /4` shl, `C1 /7` sar, `C1 /5` shr).
+	// Two-address ⇒ REUSE-of-`lhs`.
+	//
+	// BOTH right shifts exist, because they are two different instructions and Maxon needs
+	// both: `sar` replicates the sign (`StdBinOpcode.shr` — a SIGNED left operand) and `shr`
+	// fills with zeros (`StdBinOpcode.shrLogical` — an UNSIGNED one, `int(0 to u64.max)`).
+	// The Std tier has already chosen; this tier only encodes.
 	shlRegImm8(dest X64VReg, lhs X64VReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	sarRegImm8(dest X64VReg, lhs X64VReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	shrRegImm8(dest X64VReg, lhs X64VReg, imm ShiftCount) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// Shift by a VARIABLE count (`shl`/`sar r/m64, cl` — group-2 `D3 /4` / `D3 /7`). x64
 	// has NO register-register shift: the count must be in **CL**, and nowhere else. So
 	// the count is a FIXED-REGISTER operand, modelled exactly as `idiv`'s dividend is —
@@ -388,6 +392,7 @@ export union TargetOp
 	// (A union-backing literal cannot reference a named `let`, so the mask is inline.)
 	shlRegCl(dest X64VReg, lhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
 	sarRegCl(dest X64VReg, lhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
+	shrRegCl(dest X64VReg, lhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x2, implicitDefs: 0}
 	// MATERIALIZE a comparison's boolean into a register (`setcc dest8` + `movzx dest,
 	// dest8`) — one TargetOp, two instructions, because the pair is indivisible: `setcc`
 	// writes only the LOW BYTE, so the upper 56 bits would keep whatever the register

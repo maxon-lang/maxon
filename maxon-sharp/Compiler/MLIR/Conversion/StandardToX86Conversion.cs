@@ -512,18 +512,9 @@ public static class StandardToX86Conversion {
                   (l, r) => new X86XorRegRegOp(l, r),
                   lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
                 break;
-              case StdBinaryOperator.Shl:
-                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
-                  dest => new X86ShlRegClOp(dest));
-                break;
-              case StdBinaryOperator.ShrSigned:
-                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
-                  dest => new X86SarRegClOp(dest));
-                break;
-              case StdBinaryOperator.ShrUnsigned:
-                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
-                  dest => new X86ShrRegClOp(dest));
-                break;
+              // No shift arm: a shift is 64 bits (see StandardDialect's note where the three narrow
+              // shift ops used to be), so a shift can never reach the I32 lowering. The `default`
+              // below is what says so, and it throws.
               default:
                 throw new InvalidOperationException($"Unsupported I32 binary operator: {binOp.Operator}");
             }

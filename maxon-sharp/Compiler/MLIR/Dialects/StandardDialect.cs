@@ -29,9 +29,6 @@ public enum StdOpKind {
   AndI32,
   OrI32,
   XorI32,
-  ShlI32,
-  ShrI32,
-  ShrU32,
   CmpI32,
   CmpU32,
   ExtI32ToI64,
@@ -375,23 +372,19 @@ public sealed class StdXorI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rh
   public override StdBinaryOperator Operator => StdBinaryOperator.Xor;
 }
 
-public sealed class StdShlI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
-  public override StdOpKind Kind => StdOpKind.ShlI32;
-  public override string Mnemonic => "arith.shli";
-  public override StdBinaryOperator Operator => StdBinaryOperator.Shl;
-}
-
-public sealed class StdShrI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
-  public override StdOpKind Kind => StdOpKind.ShrI32;
-  public override string Mnemonic => "arith.shrsi";
-  public override StdBinaryOperator Operator => StdBinaryOperator.ShrSigned;
-}
-
-public sealed class StdShrU32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
-  public override StdOpKind Kind => StdOpKind.ShrU32;
-  public override string Mnemonic => "arith.shrui";
-  public override StdBinaryOperator Operator => StdBinaryOperator.ShrUnsigned;
-}
+// ⭐ THERE IS NO 32-BIT SHIFT OP, AND THERE MAY NOT BE ONE. A shift is 64 bits wide — see
+// ShiftSemantics' width bullet — so a narrow shift op is an ILLEGAL STATE, and the cheapest way to
+// keep it out of the IR is to give the compiler no way to spell it.
+//
+// There were three (`StdShlI32Op` / `StdShrI32Op` / `StdShrU32Op`), reached whenever a shift's
+// operands fit a narrow ranged type, and they were a silent wrong answer twice over: the operands
+// arrived through an `arith.trunci`, so `(0-8) shl 29` on an `int(-2^31 to 2^31-1)` lost the 29 bits
+// it had just shifted UP and answered 0 where the same shift at 64 bits answered -4294967296. (The
+// count survived only by luck: the x86/arm64 lowering of a 32-bit shift emitted a 64-BIT `shl reg,
+// cl` anyway, so the 5-bit mask that would have turned `x shr 33` into `x shr 1` never bit. A latent
+// wrong answer is still one op away from a real one.)
+//
+// MaxonToStandardConversion.EmitShift is now the only builder of a shift, and it works at i64.
 
 // === I32 Comparison ===
 

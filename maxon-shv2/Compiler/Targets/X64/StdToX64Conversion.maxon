@@ -141,6 +141,17 @@ function fuseIfDefines(fused CmpPredMap, defId ValueId, condId ValueId, pred Std
 	fused.upsert(condId, value: pred)
 end 'fuseIfDefines'
 
+// The three group-2 shift instructions x64 has, and the whole of what the shift lowering needs
+// to know about a Std shift opcode. Named for the INSTRUCTIONS rather than for the opcodes,
+// because the mapping between the two is exactly the fact worth stating once: `shl`→SHL,
+// `shr`→SAR (arithmetic — a signed left operand), `shrLogical`→SHR (zero-filling — an unsigned
+// one). See `shiftInstructionOf`.
+enum ShiftInstruction
+	shl
+	sar
+	shr
+end 'ShiftInstruction'
+
 export function lowerStdToX64(stdModule StdModule) returns TargetModule
 	var lowering = StdToX64Lowering.create(stdModule)
 	lowering.prepareSkeleton()
@@ -457,8 +468,9 @@ type StdToX64Lowering
 			bitAnd then self.targetModule.appendOp(dstBlock, op: TargetOp.andRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			bitOr then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			bitXor then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegReg(dest, lhs: lhsReg, rhs: rhsReg))
-			shl then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, arithmeticRight: false, dstBlock: dstBlock)
-			shr then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, arithmeticRight: true, dstBlock: dstBlock)
+			// One arm for all three shifts: they differ only in WHICH group-2 instruction they
+			// name, and `shiftInstructionOf` is the one place that is decided.
+			shl to shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOp'
 
@@ -477,16 +489,44 @@ type StdToX64Lowering
 	// coloured RCX, and the allocator's reuse copy (`mov rcx, lhs`) would then destroy the
 	// shift count between the two instructions.
 	//
-	// `shr` lowers to SAR (arithmetic), not SHR (logical): Maxon's `int` is signed, so
-	// `-8 shr 1` must be -4, not 9223372036854775804.
-	function lowerShiftCl(dest X64VReg, lhsReg X64VReg, countId ValueId, arithmeticRight bool, dstBlock IrBlock)
+	// Which group-2 instruction a shift opcode names. The `cl` form and the `imm8` form BOTH
+	// ask this, so a `shrLogical` cannot become a `sar` in one of them and a `shr` in the
+	// other — the two forms of one shift must encode the same instruction or the constant and
+	// the variable count answer differently, which is precisely the class of bug the Std tier's
+	// two right-shift opcodes exist to make impossible.
+	//
+	// A non-shift opcode PANICS rather than defaulting: it can only be a caller that widened
+	// its match arm without widening this map.
+	function shiftInstructionOf(opcode StdBinOpcode) returns ShiftInstruction
+		return match opcode 'o'
+			shl gives ShiftInstruction.shl
+			shr gives ShiftInstruction.sar
+			shrLogical gives ShiftInstruction.shr
+			add to bitXor panic("shiftInstructionOf: {opcode.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
+		end 'o'
+	end 'shiftInstructionOf'
+
+	function lowerShiftCl(dest X64VReg, lhsReg X64VReg, countId ValueId, instr ShiftInstruction, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.virtual(countId)))
-		if arithmeticRight 'sar'
-			self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegCl(dest, lhs: lhsReg))
-		end 'sar' else 'shl'
-			self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegCl(dest, lhs: lhsReg))
-		end 'shl'
+		match instr 'i'
+			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegCl(dest, lhs: lhsReg))
+			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegCl(dest, lhs: lhsReg))
+			shr then self.targetModule.appendOp(dstBlock, op: TargetOp.shrRegCl(dest, lhs: lhsReg))
+		end 'i'
 	end 'lowerShiftCl'
+
+	// The imm8 twin of `lowerShiftCl`. The cast is CHECKED, and that is the point:
+	// `constFitsBinOpImmediate` promises 0..63 for a shift, and this is where that promise is
+	// collected. A fold that ever broke it would fail loudly here rather than silently
+	// truncating a count.
+	function lowerShiftImm8(dest X64VReg, base X64VReg, imm Imm32, instr ShiftInstruction, dstBlock IrBlock)
+		let count = imm as ShiftCount
+		match instr 'i'
+			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(dest, lhs: base, imm: count))
+			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(dest, lhs: base, imm: count))
+			shr then self.targetModule.appendOp(dstBlock, op: TargetOp.shrRegImm8(dest, lhs: base, imm: count))
+		end 'i'
+	end 'lowerShiftImm8'
 
 	// Lower a Std unary op to x64. All three are genuinely two-address (`dest = <op> src`,
 	// in place), so each declares `dest` a REUSE-of-`src` def and the allocator supplies the
@@ -529,11 +569,8 @@ type StdToX64Lowering
 			bitOr then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegImm32(dest, lhs: base, imm: imm))
 			bitXor then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: base, imm: imm))
 			// A CONSTANT shift count needs no RCX at all — the whole reason `foldConstOperands`
-			// bothers to fold it. The cast is CHECKED, and that is the point: `constFitsBinOpImmediate`
-			// promises 0..63 for a shift, and this is where that promise is collected. A fold that
-			// ever broke it would fail loudly here rather than silently truncating a count.
-			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(dest, lhs: base, imm: imm as ShiftCount))
-			shr then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(dest, lhs: base, imm: imm as ShiftCount))
+			// bothers to fold it.
+			shl to shrLogical then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOpImm'
 
