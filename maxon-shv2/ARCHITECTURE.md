@@ -1783,6 +1783,39 @@ runtime `MAXON_DEBUGSTREAM` = `__ds_base == 0`), and **inline the `__ds_base` gu
 family** — the C# producer's MM events pay two real CALLs before the runtime-off check, unlike its
 Dbg events, and that wart should not be reproduced.
 
+### Compiler self-tracing — the `Log` events (Workstream O)
+
+Every event family above is emitted by the **runtime**. **Nothing lets user Maxon source put an
+event into the ring** — and shv2 *is* user Maxon source. That gap is what Workstream O closes, with
+a `__DebugStream` builtin in `maxon-sharp` and four new codes. It is what makes shv2 debuggable
+**once the harness goes parallel**: a stderr line from one of N interleaved workers cannot say which
+worker, which compilation unit, or which phase it came from, so `Logger`'s text sink stops being
+readable at P1.0a. See **PLAN.md → "Workstream O"**.
+
+`Log` events take the **free `0x60–0x6F` range** (the schema is frozen; `0x5F–0xFD` was unused):
+
+| code | event | payload after the 8-byte entry header |
+|---|---|---|
+| `0x60` | `LOG_PHASE_BEGIN` | `gt`(8) · `p_id`(8) · `phase_id`(2) `rsvd`(2) `unit_id`(4) — 32B |
+| `0x61` | `LOG_PHASE_END` | *(same)* |
+| `0x62` | `LOG_EVENT` | `gt`(8) · `p_id`(8) · `cat`(1) `lvl`(1) `event_id`(2) `unit_id`(4) · `arg0`(8) · `arg1`(8) — 48B, the Dbg shape |
+| `0x63` | `LOG_TEXT` | `gt`(8) · `p_id`(8) · `cat`(1) `lvl`(1) `len`(2) `unit_id`(4) · UTF-8 tail zero-padded to 8 |
+
+Two invariants, both load-bearing:
+
+- **The hot tier does not allocate.** `LOG_EVENT` carries numeric args and a `u16` `event_id`;
+  names are interned at compile time into a **`MXDS_STRS`** PE blob (the `MXDS_TAGS` mechanism,
+  reused), so the monitor prints real names for free. A formatted-`String` log inside the register
+  allocator would allocate into the very `mm` stream being read, and `Logger`'s `LazyMessage` thunk
+  does not prevent it — the closure env is built at the call site regardless of the level check.
+  `LOG_TEXT` is the allocating escape hatch, for the rare human message.
+- **Every event carries `gt` + `p_id`** (via `LoadCurrentP`, NULL-guarded, as `EmitDbgCallCore`
+  does) **plus a `unit_id`**. Without them the ring is a shuffled pile; with them the monitor
+  reconstructs one timeline per worker and per compilation unit.
+
+⇒ **Obligation on Workstream R1:** shv2's backend must emit this builtin too, or the trace dies at
+the self-host boundary.
+
 ## Spec-test harness
 
 `maxon-shv2 spec-test [dir]` (default `specs-shv2`) is shv2's own spec runner —

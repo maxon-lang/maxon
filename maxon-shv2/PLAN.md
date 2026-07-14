@@ -336,6 +336,7 @@ green build.
 
 | # | Mechanism | Note |
 |---|---|---|
+| **P1.0o** | **the compiler traces ITSELF — Workstream O1** ⭐ | **FIRST, because it is the instrument the rest of the ladder is debugged with.** shv2's stderr `Logger` dies the moment P1.0a interleaves N workers into one stream. A `__DebugStream` builtin in **`maxon.exe`** + 4 new event codes + a sink behind `Logger`'s existing API ⇒ binary events into the shared-memory ring, demuxed per-worker by `maxon monitor`. **Depends on NOTHING in Phase 1** — the bootstrap already carries the ring, the reserve, and the monitor *(see Workstream O)* |
 | **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub. **Workstream S is what makes it pay:** the corpus takes the suite from 126 tests to thousands |
 | **P1.0b** | **Workstream S1 — port the ≥650 scalar-core cases from `/specs`** ⭐ | *(see Workstream S.)* Teach `SpecParser` the `disabled-test:` marker, bulk-copy the corpus, disable what shv2 cannot yet pass. **The first real test of the scalar core against a corpus shv2 did not author — expect bugs, that is the point.** From here every rung is driven by the cases it enables |
 | **P1.0c** | **measure the stdlib cone** | against the **upgraded** harness. Cheap, and it sets the boundary — see above |
@@ -539,6 +540,10 @@ each WITH the milestone that first needs it:
   · the DebugStream producer (schema-compatible port of `RuntimeEmitter.DebugStream.cs`), which is
   what lets mm-trace gate P1.2 onward. v1's force-seeded bootstrap roots (`__slab_init`,
   `__mm_alloc`, `__managed_mem_create`, …) become a real obligation here.
+  **⇒ The port must also carry the `__DebugStream` builtin (Workstream O3)** — the `Log` events
+  (`0x60–0x63`) are emitted by *shv2's own source*, so if shv2's backend does not emit the builtin,
+  **the compiler's self-trace dies exactly at the self-host boundary**, which is the point at which
+  it is most needed.
   **The allocator R1 emits must ALWAYS RETURN ZEROED MEMORY, from commit 1** — it is a property of
   the allocator, not a thing each caller remembers. Non-zeroing alloc cost v1 at least three
   separately root-caused bugs (the `__gt_spawn` `cancel_flag` deadlock, the socket
@@ -564,6 +569,87 @@ each WITH the milestone that first needs it:
 Per the runtime-binding decision (Context): shv2 **excludes `Internals.maxon` and emits natively**
 — builtin registration for the `__Managed*` surface replaces v1's `__Internals` mechanism +
 `StdlibLoader` (6,434 lines, the road not taken).
+
+---
+
+## Workstream O — the compiler traces ITSELF ⭐
+
+**Small, and it lands FIRST — it is a debugging instrument, and an instrument that arrives after
+the bug is worthless.** shv2's `Logger` today formats a `String` and prints it to **stderr**. That
+survives exactly as long as the compiler is single-threaded. **P1.0a interleaves N workers into one
+stderr**, and P1.5 puts green threads under them; at that point a text log is not degraded, it is
+*useless* — you cannot tell which worker, which compilation unit, or which phase a line came from,
+and the lines themselves are torn.
+
+**The mechanism already exists — the bootstrap has all of it.** `maxon.exe` compiles binaries that
+carry a shared-memory ring (128-byte header, 8-byte packed entry headers, ticket-spinlock reserve),
+and `maxon monitor` creates the segment, spawns the child with `MAXON_DEBUGSTREAM` set, drains the
+ring, and decodes it — parsing real names out of a `MXDS_TAGS` blob in the PE. **shv2 is a Maxon
+program compiled by `maxon.exe`, so it already runs under that monitor.** The one missing link:
+the producer is wired only into *runtime internals* (mm / sched / dbg events). **Nothing lets user
+Maxon source put an event into the ring.** That is the whole gap, and it is a builtin.
+
+⇒ **Workstream O does NOT depend on Workstream R.** It is not blocked on the shv2 runtime, on
+ownership, or on `String`. It can land against the compiler as it stands *today*.
+
+**Two tiers, because the hot tier must not allocate.** A formatted-text log inside the register
+allocator would (a) allocate into the very `mm` stream you are trying to read and (b) cost more
+than the work it is measuring. `Logger`'s `LazyMessage` thunk does not save you: the closure env is
+built at the call site whether or not the level check passes.
+
+- **Tier 1 — structured, ZERO-ALLOC.** Event code + fixed numeric args, exactly like the existing
+  Dbg events. Names are **interned at compile time** into a `MXDS_STRS` PE blob (the `MXDS_TAGS`
+  trick, reused), so an event carries a `u16` id and the monitor prints the real name. No `String`,
+  no thunk, no allocation. **This is the tier the passes use.**
+- **Tier 2 — text.** A length-prefixed UTF-8 tail for the rare human message. Allocating, and it
+  says so. `entry_size` is a `u16`, so an entry caps at 64 KiB — truncate, never tear.
+
+**Every event carries `gt` + `p_id`.** Obtained the way `EmitDbgCallCore` gets them (`LoadCurrentP`,
+NULL-guarded). **This is the entire point of the workstream** — it is what lets the monitor demux N
+workers back into per-worker, per-unit timelines instead of a shuffled pile. An event also carries
+a `unit_id` (which fragment / which function), so a parallel harness run reads as one timeline per
+unit rather than one per process.
+
+**The schema is FROZEN — so these are NEW codes, in a free range** (`0x5F–0xFD` is unused):
+
+| code | event | payload after the 8-byte entry header |
+|---|---|---|
+| `0x60` | `LOG_PHASE_BEGIN` | `gt`(8) · `p_id`(8) · `phase_id`(2) `rsvd`(2) `unit_id`(4) — 32B entry |
+| `0x61` | `LOG_PHASE_END` | *(same)* |
+| `0x62` | `LOG_EVENT` | `gt`(8) · `p_id`(8) · `cat`(1) `lvl`(1) `event_id`(2) `unit_id`(4) · `arg0`(8) · `arg1`(8) — 48B entry, the Dbg shape |
+| `0x63` | `LOG_TEXT` | `gt`(8) · `p_id`(8) · `cat`(1) `lvl`(1) `len`(2) `unit_id`(4) · UTF-8 tail, zero-padded to 8 |
+
+**Keep the two-tier gating, and inline the guard** — the rule ARCHITECTURE.md already states for
+shv2's producer applies here from commit 1: compile-time (`--debugstream` off ⇒ **zero
+instructions**), runtime (`__ds_base == 0` ⇒ inline bail, *before* any CALL). The C# producer's MM
+events pay two real CALLs before the runtime-off check; do not reproduce that wart.
+
+### The slices
+
+- **O1 — NOW, before P1.0a.** A `__DebugStream` builtin in **`maxon-sharp`** (callable from Maxon
+  source), the four event codes, the `MXDS_STRS` intern blob, a DebugStream **sink behind
+  `Logger`'s existing category/level API** (the call sites do not change), and `maxon monitor
+  --filter=log` decode. **No dependency on anything in Phase 1.**
+- **O2 — with P1.0a.** `gt`/`p_id`/`unit_id` demux in the monitor: per-worker and per-unit
+  timelines. The pool's first debugging tool exists the day the pool does — not a month after it.
+- **O3 — inside R1 @ P1.2.** shv2's own backend emits the same builtin, so the trace **survives
+  self-host**. This is not new work: it is an *obligation on* the DebugStream producer port R1
+  already carries. Name it there or it will be forgotten.
+
+### ⚠ It is also the replacement for a timing instrument P1.0a is about to BREAK
+
+`CompileTimings`/`CompileMemory` accumulate into **global** per-phase timers. Under a worker pool
+two workers are in different phases at once, and a global accumulator cannot express that — the
+numbers do not just get noisy, they stop *meaning* anything. `LOG_PHASE_BEGIN`/`END` give properly
+nested, per-worker, per-unit spans, and the disjoint-and-sums-to-total check gets computed **from
+the trace** instead of from an accumulator that is structurally unable to be right. *(This is the
+"a dominant cost hid in the wrong timing bucket" failure, four times over in v1, and the parallel
+pool is about to make the bucket itself invalid.)*
+
+**And the trace can be a GOLDEN.** Normalize it the way `mm-trace` already normalizes — drop the
+timestamp, dense-renumber ids in first-appearance order — and the **worker-count-invariance gate**
+at the Phase-1 GATE sharpens from "`-j1` and `-jN` agree on the *verdicts*" to "they agree on the
+**per-unit event sequence**." That is a far tighter net, and it costs nothing extra to hold.
 
 ---
 
