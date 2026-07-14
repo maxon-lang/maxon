@@ -1,0 +1,158 @@
+// ScaleHistory — the append-only record of every ACCEPTED change to the memory goldens.
+//
+// WHY THIS IS WRITTEN AT `--update-required` AND NOWHERE ELSE.
+//
+// A scale-test run proves nothing on its own. It is run dozens of times a day against dirty trees,
+// half-finished experiments and abandoned branches, and a log that recorded every one of them would
+// be mostly noise — which is to say, a log nobody reads and nobody can trust. But `--update-required`
+// is not a run, it is a DECISION: a human looking at a moved golden and saying "yes, the compiler
+// should allocate differently now". That is exactly one entry per landed optimization, and a casual
+// run cannot manufacture one.
+//
+// WHY `--note` IS REQUIRED.
+//
+// The suite can see precisely WHAT moved and can never see WHY. Six months from now
+// "allocations fell 8% at rung 5" is worth almost nothing without the sentence naming the change
+// that did it — and that sentence exists only in the head of whoever ran the command. So the note is
+// demanded at the one moment it is still known, rather than left as a placeholder that would be
+// committed unfilled. A golden that moves with no reason recorded is the thing this file exists to
+// prevent.
+
+export let OptimizationLogRelativePath = "docs/optimization-log.md"
+
+// Signed, because every number here is a DIFFERENCE between two counts and the entire point is that
+// it can be negative. AllocCount and ByteCount are unsigned and cannot hold one.
+typealias Delta = int(i64.min to i64.max)
+
+// A percentage carried to one decimal place, held as TENTHS of a percent: -107 is -10.7%. Integer
+// arithmetic all the way down — a compiler's test harness has no business reaching for floating
+// point to print a percentage.
+typealias PercentTenths = int(i64.min to i64.max)
+
+// (delta / before) * 100 * 10 == (delta * 1000) / before, in tenths of a percent.
+let TenthsOfPercentPerUnit = 1000 as Delta
+let TenthsPerWholePercent = 10 as PercentTenths
+
+// Append one entry to the log. Called BEFORE the goldens are rewritten, so that a failure to record
+// the change leaves the committed goldens untouched: a tree with new goldens and no matching log
+// entry is precisely the state this is meant to make impossible.
+export function appendOptimizationLog(baseline ScaleBaseline, results RungResultArray, note String) returns ExitCode
+	let path = try FilePath.from(OptimizationLogRelativePath) otherwise 'badPath'
+		printError("scale-test: '{OptimizationLogRelativePath}' is not a valid path\n")
+		return 1
+	end 'badPath'
+
+	// The log is hand-written prose with a machine-appended table; the suite adds to it and never
+	// creates it. If it is missing, the likely cause is a run from the wrong directory, and silently
+	// minting a fresh file would bury the real history rather than extend it.
+	if not File.exists(path) 'missing'
+		printError("scale-test: {OptimizationLogRelativePath} does not exist. It is the log this run appends to, not a file the suite creates — run scale-test from the repo root.\n")
+		return 1
+	end 'missing'
+
+	if not anyGoldenMoved(baseline, results: results) 'unchanged'
+		print("\nscale-test: every golden already matches this run — nothing to log.\n")
+		return 0
+	end 'unchanged'
+
+	let existing = try File.readText(path) otherwise 'unreadable'
+		printError("scale-test: could not read {OptimizationLogRelativePath}\n")
+		return 1
+	end 'unreadable'
+
+	let entry = renderEntry(baseline, results: results, note: note)
+	try File.writeText(path, content: "{existing}{entry}") otherwise 'writeFailed'
+		printError("scale-test: could not write {OptimizationLogRelativePath}\n")
+		return 1
+	end 'writeFailed'
+
+	print("\nscale-test: appended '{note}' to {OptimizationLogRelativePath}\n")
+	return 0
+end 'appendOptimizationLog'
+
+// A rung with no committed golden counts as a change: it is a measurement the tree did not have
+// before, and the log should say so rather than quietly omit the row.
+function anyGoldenMoved(baseline ScaleBaseline, results RungResultArray) returns bool
+	for result in results 'eachRung'
+		let golden = try baseline.goldenFor(result.rung) otherwise 'noGolden'
+			return true
+		end 'noGolden'
+
+		if golden.allocs != result.total.allocs 'allocsMoved'
+			return true
+		end 'allocsMoved'
+
+		if golden.frees != result.total.frees 'freesMoved'
+			return true
+		end 'freesMoved'
+
+		if golden.bytes != result.total.bytes 'bytesMoved'
+			return true
+		end 'bytesMoved'
+	end 'eachRung'
+
+	return false
+end 'anyGoldenMoved'
+
+// FREES ARE NOT IN THE TABLE, and their absence is deliberate. What a reader wants from this log is
+// "how much less does the compiler allocate", and frees track allocations almost exactly — a column
+// of them would be a near-duplicate of the allocations column, paid for in width. What frees are
+// genuinely FOR is the leak check (allocs - frees must not grow), and that belongs in the goldens,
+// where it is gated, not in a document nobody diffs.
+function renderEntry(baseline ScaleBaseline, results RungResultArray, note String) returns String
+	var out = "\n## {note}\n\n"
+	out.append("| rung | allocations | bytes |\n")
+	out.append("| ---: | --- | --- |\n")
+
+	for result in results 'eachRung'
+		let golden = try baseline.goldenFor(result.rung) otherwise 'newRung'
+			out.append("| {result.rung} | {result.total.allocs} (new rung) | {result.total.bytes} (new rung) |\n")
+			continue
+		end 'newRung'
+
+		let allocs = renderChange(golden.allocs as Delta, after: result.total.allocs)
+		let bytes = renderChange(golden.bytes as Delta, after: result.total.bytes)
+		out.append("| {result.rung} | {allocs} | {bytes} |\n")
+	end 'eachRung'
+
+	return out
+end 'renderEntry'
+
+function renderChange(before Delta, after Delta) returns String
+	let delta = after - before
+	if delta == 0 'unchanged'
+		return "{after} (unchanged)"
+	end 'unchanged'
+
+	return "{before} -> {after} ({renderSigned(delta)}, {renderPercent(delta, before: before)})"
+end 'renderChange'
+
+function renderSigned(delta Delta) returns String
+	if delta < 0 'negative'
+		return "-{0 - delta}"
+	end 'negative'
+
+	return "+{delta}"
+end 'renderSigned'
+
+function renderPercent(delta Delta, before Delta) returns String
+	// Only reachable for a rung that HAS a committed golden, and a golden of zero allocations would
+	// mean the compiler ran without allocating. Guarded anyway: dividing by it would trap, and a
+	// crash in the logger is a poor way to learn that.
+	if before == 0 'noBase'
+		return "n/a"
+	end 'noBase'
+
+	var magnitude = delta
+	var sign = "+"
+	if delta < 0 'isNegative'
+		magnitude = 0 - delta
+		sign = "-"
+	end 'isNegative'
+
+	let tenths = ((magnitude * TenthsOfPercentPerUnit) / before) as PercentTenths
+	let whole = tenths / TenthsPerWholePercent
+	let fraction = tenths mod TenthsPerWholePercent
+
+	return "{sign}{whole}.{fraction}%"
+end 'renderPercent'

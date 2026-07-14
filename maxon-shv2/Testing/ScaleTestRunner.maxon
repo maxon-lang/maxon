@@ -140,6 +140,17 @@ end 'ScaleVerdict'
 // ===========================================================================================
 
 export function runScaleTest(args MaxonArgs) returns ExitCode
+	// Refused BEFORE the ladder is climbed, not after. Rejecting the command line once the run has
+	// already spent thirty seconds compiling six rungs would be a rude way to report a typo.
+	if args.updateRequired and args.note.isEmpty() 'noteRequired'
+		printError("scale-test: --update-required needs --note=\"<why the goldens moved>\".\n")
+		printError("            Accepting a golden means deciding the compiler SHOULD allocate differently.\n")
+		printError("            The suite can see exactly WHAT moved and can never see why, so the reason is\n")
+		printError("            recorded with the numbers in {OptimizationLogRelativePath} — and it has to come\n")
+		printError("            from you, now, while it is still known.\n")
+		return 1
+	end 'noteRequired'
+
 	let compilerExe = try Process.executablePath() otherwise 'noExe'
 		printError("error: could not determine the running compiler's path\n")
 		return 1
@@ -180,6 +191,28 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	end 'noBaseline'
 
 	if args.updateRequired 'regenerate'
+		// A SHORT LADDER MAY NOT REWRITE A LONG BASELINE. writeBaseline emits exactly the rungs it was
+		// given, so `--rungs=2 --update-required` against a six-rung baseline would silently DELETE the
+		// goldens for rungs 2-5 — the four most sensitive rungs, and the only ones where a bent curve is
+		// visible at all. Nothing downstream would notice: the suite would go on passing, gating four
+		// fewer rungs than it did yesterday, and the loss would surface as a golden that "was never
+		// there" long after the commit that dropped it.
+		if results.count() < baseline.goldens.count() 'ladderTooShort'
+			printError("scale-test: refusing to rewrite {baseline.goldens.count()} committed golden(s) from a {results.count()}-rung run.\n")
+			printError("            The goldens are written from the rungs actually climbed, so this would DELETE\n")
+			printError("            the goldens for the rungs above {results.count() - 1} rather than update them. Re-run with\n")
+			printError("            --rungs={baseline.goldens.count()} (or more).\n")
+			return 1
+		end 'ladderTooShort'
+
+		// The log is written FIRST. If recording the change fails, the committed goldens are left
+		// alone — a tree carrying new goldens with no matching log entry is exactly the state the
+		// log exists to make impossible.
+		let logged = appendOptimizationLog(baseline, results: results, note: args.note)
+		if logged != 0 'logFailed'
+			return logged
+		end 'logFailed'
+
 		return writeBaseline(baseline, results: results)
 	end 'regenerate'
 

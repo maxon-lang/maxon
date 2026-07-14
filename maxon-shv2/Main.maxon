@@ -278,7 +278,11 @@ function printUsage()
 	print("                                Testing/scale-baseline.tsv instead of checking against them.\n")
 	print("                                Same door-you-must-open semantics as above: the diff IS the\n")
 	print("                                review, and a memory golden that moved without a reason is\n")
-	print("                                exactly what this suite exists to catch.\n")
+	print("                                exactly what this suite exists to catch. Requires --note.\n")
+	print("  --note=<text>                 (scale-test) Why the goldens moved. REQUIRED with\n")
+	print("                                --update-required, and recorded with the numbers in\n")
+	print("                                {OptimizationLogRelativePath}. The suite can see exactly what\n")
+	print("                                moved and can never see why; you are the only one who knows.\n")
 	print("  --per-type                    (scale-test) Also run the untimed --mm-trace pass, attributing\n")
 	print("                                allocations to the TYPE allocated. Off by default: it is slow,\n")
 	print("                                and it is a different binary from the one being timed.\n")
@@ -336,6 +340,10 @@ export type MaxonArgs
 	// allocations to the TYPE allocated AND to the SCOPE that allocated it. Off by default: it traces
 	// every allocation individually and is far slower than the timed run.
 	export let perType as bool
+	// `--note=<text>` (scale-test only): REQUIRED alongside `--update-required`. The one sentence
+	// saying WHY the goldens moved, recorded in docs/optimization-log.md alongside the numbers. The
+	// suite can see exactly WHAT moved and can never see why — see Testing/ScaleHistory.maxon.
+	export let note as String
 	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung metrics,
 	// per-curve exponent + budget + verdict, and the overall verdict — as JSON.
 	//
@@ -371,6 +379,7 @@ export type MaxonArgs
 		var emitCorpus = ""
 		var rungs = DefaultRungCount
 		var perType = false
+		var note = ""
 		var resultJson = ""
 		var badOption = ""
 
@@ -425,7 +434,9 @@ export type MaxonArgs
 				end 'rungsArg'
 			end 'rungsFlag' else if arg == "--per-type" 'perTypeFlag'
 				perType = true
-			end 'perTypeFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
+			end 'perTypeFlag' else if arg.startsWith("--note=") 'noteFlag'
+				note = try CommandLine.optionValue(arg) otherwise ""
+			end 'noteFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
 				resultJson = try CommandLine.optionValue(arg) otherwise ""
 			end 'resultJsonFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
@@ -444,6 +455,6 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, resultJson: resultJson, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, note: note, resultJson: resultJson, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

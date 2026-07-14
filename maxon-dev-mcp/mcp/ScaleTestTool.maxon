@@ -15,7 +15,8 @@
 //
 // Inputs (JSON):
 //   rungs?: int          → --rungs=<n>          how many rungs to climb. Each DOUBLES the program.
-//   updateRequired?: bool → --update-required   rewrite the committed memory goldens
+//   updateRequired?: bool → --update-required   rewrite the committed memory goldens (REQUIRES note)
+//   note?: string        → --note=<text>        why the goldens moved; logged to docs/optimization-log.md
 //   perType?: bool       → --per-type           also run the untimed --mm-trace pass (by type AND by scope)
 //   emitCorpus?: string  → --emit-corpus=<dir>  dump the generated corpus and compile nothing
 //   log?: string         → --log=<value>
@@ -38,6 +39,15 @@ let scaleRawTailMaxBytes = 4096
 
 /// Entry point called by Server.maxon's dispatch table.
 export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	// Refused here, not left to the runner, so the caller gets a typed invalidParams naming the gap
+	// rather than a failed process whose stderr they have to read. (The runner refuses it too — it is
+	// reachable from a shell — but a bad tool call should never reach a subprocess at all.)
+	let wantsUpdate = try argsDoc.getBool(argsId, key: "updateRequired") otherwise false
+	let updateNote = try argsDoc.getString(argsId, key: "note") otherwise ""
+	if wantsUpdate and updateNote.isEmpty() 'noteMissing'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "scale-test: `updateRequired` needs `note` — one sentence saying WHY the goldens moved. It is appended with the before/after numbers to docs/optimization-log.md. The suite can see exactly WHAT moved and can never see why.")
+	end 'noteMissing'
+
 	let repoRoot = try repoRootPath() otherwise 'noRoot'
 		return repoRootErrorOutcome("scale-test")
 	end 'noRoot'
@@ -88,6 +98,12 @@ function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FileP
 	if updateRequired 'haveUR'
 		argv.push("--update-required")
 	end 'haveUR'
+
+	// scaleTestHandler has already refused an updateRequired with no note.
+	let note = try argsDoc.getString(argsId, key: "note") otherwise ""
+	if not note.isEmpty() 'haveNote'
+		argv.push("--note={note}")
+	end 'haveNote'
 
 	let perType = try argsDoc.getBool(argsId, key: "perType") otherwise false
 	if perType 'havePerType'

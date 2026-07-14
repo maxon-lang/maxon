@@ -223,7 +223,8 @@ end 'toolSchema'
 // it has never heard of.
 function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
 	let rungsSchema = schemaInteger(doc, description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the generated program, so this is exponential in cost: 6 rungs is a 32x span and about 20 seconds.")
-	let updateRequiredSchema = schemaBoolean(doc, description: "Rewrite the committed per-rung MEMORY GOLDENS in Testing/scale-baseline.tsv instead of checking against them. Same door-you-must-open semantics as run_spec_test's updateRequired: THE DIFF IS THE REVIEW. A golden that moved means the compiler now allocates differently for the same input, which is the event this suite exists to catch. It does NOT rewrite the exponent budgets — those are a human's judgement, and a suite that regenerated its own ceilings would pass by construction.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Rewrite the committed per-rung MEMORY GOLDENS in Testing/scale-baseline.tsv instead of checking against them. Same door-you-must-open semantics as run_spec_test's updateRequired: THE DIFF IS THE REVIEW. A golden that moved means the compiler now allocates differently for the same input, which is the event this suite exists to catch. REQUIRES `note`. It does NOT rewrite the exponent budgets — those are a human's judgement, and a suite that regenerated its own ceilings would pass by construction.")
+	let noteSchema = schemaString(doc, description: "One sentence saying WHY the goldens moved. REQUIRED with updateRequired, and appended with the before/after numbers to docs/optimization-log.md. The suite can see exactly WHAT moved and can never see why — that has to come from you, at the moment you accept the change.")
 	let perTypeSchema = schemaBoolean(doc, description: "Also run the untimed --mm-trace pass, which attributes allocations to the TYPE allocated. Off by default: it is a differently-compiled binary from the one being timed, and it traces every allocation individually.")
 	let emitCorpusSchema = schemaString(doc, description: "Dump the generated corpus to this directory for inspection and compile NOTHING. The corpus is otherwise built into a gitignored temp dir and thrown away.")
 	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"compiler:debug\", which prints the per-phase time AND memory tables for each rung's compile).")
@@ -231,6 +232,7 @@ function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("rungs", schemaId: rungsSchema, required: false))
 	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
+	fields.push(SchemaField.create("note", schemaId: noteSchema, required: false))
 	fields.push(SchemaField.create("perType", schemaId: perTypeSchema, required: false))
 	fields.push(SchemaField.create("emitCorpus", schemaId: emitCorpusSchema, required: false))
 	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))

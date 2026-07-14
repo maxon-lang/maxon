@@ -45,6 +45,8 @@ It returns four verdicts, and the last two are the point:
 What is gated, and what is not:
 
 - **Per-rung memory goldens** (allocations / frees / bytes) — EXACT, committed, bit-for-bit reproducible. The strong gate. `updateRequired: true` rewrites them, and **the diff is the review** — a golden that moved means the compiler allocates differently for the same input.
+
+`updateRequired` REQUIRES a `note` — one sentence saying why the goldens moved. It is refused (before the ladder is even climbed) without one. The note and the before/after numbers are appended to **`docs/optimization-log.md`**, which is the running record of what the compiler's memory traffic has actually done, change by change. The suite can see exactly WHAT moved and can never see WHY, so the reason is demanded at the one moment it is still known. Nothing is logged when no golden actually moved, and a short ladder (`rungs` below the number of committed goldens) is refused rather than allowed to silently DELETE the goldens for the rungs it did not climb.
 - **Per-phase growth exponents**, in time AND in allocations — tight (~1.25) everywhere except `regalloc`'s `splitting`/`liveness`, which are KNOWN superlinear (the splitter recomputes liveness after every split — `ARCHITECTURE.md:1336-1345`) and are budgeted at 2.2.
 - **Aggregate time / memory** — reported, loosely budgeted. They are sums of curves with different exponents, so they bend by construction; the teeth are in the per-phase rows.
 - **Absolute milliseconds** — reported, never gated (machine-dependent).
