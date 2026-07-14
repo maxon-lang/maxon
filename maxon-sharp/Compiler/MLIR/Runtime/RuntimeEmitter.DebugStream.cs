@@ -102,7 +102,7 @@ public partial class RuntimeEmitter {
     } else {
       _b.MovRegReg(VReg.Arg0, VReg.Ret);
     }
-    _b.MovRegImm(VReg.Arg1, DsHeaderSize + DsDefaultBufferSize + 65536);
+    _b.MovRegImm(VReg.Arg1, DsSharedMemorySize);
     _b.OsOpenAndMapSharedMemory(VReg.Ret, VReg.Arg0, VReg.Arg1);
     _b.JumpIfZero(VReg.Ret, disabledLabel);
 
@@ -167,7 +167,7 @@ public partial class RuntimeEmitter {
 
     // Unmap
     _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
-    _b.MovRegImm(VReg.Arg1, DsHeaderSize + DsDefaultBufferSize + 65536);
+    _b.MovRegImm(VReg.Arg1, DsSharedMemorySize);
     _b.OsUnmapSharedMemory(VReg.Arg0, VReg.Arg1);
 
     // Clear global
@@ -215,9 +215,18 @@ public partial class RuntimeEmitter {
   public void EmitDsReserve() {
     _b.FunctionStart("__ds_reserve", 2, 0x60);
 
-    var dropLabel = UniqueLabel("ds_reserve_drop");
+    // THE TWO DROP PATHS ARE DIFFERENT PATHS, because they differ in the one fact that matters on
+    // the way out: whether this thread holds the ticket lock. `detached` is reached before the
+    // acquire and `full` only after it, so the release below follows from the CONTROL PATH. It
+    // used to be re-derived — one shared drop label that asked `__ds_base != 0` to mean "I took
+    // the lock" — and that is a proxy, not the fact. `__debugstream_shutdown` zeroes `__ds_base`,
+    // so a producer that reached the full-buffer drop just as shutdown ran would have read base==0,
+    // concluded it never acquired, and skipped the release — leaving `__ds_reserve_now` one behind
+    // `__ds_reserve_next` and every later producer spinning on the ticket forever. A HANG, in the
+    // instrument, at shutdown, in the parallel program it exists to debug.
+    var dropDetachedLabel = UniqueLabel("ds_reserve_drop_detached");
+    var dropFullLabel = UniqueLabel("ds_reserve_drop_full");
     var noPadLabel = UniqueLabel("ds_reserve_nopad");
-    var doneLabel = UniqueLabel("ds_reserve_done");
     var recheckLabel = UniqueLabel("ds_reserve_recheck");
     var spinLabel = UniqueLabel("ds_reserve_spin");
 
@@ -227,7 +236,7 @@ public partial class RuntimeEmitter {
 
     // Load base, bail if not attached
     _b.LoadGlobal(VReg.Scratch0, "__ds_base");
-    _b.JumpIfZero(VReg.Scratch0, dropLabel);
+    _b.JumpIfZero(VReg.Scratch0, dropDetachedLabel);
     _b.StoreLocal(2, VReg.Scratch0); // base
 
     // ---- Acquire ticket lock ----
@@ -276,7 +285,7 @@ public partial class RuntimeEmitter {
     _b.AddRegReg(VReg.Scratch3, VReg.Arg0); // used + entry_size
     _b.LoadLocal(VReg.Arg1, 3); // buf_size
     _b.CmpRegReg(VReg.Scratch3, VReg.Arg1);
-    _b.JumpIf(Condition.Above, dropLabel);
+    _b.JumpIf(Condition.Above, dropFullLabel);
 
     // Check wrap: pos = wr & mask; if pos + entry_size > buf_size, write padding
     _b.LoadLocal(VReg.Scratch1, 5); // wr
@@ -323,7 +332,7 @@ public partial class RuntimeEmitter {
     _b.AddRegReg(VReg.Scratch3, VReg.Arg0); // used + entry_size
     _b.LoadLocal(VReg.Arg1, 3); // buf_size
     _b.CmpRegReg(VReg.Scratch3, VReg.Arg1);
-    _b.JumpIf(Condition.Above, dropLabel);
+    _b.JumpIf(Condition.Above, dropFullLabel);
 
     _b.DefineLabel(noPadLabel);
     // pos = wr & mask (wr may have been updated by padding)
@@ -373,34 +382,45 @@ public partial class RuntimeEmitter {
     // Increment total_events
     _b.AtomicInc(VReg.Scratch2, DsOffTotalEvents);
 
-    // ---- Release ticket lock ----
-    _b.MovRegImm(VReg.Scratch1, 1);
-    _b.LeaGlobal(VReg.Scratch2, "__ds_reserve_now");
-    _b.AtomicXadd(VReg.Scratch2, 0, VReg.Scratch1);
+    EmitDsReleaseTicket();
 
     // Return data_ptr
     _b.LoadLocal(VReg.Scratch0, 8);
     _b.ReturnValue(VReg.Scratch0);
 
-    _b.DefineLabel(dropLabel);
-    // Increment dropped_events counter
-    _b.LoadGlobal(VReg.Scratch0, "__ds_base");
-    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    // ---- Drop: DETACHED. Reached only from the base==0 test at function entry, which is BEFORE
+    // the ticket is drawn — so there is no lock to release, and no ring header to count a drop in.
+    _b.DefineLabel(dropDetachedLabel);
+    _b.ZeroReg(VReg.Ret);
+    _b.FunctionEnd();
+
+    // ---- Drop: RING FULL. Reached only from the two space checks, which are AFTER the acquire —
+    // so this path ALWAYS holds the ticket lock and ALWAYS releases it. `base` comes from the slot
+    // cached under the lock, never from the global, which shutdown can zero underneath us.
+    _b.DefineLabel(dropFullLabel);
+    _b.LoadLocal(VReg.Scratch0, 2); // base
     _b.AtomicInc(VReg.Scratch0, DsOffDroppedEvents);
-    _b.DefineLabel(doneLabel);
-    // Release lock if we acquired it. The drop path jumps in from two places:
-    // (a) base==0 at function entry — we never acquired; skip.
-    // (b) buffer-full check after acquiring — we DID acquire.
-    // Distinguish by re-checking base: if base==0 we didn't acquire.
-    var skipReleaseLabel = UniqueLabel("ds_reserve_no_release");
-    _b.LoadGlobal(VReg.Scratch0, "__ds_base");
-    _b.JumpIfZero(VReg.Scratch0, skipReleaseLabel);
+
+    EmitDsReleaseTicket();
+
+    _b.ZeroReg(VReg.Ret);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Release the ticket lock: bump `__ds_reserve_now` so the next ticket holder's spin exits.
+  ///
+  /// BOTH exits from the critical section come through here — the reservation that succeeded and
+  /// the one that found the ring full. A lock release spelled out once per exit is a lock release
+  /// that can be amended at one exit and not the other, and the failure mode is not a wrong answer
+  /// but a HANG: every producer after it spins on a ticket that is never served.
+  ///
+  /// Clobbers Scratch1 and Scratch2.
+  /// </summary>
+  private void EmitDsReleaseTicket() {
     _b.MovRegImm(VReg.Scratch1, 1);
     _b.LeaGlobal(VReg.Scratch2, "__ds_reserve_now");
     _b.AtomicXadd(VReg.Scratch2, 0, VReg.Scratch1);
-    _b.DefineLabel(skipReleaseLabel);
-    _b.ZeroReg(VReg.Ret);
-    _b.FunctionEnd();
   }
 
   // =========================================================================
@@ -719,6 +739,19 @@ public partial class RuntimeEmitter {
   // Each is a no-op when DebugStream is disabled at compile time. Callers are
   // expected to have any state they need across the call already spilled to
   // local slots, since the underlying Call clobbers all caller-saved registers.
+  //
+  // MOST OF THESE ARE DORMANT, AND THAT IS THE DESIGN. This is the scheduler-race TOOLBOX: you
+  // add a call site while hunting a "two workers on one GT" bug and take it out again when the
+  // bug is dead, because the events are far too loud to leave in. Today only RunnextSet,
+  // RunnextTake, Enqueue, Dequeue, StatusStore and TimerFire have call sites; IoComplete,
+  // CsxEntry, CsxExit, FreeListPush, FreeListPop, WloopRunGt, AwaitDeqRun and
+  // TrampolineCompleted have NONE, and neither do 10 of the 11 DsStatusSite* ids.
+  //
+  // Said out loud because a reader who finds EmitDbgIoComplete and DsDbgIoPhase* will otherwise
+  // assume io_complete events appear in traces. They do not — nothing calls it. Keeping the
+  // instrument is worth more than the tidiness of deleting it: the parallel pool it exists to
+  // debug is being built right now, and re-deriving these from scratch costs far more than the
+  // dead C# they occupy. They are emitted into the binary only under --debugstream.
   // -------------------------------------------------------------------------
 
   public void EmitDbgRunnextSet(VReg gt) {
@@ -1077,6 +1110,34 @@ public partial class RuntimeEmitter {
   public static readonly byte[] DsStrTableMagic = "MXDS_STRS\0"u8.ToArray();
 
   /// <summary>
+  /// The width of EVERY count and length field in a name blob. The compiler writes them, the
+  /// monitor reads them back out of the executable, and the two do it in different code with
+  /// different primitives — so the width is stated ONCE, here, and both sides step by it. A `2`
+  /// spelled out at each end is a number that can drift, and the drift would not fail to compile:
+  /// it would slide the parse one byte and turn every name after the first into garbage.
+  /// </summary>
+  public const int DsNameBlobFieldSize = 2;
+
+  /// The largest value such a field can hold. A count or a length above it cannot be encoded, and
+  /// the `(ushort)` cast that used to do this silently did not lose one name — it DESYNCHRONISED
+  /// the blob, so every name after the offender decoded as garbage. Say so instead.
+  private const int DsNameBlobFieldMax = (1 << (DsNameBlobFieldSize * 8)) - 1;
+
+  /// <summary>
+  /// Append one little-endian name-blob field. Both fields in the format — the table's count and
+  /// each name's length — are the same field, so they are written by the same code.
+  /// </summary>
+  private static void AppendNameBlobField(List<byte> blob, int value, string what) {
+    if (value < 0 || value > DsNameBlobFieldMax)
+      throw new InvalidOperationException(
+        $"DebugStream name blob: {what} is {value}, which does not fit its " +
+        $"{DsNameBlobFieldSize}-byte field (max {DsNameBlobFieldMax})");
+
+    for (int i = 0; i < DsNameBlobFieldSize; i++)
+      blob.Add((byte)(value >> (i * 8)));
+  }
+
+  /// <summary>
   /// Emit a packed name-table blob into symdata so the monitor can resolve a u16 index back
   /// to a real name by parsing the executable — no name is ever built at runtime.
   /// Format: [magic (10 bytes)][count:u16][len0:u16][name0 bytes]...[lenN:u16][nameN bytes]
@@ -1085,15 +1146,11 @@ public partial class RuntimeEmitter {
     var blob = new List<byte>();
     blob.AddRange(magic);
 
-    ushort count = (ushort)names.Count;
-    blob.Add((byte)(count & 0xFF));
-    blob.Add((byte)(count >> 8));
+    AppendNameBlobField(blob, names.Count, "the name count");
 
     foreach (var entry in names) {
       var nameBytes = System.Text.Encoding.UTF8.GetBytes(entry ?? "");
-      ushort len = (ushort)nameBytes.Length;
-      blob.Add((byte)(len & 0xFF));
-      blob.Add((byte)(len >> 8));
+      AppendNameBlobField(blob, nameBytes.Length, $"the UTF-8 length of name '{entry}'");
       blob.AddRange(nameBytes);
     }
 

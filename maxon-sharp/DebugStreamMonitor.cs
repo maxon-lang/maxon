@@ -66,8 +66,9 @@ public class DebugStreamMonitor {
     // Generate unique named shared memory segment
     var shmName = $"maxon_ds_{Environment.ProcessId}_{Random.Shared.Next():x8}";
 
-    // Total shared memory size: header + buffer + tag table space
-    long totalSize = RuntimeEmitter.DsHeaderSize + RuntimeEmitter.DsDefaultBufferSize + 65536;
+    // The producer MAPS exactly this many bytes (EmitDebugStreamInit), so it is not the monitor's
+    // number to choose — it is the shared layout contract, and it has one definition.
+    long totalSize = RuntimeEmitter.DsSharedMemorySize;
 
     using var mmf = MemoryMappedFile.CreateNew(shmName, totalSize);
     using var accessor = mmf.CreateViewAccessor(0, totalSize);
@@ -83,7 +84,8 @@ public class DebugStreamMonitor {
     accessor.Write(RuntimeEmitter.DsOffStartTimestamp, Environment.TickCount64);
     accessor.Write(RuntimeEmitter.DsOffTotalEvents, 0L);
     accessor.Write(RuntimeEmitter.DsOffDroppedEvents, 0L);
-    accessor.Write(RuntimeEmitter.DsOffTagTableOffset, (long)(RuntimeEmitter.DsHeaderSize + RuntimeEmitter.DsDefaultBufferSize));
+    accessor.Write(RuntimeEmitter.DsOffTagTableOffset,
+      RuntimeEmitter.DsSharedMemorySize - RuntimeEmitter.DsTagTableReserveSize);
     accessor.Write(RuntimeEmitter.DsOffTagTableCount, 0L);
     accessor.Write(RuntimeEmitter.DsOffPeakUsed, 0L);
 
@@ -122,10 +124,11 @@ public class DebugStreamMonitor {
     // Pre-allocate private buffer for copy-then-process
     var localBuf = new byte[bufferSize];
 
-    // Cached indent strings by depth
-    var indentCache = new string[64];
+    // Cached indent strings by depth. Both the cached and the uncached indent are built by
+    // Indent(), so the two cannot disagree about how wide a level is.
+    var indentCache = new string[MaxCachedIndentDepth];
     for (int i = 0; i < indentCache.Length; i++)
-      indentCache[i] = new string(' ', i * 2);
+      indentCache[i] = Indent(i);
 
     // Synchronize writes to stdout between event loop and forwarding task
     var stdoutLock = new object();
@@ -231,7 +234,7 @@ public class DebugStreamMonitor {
           string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames, logNames);
 
           if (line != null) {
-            string indent = depth < indentCache.Length ? indentCache[depth] : new string(' ', depth * 2);
+            string indent = depth < indentCache.Length ? indentCache[depth] : Indent(depth);
             lock (stdoutLock) {
               stdout.Write('[');
               stdout.Write('+');
@@ -282,6 +285,13 @@ public class DebugStreamMonitor {
 
   /// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
   private const uint MillisecondsPerSecond = 1000;
+
+  // DEPTH_INC / DEPTH_DEC nest the trace. Indents are precomputed up to this depth and built on
+  // demand past it — the cache is an optimisation, never a different answer.
+  private const int SpacesPerDepthLevel = 2;
+  private const int MaxCachedIndentDepth = 64;
+
+  private static string Indent(int depth) => new(' ', depth * SpacesPerDepthLevel);
 
   /// <summary>
   /// Does this event belong to the family the user asked for? A null filter means "all of them".
@@ -363,6 +373,23 @@ public class DebugStreamMonitor {
     accessor.Write(RuntimeEmitter.DsOffReadCursor, readCursor);
   }
 
+  // The slice of the PE/COFF format this parser walks: DOS stub -> PE signature -> COFF header ->
+  // optional header -> section table. Named, because a bare `Seek(14)` in the middle of a chain of
+  // relative skips is unverifiable by reading it — which is exactly how the field below it came to
+  // be read two bytes early.
+  private const int DosOffPeSignaturePointer = 0x3C;  // e_lfanew
+  private const int PeSignatureSize = 4;              // "PE\0\0"
+  private const int CoffOffNumberOfSections = 2;      // COFF: Machine(2) then NumberOfSections(2)
+  private const int CoffOffSizeOfOptionalHeader = 16;
+  private const int CoffHeaderSize = 20;
+  private const int SectionHeaderSize = 40;
+  private const int SectionNameSize = 8;
+  /// Section header: Name(8) VirtualSize(4) VirtualAddress(4), then SizeOfRawData and
+  /// PointerToRawData back to back — which is why one seek here reads both.
+  private const int SectionOffRawDataSize = 16;
+  /// Where the compiler puts its symdata, and so where both name blobs live.
+  private const string SymtabSectionName = ".symtab";
+
   /// <summary>
   /// Parse the PE executable to find the .symtab section, then scan it for a packed name-table
   /// blob carrying <paramref name="magic"/>. Two blobs use this: MXDS_TAGS (mm allocation type
@@ -374,38 +401,38 @@ public class DebugStreamMonitor {
       using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
       using var reader = new BinaryReader(fs);
 
-      // DOS header: e_lfanew at offset 0x3C gives PE signature offset
-      fs.Seek(0x3C, SeekOrigin.Begin);
-      var peOffset = reader.ReadUInt32();
+      fs.Seek(DosOffPeSignaturePointer, SeekOrigin.Begin);
+      long coff = reader.ReadUInt32() + PeSignatureSize;
 
-      // PE signature (4 bytes) + COFF header (20 bytes)
-      fs.Seek(peOffset + 4, SeekOrigin.Begin);
-      var numberOfSections = reader.ReadUInt16();  // offset +2 in COFF header: NumberOfSections
-      fs.Seek(14, SeekOrigin.Current);  // skip rest of COFF header (Machine already read as part of seek)
+      // Each field is seeked to ABSOLUTELY, off the COFF base and its own named offset. This used
+      // to be a chain of relative reads and skips, and the chain was one field out of step:
+      // `numberOfSections` was seeked to COFF+0 and so actually read MACHINE — 0x8664 on x64. The
+      // section walk below was bounded by 34404 instead of 6, and only ever terminated because
+      // `.symtab` happens to appear early and returns. In a binary WITHOUT it, the walk reads a
+      // megabyte of unrelated file bytes as section headers, and any eight of them that spell
+      // ".symtab" hand ScanForNameBlob a garbage offset and length. The blanket catch below then
+      // turns that into an empty table — the names quietly stop resolving, and the trace lies.
+      fs.Seek(coff + CoffOffNumberOfSections, SeekOrigin.Begin);
+      int numberOfSections = reader.ReadUInt16();
 
-      // Optional header size is at COFF offset +16, but we already read past it.
-      // Back up: COFF header is 20 bytes starting at peOffset+4.
-      // We read 2 bytes (NumberOfSections), skipped 14 = 16 bytes into COFF.
-      // SizeOfOptionalHeader is at COFF+16, which is current position.
-      var sizeOfOptionalHeader = reader.ReadUInt16();
-      fs.Seek(2, SeekOrigin.Current); // skip Characteristics
+      fs.Seek(coff + CoffOffSizeOfOptionalHeader, SeekOrigin.Begin);
+      int sizeOfOptionalHeader = reader.ReadUInt16();
 
-      // Skip optional header to reach section headers
-      fs.Seek(sizeOfOptionalHeader, SeekOrigin.Current);
+      // The section table follows the optional header, whose size is the field just read.
+      long sectionTable = coff + CoffHeaderSize + sizeOfOptionalHeader;
 
-      // Read section headers (40 bytes each)
       for (int i = 0; i < numberOfSections; i++) {
-        var nameBytes = reader.ReadBytes(8);
-        var name = System.Text.Encoding.UTF8.GetString(nameBytes).TrimEnd('\0');
-        var virtualSize = reader.ReadUInt32();
-        var virtualAddress = reader.ReadUInt32();
-        var rawDataSize = reader.ReadUInt32();
-        var rawDataPointer = reader.ReadUInt32();
-        fs.Seek(16, SeekOrigin.Current); // skip remaining section header fields
+        long header = sectionTable + (long)i * SectionHeaderSize;
 
-        if (name == ".symtab") {
-          return ScanForNameBlob(fs, reader, rawDataPointer, rawDataSize, magic);
-        }
+        fs.Seek(header, SeekOrigin.Begin);
+        var name = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(SectionNameSize)).TrimEnd('\0');
+        if (name != SymtabSectionName) continue;
+
+        fs.Seek(header + SectionOffRawDataSize, SeekOrigin.Begin);
+        uint rawDataSize = reader.ReadUInt32();
+        uint rawDataPointer = reader.ReadUInt32();
+
+        return ScanForNameBlob(fs, reader, rawDataPointer, rawDataSize, magic);
       }
     } catch {
       // PE parsing failed — return an empty table; the decoder falls back to raw indices
@@ -430,16 +457,18 @@ public class DebugStreamMonitor {
       if (!match) continue;
 
       // Found magic at pos. Decode: [magic(10)][count:u16][len0:u16][name0]...
+      // Every advance is DsNameBlobFieldSize — the emitter's own constant, so the two ends of this
+      // format cannot disagree about how wide a field is and slide the parse.
       int offset = pos + magic.Length;
-      if (offset + 2 > sectionData.Length) return [];
+      if (offset + RuntimeEmitter.DsNameBlobFieldSize > sectionData.Length) return [];
 
       ushort count = BitConverter.ToUInt16(sectionData, offset);
-      offset += 2;
+      offset += RuntimeEmitter.DsNameBlobFieldSize;
 
       var names = new string[count];
-      for (int i = 0; i < count && offset + 2 <= sectionData.Length; i++) {
+      for (int i = 0; i < count && offset + RuntimeEmitter.DsNameBlobFieldSize <= sectionData.Length; i++) {
         ushort len = BitConverter.ToUInt16(sectionData, offset);
-        offset += 2;
+        offset += RuntimeEmitter.DsNameBlobFieldSize;
         if (offset + len > sectionData.Length) break;
         names[i] = System.Text.Encoding.UTF8.GetString(sectionData, offset, len);
         offset += len;

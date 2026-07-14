@@ -91,6 +91,19 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int DsHeaderSize = 128;       // 0x80
   public const int DsDefaultBufferSize = 2 * 1024 * 1024; // 2 MB, must be power-of-two
 
+  /// Bytes reserved past the ring for the v1 IN-BAND tag table. Nothing writes there any more —
+  /// the interned name tables live in the executable's .symtab and the monitor finds them by
+  /// scanning the PE (see EmitDebugStreamNameBlob) — but the reserve stays part of the layout
+  /// because both processes must agree on the mapping length, and shrinking it buys nothing.
+  public const int DsTagTableReserveSize = 64 * 1024;
+
+  /// The size of the WHOLE shared segment. The monitor CREATES it this big and the producer MAPS
+  /// and UNMAPS it this big, in two different languages, one of them hand-emitted machine code —
+  /// so a disagreement here does not fail to compile. It fails at runtime, silently and in the
+  /// worst direction: on Windows a MapViewOfFile longer than the section returns NULL, the
+  /// producer takes its `base == 0` path, and the trace simply never appears. One definition.
+  public const long DsSharedMemorySize = DsHeaderSize + DsDefaultBufferSize + DsTagTableReserveSize;
+
   // Header field offsets (from base of shared memory)
   public const int DsOffMagic = 0x00;
   public const int DsOffVersion = 0x08;
