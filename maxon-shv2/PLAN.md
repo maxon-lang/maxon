@@ -125,7 +125,7 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Generics** | **Dictionary-passing + 64-byte layout descriptors + witness tables** — v1's design. (Rejected: monomorphization. It contaminates 3 files instead of 20, but trades code size and compile time — exactly the resources the ≤30 s / ≤1.7 GB budget exists to conserve.) |
 | **String** | **A BUILTIN, at P1.2** — gated on the RUNTIME, *not* on generics. It is the FIRST heap value. v1 shipped String in Phase 7; generics in Phase 11. |
 | **Closures** | **IN core** — co-landed with escape analysis at **P1.5**, because closure capture *is* the canonical escape. The `LazyMessage` sites are kept as dogfood. |
-| **`async` / green threads** | **IN core, at P1.5** *(reversed 2026-07-13 — was "Beyond")*. Parallel spec execution is part of the Phase-1 goal, and a green-thread capture **IS** an escape — so it co-lands with closures + escape, never after. Brings **Workstream R3 (the GT scheduler) into Phase 1.** Its dogfood + acceptance test is the parallel harness; it also un-blocks **P2.6** per-function fan-out, which was always going to need it. |
+| **`async` / green threads** | **IN core, at P1.5** *(reversed 2026-07-13 — was "Beyond")*. Parallel spec execution is part of the Phase-1 goal, and a green-thread capture **IS** an escape — so it co-lands with closures + escape, never after. Brings **Workstream R3 (the GT scheduler) into Phase 1.** Its dogfood + acceptance test is the parallel harness; it also un-blocks **P2.6** per-function fan-out, which was always going to need it. **⭐ AND: give `Promise` the ERROR TYPE — see below. Do not port the bootstrap's shape.** |
 | **Conditional conformance** | **IN core** — *declared* in Phase 1 (the stdlib forces it), *emitted* at **P2.2**. It is a hard mechanism, and this plan implements hard mechanisms rather than dodging them. See the PRINCIPLE. |
 | **`Map` / `Set`** | multi-param generics + one `Hashable` constraint. No `Iterable`-on-Map, no tuple `Entry`. **P2.3.** `Set` rides Map's exact mechanism. |
 | **Iteration** | **Hardcode `for-in`** over Array/Range/String. No general `Iterable`/associated types. |
@@ -133,6 +133,33 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Stdlib lowering** | **Reachability-seeded — lower only the stdlib bodies the program transitively reaches.** *Not an optimization: it is what makes Phase 1 a phase.* See §"The stdlib cone." |
 | **Stdlib fork** | `stdlib-shv2/stdlib/` — ❌ **NOT NEEDED. Re-deferred 2026-07-13 on measurement (P1.0c).** It was un-deferred as the backstop for `Map`, *"if reachability-seeded lowering proves insufficient."* **It proved sufficient** — `Map` is laid out and never codegen'd. The one edge it *could* have cut (`String.trim()` → `CharacterSet` → `Set`) we chose NOT to cut: do the hard things early ⇒ `Set` is in Phase 1 (P1.7b). **So the fork now gates nothing, and its original ~1 s justification is still dead.** Do not resurrect it without a NEW reason. |
 | **Targets** | x64-windows only through Phase 2. |
+
+### ⭐ P1.5: `Promise` MUST CARRY ITS ERROR TYPE — `Promise with (T, E)`, not `Promise with T`
+
+**Learned from a real bug in the bootstrap (2026-07-14). Do NOT port its shape.**
+
+The bootstrap's `MaxonPromise` stored **two BITS distilled from the callee's `throws` clause** (`Throws`,
+`ErrorIsHeapPtr`) and **threw the type away**. Everything downstream then had to reconstruct what it
+could from a bit, and it went wrong in four separate places:
+
+- `try await p otherwise (e)` **bound `e` as `int`** — the *value* was right all along (the error
+  ordinal), only the **type** was lost, so the binding fell back to `Integer`.
+- An **associated-value** union error emitted **no decref** ⇒ the payload **LEAKED**.
+- `async` and `await` in **different blocks** re-tagged the promise and **re-erased** the type.
+- **Awaiting a thunk that throws `A` inside a function that throws `B`** skipped the type check
+  entirely and **reinterpreted A's ordinals as B's tags — a silent miscompile.**
+
+⚠ And it bit **shv2's own worker pool**: `drainResultsThunk` throws the union `SubprocessError`, the box
+said "not a heap pointer", the conditional decref never fired, and **every dead worker leaked its
+error.** Invisible to a green suite, because that path only runs when a worker dies.
+
+**The erasure is not a threading bug — it is the TYPE.** `Promise with T` has one parameter, the
+*result*; boxing therefore has nowhere to keep `E`, and no amount of plumbing recovers it (an
+`Array with (Promise with Integer)` may legally hold promises from two functions with different
+`throws`). The bootstrap's `errorIsHeapPtr` runtime bit exists **only** to paper over that erasure.
+
+⇒ **shv2 builds `Promise` with the error type in it from the start. The runtime bit then becomes
+unnecessary**, and all four bugs above are unrepresentable rather than fixed.
 
 ### PRINCIPLE — when may we rewrite shv2's own source?
 
