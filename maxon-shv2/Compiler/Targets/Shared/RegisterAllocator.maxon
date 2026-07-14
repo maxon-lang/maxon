@@ -1126,7 +1126,8 @@ end 'colorTargetOp'
 // ==========================================================================
 
 function regAllocStatsMessage(stats RegAllocStats) returns String
-	var msg = "regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n"
+	var msg = StringBuilder.create()
+	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
 	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
@@ -1136,5 +1137,5 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 	for phase in RegAllocPhase.allCases 'eachPhase'
 		msg.append(" {phase.name}={stats.phaseNanosOf(phase)}")
 	end 'eachPhase'
-	return msg
+	return msg.build()
 end 'regAllocStatsMessage'

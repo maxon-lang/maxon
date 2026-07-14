@@ -37,8 +37,12 @@ let FuncHeaderPrefix = "func @"
 // fragments pass `false` so a fragment shows ONLY the program's own functions —
 // the shared runtime scaffolding never changes per-test and is pure noise there.
 // `build --emit-ir` passes `true` for the complete backend-debugging view.
+//
+// The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
+// owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
+// would make printing a module quadratic in its own output.
 export function printTargetModule(module TargetModule, includeRuntime bool) returns String
-	var body = ""
+	var body = StringBuilder.create()
 	var afterFirst = false
 
 	for func in module.functions 'eachFunc'
@@ -54,7 +58,7 @@ export function printTargetModule(module TargetModule, includeRuntime bool) retu
 		afterFirst = true
 	end 'eachFunc'
 
-	return body
+	return body.build()
 end 'printTargetModule'
 
 // True for the runtime/entry functions shv2's backend synthesizes (not from user
@@ -70,7 +74,8 @@ end 'isRuntimeFunction'
 function printTargetFunction(module TargetModule, func IrFunction) returns String
 	let openBrace = "\{"
 	let closeBrace = "\}"
-	var sb = "{FuncHeaderPrefix}{String.from(func.name)} {openBrace}\n"
+	var sb = StringBuilder.create()
+	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {openBrace}\n")
 
 	// The function's blocks in `blockRefs` order — the same public-API walk the
 	// backend's `emitFunctionChunk` uses. Collected once so branch targets can be
@@ -90,7 +95,7 @@ function printTargetFunction(module TargetModule, func IrFunction) returns Strin
 	end 'eachBlock'
 
 	sb.append("{closeBrace}\n")
-	return sb
+	return sb.build()
 end 'printTargetFunction'
 
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index

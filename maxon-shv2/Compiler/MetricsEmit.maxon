@@ -79,7 +79,8 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	let timings = project.timings
 	let memory = project.memory
 
-	var out = "{MetricsHeader}"
+	var out = StringBuilder.create()
+	out.append("{MetricsHeader}")
 	out.append(metricsRow(MetricsKindTotal, name: MetricsNoName, nanos: timings.totalNanos, delta: memory.total))
 
 	for phase in CompilePhase.allCases 'eachPhase'
@@ -100,11 +101,11 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, nanos: timings.unattributedNanos(), delta: memory.unattributed()))
 
 	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, nanos: 0, delta: PhaseDelta.create(0, allocs: 0, frees: 0, bytes: codeBytes as ByteCount)))
-	return out
+	return out.build()
 end 'metricsText'
 
+// One interpolation rather than a build-by-append: the compiler measures every part of an
+// interpolated string and allocates the row exactly once.
 function metricsRow(kind String, name String, nanos DurationNanos, delta PhaseDelta) returns String
-	var row = "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{nanos}"
-	row.append("{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}\n")
-	return row
+	return "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{nanos}{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}\n"
 end 'metricsRow'

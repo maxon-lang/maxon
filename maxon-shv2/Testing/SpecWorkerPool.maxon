@@ -628,8 +628,7 @@ end 'drainResultsThunk'
 // read error here means the handle is already gone, and there is nothing left to say about a worker
 // whose pipe we can no longer read.
 function drainChildStderr(child StreamingSubprocess) returns String
-	var out = ""
-	var first = true
+	var out = LineJoiner.create()
 
 	while true 'lineLoop'
 		let line = try child.readStderrLine() otherwise break
@@ -637,15 +636,10 @@ function drainChildStderr(child StreamingSubprocess) returns String
 			break
 		end 'eof'
 
-		if first 'firstLine'
-			out = line
-			first = false
-		end 'firstLine' else 'laterLine'
-			out = "{out}\n{line}"
-		end 'laterLine'
+		out.push(line)
 	end 'lineLoop'
 
-	return out
+	return out.build()
 end 'drainChildStderr'
 
 // ============================================================================================

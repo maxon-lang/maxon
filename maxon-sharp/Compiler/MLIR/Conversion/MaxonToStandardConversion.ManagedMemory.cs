@@ -23,30 +23,30 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Compute grow capacity: max(requiredBytes + 1, currentCapBytes * 2, 64).
-  /// Standard geometric growth strategy with a minimum floor.
+  /// The capacity an append grows a buffer to: EXACTLY the bytes it will hold, plus one for the NUL
+  /// slot `String.cstr()` reads. No growth factor, no minimum floor.
+  ///
+  /// AN APPEND ALLOCATES A NEW BUFFER OF EXACTLY THE RIGHT SIZE AND COPIES INTO IT, which is Go's
+  /// `string` and Go's reason: a string OWNS what it holds and not one byte more. Every string in a
+  /// program pays for this policy, and nearly every string is built once and thereafter only read —
+  /// so geometric growth here would leave every one of them carrying slack that will never be used,
+  /// to buy an amortization only a BUILD LOOP needs.
+  ///
+  /// It used to be `max(requiredBytes + 1, currentCapBytes * 2, 64)` — doubling, with a 64-byte floor
+  /// — which made an append loop amortized O(1) and made every string in the process up to twice the
+  /// size it needed to be.
+  ///
+  /// THE COST IS REAL AND IT IS DELIBERATE: appending in a loop is now Θ(n²), because each append
+  /// copies everything already there. That is what `StringBuilder` is for (stdlib/String.maxon) — it
+  /// accumulates into a `ByteArray`, which grows geometrically, and hands the finished buffer to a
+  /// `String` with no copy at all. Build there; hold a `String`.
   /// </summary>
-  private static StdI64 EmitGrowCapacity(
-    IrBlock<StandardOp> block, StdI64 requiredBytes, StdI64 currentCapBytes) {
+  private static StdI64 EmitExactAppendCapacity(IrBlock<StandardOp> block, StdI64 requiredBytes) {
     var oneConst = new StdConstI64Op(1);
     block.AddOp(oneConst);
-    var requiredPlusOne = new StdAddI64Op(requiredBytes, oneConst.Result);
-    block.AddOp(requiredPlusOne);
-    var twoConst = new StdConstI64Op(2);
-    block.AddOp(twoConst);
-    var doubled = new StdMulI64Op(currentCapBytes, twoConst.Result);
-    block.AddOp(doubled);
-    var cmp1 = new StdCmpU64Op("ugt", requiredPlusOne.Result, doubled.Result);
-    block.AddOp(cmp1);
-    var grow1 = new StdSelectI64Op(cmp1.Result, requiredPlusOne.Result, doubled.Result);
-    block.AddOp(grow1);
-    var minCap = new StdConstI64Op(64);
-    block.AddOp(minCap);
-    var cmp2 = new StdCmpU64Op("ugt", grow1.Result, minCap.Result);
-    block.AddOp(cmp2);
-    var growCap = new StdSelectI64Op(cmp2.Result, grow1.Result, minCap.Result);
-    block.AddOp(growCap);
-    return growCap.Result;
+    var exact = new StdAddI64Op(requiredBytes, oneConst.Result);
+    block.AddOp(exact);
+    return exact.Result;
   }
 
   /// <summary>
@@ -1679,12 +1679,10 @@ public static partial class MaxonToStandardConversion {
       var selfByteSize = ComputeBitPackedByteSize(appendBlock, selfLen);
       var selfCapBytes = ComputeBitPackedByteSize(appendBlock, clampedCap);
 
-      var growCap = EmitGrowCapacity(appendBlock, totalByteSize, selfCapBytes);
-      // requiredCap = totalByteSize + 1 (used later to check if growth occurred)
-      var oneConst = new StdConstI64Op(1);
-      appendBlock.AddOp(oneConst);
-      var requiredCap = new StdAddI64Op(totalByteSize, oneConst.Result);
-      appendBlock.AddOp(requiredCap);
+      // The capacity it grows to and the "did it have to grow" test are now the SAME number: an
+      // append takes exactly what it needs, so what it needs IS what it takes.
+      var growCap = EmitExactAppendCapacity(appendBlock, totalByteSize);
+      var requiredCap = growCap;
 
       // Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.
       // For bit-packed, selfCap is in elements but ensure_cap only checks sign, so passing
@@ -1742,7 +1740,7 @@ public static partial class MaxonToStandardConversion {
       EmitStructFieldStore(block, finalBuf, selfVarName, ManagedFieldBuffer, IrType.I64, varTypes);
       EmitStructFieldStore(block, totalLen.Result, selfVarName, ManagedFieldLength, IrType.I64, varTypes);
       // Update capacity: use totalLen if grew (conservative)
-      var grewCmp = new StdCmpU64Op("ugt", requiredCap.Result, selfCapBytes);
+      var grewCmp = new StdCmpU64Op("ugt", requiredCap, selfCapBytes);
       block.AddOp(grewCmp);
       var newCap = new StdSelectI64Op(grewCmp.Result, totalLen.Result, selfCap);
       block.AddOp(newCap);
@@ -1786,16 +1784,12 @@ public static partial class MaxonToStandardConversion {
       var totalLenBytes = new StdMulI64Op(totalLen.Result, elemSize);
       appendBlock.AddOp(totalLenBytes);
 
-      var growByteCap = EmitGrowCapacity(appendBlock, totalLenBytes.Result, selfCapBytes.Result);
+      // The capacity it grows to and the "did it have to grow" test are now the SAME number: an
+      // append takes exactly what it needs, so what it needs IS what it takes.
+      var growByteCap = EmitExactAppendCapacity(appendBlock, totalLenBytes.Result);
       var growByteCapVar = $"__append_growcap_{uid}";
       EmitStore(appendBlock, growByteCap, growByteCapVar, varTypes);
-      // requiredByteCap = totalLenBytes + 1 (used later to check if growth occurred)
-      var oneConst = new StdConstI64Op(1);
-      appendBlock.AddOp(oneConst);
-      var requiredByteCap = new StdAddI64Op(totalLenBytes.Result, oneConst.Result);
-      appendBlock.AddOp(requiredByteCap);
-      var reqByteCapVar = $"__append_reqcap_{uid}";
-      EmitStore(appendBlock, requiredByteCap.Result, reqByteCapVar, varTypes);
+      var reqByteCapVar = growByteCapVar;
 
       // Call maxon_string_ensure_cap(buffer, lengthBytes, capacity, growByteCap) -> newBuffer
       // Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.

@@ -124,14 +124,15 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	let heldCount = candidates.count()
 	let deficit = minCount(peak.pressure - available, b: heldCount)
 
-	var msg = "the loop at {filePath}:{loopLine} needs {deficit} more register(s) than are available\n"
+	var msg = StringBuilder.create()
+	msg.append("the loop at {filePath}:{loopLine} needs {deficit} more register(s) than are available\n")
 	msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
 	msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
 	msg.append(candidateList(candidates, order: order, filePath: filePath))
 	msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
 	msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
 	msg.append("  and the loop body no longer needs a register for each one.")
-	return msg
+	return msg.build()
 end 'buildRegisterPressureMessage'
 
 // The smaller of two counts. Used to cap the reported deficit at the listed-candidate count.
@@ -144,13 +145,13 @@ end 'minCount'
 // (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
 // to recover.
 function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String) returns String
-	var out = ""
+	var out = StringBuilder.create()
 	for idx in order 'each'
 		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
 		let plural = "" if c.usesInLoop == 1 else "s"
 		out.append("    {filePath}:{c.line}:{c.column}   used {c.usesInLoop} time{plural} in the loop\n")
 	end 'each'
-	return out
+	return out.build()
 end 'candidateList'
 
 // The source line to anchor "the loop at ..." on: the SMALLEST source line among the Target

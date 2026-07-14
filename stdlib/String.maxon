@@ -22,6 +22,11 @@ export typealias GraphemeIndex = int(0 to u64.max)
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
+// The UTF-8 bytes behind a `String`, nameable at FILE scope — `String.ByteMemory` is not, and a
+// generic cannot be instantiated inline in a parameter type. `StringBuilder.appendBytes` needs to say
+// it, so it is said once here.
+typealias ByteBuffer = __ManagedMemory with Byte
+
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed as ByteMemory
@@ -43,6 +48,18 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export static function from (bytes ByteArray) returns String
 		return String{managed: bytes.managed, isAsciiFlag: scanIsAscii(bytes.managed)}
 	end 'from'
+
+	// `from`, for a caller that ALREADY KNOWS whether the bytes are ASCII and is handing over a
+	// buffer it will never touch again. `StringBuilder.build` is the only caller, and both halves
+	// matter to it: it watched every byte go in, so re-scanning them here (`from` does) would make
+	// finishing a build O(n) for an answer already in hand — and it gives the buffer UP, which is
+	// what makes taking it rather than copying it sound.
+	//
+	// Not exported: "take these bytes and trust me about them" is not a promise the stdlib can let
+	// arbitrary code make.
+	static function fromOwnedBytes(bytes ByteArray, isAscii bool) returns String
+		return String{managed: bytes.managed, isAsciiFlag: isAscii}
+	end 'fromOwnedBytes'
 
 	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
 	export function toByteArray() returns ByteArray
@@ -265,7 +282,6 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'empty_old'
 
 		let selfLen = managed.length()
-		let resultIsAscii = isAsciiFlag and with.isAsciiFlag
 
 		// First pass: count matches
 		var matchCount = 0
@@ -283,10 +299,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'no_matches'
 
-		// Build result by processing matches
-		var builtResult = try managed.slice(0, 0) otherwise 'initSliceErr'
-			panic("String.replace: slice(0,0) always valid")
-		end 'initSliceErr'
+		// Build the result in ONE allocation. The first pass counted the matches, so the final size is
+		// already known exactly — every match trades `oldLen` bytes for `with`'s — and a builder that is
+		// told the answer never grows at all. (Appending the pieces to a `String` instead would copy the
+		// whole result back and forth once per match: `String.append` is exact, by design. See
+		// `StringBuilder`.)
+		let withLen = with.managed.length()
+		var out = StringBuilder.create()
+		out.reserve(selfLen + matchCount * withLen - matchCount * oldLen)
+
 		var pos = 0
 		while pos <= selfLen - oldLen 'search'
 			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: old.managed) 'try_find'
@@ -295,9 +316,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 					let prefixSlice = try managed.slice(pos, matchPos) otherwise 'prefixSliceErr'
 						panic("String.replace: prefix slice — pos and matchPos within bounds from findManaged")
 					end 'prefixSliceErr'
-					builtResult.append(prefixSlice)
+					out.appendBytes(prefixSlice, isAscii: isAsciiFlag)
 				end 'has_prefix'
-				builtResult.append(with.managed)
+				out.appendBytes(with.managed, isAscii: with.isAsciiFlag)
 				pos = matchPos + oldLen
 			end 'try_find' else 'no_more'
 				break
@@ -309,10 +330,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			let suffixSlice = try managed.slice(pos, selfLen) otherwise 'suffixSliceErr'
 				panic("String.replace: suffix slice — pos < selfLen guaranteed")
 			end 'suffixSliceErr'
-			builtResult.append(suffixSlice)
+			out.appendBytes(suffixSlice, isAscii: isAsciiFlag)
 		end 'has_suffix'
 
-		return String{managed: builtResult, isAsciiFlag: resultIsAscii}
+		return out.build()
 	end 'replace'
 
 	export function replaceFirst(old String, with String) returns String
@@ -321,20 +342,33 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
-		let resultIsAscii = isAsciiFlag and with.isAsciiFlag
-		if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
-			let selfLen = managed.length()
-			var result = try managed.slice(0, idx) otherwise 'rfHeadSliceErr'
-				panic("String.replaceFirst: head slice — idx from findManaged, always in bounds")
-			end 'rfHeadSliceErr'
-			result.append(with.managed)
-			let tail = try managed.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
-				panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
-			end 'rfTailSliceErr'
-			result.append(tail)
-			return String{managed: result, isAsciiFlag: resultIsAscii}
-		end 'try_find'
-		return String{managed: managed, isAsciiFlag: isAsciiFlag}
+		let selfLen = managed.length()
+		let idx = try findManaged(managed, offset: 0, len: selfLen, needle: old.managed) otherwise 'no_match'
+			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+		end 'no_match'
+
+		// `replace`'s three-piece build, with the counting pass it does not need: there is exactly one
+		// match, so the final size is known outright — the match trades `oldLen` bytes for `with`'s —
+		// and a builder that is told the answer allocates once and never grows. Growing the head slice
+		// by two exact appends instead (what this used to do) reallocated and recopied the whole
+		// result twice.
+		let withLen = with.managed.length()
+		var out = StringBuilder.create()
+		out.reserve(selfLen - oldLen + withLen)
+
+		let head = try managed.slice(0, idx) otherwise 'rfHeadSliceErr'
+			panic("String.replaceFirst: head slice — idx from findManaged, always in bounds")
+		end 'rfHeadSliceErr'
+		out.appendBytes(head, isAscii: isAsciiFlag)
+
+		out.appendBytes(with.managed, isAscii: with.isAsciiFlag)
+
+		let tail = try managed.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
+			panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
+		end 'rfTailSliceErr'
+		out.appendBytes(tail, isAscii: isAsciiFlag)
+
+		return out.build()
 	end 'replaceFirst'
 
 	// Split method
@@ -606,6 +640,99 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return trimEnd(CharacterSet.whitespacesAndNewlines())
 	end 'trimEnd'
 end 'String'
+
+/// Builds a `String` piece by piece — which a `String` itself deliberately cannot do cheaply.
+/// @category Text
+///
+/// WHY THIS TYPE EXISTS, AND WHY `String.append` IS NOT ALLOWED TO BE CLEVER INSTEAD.
+///
+/// A `String` OWNS EXACTLY THE BYTES IT HOLDS. `append` allocates a new buffer of exactly the
+/// required size, copies into it, and frees the old one — no growth factor, no slack, not one byte
+/// more than the string is. Every string in a program pays for that decision, and almost every
+/// string in a program is built once and then only read, so it is the right one: a growth policy
+/// would leave every one of them carrying capacity nobody will ever use.
+///
+/// The price is that appending in a LOOP is Θ(n²) — each append copies everything already there.
+/// That is not a defect to be papered over by giving every string slack it does not need; it is
+/// what this type is for. Build here, where the buffer grows GEOMETRICALLY (`Array`'s policy — see
+/// `grownCapacity` in stdlib/Array.maxon: double while small, ease toward 1.25× once big), so the
+/// whole build is amortized O(1) per byte, and hand the finished bytes to a `String` at the end.
+///
+/// It is Go's split, for Go's reason: an immutable `string` whose `+` copies, and a
+/// `strings.Builder` that grows. The two costs are paid by different code — a program HOLDS many
+/// strings and BUILDS few.
+export type StringBuilder
+	var bytes as ByteArray
+	// Tracked as the pieces arrive rather than re-scanned at the end: the builder already sees every
+	// byte that goes in. An empty builder is trivially ASCII, and one non-ASCII piece settles it.
+	var isAsciiFlag as bool
+
+	export static function create() returns StringBuilder
+		return StringBuilder{bytes: ByteArray.create(), isAsciiFlag: true}
+	end 'create'
+
+	/// Reserve room for `byteCount` bytes up front — for the one case a growth policy cannot beat:
+	/// when the caller ALREADY KNOWS the final size.
+	///
+	/// Growing geometrically costs log₂(N) reallocations and leaves slack behind. A caller who knows
+	/// the answer can have ONE allocation of exactly the right size, with no re-copies and nothing
+	/// wasted, which is strictly better than any growth policy can be. (It is what the compiler
+	/// already does for an interpolated string: it measures every part, then allocates once.)
+	export function reserve(byteCount ByteCount)
+		bytes.reserve(byteCount)
+	end 'reserve'
+
+	export function append(other String)
+		appendBytes(other.managed, isAscii: other.isAscii())
+	end 'append'
+
+	/// Append a raw UTF-8 byte range whose ASCII-ness the caller ALREADY KNOWS — a slice cut out of a
+	/// string that has already been classified, which is what `String.replace` spends its whole life
+	/// doing. Routing those through `append(String)` would wrap each piece in a `String`, and a
+	/// `String` built from raw bytes RE-SCANS them to decide `isAscii` — paying O(n) for an answer the
+	/// caller is holding.
+	///
+	/// The bytes are COPIED in. The range may point into a buffer this builder is about to reallocate
+	/// (`replace` slices the very string it is rebuilding), so borrowing it would be a use-after-free
+	/// waiting for the next growth.
+	function appendBytes(piece ByteBuffer, isAscii bool)
+		bytes.append(ByteArray.init(piece))
+
+		if not isAscii 'clearAscii'
+			isAsciiFlag = false
+		end 'clearAscii'
+	end 'appendBytes'
+
+	export function byteLength() returns ByteCount
+		return bytes.count()
+	end 'byteLength'
+
+	export function isEmpty() returns bool
+		return bytes.count() == 0
+	end 'isEmpty'
+
+	/// Throw away what has been built, KEEPING the capacity — so a builder reused across many strings
+	/// pays for its growth once instead of once per string.
+	export function clear()
+		bytes.clear()
+		isAsciiFlag = true
+	end 'clear'
+
+	/// The `String` that was built. The builder is EMPTY afterwards, and that is not an accident.
+	///
+	/// It HANDS THE BUFFER OVER instead of copying it — the finished string IS the bytes the builder
+	/// accumulated, so a build costs no final O(n) copy and no second allocation. That is only sound
+	/// because the builder gives them up: a non-consuming `toString()` would leave a `String` and a
+	/// `StringBuilder` sharing one buffer that the builder's very next `append` may REALLOCATE out
+	/// from under it, and the string would be reading freed memory. So there is exactly one way to
+	/// finish, and it cannot alias.
+	export function build() returns String
+		let built = String.fromOwnedBytes(self.bytes, isAscii: self.isAsciiFlag)
+		self.bytes = ByteArray.create()
+		self.isAsciiFlag = true
+		return built
+	end 'build'
+end 'StringBuilder'
 
 /// Iterator for String — traverses Unicode grapheme clusters.
 /// Positioning invariant: iterPos always points at the start of a valid grapheme,

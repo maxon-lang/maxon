@@ -545,8 +545,13 @@ end 'printRungHeader'
 
 // `results` is the rungs climbed SO FAR, not including this one — the line is printed as each rung
 // lands, so that a run whose top rung dies has still told you everything the rungs below it said.
+//
+// Every table row below is accumulated in a `StringBuilder`, not a `String`: a `String` owns exactly
+// the bytes it holds, so each `append` recopies the whole row so far (stdlib/String.maxon), and the
+// phase table's rows carry one column per rung.
 function printRungLine(result RungResult, results RungResultArray)
-	var line = padRight("  rung {result.rung}", width: RungColumnWidth)
+	var line = StringBuilder.create()
+	line.append(padRight("  rung {result.rung}", width: RungColumnWidth))
 	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
@@ -554,7 +559,7 @@ function printRungLine(result RungResult, results RungResultArray)
 	line.append(padLeft("{result.total.frees}", width: CountColumnWidth))
 	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
 	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes, results: results, ofBytes: true)), width: GrowthColumnWidth))
-	print("{line}\n")
+	print("{line.build()}\n")
 end 'printRungLine'
 
 // This rung's growth over the LAST rung in `results` — which is the rung below it, because the
@@ -598,12 +603,13 @@ function printPhaseTable(results RungResultArray, ofBytes bool)
 	print("  per-phase {measureHeading(ofBytes)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
 	print("\n")
 
-	var header = padRight("  phase", width: PhaseColumnWidth)
+	var header = StringBuilder.create()
+	header.append(padRight("  phase", width: PhaseColumnWidth))
 	for result in results 'eachRung'
 		header.append(padLeft("rung {result.rung}", width: PhaseCountColumnWidth))
 	end 'eachRung'
 	header.append(padLeft("x", width: GrowthColumnWidth))
-	print("{header}\n")
+	print("{header.build()}\n")
 
 	for source in scalePhaseSources() 'eachPhase'
 		printPhaseRow(source, results: results, ofBytes: ofBytes)
@@ -619,14 +625,15 @@ function measureHeading(ofBytes bool) returns String
 end 'measureHeading'
 
 function printPhaseRow(source PhaseSource, results RungResultArray, ofBytes bool)
-	var line = padRight("  {phaseSourceName(source)}", width: PhaseColumnWidth)
+	var line = StringBuilder.create()
+	line.append(padRight("  {phaseSourceName(source)}", width: PhaseColumnWidth))
 
 	for result in results 'eachRung'
 		line.append(padLeft("{measureOf(phaseMetricOf(source, result: result), ofBytes: ofBytes)}", width: PhaseCountColumnWidth))
 	end 'eachRung'
 
 	line.append(padLeft(growthText(topRungGrowth(source, results: results, ofBytes: ofBytes)), width: GrowthColumnWidth))
-	print("{line}\n")
+	print("{line.build()}\n")
 end 'printPhaseRow'
 
 // The growth of the TOP rung over the one below it — the steepest, most informative end of the
@@ -673,12 +680,13 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("printMemoryDelta: i < count but results.get({i}) failed")
 
-		var line = padRight("  {result.rung}", width: TrendRungColumnWidth)
+		var line = StringBuilder.create()
+		line.append(padRight("  {result.rung}", width: TrendRungColumnWidth))
 		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
 		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
 		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
 		line.append(padLeft(countDeltaText(result.total.bytes, logged: loggedBytes, rung: i), width: TrendDeltaColumnWidth))
-		print("{line}\n")
+		print("{line.build()}\n")
 
 		if countMoved(result.total.allocs, logged: loggedAllocs, rung: i) or countMoved(result.total.bytes, logged: loggedBytes, rung: i) 'changed'
 			moved = true
@@ -734,12 +742,13 @@ function printCorpusGrowth(results RungResultArray)
 		return
 	end 'tooFewRungs'
 
-	var line = "  corpus: emitted code grows"
+	var line = StringBuilder.create()
+	line.append("  corpus: emitted code grows")
 	for i in 1 upto results.count() 'eachRung'
 		line.append(" {growthText(codeGrowthAt(results, rung: i))}")
 	end 'eachRung'
 
-	print("{line} per rung (floor {growthText(GrowthReading.measured(MinCodeGrowthRatio))}) —\n")
+	print("{line.build()} per rung (floor {growthText(GrowthReading.measured(MinCodeGrowthRatio))}) —\n")
 	print("          the programs compiled rather than folding away, so the numbers above are numbers\n")
 	print("          about something.\n")
 end 'printCorpusGrowth'

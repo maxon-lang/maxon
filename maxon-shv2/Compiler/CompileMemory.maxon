@@ -30,14 +30,14 @@
 
 // Column widths for the report table. Its own set: the memory table has four numeric
 // columns to the timing table's two, and its numbers are counts and byte volumes rather
-// than milliseconds.
-typealias MemColumnWidth = int(0 to 128)
-
-let MemPhaseNameWidth = 22 as MemColumnWidth
-let MemAllocsWidth = 12 as MemColumnWidth
-let MemFreesWidth = 12 as MemColumnWidth
-let MemBytesWidth = 14 as MemColumnWidth
-let MemRuleWidth = MemPhaseNameWidth + MemAllocsWidth + MemFreesWidth + MemBytesWidth
+// than milliseconds. The widths differ; how a cell is PADDED and how a rule is DRAWN do not, so
+// `padRight`/`padLeft`/`horizontalRule` are CompileTimings' and shared (this file used to carry a
+// second, identical copy of all three, over an identically-ranged `MemColumnWidth`).
+let MemPhaseNameWidth = 22 as ColumnWidth
+let MemAllocsWidth = 12 as ColumnWidth
+let MemFreesWidth = 12 as ColumnWidth
+let MemBytesWidth = 14 as ColumnWidth
+let MemRuleWidth = (MemPhaseNameWidth + MemAllocsWidth + MemFreesWidth + MemBytesWidth) as ColumnWidth
 
 let MemRowIndent = "  "
 let MemSubPhaseIndent = "    "
@@ -237,9 +237,10 @@ end 'regAllocMemoryUnattributed'
 export function compileMemoryReport(memory CompileMemory) returns String
 	let total = memory.total
 
-	var msg = "compile memory — {total.allocs} allocs, {total.frees} frees, {total.bytes} bytes\n"
-	msg.append("{memPadRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{memPadLeft("allocs", width: MemAllocsWidth)}{memPadLeft("frees", width: MemFreesWidth)}{memPadLeft("bytes", width: MemBytesWidth)}\n")
-	msg.append(memHorizontalRule())
+	var msg = StringBuilder.create()
+	msg.append("compile memory — {total.allocs} allocs, {total.frees} frees, {total.bytes} bytes\n")
+	msg.append("{padRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{padLeft("allocs", width: MemAllocsWidth)}{padLeft("frees", width: MemFreesWidth)}{padLeft("bytes", width: MemBytesWidth)}\n")
+	msg.append(horizontalRule(MemRuleWidth))
 
 	for phase in CompilePhase.allCases 'eachPhase'
 		msg.append(memoryRow("{MemRowIndent}{phase.name}", delta: memory.deltaOf(phase)))
@@ -249,54 +250,22 @@ export function compileMemoryReport(memory CompileMemory) returns String
 		end 'nestRegAlloc'
 	end 'eachPhase'
 
-	msg.append(memHorizontalRule())
+	msg.append(horizontalRule(MemRuleWidth))
 	msg.append(memoryRow("{MemRowIndent}TOTAL", delta: total))
 	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.columns.totalDelta()))
 	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed()))
-	return msg
+	return msg.build()
 end 'compileMemoryReport'
 
 function regAllocMemoryBreakdown(memory CompileMemory) returns String
-	var msg = ""
+	var msg = StringBuilder.create()
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(memoryRow("{MemSubPhaseIndent}{sub.name}", delta: memory.regAlloc.deltaOf(sub)))
 	end 'eachSub'
 	msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: regAllocMemoryUnattributed(memory)))
-	return msg
+	return msg.build()
 end 'regAllocMemoryBreakdown'
 
 function memoryRow(label String, delta PhaseDelta) returns String
-	return "{memPadRight(label, width: MemPhaseNameWidth)}{memPadLeft("{delta.allocs}", width: MemAllocsWidth)}{memPadLeft("{delta.frees}", width: MemFreesWidth)}{memPadLeft("{delta.bytes}", width: MemBytesWidth)}\n"
+	return "{padRight(label, width: MemPhaseNameWidth)}{padLeft("{delta.allocs}", width: MemAllocsWidth)}{padLeft("{delta.frees}", width: MemFreesWidth)}{padLeft("{delta.bytes}", width: MemBytesWidth)}\n"
 end 'memoryRow'
-
-function memHorizontalRule() returns String
-	var out = ""
-	var i = 0
-	while i < MemRuleWidth 'dash'
-		out.append("-")
-		i = i + 1
-	end 'dash'
-	out.append("\n")
-	return out
-end 'memHorizontalRule'
-
-function memPadRight(text String, width MemColumnWidth) returns String
-	var out = "{text}"
-	var i = text.byteLength()
-	while i < width 'pad'
-		out.append(" ")
-		i = i + 1
-	end 'pad'
-	return out
-end 'memPadRight'
-
-function memPadLeft(text String, width MemColumnWidth) returns String
-	var out = ""
-	var i = text.byteLength()
-	while i < width 'pad'
-		out.append(" ")
-		i = i + 1
-	end 'pad'
-	out.append(text)
-	return out
-end 'memPadLeft'

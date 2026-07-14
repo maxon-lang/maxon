@@ -465,6 +465,42 @@ function markerValue(line String) returns String
 	return line.slice(valueStart, endIndex: endIdx).trim()
 end 'markerValue'
 
+// Lines joined by "\n", with no leading and no trailing newline.
+//
+// The suite accumulates line-oriented text in exactly two places — a spec's fenced blocks
+// (`readFence`, below) and a worker's whole stderr (`drainChildStderr`, SpecWorkerPool) — and both used
+// to hand-roll this dance identically. Both are also UNBOUNDED in the input: a fence is a whole test
+// program, a drain is everything a crashed child said. So both must accumulate into a `StringBuilder`,
+// because a `String` owns exactly the bytes it holds and its `append` recopies all of them
+// (stdlib/String.maxon), making a join Θ(n²) in its own output.
+//
+// `hasLine` is NOT `out.isEmpty()`. A first line that is itself EMPTY leaves the builder empty and must
+// still be separated from the line after it — a spec fence opening on a blank line is ordinary, and
+// inferring the flag from the buffer would silently eat that newline.
+export type LineJoiner
+	var out as StringBuilder
+	var hasLine as bool
+
+	export static function create() returns LineJoiner
+		return LineJoiner{out: StringBuilder.create(), hasLine: false}
+	end 'create'
+
+	export function push(line String)
+		if hasLine 'separator'
+			out.append("\n")
+		end 'separator'
+
+		out.append(line)
+		hasLine = true
+	end 'push'
+
+	/// The joined text. CONSUMING, as `StringBuilder.build` is: the joiner is empty afterwards.
+	export function build() returns String
+		hasLine = false
+		return out.build()
+	end 'build'
+end 'LineJoiner'
+
 // Read the fenced block whose opening ``` is at `openIndex`. Content lines are
 // joined with "\n" and NO trailing newline, so a ```maxon block is reproduced
 // VERBATIM — the runner prepends the one `// Test: <name>` line the C# reference
@@ -474,26 +510,19 @@ end 'markerValue'
 // than looping).
 function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 	let lineCount = lines.count()
-	var text = ""
-	var first = true
+	var text = LineJoiner.create()
 	var i = openIndex + 1
 
 	while i < lineCount 'read'
 		let line = try lines.get(i) otherwise panic("SpecParser.readFence: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
 		if line.startsWith(FenceClose) 'close'
-			return FenceBlock.create(text, nextIndex: i + 1)
+			return FenceBlock.create(text.build(), nextIndex: i + 1)
 		end 'close'
 
-		if first 'firstLine'
-			text = line
-			first = false
-		end 'firstLine' else 'moreLines'
-			text = "{text}\n{line}"
-		end 'moreLines'
-
+		text.push(line)
 		i = i + 1
 	end 'read'
 
-	return FenceBlock.create(text, nextIndex: lineCount)
+	return FenceBlock.create(text.build(), nextIndex: lineCount)
 end 'readFence'

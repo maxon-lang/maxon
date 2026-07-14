@@ -191,7 +191,12 @@ export type HttpClient
 		// TRUNCATED and handed to the parser as if it were whole. A throttling or failing server —
 		// exactly what a busy test suite provokes — therefore produced a garbage response instead of
 		// an error the caller could see.
-		var responseData = ""
+		//
+		// The chunks accumulate into a `StringBuilder`, never into a `String`: a `String` owns exactly
+		// the bytes it holds, so appending a chunk to one reallocates and recopies the whole response
+		// received so far (see String.maxon). A 1 MB body arriving in 4 KB chunks would copy half a
+		// gigabyte.
+		var responseData = StringBuilder.create()
 		var receiving = true
 		while receiving 'recvLoop'
 			let chunk = try client.recv(4096) otherwise (e) 'recvErr'
@@ -210,7 +215,7 @@ export type HttpClient
 		client.close()
 
 		// Parse the response
-		let response = try httpParseResponse(responseData)
+		let response = try httpParseResponse(responseData.build())
 		return response
 	end 'send'
 

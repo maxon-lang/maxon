@@ -18,48 +18,54 @@ export function httpBuildRequest(request HttpRequest) returns String
 
 	let method = httpMethodToString(request.method())
 
+	// A request grows with its header count and ends with the whole body. Rebuilding a `String` per
+	// header would recopy everything written so far each time — a `String` owns exactly the bytes it
+	// holds, so it has nowhere to put a new one (see String.maxon) — and the body would be copied
+	// again for every header that followed it. The builder grows geometrically instead.
+	var raw = StringBuilder.create()
+
 	// Request line
-	var raw = "{method} {path} HTTP/1.1\r\n"
+	raw.append("{method} {path} HTTP/1.1\r\n")
 
 	// Host header (auto-add if not set by user)
 	let host = try url.host() otherwise ""
 	if not request.headers().has("host") 'addHost'
 		let portNum = try url.port() otherwise 0
 		if portNum != 0 and portNum != 80 'nonDefaultPort'
-			raw = "{raw}Host: {host}:{portNum}\r\n"
+			raw.append("Host: {host}:{portNum}\r\n")
 		end 'nonDefaultPort' else 'defaultPort'
-			raw = "{raw}Host: {host}\r\n"
+			raw.append("Host: {host}\r\n")
 		end 'defaultPort'
 	end 'addHost'
 
 	// Connection: close so server closes after response
 	if not request.headers().has("connection") 'addConn'
-		raw = "{raw}Connection: close\r\n"
+		raw.append("Connection: close\r\n")
 	end 'addConn'
 
 	// Content-Length
 	let bodyLen = request.body().byteLength()
 	if bodyLen > 0 'hasBodyLen'
-		raw = "{raw}Content-Length: {bodyLen}\r\n"
+		raw.append("Content-Length: {bodyLen}\r\n")
 	end 'hasBodyLen'
 
 	// User-set headers
 	for (hdrName, hdrValue) in request.headers().headers 'headerLoop'
 		// Skip headers we already handled
 		if hdrName != "host" and hdrName != "connection" and hdrName != "content-length" 'custom'
-			raw = "{raw}{hdrName}: {hdrValue}\r\n"
+			raw.append("{hdrName}: {hdrValue}\r\n")
 		end 'custom'
 	end 'headerLoop'
 
 	// End of headers
-	raw = "{raw}\r\n"
+	raw.append("\r\n")
 
 	// Body
 	if bodyLen > 0 'hasBody'
-		raw = "{raw}{request.body()}"
+		raw.append(request.body())
 	end 'hasBody'
 
-	return raw
+	return raw.build()
 end 'httpBuildRequest'
 
 export function httpParseResponse(data String) returns HttpResponse throws HttpError
@@ -107,17 +113,19 @@ export function httpParseResponse(data String) returns HttpResponse throws HttpE
 		throw HttpError.invalidResponse
 	end 'unknownCode'
 
-	// Reason phrase (everything after second space)
-	var reason = ""
-	if statusParts.count() >= 3 'hasReason'
-		reason = try statusParts.get(2) otherwise ""
-		var i = 3
-		while i < statusParts.count() 'joinReason'
-			let part = try statusParts.get(i) otherwise ""
-			reason = "{reason} {part}"
-			i = i + 1
-		end 'joinReason'
-	end 'hasReason'
+	// Reason phrase (everything after second space) — the split parts rejoined with the single spaces
+	// that separated them.
+	var reasonText = StringBuilder.create()
+	var i = 2
+	while i < statusParts.count() 'joinReason'
+		if i > 2 'separator'
+			reasonText.append(" ")
+		end 'separator'
+
+		reasonText.append(try statusParts.get(i) otherwise "")
+		i = i + 1
+	end 'joinReason'
+	let reason = reasonText.build()
 
 	// Parse headers
 	var headers = HttpHeaders.create()

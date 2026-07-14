@@ -45,12 +45,16 @@ export typealias ColumnWidth = int(0 to 128)
 let PhaseNameWidth = 22 as ColumnWidth
 let TimeWidth = 11 as ColumnWidth
 let PercentWidth = 8 as ColumnWidth
-let RuleWidth = PhaseNameWidth + TimeWidth + PercentWidth
+let RuleWidth = (PhaseNameWidth + TimeWidth + PercentWidth) as ColumnWidth
 
 // Every row is indented under the report's title line; a sub-phase row is indented
 // once more, under the phase whose wall time it breaks down.
 let RowIndent = "  "
 let SubPhaseIndent = "    "
+
+// What `repeated` lays down: a column is filled with spaces, a rule is drawn with dashes.
+let PadUnit = " "
+let RuleUnit = "-"
 
 // A percentage held to one decimal place in integer math: `nanos * 1000 / total`, so
 // 1000 = 100.0%. There is no float formatting on this path (and no reason to pull
@@ -190,11 +194,12 @@ end 'regAllocUnattributedNanos'
 export function compileTimingsReport(timings CompileTimings) returns String
 	let total = timings.totalNanos
 
-	var msg = "compile timings — total {millisText(total)} ms\n"
+	var msg = StringBuilder.create()
+	msg.append("compile timings — total {millisText(total)} ms\n")
 	// The header's label carries the same indent every row's does, so it pads to the
 	// same column width and the three columns line up.
 	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: TimeWidth)}{padLeft("%", width: PercentWidth)}\n")
-	msg.append(horizontalRule())
+	msg.append(horizontalRule(RuleWidth))
 
 	for phase in CompilePhase.allCases 'eachPhase'
 		msg.append(timingRow("{RowIndent}{phase.name}", nanos: timings.phaseNanosOf(phase), total: total))
@@ -204,11 +209,11 @@ export function compileTimingsReport(timings CompileTimings) returns String
 		end 'nestRegAlloc'
 	end 'eachPhase'
 
-	msg.append(horizontalRule())
+	msg.append(horizontalRule(RuleWidth))
 	msg.append(timingRow("{RowIndent}TOTAL", nanos: total, total: total))
 	msg.append(timingRow("{RowIndent}attributed", nanos: timings.attributedNanos(), total: total))
 	msg.append(timingRow("{RowIndent}unattributed", nanos: timings.unattributedNanos(), total: total))
-	return msg
+	return msg.build()
 end 'compileTimingsReport'
 
 // The allocator's sub-phases, indented under `regalloc`. Their percentages are
@@ -216,12 +221,12 @@ end 'compileTimingsReport'
 // can compare "liveness" directly against "parse" — the question the table exists to
 // answer is where the compile's time goes, not where the allocator's does.
 function regAllocBreakdown(timings CompileTimings, total DurationNanos) returns String
-	var msg = ""
+	var msg = StringBuilder.create()
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(timingRow("{SubPhaseIndent}{sub.name}", nanos: timings.regAlloc.phaseNanosOf(sub), total: total))
 	end 'eachSub'
 	msg.append(timingRow("{SubPhaseIndent}(unattributed)", nanos: regAllocUnattributedNanos(timings), total: total))
-	return msg
+	return msg.build()
 end 'regAllocBreakdown'
 
 function timingRow(label String, nanos DurationNanos, total DurationNanos) returns String
@@ -241,17 +246,14 @@ export function millisText(nanos DurationNanos) returns String
 	return "{tenths / MillisTenthsPerMs}.{tenths mod MillisTenthsPerMs}"
 end 'millisText'
 
-// Spans exactly the three columns. A row's own indent is part of its label column, so
-// the rule starts at column 0 and ends where the percent column does.
-function horizontalRule() returns String
-	var out = ""
-	var i = 0
-	while i < RuleWidth 'dash'
-		out.append("-")
-		i = i + 1
-	end 'dash'
-	out.append("\n")
-	return out
+// A rule spanning exactly `width` columns. A row's own indent is part of its label column, so
+// a rule starts at column 0 and ends where its table's last column does.
+//
+// Exported for the memory table, whose four columns are wider than this one's three. That table used
+// to carry its own copy of this function and of both pads below, differing only in which widths they
+// summed — and a copy of a formatter is a formatter that will eventually disagree.
+export function horizontalRule(width ColumnWidth) returns String
+	return "{repeated(RuleUnit, count: width)}\n"
 end 'horizontalRule'
 
 // `ms` as a percentage of `total`, to one decimal place, in integer math.
@@ -272,23 +274,42 @@ end 'percentOfTotal'
 
 // Pad to `width` with spaces. A label longer than its column widens that row rather
 // than being truncated — a phase name must always be readable in full.
+//
+// One interpolation, so one allocation: the compiler measures every part of an interpolated string
+// and allocates the result exactly once.
 export function padRight(text String, width ColumnWidth) returns String
-	var out = "{text}"
-	var i = text.byteLength()
-	while i < width 'pad'
-		out.append(" ")
-		i = i + 1
-	end 'pad'
-	return out
+	return "{text}{repeated(PadUnit, count: padCount(text, width: width))}"
 end 'padRight'
 
 export function padLeft(text String, width ColumnWidth) returns String
-	var out = ""
-	var i = text.byteLength()
-	while i < width 'pad'
-		out.append(" ")
-		i = i + 1
-	end 'pad'
-	out.append(text)
-	return out
+	return "{repeated(PadUnit, count: padCount(text, width: width))}{text}"
 end 'padLeft'
+
+// The spaces a `text` cell needs to fill a `width` column — none, for a label that already overflows
+// it (see `padRight`: an overlong label widens its row rather than being truncated).
+function padCount(text String, width ColumnWidth) returns ColumnWidth
+	let len = text.byteLength()
+	if len >= width 'overflows'
+		return 0
+	end 'overflows'
+
+	return (width - len) as ColumnWidth
+end 'padCount'
+
+// `unit` repeated `count` times — the one place a run of identical characters is spelled, for both
+// pads above and both tables' rules.
+//
+// It RESERVES, because the size is known exactly before the first unit is written. That matters more
+// than it looks: `String.append` is exact by design (stdlib/String.maxon), so the while-loop this
+// replaced — append one space, `width` times — reallocated and recopied the whole run PER SPACE, and
+// every cell of every table paid it.
+function repeated(unit String, count ColumnWidth) returns String
+	var out = StringBuilder.create()
+	out.reserve(unit.byteLength() * count)
+
+	for _ in 0 upto count 'each'
+		out.append(unit)
+	end 'each'
+
+	return out.build()
+end 'repeated'
