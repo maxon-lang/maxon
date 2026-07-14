@@ -132,13 +132,24 @@ public enum ErrorCode {
   // diagnostics (semanticTypeResolutionLeak..semanticAmbiguousCrossFileCall),
   // so this shared diagnostic takes the next code free on both sides.
   SemanticEnumAccessorComparison = 3097,
-  // `try await p otherwise (e)` where p came out of storage as a bare
-  // `Promise with T`. That type has one type parameter — the RESULT — and so no
-  // slot to carry the thunk's `throws` type: boxing a promise into it erases the
-  // error type, keeping only a runtime bit saying whether the flag is a heap
-  // pointer. There is therefore no type to give `e`, and binding it used to
-  // silently hand back the error flag typed as a raw `int`. Awaiting the promise
-  // where `async` produced it keeps the error type and binds correctly.
+  // `try await p` where p came out of storage as a bare `Promise with T`, in one of
+  // the two forms that need the thunk's error TYPE. That type has one type parameter
+  // — the RESULT — and so no slot to carry the thunk's `throws` type: boxing a promise
+  // into it erases the error type, keeping only a runtime bit saying whether the flag
+  // is a heap pointer. The two forms that cannot be served without the type are:
+  //
+  //   - `otherwise (e)` — there is no type to give `e`, and binding it used to hand
+  //     back the error flag silently typed as a raw `int`;
+  //   - propagation (bare `try await p` inside a `throws` function) — there is no type
+  //     to check the enclosing function's `throws` against, so the SPAWNED function's
+  //     ordinals get re-thrown through this function's error flag and the caller
+  //     decodes one error type as another. When the caller's type has associated
+  //     values it then mm_decrefs an ordinal as a pointer and the program faults.
+  //
+  // Both are refused. The `otherwise` forms that do NOT need the type (a default value,
+  // `ignore`, `panic`, an unbound `'label'`) still work: they release the payload off a
+  // runtime bit read back from the box. Awaiting the promise where `async` produced it
+  // keeps the error type and serves every form.
   SemanticAwaitErrorTypeErased = 3098,
 
   // IR pipeline errors (4xxx) - Stage 4

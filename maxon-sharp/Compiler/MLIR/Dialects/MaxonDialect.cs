@@ -1801,15 +1801,13 @@ public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, Maxon
   public override string Mnemonic => $"maxon.async_call @{Callee}";
   public string Callee { get; } = callee;
   public List<MaxonValue> Args { get; } = args;
+  /// Everything the spawned call's type says about the promise — the result kind, the
+  /// result struct name, throws-ness, and the `throws` TYPE — lives on this one value.
+  /// The op deliberately does not re-publish any of it as its own properties: the four
+  /// it used to expose were write-only, and a second copy of a fact is a second thing to
+  /// forget (which is how `errorIsHeapPtr` came to be dropped on the cross-block re-tag
+  /// in the first place). Read `asyncOp.Result.ErrorType`, not an op-level echo of it.
   public MaxonPromise Result { get; } = new MaxonPromise(IrContext.Current.NextId(), innerResultKind, innerStructTypeName, throws, errorType);
-  /// The return type of the spawned function (what await will produce)
-  public MaxonValueKind? InnerResultKind { get; } = innerResultKind;
-  public string? InnerStructTypeName { get; } = innerStructTypeName;
-  /// Whether the spawned function is a throwing function.
-  public bool Throws { get; } = throws;
-  /// The spawned callee's declared `throws` type, carried so an `otherwise (e)`
-  /// on the await can bind `e` at that type. See MaxonPromise.ErrorType.
-  public IrType? ErrorType { get; } = errorType;
   public List<bool>? ArgMutabilities { get; set; }
   public List<string?>? ArgVarNames { get; set; }
   /// Source location for error reporting (line of the 'async' keyword)
@@ -1829,6 +1827,12 @@ public sealed class MaxonAwaitOp : MaxonOp {
   public MaxonValue? Result { get; }
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
+  /// Source location of the `await` keyword. A MaxonAwaitOp that SURVIVES parsing is by
+  /// construction a PLAIN await — `try await` deletes it and emits a MaxonTryAwaitOp in
+  /// its place — so SemanticCheckPass can reject a plain await of a throwing thunk, and
+  /// needs somewhere to point when it does.
+  public int? AwaitLine { get; set; }
+  public int? AwaitColumn { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
 

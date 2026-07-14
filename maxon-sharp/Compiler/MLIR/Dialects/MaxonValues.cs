@@ -47,11 +47,24 @@ public sealed class MaxonPromise(
   ///     has no slot for the error (Throws == true, ErrorType == null). Use
   ///     `Promise with (T, E)` to keep E across storage.
   public Core.IrType? ErrorType { get; } = errorType;
-  /// True iff the error flag is a heap pointer (an associated-value enum payload)
-  /// that the `otherwise` path must mm_decref. Derived from ErrorType rather than
-  /// stored: a second, independently-passed bit is a second thing to forget, and
-  /// it HAS been forgotten (the cross-block promise re-tag used to drop it).
-  public bool ErrorIsHeapPtr => ErrorType is Core.IrEnumType { HasAssociatedValues: true };
+
+  /// Whether an error flag of this type is a heap POINTER — an owned associated-value
+  /// enum payload the error path must mm_decref — rather than a plain ordinal.
+  ///
+  /// This is the single answer to that question. It is asked in three places that must
+  /// agree or the program either leaks (a payload nobody releases) or faults (an ordinal
+  /// mm_decref'd as a pointer): here, when boxing a promise into a `Promise with T`; in
+  /// the parser, when deciding whether an `otherwise` path needs a cleanup branch; and
+  /// in the parser again, when emitting that branch. They are not three tests of the
+  /// same shape any more — they are three callers of this one.
+  public static bool ErrorTypeIsHeapPtr(Core.IrType? errorType) =>
+      errorType is Core.IrEnumType { HasAssociatedValues: true };
+
+  /// True iff the error flag is a heap pointer that the `otherwise` path must mm_decref.
+  /// Derived from ErrorType rather than stored: a second, independently-passed bit is a
+  /// second thing to forget, and it HAS been forgotten (the cross-block promise re-tag
+  /// used to drop it).
+  public bool ErrorIsHeapPtr => ErrorTypeIsHeapPtr(ErrorType);
   /// Runtime SSA bool loaded from the boxed Promise struct's `errorIsHeapPtr`
   /// field. Non-null only when the error TYPE was erased by storage in a bare
   /// `Promise with T` (ReconstructPromiseFromStruct) — the one bit of the type

@@ -44,6 +44,9 @@ public static class SemanticCheckPass {
     // Check async calls target yielding functions
     CheckAsyncYielding(module);
 
+    // Check that a throwing promise is awaited with `try await`, not a bare `await`
+    CheckPlainAwaitOfThrowingPromise(module);
+
     // Check for redundant `if x.contains(k) ... try x.get(k) otherwise ...` pattern
     CheckRedundantContainsGet(module);
   }
@@ -243,6 +246,41 @@ public static class SemanticCheckPass {
           asyncOp.CallColumn) {
           FilePath = containingFunc.SourceFilePath
         };
+      }
+    }
+  }
+
+  /// E3057: a PLAIN `await` on a promise whose thunk throws.
+  ///
+  /// A throwing thunk hands the awaiting frame an OWNED error on its error path. A plain
+  /// `await` has nowhere to put it: the value it yields is the undefined success slot,
+  /// and an associated-value payload is released by nobody — the program leaks and exits
+  /// 101. `try await` is the only form that can receive the error, which is what
+  /// specs/async-await.md has always said. Now it is enforced.
+  ///
+  /// This is checked HERE rather than in the parser because here it is EXACT: a
+  /// MaxonAwaitOp only survives parsing if it is a plain await (a `try await` removes it
+  /// and emits a MaxonTryAwaitOp in its place). The parser would have to infer the same
+  /// thing from `_inTryContext`, which is true across the whole of `try f(await p)` and
+  /// so misses the plain, leaking await sitting in its arguments.
+  ///
+  /// The gate is the error TYPE, not `Throws`: a promise reconstructed out of a
+  /// `Promise with T` reports Throws=true unconditionally (its real throws-ness died with
+  /// the box and the runtime re-reads it from the struct), so gating on `Throws` would
+  /// reject `await` on every STORED non-throwing promise too.
+  private static void CheckPlainAwaitOfThrowingPromise(IrModule<MaxonOp> module) {
+    foreach (var func in module.Functions) {
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is not MaxonAwaitOp { Promise: MaxonPromise { ErrorType: { } errorType } } awaitOp) continue;
+
+          throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
+            $"throwing function requires try: 'await' on a promise from a function that throws '{errorType.Name}' drops the error and leaks its payload — use 'try await'",
+            awaitOp.AwaitLine,
+            awaitOp.AwaitColumn) {
+            FilePath = func.SourceFilePath
+          };
+        }
       }
     }
   }

@@ -1,0 +1,114 @@
+// Test: if-try-fn-typed-result
+typealias Score = int(i64.min to i64.max)
+typealias Transform = function(Score) returns Score
+
+enum PickError implements Error
+	nope
+end 'PickError'
+
+function double(x Score) returns Score
+	return x * 2
+end 'double'
+
+function pick(ok bool) returns Transform throws PickError
+	if ok 'y'
+		return double
+	end 'y'
+	throw PickError.nope
+end 'pick'
+
+function main() returns ExitCode
+	let f = try pick(true) otherwise panic("pick(true) cannot fail")
+	let a = f(3)
+
+	if let g = try pick(true) 'ok'
+		let b = g(4)
+		return a + b
+	end 'ok' else 'bad'
+		return 1
+	end 'bad'
+end 'main'
+---
+ExitCode: 14
+---
+// CompiledIR
+module {
+  func @double(x: i64) -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @pick(ok: i1) -> fn(Score) returns Score {
+  entry:
+    x64.test rcx, rcx
+    x64.je pick.y_0.after
+  y_0:
+    x64.lea_func rax, [double]
+    x64.xor edx, edx
+    x64.ret
+  y_0.after:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 1
+    x64.call pick
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.xor edx, edx
+    x64.mov r10, rax
+    x64.call r10
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 1
+    x64.call pick
+    x64.mov [rbp-24], rax
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.jne main.bad_0
+  ok_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 4
+    x64.xor edx, edx
+    x64.mov r10, rax
+    x64.call r10
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rax
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  bad_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

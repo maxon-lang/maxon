@@ -788,3 +788,46 @@ end 'main'
 ```exitcode
 22
 ```
+
+<!-- test: if-try-fn-typed-result -->
+A throwing function that returns a FUNCTION must bind through `if let` with its
+signature intact, exactly as `let f = try pick(...) otherwise ...` does. The two
+forms are one rewrite of the call into a try-call, and they were once two copies
+of that rewrite: only the expression copy carried the resolved signature across,
+so the `if let` form declared the binding with no function type and calling it
+dereferenced null — the compiler crashed with an internal E9001 rather than
+compiling the program.
+```maxon
+typealias Score = int(i64.min to i64.max)
+typealias Transform = function(Score) returns Score
+
+enum PickError implements Error
+	nope
+end 'PickError'
+
+function double(x Score) returns Score
+	return x * 2
+end 'double'
+
+function pick(ok bool) returns Transform throws PickError
+	if ok 'y'
+		return double
+	end 'y'
+	throw PickError.nope
+end 'pick'
+
+function main() returns ExitCode
+	let f = try pick(true) otherwise panic("pick(true) cannot fail")
+	let a = f(3)
+
+	if let g = try pick(true) 'ok'
+		let b = g(4)
+		return a + b
+	end 'ok' else 'bad'
+		return 1
+	end 'bad'
+end 'main'
+```
+```exitcode
+14
+```

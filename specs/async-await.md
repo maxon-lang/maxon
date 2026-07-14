@@ -550,6 +550,80 @@ end 'main'
 error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch.test:20:11: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
 ```
 
+<!-- test: async-await.error.propagate-erased -->
+The type check above needs an error type to check. A promise read back out of a
+`Promise with T` has none — storage erased it — so the check has nothing to
+compare and used to be skipped, which let the SPAWNED function's ordinals be
+re-thrown through the enclosing function's error flag. That is not a theoretical
+hazard: below, the caller's `WrapError` has associated values, so the caller
+mm_decrefs `TaskError.crashed`'s ordinal as if it were a heap pointer and the
+program dies on an invalid access. Unverifiable is not the same as fine — refuse
+it, exactly as an `(e)` binding on the same promise is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+enum TaskError implements Error
+		timedOut
+		crashed
+end 'TaskError'
+
+union WrapError implements Error
+		wrapped(reason String)
+end 'WrapError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function viaStorage() returns Integer throws WrapError
+		var arr = IntPromiseArray.create()
+		arr.push(async mayFail())
+		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		let r = try await p
+		return r
+end 'viaStorage'
+
+function main() returns ExitCode
+		let v = try viaStorage() otherwise 55
+		return v
+end 'main'
+```
+```maxoncstderr
+error E3098: specs/fragments/async-await/async-await.error.propagate-erased.test:24:11: cannot propagate: a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from, so 'try await' cannot check it against this function's 'throws WrapError' — 'Promise with T' names the result type only. Handle the error here with 'otherwise' (which converts it), or await the promise where 'async' produced it
+```
+
+<!-- test: async-await.error.await-without-try -->
+A throwing thunk hands the awaiting frame an OWNED error on its error path. A
+plain `await` has nowhere to put it: the value it yields is the undefined success
+slot, and an associated-value payload is released by nobody — the run below ends
+101 (leak) if it is allowed to compile. `try await` is the only form that can
+receive the error, which is what this spec has said since the top of the file;
+now the compiler enforces it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union TaskError implements Error
+		crashed(reason String)
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed("boom")
+end 'mayFail'
+
+function main() returns ExitCode
+		let p = async mayFail()
+		let r = await p
+		return r
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/async-await/async-await.error.await-without-try.test:15:11: throwing function requires try: 'await' on a promise from a function that throws 'TaskError' drops the error and leaks its payload — use 'try await'
+```
+
 <!-- test: async-await.cancel -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

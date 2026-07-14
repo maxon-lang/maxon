@@ -8183,6 +8183,82 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  /// The three facts a `try` needs about the call it has just parsed: the op that
+  /// produces the error flag, the callee (null for a synthetic builtin, which has no
+  /// entry in the function registry), and the type of the error this `try` may catch.
+  private record TryCallTarget(MaxonTryCallOp Op, IrFunction<MaxonOp>? Callee, IrType? ThrowsType);
+
+  /// <summary>
+  /// Rewrites the call that the inner ParsePrimary just emitted at the tail of the
+  /// current block into a MaxonTryCallOp, and reports the error type `try` will catch.
+  ///
+  /// Two emission styles reach here:
+  ///
+  ///   (a) Direct MaxonTryCallOp — synthetic throwing builtins (slice, get, set, the
+  ///       socket/file/directory ops) check `_inTryContext` and emit a MaxonTryCallOp
+  ///       straight away. Nothing to rewrite; we pick up the existing op. Their callee
+  ///       name (e.g. "__managed_socket_tcp_connect") is not in the function registry,
+  ///       so the op is the ONLY place their error type can be read from.
+  ///
+  ///   (b) MaxonCallOp + optional tmp assign — user function calls are emitted as a
+  ///       MaxonCallOp with EmitCallReturnTempAssign (or EmitLiteralTempAssign) for
+  ///       struct returns. Remove the tmp assign, then swap the MaxonCallOp for a
+  ///       MaxonTryCallOp.
+  ///
+  /// `try f()` and `if let x = try f()` are the SAME rewrite, and this is the one copy
+  /// of it. They used to be two, and the two drifted — nothing made them agree:
+  ///   - only the expression copy carried `ResultFnType` onto the MaxonTryCallOp, so
+  ///     `if let g = try fnReturningFn() 'ok'` crashed the compiler with an NRE;
+  ///   - only the expression copy read the error type off a synthetic builtin's op, so
+  ///     `if ... else (e)` over one bound `e` as a raw int and skipped its cleanup.
+  /// Neither read as a bug at its own site.
+  ///
+  /// `notACallMessage` is the one thing that legitimately differs: the expression form
+  /// accepts `try await p` (handled by its caller before we get here), the `if` form
+  /// does not, so each names the forms IT accepts.
+  /// </summary>
+  private TryCallTarget RewriteTailCallAsTryCall(Token tryToken, string notACallMessage) {
+    var lastOp = _currentBlock!.Operations[^1];
+
+    if (lastOp is MaxonTryCallOp existingTryCall) {
+      var directCallee = _currentModule!.FindFunctionByExactName(existingTryCall.Callee);
+
+      // Prefer the op-level ThrowsType: a synthetic builtin is absent from the function
+      // registry, so `directCallee` is null and the op is the only source of its type.
+      return new TryCallTarget(existingTryCall, directCallee, existingTryCall.ThrowsType ?? directCallee?.ThrowsType);
+    }
+
+    if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign
+        && (tmpAssign.VarName.StartsWith("__call_tmp_") || tmpAssign.VarName.StartsWith("__lit_tmp_"))) {
+      _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+      _variables.Remove(tmpAssign.VarName);
+      lastOp = _currentBlock!.Operations[^1];
+    }
+
+    if (lastOp is not MaxonCallOp callOp) {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, notACallMessage, tryToken.Line, tryToken.Column);
+    }
+
+    var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
+    if (callee != null && callee.ThrowsType == null) {
+      throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
+        $"try requires a throwing function: '{callOp.Callee}' does not throw'",
+        tryToken.Line, tryToken.Column);
+    }
+
+    _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+      ArgMutabilities = callOp.ArgMutabilities,
+      ArgVarNames = callOp.ArgVarNames,
+      CallLine = callOp.CallLine,
+      CallColumn = callOp.CallColumn,
+      ResultFnType = callOp.ResultFnType
+    };
+    _currentBlock!.AddOp(tryCallOp);
+
+    return new TryCallTarget(tryCallOp, callee, callee?.ThrowsType);
+  }
+
   /// <summary>
   /// Core try/otherwise parsing shared between expression and statement contexts.
   /// Returns the result value (for expression context) or null (for ignore/block in statement context).
@@ -8252,64 +8328,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           tryToken.Line, tryToken.Column);
       }
     } else {
-      // Standard try-call path.
-      //
-      // There are two emission styles the inner ParsePrimary may have used:
-      //
-      //   (a) Direct MaxonTryCallOp — synthetic throwing builtins (slice, get, set,
-      //       etc.) check `_inTryContext` and emit MaxonTryCallOp straight away. No
-      //       rewrite needed; we just pick up the existing op.
-      //
-      //   (b) MaxonCallOp + optional tmp assign — user function calls are emitted as
-      //       MaxonCallOp with EmitCallReturnTempAssign (or EmitLiteralTempAssign) for
-      //       struct returns. Remove the tmp assign, then swap the MaxonCallOp for a
-      //       MaxonTryCallOp.
-      MaxonTryCallOp tryCallOp;
-      IrFunction<MaxonOp>? callee;
-      if (lastOp is MaxonTryCallOp existingTryCall) {
-        // (a) Direct emission — nothing to rewrite.
-        tryCallOp = existingTryCall;
-        callee = _currentModule!.FindFunctionByExactName(tryCallOp.Callee);
-        // Prefer the op-level ThrowsType for synthetic builtins whose callee name
-        // (e.g. "__managed_socket_tcp_connect") doesn't appear in the function registry.
-        calleeThrowsType = existingTryCall.ThrowsType ?? callee?.ThrowsType;
-      } else {
-        // (b) MaxonCallOp path. If the call returned a struct, EmitCallReturnTempAssign
-        // added a __call_tmp_ assign after it — remove that too. Synthetic
-        // __managed_mem_* builtin calls use EmitLiteralTempAssign instead.
-        if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign && (tmpAssign.VarName.StartsWith("__call_tmp_") || tmpAssign.VarName.StartsWith("__lit_tmp_"))) {
-          _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-          _variables.Remove(tmpAssign.VarName);
-          lastOp = _currentBlock!.Operations[^1];
-        }
-        if (lastOp is not MaxonCallOp foundCallOp) {
-          throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call or await expression", tryToken.Line, tryToken.Column);
-        }
-        var callOp = foundCallOp;
-
-        // Look up the callee to check it actually throws
-        callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
-        if (callee != null && callee.ThrowsType == null) {
-          throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-            $"try requires a throwing function: '{callOp.Callee}' does not throw'",
-            tryToken.Line, tryToken.Column);
-        }
-        calleeThrowsType = callee?.ThrowsType;
-
-        // Replace the MaxonCallOp with a MaxonTryCallOp.
-        _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-        tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
-          ArgMutabilities = callOp.ArgMutabilities,
-          ArgVarNames = callOp.ArgVarNames,
-          CallLine = callOp.CallLine,
-          CallColumn = callOp.CallColumn,
-          ResultFnType = callOp.ResultFnType
-        };
-        _currentBlock!.AddOp(tryCallOp);
-      }
+      // Standard try-call path — the same rewrite `if let x = try f()` performs.
+      var target = RewriteTailCallAsTryCall(tryToken, "try requires a function call or await expression");
+      var tryCallOp = target.Op;
+      calleeThrowsType = target.ThrowsType;
       _lastExprCallOp = tryCallOp;
 
-      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType, tryCallOp.ResultFnType);
+      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, target.Callee?.ReturnType, tryCallOp.ResultFnType);
 
       // Void-returning functions can't be used as values in assignments
       if (!isStatementContext && tryCallOp.Result == null) {
@@ -8327,6 +8352,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           "try without otherwise requires the enclosing function to have 'throws'",
           tryToken.Line, tryToken.Column);
       }
+      // Storage erased the awaited thunk's error type, so there is nothing to check the
+      // enclosing function's `throws` against — and propagating re-throws the SPAWNED
+      // function's ordinals through this function's error flag, leaving the caller to
+      // decode one error type's ordinals as another's. That is not a theoretical risk:
+      // when the caller's type has associated values it mm_decrefs the ordinal as if it
+      // were a heap pointer, and the program faults. Refuse, exactly as the `(e)` binding
+      // below does, and for the same reason.
+      if (awaitErrorTypeErasedByStorage) {
+        throw new CompileError(ErrorCode.SemanticAwaitErrorTypeErased,
+          $"cannot propagate: a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from, so 'try await' cannot check it against this function's 'throws {_currentFunction.ThrowsType.Name}' — 'Promise with T' names the result type only. Handle the error here with 'otherwise' (which converts it), or await the promise where 'async' produced it",
+          tryToken.Line, tryToken.Column);
+      }
+
       // Propagation re-throws the callee's error value through the enclosing function's
       // error flag. If the two error types differ, the caller decodes bits of one enum
       // as tags of another — a silent correctness bug. Require exact name match.
@@ -8656,9 +8694,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Other throws (unit enums, non-enum errors) skip the cleanup and keep the
   /// IR shape unchanged.
   /// </summary>
-  private static bool ErrorPathNeedsCleanup(IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr) {
-    return (errorType is IrEnumType iet && iet.HasAssociatedValues)
-        || runtimeErrorIsHeapPtr != null;
+  private static bool ErrorPathNeedsCleanup(IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr = null) {
+    return MaxonPromise.ErrorTypeIsHeapPtr(errorType) || runtimeErrorIsHeapPtr != null;
   }
 
   /// <summary>
@@ -8673,9 +8710,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// before the caller sees it.)
   /// </summary>
   private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr = null) {
-    // Static path: the callee's throws-type is a known associated-value enum,
-    // so the error flag is unconditionally a heap pointer. Emit a bare decref.
-    if (errorType is IrEnumType enumType && enumType.HasAssociatedValues) {
+    // Static path: the error type is known and its flag is unconditionally a heap
+    // pointer. Emit a bare decref.
+    if (MaxonPromise.ErrorTypeIsHeapPtr(errorType)) {
       var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
       _currentBlock!.AddOp(loadForDecref);
       var decrefOp = new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false);
@@ -11232,54 +11269,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       Expect(TokenType.Equals);
     }
 
-    // Parse the try call expression (shared logic with ParseTryExpression lines 1990-2011)
+    // Parse the try call expression. `await` is not accepted here (a promise's error
+    // handling needs the `otherwise` forms of the expression `try`), so RewriteTailCall
+    // AsTryCall's not-a-call message names only the call form.
     var tryToken = Expect(TokenType.Try);
+    var savedTryContext = _inTryContext;
     _inTryContext = true;
     var callExpr = ParsePrimary();
-    _inTryContext = false;
+    _inTryContext = savedTryContext;
 
-    // Two emission styles (see ParseTryExpression for the longer explanation):
-    //   (a) Direct MaxonTryCallOp — synthetic throwing builtins emit this when
-    //       _inTryContext is true; nothing to rewrite.
-    //   (b) MaxonCallOp + optional __call_tmp_/__lit_tmp_ assign — user function
-    //       calls go through this path; remove the tmp and swap the call op.
-    var lastOp = _currentBlock!.Operations[^1];
-    MaxonTryCallOp tryCallOp;
-    IrFunction<MaxonOp>? callee;
-    if (lastOp is MaxonTryCallOp existingTryCall) {
-      tryCallOp = existingTryCall;
-      callee = _currentModule!.FindFunctionByExactName(tryCallOp.Callee);
-    } else {
-      if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign2 && (tmpAssign2.VarName.StartsWith("__call_tmp_") || tmpAssign2.VarName.StartsWith("__lit_tmp_"))) {
-        _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-        _variables.Remove(tmpAssign2.VarName);
-        lastOp = _currentBlock!.Operations[^1];
-      }
-      if (lastOp is not MaxonCallOp callOp) {
-        throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
-      }
-
-      // Validate the callee actually throws
-      callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
-      if (callee != null && callee.ThrowsType == null) {
-        throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-          $"try requires a throwing function: '{callOp.Callee}' does not throw'",
-          tryToken.Line, tryToken.Column);
-      }
-
-      // Replace MaxonCallOp with MaxonTryCallOp.
-      _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
-        ArgMutabilities = callOp.ArgMutabilities,
-        ArgVarNames = callOp.ArgVarNames,
-        CallLine = callOp.CallLine,
-        CallColumn = callOp.CallColumn
-      };
-      _currentBlock!.AddOp(tryCallOp);
-    }
+    // The same rewrite the expression `try` performs — one copy, so the two cannot drift.
+    var target = RewriteTailCallAsTryCall(tryToken, "try requires a function call");
+    var tryCallOp = target.Op;
+    var callee = target.Callee;
+    var calleeThrowsType = target.ThrowsType;
 
     // Store error flag and result to mutable variables for cross-block access
-    var tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName);
+    var tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType, tryCallOp.ResultFnType);
     var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryInfo);
 
     // Build condition: errorFlag == 0 means success (true = enter then-block)
@@ -11321,7 +11327,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadedValue, isDeclaration: true, isMutable: bindingIsMutable, resultKind));
-      _variables.Declare(bindingName, resultKind, bindingIsMutable, loadedValue, _currentBlock!, structTypeName: bindingStructTypeName);
+      // A function-typed result needs its signature on the binding, exactly as the
+      // expression form's `let f = try fnReturningFn() otherwise ...` gets one: without
+      // it, calling the binding has no signature to check the args against.
+      _variables.Declare(bindingName, resultKind, bindingIsMutable, loadedValue, _currentBlock!,
+          structTypeName: bindingStructTypeName, fnType: tryInfo.ResultFnType);
     }
 
     ParseBodyUntilEndOrThrowEmpty(thenSourceLabel);
@@ -11346,7 +11356,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _currentBlock = elseBlock;
         var elseIfOuterScope = _variables.SnapshotKeys();
         PushScope();
-        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
+        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
         ParseIf();
         ifTryElseInnerScope = _variables.KeysSince(elseIfOuterScope);
         PopScope();
@@ -11373,10 +11383,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // If error binding requested, emit a typed error binding in the else block
         if (errorBindingToken != null) {
           CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
-          EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
+          EmitErrorBinding(errorBindingToken.Value, errorFlagVar, calleeThrowsType);
           _localVarLocations.Add((errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column));
         } else {
-          EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
+          EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
         }
 
         ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
@@ -11385,15 +11395,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         elseEndBlock = _currentBlock;
         ExpectEndLabel(elseSourceLabel);
       }
-    } else if (callee?.ThrowsType is IrEnumType ifErrType && ifErrType.HasAssociatedValues) {
-      // No else clause but the callee throws an associated-value enum: inject
-      // a synthetic else block that decrefs the thrown heap object, then
-      // falls through to the merge. Without this the error-path allocation
-      // leaks whenever control reaches the after-block via the error branch.
+    } else if (ErrorPathNeedsCleanup(calleeThrowsType)) {
+      // No else clause but the error flag carries an owned heap payload: inject a
+      // synthetic else block that decrefs it, then falls through to the merge. Without
+      // this the error-path allocation leaks whenever control reaches the after-block
+      // via the error branch.
       elseLabel = UniqueLabel("if_try_cleanup");
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
-      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
+      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
       elseEndBlock = _currentBlock;
     }
 
@@ -15549,7 +15559,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         // Check for indirect call through function-typed variable
         if (ResolveVariable(token.Value) is ResolvedVar.Local(var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
-          var fnType = fnVarInfo.FnType!;
+          // A Function-kinded binding without a signature is a compiler invariant break,
+          // not a user error: every declaration site must record the fn type. The `!` that
+          // used to stand here dereferenced null and crashed the compiler with an NRE
+          // (E9001) whenever a site forgot — which `if let g = try fnReturningFn()` did.
+          // Fail loudly and legibly instead of dereferencing null.
+          if (fnVarInfo.FnType == null) {
+            throw new CompileError(ErrorCode.IrUnsupportedExpression,
+              $"internal: function-typed variable '{token.Value}' was declared without a function type, so its call cannot be checked",
+              token.Line, token.Column);
+          }
+          var fnType = fnVarInfo.FnType;
           Advance(); // consume '('
           var indirectArgs = ParseIndirectCallArgs(token, fnType);
 
@@ -19945,7 +19965,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         awaitToken.Line, awaitToken.Column);
     }
 
-    var awaitOp = new MaxonAwaitOp(promise, promise.InnerKind, promise.InnerStructTypeName);
+    // Carry the `await` keyword's location: a MaxonAwaitOp that survives parsing is a
+    // PLAIN await (a `try await` deletes it and emits a MaxonTryAwaitOp instead), and
+    // SemanticCheckPass rejects a plain await of a THROWING thunk — which drops an owned
+    // error and leaks its payload. Deciding that here in the parser would have to guess
+    // from `_inTryContext`, which is true for the whole of `try f(await p)` and so would
+    // miss the await in its arguments. What survives the parse cannot be guessed at.
+    var awaitOp = new MaxonAwaitOp(promise, promise.InnerKind, promise.InnerStructTypeName) {
+      AwaitLine = awaitToken.Line,
+      AwaitColumn = awaitToken.Column,
+    };
     _currentBlock!.AddOp(awaitOp);
     InvalidateCachedSelfFields();
     if (awaitOp.Result != null)
