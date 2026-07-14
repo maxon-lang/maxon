@@ -31,8 +31,7 @@ shape, opposite behaviour, decided by a bit of the constant. Both are rejected.
 > **Flip all four to `test:` once this branch is rebased onto it. Nothing else is needed.**
 
 
-<!-- disabled-test: bool-and-int -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: bool-and-int -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -47,8 +46,7 @@ end 'main'
 error E3005: specs/fragments/word-operator-mixed-operands/bool-and-int.test:4:15: operator 'and' requires both operands to be the same type (both bool or both int)
 ```
 
-<!-- disabled-test: int-and-bool -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: int-and-bool -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -63,8 +61,7 @@ end 'main'
 error E3005: specs/fragments/word-operator-mixed-operands/int-and-bool.test:4:12: operator 'and' requires both operands to be the same type (both bool or both int)
 ```
 
-<!-- disabled-test: int-or-bool -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: int-or-bool -->
 ```maxon
 function main() returns ExitCode
 	let flag = false
@@ -79,8 +76,7 @@ end 'main'
 error E3005: specs/fragments/word-operator-mixed-operands/int-or-bool.test:4:12: operator 'or' requires both operands to be the same type (both bool or both int)
 ```
 
-<!-- disabled-test: bool-xor-int -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: bool-xor-int -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
