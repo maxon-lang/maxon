@@ -8195,7 +8195,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _inTryContext = savedTryContext;
 
     TryResultInfo tryInfo;
-    IrType? calleeThrowsType = null;
+    // The type of the error this `try` may catch: the callee's `throws` for a
+    // try-call, the awaited thunk's for a try-await. Both branches below set it.
+    IrType? calleeThrowsType;
     // Runtime SSA bool: when non-null, the otherwise emitters branch on this
     // at runtime to decide whether the error flag is a heap pointer (assoc-
     // value enum) that needs mm_decref. Set only on the storage-sourced
@@ -8203,6 +8205,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Promise<T> struct boundary. Direct-await and try-call leave this null
     // and continue to rely on the static `calleeThrowsType` check.
     MaxonValue? runtimeErrorIsHeapPtr = null;
+    // True when this is a try-await whose promise came out of a bare `Promise with T`,
+    // whose type has no slot for the thunk's error type. There is then no type to give
+    // an `otherwise (e)` binding, and we must say so rather than invent one.
+    var awaitErrorTypeErasedByStorage = false;
 
     // Check if this is a try-await expression (the inner parsed an await op)
     var lastOp = _currentBlock!.Operations[^1];
@@ -8220,20 +8226,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Replace the MaxonAwaitOp with a MaxonTryAwaitOp
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName,
-          errorIsHeapPtr: promiseVal.ErrorIsHeapPtr,
-          errorIsHeapPtrRuntime: promiseVal.ErrorIsHeapPtrRuntime);
+      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName);
       _currentBlock!.AddOp(tryAwaitOp);
       InvalidateCachedSelfFields();
       _lastExprCallOp = null;
 
       tryInfo = new TryResultInfo(tryAwaitOp.ErrorFlag, tryAwaitOp.Result, tryAwaitOp.ResultKind, tryAwaitOp.ResultStructTypeName);
-      // Propagate the storage-path runtime bit so otherwise emitters can
-      // gate the mm_decref. ErrorIsHeapPtr (compile-time bit from a direct
-      // async-call) and ErrorIsHeapPtrRuntime (runtime field load from a
-      // reconstructed Promise) are mutually exclusive — only the runtime
-      // bit needs threading; the direct-await path stays unchanged.
+      // The awaited thunk's `throws` type IS the type of this try's error, exactly
+      // as a try-call's is its callee's. Everything downstream — the `(e)` binding's
+      // type, the assoc-value decref, the propagation-type check — keys off this one
+      // value, so an await and a call now behave identically once it is set.
+      calleeThrowsType = promiseVal.ErrorType;
+      // Storage erases the error TYPE (a bare `Promise with T` has no slot for it)
+      // but keeps one bit of it in the box. Where the type survived, the static
+      // check above is exact and this stays null.
       runtimeErrorIsHeapPtr = promiseVal.ErrorIsHeapPtrRuntime;
+      // Throws was proven true just above, so a missing error type here can only mean
+      // storage dropped it.
+      awaitErrorTypeErasedByStorage = calleeThrowsType == null;
 
       // Void-returning async functions can't be used as values in assignments
       if (!isStatementContext && tryAwaitOp.Result == null) {
@@ -8373,6 +8383,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var errorBindingToken = Expect(TokenType.Identifier);
       CheckReservedDeclName(errorBindingToken);
       Expect(TokenType.RightParen);
+      // Binding an error we cannot type would hand back the raw error flag as an
+      // `int` — a value that answers every method call with a type error naming a
+      // type the user never wrote. Refuse, and say where the type went.
+      if (awaitErrorTypeErasedByStorage) {
+        throw new CompileError(ErrorCode.SemanticAwaitErrorTypeErased,
+          $"cannot bind '{errorBindingToken.Value}': a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from — 'Promise with T' names the result type only. Await the promise where 'async' produced it to bind the error, or handle it without a binding ('otherwise <value>', 'otherwise ignore', 'otherwise 'label'')",
+          errorBindingToken.Line, errorBindingToken.Column);
+      }
       return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType, runtimeErrorIsHeapPtr);
     }
 
@@ -17446,8 +17464,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _currentBlock!.AddOp(refOp);
         // Promise variables need to preserve their type metadata across blocks
         // so await can verify the value is a promise and access InnerKind/Throws.
+        // ALL of the metadata, not some: dropping ErrorType here would re-erase the
+        // error type for any `try await p` that sits in a different block from the
+        // `async` that made p — which is the common shape, and which used to both
+        // mistype the `(e)` binding and leak an assoc-value payload.
         if (info.Value is MaxonPromise origPromise) {
-          return new MaxonPromise(refOp.Result.Id, origPromise.InnerKind, origPromise.InnerStructTypeName, origPromise.Throws);
+          return new MaxonPromise(refOp.Result.Id, origPromise.InnerKind, origPromise.InnerStructTypeName,
+              origPromise.Throws, origPromise.ErrorType, origPromise.ErrorIsHeapPtrRuntime);
         }
         return refOp.Result;
     }
@@ -19879,8 +19902,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       needSep = true;
     }
     var sourceText = $"async {nameToken.Value}({argParts})";
-    var calleeErrorIsHeapPtr = callee.ThrowsType is IrEnumType calleeThrowsEnum && calleeThrowsEnum.HasAssociatedValues;
-    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, throws: callee.ThrowsType != null, errorIsHeapPtr: calleeErrorIsHeapPtr) {
+    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, throws: callee.ThrowsType != null, errorType: callee.ThrowsType) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
       CallLine = asyncToken.Line,
@@ -19971,7 +19993,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // succeeds — it just adds an ignored error-handler the runtime never
     // triggers.
     return new MaxonPromise(loadInner.Result.Id, innerKind, innerStructTypeName,
-        throws: true, errorIsHeapPtr: false,
+        throws: true, errorType: null,
         errorIsHeapPtrRuntime: loadErrIsHeapPtr.Result);
   }
 

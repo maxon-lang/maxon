@@ -30,19 +30,32 @@ public sealed class MaxonPromise(
     MaxonValueKind? innerKind,
     string? innerStructTypeName,
     bool throws = false,
-    bool errorIsHeapPtr = false,
+    Core.IrType? errorType = null,
     MaxonValue? errorIsHeapPtrRuntime = null) : MaxonValue(id) {
   public MaxonValueKind? InnerKind { get; } = innerKind;
   public string? InnerStructTypeName { get; } = innerStructTypeName;
   /// Whether the spawned function is a throwing function (requires try await).
   public bool Throws { get; } = throws;
-  /// Compile-time-known: true iff the spawned callee's ThrowsType is an
-  /// associated-value enum (i.e. the error flag is a heap pointer that needs
-  /// mm_decref on the otherwise path). Direct-await path only.
-  public bool ErrorIsHeapPtr { get; } = errorIsHeapPtr;
+  /// The awaited thunk's declared `throws` type — the type an `otherwise (e)`
+  /// binding must take. Carrying the TYPE (not a bit distilled from it) is what
+  /// lets `try await p otherwise (e)` bind `e` as the error the thunk actually
+  /// throws instead of as the promise's raw i64 representation.
+  ///
+  /// Null in exactly two cases, which are not the same thing:
+  ///   - the spawned callee does not throw (Throws == false);
+  ///   - the promise came out of storage as a bare `Promise with T`, whose type
+  ///     has no slot for the error (Throws == true, ErrorType == null). Use
+  ///     `Promise with (T, E)` to keep E across storage.
+  public Core.IrType? ErrorType { get; } = errorType;
+  /// True iff the error flag is a heap pointer (an associated-value enum payload)
+  /// that the `otherwise` path must mm_decref. Derived from ErrorType rather than
+  /// stored: a second, independently-passed bit is a second thing to forget, and
+  /// it HAS been forgotten (the cross-block promise re-tag used to drop it).
+  public bool ErrorIsHeapPtr => ErrorType is Core.IrEnumType { HasAssociatedValues: true };
   /// Runtime SSA bool loaded from the boxed Promise struct's `errorIsHeapPtr`
-  /// field. Non-null only on the storage-sourced path (ReconstructPromiseFromStruct).
-  /// When non-null, ErrorIsHeapPtr is ignored — the otherwise emitter branches
-  /// on this runtime bit instead.
+  /// field. Non-null only when the error TYPE was erased by storage in a bare
+  /// `Promise with T` (ReconstructPromiseFromStruct) — the one bit of the type
+  /// that survives boxing. The otherwise emitter branches on it to decide the
+  /// decref; a `Promise with (T, E)` needs no such branch because E is static.
   public MaxonValue? ErrorIsHeapPtrRuntime { get; } = errorIsHeapPtrRuntime;
 }

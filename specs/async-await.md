@@ -277,6 +277,172 @@ end 'main'
 1
 ```
 
+<!-- test: async-await.try-await.otherwise-bind -->
+`otherwise (e)` on a `try await` binds the error the awaited thunk THREW,
+at the thunk's declared `throws` type — exactly as it does on a `try` call.
+The promise carries its callee's error type, so `e` here is a `TaskError`
+and can be matched. (It used to be handed back as the raw error flag typed
+`int`, so any use of `e` failed with "Primitive type 'int' has no method".)
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum TaskError implements Error
+		timedOut
+		crashed
+end 'TaskError'
+
+function mayFail(mode Integer) returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		if mode == 0 'ok'
+				return 1
+		end 'ok'
+		if mode == 1 'slow'
+				throw TaskError.timedOut
+		end 'slow'
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		let p = async mayFail(2)
+		let r = try await p otherwise (e) 'failed'
+				return match e 'why'
+						timedOut gives 7
+						crashed gives 9
+				end 'why'
+		end 'failed'
+		return r
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: async-await.try-await.otherwise-bind-assoc-value -->
+The bound error is an associated-value union, so the error flag IS a heap
+pointer to the payload. The binding takes ownership and scope-end releases
+it exactly once — a leak here (the payload never decref'd) or a double-free
+would both surface under the runtime's allocation accounting. Before the
+promise carried its error type, the `otherwise` path emitted no release at
+all on a DIRECT await and the payload leaked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union WorkError implements Error
+		failed(reason String)
+		refused(code Integer)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		let p = async work(-1)
+		let r = try await p otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+						refused(code) then print("refused {code}\n")
+				end 'which'
+				return 0
+		end 'failed'
+		return r
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught: negative input
+```
+
+<!-- test: async-await.try-await.otherwise-bind-cross-block -->
+The `async` and its `try await` sit in different basic blocks, so the promise
+reaches the await through the cross-block variable-reference path. That path
+re-tags the promise value and must carry ALL of its metadata across — it used
+to rebuild the promise without its error type, re-erasing it for the common
+shape where a spawn is followed by any intervening control flow.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union WorkError implements Error
+		failed(reason String)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("cross-block")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		let p = async work(-1)
+		var guard = 1
+		if guard == 1 'sep'
+				guard = 2
+		end 'sep'
+		let r = try await p otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+				end 'which'
+				return 0
+		end 'failed'
+		return r
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught: cross-block
+```
+
+<!-- test: async-await.try-await.otherwise-bind-void -->
+A void-returning throwing async function has no result — only an error flag.
+The `otherwise (e)` binding must still be typed at the thunk's `throws` type.
+```maxon
+typealias Code = int(0 to 100)
+
+var flag = 0
+
+enum TaskError implements Error
+		timedOut
+		crashed
+
+		export function code() returns Code
+				return match self 'e'
+						timedOut gives 7
+						crashed gives 9
+				end 'e'
+		end 'code'
+end 'TaskError'
+
+function maySetFlag(succeed bool) throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		if succeed 'ok'
+				flag = 1
+				return
+		end 'ok'
+		throw TaskError.crashed
+end 'maySetFlag'
+
+function main() returns ExitCode
+		let p = async maySetFlag(false)
+		try await p otherwise (e) 'failed'
+				flag = e.code()
+		end 'failed'
+		return flag
+end 'main'
+```
+```exitcode
+9
+```
+
 <!-- test: async-await.error.non-promise -->
 ```maxon
 function main() returns ExitCode
@@ -305,6 +471,83 @@ end 'main'
 ```
 ```maxoncstderr
 error E3073: specs/fragments/async-await/async-await.error.no-yield.test:9:11: 'async heavyCompute(5)' — function never yields; 'async' is for I/O-concurrent work only
+```
+
+<!-- test: async-await.error.otherwise-bind-erased -->
+`Promise with T` names the RESULT type and nothing else, so boxing a promise
+into it drops the spawned function's error type — only a runtime bit saying
+whether the flag is a heap pointer survives (see
+`async-await.promise-array-throwing`). A promise read back out of that storage
+therefore has no error type to give an `otherwise (e)` binding, and the
+compiler says so instead of handing back the raw error flag typed `int`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+enum TaskError implements Error
+		timedOut
+		crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		var arr = IntPromiseArray.create()
+		arr.push(async mayFail())
+		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		let r = try await p otherwise (e) 'failed'
+				return match e 'why'
+						timedOut gives 7
+						crashed gives 9
+				end 'why'
+		end 'failed'
+		return r
+end 'main'
+```
+```maxoncstderr
+error E3098: specs/fragments/async-await/async-await.error.otherwise-bind-erased.test:20:34: cannot bind 'e': a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from — 'Promise with T' names the result type only. Await the promise where 'async' produced it to bind the error, or handle it without a binding ('otherwise <value>', 'otherwise ignore', 'otherwise 'label'')
+```
+
+<!-- test: async-await.error.propagate-type-mismatch -->
+Bare `try await p` re-throws the awaited thunk's error through the enclosing
+function's error-return ABI. If the two error types differ, the caller decodes
+one enum's ordinals as another's tags — a silent miscompile. The `try` CALL
+form has always rejected this; the `try await` form used to skip the check
+entirely, because it had no error type to compare. Now it has one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum AError implements Error
+		alpha
+end 'AError'
+
+enum BError implements Error
+		beta
+		gamma
+end 'BError'
+
+function throwsA() returns Integer throws AError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw AError.alpha
+end 'throwsA'
+
+function caller() returns Integer throws BError
+		let p = async throwsA()
+		let r = try await p
+		return r
+end 'caller'
+
+function main() returns ExitCode
+		let v = try caller() otherwise 0
+		return v
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch.test:20:11: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
 ```
 
 <!-- test: async-await.cancel -->

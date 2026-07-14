@@ -878,10 +878,17 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 			let job = (try inFlight.get(readySlot) otherwise panic("runSpecPool: inFlight.get({readySlot}) is in bounds by construction")).clone()
 			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise, and slot {readySlot} is busy")
 
-			// No `(e)` binding on this `otherwise`: a bound name on an `await` binds the promise's
-			// VALUE type, not its error, so `e` would come through as a StringArray's element rather
-			// than the SubprocessError. The drain has exactly two ways to fail and both are named
-			// below, so nothing is lost.
+			// No `(e)` binding on this `otherwise`, and the reason is the STORAGE, not the await:
+			// `DrainPromise` is `Promise with StringArray`, whose one type parameter names the
+			// RESULT. Boxing a promise into it therefore drops the thunk's `throws` type, so by
+			// the time the drain comes back out of `drains` there is no SubprocessError left to
+			// bind — only a runtime bit saying whether the error flag is a heap pointer. The
+			// bootstrap now rejects a binding here outright (E3098) instead of quietly handing
+			// back the error flag typed `int`. Awaiting a promise where `async` produced it DOES
+			// bind the real error; recovering it across storage needs the error type to become
+			// part of the promise's type (`Promise with (T, E)`).
+			//
+			// The drain has exactly two ways to fail and both are named below, so nothing is lost.
 			let lines = try await drain otherwise 'workerDied'
 				abortOnDeadWorker(handle, job: job, reason: "its stdout gave EOF or an I/O error before {WorkerReadyMarker}")
 			end 'workerDied'

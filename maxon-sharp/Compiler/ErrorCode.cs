@@ -132,6 +132,14 @@ public enum ErrorCode {
   // diagnostics (semanticTypeResolutionLeak..semanticAmbiguousCrossFileCall),
   // so this shared diagnostic takes the next code free on both sides.
   SemanticEnumAccessorComparison = 3097,
+  // `try await p otherwise (e)` where p came out of storage as a bare
+  // `Promise with T`. That type has one type parameter — the RESULT — and so no
+  // slot to carry the thunk's `throws` type: boxing a promise into it erases the
+  // error type, keeping only a runtime bit saying whether the flag is a heap
+  // pointer. There is therefore no type to give `e`, and binding it used to
+  // silently hand back the error flag typed as a raw `int`. Awaiting the promise
+  // where `async` produced it keeps the error type and binds correctly.
+  SemanticAwaitErrorTypeErased = 3098,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,
