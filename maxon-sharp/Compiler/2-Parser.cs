@@ -6523,10 +6523,60 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _currentBlock.AddOp(new MaxonReturnOp());
     }
 
+    VerifyOperandsAreDominated(name, nameToken);
+
     _currentFunction = null;
     _currentBlock = null;
     _currentSelfParamResult = null;
     _staleSelfFields.Clear();
+  }
+
+  /// <summary>
+  /// Proves that every op reads only values whose DEFINITION dominates it — the one invariant SSA
+  /// has, and the one the parser had no way to state.
+  ///
+  /// The parser MOVES IR: a ternary detaches its true arm and re-attaches it inside a branch. A move
+  /// that leaves a cached VarInfo pointing at the old block produces a read of a value that is no
+  /// longer defined on the reader's path. When the stale def lands LATER in the block list the
+  /// lowering happens to notice ("not in valueMap") and raises E9001 — but that check is TEXTUAL
+  /// ORDER, not dominance, so the same defect with the def merely EARLIER in the list lowers
+  /// silently and miscompiles. A crash is bad; a wrong answer is worse. This turns the whole class
+  /// into a loud one, at the moment and in the function where it was introduced.
+  ///
+  /// Linear in the function: one pass to map value → defining block, one to check every operand,
+  /// plus the dominator tree. Runs once per function, never once per ternary.
+  /// </summary>
+  private void VerifyOperandsAreDominated(string functionName, Token nameToken) {
+    var blocks = _currentFunction!.Body.Blocks;
+    if (blocks.Count <= 1) return;
+
+    var definingBlock = new Dictionary<int, string>();
+    foreach (var block in blocks) {
+      foreach (var op in block.Operations) {
+        foreach (var result in op.Results) definingBlock[result.Id] = block.Name;
+      }
+    }
+
+    var cfg = CfgBuilder<MaxonOp>.Build(blocks, GetMaxonSuccessors, EndsWithMaxonTerminator);
+    var domTree = DominatorTree.Build(blocks[0].Name, cfg);
+
+    foreach (var block in blocks) {
+      foreach (var op in block.Operations) {
+        foreach (var operand in op.Operands) {
+          // A value with no defining op in this function is a literal folded in at construction, a
+          // seed the parser minted directly, or a stdlib value — none of which live in a block, so
+          // none of which can fail to dominate one.
+          if (!definingBlock.TryGetValue(operand.Id, out var defBlock)) continue;
+          if (domTree.Dominates(defBlock, block.Name)) continue;
+
+          throw new CompileError(ErrorCode.InternalError,
+            $"in '{functionName}', op '{op.Mnemonic}' in block '{block.Name}' reads %{operand.Id}, "
+            + $"which is defined in block '{defBlock}' — and '{defBlock}' does not dominate '{block.Name}'. "
+            + "An SSA value must be defined on every path that reaches a use of it.",
+            nameToken.Line, nameToken.Column);
+        }
+      }
+    }
   }
 
   /// Runs forward dataflow over the current factory function's CFG to prove
@@ -14637,11 +14687,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // starts emitting. If an `if` does follow, ParseTernaryExpression LIFTS everything emitted
     // since — ops and any blocks — into the arm's own branch. The IR moves; nothing is re-parsed,
     // so no value id is minted twice and no closure is lifted twice.
+    //
+    // THREE INTEGERS, AND IT MUST STAY THAT WAY. This runs at the top of EVERY ParseExpression —
+    // before anything knows whether a ternary follows, and almost always it does not — so the mark
+    // has to cost O(1). It once carried a `_variables.SnapshotKeys()`, an O(live-locals) HashSet
+    // copy per expression, which made parsing QUADRATIC in a function's local count: +36% on a
+    // 4000-local function, and the compiler's own sources have functions that big.
     var armOrigin = new TernaryArmOrigin(
       _currentBlock,
       _currentBlock?.Operations.Count ?? 0,
-      _currentFunction?.Body.Blocks.Count ?? 0,
-      _variables.SnapshotKeys());
+      _currentFunction?.Body.Blocks.Count ?? 0);
 
     var lhs = ParsePrimary();
 
@@ -15110,12 +15165,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// arm at all — the `if` only arrives after it — so <see cref="ParseExpression"/> records this at
   /// its own start and <see cref="ParseTernaryExpression"/> uses it to lift the arm's IR out of the
   /// unconditional path and into the true branch.
+  ///
+  /// Three integers, deliberately: see the comment at the recording site for why this must not grow
+  /// anything whose cost scales with the enclosing function.
   /// </summary>
   private readonly record struct TernaryArmOrigin(
     IrBlock<MaxonOp>? Block,
     int OpCount,
-    int BlockCount,
-    HashSet<string> VarKeys);
+    int BlockCount);
 
   /// <summary>
   /// Detaches everything <paramref name="origin"/>'s expression emitted — the tail of its starting
@@ -15126,14 +15183,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// preserves it: values still dominate their uses (the region only reads what came BEFORE it,
   /// which still dominates), and every internal `cond_br` keeps the block that must physically
   /// follow it, because the blocks move together and in order.
+  ///
+  /// <c>RelocatedOps</c> are the ops that CHANGE BLOCK — the tail of the start block, which will be
+  /// re-attached somewhere else. The blocks in <c>Blocks</c> move as blocks, keeping their identity,
+  /// so an op inside one of them does not change block and is not listed.
+  ///
+  /// <c>StrandedVars</c> are the names whose cached SSA value one of those ops defined: their
+  /// VarInfo now points at a value that is no longer in the block it says it is. Answering that
+  /// question is what makes the move safe, and it is a question about VALUE PROVENANCE. The old
+  /// answer asked which KEYS were new since the arm began parsing, which is a DIFFERENT question
+  /// that merely coincided on the cases anyone had tried: a self-field alias is a PRE-EXISTING key
+  /// that gets MUTATED in place (see <see cref="RefreshStaleSelfFieldIfNeeded"/>), so key-novelty
+  /// could not see it — and `n if n &gt; t else base` emitted a `binop` in the entry block reading a
+  /// `field_access` that had moved into the true arm.
   /// </summary>
-  private (List<MaxonOp> Ops, List<IrBlock<MaxonOp>> Blocks, IrBlock<MaxonOp> Exit) DetachEmittedRegion(
-      TernaryArmOrigin origin) {
+  private DetachedRegion DetachEmittedRegion(TernaryArmOrigin origin) {
     var startBlock = origin.Block!;
     var exit = _currentBlock!;
 
     var opCount = startBlock.Operations.Count - origin.OpCount;
-    var ops = startBlock.Operations.GetRange(origin.OpCount, opCount);
+    var relocatedOps = startBlock.Operations.GetRange(origin.OpCount, opCount);
     startBlock.Operations.RemoveRange(origin.OpCount, opCount);
 
     var allBlocks = _currentFunction!.Body.Blocks;
@@ -15142,7 +15211,66 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     allBlocks.RemoveRange(origin.BlockCount, blockCount);
 
     _currentBlock = startBlock;
-    return (ops, blocks, exit);
+
+    HashSet<int> relocatedValueIds = [];
+    foreach (var op in relocatedOps) {
+      foreach (var result in op.Results) relocatedValueIds.Add(result.Id);
+    }
+
+    // Walking every live variable is fine — this runs ONCE PER TERNARY. It is emphatically not the
+    // quadratic that a `SnapshotKeys()` at the top of every `ParseExpression` was.
+    List<string> stranded = [];
+    foreach (var (name, info) in _variables.Entries) {
+      if (relocatedValueIds.Contains(info.Value.Id)) stranded.Add(name);
+    }
+
+    return new DetachedRegion(relocatedOps, blocks, exit, stranded, relocatedValueIds);
+  }
+
+  /// <summary>An arm's IR, lifted out of the block it was emitted into. See DetachEmittedRegion.</summary>
+  private sealed record DetachedRegion(
+    List<MaxonOp> RelocatedOps,
+    List<IrBlock<MaxonOp>> Blocks,
+    IrBlock<MaxonOp> Exit,
+    List<string> StrandedVars,
+    HashSet<int> RelocatedValueIds);
+
+  /// <summary>
+  /// Arms the re-derivation of every stranded variable that HAS one, immediately after the arm's IR
+  /// is detached and BEFORE the condition is parsed.
+  ///
+  /// This has to happen now, not later: the condition parses into the START block, and a stranded
+  /// variable read there would take the same-block fast path in <see cref="ResolveExprValue"/> and
+  /// hand back the value that just left. The true branch does not exist yet — it cannot, it must be
+  /// created after the condition so it lands physically next to the `cond_br` — so re-pointing is
+  /// not available here and re-derivation is the whole repair.
+  ///
+  /// A SELF-FIELD ALIAS is the only variable the parser re-derives, and `_staleSelfFields` is how
+  /// that is armed: the next read re-emits the field access at ITS site (see
+  /// <see cref="RefreshStaleSelfFieldIfNeeded"/>), which is exactly right — the arm's load belongs
+  /// to the arm, and the condition needs its own. It is also the only kind of variable that CAN be
+  /// stranded and then read by the condition, because a self-field alias is the only pre-existing
+  /// VarInfo whose Value the parser rewrites mid-expression; everything else stranded here is a temp
+  /// the arm itself declared, which the condition cannot name.
+  /// </summary>
+  private void ArmRederivationOfStrandedVars(DetachedRegion arm) {
+    foreach (var name in arm.StrandedVars) {
+      if (_variables.TryGetValue(name, out var info) && info.IsSelfField) _staleSelfFields.Add(name);
+    }
+  }
+
+  /// <summary>
+  /// Points every stranded variable at <paramref name="destination"/> — the block the relocated ops
+  /// now live in — so that a read AFTER the ternary finds the value where it actually is.
+  ///
+  /// Runs once the true branch exists. A stranded variable the condition already re-derived is no
+  /// longer caching a relocated value, so it is skipped: the check is on the VALUE, not the name.
+  /// </summary>
+  private void RepointStrandedVars(DetachedRegion arm, IrBlock<MaxonOp> destination) {
+    foreach (var name in arm.StrandedVars) {
+      if (_variables.TryGetValue(name, out var info) && arm.RelocatedValueIds.Contains(info.Value.Id))
+        _variables[name] = info with { DefinedInBlock = destination };
+    }
   }
 
   /// <summary>
@@ -15163,7 +15291,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // var ref), and those ops belong to the arm, on the arm's path.
     var trueVal = ResolveExprValue(trueExpr);
 
+    // And read the arm's SIGNATURE here too, while its producing op is still the last one emitted.
+    // `GetFunctionTypeFromLastOp` is POSITION-DEPENDENT — it looks at `_currentBlock.Operations[^1]`
+    // — so asking for it later, once the false arm has been parsed and the current block has moved,
+    // silently returns the OTHER arm's signature. It did: a `unary if c else binary` type-checked
+    // clean and then failed at the call site with "expected 2 arguments, got 1".
+    var trueFnType = ResolveArmFnType(trueExpr, trueVal, ifToken);
+
     var trueArm = DetachEmittedRegion(trueArmOrigin);
+
+    // BEFORE the condition parses — it parses into the start block, and would otherwise reuse a
+    // value that has just moved out of it.
+    ArmRederivationOfStrandedVars(trueArm);
 
     // The condition is the one thing that IS unconditional. It lands where the true arm was.
     var conditionExpr = ParseExpression();
@@ -15187,21 +15326,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // first block added after the condition — is what puts it there.
     var trueBranchLabel = $"{ternaryLabel}.true";
     var trueBranchBlock = _currentFunction!.Body.AddBlock(trueBranchLabel);
-    trueBranchBlock.Operations.AddRange(trueArm.Ops);
+    trueBranchBlock.Operations.AddRange(trueArm.RelocatedOps);
     _currentFunction!.Body.Blocks.AddRange(trueArm.Blocks);
 
     // The arm's blocks kept their identity through the move, so its exit is still its exit — unless
     // it made none, in which case its ops now end in the true branch itself.
     var trueExitBlock = ReferenceEquals(trueArm.Exit, trueArmOrigin.Block) ? trueBranchBlock : trueArm.Exit;
 
-    // A variable the arm declared while it was still emitting into the start block now lives in the
-    // true branch. DefinedInBlock is what tells a later lookup "this value dominates you, use it
-    // instead of reloading" — left stale, it names a block whose ops have moved out from under it.
-    foreach (var name in _variables.KeysSince(trueArmOrigin.VarKeys)) {
-      if (_variables.TryGetValue(name, out var info) && ReferenceEquals(info.DefinedInBlock, trueArmOrigin.Block)) {
-        _variables[name] = info with { DefinedInBlock = trueBranchBlock };
-      }
-    }
+    // The other half of the repair: the relocated values now live in the true branch, so a read
+    // after the ternary must look for them there.
+    RepointStrandedVars(trueArm, trueBranchBlock);
 
     // False branch: parsed directly into its own block, so it never runs on the true path.
     var falseBranchLabel = $"{ternaryLabel}.false";
@@ -15209,6 +15343,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock = falseBranchBlock;
     var falseExpr = ParseExpression(); // full expression — chains: a if c1 else b if c2 else c
     var falseVal = ResolveExprValue(falseExpr);
+    var falseFnType = ResolveArmFnType(falseExpr, falseVal, ifToken); // while it is still the last op
     var falseExitBlock = _currentBlock!;
 
     var trueKind = DetermineValueKind(trueVal);
@@ -15255,14 +15390,47 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         ifToken.Line, ifToken.Column);
     }
 
+    var resultFnType = MergeTernaryArmFnTypes(trueFnType, falseFnType, ifToken);
+
     // Seed the result slot on the unconditional path, so the arm that wins overwrites a known
     // value rather than whatever the slot last held. Declared only now, because widening above is
     // what settles the kind. entryBlock's op list is still open — its cond_br comes last.
+    //
+    // ── WHAT THE MERGED RESULT CARRIES, AND WHAT IT DROPS ────────────────────────────────────
+    // A VarInfo is eleven facts, and the result of a ternary is a NEW temp holding a COPY of
+    // whichever arm won. So every fact is either MERGED from the arms or DROPPED — there is no
+    // third option, and a fact that is silently neither is how a capturing closure walked past
+    // E3099 and a `let h = f if c else g` died E9001 inside GetFunctionTypeFromLastOp.
+    //
+    //   Kind             MERGED, after widening; the arms must agree (checked above).
+    //   StructTypeName   MERGED; the arms must name the same concrete type (checked above).
+    //   FnType           MERGED; the arms must have the same signature (checked just above).
+    //                    Without it nothing downstream can recover the merged value's signature:
+    //                    it is not on the op, and the op is all `GetFunctionTypeFromLastOp` has.
+    //   Value            NEW — the seed literal, which is the definition that dominates the merge.
+    //   DefinedInBlock   NEW — the entry block, where that seed is. Value and block must agree.
+    //   Mutable          DROPPED, but declared `true` on the slot so the arms can store into it.
+    //                    The EXPRESSION is an rvalue: `(a if c else b) = 1` is not a place.
+    //   Flags            DROPPED (None) — and that is the correct disposition, not an omission:
+    //                    whichever arm wins, the slot ends up holding exactly one owned reference,
+    //                    acquired on the path that stored it, and released once at scope end. The
+    //                    six `ternary-expression.ownership.*` specs are what prove it.
+    //   IsCaptured       DROPPED. It means "this NAME is an enclosing local, read through a closure
+    //                    environment". The result is a fresh temp of the CURRENT frame; it is not.
+    //   IsSelfField      DROPPED. It means "this NAME aliases self.<field>; re-load it after a call
+    //                    that could have mutated it". The result is a COPY taken at the ternary —
+    //                    `self.n if c else 0` must NOT be re-read from self afterwards.
+    //   PayloadBinding   DROPPED. It means "assigning this NAME writes back into an enum's heap
+    //                    box". The result is an rvalue; there is nothing to write back through.
+    //
+    // The capture ENVIRONMENT is the one fact the merge cannot carry at all — see
+    // RejectCapturingClosureAsTernaryArm, which is why no arm reaching here has one.
     var resultVarName = $"__ternary_{ternaryLabel}";
     var zeroLit = new MaxonLiteralOp(0L);
     entryBlock.AddOp(zeroLit);
     entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, trueKind));
-    _variables.Declare(resultVarName, trueKind, true, zeroLit.Result, entryBlock, structTypeName: resultStructTypeName);
+    _variables.Declare(resultVarName, trueKind, true, zeroLit.Result, entryBlock,
+      structTypeName: resultStructTypeName, fnType: resultFnType);
 
     // Each arm stores its own value and jumps to the merge. The arm's value was produced in the
     // arm, so an owned one (a call return) is acquired ONLY on the path that stores it — which is
@@ -15278,11 +15446,89 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     _currentBlock = mergeBlock;
 
-    // Update variable info with the correct type
-    _variables[resultVarName] = new VarInfo(resultVarName, trueKind, true, zeroLit.Result, entryBlock, StructTypeName: resultStructTypeName);
-
     var resultValue = EmitVarRefOp(resultVarName, trueKind, resultStructTypeName);
-    return new ExprResult.Direct(resultValue);
+    return new ExprResult.Direct(resultValue, resultFnType);
+  }
+
+  /// <summary>
+  /// The signature the merged result carries, or null when the arms are not function values.
+  ///
+  /// This is the fact that made `let h = f if c else g` an E9001 internal crash: the merged result
+  /// is read back through a `maxon.var_ref`, and a var_ref carries only a KIND. The signature lives
+  /// on the VarInfo or nowhere, and it was going nowhere.
+  ///
+  /// The arms must agree, because the merged slot holds ONE signature and either arm may end up in
+  /// it — a caller of the result would otherwise be checked against a signature the value might not
+  /// have. Kind equality is not enough here for the same reason it is not enough for structs.
+  /// </summary>
+  private IrFunctionType? MergeTernaryArmFnTypes(IrFunctionType? trueFnType, IrFunctionType? falseFnType, Token ifToken) {
+    if (trueFnType == null && falseFnType == null) return null;
+
+    if (trueFnType == null || falseFnType == null)
+      throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+        "ternary expression type mismatch: one branch is a function and the other is not",
+        ifToken.Line, ifToken.Column);
+
+    // IrFunctionType is compared by NAME because its name IS its structure — `IrFunctionType`
+    // builds it from the parameter and return types (`fn(i64) returns i64`). Reference equality
+    // would be wrong: two identical signatures parsed at two sites are two objects.
+    if (trueFnType.Name != falseFnType.Name)
+      throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+        $"ternary expression type mismatch: true branch is '{trueFnType.Name}' "
+        + $"but false branch is '{falseFnType.Name}'",
+        ifToken.Line, ifToken.Column);
+
+    return trueFnType;
+  }
+
+  /// <summary>
+  /// The signature of one ternary arm, or null when that arm is not a function value.
+  ///
+  /// MUST be called while the arm's producing op is still the last one emitted: a named binding
+  /// carries its signature on its VarInfo and is position-independent, but an unnamed one (a bare
+  /// function reference, a closure literal, a call that returns a function) left it on the op, and
+  /// <see cref="GetFunctionTypeFromLastOp"/> reads `_currentBlock.Operations[^1]` to find it.
+  ///
+  /// The capturing-closure refusal lives here because this is the one place both arms are looked at
+  /// as function values, and the earliest point at which each one can be.
+  /// </summary>
+  private IrFunctionType? ResolveArmFnType(ExprResult arm, MaxonValue armVal, Token ifToken) {
+    if (DetermineValueKind(armVal) != MaxonValueKind.Function) return null;
+
+    RejectCapturingClosureAsTernaryArm(armVal, ifToken);
+
+    return ResolveCallableFnType(arm, directFnType: null) ?? GetFunctionTypeFromLastOp();
+  }
+
+  /// <summary>
+  /// Refuses a closure carrying a capture ENVIRONMENT as an arm of a ternary.
+  ///
+  /// The merge writes the winning arm's function POINTER into a slot and reads it back in the merge
+  /// block. Nothing writes the environment: an environment reaches a callee either as the SSA value
+  /// the `closure_create` produced (same block) or through the `__env_&lt;name&gt;` slot the lowering
+  /// pairs with a function PARAMETER — and a ternary's result temp is neither. So the merged value
+  /// is a closure whose environment is unreachable, on EVERY path, whether or not the result ever
+  /// leaves the frame. `let h = f if c else dbl` then `h(2)` compiled and nil-dereffed in `_$closure_0`.
+  ///
+  /// So this is not merely an escape: the merge DROPS a fact it cannot carry, and the honest thing
+  /// is to refuse the input rather than emit the wrong answer. It is E3099 because it is E3099's
+  /// rule — a closure that captures cannot be separated from its frame — and refusing it here also
+  /// subsumes the escape routes, since a capturing closure can no longer reach a return, a global,
+  /// or a field THROUGH a ternary either.
+  ///
+  /// It inherits E3099's boundary exactly: a capturing closure that arrived as a PARAMETER is not
+  /// recognizable as one without an interprocedural escape summary, so it is not refused here — the
+  /// same route <see cref="RejectEscapingCapturingClosure"/> documents as deliberately open.
+  /// </summary>
+  private void RejectCapturingClosureAsTernaryArm(MaxonValue armVal, Token ifToken) {
+    if (CapturingClosureFrameOf(armVal) == null) return;
+
+    throw new CompileError(ErrorCode.SemanticCapturingClosureEscapes,
+      "cannot use a closure that captures as an arm of a conditional expression: the two arms merge "
+      + "through a single slot, which carries the function pointer but not the capture environment, "
+      + "so the closure would be called with no environment. Use a function reference, or a closure "
+      + "that captures nothing",
+      ifToken.Line, ifToken.Column);
   }
 
   private ExprResult ParsePrimary() {
@@ -15396,7 +15642,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
       // Parenthesized expression: (expr)
       Expect(TokenType.RightParen);
-      if (Check(TokenType.Dot))
+      // A '(' suffix here is a CALL through the parenthesized value, and only a function value may
+      // consume it — `(a + b) * c` must still leave its parens alone. ParseFieldAccessChain applies
+      // exactly that guard, and is where `pick()(x)` is already handled; routing a callable
+      // parenthesized value through it is what makes `(f)(21)` and `(f if c else g)(21)` calls
+      // instead of an E9001 "Unhandled cast combination: Function -> Integer" at the use site.
+      if (Check(TokenType.Dot) || (Check(TokenType.LeftParen) && ResolveCallableFnType(first, null) != null))
         return ParseFieldAccessChain(first, parenToken);
       return first;
     }
@@ -17841,6 +18092,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // Cross-block reference for non-struct/enum types
         var refOp = new MaxonVarRefOp(v.VarName, info.Kind);
         _currentBlock!.AddOp(refOp);
+        // A function value's capture ENVIRONMENT rides across too, for the same reason the promise
+        // metadata below does: this is a new SSA id for the same value, and E3099 keys on the id.
+        // `LoadFunctionVarValue` — the CALL path — always carried it; this path, which is every
+        // OTHER read (`return f`, `handler = f`, `apply(f, ...)`), did not, so a closure bound in
+        // one block and returned from another walked straight past the escape check and nil-dereffed.
+        CarryCapturingClosureMark(v.VarName, refOp.Result);
         // Promise variables need to preserve their type metadata across blocks
         // so await can verify the value is a promise and access InnerKind/ErrorType.
         // ALL of the metadata, not some: dropping ErrorType here would re-erase the
@@ -17898,7 +18155,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private abstract record ExprResult {
-    public sealed record Direct(MaxonValue Value) : ExprResult;
+    /// <param name="FnType">
+    /// The signature, when <paramref name="Value"/> is a function value whose signature is not
+    /// recoverable from the op that produced it. A ternary is the case that needs it: its result is
+    /// read back through a `maxon.var_ref`, which carries only a kind, so the merged signature has
+    /// nowhere else to live. Null for every value that is not a function, and for those whose
+    /// producing op still names their signature.
+    /// </param>
+    public sealed record Direct(MaxonValue Value, IrFunctionType? FnType = null) : ExprResult;
     public sealed record VarRef(string VarName, VarInfo Info) : ExprResult;
   }
 
@@ -18982,13 +19246,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// The function type carried by a value that a completed expression produced, or null
   /// when the value is not callable. This is what licenses a '(' suffix on something
   /// other than a function's NAME, so it must know every shape a function value arrives
-  /// in: a function-typed parameter or local (VarRef), and — via the caller-supplied
+  /// in: a function-typed parameter or local (VarRef), an unnamed function value that
+  /// carries its own signature (a ternary's merged result), and — via the caller-supplied
   /// <paramref name="directFnType"/> — a call result or a function-typed field.
   /// </summary>
   private static IrFunctionType? ResolveCallableFnType(ExprResult expr, IrFunctionType? directFnType) {
     if (directFnType != null) return directFnType;
 
-    return expr is ExprResult.VarRef { Info.Kind: MaxonValueKind.Function } fnVar ? fnVar.Info.FnType : null;
+    return expr switch {
+      ExprResult.VarRef { Info.Kind: MaxonValueKind.Function } fnVar => fnVar.Info.FnType,
+      ExprResult.Direct { FnType: not null } direct => direct.FnType,
+      _ => null,
+    };
   }
 
   /// <summary>
@@ -19002,15 +19271,38 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var fnVarRefOp = new MaxonFunctionVarRefOp(varName, fnType);
     _currentBlock!.AddOp(fnVarRefOp);
-
-    // A cross-block load mints a fresh SSA id for the same function value, so carry the
-    // "has an environment" fact — and the frame it points into — across with it, otherwise
-    // a closure bound in one block and escaping in another would slip past every check.
-    if (_capturingClosureVarFrames.TryGetValue(varName, out var definingFrame))
-      _capturingClosureFrames[fnVarRefOp.Result.Id] = definingFrame;
+    CarryCapturingClosureMark(varName, fnVarRefOp.Result);
 
     return fnVarRefOp.Result;
   }
+
+  /// <summary>
+  /// Carries the "this value has a capture environment, pointing into frame F" fact from the
+  /// VARIABLE <paramref name="varName"/> onto <paramref name="reloaded"/>, a freshly minted SSA
+  /// id for the same function value.
+  ///
+  /// EVERY re-mint of a function value must call this. The fact is keyed by SSA id
+  /// (<see cref="_capturingClosureFrames"/>) because that is what an escape site holds, and a
+  /// cross-block read of a variable mints a NEW id — so a read that forgets to carry the mark
+  /// erases it, and E3099 stops applying to a closure that still very much has an environment.
+  /// That is not hypothetical: `ResolveExprValue` used to forget, and `return f` from a block
+  /// other than the one that bound `f` compiled clean and died with the exact nil-deref E3099
+  /// exists to prevent.
+  /// </summary>
+  private void CarryCapturingClosureMark(string varName, MaxonValue reloaded) {
+    if (_capturingClosureVarFrames.Count == 0) return;
+
+    if (_capturingClosureVarFrames.TryGetValue(varName, out var definingFrame))
+      _capturingClosureFrames[reloaded.Id] = definingFrame;
+  }
+
+  /// <summary>
+  /// The frame whose stack <paramref name="value"/>'s capture environment points into, or null
+  /// when the value carries no environment (a plain function reference, or a closure that
+  /// captures nothing — which lowers to one).
+  /// </summary>
+  private string? CapturingClosureFrameOf(MaxonValue value) =>
+    _capturingClosureFrames.GetValueOrDefault(value.Id);
 
   /// <summary>
   /// Records that <paramref name="varName"/> is bound to a function value carrying a
@@ -19020,7 +19312,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// longer holds an environment.
   /// </summary>
   private void TrackCapturingClosureBinding(string varName, MaxonValue value) {
-    if (_capturingClosureFrames.TryGetValue(value.Id, out var definingFrame))
+    if (CapturingClosureFrameOf(value) is string definingFrame)
       _capturingClosureVarFrames[varName] = definingFrame;
     else
       _capturingClosureVarFrames.Remove(varName);
@@ -19045,7 +19337,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// and passes, which is what keeps a table of handlers or passes buildable.
   /// </summary>
   private void RejectEscapingCapturingClosure(MaxonValue value, string destination, int line, int column) {
-    if (!_capturingClosureFrames.ContainsKey(value.Id)) return;
+    if (CapturingClosureFrameOf(value) == null) return;
 
     throw new CompileError(ErrorCode.SemanticCapturingClosureEscapes,
       $"cannot {destination}: captures are taken by reference to the enclosing function's "
@@ -19077,8 +19369,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// refused at its own site). Over-rejection here would be the worse failure.
   /// </summary>
   private void RejectReturnOfCapturingClosure(MaxonValue value, int line, int column) {
-    if (!_capturingClosureFrames.TryGetValue(value.Id, out var definingFrame)
-        || definingFrame != _currentFunction!.Name) return;
+    if (CapturingClosureFrameOf(value) != _currentFunction!.Name) return;
 
     RejectEscapingCapturingClosure(value, "return a closure that captures", line, column);
   }

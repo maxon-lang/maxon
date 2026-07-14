@@ -875,6 +875,31 @@ as a CALL ARGUMENT to a callee that then stores it. At that store the value is a
 *parameter*, and whether it carries an environment is a fact about the CALLER, so deciding
 it needs a per-parameter escape summary propagated over the call graph.
 
+### The rule keys on the VALUE, so it must ride every re-mint of one
+
+"Carries an environment" is recorded against the closure's SSA value. Reading a function-typed
+variable in a block other than the one that bound it mints a NEW SSA value for the same
+function, so a read that does not carry the mark across ERASES it — and the escape check stops
+applying to a closure that still very much has an environment. Returning a capturing closure
+from a block other than the one that bound it used to compile clean and nil-deref for exactly
+that reason.
+
+### A ternary is not an escape route — it is worse, and it is refused
+
+A conditional expression merges its two arms through **one slot**, and that slot holds the code
+pointer alone. An environment reaches a callee either as the SSA value its `closure_create`
+produced, or through the `__env_<name>` slot the lowering pairs with a function PARAMETER — and
+a ternary's result temp is neither. So the environment is dropped on EVERY path, whether or not
+the result ever leaves the frame: `let h = f if c else dbl` then `h(2)` compiled and died in
+`_$closure_0` without escaping anything.
+
+That makes it a fact the merge cannot carry rather than merely a place the closure must not go,
+so a capturing closure is refused as an ARM of a ternary. Refusing there also closes the escape
+routes through one, since a capturing closure can no longer reach a return, a global or a field
+by way of a conditional expression either. It inherits the boundary above exactly: a capturing
+closure that arrived as a PARAMETER is not recognizable as one without an escape summary, and is
+not refused here.
+
 <!-- test: first-class-function.capturing-closure-in-field-errors -->
 A capturing closure stored into a function-typed FIELD is refused rather than miscompiled.
 ```maxon
@@ -1144,6 +1169,129 @@ function main() returns ExitCode
 		run then return 42
 		idle then return 1
 	end 'go'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.capturing-closure-in-ternary-arm-errors -->
+A capturing closure as a ternary ARM is refused. This one also RETURNS the result, which is the
+shape that made the defect visible: it compiled clean and nil-dereffed inside `_$closure_0` —
+the exact failure the escape rule exists to prevent, reached by laundering the closure through a
+merge the rule could not see.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function makeAdder(bump Integer) returns UnaryOp
+	let inc = function(n Integer) gives n + bump
+	let dbl = function(n Integer) gives n * 2
+	return inc if bump > 0 else dbl
+end 'makeAdder'
+
+function main() returns ExitCode
+	let f = makeAdder(20)
+	return f(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-arm-errors.test:9:13: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
+The same laundering, into a GLOBAL. Through the ternary this was an internal `StdPtr`/`StdI64`
+cast crash at lowering rather than a diagnostic.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+var handler = 0
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	handler = f if bump > 0 else dbl
+	return 42
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:14: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors -->
+Refused even when the result NEVER LEAVES THE FRAME. This is what makes the merge different
+from an escape route: the environment is dropped by the merge itself, so `h(22)` here called a
+closure with `env=0` and nil-dereffed without escaping anything.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let h = f if bump > 0 else dbl
+	return h(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-returned-from-other-block-errors -->
+The escape rule keys on the VALUE, and a cross-block read mints a new one. Returning the closure
+from a block other than the one that bound it must still be refused — this compiled clean and
+nil-dereffed, because the read that crossed the block boundary dropped the "has an environment"
+mark and the check had nothing left to fire on.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function makeAdder(bump Integer) returns UnaryOp
+	let f = function(n Integer) gives n + bump
+	if bump > 0 'guard'
+		return f
+	end 'guard'
+	return dbl
+end 'makeAdder'
+
+function main() returns ExitCode
+	let add = makeAdder(20)
+	return add(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-from-other-block-errors.test:13:3: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.non-capturing-closure-through-ternary -->
+The accept side of the ternary rule. A closure that captures NOTHING has no environment to
+lose, so it merges through a ternary like any other function value — and the merged result is
+callable, which requires the signature to have survived the merge.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let c = 1
+	let twice = function(n Integer) gives n * 2
+	let thrice = function(n Integer) gives n * 3
+	let h = twice if c > 0 else thrice
+	return h(21)
 end 'main'
 ```
 ```exitcode

@@ -100,6 +100,12 @@ public class VarRegistry {
 
     public IEnumerable<VarInfo> Values => _vars.Values;
 
+    /// <summary>
+    /// Name/info pairs, for the callers that need both and would otherwise walk Keys and index back
+    /// in. Enumerating is allocation-free; the caller must not mutate the registry while iterating.
+    /// </summary>
+    public IEnumerable<KeyValuePair<string, VarInfo>> Entries => _vars;
+
     public int Count => _vars.Count;
 
     // ---- Parser Variable Mutation ----
