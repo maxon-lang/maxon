@@ -209,19 +209,68 @@ end 'zeroColumn'
 // The explicit fill is not paranoia. `resize` zero-fills only where it has to ALLOCATE (see
 // `zeroColumn`), so a column with spare capacity hands the added entries straight back over whatever
 // bytes last lived in them.
+// GROW BY DOUBLING, and that is not a micro-optimisation — it is the difference between linear and
+// quadratic BYTES.
+//
+// `Array.resize` is `reserve(newLength)`, and `reserve` grows capacity to EXACTLY what is asked. So a
+// column extended a few ids at a time — which is what EVERY SPLIT does, minting reload ids — is
+// reallocated and copied IN FULL on every growth. Across a function that is Θ(splits × values) bytes,
+// quadratic on precisely the shape that splits most.
+//
+// It hid because the allocation COUNT stays low: one realloc per split, not thousands. The ladder's
+// BYTE column is what caught it (`regalloc:splitting` grew ×6.75 per doubling of the program, where
+// linear is ×2), which is the reason that column is read and not just the alloc one.
 export function growFilledColumn(col DenseColumn, count ColumnLength, value DenseInt)
 	let existing = col.count()
+	if count <= existing 'nothingAdded'
+		return
+	end 'nothingAdded'
+
+	reserveByDoubling(col, needed: count)
 	col.resize(count)
 	for i in existing upto count 'fill'
 		try col.set(i, value: value) otherwise panic("growFilledColumn: set({i}) OOB")
 	end 'fill'
 end 'growFilledColumn'
 
+// Reserve at least `needed`, doubling what is already there rather than asking for exactly `needed` —
+// see `growFilledColumn` for why that distinction is worth a function.
+function reserveByDoubling(col DenseColumn, needed ColumnLength)
+	if needed <= col.capacity() 'alreadyFits'
+		return
+	end 'alreadyFits'
+
+	var target = col.capacity() + col.capacity()
+	if target < needed 'atLeastWhatWasAsked'
+		target = needed
+	end 'atLeastWhatWasAsked'
+	col.reserve(target)
+end 'reserveByDoubling'
+
+// `reserveByDoubling` for a BOOL column — separate for the same reason `growFalseColumn` is: a `bool`
+// element is ONE byte where a `DenseInt` is eight.
+function reserveBoolByDoubling(col BoolArray, needed ColumnLength)
+	if needed <= col.capacity() 'alreadyFits'
+		return
+	end 'alreadyFits'
+
+	var target = col.capacity() + col.capacity()
+	if target < needed 'atLeastWhatWasAsked'
+		target = needed
+	end 'atLeastWhatWasAsked'
+	col.reserve(target)
+end 'reserveBoolByDoubling'
+
 // `growFilledColumn` for a BOOL column. It is a separate function rather than a substitution into that
 // one because a `bool` element is ONE byte where a `DenseInt` is eight, and a `DenseColumn`-width
 // write into a bool column is memory corruption the type checker will not stop (see `refillColumn`).
 function growFalseColumn(col BoolArray, count ColumnLength)
 	let existing = col.count()
+	if count <= existing 'nothingAdded'
+		return
+	end 'nothingAdded'
+
+	reserveBoolByDoubling(col, needed: count)
 	col.resize(count)
 	for i in existing upto count 'fill'
 		try col.set(i, value: false) otherwise panic("growFalseColumn: set({i}) OOB")
