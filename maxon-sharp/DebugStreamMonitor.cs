@@ -7,17 +7,37 @@ namespace MaxonSharp;
 /// Shared-memory debug stream monitor. Creates named shared memory,
 /// spawns the target process with --debugstream=&lt;name&gt; in its environment,
 /// reads binary events from the ring buffer, and formats them as text.
+///
+/// THE READER SIDE OF THE COMMIT PROTOCOL (see the ring protocol note on
+/// <see cref="RuntimeEmitter"/>'s DebugStream partial). An entry appears below `write_cursor`
+/// the moment it is RESERVED; its payload is written afterwards, outside the ring lock. So
+/// "below write_cursor" does not mean "readable", and this monitor must not treat it as if it
+/// did — it decodes only entries carrying <see cref="RuntimeEmitter.DsEntryFlagCommitted"/>,
+/// and stops at the first one that does not.
 /// </summary>
 public class DebugStreamMonitor {
 
+  /// How long to idle when the ring has nothing decodable — whether it is empty, or its head
+  /// entry is reserved and its producer is still writing the payload.
+  private const int PollIntervalMs = 1;
+
+  // The event families `--filter` can select. Validated at PARSE time (below) rather than in the
+  // decode loop, so that PassesFilter has no unhandled case to fall through — an unrecognised
+  // filter used to silently show EVERY event, which is the opposite of what the user asked for.
+  private const string FilterMm = "mm";
+  private const string FilterSched = "sched";
+  private const string FilterLog = "log";
+  private const string UsageLine = "Usage: maxon monitor [--filter=mm|sched|log] <exe> [args...]";
+
   public static int Run(string[] args) {
     // Parse args: [--filter=mm|sched|log] <exe> [exe-args...]
+    const string FilterOption = "--filter=";
     string? filter = null;
     int exeIndex = 0;
 
     for (int i = 0; i < args.Length; i++) {
-      if (args[i].StartsWith("--filter=")) {
-        filter = args[i]["--filter=".Length..];
+      if (args[i].StartsWith(FilterOption)) {
+        filter = args[i][FilterOption.Length..];
       } else {
         exeIndex = i;
         break;
@@ -25,7 +45,13 @@ public class DebugStreamMonitor {
     }
 
     if (exeIndex >= args.Length) {
-      Console.Error.WriteLine("Usage: maxon monitor [--filter=mm|sched|log] <exe> [args...]");
+      Console.Error.WriteLine(UsageLine);
+      return 1;
+    }
+
+    if (filter is not (null or FilterMm or FilterSched or FilterLog)) {
+      Console.Error.WriteLine($"Unknown --filter value '{filter}'.");
+      Console.Error.WriteLine(UsageLine);
       return 1;
     }
 
@@ -119,18 +145,60 @@ public class DebugStreamMonitor {
         Console.Error.WriteLine(line);
     });
 
-    while (!process.HasExited || readCursor < accessor.ReadInt64(RuntimeEmitter.DsOffWriteCursor)) {
+    // Entries whose producer DIED between __ds_reserve and __ds_commit. Their payload will never
+    // be written, so they are unreadable — but they are counted and reported, never silently
+    // dropped from the trace, because a missing event is exactly the lie this protocol prevents.
+    long abandonedEntries = 0;
+
+    while (true) {
+      // Snapshot liveness BEFORE the cursors. If the producer is already gone by this read, then
+      // every store it will ever make is in the ring, so the cursors read next are FINAL. The
+      // other order would let a last event land after the check and be lost.
+      bool producerExited = process.HasExited;
+
       long writeCursor = accessor.ReadInt64(RuntimeEmitter.DsOffWriteCursor);
 
-      if (readCursor >= writeCursor) {
+      // Pairs with the producer's RELEASE store of write_cursor in __ds_reserve. Everything it
+      // wrote below this cursor — every entry HEADER — is therefore visible to the scan below.
+      // Without this, the scan could read a previous generation's bytes at a ring offset the
+      // cursor claims is live, and those bytes carry a stale commit bit and a stale entry_size.
+      Thread.MemoryBarrier();
+
+      long committedEnd = ScanCommittedPrefix(accessor, readCursor, writeCursor, bufferMask);
+
+      if (committedEnd == readCursor) {
         lock (stdoutLock) { stdout.Flush(); }
-        Thread.Sleep(1);
+
+        if (!producerExited) {
+          // Either the ring is empty, or its head entry is reserved-but-not-yet-committed and its
+          // producer is mid-payload. Wait: decoding it now would decode whatever bytes the ring
+          // last held at that offset, and advancing past it would lose it.
+          Thread.Sleep(PollIntervalMs);
+          continue;
+        }
+
+        if (readCursor >= writeCursor) break; // fully drained, and the producer is gone
+
+        // The producer died between reserving the head entry and committing it — a crash, a
+        // panic, a watchdog kill. Nothing will ever fill that payload, so waiting for it is a
+        // HANG, and the loop condition alone would spin here forever. Its HEADER is intact
+        // (reserve wrote it before releasing write_cursor), so step over it and keep draining
+        // the entries behind it, which may well be complete.
+        abandonedEntries++;
+        readCursor += EntrySizeOf(ReadEntryHeader(accessor, readCursor, bufferMask), readCursor);
+        PublishReadCursor(accessor, readCursor);
         continue;
       }
 
-      // Copy pending data from ring buffer into private buffer, then immediately
-      // advance read_cursor to free ring buffer space for the producer.
-      long pending = writeCursor - readCursor;
+      // Orders every header load in the scan above ahead of every payload load in the copy below.
+      // That is what makes the commit bit mean anything: __ds_commit released the bit AFTER the
+      // payload stores, so a reader that has seen the bit and does not reorder past it is
+      // guaranteed the payload.
+      Thread.MemoryBarrier();
+
+      // Copy the committed prefix out of the ring into the private buffer, then immediately
+      // release that span back to the producer.
+      long pending = committedEnd - readCursor;
       long startPos = readCursor & bufferMask;
       long firstChunk = Math.Min(pending, bufferSize - startPos);
       accessor.ReadArray(RuntimeEmitter.DsHeaderSize + startPos, localBuf, 0, (int)firstChunk);
@@ -139,71 +207,44 @@ public class DebugStreamMonitor {
         accessor.ReadArray(RuntimeEmitter.DsHeaderSize, localBuf, (int)firstChunk, (int)(pending - firstChunk));
       }
 
-      // Release ring buffer immediately
-      readCursor = writeCursor;
-      accessor.Write(RuntimeEmitter.DsOffReadCursor, readCursor);
+      readCursor = committedEnd;
+      PublishReadCursor(accessor, readCursor);
 
-      // Process events from private copy
+      // Process events from private copy. Every entry in it is committed, so every payload is
+      // whole — the walk below can trust what it reads.
       long localOffset = 0;
       while (localOffset < pending) {
-        // Read entry header (8 bytes)
         long header = BitConverter.ToInt64(localBuf, (int)localOffset);
-        byte eventType = (byte)(header & 0xFF);
-        ushort entrySize = (ushort)((header >> 16) & 0xFFFF);
-        uint timestampDelta = (uint)((header >> 32) & 0xFFFFFFFF);
+        byte eventType = (byte)(header & RuntimeEmitter.DsEntryTypeMask);
+        int entrySize = EntrySizeOf(header, readCursor - pending + localOffset);
+        uint timestampDelta =
+          (uint)((header >> RuntimeEmitter.DsEntryTimestampShift) & RuntimeEmitter.DsEntryTimestampMask);
 
-        if (entrySize == 0) break; // safety
-
-        if (eventType == RuntimeEmitter.DsEvPadding) {
-          localOffset += entrySize;
-          continue;
-        }
-
+        // ONE advance for the whole walk. Padding, the depth markers and every filtered-out family
+        // all step over the entry by exactly the same amount, and spelling that out per branch is
+        // six chances to step by the wrong one.
         if (eventType == RuntimeEmitter.DsEvDepthInc) {
           depth++;
-          localOffset += entrySize;
-          continue;
-        }
-        if (eventType == RuntimeEmitter.DsEvDepthDec) {
+        } else if (eventType == RuntimeEmitter.DsEvDepthDec) {
           if (depth > 0) depth--;
-          localOffset += entrySize;
-          continue;
-        }
+        } else if (eventType != RuntimeEmitter.DsEvPadding && PassesFilter(eventType, filter)) {
+          string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames, logNames);
 
-        // Pre-filter before formatting. The families are contiguous code ranges (see the event
-        // table in RuntimeEmitter): mm below DsEvSchedSpawn, sched/dbg between it and the Log
-        // range, and the Log events — the ones USER MAXON SOURCE emitted — at the top.
-        bool isLogEvent = eventType >= RuntimeEmitter.DsEvLogPhaseBegin
-                       && eventType <= RuntimeEmitter.DsEvLogText;
-        if (filter == "sched" && (eventType <= RuntimeEmitter.DsEvMmRawFree || isLogEvent)) {
-          localOffset += entrySize;
-          continue;
-        }
-        if (filter == "mm" && eventType >= RuntimeEmitter.DsEvSchedSpawn) {
-          localOffset += entrySize;
-          continue;
-        }
-        if (filter == "log" && !isLogEvent) {
-          localOffset += entrySize;
-          continue;
-        }
-
-        string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames, logNames);
-
-        if (line != null) {
-          string indent = depth < indentCache.Length ? indentCache[depth] : new string(' ', depth * 2);
-          lock (stdoutLock) {
-            stdout.Write('[');
-            stdout.Write('+');
-            uint seconds = timestampDelta / 1000;
-            uint ms = timestampDelta % 1000;
-            stdout.Write(seconds.ToString("D4"));
-            stdout.Write('.');
-            stdout.Write(ms.ToString("D3"));
-            stdout.Write(']');
-            stdout.Write(' ');
-            stdout.Write(indent);
-            stdout.WriteLine(line);
+          if (line != null) {
+            string indent = depth < indentCache.Length ? indentCache[depth] : new string(' ', depth * 2);
+            lock (stdoutLock) {
+              stdout.Write('[');
+              stdout.Write('+');
+              uint seconds = timestampDelta / MillisecondsPerSecond;
+              uint ms = timestampDelta % MillisecondsPerSecond;
+              stdout.Write(seconds.ToString("D4"));
+              stdout.Write('.');
+              stdout.Write(ms.ToString("D3"));
+              stdout.Write(']');
+              stdout.Write(' ');
+              stdout.Write(indent);
+              stdout.WriteLine(line);
+            }
           }
         }
 
@@ -224,14 +265,102 @@ public class DebugStreamMonitor {
     long totalEvents = accessor.ReadInt64(RuntimeEmitter.DsOffTotalEvents);
     long droppedEvents = accessor.ReadInt64(RuntimeEmitter.DsOffDroppedEvents);
     long peakUsed = accessor.ReadInt64(RuntimeEmitter.DsOffPeakUsed);
-    if (totalEvents > 0 || droppedEvents > 0) {
+    if (totalEvents > 0 || droppedEvents > 0 || abandonedEntries > 0) {
       double peakMB = peakUsed / (1024.0 * 1024.0);
       double bufMB = bufferSize / (1024.0 * 1024.0);
       int peakPct = bufferSize > 0 ? (int)(peakUsed * 100 / bufferSize) : 0;
-      Console.Error.WriteLine($"[debugstream] {totalEvents} events, {droppedEvents} dropped, peak buffer: {peakMB:F1} MB / {bufMB:F1} MB ({peakPct}%)");
+      // `abandoned` only ever appears when it is non-zero, but it appears LOUDLY when it is: it
+      // means the producer was killed mid-entry and that entry's payload is gone for good.
+      string abandoned = abandonedEntries > 0
+        ? $", {abandonedEntries} abandoned (producer died mid-entry)"
+        : "";
+      Console.Error.WriteLine($"[debugstream] {totalEvents} events, {droppedEvents} dropped{abandoned}, peak buffer: {peakMB:F1} MB / {bufMB:F1} MB ({peakPct}%)");
     }
 
     return process.ExitCode;
+  }
+
+  /// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
+  private const uint MillisecondsPerSecond = 1000;
+
+  /// <summary>
+  /// Does this event belong to the family the user asked for? A null filter means "all of them".
+  ///
+  /// The families are CONTIGUOUS code ranges (see the event table in RuntimeEmitter): the mm codes
+  /// sit below DsEvSchedSpawn, sched and dbg between that and the Log range, and the Log events —
+  /// the ones USER MAXON SOURCE emitted — at the top. So membership is a range test, not a list
+  /// that has to be kept in step with the event table.
+  ///
+  /// The filter string is validated when the command line is parsed, so an unrecognised one cannot
+  /// reach here; if one does, it would silently show every event, which is the bug this throw
+  /// exists to make impossible.
+  /// </summary>
+  private static bool PassesFilter(byte eventType, string? filter) {
+    if (filter == null) return true;
+
+    bool isLogEvent = eventType >= RuntimeEmitter.DsEvLogPhaseBegin
+                   && eventType <= RuntimeEmitter.DsEvLogText;
+
+    return filter switch {
+      FilterMm => eventType < RuntimeEmitter.DsEvSchedSpawn,
+      FilterSched => eventType >= RuntimeEmitter.DsEvSchedSpawn && !isLogEvent,
+      FilterLog => isLogEvent,
+      _ => throw new InvalidOperationException(
+        $"--filter '{filter}' reached the decode loop; it should have been rejected at parse time")
+    };
+  }
+
+  /// <summary>
+  /// How far below <paramref name="writeCursor"/> the ring is actually READABLE: the end of the
+  /// run of entries, starting at <paramref name="readCursor"/>, that carry the COMMIT BIT.
+  ///
+  /// An entry appears below write_cursor as soon as it is RESERVED, and its payload is written
+  /// after the ring lock is released — so "present" and "readable" are two different states, and
+  /// the commit bit is the difference. The scan stops at the first entry without it and never
+  /// looks past: entries are consumed in ring order, so an uncommitted head briefly blocks the
+  /// committed entries behind it rather than being skipped over and lost.
+  /// </summary>
+  private static long ScanCommittedPrefix(MemoryMappedViewAccessor accessor, long readCursor,
+      long writeCursor, long bufferMask) {
+    long cursor = readCursor;
+    while (cursor < writeCursor) {
+      long header = ReadEntryHeader(accessor, cursor, bufferMask);
+      if ((header & RuntimeEmitter.DsEntryHeaderCommittedBit) == 0) break;
+      cursor += EntrySizeOf(header, cursor);
+    }
+    return cursor;
+  }
+
+  /// <summary>
+  /// The packed 8-byte header of the entry at <paramref name="cursor"/>. An entry never straddles
+  /// the end of the ring — __ds_reserve emits a padding entry rather than let one wrap — so this
+  /// single read is always contiguous.
+  /// </summary>
+  private static long ReadEntryHeader(MemoryMappedViewAccessor accessor, long cursor, long bufferMask) =>
+    accessor.ReadInt64(RuntimeEmitter.DsHeaderSize + (cursor & bufferMask));
+
+  /// <summary>
+  /// Total bytes of an entry, header included. Zero is not a legal entry size — __ds_reserve
+  /// never reserves one, and every event family has at least a header — so a zero here means the
+  /// ring is corrupt AND that a walk keyed off it would spin on this offset forever. Say so.
+  /// </summary>
+  private static int EntrySizeOf(long header, long cursor) {
+    int size = (int)((header >> RuntimeEmitter.DsEntrySizeShift) & RuntimeEmitter.DsEntrySizeMask);
+    if (size == 0)
+      throw new InvalidOperationException(
+        $"DebugStream ring corrupt: entry at cursor {cursor} declares size 0 (header 0x{header:x16})");
+    return size;
+  }
+
+  /// <summary>
+  /// Publish `read_cursor`, handing that span of the ring back to the producer.
+  ///
+  /// The fence is not decoration. The instant this store lands, the producer may overwrite the
+  /// bytes it frees — so every load of the copy we just took must be complete before it.
+  /// </summary>
+  private static void PublishReadCursor(MemoryMappedViewAccessor accessor, long readCursor) {
+    Thread.MemoryBarrier();
+    accessor.Write(RuntimeEmitter.DsOffReadCursor, readCursor);
   }
 
   /// <summary>
@@ -338,6 +467,24 @@ public class DebugStreamMonitor {
   private const string TagFieldName = "tag";
   private const string LogNameFieldName = "name";
 
+  /// <summary>
+  /// Decode the payload every TAGGED mm event shares: the alloc id, the interned tag NAME, and
+  /// the packed word's 32-bit value slot — an allocation size for the alloc family, a new
+  /// refcount for the refcount family, and unused for mm_free.
+  ///
+  /// One decoder against the emitter's one packer (<c>EmitDsStoreMmPayload</c>), keyed off the
+  /// same offsets. The six mm cases used to inline the same four lines each, which is six chances
+  /// to disagree with the producer about a shift.
+  /// </summary>
+  private static (long AllocId, string Tag, long Value) ReadMmPayload(byte[] buf, int offset,
+      string[] tagNames) {
+    long allocId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsMmOffAllocId);
+    long packed = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsMmOffPacked);
+    int tagIndex = (int)(packed & RuntimeEmitter.DsMmTagIndexMask);
+    long value = (packed >> RuntimeEmitter.DsMmValueShift) & RuntimeEmitter.DsMmValueMask;
+    return (allocId, ResolveInternedName(tagIndex, tagNames, TagFieldName), value);
+  }
+
   private static string? FormatEventFromBuffer(byte eventType, byte[] buf, int offset, string[] tagNames,
       string[] logNames) {
     switch (eventType) {
@@ -346,18 +493,22 @@ public class DebugStreamMonitor {
       case RuntimeEmitter.DsEvLogEvent:
       case RuntimeEmitter.DsEvLogText:
         return FormatLogEvent(eventType, buf, offset, logNames);
-      case RuntimeEmitter.DsEvMmAlloc: {
-        long allocId = BitConverter.ToInt64(buf, offset + 8);
-        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
-        int tagIndex = (int)(tagAndSize & 0xFFFF);
-        int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_alloc {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
+      case RuntimeEmitter.DsEvMmAlloc:
+      case RuntimeEmitter.DsEvMmRealloc:
+      case RuntimeEmitter.DsEvMmCow: {
+        string name = eventType switch {
+          RuntimeEmitter.DsEvMmAlloc => "mm_alloc",
+          RuntimeEmitter.DsEvMmRealloc => "mm_realloc",
+          RuntimeEmitter.DsEvMmCow => "mm_cow",
+          _ => throw new InvalidOperationException($"Unexpected alloc event type: 0x{eventType:X2}")
+        };
+        var (allocId, tag, size) = ReadMmPayload(buf, offset, tagNames);
+        return $"{name} {tag} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvMmFree: {
-        long allocId = BitConverter.ToInt64(buf, offset + 8);
-        long tagField = BitConverter.ToInt64(buf, offset + 16);
-        int tagIndex = (int)(tagField & 0xFFFF);
-        return $"mm_free {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId}";
+        // The value slot is unused by a free — it has no size and no refcount to report.
+        var (allocId, tag, _) = ReadMmPayload(buf, offset, tagNames);
+        return $"mm_free {tag} #{allocId}";
       }
       case RuntimeEmitter.DsEvMmIncref:
       case RuntimeEmitter.DsEvMmDecref:
@@ -368,34 +519,17 @@ public class DebugStreamMonitor {
           RuntimeEmitter.DsEvMmTransfer => "mm_transfer",
           _ => throw new InvalidOperationException($"Unexpected refcount event type: 0x{eventType:X2}")
         };
-        long allocId = BitConverter.ToInt64(buf, offset + 8);
-        long tagAndRc = BitConverter.ToInt64(buf, offset + 16);
-        int tagIndex = (int)(tagAndRc & 0xFFFF);
-        int rc = (int)((tagAndRc >> 32) & 0xFFFFFFFF);
-        return $"{name} {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} rc={rc}";
+        var (allocId, tag, rc) = ReadMmPayload(buf, offset, tagNames);
+        return $"{name} {tag} #{allocId} rc={rc}";
       }
       case RuntimeEmitter.DsEvMmRawAlloc: {
-        long rawId = BitConverter.ToInt64(buf, offset + 8);
-        long size = BitConverter.ToInt64(buf, offset + 16);
+        long rawId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsMmOffAllocId);
+        long size = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsMmOffRawSize);
         return $"mm_raw_alloc #{rawId} size={size}";
       }
       case RuntimeEmitter.DsEvMmRawFree: {
-        long rawId = BitConverter.ToInt64(buf, offset + 8);
+        long rawId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsMmOffAllocId);
         return $"mm_raw_free #{rawId}";
-      }
-      case RuntimeEmitter.DsEvMmRealloc: {
-        long allocId = BitConverter.ToInt64(buf, offset + 8);
-        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
-        int tagIndex = (int)(tagAndSize & 0xFFFF);
-        int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_realloc {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
-      }
-      case RuntimeEmitter.DsEvMmCow: {
-        long allocId = BitConverter.ToInt64(buf, offset + 8);
-        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
-        int tagIndex = (int)(tagAndSize & 0xFFFF);
-        int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_cow {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvSchedSpawn:
       case RuntimeEmitter.DsEvSchedAwait:
@@ -412,7 +546,7 @@ public class DebugStreamMonitor {
           RuntimeEmitter.DsEvIoResume => "io_resume",
           _ => throw new InvalidOperationException($"Unexpected sched event type: 0x{eventType:X2}")
         };
-        long traceId = BitConverter.ToInt64(buf, offset + 8);
+        long traceId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsSchedOffTraceId);
         return $"{name} #{traceId}";
       }
       case RuntimeEmitter.DsEvDbgEnqueue:
@@ -430,11 +564,11 @@ public class DebugStreamMonitor {
       case RuntimeEmitter.DsEvDbgTimerFire:
       case RuntimeEmitter.DsEvDbgCsxEntry:
       case RuntimeEmitter.DsEvDbgCsxExit: {
-        long gt = BitConverter.ToInt64(buf, offset + 8);
-        long pId = BitConverter.ToInt64(buf, offset + 16);
-        long arg2 = BitConverter.ToInt64(buf, offset + 24);
-        long arg3 = BitConverter.ToInt64(buf, offset + 32);
-        long arg4 = BitConverter.ToInt64(buf, offset + 40);
+        long gt = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsDbgOffGt);
+        long pId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsDbgOffPid);
+        long arg2 = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsDbgOffArg2);
+        long arg3 = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsDbgOffArg3);
+        long arg4 = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsDbgOffArg4);
         return FormatDbgEvent(eventType, gt, pId, arg2, arg3, arg4);
       }
       case RuntimeEmitter.DsEvHeartbeat:
@@ -492,18 +626,30 @@ public class DebugStreamMonitor {
     }
   }
 
+  /// <summary>
+  /// Name the queue a green thread went onto or came off. The codes are the emitter's own
+  /// <c>DsDbgQueue*</c> constants — the enqueue and dequeue sides share the first two and diverge
+  /// on the third (a steal is a CHAIN going in and a FIRST coming out), which is exactly why the
+  /// direction is a parameter here instead of two near-identical switches.
+  ///
+  /// A code the emitter never writes cannot appear, so it is a corrupt trace, not an unknown kind.
+  /// </summary>
+  private static string FormatQueueKind(long kind, bool isEnqueue) => kind switch {
+    RuntimeEmitter.DsDbgQueueLocal   => "local",
+    RuntimeEmitter.DsDbgQueueGlobal  => "global",
+    RuntimeEmitter.DsDbgQueueRunnext => "runnext",
+    RuntimeEmitter.DsDbgQueueStealChain => isEnqueue ? "steal_chain" : "steal_first",
+    _ => throw new InvalidOperationException($"DebugStream: unknown dbg queue kind {kind}")
+  };
+
   private static string FormatDbgEvent(byte eventType, long gt, long pId, long arg2, long arg3, long arg4) {
     string gtHex = $"gt=0x{gt:x}";
     string pIdStr = $"P{pId}";
     switch (eventType) {
-      case RuntimeEmitter.DsEvDbgEnqueue: {
-        string kind = arg2 switch { 0 => "local", 1 => "global", 2 => "steal_chain", 3 => "runnext", _ => $"k{arg2}" };
-        return $"dbg_enqueue {gtHex} {pIdStr} kind={kind} owner=P{arg3}";
-      }
-      case RuntimeEmitter.DsEvDbgDequeue: {
-        string kind = arg2 switch { 0 => "local", 1 => "global", 2 => "steal_first", 3 => "runnext", _ => $"k{arg2}" };
-        return $"dbg_dequeue {gtHex} {pIdStr} kind={kind} from=P{arg3}";
-      }
+      case RuntimeEmitter.DsEvDbgEnqueue:
+        return $"dbg_enqueue {gtHex} {pIdStr} kind={FormatQueueKind(arg2, isEnqueue: true)} owner=P{arg3}";
+      case RuntimeEmitter.DsEvDbgDequeue:
+        return $"dbg_dequeue {gtHex} {pIdStr} kind={FormatQueueKind(arg2, isEnqueue: false)} from=P{arg3}";
       case RuntimeEmitter.DsEvDbgRunnextSet:
         return $"dbg_runnext_set {gtHex} {pIdStr}";
       case RuntimeEmitter.DsEvDbgRunnextTake:
@@ -513,7 +659,13 @@ public class DebugStreamMonitor {
       case RuntimeEmitter.DsEvDbgStatusStore:
         return $"dbg_status {gtHex} {pIdStr} {arg2}->{arg3} site={arg4}";
       case RuntimeEmitter.DsEvDbgIoComplete: {
-        string phase = arg2 switch { 0 => "status_set", 1 => "spin_done", 2 => "enqueueing", _ => $"phase{arg2}" };
+        // The emitter's DsDbgIoPhase* constants. A code it never writes is a corrupt trace.
+        string phase = arg2 switch {
+          RuntimeEmitter.DsDbgIoPhaseStatusSet  => "status_set",
+          RuntimeEmitter.DsDbgIoPhaseSpinDone   => "spin_done",
+          RuntimeEmitter.DsDbgIoPhaseEnqueueing => "enqueueing",
+          _ => throw new InvalidOperationException($"DebugStream: unknown dbg io phase {arg2}")
+        };
         return $"dbg_io_complete {gtHex} phase={phase}";
       }
       case RuntimeEmitter.DsEvDbgFreeListPush:
@@ -533,7 +685,9 @@ public class DebugStreamMonitor {
       case RuntimeEmitter.DsEvDbgCsxExit:
         return $"dbg_csx_exit  from={gtHex} to=0x{arg2:x} to_rsp=0x{arg3:x} to_rbp=0x{arg4:x}";
       default:
-        return $"dbg_unknown 0x{eventType:X2} {gtHex} {pIdStr}";
+        // Unreachable: FormatEventFromBuffer routes only the DsEvDbg* codes enumerated above here,
+        // so a miss means a new code was added to that switch and not to this one.
+        throw new InvalidOperationException($"Unexpected dbg event type: 0x{eventType:X2}");
     }
   }
 }

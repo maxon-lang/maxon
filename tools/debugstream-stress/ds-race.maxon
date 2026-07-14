@@ -1,0 +1,230 @@
+// DebugStream commit-bit stress — a SELF-VERIFYING concurrent producer.
+//
+// WHY THIS EXISTS. `__ds_reserve` publishes an entry (header written, `write_cursor` advanced, ring
+// lock released) and the CALLER writes the PAYLOAD afterwards. Between those two moments the
+// monitor — a separate process, polling — can see the entry and copy a payload that has not been
+// written yet: stale ring bytes, decoded and printed as if they were events. The commit bit closes
+// that window; this program is the test that says so, and it FAILS without it (measured: torn
+// LOG_TEXT tails, ~10 per run).
+//
+// TWO STREAMS, and both are load-bearing.
+//
+//   LOG_EVENT — the COUNTED stream. Its payload is a checksum of itself, so a decoded event can be
+//   checked against its own contents alone. It proves nothing is LOST or DUPLICATED. It will NOT
+//   catch the race on its own: its payload is five stores, so its unpublished window is nanoseconds
+//   wide, and a polling reader never lands that precisely (measured: 14400 events, zero tears).
+//
+//   LOG_TEXT — the TEARING stream, and the one with teeth. Its payload ends in a BYTE-COPY LOOP
+//   over a 16 KB UTF-8 tail, so the window between "entry visible to the monitor" and "entry
+//   actually written" is tens of MICROSECONDS. That is a window a polling reader can land in.
+//
+// THE OPERATING POINT, which is the subtle part. The monitor copies its pending region from the
+// BOTTOM up, and sleeps only when the ring is EMPTY. So BOTH extremes hide the bug:
+//
+//   * Producer too FAST => the monitor is permanently backlogged, its pending region grows to
+//     megabytes, and its memcpy reaches an in-flight entry only after copying everything below it
+//     — by which time the producer has long finished. (Measured: a flat-out producer, even a single
+//     one, never tears. It is the fastest way to make this test useless.)
+//   * Producer too SLOW => the ring keeps going empty, the monitor sleeps ~1-15 ms between polls,
+//     and it simply never looks during the microseconds an entry is in flight.
+//
+// The event stream keeps the ring NEVER EMPTY (so the monitor polls continuously, at its decode
+// rate — microseconds, not milliseconds) but SHALLOW (so its copy reaches an in-flight entry at
+// once). `spin` is what puts it there, and its right value is MACHINE-DEPENDENT, which is why it
+// comes in on the COMMAND LINE and validate.sh sweeps a band of it rather than betting on one
+// number.
+//
+// HOW A TEAR IS CAUGHT. Whatever bytes a torn read happens to catch, it is one of two things:
+//   * fresh ring memory (all zeros) => cat/lvl are 0, gt is null, arg0 is out of range (it is never
+//     0 by construction), the checksum fails, and a text tail is not the message it claims to be.
+//   * a PREVIOUS generation's payload at the same ring offset => self-consistent, but its (unit,
+//     seq) was already consumed => a DUPLICATE.
+// verify.awk checks for both, in both streams, plus exact counts and zero drops.
+//
+// The green threads run on real OS worker threads (`__Builtins.parallelBoundary()` marks the
+// CPU-bound task functions as legitimate `async` targets), so producers genuinely interleave.
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+let threadCount = 12
+let textsPerThread = 600
+
+// One LOG_TEXT every `eventsPerText` LOG_EVENTs. The event count is DERIVED from these two, so the
+// three can never disagree.
+let eventsPerText = 25
+let eventsPerThread = eventsPerText * textsPerThread
+
+// The tail length, as doublings of a single character: 2^14 = 16384 bytes. This IS the window —
+// every byte of it is one iteration of the runtime's byte-copy loop, running AFTER `write_cursor`
+// already made the entry visible to the monitor.
+//
+// It stops at 16 KB, and not higher, for a reason that is NOT about this test: at 32 KB, twelve
+// green threads each building a fresh 32 KB String per iteration SEGFAULT the runtime —
+// reproducible with no `__DebugStream` call anywhere in the program, so it is a separate
+// pre-existing bug, not this one. 16 KB is well inside the working range and already a wide enough
+// window.
+let padDoublings = 14
+
+// The pacer's default, in iterations of a cheap arithmetic loop between LOG_EVENTs. See the
+// operating-point note above: this is the knob that decides whether the bug is reachable at all.
+// Overridable as argv[1], because the right value depends on how fast this machine is relative to
+// the monitor.
+let defaultSpin = 120000
+
+// arg0 = 1 + idx * seqBase + seq. seqBase exceeds eventsPerThread by a wide margin, so idx and seq
+// can be recovered from arg0 by division without ambiguity.
+let seqBase = 1000000
+
+// The self-checking relation arg1 = arg0 * checkMul + checkAdd. checkAdd is non-zero so that a
+// zeroed payload (arg0 = 0) fails it: 0 * checkMul + checkAdd != 0.
+let checkMul = 3
+let checkAdd = 11
+
+// Fixed, non-zero category/level. A torn read of the packed fields word reports 0 for both.
+let logCategory = 7
+let logLevel = 5
+
+let asciiZero = 48
+let asciiNine = 57
+let decimalRadix = 10
+
+// The pacer arrives as text on the command line; argv[0] is the program itself.
+let spinArgIndex = 1
+
+function parseDecimal(text String, fallback Integer) returns Integer
+	if text.isEmpty() 'empty'
+		return fallback
+	end 'empty'
+
+	var value = 0
+	var i = 0
+	let n = text.byteLength()
+
+	while i < n 'digits'
+		let b = try text.managed.byteAt(i) otherwise panic("parseDecimal: byteAt OOB — i < byteLength invariant")
+		let digit = (b as Integer) - asciiZero
+
+		if digit < 0 or digit > asciiNine - asciiZero 'nonDigit'
+			return fallback
+		end 'nonDigit'
+
+		value = value * decimalRadix + digit
+		i = i + 1
+	end 'digits'
+
+	return value
+end 'parseDecimal'
+
+// The shared tail every LOG_TEXT message ends in. Built ONCE, in main, and handed to each producer
+// as an `async` argument: building it per message would allocate 16 KB inside the emit loop and
+// flood the ring with mm events that have nothing to do with what is being tested.
+function buildTextPad() returns String
+	var pad = "A"
+	var i = 0
+
+	// Doubling, not appending: growing to 16 KB one character at a time is quadratic in copies.
+	while i < padDoublings 'grow'
+		pad = "{pad}{pad}"
+		i = i + 1
+	end 'grow'
+
+	return pad
+end 'buildTextPad'
+
+// The pacer. Returns its accumulator so the call has a live result and cannot be dropped as dead by
+// purity analysis — a pacer that gets optimised away is not a pacer.
+function burnCycles(n Integer) returns Integer
+	var acc = 0
+	var i = 0
+
+	while i < n 'burn'
+		acc = acc + i
+		i = i + 1
+	end 'burn'
+
+	return acc
+end 'burnCycles'
+
+function emitBurst(idx Integer, events Integer, texts Integer, pad String, spin Integer) returns Integer
+	// Marks this CPU-bound function as a legitimate `async` target (the E3073 yielding contract)
+	// without claiming fake I/O. No-op at runtime.
+	__Builtins.parallelBoundary()
+
+	// Interned at COMPILE time into the MXDS_STRS blob, so the loop below builds no name and the
+	// only thing racing on the ring is the event write itself.
+	let name = __DebugStream.nameId("stress")
+	let unit = idx + 1
+
+	var seq = 0
+	var textSeq = 0
+	var sinceText = 0
+	var sink = 0
+
+	while seq < events 'emit'
+		let a0 = 1 + idx * seqBase + seq
+		let a1 = a0 * checkMul + checkAdd
+
+		__DebugStream.event(name, logCategory, logLevel, unit, a0, a1)
+
+		sinceText = sinceText + 1
+
+		// Every `eventsPerText`th event, a long one. The message names the thread and its own
+		// sequence, so a torn tail cannot masquerade as another thread's message, and a stale tail
+		// from a previous ring generation shows up as a duplicate.
+		if sinceText == eventsPerText and textSeq < texts 'text'
+			let msg = "t{idx}s{textSeq}-{pad}"
+
+			__DebugStream.text(logCategory, logLevel, unit, msg.managed)
+
+			textSeq = textSeq + 1
+			sinceText = 0
+		end 'text'
+
+		sink = sink + burnCycles(spin)
+		seq = seq + 1
+	end 'emit'
+
+	// Consume the pacer's accumulator so it stays live. It is a sum of triangular numbers, so it is
+	// never negative and this branch never runs — but the compiler cannot fold that away.
+	if sink < 0 'unreachable'
+		return 0
+	end 'unreachable'
+
+	return events
+end 'emitBurst'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	var spin = defaultSpin
+
+	if args.count() > spinArgIndex 'pacer'
+		let raw = try args.get(spinArgIndex) otherwise panic("CommandLine.args: get OOB — index < count invariant")
+		spin = parseDecimal(raw, fallback: defaultSpin)
+	end 'pacer'
+
+	let pad = buildTextPad()
+
+	var promises = IntPromiseArray.create()
+
+	// Queue every task before awaiting any, so the scheduler spins up worker Ms to service the
+	// backlog — that is what puts more than one producer on the ring at once.
+	for i in 0 upto threadCount 'spawn'
+		promises.push(async emitBurst(i, events: eventsPerThread, texts: textsPerThread, pad: pad, spin: spin))
+	end 'spawn'
+
+	var emitted = 0
+
+	for p in promises 'await'
+		emitted = emitted + await p
+	end 'await'
+
+	// The counts the verifier holds the trace to. Printed AFTER every producer has finished, so they
+	// are the exact numbers of events that went into the ring.
+	print("emitted={emitted}\n")
+	print("emittedTexts={threadCount * textsPerThread}\n")
+
+	// Fixed, deterministic, and never 101 (the runtime's leak-check gate value).
+	return 42
+end 'main'

@@ -7,6 +7,24 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// The monitor (maxon monitor) creates named shared memory and spawns the target.
 /// The target opens the pre-existing segment via the MAXON_DEBUGSTREAM env var,
 /// writes binary events into the ring buffer, and unmaps on shutdown.
+///
+/// THE RING PROTOCOL, in three moments — because two of them used to be one, and that was a race:
+///
+///   1. RESERVE (`__ds_reserve`, under the ticket lock). Claim the bytes, write the entry HEADER
+///      with the commit bit CLEAR, advance `write_cursor` with a release store, drop the lock.
+///      The entry is now VISIBLE to the monitor. Its payload is still whatever the ring last
+///      held there.
+///   2. PAYLOAD (the caller, outside the lock — this is the bulk of the work, and for LOG_TEXT
+///      it is a byte-copy loop).
+///   3. COMMIT (`__ds_commit`). Set the commit bit with a RELEASE store. The entry is now
+///      READABLE, and only now.
+///
+/// The monitor decodes nothing — and advances past nothing — that does not carry the commit bit
+/// (<see cref="DsEntryFlagCommitted"/>). Before it existed, step 1 published the cursor and step
+/// 2 wrote the payload afterwards, so the monitor could copy and decode an entry whose payload
+/// had not been written: stale ring bytes, reported as events. That hit EVERY family — mm, sched,
+/// dbg and log alike — and it is why the pairing of (1) and (3) is enforced structurally, in
+/// <c>EmitDsEntryBody</c>, rather than left to each call site to remember.
 /// </summary>
 public partial class RuntimeEmitter {
 
@@ -178,13 +196,21 @@ public partial class RuntimeEmitter {
   // =========================================================================
 
   /// <summary>
-  /// Emit __ds_reserve(entry_size_aligned) -> pointer to write location, or 0 if full.
-  /// Also writes the entry header (event_type, flags, entry_size, timestamp_delta).
+  /// Emit __ds_reserve(event_type, entry_size) -> pointer to write location, or 0 if full.
+  /// Writes the entry header and publishes the entry as UNCOMMITTED.
   ///
   /// Args: Arg0 = event_type (byte), Arg1 = entry_size (total, 8-byte aligned)
   /// Returns: Ret = pointer to entry start in shared memory (0 if dropped)
   ///
-  /// Stack slots: 0=event_type, 1=entry_size, 2=base, 3=buf_size, 4=buf_mask
+  /// THE ENTRY IS NOT READABLE WHEN THIS RETURNS. The header goes down with flags = 0 (see
+  /// <see cref="DsEntryFlagCommitted"/>), the cursor advances and the ring lock is released —
+  /// all before the caller has written a single byte of payload. Publishing the cursor is what
+  /// makes the entry VISIBLE; setting the commit bit, in <c>__ds_commit</c>, is what makes it
+  /// READABLE. The two are deliberately different moments, because the payload must be written
+  /// outside the lock (it is the bulk of the work, and a LOG_TEXT tail can be kilobytes).
+  ///
+  /// Stack slots: 0=event_type, 1=entry_size, 2=base, 3=buf_size, 4=buf_mask,
+  ///              5=write_cursor, 6..7=timestamp scratch, 8=data_ptr, 9=ticket
   /// </summary>
   public void EmitDsReserve() {
     _b.FunctionStart("__ds_reserve", 2, 0x60);
@@ -270,12 +296,16 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 2); // base
     _b.AddRegImm(VReg.Scratch0, DsHeaderSize);
     _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // data_ptr = base + header + pos
-    // Padding header: event_type=0xFF, flags=0, entry_size=pad_size, timestamp=0
-    // Pack: 0xFF | (0 << 8) | (pad_size << 16) | (0 << 32)
-    // = 0xFF | (pad_size << 16)
+    // Padding header: event_type=0xFF, flags=COMMITTED, entry_size=pad_size, timestamp=0.
+    // Pack: (pad_size << DsEntrySizeShift) | DsPaddingHeaderTypeAndFlags.
+    //
+    // BORN COMMITTED, and it has to be: a padding entry is written entirely here, has no payload
+    // and no second writer, so nothing would ever come back to set its bit — the monitor, which
+    // refuses to advance past an uncommitted entry, would stall on it forever. This store is
+    // ordered ahead of the write_cursor release below, so a reader that sees the cursor sees it.
     _b.MovRegReg(VReg.Scratch2, VReg.Arg1); // pad_size
-    _b.ShlRegImm(VReg.Scratch2, 16);
-    _b.AddRegImm(VReg.Scratch2, DsEvPadding); // 0xFF
+    _b.ShlRegImm(VReg.Scratch2, DsEntrySizeShift);
+    _b.AddRegImm(VReg.Scratch2, DsPaddingHeaderTypeAndFlags);
     _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch2); // write padding header
 
     // Advance write_cursor by pad_size
@@ -313,22 +343,32 @@ public partial class RuntimeEmitter {
     _b.SubRegReg(VReg.Scratch2, VReg.Scratch3); // delta = now - start
 
     // Pack header into one 8-byte value:
-    //   [0:7] = event_type, [8:15] = 0, [16:31] = entry_size, [32:63] = timestamp_delta
+    //   [0:7] = event_type, [8:15] = flags = 0, [16:31] = entry_size, [32:63] = timestamp_delta
+    //
+    // flags = 0 is NOT filler — it is the entry's UNCOMMITTED state (DsEntryFlagCommitted), and
+    // it falls out for free because event_type is a byte and entry_size starts at bit 16.
     _b.LoadLocal(VReg.Scratch3, 0); // event_type (in low byte)
     _b.LoadLocal(VReg.Arg0, 1);     // entry_size
-    _b.ShlRegImm(VReg.Arg0, 16);
+    _b.ShlRegImm(VReg.Arg0, DsEntrySizeShift);
     _b.AddRegReg(VReg.Scratch3, VReg.Arg0); // event_type | (entry_size << 16)
-    _b.ShlRegImm(VReg.Scratch2, 32);
+    _b.ShlRegImm(VReg.Scratch2, DsEntryTimestampShift);
     _b.AddRegReg(VReg.Scratch3, VReg.Scratch2); // | (timestamp << 32)
     _b.LoadLocal(VReg.Scratch0, 8); // reload data_ptr
     _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch3); // write header
 
-    // Advance write_cursor
+    // Advance write_cursor — a RELEASE store, and the ring's one publish point.
+    //
+    // It orders every store above it (this entry's header, and any padding entry written on the
+    // way) ahead of the cursor that makes them reachable. The monitor bounds its header walk by
+    // this cursor, so pairing the two is what lets it trust that a header inside [read, write)
+    // is THIS entry's header and not a previous generation's bytes at the same ring offset —
+    // stale bytes that would carry a stale COMMIT BIT and a stale entry_size, and desynchronise
+    // the walk. On x86 this is a plain MOV; on ARM64 it is STLR, and there it is load-bearing.
     _b.LoadLocal(VReg.Scratch1, 5); // wr
     _b.LoadLocal(VReg.Arg0, 1); // entry_size
     _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // wr += entry_size
     _b.LoadLocal(VReg.Scratch2, 2); // base
-    _b.StoreIndirect(VReg.Scratch2, DsOffWriteCursor, VReg.Scratch1);
+    _b.StoreRelease(VReg.Scratch2, DsOffWriteCursor, VReg.Scratch1);
 
     // Increment total_events
     _b.AtomicInc(VReg.Scratch2, DsOffTotalEvents);
@@ -364,124 +404,177 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // Commit: __ds_commit
+  // =========================================================================
+
+  /// <summary>
+  /// Emit __ds_commit(data_ptr): mark the entry at <c>data_ptr</c> COMPLETE — payload written,
+  /// safe to read. Args: Arg0 = the pointer <c>__ds_reserve</c> returned.
+  ///
+  /// The read-modify-write of the header word needs NO atomic. `__ds_reserve` handed this entry
+  /// to exactly one thread, that thread is the only one that ever writes the entry again, and
+  /// the monitor only reads it — so nothing can race the OR.
+  ///
+  /// What it does need is RELEASE ordering, which is why this is <c>StoreRelease</c> and not a
+  /// plain store: the payload writes must be visible to the monitor BEFORE the bit that claims
+  /// they are there. Reversed, the monitor sees a committed entry and copies a stale payload —
+  /// exactly the torn read the commit bit exists to prevent, just moved one level down. On x86
+  /// TSO the release is free (a plain MOV); on ARM64 it compiles to STLR, and the ARM64 backend
+  /// is a real target, so this is a correctness rule, not a portability nicety.
+  /// </summary>
+  public void EmitDsCommit() {
+    _b.FunctionStart("__ds_commit", 1, 0x30);
+
+    _b.LoadLocal(VReg.Scratch0, 0); // data_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // the header __ds_reserve wrote
+    _b.MovRegImm(VReg.Scratch2, DsEntryHeaderCommittedBit);
+    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.StoreRelease(VReg.Scratch0, 0, VReg.Scratch1);
+
+    _b.FunctionEnd();
+  }
+
+  // =========================================================================
   // Per-event-type emitters
   // =========================================================================
 
   /// <summary>
+  /// Emit the reserve → payload → COMMIT sequence that every DebugStream event body IS.
+  ///
+  /// THIS IS THE ONLY PLACE `__ds_reserve` IS CALLED, and it always pairs the reserve with a
+  /// `__ds_commit`. A producer therefore cannot publish an entry and forget to commit it: the
+  /// pairing is not a convention each call site is trusted to follow, it is the only shape a
+  /// call site can have — a new event family gets its commit by virtue of existing. That is
+  /// worth the indirection, because a missed commit does not lose one event: an uncommitted
+  /// entry is never skipped while its producer lives, so the monitor STALLS ON IT FOREVER.
+  ///
+  /// <paramref name="stageReserveArgs"/> must leave Arg0 = event_type and Arg1 = entry_size.
+  /// <paramref name="writePayload"/> writes the payload through <see cref="VReg.Ret"/>, which
+  /// holds the entry pointer, and may clobber every other register. The pointer is also spilled
+  /// to <paramref name="dataPtrSlot"/>, because the commit needs it back afterwards.
+  /// </summary>
+  private void EmitDsEntryBody(int dataPtrSlot, Action stageReserveArgs, Action writePayload) {
+    var done = UniqueLabel("ds_entry_done");
+
+    stageReserveArgs();
+    _b.Call("__ds_reserve");
+    // 0 = the ring is detached or full. The entry was never reserved, so there is nothing to
+    // commit — this is a DROPPED event (counted in the ring header), not a deferred one.
+    _b.JumpIfZero(VReg.Ret, done);
+
+    _b.StoreLocal(dataPtrSlot, VReg.Ret);
+    writePayload();
+
+    _b.LoadLocal(VReg.Arg0, dataPtrSlot);
+    _b.Call("__ds_commit");
+
+    _b.DefineLabel(done);
+  }
+
+  /// The <c>valueSlot</c> an mm event passes when it has no 32-bit value to carry.
+  private const int DsMmNoValueSlot = -1;
+
+  /// <summary>
+  /// Write the payload shared by every mm event that carries one: alloc_id, then the packed
+  /// tag_index(2) | scope_len(2) | value(4) word. `value` is an allocation size for the alloc
+  /// family and a new refcount for the refcount family — the same 32-bit slot either way, which
+  /// is why they pack HERE rather than in four near-identical copies.
+  ///
+  /// <paramref name="valueSlot"/> is <see cref="DsMmNoValueSlot"/> for an event with no value
+  /// (mm_free), which leaves the slot zero. Clobbers Scratch1, Scratch2.
+  /// </summary>
+  private void EmitDsStoreMmPayload(int packedIdSlot, int valueSlot) {
+    _b.LoadLocal(VReg.Scratch1, packedIdSlot);
+    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.ShrRegImm(VReg.Scratch2, DsMmPackedIdShift); // alloc_id
+    _b.StoreIndirect(VReg.Ret, DsMmOffAllocId, VReg.Scratch2);
+
+    _b.MovRegImm(VReg.Scratch2, DsMmTagIndexMask);
+    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2); // tag_index, with scope_len left 0
+
+    if (valueSlot != DsMmNoValueSlot) {
+      _b.LoadLocal(VReg.Scratch2, valueSlot);
+      _b.ShlRegImm(VReg.Scratch2, DsMmValueShift);
+      _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
+    }
+
+    _b.StoreIndirect(VReg.Ret, DsMmOffPacked, VReg.Scratch1);
+  }
+
+  /// <summary>
   /// __ds_emit_mm_alloc(packed_id, alloc_size, scope_ptr)
-  /// Writes an MM_ALLOC event: alloc_id(8), tag_index(2), scope_len(2), size(4), [scope_str]
+  /// MM_ALLOC: alloc_id(8), tag_index(2), scope_len(2), size(4).
   /// </summary>
   public void EmitDsEmitMmAlloc() {
     _b.FunctionStart("__ds_emit_mm_alloc", 3, 0x60);
-    // Slots: 0=packed_id, 1=alloc_size, 2=scope_ptr
+    // Slots: 0=packed_id, 1=alloc_size, 2=scope_ptr, 3=data_ptr
 
-    var done = UniqueLabel("ds_mm_alloc_done");
+    EmitDsEntryBody(dataPtrSlot: 3,
+      () => {
+        _b.MovRegImm(VReg.Arg0, DsEvMmAlloc);
+        _b.MovRegImm(VReg.Arg1, DsMmEntrySize);
+      },
+      () => EmitDsStoreMmPayload(packedIdSlot: 0, valueSlot: 1));
 
-    // Fixed size = 8 (header) + 8 (alloc_id) + 8 (tag+scope_len+size) = 24
-    _b.MovRegImm(VReg.Arg0, DsEvMmAlloc);
-    _b.MovRegImm(VReg.Arg1, 24);
-    _b.Call("__ds_reserve");
-    _b.JumpIfZero(VReg.Ret, done);
-    // Ret = data_ptr (header already written by __ds_reserve)
-
-    // Write payload at data_ptr + 8
-    // alloc_id = packed_id >> 16
-    _b.LoadLocal(VReg.Scratch1, 0); // packed_id
-    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.ShrRegImm(VReg.Scratch2, 16); // alloc_id
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch2);
-
-    // tag_index (low 16 bits of packed_id) + scope_len=0 + alloc_size
-    // Pack: tag_index(2) | scope_len(2) | alloc_size(4) into 8 bytes at offset 16
-    _b.MovRegImm(VReg.Scratch2, 0xFFFF);
-    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2); // tag_index = packed_id & 0xFFFF
-    _b.LoadLocal(VReg.Scratch2, 1); // alloc_size
-    _b.ShlRegImm(VReg.Scratch2, 32); // shift size to bits [32:63]
-    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2); // tag_index | (0 << 16) | (size << 32)
-    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
   /// <summary>
   /// __ds_emit_mm_free(packed_id, scope_ptr)
-  /// Writes an MM_FREE event: alloc_id(8), tag_index(2), pad(6)
+  /// MM_FREE: alloc_id(8), tag_index(2), pad(6). No value — a free has no size to report.
   /// </summary>
   public void EmitDsEmitMmFree() {
     _b.FunctionStart("__ds_emit_mm_free", 2, 0x40);
+    // Slots: 0=packed_id, 1=scope_ptr, 2=data_ptr
 
-    _b.MovRegImm(VReg.Arg0, DsEvMmFree);
-    _b.MovRegImm(VReg.Arg1, 24);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_mm_free_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 2,
+      () => {
+        _b.MovRegImm(VReg.Arg0, DsEvMmFree);
+        _b.MovRegImm(VReg.Arg1, DsMmEntrySize);
+      },
+      () => EmitDsStoreMmPayload(packedIdSlot: 0, valueSlot: DsMmNoValueSlot));
 
-    // alloc_id
-    _b.LoadLocal(VReg.Scratch1, 0);
-    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.ShrRegImm(VReg.Scratch2, 16);
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch2);
-
-    // tag_index
-    _b.MovRegImm(VReg.Scratch2, 0xFFFF);
-    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
   /// <summary>
   /// __ds_emit_mm_refcount(event_type, packed_id, new_refcount, scope_ptr)
-  /// Writes MM_INCREF/MM_DECREF/MM_TRANSFER event: alloc_id(8), tag_index(2), scope_len(2), new_rc(4)
+  /// MM_INCREF / MM_DECREF / MM_TRANSFER: alloc_id(8), tag_index(2), scope_len(2), new_rc(4).
   /// </summary>
   public void EmitDsEmitMmRefcount() {
     _b.FunctionStart("__ds_emit_mm_refcount", 4, 0x60);
-    // Slots: 0=event_type, 1=packed_id, 2=new_refcount, 3=scope_ptr
+    // Slots: 0=event_type, 1=packed_id, 2=new_refcount, 3=scope_ptr, 4=data_ptr
 
-    _b.LoadLocal(VReg.Arg0, 0); // event_type
-    _b.MovRegImm(VReg.Arg1, 24);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_mm_rc_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 4,
+      () => {
+        _b.LoadLocal(VReg.Arg0, 0); // event_type
+        _b.MovRegImm(VReg.Arg1, DsMmEntrySize);
+      },
+      () => EmitDsStoreMmPayload(packedIdSlot: 1, valueSlot: 2));
 
-    // alloc_id
-    _b.LoadLocal(VReg.Scratch1, 1); // packed_id
-    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.ShrRegImm(VReg.Scratch2, 16);
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch2);
-
-    // tag_index(2) | scope_len=0(2) | new_rc(4)
-    _b.MovRegImm(VReg.Scratch2, 0xFFFF);
-    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2); // tag_index
-    _b.LoadLocal(VReg.Scratch2, 2); // new_refcount
-    _b.ShlRegImm(VReg.Scratch2, 32);
-    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
   /// <summary>
   /// __ds_emit_mm_raw_alloc(raw_id, size)
+  /// A raw allocation carries no tag and no scope, so its size takes the packed word outright.
   /// </summary>
   public void EmitDsEmitMmRawAlloc() {
     _b.FunctionStart("__ds_emit_mm_raw_alloc", 2, 0x40);
+    // Slots: 0=raw_id, 1=size, 2=data_ptr
 
-    _b.MovRegImm(VReg.Arg0, DsEvMmRawAlloc);
-    _b.MovRegImm(VReg.Arg1, 24);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_mm_raw_alloc_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 2,
+      () => {
+        _b.MovRegImm(VReg.Arg0, DsEvMmRawAlloc);
+        _b.MovRegImm(VReg.Arg1, DsMmEntrySize);
+      },
+      () => {
+        _b.LoadLocal(VReg.Scratch1, 0); // raw_id
+        _b.StoreIndirect(VReg.Ret, DsMmOffAllocId, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 1); // size
+        _b.StoreIndirect(VReg.Ret, DsMmOffRawSize, VReg.Scratch1);
+      });
 
-    _b.LoadLocal(VReg.Scratch1, 0); // raw_id
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 1); // size
-    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -490,17 +583,18 @@ public partial class RuntimeEmitter {
   /// </summary>
   public void EmitDsEmitMmRawFree() {
     _b.FunctionStart("__ds_emit_mm_raw_free", 1, 0x30);
+    // Slots: 0=raw_id, 1=data_ptr
 
-    _b.MovRegImm(VReg.Arg0, DsEvMmRawFree);
-    _b.MovRegImm(VReg.Arg1, 16);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_mm_raw_free_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 1,
+      () => {
+        _b.MovRegImm(VReg.Arg0, DsEvMmRawFree);
+        _b.MovRegImm(VReg.Arg1, DsMmRawFreeEntrySize);
+      },
+      () => {
+        _b.LoadLocal(VReg.Scratch1, 0); // raw_id
+        _b.StoreIndirect(VReg.Ret, DsMmOffAllocId, VReg.Scratch1);
+      });
 
-    _b.LoadLocal(VReg.Scratch1, 0); // raw_id
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -510,17 +604,18 @@ public partial class RuntimeEmitter {
   /// </summary>
   public void EmitDsEmitSched() {
     _b.FunctionStart("__ds_emit_sched", 2, 0x40);
+    // Slots: 0=event_type, 1=trace_id, 2=data_ptr
 
-    _b.LoadLocal(VReg.Arg0, 0); // event_type
-    _b.MovRegImm(VReg.Arg1, 16);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_sched_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 2,
+      () => {
+        _b.LoadLocal(VReg.Arg0, 0); // event_type
+        _b.MovRegImm(VReg.Arg1, DsSchedEntrySize);
+      },
+      () => {
+        _b.LoadLocal(VReg.Scratch1, 1); // trace_id
+        _b.StoreIndirect(VReg.Ret, DsSchedOffTraceId, VReg.Scratch1);
+      });
 
-    _b.LoadLocal(VReg.Scratch1, 1); // trace_id
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -532,34 +627,32 @@ public partial class RuntimeEmitter {
   ///   [+24]  arg2       (8 bytes) — event-specific
   ///   [+32]  arg3       (8 bytes) — event-specific
   ///   [+40]  arg4       (8 bytes) — event-specific
-  /// Total entry = 8 (header) + 40 (payload) = 48 bytes.
   ///
   /// All callers should pass arg2..arg4 = 0 if unused. Helpers below
   /// (`EmitDbg*`) provide named-argument convenience wrappers.
   /// </summary>
   public void EmitDsEmitDbg() {
     _b.FunctionStart("__ds_emit_dbg", 6, 0x60);
-    // Slots: 0=event_type, 1=gt, 2=p_id, 3=arg2, 4=arg3, 5=arg4
+    // Slots: 0=event_type, 1=gt, 2=p_id, 3=arg2, 4=arg3, 5=arg4, 6=data_ptr
 
-    _b.LoadLocal(VReg.Arg0, 0); // event_type
-    _b.MovRegImm(VReg.Arg1, 48);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_dbg_done");
-    _b.JumpIfZero(VReg.Ret, done);
-    // Ret = data_ptr (header already written by __ds_reserve)
+    EmitDsEntryBody(dataPtrSlot: 6,
+      () => {
+        _b.LoadLocal(VReg.Arg0, 0); // event_type
+        _b.MovRegImm(VReg.Arg1, DsDbgEntrySize);
+      },
+      () => {
+        _b.LoadLocal(VReg.Scratch1, 1); // gt
+        _b.StoreIndirect(VReg.Ret, DsDbgOffGt, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 2); // p_id
+        _b.StoreIndirect(VReg.Ret, DsDbgOffPid, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 3); // arg2
+        _b.StoreIndirect(VReg.Ret, DsDbgOffArg2, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 4); // arg3
+        _b.StoreIndirect(VReg.Ret, DsDbgOffArg3, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 5); // arg4
+        _b.StoreIndirect(VReg.Ret, DsDbgOffArg4, VReg.Scratch1);
+      });
 
-    _b.LoadLocal(VReg.Scratch1, 1); // gt
-    _b.StoreIndirect(VReg.Ret, 8, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 2); // p_id
-    _b.StoreIndirect(VReg.Ret, 16, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 3); // arg2
-    _b.StoreIndirect(VReg.Ret, 24, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 4); // arg3
-    _b.StoreIndirect(VReg.Ret, 32, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 5); // arg4
-    _b.StoreIndirect(VReg.Ret, 40, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -644,13 +737,13 @@ public partial class RuntimeEmitter {
     // arg3/arg4 ignored by formatter; pass any reg to satisfy the helper signature.
   }
 
-  /// <summary>kind: 0=local, 1=global, 2=steal_chain, 3=runnext.</summary>
+  /// <summary>`kind` is a DsDbgQueue* constant — the monitor decodes it off the same ones.</summary>
   public void EmitDbgEnqueue(VReg gt, long kind, long ownerPid) {
     if (!Compiler.DebugStream) return;
     EmitDbgCallImm(DsEvDbgEnqueue, gt, kind, ownerPid, 0);
   }
 
-  /// <summary>kind: 0=local, 1=global, 2=steal_first, 3=runnext.</summary>
+  /// <summary>`kind` is a DsDbgQueue* constant — the monitor decodes it off the same ones.</summary>
   public void EmitDbgDequeue(VReg gt, long kind, long fromPid) {
     if (!Compiler.DebugStream) return;
     EmitDbgCallImm(DsEvDbgDequeue, gt, kind, fromPid, 0);
@@ -662,7 +755,7 @@ public partial class RuntimeEmitter {
     EmitDbgCallImm(DsEvDbgStatusStore, gt, oldStatus, newStatus, siteId);
   }
 
-  /// <summary>phase: 0=status_set, 1=spin_done, 2=enqueueing.</summary>
+  /// <summary>`phase` is a DsDbgIoPhase* constant — the monitor decodes it off the same ones.</summary>
   public void EmitDbgIoComplete(VReg gt, long phase) {
     if (!Compiler.DebugStream) return;
     EmitDbgCallImm(DsEvDbgIoComplete, gt, phase, 0, 0);
@@ -754,27 +847,27 @@ public partial class RuntimeEmitter {
   /// </summary>
   public void EmitDsEmitLogPhase() {
     _b.FunctionStart("__ds_emit_log_phase", 3, 0x60);
-    // Slots: 0=event_type, 1=name_id, 2=unit_id
+    // Slots: 0=event_type, 1=name_id, 2=unit_id, 3=data_ptr
 
-    _b.LoadLocal(VReg.Arg0, 0);
-    _b.MovRegImm(VReg.Arg1, DsLogPhaseEntrySize);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_log_phase_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 3,
+      () => {
+        _b.LoadLocal(VReg.Arg0, 0); // event_type
+        _b.MovRegImm(VReg.Arg1, DsLogPhaseEntrySize);
+      },
+      () => {
+        EmitDsStoreLogIdentity(VReg.Ret);
 
-    EmitDsStoreLogIdentity(VReg.Ret);
+        // phase_id(2) | rsvd(2) | unit_id(4). rsvd stays 0 because the masked phase_id
+        // occupies only bits [0:15], and the unit_id shift discards anything above bit 31.
+        _b.LoadLocal(VReg.Scratch1, 1); // name_id
+        _b.MovRegImm(VReg.Scratch2, DsLogU16FieldMask);
+        _b.AndRegReg(VReg.Scratch1, VReg.Scratch2);
+        _b.LoadLocal(VReg.Scratch2, 2); // unit_id
+        _b.ShlRegImm(VReg.Scratch2, DsLogUnitIdShift);
+        _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+        _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+      });
 
-    // phase_id(2) | rsvd(2) | unit_id(4). rsvd stays 0 because the masked phase_id
-    // occupies only bits [0:15], and the unit_id shift discards anything above bit 31.
-    _b.LoadLocal(VReg.Scratch1, 1); // name_id
-    _b.MovRegImm(VReg.Scratch2, DsLogU16FieldMask);
-    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.LoadLocal(VReg.Scratch2, 2); // unit_id
-    _b.ShlRegImm(VReg.Scratch2, DsLogUnitIdShift);
-    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -785,25 +878,25 @@ public partial class RuntimeEmitter {
   /// </summary>
   public void EmitDsEmitLogEvent() {
     _b.FunctionStart("__ds_emit_log_event", 6, 0x60);
-    // Slots: 0=name_id, 1=cat, 2=lvl, 3=unit_id, 4=arg0, 5=arg1
+    // Slots: 0=name_id, 1=cat, 2=lvl, 3=unit_id, 4=arg0, 5=arg1, 6=data_ptr
 
-    _b.MovRegImm(VReg.Arg0, DsEvLogEvent);
-    _b.MovRegImm(VReg.Arg1, DsLogEventEntrySize);
-    _b.Call("__ds_reserve");
-    var done = UniqueLabel("ds_log_event_done");
-    _b.JumpIfZero(VReg.Ret, done);
+    EmitDsEntryBody(dataPtrSlot: 6,
+      () => {
+        _b.MovRegImm(VReg.Arg0, DsEvLogEvent);
+        _b.MovRegImm(VReg.Arg1, DsLogEventEntrySize);
+      },
+      () => {
+        EmitDsStoreLogIdentity(VReg.Ret);
 
-    EmitDsStoreLogIdentity(VReg.Ret);
+        EmitDsPackLogFields(catSlot: 1, lvlSlot: 2, u16Slot: 0, unitSlot: 3);
+        _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
 
-    EmitDsPackLogFields(catSlot: 1, lvlSlot: 2, u16Slot: 0, unitSlot: 3);
-    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 4); // arg0
+        _b.StoreIndirect(VReg.Ret, DsLogOffArg0, VReg.Scratch1);
+        _b.LoadLocal(VReg.Scratch1, 5); // arg1
+        _b.StoreIndirect(VReg.Ret, DsLogOffArg1, VReg.Scratch1);
+      });
 
-    _b.LoadLocal(VReg.Scratch1, 4); // arg0
-    _b.StoreIndirect(VReg.Ret, DsLogOffArg0, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch1, 5); // arg1
-    _b.StoreIndirect(VReg.Ret, DsLogOffArg1, VReg.Scratch1);
-
-    _b.DefineLabel(done);
     _b.FunctionEnd();
   }
 
@@ -819,70 +912,76 @@ public partial class RuntimeEmitter {
   /// </summary>
   public void EmitDsEmitLogText() {
     _b.FunctionStart("__ds_emit_log_text", 5, 0x60);
-    // Slots: 0=cat, 1=lvl, 2=unit_id, 3=ptr, 4=len (clamped in place), 5=data_ptr
+    // Slots: 0=cat, 1=lvl, 2=unit_id, 3=ptr, 4=len (clamped in place), 5=data_ptr,
+    //        6=align8(len)
 
-    var lenOk = UniqueLabel("ds_log_text_len_ok");
-    var done = UniqueLabel("ds_log_text_done");
-    var copyLoop = UniqueLabel("ds_log_text_copy");
-    var copyDone = UniqueLabel("ds_log_text_copied");
+    EmitDsEntryBody(dataPtrSlot: 5,
+      () => {
+        var lenOk = UniqueLabel("ds_log_text_len_ok");
 
-    // Clamp the length, and write it back: both the header's len field and the entry size
-    // must be computed from the SAME (clamped) value, or the reader walks off the entry.
-    _b.LoadLocal(VReg.Scratch1, 4);
-    _b.CmpRegImm(VReg.Scratch1, DsLogTextMaxBytes);
-    _b.JumpIf(Condition.BelowEqual, lenOk);
-    _b.MovRegImm(VReg.Scratch1, DsLogTextMaxBytes);
-    _b.StoreLocal(4, VReg.Scratch1);
-    _b.DefineLabel(lenOk);
+        // Clamp the length, and write it back: both the header's len field and the entry size
+        // must be computed from the SAME (clamped) value, or the reader walks off the entry.
+        _b.LoadLocal(VReg.Scratch1, 4);
+        _b.CmpRegImm(VReg.Scratch1, DsLogTextMaxBytes);
+        _b.JumpIf(Condition.BelowEqual, lenOk);
+        _b.MovRegImm(VReg.Scratch1, DsLogTextMaxBytes);
+        _b.StoreLocal(4, VReg.Scratch1);
+        _b.DefineLabel(lenOk);
 
-    // entry_size = DsLogTextFixedSize + align8(len)
-    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.AddRegImm(VReg.Scratch2, DsEntryAlignBias);
-    _b.MovRegImm(VReg.Scratch3, DsEntryAlignMask);
-    _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
-    _b.StoreLocal(6, VReg.Scratch2); // aligned tail size, reused by the pad-zeroing below
-    _b.AddRegImm(VReg.Scratch2, DsLogTextFixedSize);
+        // entry_size = DsLogTextFixedSize + align8(len)
+        _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
+        _b.AddRegImm(VReg.Scratch2, DsEntryAlignBias);
+        _b.MovRegImm(VReg.Scratch3, DsEntryAlignMask);
+        _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
+        _b.StoreLocal(6, VReg.Scratch2); // aligned tail size, reused by the pad-zeroing below
+        _b.AddRegImm(VReg.Scratch2, DsLogTextFixedSize);
 
-    _b.MovRegReg(VReg.Arg1, VReg.Scratch2);
-    _b.MovRegImm(VReg.Arg0, DsEvLogText);
-    _b.Call("__ds_reserve");
-    _b.JumpIfZero(VReg.Ret, done);
-    _b.StoreLocal(5, VReg.Ret); // data_ptr: the byte-copy loop below needs every scratch reg
+        _b.MovRegReg(VReg.Arg1, VReg.Scratch2);
+        _b.MovRegImm(VReg.Arg0, DsEvLogText);
+      },
+      () => {
+        var copyLoop = UniqueLabel("ds_log_text_copy");
+        var copyDone = UniqueLabel("ds_log_text_copied");
 
-    EmitDsStoreLogIdentity(VReg.Ret);
+        EmitDsStoreLogIdentity(VReg.Ret);
 
-    EmitDsPackLogFields(catSlot: 0, lvlSlot: 1, u16Slot: 4, unitSlot: 2);
-    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+        EmitDsPackLogFields(catSlot: 0, lvlSlot: 1, u16Slot: 4, unitSlot: 2);
+        _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
 
-    // Zero the FINAL qword of the tail before copying. The ring is reused memory, so the pad
-    // bytes [len, align8(len)) would otherwise carry a previous entry's payload. Only the last
-    // qword can hold padding — align8(len) - 8 < len for every len > 0 — so one store suffices.
-    _b.LoadLocal(VReg.Scratch2, 6); // align8(len)
-    _b.JumpIfZero(VReg.Scratch2, copyDone);
-    _b.MovRegReg(VReg.Arg3, VReg.Ret);
-    _b.AddRegImm(VReg.Arg3, DsLogOffText);
-    _b.AddRegReg(VReg.Arg3, VReg.Scratch2);
-    _b.SubRegImm(VReg.Arg3, DsEntryAlign);
-    _b.ZeroReg(VReg.Scratch3);
-    _b.StoreIndirect(VReg.Arg3, 0, VReg.Scratch3);
+        // Zero the FINAL qword of the tail before copying. The ring is reused memory, so the pad
+        // bytes [len, align8(len)) would otherwise carry a previous entry's payload. Only the
+        // last qword can hold padding — align8(len) - 8 < len for every len > 0 — so one store
+        // suffices.
+        _b.LoadLocal(VReg.Scratch2, 6); // align8(len)
+        _b.JumpIfZero(VReg.Scratch2, copyDone);
+        _b.MovRegReg(VReg.Arg3, VReg.Ret);
+        _b.AddRegImm(VReg.Arg3, DsLogOffText);
+        _b.AddRegReg(VReg.Arg3, VReg.Scratch2);
+        _b.SubRegImm(VReg.Arg3, DsEntryAlign);
+        _b.ZeroReg(VReg.Scratch3);
+        _b.StoreIndirect(VReg.Arg3, 0, VReg.Scratch3);
 
-    // Byte-copy the message. The backend's indirect byte ops take a constant offset, so the
-    // cursors advance instead of being indexed.
-    _b.LoadLocal(VReg.Arg2, 3);      // src
-    _b.LoadLocal(VReg.Arg3, 5);      // data_ptr
-    _b.AddRegImm(VReg.Arg3, DsLogOffText); // dst
-    _b.LoadLocal(VReg.Scratch2, 4);  // remaining
-    _b.DefineLabel(copyLoop);
-    _b.JumpIfZero(VReg.Scratch2, copyDone);
-    _b.LoadIndirectByte(VReg.Scratch3, VReg.Arg2, 0);
-    _b.StoreIndirectByte(VReg.Arg3, 0, VReg.Scratch3);
-    _b.AddRegImm(VReg.Arg2, 1);
-    _b.AddRegImm(VReg.Arg3, 1);
-    _b.SubRegImm(VReg.Scratch2, 1);
-    _b.Jump(copyLoop);
-    _b.DefineLabel(copyDone);
+        // Byte-copy the message. The backend's indirect byte ops take a constant offset, so the
+        // cursors advance instead of being indexed.
+        _b.LoadLocal(VReg.Arg2, 3);      // src
+        _b.LoadLocal(VReg.Arg3, 5);      // data_ptr
+        _b.AddRegImm(VReg.Arg3, DsLogOffText); // dst
+        _b.LoadLocal(VReg.Scratch2, 4);  // remaining
+        _b.DefineLabel(copyLoop);
+        _b.JumpIfZero(VReg.Scratch2, copyDone);
+        _b.LoadIndirectByte(VReg.Scratch3, VReg.Arg2, 0);
+        _b.StoreIndirectByte(VReg.Arg3, 0, VReg.Scratch3);
+        _b.AddRegImm(VReg.Arg2, 1);
+        _b.AddRegImm(VReg.Arg3, 1);
+        _b.SubRegImm(VReg.Scratch2, 1);
+        _b.Jump(copyLoop);
+        _b.DefineLabel(copyDone);
 
-    _b.DefineLabel(done);
+        // The commit that EmitDsEntryBody appends here is the one that matters most in this
+        // family: the tail is the longest payload the ring carries, so it is the widest window
+        // between "entry visible" and "entry readable" — and the easiest one to tear.
+      });
+
     _b.FunctionEnd();
   }
 
@@ -921,14 +1020,22 @@ public partial class RuntimeEmitter {
   /// <summary>
   /// __ds_emit_depth(event_type)
   /// DEPTH_INC or DEPTH_DEC: header-only event, no payload.
+  ///
+  /// It still COMMITS. There is nothing to publish, but the monitor's rule is uniform — an entry
+  /// it has not seen committed is one it will not decode or step over — so an event that skipped
+  /// the commit because "it has no payload" would stop the drain dead at that entry. Going
+  /// through the same helper as every other family is what makes that impossible to get wrong.
   /// </summary>
   public void EmitDsEmitDepth() {
     _b.FunctionStart("__ds_emit_depth", 1, 0x30);
+    // Slots: 0=event_type, 1=data_ptr
 
-    _b.LoadLocal(VReg.Arg0, 0); // event_type
-    _b.MovRegImm(VReg.Arg1, 8); // header only
-    _b.Call("__ds_reserve");
-    // No payload to write
+    EmitDsEntryBody(dataPtrSlot: 1,
+      () => {
+        _b.LoadLocal(VReg.Arg0, 0); // event_type
+        _b.MovRegImm(VReg.Arg1, DsEntryHeaderSize); // header only
+      },
+      writePayload: () => { });
 
     _b.FunctionEnd();
   }
@@ -948,6 +1055,7 @@ public partial class RuntimeEmitter {
     EmitDebugStreamInit();
     EmitDebugStreamShutdown();
     EmitDsReserve();
+    EmitDsCommit();
     EmitDsEmitMmAlloc();
     EmitDsEmitMmFree();
     EmitDsEmitMmRefcount();

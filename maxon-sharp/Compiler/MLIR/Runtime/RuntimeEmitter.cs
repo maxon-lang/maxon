@@ -168,9 +168,41 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const byte DsEvHeartbeat = 0xFE;
   public const byte DsEvPadding = 0xFF;
 
-  // ---- Log event payload geometry ----
+  // ---- mm event payload geometry ----
   // Offsets are from the START of the entry (i.e. they include the 8-byte entry header),
-  // so an emitter can write straight through the pointer __ds_reserve handed back.
+  // so an emitter can write straight through the pointer __ds_reserve handed back. The monitor
+  // decodes off the SAME constants, which is the only way the two sides cannot drift apart.
+  public const int DsMmOffAllocId = 8;
+  /// tag_index(2) | scope_len(2) | value(4) — one word, shared by every mm event that has one.
+  public const int DsMmOffPacked = 16;
+  /// mm_raw_alloc has no tag and no scope, so its size takes the packed word's place outright.
+  public const int DsMmOffRawSize = 16;
+  /// The `packed_id` the MM runtime hands the emitters: alloc_id above, tag index below.
+  public const int DsMmPackedIdShift = 16;
+  public const long DsMmTagIndexMask = 0xFFFF;
+  /// The 32-bit value slot of DsMmOffPacked: an allocation size, or a new refcount.
+  public const int DsMmValueShift = 32;
+  public const long DsMmValueMask = 0xFFFFFFFF;
+
+  // ---- sched / dbg event payload geometry ----
+  public const int DsSchedOffTraceId = 8;
+  public const int DsDbgOffGt = 8;
+  public const int DsDbgOffPid = 16;
+  public const int DsDbgOffArg2 = 24;
+  public const int DsDbgOffArg3 = 32;
+  public const int DsDbgOffArg4 = 40;
+
+  // ---- Total entry sizes, header included ----
+  /// Every mm event but mm_raw_free: header + alloc_id(8) + packed word(8).
+  public const int DsMmEntrySize = 24;
+  /// mm_raw_free: header + raw_id(8). It carries no tag and no value.
+  public const int DsMmRawFreeEntrySize = 16;
+  /// A sched event: header + trace_id(8).
+  public const int DsSchedEntrySize = 16;
+  /// A per-slot dbg event: header + gt(8) + p_id(8) + arg2(8) + arg3(8) + arg4(8).
+  public const int DsDbgEntrySize = 48;
+
+  // ---- Log event payload geometry ----
   public const int DsLogOffGt = 8;
   public const int DsLogOffPid = 16;
   /// The packed field word. Its layout differs per event (see the table above), but every
@@ -208,8 +240,42 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   /// Masks a biased length back DOWN to a multiple of DsEntryAlign — together, round-up.
   public const long DsEntryAlignMask = ~(long)DsEntryAlignBias;
 
-  /// The entry header's `entry_size` is a u16, so no single entry can exceed this.
-  public const int DsEntrySizeMax = 0xFFFF;
+  // ---- Entry header (8 bytes), one packed u64 ----
+  //   [0:7]   u8  event_type
+  //   [8:15]  u8  flags            — DsEntryFlag* below
+  //   [16:31] u16 entry_size       (total bytes, header included, 8-byte aligned)
+  //   [32:63] u32 timestamp_delta  (ms since start_timestamp)
+  public const int DsEntryHeaderSize = 8;
+
+  public const long DsEntryTypeMask = 0xFF;
+  public const int DsEntryFlagsShift = 8;
+  public const int DsEntrySizeShift = 16;
+  public const long DsEntrySizeMask = 0xFFFF;
+  public const int DsEntryTimestampShift = 32;
+  public const long DsEntryTimestampMask = 0xFFFFFFFF;
+
+  /// The entry header's `entry_size` is a u16, so no single entry can exceed what its mask holds.
+  public const int DsEntrySizeMax = (int)DsEntrySizeMask;
+
+  /// THE COMMIT BIT (flags bit 0), and the invariant of the whole ring protocol:
+  /// an entry below `write_cursor` is PRESENT, but only an entry carrying this bit is READABLE.
+  ///
+  /// `__ds_reserve` publishes the entry — header written, cursor advanced, ring lock released —
+  /// and the caller writes the PAYLOAD afterwards, outside the lock. So there is a window in
+  /// which the monitor can see an entry whose payload is still whatever bytes the ring last held
+  /// at that offset. It is born with flags = 0, meaning "payload not yet written"; `__ds_commit`
+  /// sets this bit with a RELEASE store once the payload is in; and the monitor decodes nothing
+  /// — and advances past nothing — that does not carry it. Without the bit the trace can report
+  /// events that were never emitted, and an instrument that lies is worse than no instrument.
+  public const long DsEntryFlagCommitted = 0x01;
+
+  /// The commit bit, already positioned inside the packed 8-byte header word.
+  public const long DsEntryHeaderCommittedBit = DsEntryFlagCommitted << DsEntryFlagsShift;
+
+  /// A padding entry is written ENTIRELY inside `__ds_reserve` and has no payload, so it is BORN
+  /// committed: no second writer exists to set its bit later, and a monitor waiting for one would
+  /// stall on it forever. These are the low 16 bits of its header — event_type | flags.
+  public const long DsPaddingHeaderTypeAndFlags = DsEvPadding | DsEntryHeaderCommittedBit;
 
   /// The largest UTF-8 tail a LOG_TEXT entry can carry: what is left of a maximal entry after
   /// the fixed part, rounded DOWN to the ring's alignment. A longer message is TRUNCATED to it
@@ -217,6 +283,26 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   /// does not have.
   public const int DsLogTextMaxBytes =
     (DsEntrySizeMax - DsLogTextFixedSize) / DsEntryAlign * DsEntryAlign;
+
+  // The `kind` a DsEvDbgEnqueue / DsEvDbgDequeue event carries: WHICH QUEUE the green thread went
+  // onto or came off. The enqueue and dequeue sides share the first two codes and diverge on the
+  // third — a steal is a CHAIN on the way in and a FIRST on the way out — which is exactly why the
+  // encoding is named here rather than left as a bare literal at each end.
+  //
+  // These live HERE, next to the site IDs, because the emitter writes the number and the monitor
+  // (DebugStreamMonitor.FormatDbgEvent) turns it back into a name. Two ends, one definition: a
+  // fourth kind added to one side and not the other would not fail to compile, it would just make
+  // the trace say the wrong thing.
+  public const int DsDbgQueueLocal      = 0;
+  public const int DsDbgQueueGlobal     = 1;
+  public const int DsDbgQueueStealChain = 2;  // enqueue side
+  public const int DsDbgQueueStealFirst = 2;  // dequeue side — the same code, the other direction
+  public const int DsDbgQueueRunnext    = 3;
+
+  // The `phase` a DsEvDbgIoComplete event carries: how far the I/O completion path had got.
+  public const int DsDbgIoPhaseStatusSet  = 0;
+  public const int DsDbgIoPhaseSpinDone   = 1;
+  public const int DsDbgIoPhaseEnqueueing = 2;
 
   // Site IDs for DsEvDbgStatusStore. Distinct constants per call site so the trace
   // attributes a torn status transition to its source.
@@ -231,11 +317,4 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int DsStatusSiteTimerFireReady       = 9;
   public const int DsStatusSiteIoMainLoopRunning    = 10;
   public const int DsStatusSiteIoYieldTargetRunning = 11;
-
-  // Entry header layout (8 bytes)
-  //   [+0x00] u8  event_type
-  //   [+0x01] u8  flags
-  //   [+0x02] u16 entry_size (total bytes, 8-byte aligned)
-  //   [+0x04] u32 timestamp_delta (ms since start_timestamp)
-  public const int DsEntryHeaderSize = 8;
 }

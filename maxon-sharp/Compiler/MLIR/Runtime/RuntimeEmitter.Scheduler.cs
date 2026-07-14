@@ -133,7 +133,7 @@ public partial class RuntimeEmitter {
     _b.LockRelease(_b.SchedLockLabel);
     // dbg: enqueue (gt, kind=local). Reload gt — P->id will be loaded by helper.
     _b.LoadLocal(VReg.Scratch0, 0);
-    EmitDbgEnqueue(VReg.Scratch0, /*kind=local*/0, /*ownerPid=self*/0);
+    EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueLocal, /*ownerPid=self*/0);
     _b.Jump("__gt_enqueue_wake");
 
     // Local queue full: release lock then fall through to global path.
@@ -165,7 +165,7 @@ public partial class RuntimeEmitter {
     // so the only window is "store visible but event not yet logged" which is
     // benign for diagnostics.
     _b.LoadLocal(VReg.Scratch0, 0);
-    EmitDbgEnqueue(VReg.Scratch0, /*kind=global*/1, 0);
+    EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueGlobal, 0);
 
     // --- Wake phase ---
     _b.DefineLabel("__gt_enqueue_wake");
@@ -336,7 +336,7 @@ public partial class RuntimeEmitter {
     _b.LockRelease(_b.SchedLockLabel);
     // dbg: dequeue (gt, kind=local)
     _b.LoadLocal(VReg.Scratch0, 2);
-    EmitDbgDequeue(VReg.Scratch0, /*kind=local*/0, 0);
+    EmitDbgDequeue(VReg.Scratch0, DsDbgQueueLocal, 0);
     _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -376,7 +376,7 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, GtOffNext, VReg.Scratch1);
     // dbg: dequeue (gt, kind=global)
     _b.StoreLocal(2, VReg.Scratch0);
-    EmitDbgDequeue(VReg.Scratch0, /*kind=global*/1, 0);
+    EmitDbgDequeue(VReg.Scratch0, DsDbgQueueGlobal, 0);
     _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -555,14 +555,14 @@ public partial class RuntimeEmitter {
     // local queue without an explicit per-element enqueue event, so emit a
     // single steal_chain enqueue tagged with last_stolen if we stole >1.
     _b.StoreLocal(8, VReg.Scratch0); // save first_stolen for return
-    EmitDbgDequeue(VReg.Scratch0, /*kind=steal_first*/2, 0);
+    EmitDbgDequeue(VReg.Scratch0, DsDbgQueueStealFirst, 0);
     // If n > 1, also log a steal_chain event for the chain we appended.
     _b.LoadLocal(VReg.Scratch1, 5); // n
     _b.CmpRegImm(VReg.Scratch1, 1);
     var noChainLabel = UniqueLabel("steal_no_chain");
     _b.JumpIf(Condition.BelowEqual, noChainLabel);
     _b.LoadLocal(VReg.Scratch0, 7); // last_stolen
-    EmitDbgEnqueue(VReg.Scratch0, /*kind=steal_chain*/2, 0);
+    EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueStealChain, 0);
     _b.DefineLabel(noChainLabel);
     _b.LoadLocal(VReg.Scratch0, 8);
     _b.ReturnValue(VReg.Scratch0);
