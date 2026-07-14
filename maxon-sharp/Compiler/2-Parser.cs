@@ -14616,6 +14616,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var suppressRangeLowering = _inForInIterable;
     _inForInIterable = false;
 
+    // A ternary must evaluate ONLY the arm it selects — `0 if d == 0 else n / d` may not divide.
+    // But nothing announces a ternary until the `if` that comes AFTER its true arm, by which time
+    // this invocation has already emitted that arm into the fallthrough path. So record where it
+    // starts emitting. If an `if` does follow, ParseTernaryExpression LIFTS everything emitted
+    // since — ops and any blocks — into the arm's own branch. The IR moves; nothing is re-parsed,
+    // so no value id is minted twice and no closure is lifted twice.
+    var armOrigin = new TernaryArmOrigin(
+      _currentBlock,
+      _currentBlock?.Operations.Count ?? 0,
+      _currentFunction?.Body.Blocks.Count ?? 0,
+      _variables.SnapshotKeys());
+
     var lhs = ParsePrimary();
 
     // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
@@ -14988,7 +15000,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Ternary expression: <true_value> if <condition> else <false_value>
     if (Check(TokenType.If)) {
-      lhs = ParseTernaryExpression(lhs);
+      lhs = ParseTernaryExpression(lhs, armOrigin);
     }
 
     // Restore the suppression flag so the for-in parser sees the original value
@@ -15064,13 +15076,66 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// Where a ternary's TRUE ARM began emitting. The arm is parsed before anything reveals it is an
+  /// arm at all — the `if` only arrives after it — so <see cref="ParseExpression"/> records this at
+  /// its own start and <see cref="ParseTernaryExpression"/> uses it to lift the arm's IR out of the
+  /// unconditional path and into the true branch.
+  /// </summary>
+  private readonly record struct TernaryArmOrigin(
+    IrBlock<MaxonOp>? Block,
+    int OpCount,
+    int BlockCount,
+    HashSet<string> VarKeys);
+
+  /// <summary>
+  /// Detaches everything <paramref name="origin"/>'s expression emitted — the tail of its starting
+  /// block, plus every block that expression created — and returns it. The starting block is left
+  /// exactly as it was before the expression ran, so the caller can emit something else there.
+  ///
+  /// The region is single-entry/single-exit and internally ordered, so re-attaching it elsewhere
+  /// preserves it: values still dominate their uses (the region only reads what came BEFORE it,
+  /// which still dominates), and every internal `cond_br` keeps the block that must physically
+  /// follow it, because the blocks move together and in order.
+  /// </summary>
+  private (List<MaxonOp> Ops, List<IrBlock<MaxonOp>> Blocks, IrBlock<MaxonOp> Exit) DetachEmittedRegion(
+      TernaryArmOrigin origin) {
+    var startBlock = origin.Block!;
+    var exit = _currentBlock!;
+
+    var opCount = startBlock.Operations.Count - origin.OpCount;
+    var ops = startBlock.Operations.GetRange(origin.OpCount, opCount);
+    startBlock.Operations.RemoveRange(origin.OpCount, opCount);
+
+    var allBlocks = _currentFunction!.Body.Blocks;
+    var blockCount = allBlocks.Count - origin.BlockCount;
+    var blocks = allBlocks.GetRange(origin.BlockCount, blockCount);
+    allBlocks.RemoveRange(origin.BlockCount, blockCount);
+
+    _currentBlock = startBlock;
+    return (ops, blocks, exit);
+  }
+
+  /// <summary>
   /// Parses a ternary conditional expression: true_value if condition else false_value.
   /// Called after the true_value has been parsed. Current token is 'if'.
+  ///
+  /// ONLY THE SELECTED ARM IS EVALUATED. `0 if d == 0 else n / d` must not divide when d is 0, so
+  /// neither arm may sit on the unconditional path. The false arm is easy — it is parsed straight
+  /// into its own block. The true arm is not: it was already emitted, because nothing announced the
+  /// ternary until the `if` that follows it. So it is DETACHED from where it landed and re-attached
+  /// inside the true branch. The IR is moved, never re-parsed: no value id is minted twice, no
+  /// closure is lifted twice, and no diagnostic is reported twice.
   /// </summary>
-  private ExprResult.Direct ParseTernaryExpression(ExprResult trueExpr) {
+  private ExprResult.Direct ParseTernaryExpression(ExprResult trueExpr, TernaryArmOrigin trueArmOrigin) {
     var ifToken = Advance(); // consume 'if'
 
-    // Parse condition (full expression — delimited by 'else' keyword)
+    // Resolve the true arm's value BEFORE detaching: resolving may itself emit (a field load, a
+    // var ref), and those ops belong to the arm, on the arm's path.
+    var trueVal = ResolveExprValue(trueExpr);
+
+    var trueArm = DetachEmittedRegion(trueArmOrigin);
+
+    // The condition is the one thing that IS unconditional. It lands where the true arm was.
     var conditionExpr = ParseExpression();
     var conditionVal = ResolveExprValue(conditionExpr);
     var conditionKind = DetermineValueKind(conditionVal);
@@ -15082,11 +15147,40 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     Expect(TokenType.Else);
 
-    // Parse false value (full expression — allows chaining: a if c1 else b if c2 else c)
-    var falseExpr = ParseExpression();
+    // The block the branch is taken FROM: the condition may have grown blocks of its own (an
+    // `and`/`or` short-circuits), and the cond_br belongs at the end of whichever one it left.
+    var entryBlock = _currentBlock!;
+    var ternaryLabel = UniqueLabel("ternary");
 
-    var trueVal = ResolveExprValue(trueExpr);
+    // The true branch must be the block PHYSICALLY NEXT after entryBlock: cond_br lowers to a
+    // single jcc to its ELSE target and falls through to its THEN target. Creating it here — the
+    // first block added after the condition — is what puts it there.
+    var trueBranchLabel = $"{ternaryLabel}.true";
+    var trueBranchBlock = _currentFunction!.Body.AddBlock(trueBranchLabel);
+    trueBranchBlock.Operations.AddRange(trueArm.Ops);
+    _currentFunction!.Body.Blocks.AddRange(trueArm.Blocks);
+
+    // The arm's blocks kept their identity through the move, so its exit is still its exit — unless
+    // it made none, in which case its ops now end in the true branch itself.
+    var trueExitBlock = ReferenceEquals(trueArm.Exit, trueArmOrigin.Block) ? trueBranchBlock : trueArm.Exit;
+
+    // A variable the arm declared while it was still emitting into the start block now lives in the
+    // true branch. DefinedInBlock is what tells a later lookup "this value dominates you, use it
+    // instead of reloading" — left stale, it names a block whose ops have moved out from under it.
+    foreach (var name in _variables.KeysSince(trueArmOrigin.VarKeys)) {
+      if (_variables.TryGetValue(name, out var info) && ReferenceEquals(info.DefinedInBlock, trueArmOrigin.Block)) {
+        _variables[name] = info with { DefinedInBlock = trueBranchBlock };
+      }
+    }
+
+    // False branch: parsed directly into its own block, so it never runs on the true path.
+    var falseBranchLabel = $"{ternaryLabel}.false";
+    var falseBranchBlock = _currentFunction!.Body.AddBlock(falseBranchLabel);
+    _currentBlock = falseBranchBlock;
+    var falseExpr = ParseExpression(); // full expression — chains: a if c1 else b if c2 else c
     var falseVal = ResolveExprValue(falseExpr);
+    var falseExitBlock = _currentBlock!;
+
     var trueKind = DetermineValueKind(trueVal);
     var falseKind = DetermineValueKind(falseVal);
 
@@ -15094,12 +15188,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // (e.g. one arm yields an integer and the other a float), promote the
     // narrower arm to the wider arm's kind so the merge sees a single kind.
     // Cross-kind narrowing (float -> int) and bool <-> numeric remain errors.
+    // The cast is emitted into the arm it widens — it is that arm's work, and must not run when
+    // the other arm is selected.
     if (trueKind != falseKind) {
       if (IsWideningCastSafe(trueKind, falseKind)) {
+        _currentBlock = trueExitBlock;
         trueVal = PromoteValue(trueVal, falseKind);
+        trueExitBlock = _currentBlock!;
         trueKind = falseKind;
       } else if (IsWideningCastSafe(falseKind, trueKind)) {
+        _currentBlock = falseExitBlock;
         falseVal = PromoteValue(falseVal, trueKind);
+        falseExitBlock = _currentBlock!;
         falseKind = trueKind;
       }
     }
@@ -15125,41 +15225,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         ifToken.Line, ifToken.Column);
     }
 
-    var entryBlock = _currentBlock!;
-    var ternaryLabel = UniqueLabel("ternary");
-
-    // Create result variable
+    // Seed the result slot on the unconditional path, so the arm that wins overwrites a known
+    // value rather than whatever the slot last held. Declared only now, because widening above is
+    // what settles the kind. entryBlock's op list is still open — its cond_br comes last.
     var resultVarName = $"__ternary_{ternaryLabel}";
     var zeroLit = new MaxonLiteralOp(0L);
     entryBlock.AddOp(zeroLit);
     entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, trueKind));
     _variables.Declare(resultVarName, trueKind, true, zeroLit.Result, entryBlock, structTypeName: resultStructTypeName);
 
-    // True branch
-    var trueBranchLabel = $"{ternaryLabel}.true";
-    var trueBranchBlock = _currentFunction!.Body.AddBlock(trueBranchLabel);
-    _currentBlock = trueBranchBlock;
-    trueBranchBlock.AddOp(new MaxonAssignOp(resultVarName, trueVal, isDeclaration: false, isMutable: true, trueKind));
-
-    // False branch
-    var falseBranchLabel = $"{ternaryLabel}.false";
-    var falseBranchBlock = _currentFunction!.Body.AddBlock(falseBranchLabel);
-    _currentBlock = falseBranchBlock;
-    falseBranchBlock.AddOp(new MaxonAssignOp(resultVarName, falseVal, isDeclaration: false, isMutable: true, falseKind));
-
-    // Merge block
+    // Each arm stores its own value and jumps to the merge. The arm's value was produced in the
+    // arm, so an owned one (a call return) is acquired ONLY on the path that stores it — which is
+    // what lets the lowering transfer that reference instead of retaining it.
     var mergeLabel = $"{ternaryLabel}.merge";
-    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+    trueExitBlock.AddOp(new MaxonAssignOp(resultVarName, trueVal, isDeclaration: false, isMutable: true, trueKind));
+    trueExitBlock.AddOp(new MaxonBrOp(mergeLabel));
+    falseExitBlock.AddOp(new MaxonAssignOp(resultVarName, falseVal, isDeclaration: false, isMutable: true, falseKind));
+    falseExitBlock.AddOp(new MaxonBrOp(mergeLabel));
 
-    // Wire up control flow
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
     entryBlock.AddOp(new MaxonCondBrOp(conditionVal, trueBranchLabel, falseBranchLabel));
-    trueBranchBlock.AddOp(new MaxonBrOp(mergeLabel));
-    falseBranchBlock.AddOp(new MaxonBrOp(mergeLabel));
 
     _currentBlock = mergeBlock;
 
     // Update variable info with the correct type
-    _variables[resultVarName] = new VarInfo(resultVarName, trueKind, true, trueVal, entryBlock, StructTypeName: resultStructTypeName);
+    _variables[resultVarName] = new VarInfo(resultVarName, trueKind, true, zeroLit.Result, entryBlock, StructTypeName: resultStructTypeName);
 
     var resultValue = EmitVarRefOp(resultVarName, trueKind, resultStructTypeName);
     return new ExprResult.Direct(resultValue);

@@ -303,6 +303,7 @@ public sealed class MaxonAssignOp(string varName, MaxonValue value, bool isDecla
   public OwnershipFlags? OwnerFlags { get; set; }
   /// Allocator tests need deterministic heap traces; @heap opts out of stack promotion for that variable.
   public bool ForceHeap { get; set; }
+  /// Reads the value being stored.
   public override IReadOnlyList<MaxonValue> Operands => [Value];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes {
     get {

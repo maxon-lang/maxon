@@ -1,0 +1,83 @@
+// Test: ternary-expression.elision.guard-actually-guards
+typealias Integer = int(i64.min to i64.max)
+
+function safeDiv(n Integer, d Integer) returns Integer
+	return 0 if d == 0 else (n / d)
+end 'safeDiv'
+
+function main() returns ExitCode
+	let guarded = safeDiv(100, d: 0) // the divide is in the arm NOT selected
+	let divided = safeDiv(100, d: 5)
+	return (guarded + divided) as ExitCode
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @safeDiv(n: i64, d: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne safeDiv.ternary_0.false
+  ternary_0.true:
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp safeDiv.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.cqo
+    x64.idiv rcx
+    x64.mov [rbp-24], rax
+    x64.jmp safeDiv.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 100
+    x64.xor edx, edx
+    x64.call safeDiv
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 100
+    x64.mov rdx, 5
+    x64.call safeDiv
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg main.__range_panic_1
+    x64.cmp rcx, rbx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

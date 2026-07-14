@@ -462,3 +462,450 @@ end 'main'
 ```exitcode
 4
 ```
+
+### Ownership across the two arms
+
+A ternary is a **merge of two values whose ownership can differ**: one arm may
+yield a value the expression only *borrows* (a field read, a variable, a
+parameter), while the other yields a **freshly-owned** one returned by a call.
+The merged result carries a single obligation, so the merge must reconcile the
+two rather than adopt one arm's and be wrong on the other.
+
+Both arms of a ternary are **evaluated**, and only one is selected. A fresh
+allocation produced by the arm that is *not* selected is therefore still live,
+and is released when the enclosing scope ends. The rule the compiler follows is
+to **normalize to owned**: the result retains its own reference to whichever arm
+won, and every arm keeps the reference it already held. That is correct whichever
+arm the condition picks.
+
+These tests exit `0` only when every allocation is freed — the runtime's leak
+check substitutes exit code `101` when any allocation is still live at exit.
+
+<!-- test: ternary-expression.ownership.borrowed-arm-selected -->
+### Borrowed arm selected; the other arm's fresh allocation is still released
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+type Entry
+	export var kind as Kind
+
+	static function create(kind Kind) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Entry'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let e = Entry.create(Kind.value(3))
+	let identity = true
+	// `e.kind` is BORROWED; `remapKind(e.kind)` is FRESHLY OWNED.
+	let n = record(e.kind if identity else remapKind(e.kind))
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: ternary-expression.ownership.owned-arm-selected -->
+### Owned arm selected; its reference transfers exactly once
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+type Entry
+	export var kind as Kind
+
+	static function create(kind Kind) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Entry'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let e = Entry.create(Kind.value(3))
+	let identity = false
+	let n = record(e.kind if identity else remapKind(e.kind))
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: ternary-expression.ownership.owned-arm-first -->
+### The owned arm may be either arm — here the TRUE arm is the fresh one
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let k = Kind.value(3)
+	let remapped = false
+	let n = record(remapKind(k) if remapped else k)
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: ternary-expression.ownership.both-arms-owned -->
+### Both arms freshly owned — the arm not selected is still released
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let k = Kind.value(3)
+	let c = true
+	let n = record(remapKind(k) if c else remapKind(k))
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: ternary-expression.ownership.chained-arms -->
+### A chained ternary reconciles every arm, not just the outermost pair
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+type Entry
+	export var kind as Kind
+
+	static function create(kind Kind) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Entry'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let e = Entry.create(Kind.value(3))
+	let a = true
+	let b = false
+	let n = record(e.kind if a else remapKind(e.kind) if b else remapKind(e.kind))
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: ternary-expression.ownership.result-stored-in-container -->
+### The merged result can be stored, and is owned exactly once when it is
+This is the shape that found the defect: a table fold choosing between an
+already-interned entry and a freshly remapped one, then storing the winner.
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+typealias KindArray = Array with Kind
+
+type Entry
+	export var kind as Kind
+
+	static function create(kind Kind) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Entry'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let e = Entry.create(Kind.value(3))
+	var out = KindArray.create()
+	let identity = true
+	out.push(e.kind if identity else remapKind(e.kind))
+	print("{record(try out.get(0) otherwise Kind.none)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+### Only the selected arm is evaluated
+
+A ternary **chooses before it evaluates**. The arm the condition does not select is never
+run — not its calls, not its arithmetic, not its allocations. This is the whole point of the
+form: it is what lets a ternary act as a *guard*.
+
+```maxon
+return 0 if d == 0 else (n / d)   // never divides when d is 0
+```
+
+An eagerly-evaluated ternary computes the same answer as a lazy one whenever both arms are
+total, so no value test can tell them apart. The evidence therefore has to be **observational**:
+a side effect that provably did not happen. Two oracles are used below — a counter in a global
+(exact), and a division by a runtime zero, which faults the process if it is ever reached.
+
+<!-- test: ternary-expression.elision.guard-actually-guards -->
+### A guarded division does not divide
+The idiomatic use of the form. If the unselected arm ran, this would die with
+`panic: integer divide by zero` instead of answering.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function safeDiv(n Integer, d Integer) returns Integer
+	return 0 if d == 0 else (n / d)
+end 'safeDiv'
+
+function main() returns ExitCode
+	let guarded = safeDiv(100, d: 0) // the divide is in the arm NOT selected
+	let divided = safeDiv(100, d: 5)
+	return (guarded + divided) as ExitCode
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: ternary-expression.elision.false-arm-not-evaluated -->
+### The false arm is not evaluated when the condition is true
+```maxon
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let x = 7 if true else track(9)
+	if x != 7 'v'
+		return 99
+	end 'v'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: ternary-expression.elision.true-arm-not-evaluated -->
+### The true arm is not evaluated when the condition is false
+```maxon
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let x = track(9) if false else 7
+	if x != 7 'v'
+		return 99
+	end 'v'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: ternary-expression.elision.selected-arm-is-evaluated-exactly-once -->
+### The selected arm IS evaluated — exactly once, not zero times and not twice
+The counterpart direction: elision must not become elimination.
+```maxon
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let x = track(4) if true else track(9)
+	if x != 4 'v'
+		return 99
+	end 'v'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: ternary-expression.elision.chained-evaluates-only-the-winner -->
+### In a chain, every arm but the winner is skipped
+```maxon
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	// Right-associates: track(1) if false else (track(2) if true else track(3))
+	let x = track(1) if false else track(2) if true else track(3)
+	if x != 2 'v'
+		return 99
+	end 'v'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: ternary-expression.elision.condition-always-evaluated -->
+### The condition itself is always evaluated, exactly once
+```maxon
+var sideEffectCount = 0
+
+function pick() returns bool
+	sideEffectCount = sideEffectCount + 1
+	return false
+end 'pick'
+
+function main() returns ExitCode
+	let x = 1 if pick() else 2
+	if x != 2 'v'
+		return 99
+	end 'v'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+1
+```

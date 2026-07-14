@@ -1227,6 +1227,13 @@ public static partial class MaxonToStandardConversion {
                   var isCallRetTransfer = !isSelfReturn
                       && (assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true
                           || temps.IsCallReturnTransfer(srcName));
+                  // Transferring the source's reference — no incref, and its scope-end release
+                  // cancelled — is sound because every construct acquires a value on exactly the
+                  // paths that go on to store it. A ternary once broke that: it evaluated BOTH arms
+                  // ahead of the branch, so the arm that lost had already allocated, and handed its
+                  // reference to a store that never ran. The parser no longer hoists — each arm is
+                  // emitted inside its own branch — so the acquisition is once again conditional on
+                  // the very same thing the store is.
                   if (isCallRetTransfer || isOwnsRef) {
                     temps.ConsumeTempOwnership(srcName);
                   } else if (assignOp.IsDeclaration || srcName != dstName) {
