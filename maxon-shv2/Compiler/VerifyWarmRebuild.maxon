@@ -264,6 +264,13 @@ end 'verifyCacheHit'
 let BytesOnlyEditText = "// verify-warm-rebuild: bytes moved, declarations did not."
 let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn true\nend '__warmRebuildProbe'"
 
+// The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
+// reason is arithmetic rather than taste: the property's two halves assert "a declaration edit
+// re-parses `fileCount` files" and "a bytes-only edit re-parses 1 file", and at `fileCount == 1`
+// those are the same assertion — so the file's-own-bytes key that this property exists to REJECT
+// satisfies both. Named, so the refusal below and the reason for it are one fact.
+let MinFilesForInvalidation = 2 as QueryCount
+
 // **THE PROPERTY THE SIGNATURE INDEX'S PARSE KEY EXISTS FOR** — and the two halves of it pull in
 // opposite directions, so a key that satisfies one and not the other is simply wrong:
 //
@@ -277,11 +284,23 @@ let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn 
 //       (a) and re-parse the entire program on every keystroke — sound, and useless.
 //
 // Both are asserted here, on ONE fresh project, by editing a real file in the query database and
-// re-querying. ⚠ On a SINGLE-file input the two assertions coincide (fileCount == 1) and the
-// property proves nothing — point this gate at a multi-file project to give it teeth.
+// re-querying.
+//
+// ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
+// With `fileCount == 1` the two assertions above collapse into the SAME assertion — (a) expects
+// `fileCount` re-parses and (b) expects 1, and those are the same number — so a key that tracks only
+// the file's own bytes, which is EXACTLY the bug this property exists to catch, sails through both.
+// This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
+// that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
+// It now FAILS, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
 	var project = try loadProject(inputPath, target: target)
 	let fileCount = project.db.sourcePaths.count()
+
+	if fileCount < MinFilesForInvalidation 'cannotProve'
+		printError("FAIL invalidation: this project has {fileCount} source file, and the property is VACUOUS on one — 'a declaration edit re-parses every file' and 'a bytes-only edit re-parses one file' are the same assertion when every file IS the one file, so the single-file-hash key this property exists to reject would PASS. Point the gate at a project with at least {MinFilesForInvalidation} files (a cross-file callee is the whole point: `a.maxon` declares it, `b.maxon` calls it)\n")
+		return false
+	end 'cannotProve'
 
 	let editedPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
 	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
