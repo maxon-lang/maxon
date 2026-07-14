@@ -49,6 +49,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
 | 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 224,996 | 456,886 | 966,324 | 2,168,570 | 5,306,696 | 14,518,054 |
+| 2026-07-14 | P1.0d block scoping: the parser now pushes and pops a real Scope per if/while body — pushScope/popScope existed, were correct, and were never called, so a let inside an if leaked to the function frame. Two Scope containers per function  | 225,935 | 458,593 | 969,351 | 2,173,373 | 5,311,595 | 14,509,321 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -61,6 +62,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 12,113,819 | 25,521,299 | 57,502,887 | 145,153,461 | 438,545,764 | 1,685,625,083 |
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 12,113,827 | 25,521,307 | 57,502,895 | 145,153,469 | 438,545,772 | 1,685,625,091 |
 | 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 10,092,819 | 21,316,475 | 48,359,471 | 123,847,293 | 383,771,820 | 1,527,346,499 |
+| 2026-07-14 | P1.0d block scoping: the parser now pushes and pops a real Scope per if/while body — pushScope/popScope existed, were correct, and were never called, so a let inside an if leaked to the function frame. Two Scope containers per function  | 10,036,452 | 21,194,700 | 48,086,144 | 123,187,918 | 382,008,573 | 1,522,048,404 |
 <!-- scale-history:bytes -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,518,054 allocations** (−61%) and
