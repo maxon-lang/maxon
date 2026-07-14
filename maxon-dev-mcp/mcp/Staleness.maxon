@@ -1,0 +1,176 @@
+// THE SERVER REFUSES TO ANSWER FROM A BINARY OLDER THAN ITS OWN SOURCE.
+//
+// The MCP server's binary is GITIGNORED and nothing rebuilds it. So when a commit
+// rewrote `lookup_error_code` to read the new error-code registry, the binary went on
+// running the OLD code — which read a file that commit had gutted — and the tool answered
+// `code E3099 not found in maxon-selfhosted/Compiler/ErrorCode.maxon` for all 130 codes,
+// while `.claude/CLAUDE.md`, edited by the same commit, asserted that the tool "reads the
+// registry". It did not. A COMMENT DESCRIBING A COMPILER NOBODY WROTE, at the tooling
+// level: the ninth instance of this project's signature bug in one day.
+//
+// The binary cannot rebuild itself — Windows locks a running executable, so the very
+// process that would notice the staleness is the one holding the file open. And it must
+// not be rebuilt from under a running server by someone else's `dotnet build` either: that
+// build would simply fail on the lock, taking an unrelated build down with it.
+//
+// So the guarantee is not "the binary is always fresh". It is: **A STALE BINARY DOES NOT
+// ANSWER.** Every `tools/call` is gated on this check, and a stale server refuses each one
+// with the file that moved and the command that fixes it. An instrument that reports
+// confidently from code that no longer exists is worse than one that reports nothing —
+// that is the whole lesson of the bug above, and the reason this file is not merely a
+// build target.
+//
+// Scope: the server's OWN sources, not the stdlib it links. A stdlib edit can in principle
+// change the server's behaviour, but the stdlib churns constantly and gating on it would
+// make the server refuse many times a day for changes that have nothing to do with it —
+// turning a precise signal into noise, which is how a warning gets ignored and then
+// removed. The failure this guards is an edit to a TOOL that the TOOL then denies making.
+
+typealias FileTimestamp = int(0 to u64.max)
+
+// The server's own project directory, relative to the checkout that holds it. Its `.maxon`
+// files are the sources this binary was compiled from.
+let ServerSourceDir = "maxon-dev-mcp/mcp"
+
+// Build output, not source — and it is a DIRECTORY whose name ends in `.maxon`, so a scan
+// that filters on the extension alone picks it up and reads the timestamp of the very
+// build it is trying to date. The first run of this check reported its own freshly-built
+// binary as stale for exactly that reason.
+let BuildOutputDir = ".maxon"
+
+// What a stale server tells the caller to run. The tree is filled in at the call site: the
+// binary must be rebuilt in the tree it LIVES in, which is not necessarily the tree the
+// caller is working in.
+let RebuildCommand = "maxon build maxon-dev-mcp/mcp"
+
+/// Why this binary must not be trusted. `fresh` is the only outcome that lets a tool run.
+export union ServerFreshness
+	fresh
+	/// A source file is at least as new as the binary — the binary predates an edit to it.
+	staleSource(newestSource String, binaryPath String)
+	/// The binary is running detached from the sources it was built from, so freshness
+	/// cannot be established. Refused rather than assumed: an unverifiable binary is exactly
+	/// the one that was wrong last time.
+	sourcesUnlocatable(binaryPath String, reason String)
+end 'ServerFreshness'
+
+/// Is the RUNNING server binary at least as new as every source it was built from?
+///
+/// Checked per tool call, not once at startup, because the case that matters is an agent
+/// editing a tool DURING a session and then calling it — a startup check would have
+/// declared that binary fresh and gone on lying for the rest of the day.
+export function serverFreshness() returns ServerFreshness
+	let exe = try Process.executablePath() otherwise 'noExe'
+		return ServerFreshness.sourcesUnlocatable("<unknown>", reason: "the runtime would not report this process's executable path")
+	end 'noExe'
+
+	let exeInfo = try File.info(exe) otherwise 'noExeInfo'
+		return ServerFreshness.sourcesUnlocatable(exe.path, reason: "the running binary's own timestamp could not be read")
+	end 'noExeInfo'
+
+	// The tree that holds THIS BINARY — never the caller's `repoRoot`. The binary was
+	// compiled from its own tree's sources, and that is the only tree whose edits could
+	// have made it stale.
+	let root = try repoRootPath() otherwise 'noRoot'
+		return ServerFreshness.sourcesUnlocatable(exe.path, reason: "no Maxon checkout was found above it, so its sources cannot be located")
+	end 'noRoot'
+
+	let sourceDir = childPath(root, segment: ServerSourceDir)
+	let newest = try newestSourceUnder(sourceDir) otherwise 'noSources'
+		return ServerFreshness.sourcesUnlocatable(exe.path, reason: "its source directory {sourceDir.path} could not be read, or holds no .maxon files")
+	end 'noSources'
+
+	// `>=`, not `>`. File timestamps here have ONE-SECOND resolution, so a source edited in
+	// the same second the binary was written compares EQUAL to it — and that source may or
+	// may not be in the build. Treating equal as stale costs at worst one redundant rebuild;
+	// treating it as fresh reopens, for a whole second, exactly the hole this file closes.
+	if newest.modifiedTime >= exeInfo.modifiedTime 'stale'
+		return ServerFreshness.staleSource(newest.path, binaryPath: exe.path)
+	end 'stale'
+
+	return ServerFreshness.fresh
+end 'serverFreshness'
+
+// The most recently modified `.maxon` source at or below `dir`.
+type NewestSource
+	export var path as String
+	export var modifiedTime as FileTimestamp
+
+	export static function create(path String, modifiedTime FileTimestamp) returns NewestSource
+		return Self{path: path, modifiedTime: modifiedTime}
+	end 'create'
+end 'NewestSource'
+
+// Walks the whole subtree rather than one flat directory: a source file is a source file
+// wherever it sits, and a check that silently ignored a subdirectory would be a freshness
+// guarantee with a hole in precisely the place someone would later add code.
+//
+// Throws `NotFound` when the tree holds no sources at all — an answer, not a sentinel. The
+// caller turns it into a refusal, because a server that cannot find its own sources cannot
+// prove it is running them.
+function newestSourceUnder(dir FilePath) returns NewestSource throws NotFound
+	let entries = try Directory.list(dir) otherwise 'noList'
+		throw NotFound.notFound
+	end 'noList'
+
+	var bestPath = ""
+	var bestTime = 0 as FileTimestamp
+	var found = false
+
+	let n = entries.count()
+	for i in 0 upto n 'each'
+		let entry = try entries.get(i) otherwise 'gErr'
+			panic("newestSourceUnder: entries.get OOB — i bounded by n")
+		end 'gErr'
+
+		let info = try File.info(entry) otherwise 'noInfo'
+			continue
+		end 'noInfo'
+
+		if info.isDirectory 'descend'
+			if lastSegment(entry).equals(BuildOutputDir) 'skipOutput'
+				continue
+			end 'skipOutput'
+			let deeper = try newestSourceUnder(entry) otherwise 'empty'
+				continue
+			end 'empty'
+			if not found or deeper.modifiedTime > bestTime 'deeperWins'
+				bestPath = deeper.path
+				bestTime = deeper.modifiedTime
+				found = true
+			end 'deeperWins'
+			continue
+		end 'descend'
+
+		if not entry.path.endsWith(".maxon") 'notSource'
+			continue
+		end 'notSource'
+
+		if not found or info.modifiedTime > bestTime 'newer'
+			bestPath = entry.path
+			bestTime = info.modifiedTime
+			found = true
+		end 'newer'
+	end 'each'
+
+	if not found 'none'
+		throw NotFound.notFound
+	end 'none'
+
+	return NewestSource.create(bestPath, modifiedTime: bestTime)
+end 'newestSourceUnder'
+
+/// The refusal a caller sees when the binary predates one of its own sources. It names the
+/// file that moved, the binary that predates it, and BOTH steps of the fix — rebuilding is
+/// not enough on its own, because the MCP host keeps the old process alive until the
+/// connection is restarted.
+export function staleSourceRefusal(newestSource String, binaryPath String) returns String
+	return "THIS MCP SERVER IS RUNNING STALE CODE AND WILL NOT ANSWER. Its binary ({binaryPath}) is older than its own source `{newestSource}`, so it cannot do what that source says it does — and a tool that answers confidently from code nobody is running is worse than one that refuses. FIX: (1) rebuild it — `{RebuildCommand}` in the tree holding that binary; (2) RESTART the MCP server, because the host is still running the old process and a rebuild alone does not replace it."
+end 'staleSourceRefusal'
+
+/// The refusal a caller sees when freshness cannot be established at all. Refused rather
+/// than assumed: the last time this server answered from code that no longer existed, it
+/// did so for 130 error codes without one sign that anything was wrong.
+export function unverifiableRefusal(binaryPath String, reason String) returns String
+	return "THIS MCP SERVER CANNOT VERIFY ITS OWN FRESHNESS AND WILL NOT ANSWER. Its binary is {binaryPath}, and {reason}. An unverifiable binary is refused rather than trusted. Run the server from its built location inside a Maxon checkout (`{ServerSourceDir}/.maxon/`), and rebuild it with `{RebuildCommand}`."
+end 'unverifiableRefusal'

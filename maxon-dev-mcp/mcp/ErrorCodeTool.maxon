@@ -1,35 +1,48 @@
 // `lookup_error_code` MCP tool. Given a 4-digit Maxon error code (e.g. `3014`,
-// `"3014"`, or `"E3014"`), returns its meaning from `docs/error-codes.txt` — the
-// SINGLE SOURCE OF TRUTH for the code space — naming, per compiler, the member each
-// one spells it with, plus the spec files that exercise it.
+// `"3014"`, or `"E3014"`), returns its ONE meaning — naming, per compiler, the member
+// each spells it with, which compilers do NOT emit it, whether the number is merely
+// RESERVED, and the spec files that exercise it.
 //
-// It used to read `maxon-selfhosted/Compiler/ErrorCode.maxon`: one of THREE registries
-// that disagreed with each other. E3030 was `SemanticEnumDuplicateCase` there and
-// `callUnknownFunction` in shv2 — so an agent debugging shv2 who hit E3030 was told,
-// confidently, that an enum had declared a case twice. An instrument that lies is worse
-// than no instrument at all.
+// ⚠ THIS FILE DOES NOT PARSE THE REGISTRY, AND MUST NEVER LEARN HOW.
 //
-// Now there is one registry, a number has exactly one meaning, and the answer names
-// which compilers EMIT the code and which do NOT. The tool cannot answer for the wrong
-// compiler, because it no longer answers for A compiler — it answers for the number.
+// It used to. `docs/error-codes.txt` is the authored source of truth, and for a while it
+// had TWO hand-written parsers: `maxon-sharp/Compiler/ErrorCodeRegistry.cs` (which
+// validates it and generates the enums) and this file. They disagreed on five inputs:
+//   - a BLANK LINE inside an entry: the gate said OK; this file ended the entry there and
+//     answered `emittedBy: {}` — "no compiler emits this code" — about a code the
+//     bootstrap declares. An instrument that lies.
+//   - an indented `#` COMMENT: the gate said OK; this file PANICKED, tearing down the
+//     stdio connection the way the comment three paragraphs down swears it never would.
+//   - a TAB between key and value: this file was happy; the gate FAILED `dotnet build`.
+// The file that exists BECAUSE a number was written down three times had come to be READ
+// by a format written down twice. So: the grammar has ONE parser, in C#, and this tool
+// reads `docs/error-codes.json` — which that parser GENERATES — with the stdlib's JSON
+// parser. There is no registry grammar in this file to drift.
 //
-// ⚠ THIS IS THE SECOND READER of the registry format. The first is
-// `maxon-sharp/Compiler/ErrorCodeRegistry.cs`, which also VALIDATES the file and
-// generates the three enums from it. Two readers of one format is a deliberate trade:
-// this one must work as a pure DATA READ, with no dependency on a built compiler — a
-// tool that needs the compiler in order to explain the compiler's own errors is useless
-// at exactly the moment you need it (v1 does not build today, and this lookup still
-// answers for it). The format is frozen and trivial, the C# side is the one that
-// ENFORCES it, and this side refuses an unknown key rather than skipping it — so the
-// two cannot drift quietly.
+// It is still a pure DATA READ, which was the reason the second parser existed and is a
+// reason that still holds: a tool that needs a working compiler in order to explain the
+// compiler's own errors is useless at exactly the moment you need it. (v1 has not built
+// since 2026-07-13, and this lookup still answers for it.) Both files are committed, so
+// the tool needs nothing built, and it needs nothing generated at call time.
+//
+// The two files are tied together by a HASH, not by trust. `error-codes.json` carries the
+// FNV-1a of the registry bytes it was made from; this tool hashes those bytes itself and
+// REFUSES if they differ. So a hand-edited registry, or a stale generated file, produces a
+// REFUSAL naming the fix — never a confident answer from a copy nobody checked. The answer
+// this tool gives is, by construction, the answer the gate sanctioned, or no answer.
 
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias CodeNumber = int(1000 to 9999)
-typealias LineCount = int(0 to u64.max)
 
-// The registry, relative to the repo root. The one place a code's meaning is written.
+// 64-bit unsigned FNV-1a state. The arithmetic wraps, which is what FNV is.
+typealias RegistryHash = int(0 to u64.max)
+
+// The authored registry. Read here ONLY as bytes, to hash — never parsed.
 let ErrorCodeRegistryPath = "docs/error-codes.txt"
+
+// The generated projection of it. This is the file this tool actually reads.
+let ErrorCodeInterchangePath = "docs/error-codes.json"
 
 /// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
 /// registry and specs are read — resolved and validated by the dispatcher.
@@ -38,12 +51,16 @@ export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoR
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {errorReason(err)}")
 	end 'bad'
 
-	let entry = try lookupInRegistry(repoRoot, code: code) otherwise (err) 'notInRegistry'
+	let registry = try loadRegistry(repoRoot) otherwise (err) 'noRegistry'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {registryErrorReason(err, code: code)}")
-	end 'notInRegistry'
+	end 'noRegistry'
+
+	let entryId = try findCode(registry, code: code) otherwise 'absent'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {registryErrorReason(RegistryError.codeAbsent, code: code)}")
+	end 'absent'
 
 	let specFiles = collectSpecFilesReferencing(repoRoot, code: code)
-	return buildOutcome(code, entry: entry, specFiles: specFiles)
+	return buildOutcome(registry, entryId: entryId, specFiles: specFiles)
 end 'lookupErrorCodeHandler'
 
 // =============================================================================
@@ -100,7 +117,7 @@ function resolveStringCode(argsDoc JsonDoc, argsId JsonNodeId) returns CodeNumbe
 		let b = try bytes.get(i) otherwise 'gErr2'
 			panic("resolveStringCode: bytes.get OOB — i bounded by n")
 		end 'gErr2'
-		if b < 0x30 or b > 0x39 'badDigit'
+		if not isAsciiDigit(b) 'badDigit'
 			throw LookupArgError.notFourDigits
 		end 'badDigit'
 		value = value * 10 + (b - 0x30)
@@ -116,270 +133,133 @@ function clampToCodeRange(value JsonInt) returns CodeNumber throws LookupArgErro
 end 'clampToCodeRange'
 
 // =============================================================================
-// Registry parsing
+// The registry hash — the handshake with the gate
 // =============================================================================
 
-// Why a code lookup came back empty. The registry being UNREADABLE and the code
-// being ABSENT from it are different facts and get different messages: the first
-// says nothing about the code, and reporting it as "no such code" would be a wrong
-// answer, not merely an unhelpful one.
-enum RegistryLookupError implements Error
-	registryUnreadable
-	codeAbsent
-end 'RegistryLookupError'
+// FNV-1a, 64-bit, over the registry's raw bytes, as 16 lowercase hex digits. The exact
+// algorithm `ErrorCodeRegistry.HashBytes` uses in C#, and the ONE fact these two files
+// share.
+//
+// Sharing it is safe in a way that sharing the GRAMMAR was not, and the difference is the
+// whole design: hashing a byte string has a single right answer, so the two
+// implementations cannot quietly hold different opinions the way two parsers did. And if
+// they somehow did, the failure is a REFUSAL — the hashes would never match and this tool
+// would answer nothing — not a wrong answer delivered with confidence.
+function registryHash(bytes ByteArray) returns RegistryHash
+	// 0xCBF29CE484222325, rebuilt from halves: the literal is outside Maxon's signed
+	// integer-literal range (the same trick maxon-shv2/Compiler/ContentHash.maxon uses).
+	//
+	// Copied from that file, WITH ITS BUG: its high half read 0xCBF86344, so it had never
+	// been computing FNV-1a. Nothing caught it in shv2 because a cache key only has to be
+	// stable, and a wrong basis is stable. It surfaced here within minutes, because here
+	// the number has to match one that C# computes — which is the argument for this design
+	// in miniature: a fact TWO parties must agree on is a fact that gets checked.
+	let high = 3421674724 as RegistryHash
+	let low = 2216829733 as RegistryHash
+	let prime = 1099511628211 as RegistryHash
 
-function registryErrorReason(err RegistryLookupError, code CodeNumber) returns String
+	var h = (high shl 32) or low
+	let n = bytes.count()
+	for i in 0 upto n 'each'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("registryHash: bytes.get OOB — i bounded by n")
+		end 'gErr'
+		h = h xor (b as RegistryHash)
+		h = h * prime
+	end 'each'
+	return h
+end 'registryHash'
+
+function formatRegistryHash(h RegistryHash) returns String
+	return "{h:016x}"
+end 'formatRegistryHash'
+
+// =============================================================================
+// Loading the generated registry
+// =============================================================================
+
+// Why the registry could not answer. These are DIFFERENT FACTS and get different
+// messages: reporting an unreadable registry as "no such code" would be a wrong answer,
+// not merely an unhelpful one — and reporting a STALE one as an answer at all would be
+// the bug this whole design exists to make unrepresentable.
+enum RegistryError implements Error
+	registryUnreadable
+	interchangeUnreadable
+	interchangeMalformed
+	interchangeStale
+	codeAbsent
+end 'RegistryError'
+
+function registryErrorReason(err RegistryError, code CodeNumber) returns String
 	return match err 'r'
 		registryUnreadable gives "cannot read `{ErrorCodeRegistryPath}` in the tree being used. That file is the single source of truth for the 4-digit code space; a checkout without it cannot answer this."
+		interchangeUnreadable gives "cannot read `{ErrorCodeInterchangePath}` in the tree being used. It is GENERATED from `{ErrorCodeRegistryPath}` and committed alongside it; run `maxon error-codes generate` in that tree."
+		interchangeMalformed gives "`{ErrorCodeInterchangePath}` is not the shape this tool expects. It is generated — do not hand-edit it. Run `maxon error-codes generate`."
+		interchangeStale gives "`{ErrorCodeInterchangePath}` is STALE: it does not match `{ErrorCodeRegistryPath}` as it stands on disk, so it cannot be trusted to say what E{code} means. REFUSING TO ANSWER rather than answering from a registry nobody checked. Run `maxon error-codes generate` in that tree and commit the result."
 		codeAbsent gives "E{code} is not in `{ErrorCodeRegistryPath}`. The number is FREE: no compiler declares it and nothing reserves it."
 	end 'r'
 end 'registryErrorReason'
 
-// One compiler's claim on a code: it declares the number, and spells it thus. The
-// three compilers name the same meaning differently (E3005 is `SemanticTypeMismatch`
-// to the bootstrap and `typeMismatch` to shv2), so the spelling is per-compiler data
-// while the number and the meaning are not.
-type CompilerClaim
-	export var compiler as String
-	export var memberName as String
+// The generated registry, parsed by the stdlib's JSON parser — the only parser involved.
+type LoadedRegistry
+	export var doc as JsonDoc
+	export var codesId as JsonNodeId
 
-	export static function create(compiler String, memberName String) returns CompilerClaim
-		return Self{compiler: compiler, memberName: memberName}
+	export static function create(doc JsonDoc, codesId JsonNodeId) returns LoadedRegistry
+		return Self{doc: doc, codesId: codesId}
 	end 'create'
-end 'CompilerClaim'
+end 'LoadedRegistry'
 
-typealias CompilerClaimArray = Array with CompilerClaim
+// Reads out of the CALLER'S tree, which is why every failure here is an error and not a
+// panic: `repoRoot` comes from the wire, and a panic would tear down the stdio connection
+// for every subsequent request on behalf of one bad lookup.
+function loadRegistry(repoRoot FilePath) returns LoadedRegistry throws RegistryError
+	let authoredBytes = try File.readBinary(childPath(repoRoot, segment: ErrorCodeRegistryPath)) otherwise 'noAuthored'
+		throw RegistryError.registryUnreadable
+	end 'noAuthored'
 
-// A code, as the registry states it. `isReserved` is true exactly when NO compiler
-// declares the number yet — an in-flight claim from an unmerged branch, or a retired
-// meaning. Such a code still occupies the number space, which is the point of it.
-type RegistryEntry
-	export var number as CodeNumber
-	export var canonicalName as String
-	export var claims as CompilerClaimArray
-	export var isReserved as bool
-	export var reservedReason as String
-	export var doc as String
+	let text = try File.readText(childPath(repoRoot, segment: ErrorCodeInterchangePath)) otherwise 'noJson'
+		throw RegistryError.interchangeUnreadable
+	end 'noJson'
 
-	export static function create(number CodeNumber, canonicalName String, claims CompilerClaimArray, isReserved bool, reservedReason String, doc String) returns RegistryEntry
-		return Self{number: number, canonicalName: canonicalName, claims: claims, isReserved: isReserved, reservedReason: reservedReason, doc: doc}
-	end 'create'
-end 'RegistryEntry'
+	let doc = try Json.parse(text) otherwise 'badJson'
+		throw RegistryError.interchangeMalformed
+	end 'badJson'
 
-type EntryHeader
-	export var number as CodeNumber
-	export var canonicalName as String
+	// THE HANDSHAKE. Everything below this line is trusted; nothing above it is.
+	let stamped = try doc.getString(doc.root, key: "sourceHash") otherwise 'noHash'
+		throw RegistryError.interchangeMalformed
+	end 'noHash'
+	if not stamped.equals(formatRegistryHash(registryHash(authoredBytes))) 'stale'
+		throw RegistryError.interchangeStale
+	end 'stale'
 
-	export static function create(number CodeNumber, canonicalName String) returns EntryHeader
-		return Self{number: number, canonicalName: canonicalName}
-	end 'create'
-end 'EntryHeader'
+	let codesId = try doc.getChild(doc.root, key: "codes") otherwise 'noCodes'
+		throw RegistryError.interchangeMalformed
+	end 'noCodes'
+	if doc.get(codesId).kind != JsonKind.jsonArray 'notArray'
+		throw RegistryError.interchangeMalformed
+	end 'notArray'
 
-type KeyValue
-	export var key as String
-	export var value as String
+	return LoadedRegistry.create(doc, codesId: codesId)
+end 'loadRegistry'
 
-	export static function create(key String, value String) returns KeyValue
-		return Self{key: key, value: value}
-	end 'create'
-end 'KeyValue'
-
-// The three compilers the registry knows, in the order the answer lists them.
-function allCompilerNames() returns StringArray
-	var out = StringArray.create()
-	out.push("csharp")
-	out.push("selfhosted")
-	out.push("shv2")
-	return out
-end 'allCompilerNames'
-
-// Reads the registry out of the CALLER'S tree, which is why the unreadable case is an
-// error and not a panic: `repoRoot` comes from the wire, and a panic here would tear
-// down the stdio connection for every subsequent request on behalf of one bad lookup.
-function lookupInRegistry(repoRoot FilePath, code CodeNumber) returns RegistryEntry throws RegistryLookupError
-	let path = childPath(repoRoot, segment: ErrorCodeRegistryPath)
-	let content = try File.readText(path) otherwise 'readErr'
-		throw RegistryLookupError.registryUnreadable
-	end 'readErr'
-	let lines = content.split("\n")
-	let total = lines.count()
-	for i in 0 upto total 'scan'
-		let line = try lines.get(i) otherwise 'gErr'
-			panic("lookupInRegistry: lines.get OOB — i bounded by total")
+function findCode(registry LoadedRegistry, code CodeNumber) returns JsonNodeId throws NotFound
+	let codes = registry.doc.get(registry.codesId)
+	let n = codes.children.count()
+	for i in 0 upto n 'scan'
+		let entryId = try codes.children.get(i) otherwise 'gErr'
+			panic("findCode: codes.children.get OOB — i bounded by n")
 		end 'gErr'
-		let header = try parseEntryHeader(line) otherwise 'notHeader'
-			continue
-		end 'notHeader'
-		if header.number != code 'otherCode'
-			continue
-		end 'otherCode'
-		return readEntryBody(lines, header: header, from: i + 1)
-	end 'scan'
-	throw RegistryLookupError.codeAbsent
-end 'lookupInRegistry'
-
-// An entry header sits at column 0: `E<nnnn> <CanonicalName>`. Anything indented is a
-// key line belonging to the entry above; anything else is a `#` comment or a blank.
-function parseEntryHeader(line String) returns EntryHeader throws NotFound
-	let bytes = line.toByteArray()
-	let n = bytes.count()
-	// "E1001 X" is the shortest legal header: 5 code bytes, a space, >= 1 name byte.
-	if n < 7 'tooShort'
-		throw NotFound.notFound
-	end 'tooShort'
-	let first = try bytes.get(0) otherwise 'gErr'
-		panic("parseEntryHeader: bytes.get(0) OOB — n >= 7 just checked")
-	end 'gErr'
-	if first != 0x45 'notE'
-		throw NotFound.notFound
-	end 'notE'
-	var value = 0
-	for i in 1 upto 5 'digits'
-		let b = try bytes.get(i) otherwise 'gErr2'
-			panic("parseEntryHeader: bytes.get OOB — n >= 7 just checked")
-		end 'gErr2'
-		if not isAsciiDigit(b) 'notDigit'
-			throw NotFound.notFound
-		end 'notDigit'
-		value = value * 10 + (b - 0x30)
-	end 'digits'
-	if value < 1000 or value > 9999 'oob'
-		throw NotFound.notFound
-	end 'oob'
-	let space = try bytes.get(5) otherwise 'gErr3'
-		panic("parseEntryHeader: bytes.get(5) OOB — n >= 7 just checked")
-	end 'gErr3'
-	if space != 0x20 'noSpace'
-		throw NotFound.notFound
-	end 'noSpace'
-	let name = sliceBytes(bytes, from: 6, until: n)
-	if name.isEmpty() 'noName'
-		throw NotFound.notFound
-	end 'noName'
-	return EntryHeader.create(value as CodeNumber, canonicalName: name)
-end 'parseEntryHeader'
-
-// Collect the entry's indented key lines, stopping at the next column-0 line.
-function readEntryBody(lines StringArray, header EntryHeader, from LineCount) returns RegistryEntry
-	var claims = CompilerClaimArray.create()
-	var isReserved = false
-	var reservedReason = ""
-	var doc = ""
-	let total = lines.count()
-	for i in from upto total 'walk'
-		let line = try lines.get(i) otherwise 'gErr'
-			panic("readEntryBody: lines.get OOB — i bounded by total")
-		end 'gErr'
-		if not isIndented(line) 'endOfEntry'
-			break
-		end 'endOfEntry'
-		let kv = try splitKeyValue(line) otherwise 'whitespaceOnly'
-			continue
-		end 'whitespaceOnly'
-
-		if kv.key == "doc" 'docLine'
-			if not doc.isEmpty() 'sep'
-				doc.append("\n")
-			end 'sep'
-			doc.append(kv.value)
-			continue
-		end 'docLine'
-
-		if kv.key == "reserved" 'reservedLine'
-			isReserved = true
-			reservedReason = kv.value
-			continue
-		end 'reservedLine'
-
-		if kv.key == "csharp" or kv.key == "selfhosted" or kv.key == "shv2" 'claimLine'
-			claims.push(CompilerClaim.create(kv.key, memberName: kv.value))
-			continue
-		end 'claimLine'
-
-		// `maxon error-codes check` rejects an unknown key and fails the build, so
-		// reaching one here means this tool is reading a registry the gate never saw.
-		panic("readEntryBody: unknown registry key '{kv.key}' on E{header.number} — run `maxon error-codes check`")
-	end 'walk'
-	return RegistryEntry.create(header.number, canonicalName: header.canonicalName, claims: claims, isReserved: isReserved, reservedReason: reservedReason, doc: doc)
-end 'readEntryBody'
-
-function isIndented(line String) returns bool
-	let bytes = line.toByteArray()
-	if bytes.count() == 0 'empty'
-		return false
-	end 'empty'
-	let first = try bytes.get(0) otherwise 'gErr'
-		panic("isIndented: bytes.get(0) OOB — count > 0 just checked")
-	end 'gErr'
-	return first == 0x20 or first == 0x09
-end 'isIndented'
-
-// Split an indented `key value...` line at the whitespace run after the key. Throws
-// NotFound for a whitespace-only line (no key), which the caller skips.
-function splitKeyValue(line String) returns KeyValue throws NotFound
-	let bytes = line.toByteArray()
-	let n = bytes.count()
-	var i = skipWhitespace(bytes, from: 0)
-	let keyStart = i
-	while i < n 'scanKey'
-		let b = try bytes.get(i) otherwise 'gErr'
-			panic("splitKeyValue: bytes.get OOB during key scan")
-		end 'gErr'
-		if b == 0x20 or b == 0x09 'endKey'
-			break
-		end 'endKey'
-		i = i + 1
-	end 'scanKey'
-	if i == keyStart 'noKey'
-		throw NotFound.notFound
-	end 'noKey'
-	let key = sliceBytes(bytes, from: keyStart, until: i)
-	let valueStart = skipWhitespace(bytes, from: i)
-	if valueStart >= n 'noValue'
-		throw NotFound.notFound
-	end 'noValue'
-	return KeyValue.create(key, value: sliceBytes(bytes, from: valueStart, until: n))
-end 'splitKeyValue'
-
-function skipWhitespace(bytes ByteArray, from LineCount) returns LineCount
-	let n = bytes.count()
-	var i = from
-	while i < n 'skip'
-		let b = try bytes.get(i) otherwise 'gErr'
-			panic("skipWhitespace: bytes.get OOB — i bounded by n")
-		end 'gErr'
-		if b != 0x20 and b != 0x09 'notWs'
-			break
-		end 'notWs'
-		i = i + 1
-	end 'skip'
-	return i
-end 'skipWhitespace'
-
-// The stage is DERIVED from the leading digit — it is never written in the registry,
-// so it cannot disagree with the number.
-function stageFor(code CodeNumber) returns String
-	let leading = code / 1000
-	return match leading 'pick'
-		1 gives "lexer"
-		2 gives "parser"
-		3 gives "semantic"
-		4 gives "ir"
-		5 gives "codegen"
-		6 gives "pewriter"
-		9 gives "internal"
-		default panic("stageFor: E{code} is in the {leading}xxx band, which names no compilation stage")
-	end 'pick'
-end 'stageFor'
-
-function claimsContain(claims CompilerClaimArray, compiler String) returns bool
-	for claim in claims 'each'
-		if claim.compiler == compiler 'hit'
-			return true
+		let number = try registry.doc.getInt(entryId, key: "code") otherwise 'noNumber'
+			panic("findCode: a generated `codes` entry has no integer `code` — {ErrorCodeInterchangePath} is not the file this tool was generated against")
+		end 'noNumber'
+		if number == code 'hit'
+			return entryId
 		end 'hit'
-	end 'each'
-	return false
-end 'claimsContain'
+	end 'scan'
+	throw NotFound.notFound
+end 'findCode'
 
 // =============================================================================
 // Spec-file scan
@@ -425,33 +305,19 @@ end 'appendSpecMatches'
 // Outcome construction
 // =============================================================================
 
-function buildOutcome(code CodeNumber, entry RegistryEntry, specFiles StringArray) returns ToolOutcome
+// The answer IS the generated entry, copied out whole, plus the one thing the registry
+// cannot know: which specs exercise the code in THIS tree.
+//
+// Nothing is recomputed on the way out — not the stage, not `notEmittedBy`, not the tag.
+// The generator writes all of them, and a derivation performed here as well would be one
+// more fact held in two places, which is the disease this file was treated for.
+function buildOutcome(registry LoadedRegistry, entryId JsonNodeId, specFiles StringArray) returns ToolOutcome
 	var doc = JsonDoc.create()
-	let codeId = doc.add(JsonNode.numberNode(code))
-	let tagId = doc.add(JsonNode.stringNode("E{code}"))
-	let nameId = doc.add(JsonNode.stringNode(entry.canonicalName))
-	let stageId = doc.add(JsonNode.stringNode(stageFor(code)))
-	let docId = doc.add(JsonNode.stringNode(entry.doc))
-
-	// `emittedBy` maps each claiming compiler to ITS OWN spelling of this code;
-	// `notEmittedBy` names the compilers that do not emit it at all. Together they are
-	// why this answer cannot be about the wrong compiler.
-	var claimKeys = StringArray.create()
-	var claimVals = JsonNodeIdArray.create()
-	for claim in entry.claims 'eachClaim'
-		claimKeys.push(claim.compiler)
-		claimVals.push(doc.add(JsonNode.stringNode(claim.memberName)))
-	end 'eachClaim'
-	let emittedById = doc.add(JsonNode.objectNode(claimKeys, children: claimVals))
-
-	var absentIds = JsonNodeIdArray.create()
-	let compilers = allCompilerNames()
-	for name in compilers 'eachCompiler'
-		if not claimsContain(entry.claims, compiler: name) 'absent'
-			absentIds.push(doc.add(JsonNode.stringNode(name)))
-		end 'absent'
-	end 'eachCompiler'
-	let notEmittedById = doc.add(JsonNode.arrayNode(absentIds))
+	let entryCopy = copyJsonNode(registry.doc, srcId: entryId, dst: doc)
+	let entry = doc.get(entryCopy)
+	if entry.kind != JsonKind.jsonObject 'notObject'
+		panic("buildOutcome: a `codes` entry must be a JSON object, got {entry.kind.name}")
+	end 'notObject'
 
 	var specIds = JsonNodeIdArray.create()
 	let sn = specFiles.count()
@@ -461,35 +327,23 @@ function buildOutcome(code CodeNumber, entry RegistryEntry, specFiles StringArra
 		end 'gErr'
 		specIds.push(doc.add(JsonNode.stringNode(path)))
 	end 'eachSpec'
-	let specsArr = doc.add(JsonNode.arrayNode(specIds))
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	keys.push("code")
-	children.push(codeId)
-	keys.push("tag")
-	children.push(tagId)
-	keys.push("name")
-	children.push(nameId)
-	keys.push("stage")
-	children.push(stageId)
-	keys.push("doc")
-	children.push(docId)
-	keys.push("emittedBy")
-	children.push(emittedById)
-	keys.push("notEmittedBy")
-	children.push(notEmittedById)
-
-	// Present only when the number is claimed but not yet declared — the field's very
-	// presence is the answer to "may I take this number?".
-	if entry.isReserved 'reserved'
-		keys.push("reserved")
-		children.push(doc.add(JsonNode.stringNode(entry.reservedReason)))
-	end 'reserved'
-
+	let n = entry.keys.count()
+	for i in 0 upto n 'eachKey'
+		let key = try entry.keys.get(i) otherwise 'kErr'
+			panic("buildOutcome: entry.keys.get OOB — i bounded by n")
+		end 'kErr'
+		let childId = try entry.children.get(i) otherwise 'cErr'
+			panic("buildOutcome: entry.children.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		keys.push(key)
+		children.push(childId)
+	end 'eachKey'
 	keys.push("specFiles")
-	children.push(specsArr)
-	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	children.push(doc.add(JsonNode.arrayNode(specIds)))
 
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 	return ToolOutcome.success(doc, root: doc.root)
 end 'buildOutcome'

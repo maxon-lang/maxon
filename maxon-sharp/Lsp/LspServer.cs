@@ -1615,12 +1615,21 @@ public class LspServer {
     return new WorkspaceEdit { Changes = changes };
   }
 
+  /// The wire spelling of the diagnostic this server offers a quick fix for.
+  ///
+  /// DERIVED, never written. `ErrorCode.SemanticUnneededCast` is generated from
+  /// docs/error-codes.txt, so renumbering the code moves this string with it. Spelled
+  /// as the literal "E3010" — which it was, in three places — the number space had a
+  /// fourth copy that nothing checked: renumber the code and the registry gate passes,
+  /// the build passes, and the quick fix silently stops matching anything.
+  static readonly string UnneededCastCode = ErrorCode.SemanticUnneededCast.Format();
+
   /// Compute code actions (quick fixes) for diagnostics in the requested range.
   /// The editor narrows by selection range itself, so per-diagnostic fixes are
   /// keyed off `context.Diagnostics`. Fix-all variants pull from the project's
   /// full diagnostic set so they cover diagnostics outside the selection.
   /// Currently handles:
-  ///   - E3010 (unneeded cast): per-diagnostic + fix-all-in-file + fix-all-in-project.
+  ///   - SemanticUnneededCast: per-diagnostic + fix-all-in-file + fix-all-in-project.
   public List<CodeAction>? GetCodeActions(DocumentUri uri, CodeActionContext context) {
     if (!_documents.TryGetValue(uri, out var content))
       return null;
@@ -1628,11 +1637,11 @@ public class LspServer {
     var actions = new List<CodeAction>();
     var lines = content.Split('\n');
 
-    // Per-diagnostic fixes — one CodeAction per E3010 diagnostic the editor
+    // Per-diagnostic fixes — one CodeAction per unneeded-cast diagnostic the editor
     // told us is in scope. These attach to the diagnostic so lightbulbs show
     // up next to the squiggle.
     foreach (var diag in context.Diagnostics) {
-      if (diag.Code?.String != "E3010") continue;
+      if (diag.Code?.String != UnneededCastCode) continue;
       var edit = ComputeUnneededCastEdit(diag, lines);
       if (edit == null) continue;
       actions.Add(new CodeAction {
@@ -1667,9 +1676,9 @@ public class LspServer {
     if (project == null) return;
 
     var attachedDiags = new Container<Diagnostic>(
-      contextDiagnostics.Where(d => d.Code?.String == "E3010"));
+      contextDiagnostics.Where(d => d.Code?.String == UnneededCastCode));
 
-    // Fix-all-in-file: collect every E3010 stored for this file and combine.
+    // Fix-all-in-file: collect every unneeded cast stored for this file and combine.
     var fileEdits = CollectUnneededCastEditsForFile(filePath, project);
     if (fileEdits.Count >= 2) {
       actions.Add(new CodeAction {
@@ -1720,7 +1729,7 @@ public class LspServer {
 
     var edits = new List<TextEdit>();
     foreach (var err in project.GetDiagnostics(filePath)) {
-      if (err.Code.Format() != "E3010") continue;
+      if (err.Code.Format() != UnneededCastCode) continue;
       // Project diagnostics carry 1-based line/column; convert to the
       // 0-based LSP form used by ComputeUnneededCastEdit.
       var synthetic = new Diagnostic {

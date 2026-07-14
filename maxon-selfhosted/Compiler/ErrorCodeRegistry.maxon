@@ -1,7 +1,7 @@
 // GENERATED FROM docs/error-codes.txt. DO NOT EDIT.
 //
 // Add or change a code in that file, then run `maxon error-codes generate`.
-// `maxon error-codes check` (run by every `dotnet build`) fails if this file drifts.
+// `maxon error-codes check` (run by every build that consumes this file) fails if it drifts.
 
 // Error codes grouped by compilation stage:
 // 1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx code emitter,
@@ -76,20 +76,6 @@ export enum ErrorCode
 	// The first argument is positional-only; only the second and subsequent
 	// arguments may be labeled.
 	parserFirstArgCannotBeNamed = 2052
-	// A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
-	// 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
-	// not a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed
-	// 'a shl 63' -- the MAXIMUM LEFT shift, a wrong answer with the opposite sign.
-	// Maxon follows Go: the count must be non-negative; a constant one is this compile
-	// error, and one that only appears at RUN TIME panics.
-	// WARNING -- a count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined
-	// shift that moves every bit out ('x shl 64' == 0), because Go puts no upper limit
-	// on a shift count. This code briefly rejected it, which OVER-rejects a correct
-	// program. The compiler SATURATES such a count instead of masking it.
-	// A PARSE-time check, positioned at the count as WRITTEN. It asks the CONSTANT
-	// FOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a
-	// check that only looked for a bare literal token missed its own motivating example.
-	parserShiftCountNegative = 2054
 
 	// The program declares no 'main' function.
 	semanticNoMain = 3001
@@ -213,8 +199,6 @@ export enum ErrorCode
 	// in TypeResolution. Mirrors the C# bootstrap's
 	// `SemanticRefIdentityOnPrimitive`.
 	semanticRefIdentityOnPrimitive = 3068
-	// '=='/'!=' is applied to a type that does not implement Equatable.
-	semanticEqualsRequiresEquatable = 3069
 	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.
 	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
@@ -374,75 +358,6 @@ export enum ErrorCode
 	// onward), so this shared diagnostic takes the next code free on both
 	// sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
 	semanticEnumAccessorComparison = 3097
-	// A promise is stored in a Promise type that does not name the error its thunk throws.
-	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
-	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
-	// Storing a promise in the wrong one is refused here -- including, in particular, storing
-	// a THROWING promise in a `Promise with T`, which is what used to erase the error type.
-	// That erasure was the root of a family of bugs, all of which this refusal (plus the
-	// two-parameter form that makes it avoidable) turns into impossibilities:
-	// - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
-	// promise handle typed `int`;
-	// - an associated-value error's payload had no static type to mm_decref, so it LEAKED
-	// (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
-	// - propagation (a bare `try await p` inside a `throws` function) had no error type to
-	// check the enclosing function's `throws` against, so a thunk throwing A could be
-	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
-	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
-	semanticPromiseErrorTypeMismatch = 3098
-	// A closure that CAPTURES, ESCAPING the frame its captures point into.
-	// THE RULE: a closure that captures may not escape its defining frame.
-	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
-	// fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
-	// through a capture see later mutations of the captured variable. The environment is
-	// therefore only meaningful while that frame is alive. Let the closure outlive the
-	// frame and every captured read dereferences a dead frame -- the classic upward-funarg
-	// problem. It compiles clean and dies at runtime, so it is refused where the mistake
-	// is still legible rather than left to fault inside emitted code the author never wrote.
-	// The routes refused are every store the parser can see WITHOUT interprocedural
-	// analysis:
-	// - RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and
-	// the reason this exists). Returning a closure an OUTER frame built is fine and is
-	// allowed: that environment points into a frame that is still alive.
-	// - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
-	// element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
-	// looks like a plain local but is an alias INTO the enum's heap box, so assigning
-	// through it writes back). Each is one 8-byte slot holding the code pointer alone,
-	// and each is heap memory outliving every frame, so the store drops the environment;
-	// the call then passes env=0 and the first captured read dereferences null.
-	// DELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a
-	// CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
-	// bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
-	// that store the value is a *parameter*, and whether it carries an environment is a fact
-	// about the CALLER -- deciding it needs a per-parameter escape summary propagated over
-	// the call graph, i.e. escape analysis proper. That is scoped OUT of the bootstrap and
-	// stays a runtime nil-deref. Passing a capturing closure DOWN to a callee that only
-	// CALLS it is perfectly safe and must keep working.
-	// A NON-capturing closure is unaffected and must keep working -- it lowers to a plain
-	// MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
-	// CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
-	// or passes keyed by a struct field is built from.
-	// What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
-	// capture, so a closure's environment outlives the frame that built it. That is a real
-	// language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
-	// by-reference capture semantics the closure specs currently pin. shv2 schedules it at
-	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
-	semanticCapturingClosureEscapes = 3099
-	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
-	// 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
-	// this was in review. Both of us picked "the next code free" and both of us were right, because
-	// the registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --
-	// and neither copy sees the other's pending codes. Same disease as the promise's two bits, one
-	// level up. Keep the two files in step until there is only one of them.
-	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
-	// language already has everywhere else. A second await would take a second +1 on a payload the
-	// thunk only ever owned once, and the two releases underflow the refcount and free it twice
-	// ("mm_decref: refcount underflow (already zero)"). It is not an error-handling bug and does
-	// not need a throwing thunk: a plain `async` returning a String double-frees identically.
-	// So the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --
-	// two awaits of the same promise in mutually exclusive branches are each the only await on
-	// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
-	semanticPromiseAlreadyAwaited = 3100
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	irInvalidFieldAccess = 4006

@@ -1,0 +1,474 @@
+// REGISTRY CONFORMANCE — one format, both readers, and they must never disagree.
+//
+// `docs/error-codes.txt` is the authored source of truth for the error-code space. It
+// briefly had TWO hand-written parsers — the build gate in
+// `maxon-sharp/Compiler/ErrorCodeRegistry.cs`, and the MCP's `lookup_error_code` — and
+// they disagreed on five inputs. A blank line inside an entry made the gate shrug and made
+// the tool answer `emittedBy: {}` — "no compiler emits this code" — about a code the
+// bootstrap declares. An instrument that lies.
+//
+// The fix DELETED the second parser: the tool now reads `docs/error-codes.json`, which the
+// gate generates, and verifies an FNV-1a hash of the registry's bytes before trusting a
+// word of it. Two readers can no longer hold different opinions about the grammar, because
+// only one of them reads the grammar.
+//
+// THIS FILE IS WHAT KEEPS THAT TRUE. For each fixture registry it runs BOTH readers over
+// the SAME bytes and asserts the safety property — which is CHECKED, never authored:
+//
+//     THE TOOL ANSWERS ONLY WHAT THE GATE SANCTIONED, FOR THE BYTES ON DISK NOW.
+//
+//   - the gate REJECTED the registry  => the tool must REFUSE
+//                                        (`duplicate-key`, `missing-doc`)
+//   - the gate ACCEPTED it            => the tool must ANSWER, and its `emittedBy` must
+//                                        equal the gate's OWN generated `emittedBy`
+//                                        (`blank-line-in-entry`, `indented-comment`,
+//                                         `tab-separated-key` — the three that used to
+//                                         diverge)
+//   - the gate accepted, then the registry CHANGED under the artifact => the tool must
+//     REFUSE (`stale-after-generate`) — the case no amount of parser agreement could ever
+//     have caught, and the one that a stale generated file turns into a confident wrong
+//     answer.
+//
+// A fixture is `<name>.txt` (the registry both readers see), an optional `<name>.after.txt`
+// (written over it AFTER generation, to strand the artifact), and `<name>.expect.json`.
+
+let ConformanceFixtureDir = "maxon-dev-mcp/test/fixtures/registry"
+
+// Scratch checkouts live under the test project's gitignored build dir — never in a real
+// tree, because `error-codes generate` WRITES into whatever root it is pointed at.
+let ConformanceWorkDir = "maxon-dev-mcp/test/.maxon/conformance"
+
+// A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright.
+// These are the markers `isMaxonCheckout` (mcp/Util.maxon) looks for — source directories,
+// never build output, which is why an empty pair of them is enough to make a root real.
+function checkoutMarkerDirs() returns StringArray
+	var out = StringArray.create()
+	out.push("stdlib")
+	out.push("maxon-sharp")
+	return out
+end 'checkoutMarkerDirs'
+
+let RegistryRelativePath = "docs/error-codes.txt"
+let InterchangeRelativePath = "docs/error-codes.json"
+
+export type ConformanceTally
+	export var passed as TestCount
+	export var failed as TestCount
+
+	export static function create(passed TestCount, failed TestCount) returns ConformanceTally
+		return ConformanceTally{passed: passed, failed: failed}
+	end 'create'
+end 'ConformanceTally'
+
+// What the gate did with a registry, and what it said while doing it. Its diagnosis is on
+// STDERR — every refusal in ErrorCodeRegistry.cs goes through `Console.Error` — so that is
+// the stream the fixtures match against and the one a failure prints.
+type GateOutcome
+	export var accepted as bool
+	export var stderr as String
+
+	export static function create(accepted bool, stderr String) returns GateOutcome
+		return GateOutcome{accepted: accepted, stderr: stderr}
+	end 'create'
+end 'GateOutcome'
+
+// What the tool did with the same registry. `answered` is the whole safety question: an
+// answer is a claim about what a code MEANS, and a claim has to be earned.
+type ToolVerdict
+	export var answered as bool
+	export var errorMessage as String
+	export var emittedBy as StringArray
+
+	export static function create(answered bool, errorMessage String, emittedBy StringArray) returns ToolVerdict
+		return ToolVerdict{answered: answered, errorMessage: errorMessage, emittedBy: emittedBy}
+	end 'create'
+end 'ToolVerdict'
+
+export function runRegistryConformance(repoRoot FilePath, binary FilePath) returns ConformanceTally
+	let fixturesDir = joinPath(repoRoot, segment: ConformanceFixtureDir)
+	let names = collectConformanceNames(fixturesDir)
+	let n = names.count()
+
+	print("\n[mcp-test] registry conformance — one format, both readers, {n} fixtures\n")
+	if n == 0 'none'
+		print("[mcp-test] FAIL — no conformance fixtures under {fixturesDir.path}\n")
+		return ConformanceTally.create(0, failed: 1)
+	end 'none'
+
+	var passed = 0
+	var failed = 0
+	for i in 0 upto n 'each'
+		let name = try names.get(i) otherwise panic("runRegistryConformance: names.get OOB — i bounded by n")
+		let ok = runConformanceCase(name, repoRoot: repoRoot, binary: binary, fixturesDir: fixturesDir)
+		if ok 'pass'
+			passed = passed + 1
+		end 'pass' else 'fail'
+			failed = failed + 1
+		end 'fail'
+	end 'each'
+	return ConformanceTally.create(passed, failed: failed)
+end 'runRegistryConformance'
+
+// `<name>.txt`, excluding `<name>.after.txt` — a mutation is part of a case, not a case.
+function collectConformanceNames(dir FilePath) returns StringArray
+	var out = StringArray.create()
+	let entries = try Directory.list(dir) otherwise 'listErr'
+		return out
+	end 'listErr'
+	let n = entries.count()
+	for i in 0 upto n 'each'
+		let entry = try entries.get(i) otherwise panic("collectConformanceNames: entries.get OOB — i bounded by n")
+		if not entry.path.endsWith(".txt") 'notRegistry'
+			continue
+		end 'notRegistry'
+		if entry.path.endsWith(".after.txt") 'isMutation'
+			continue
+		end 'isMutation'
+		out.push(stripSuffix(lastSegment(entry), suffix: ".txt"))
+	end 'each'
+	return out
+end 'collectConformanceNames'
+
+function runConformanceCase(name String, repoRoot FilePath, binary FilePath, fixturesDir FilePath) returns bool
+	print("[mcp-test] registry/{name}: ")
+
+	let expect = try readJsonFile(joinPath(fixturesDir, segment: "{name}.expect.json")) otherwise 'noExpect'
+		print("FAIL — cannot read or parse {name}.expect.json\n")
+		return false
+	end 'noExpect'
+	let code = try expect.getInt(expect.root, key: "code") otherwise 'noCode'
+		print("FAIL — {name}.expect.json has no integer `code`\n")
+		return false
+	end 'noCode'
+
+	let workRoot = try materializeScratchCheckout(name, repoRoot: repoRoot, fixturesDir: fixturesDir) otherwise (err) 'noWork'
+		print("FAIL — could not build the scratch checkout ({err.name})\n")
+		return false
+	end 'noWork'
+
+	// READER A: the gate. It parses, validates, and — when it accepts — GENERATES the
+	// artifact the tool will read. The tool's input is literally reader A's output.
+	let gate = runGate(repoRoot, workRoot: workRoot)
+
+	// The registry changes UNDER the artifact, if the fixture says so. Nothing regenerates.
+	try applyMutation(name, fixturesDir: fixturesDir, workRoot: workRoot) otherwise 'mutErr'
+		print("FAIL — could not apply {name}.after.txt\n")
+		return false
+	end 'mutErr'
+
+	// READER B: the tool, pointed at exactly the same tree.
+	let tool = runLookup(binary, workRoot: workRoot, code: code)
+
+	return judge(name, expect: expect, code: code, gate: gate, tool: tool, workRoot: workRoot)
+end 'runConformanceCase'
+
+// THE ASSERTION. The computed invariant is checked FIRST, ahead of every authored
+// expectation: if the safety property breaks, this must fail even for someone who has
+// helpfully updated the expectation file to match the new behaviour.
+function judge(name String, expect JsonDoc, code JsonInt, gate GateOutcome, tool ToolVerdict, workRoot FilePath) returns bool
+	// (1) THE INVARIANT — never authored, always checked. An answer must be sanctioned.
+	if tool.answered and not gate.accepted 'unsanctioned'
+		print("FAIL — READERS DISAGREE: the gate REJECTED this registry and the tool ANSWERED for E{code} regardless.\n")
+		print("       gate said: {gate.stderr.trim()}\n")
+		return false
+	end 'unsanctioned'
+
+	// (2) The gate's verdict is the one the fixture documents.
+	let wantGate = try stringField(expect, key: "gate") otherwise panic("judge: {name}.expect.json has no `gate`")
+	if wantGate.equals("accept") != gate.accepted 'gateVerdict'
+		print("FAIL — expected the gate to {wantGate} this registry; it did not. gate said: {gate.stderr.trim()}\n")
+		return false
+	end 'gateVerdict'
+	if not expectContains(expect, key: "gateStderrContains", actual: gate.stderr, what: "gate stderr") 'gateMsg'
+		return false
+	end 'gateMsg'
+
+	// (3) The tool's verdict is the one the fixture documents.
+	let wantTool = try stringField(expect, key: "tool") otherwise panic("judge: {name}.expect.json has no `tool`")
+	if wantTool.equals("answer") != tool.answered 'toolVerdict'
+		print("FAIL — expected the tool to {wantTool}; it did the other. tool said: {tool.errorMessage.trim()}\n")
+		return false
+	end 'toolVerdict'
+	if not expectContains(expect, key: "toolErrorContains", actual: tool.errorMessage, what: "tool refusal") 'toolMsg'
+		return false
+	end 'toolMsg'
+
+	if not tool.answered 'refused'
+		print("OK (gate {wantGate}s, tool refuses)\n")
+		return true
+	end 'refused'
+
+	// (4) CONTENT AGREEMENT, computed. The tool answered — so what it said must be what the
+	// gate PARSED, not merely something plausible. Checked against the gate's own generated
+	// artifact AND against the fixture's authored expectation, so neither can drift alone.
+	let gateEmittedBy = try readGeneratedEmittedBy(workRoot, code: code) otherwise 'noGen'
+		print("FAIL — the gate accepted but wrote no readable {InterchangeRelativePath} to compare against\n")
+		return false
+	end 'noGen'
+	if not sameStrings(tool.emittedBy, b: gateEmittedBy) 'disagree'
+		print("FAIL — READERS DISAGREE on E{code}: the gate parsed emittedBy={render(gateEmittedBy)}, the tool reported emittedBy={render(tool.emittedBy)}\n")
+		return false
+	end 'disagree'
+
+	let wantEmitted = try stringArrayField(expect, key: "emittedBy") otherwise panic("judge: {name}.expect.json has no `emittedBy` for an answering case")
+	if not sameStrings(tool.emittedBy, b: wantEmitted) 'notExpected'
+		print("FAIL — E{code}: expected emittedBy={render(wantEmitted)}, but both readers say {render(tool.emittedBy)}\n")
+		return false
+	end 'notExpected'
+
+	print("OK (gate accepts, tool answers, emittedBy={render(tool.emittedBy)} — agreed)\n")
+	return true
+end 'judge'
+
+// =============================================================================
+// Plumbing
+// =============================================================================
+
+enum ScratchError implements Error
+	cannotCreate
+	cannotWrite
+	cannotRead
+end 'ScratchError'
+
+// A throwaway checkout holding nothing but the fixture registry. `error-codes generate`
+// WRITES into the root it is given, which is exactly why it is never given a real one.
+function materializeScratchCheckout(name String, repoRoot FilePath, fixturesDir FilePath) returns FilePath throws ScratchError
+	let workRoot = joinPath(joinPath(repoRoot, segment: ConformanceWorkDir), segment: name)
+
+	let markers = checkoutMarkerDirs()
+	let m = markers.count()
+	for i in 0 upto m 'eachMarker'
+		let marker = try markers.get(i) otherwise panic("materializeScratchCheckout: markers.get OOB — i bounded by m")
+		if not Directory.create(joinPath(workRoot, segment: marker)) 'markerFailed'
+			throw ScratchError.cannotCreate
+		end 'markerFailed'
+	end 'eachMarker'
+	if not Directory.create(joinPath(workRoot, segment: "docs")) 'docsFailed'
+		throw ScratchError.cannotCreate
+	end 'docsFailed'
+
+	// Wipe the previous run's artifact. Without this, a REJECTED registry could be answered
+	// from a generated file left behind by an earlier ACCEPTED one — and the test would pass
+	// for the wrong reason, which is the only way a test can do real harm.
+	let interchange = joinPath(workRoot, segment: InterchangeRelativePath)
+	if File.exists(interchange) 'priorRun'
+		try File.delete(interchange) otherwise throw ScratchError.cannotWrite
+	end 'priorRun'
+
+	let registry = try File.readText(joinPath(fixturesDir, segment: "{name}.txt")) otherwise throw ScratchError.cannotRead
+	try File.writeText(joinPath(workRoot, segment: RegistryRelativePath), content: registry) otherwise throw ScratchError.cannotWrite
+
+	return workRoot
+end 'materializeScratchCheckout'
+
+// Overwrite the scratch registry AFTER the gate has generated from it, stranding the
+// artifact. Most fixtures have no `.after.txt` and this does nothing — the mutation is what
+// makes `stale-after-generate` a different case from its siblings, not a case of its own.
+function applyMutation(name String, fixturesDir FilePath, workRoot FilePath) throws ScratchError
+	let afterPath = joinPath(fixturesDir, segment: "{name}.after.txt")
+	if not File.exists(afterPath) 'noMutation'
+		return
+	end 'noMutation'
+
+	let mutated = try File.readText(afterPath) otherwise throw ScratchError.cannotRead
+	try File.writeText(joinPath(workRoot, segment: RegistryRelativePath), content: mutated) otherwise throw ScratchError.cannotWrite
+end 'applyMutation'
+
+// `maxon error-codes generate <workRoot>` — parse, validate, and (on acceptance) write the
+// artifact. Deliberately `generate` and not `check`: `check` ALSO enforces claim liveness,
+// which asks whether a real compiler tree emits the member, and a scratch root has no
+// compiler in it. Liveness is a rule about the WORLD; these fixtures are about the FORMAT.
+// (Liveness is gated on the real tree, by every build.)
+function runGate(repoRoot FilePath, workRoot FilePath) returns GateOutcome
+	let gateExe = joinPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
+	if not File.exists(gateExe) 'noGate'
+		panic("runGate: the C# bootstrap is not built at {gateExe.path}. This test runs the REAL gate against the fixtures — without it there is nothing to compare the tool against, and a conformance test that silently skips the other reader is worse than none.")
+	end 'noGate'
+
+	var argv = StringArray.create()
+	argv.push("error-codes")
+	argv.push("generate")
+	argv.push(workRoot.path)
+
+	var c = Configuration.create(Executable.path(gateExe))
+	c.arguments = argv
+	c.standardOutput = OutputDestination.collect(1024 * 1024)
+	c.standardError = OutputDestination.collect(1024 * 1024)
+	c.timeoutMs = perFixtureTimeoutMs
+
+	let collected = try c.run() otherwise (err) 'runErr'
+		panic("runGate: could not run the gate: {err.displayReason()}")
+	end 'runErr'
+
+	return GateOutcome.create(collected.exitCode() == 0, stderr: collected.stderr)
+end 'runGate'
+
+// The JSON-RPC request, assembled with the same serializer the server answers with rather
+// than pasted together as text. A hand-built request would have to escape a Windows path's
+// backslashes into a JSON string by hand — and a fixture that escapes its own path wrongly
+// does not fail, it silently tests a DIFFERENT tree, which is the failure this whole
+// afternoon is about.
+function buildLookupRequest(workRoot FilePath, code JsonInt) returns String
+	var doc = JsonDoc.create()
+
+	var argKeys = StringArray.create()
+	var argVals = JsonNodeIdArray.create()
+	argKeys.push("code")
+	argVals.push(doc.add(JsonNode.numberNode(code)))
+	argKeys.push("repoRoot")
+	argVals.push(doc.add(JsonNode.stringNode(workRoot.path)))
+	let argsId = doc.add(JsonNode.objectNode(argKeys, children: argVals))
+
+	var paramKeys = StringArray.create()
+	var paramVals = JsonNodeIdArray.create()
+	paramKeys.push("name")
+	paramVals.push(doc.add(JsonNode.stringNode("lookup_error_code")))
+	paramKeys.push("arguments")
+	paramVals.push(argsId)
+	let paramsId = doc.add(JsonNode.objectNode(paramKeys, children: paramVals))
+
+	var keys = StringArray.create()
+	var vals = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	vals.push(doc.add(JsonNode.stringNode("2.0")))
+	keys.push("id")
+	vals.push(doc.add(JsonNode.numberNode(1)))
+	keys.push("method")
+	vals.push(doc.add(JsonNode.stringNode("tools/call")))
+	keys.push("params")
+	vals.push(paramsId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: vals))
+
+	return "{Json.stringify(doc)}\n"
+end 'buildLookupRequest'
+
+// One `lookup_error_code` call against the scratch tree, through the real server binary.
+function runLookup(binary FilePath, workRoot FilePath, code JsonInt) returns ToolVerdict
+	var c = Configuration.create(Executable.path(binary))
+	c.standardInput = InputSource.bytes(buildLookupRequest(workRoot, code: code))
+	c.standardOutput = OutputDestination.collect(16 * 1024 * 1024)
+	c.standardError = OutputDestination.collect(1024 * 1024)
+	c.timeoutMs = perFixtureTimeoutMs
+
+	let collected = try c.run() otherwise (err) 'runErr'
+		panic("runLookup: could not run the MCP server: {err.displayReason()}")
+	end 'runErr'
+
+	let responses = splitJsonLines(collected.stdout)
+	if responses.count() == 0 'noResponse'
+		panic("runLookup: the server produced no JSON-RPC response. stderr: {collected.stderr.trim()}")
+	end 'noResponse'
+	let response = try responses.get(0) otherwise panic("runLookup: responses.get(0) OOB — count just checked")
+
+	let errId = try response.getChild(response.root, key: "error") otherwise 'answered'
+		return ToolVerdict.create(true, errorMessage: "", emittedBy: toolEmittedBy(response))
+	end 'answered'
+
+	let message = try response.getString(errId, key: "message") otherwise 'noMessage'
+		panic("runLookup: a JSON-RPC error must carry a `message`")
+	end 'noMessage'
+	return ToolVerdict.create(false, errorMessage: message, emittedBy: StringArray.create())
+end 'runLookup'
+
+// The tool's answer arrives as MCP's `content[0].text` — a JSON document inside a string.
+function toolEmittedBy(response JsonDoc) returns StringArray
+	let resultId = try response.getChild(response.root, key: "result") otherwise panic("toolEmittedBy: a non-error response must carry `result`")
+	let contentId = try response.getChild(resultId, key: "content") otherwise panic("toolEmittedBy: a tools/call result must carry `content`")
+	let items = response.get(contentId)
+	let firstId = try items.children.get(0) otherwise panic("toolEmittedBy: `content` is empty")
+	let text = try response.getString(firstId, key: "text") otherwise panic("toolEmittedBy: `content[0]` has no `text`")
+	let payload = try Json.parse(text) otherwise panic("toolEmittedBy: the tool's `text` is not JSON: {text}")
+	let emittedId = try payload.getChild(payload.root, key: "emittedBy") otherwise panic("toolEmittedBy: the tool's answer has no `emittedBy`")
+	return objectKeys(payload, id: emittedId)
+end 'toolEmittedBy'
+
+// The GATE's own parse of the same entry, read back out of the artifact it generated.
+function readGeneratedEmittedBy(workRoot FilePath, code JsonInt) returns StringArray throws NotFound
+	let doc = try readJsonFile(joinPath(workRoot, segment: InterchangeRelativePath)) otherwise throw NotFound.notFound
+	let codesId = try doc.getChild(doc.root, key: "codes") otherwise throw NotFound.notFound
+	let codes = doc.get(codesId)
+	let n = codes.children.count()
+	for i in 0 upto n 'scan'
+		let entryId = try codes.children.get(i) otherwise panic("readGeneratedEmittedBy: children.get OOB — i bounded by n")
+		let number = try doc.getInt(entryId, key: "code") otherwise throw NotFound.notFound
+		if number != code 'otherCode'
+			continue
+		end 'otherCode'
+		let emittedId = try doc.getChild(entryId, key: "emittedBy") otherwise throw NotFound.notFound
+		return objectKeys(doc, id: emittedId)
+	end 'scan'
+	throw NotFound.notFound
+end 'readGeneratedEmittedBy'
+
+function objectKeys(doc JsonDoc, id JsonNodeId) returns StringArray
+	var out = StringArray.create()
+	let node = doc.get(id)
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let key = try node.keys.get(i) otherwise panic("objectKeys: keys.get OOB — i bounded by n")
+		out.push(key)
+	end 'each'
+	return out
+end 'objectKeys'
+
+function readJsonFile(path FilePath) returns JsonDoc throws NotFound
+	let text = try File.readText(path) otherwise throw NotFound.notFound
+	return try Json.parse(text) otherwise throw NotFound.notFound
+end 'readJsonFile'
+
+function stringField(doc JsonDoc, key String) returns String throws NotFound
+	return try doc.getString(doc.root, key: key) otherwise throw NotFound.notFound
+end 'stringField'
+
+function stringArrayField(doc JsonDoc, key String) returns StringArray throws NotFound
+	let id = try doc.getChild(doc.root, key: key) otherwise throw NotFound.notFound
+	var out = StringArray.create()
+	let node = doc.get(id)
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let childId = try node.children.get(i) otherwise panic("stringArrayField: children.get OOB — i bounded by n")
+		out.push(doc.get(childId).stringValue)
+	end 'each'
+	return out
+end 'stringArrayField'
+
+// An optional `<key>Contains` expectation: absent means "do not care".
+function expectContains(expect JsonDoc, key String, actual String, what String) returns bool
+	let needle = try expect.getString(expect.root, key: key) otherwise 'absent'
+		return true
+	end 'absent'
+	if actual.contains(needle) 'hit'
+		return true
+	end 'hit'
+	print("FAIL — expected the {what} to contain \"{needle}\". It said: {actual.trim()}\n")
+	return false
+end 'expectContains'
+
+function sameStrings(a StringArray, b StringArray) returns bool
+	if a.count() != b.count() 'lenMismatch'
+		return false
+	end 'lenMismatch'
+	let n = a.count()
+	for i in 0 upto n 'each'
+		let x = try a.get(i) otherwise panic("sameStrings: a.get OOB — i bounded by n")
+		let y = try b.get(i) otherwise panic("sameStrings: b.get OOB — i bounded by n")
+		if not x.equals(y) 'differ'
+			return false
+		end 'differ'
+	end 'each'
+	return true
+end 'sameStrings'
+
+function render(items StringArray) returns String
+	var out = ""
+	let n = items.count()
+	for i in 0 upto n 'each'
+		let item = try items.get(i) otherwise panic("render: items.get OOB — i bounded by n")
+		if i > 0 'sep'
+			out.append(",")
+		end 'sep'
+		out.append(item)
+	end 'each'
+	return "[{out}]"
+end 'render'
+

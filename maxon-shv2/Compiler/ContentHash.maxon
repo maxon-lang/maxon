@@ -27,8 +27,17 @@ let fnvPrime = 1099511628211 as ContentHash
 // That constant is outside Maxon's signed integer-literal range, so it is
 // reconstructed from its high/low 32-bit halves at runtime — the same trick v1
 // uses. Kept as a function so the reconstruction lives in exactly one place.
+//
+// The HIGH half read 3422053188 until 2026-07-14, which is 0xCBF86344, not
+// 0xCBF29CE4 — so this function returned 0xCBF8634484222325 and the hash was not
+// FNV-1a at all, merely a deterministic hash whose comment named a different one.
+// It went unnoticed because nothing outside this file ever had to AGREE with the
+// value: a content-addressed cache key only has to be stable, and a wrong basis is
+// perfectly stable. It was caught the moment a second implementation (the MCP's
+// registry-staleness check, in C#) had to produce the same number and could not.
+// A constant only one party computes is a constant nobody checks.
 export function fnvOffsetBasis() returns ContentHash
-	let high = 3422053188 as ContentHash
+	let high = 3421674724 as ContentHash
 	let low = 2216829733 as ContentHash
 	return (high shl 32) or low
 end 'fnvOffsetBasis'

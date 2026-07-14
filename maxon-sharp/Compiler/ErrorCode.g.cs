@@ -2,7 +2,7 @@
 // GENERATED FROM docs/error-codes.txt. DO NOT EDIT.
 //
 // Add or change a code in that file, then run `maxon error-codes generate`.
-// `maxon error-codes check` (run by every `dotnet build`) fails if this file drifts.
+// `maxon error-codes check` (run by every build that consumes this file) fails if it drifts.
 
 namespace MaxonSharp.Compiler;
 
@@ -13,25 +13,13 @@ namespace MaxonSharp.Compiler;
 /// </summary>
 public enum ErrorCode {
   /// <summary>
-  /// The lexer met a character that cannot begin any token.
-  /// </summary>
-  LexerUnexpectedCharacter = 1001,
-  /// <summary>
   /// A string literal reached end-of-line or end-of-file with no closing quote.
   /// </summary>
   LexerUnterminatedString = 1002,
   /// <summary>
-  /// A character literal reached end-of-line or end-of-file with no closing quote.
-  /// </summary>
-  LexerUnterminatedChar = 1003,
-  /// <summary>
   /// A backslash escape in a string or character literal names no known escape.
   /// </summary>
   LexerInvalidEscape = 1004,
-  /// <summary>
-  /// A numeric literal is malformed (a stray radix prefix, a digit outside the radix, or a misplaced separator).
-  /// </summary>
-  LexerInvalidNumber = 1005,
   /// <summary>
   /// A literal brace appears unescaped in a string literal. Braces open interpolation, so a literal brace must be doubled.
   /// </summary>
@@ -46,10 +34,6 @@ public enum ErrorCode {
   /// </summary>
   ParserUnexpectedToken = 2001,
   /// <summary>
-  /// An identifier was required here (a declaration name, a parameter name, a field name).
-  /// </summary>
-  ParserExpectedIdentifier = 2002,
-  /// <summary>
   /// A type was required here and the token stream had something else.
   /// </summary>
   ParserExpectedType = 2003,
@@ -58,14 +42,6 @@ public enum ErrorCode {
   /// </summary>
   ParserExpectedExpression = 2004,
   /// <summary>
-  /// A statement was required here and the token stream had something else.
-  /// </summary>
-  ParserExpectedStatement = 2005,
-  /// <summary>
-  /// A block was left unterminated: its 'end' is missing.
-  /// </summary>
-  ParserExpectedEnd = 2006,
-  /// <summary>
   /// The parser reached end-of-file with a construct still open.
   /// </summary>
   ParserUnexpectedEof = 2007,
@@ -73,10 +49,6 @@ public enum ErrorCode {
   /// A block's 'end' label does not match the label its header opened.
   /// </summary>
   ParserMismatchedEndLabel = 2008,
-  /// <summary>
-  /// The left side of an assignment is not an assignable place.
-  /// </summary>
-  ParserInvalidAssignment = 2009,
   /// <summary>
   /// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
   /// </summary>
@@ -125,10 +97,6 @@ public enum ErrorCode {
   /// A match arm's block label does not match the label its arm opened.
   /// </summary>
   ParserMatchMismatchedBlockId = 2043,
-  /// <summary>
-  /// A match over an enum has a 'default' arm. Enums are matched exhaustively so that adding a case forces every site to handle it.
-  /// </summary>
-  ParserMatchDefaultWithEnum = 2044,
   /// <summary>
   /// A top-level constant's initializer is not a compile-time constant.
   /// </summary>
@@ -328,10 +296,6 @@ public enum ErrorCode {
   /// </summary>
   SemanticErrorTypeMismatch = 3059,
   /// <summary>
-  /// A bare type name has more than one reachable definition; qualify it.
-  /// </summary>
-  SemanticAmbiguousTypeReference = 3060,
-  /// <summary>
   /// Two typealiases in scope declare the same name.
   /// </summary>
   SemanticDuplicateTypeAlias = 3061,
@@ -471,10 +435,6 @@ public enum ErrorCode {
   /// An 'enum' declares a case with associated values. Cases with payloads make it a 'union'.
   /// </summary>
   SemanticEnumCannotHaveAssociatedValues = 3079,
-  /// <summary>
-  /// A 'union' declares raw values. Raw values belong to 'enum'.
-  /// </summary>
-  SemanticUnionCannotHaveRawValues = 3080,
   /// <summary>
   /// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
   /// </summary>
@@ -626,22 +586,6 @@ public enum ErrorCode {
   /// </summary>
   IrUnsupportedExpression = 4001,
   /// <summary>
-  /// The IR builder met a statement form it cannot lower.
-  /// </summary>
-  IrUnsupportedStatement = 4002,
-  /// <summary>
-  /// A type reached the IR builder unresolved.
-  /// </summary>
-  IrUndefinedType = 4003,
-  /// <summary>
-  /// A variable reached the IR builder unresolved.
-  /// </summary>
-  IrUndefinedVariable = 4004,
-  /// <summary>
-  /// A function reached the IR builder unresolved.
-  /// </summary>
-  IrUndefinedFunction = 4005,
-  /// <summary>
   /// A field access could not be lowered: the base is not a struct, or the field has no slot.
   /// </summary>
   IrInvalidFieldAccess = 4006,
@@ -649,10 +593,6 @@ public enum ErrorCode {
   /// A method call could not be lowered.
   /// </summary>
   IrInvalidMethodCall = 4007,
-  /// <summary>
-  /// A lowering pass met an IR instruction it does not handle.
-  /// </summary>
-  IrUnsupportedInstruction = 4008,
   /// <summary>
   /// a type definition contains a reference cycle -- it transitively
   /// contains itself through struct fields, union associated values, or
@@ -662,16 +602,6 @@ public enum ErrorCode {
   /// the C# bootstrap's `IrTypeCycle` (same code, same message format).
   /// </summary>
   IrTypeCycle = 4014,
-
-  /// <summary>
-  /// The code emitter met an IR instruction it cannot encode for this target.
-  /// </summary>
-  CodeEmitterUnsupportedInstruction = 5002,
-
-  /// <summary>
-  /// The PE writer could not produce the output image.
-  /// </summary>
-  PeWriteError = 6001,
 
   /// <summary>
   /// An internal compiler invariant was violated. This is a compiler bug.

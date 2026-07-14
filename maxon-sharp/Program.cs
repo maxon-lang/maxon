@@ -153,6 +153,23 @@ class Program {
     };
   }
 
+  /// <summary>
+  /// Gate a `maxon build` of a project that contains a GENERATED error-code registry
+  /// (maxon-shv2, maxon-selfhosted) on `error-codes check`. Projects that hold no
+  /// generated file — maxon-dev-mcp, a user's program — are not gated: there is nothing
+  /// in them for the registry to have drifted from.
+  ///
+  /// A project outside any Maxon checkout is not gated either. That is not a hole: with
+  /// no docs/error-codes.txt above it, it cannot contain a file generated from one.
+  /// </summary>
+  static int CheckErrorCodeRegistryFor(string projectDir) {
+    var root = Compiler.ErrorCodeRegistry.FindRootOrNull(Path.GetFullPath(projectDir));
+    if (root == null) return 0;
+    if (!Compiler.ErrorCodeRegistry.ConsumesGeneratedRegistry(root, projectDir)) return 0;
+
+    return Compiler.ErrorCodeRegistry.Check(root);
+  }
+
   static int RunBuild(string[] args) {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
@@ -203,6 +220,15 @@ class Program {
           Console.Error.WriteLine($"No .maxon files found in: {path}");
           return 1;
         }
+
+        // A generated file is verified WHERE IT IS USED, not only where it is produced.
+        // `dotnet build` regenerates ErrorCode.g.cs and checks the registry — but
+        // `maxon build maxon-shv2` compiles maxon-shv2/Compiler/ErrorCodeRegistry.maxon,
+        // which is generated too, and nothing checked it. An shv2 agent could hand-edit
+        // that enum, get a green 275/0, and never trip a gate that lives in someone
+        // else's build. Ahead of the cache probe: a cached build must not skip a gate.
+        var registryGateResult = CheckErrorCodeRegistryFor(path);
+        if (registryGateResult != 0) return registryGateResult;
 
         // Check project cache (includes build.maxon to detect config changes).
         // The buildFile sits at the project root, so its RootPath is `path`.

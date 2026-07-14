@@ -403,6 +403,27 @@ end 'schemaFieldsForScaleTest'
 // =============================================================================
 
 function dispatchToolCall(req RpcRequest, tools ToolSpecArray)
+	// FIRST, BEFORE ANYTHING: does this binary still correspond to its own source?
+	//
+	// It is checked here, at the one place every tool call passes through, and ahead of
+	// the arguments — a stale server has nothing useful to say about an argument either.
+	// `tools/list` deliberately still answers: the MCP host needs it to complete the
+	// handshake, and a server that refuses to introduce itself is a server the agent
+	// cannot be told anything by, including WHY it is refusing.
+	match serverFreshness() 'f'
+		fresh then dispatchFreshToolCall(req, tools: tools)
+		staleSource(newestSource, binaryPath) then refuseStaleServer(req, message: staleSourceRefusal(newestSource, binaryPath: binaryPath))
+		sourcesUnlocatable(binaryPath, reason) then refuseStaleServer(req, message: unverifiableRefusal(binaryPath, reason: reason))
+	end 'f'
+end 'dispatchToolCall'
+
+// `internalError`, not `invalidParams`: nothing is wrong with what the caller asked for.
+// The server is what is wrong, and it says so rather than guessing on their behalf.
+function refuseStaleServer(req RpcRequest, message String)
+	writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.internalError.rawValue, message: message, repoRootEcho: "")
+end 'refuseStaleServer'
+
+function dispatchFreshToolCall(req RpcRequest, tools ToolSpecArray)
 	if not req.paramsPresent 'noPar'
 		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call requires `params`", repoRootEcho: "")
 		return
@@ -435,7 +456,7 @@ function dispatchToolCall(req RpcRequest, tools ToolSpecArray)
 	end 'badRoot'
 
 	invokeAndEmit(spec.handler, req: req, argsId: argsId, repoRoot: repoRoot)
-end 'dispatchToolCall'
+end 'dispatchFreshToolCall'
 
 function findTool(tools ToolSpecArray, name String) returns ToolSpec throws NotFound
 	let n = tools.count()

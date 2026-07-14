@@ -1,47 +1,72 @@
 # The Maxon error-code registry -- the SINGLE SOURCE OF TRUTH for the 4-digit
 # error-code space, shared by all three compilers.
 #
-# THIS FILE IS AUTHORED. The three compiler registries are GENERATED FROM IT:
+# THIS FILE IS AUTHORED. Four files are GENERATED FROM IT, and none may be edited:
 #
-#   maxon-sharp/Compiler/ErrorCode.g.cs           (the C# bootstrap)
-#   maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon   (v1, deprecated)
-#   maxon-shv2/Compiler/ErrorCodeRegistry.maxon         (shv2)
+#   maxon-sharp/Compiler/ErrorCode.g.cs                (the C# bootstrap's enum)
+#   maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon  (v1's enum, deprecated)
+#   maxon-shv2/Compiler/ErrorCodeRegistry.maxon        (shv2's enum)
+#   docs/error-codes.json                              (the artifact TOOLS read)
 #
 # Regenerate them with:  maxon error-codes generate
-# Verify them with:      maxon error-codes check     <- run by every `dotnet build`
+# Verify them with:      maxon error-codes check   <- run by every build that USES one
 #
 # A duplicate number FAILS THE BUILD, naming both claimants. That is the whole
 # point: this file exists because the number space used to be written down three
 # times, and two agents took E3099 on the same day, each having correctly
 # grepped a different copy.
 #
-# FORMAT
+# THIS GRAMMAR HAS EXACTLY ONE PARSER: maxon-sharp/Compiler/ErrorCodeRegistry.cs.
+# It briefly had two -- the MCP's `lookup_error_code` hand-parsed it as well -- and
+# they disagreed on five inputs, one of which reported `emittedBy: {}` for a code the
+# bootstrap declares. A format described in two places is the same disease as a number
+# space written in three. Tools now read docs/error-codes.json, which THIS parser emits
+# and stamps with a hash of these bytes; a tool that finds the hash stale REFUSES to
+# answer rather than answering from a copy nobody checked.
+#
+# FORMAT  (a KEY LINE is any line starting with whitespace; an ENTRY runs from its
+#          header to the next header, and a blank line does NOT end it)
+#
 #   E<nnnn> <CanonicalName>        an entry; the canonical name IS the meaning
-#       csharp     <MemberName>    this compiler declares the code, spelled thus
+#       csharp     <MemberName>    this compiler emits the code, spelled thus
 #       selfhosted <memberName>
 #       shv2       <memberName>
-#       reserved   <why>           nobody declares it YET -- but it is TAKEN
+#       reserved   <why>           nobody emits it -- but the number is TAKEN
 #       doc        <prose>         repeatable; the text `lookup_error_code` returns
 #
-#   `#` comments and blank lines are ignored. Keys are tab-indented.
+#   Key and value are separated by a run of SPACES OR TABS, and so are the number and
+#   the canonical name. Blank lines and `#` comments are ignored anywhere, including
+#   between an entry's key lines. An unknown key is an ERROR, never a skipped line.
 #
 # RULES THE CHECKER ENFORCES
 #   - a number appears at most once
 #   - a canonical name appears at most once
-#   - one compiler never spells two codes with the same member name
+#   - one compiler never spells two codes with the same member name, and never
+#     declares the same key twice on one entry
 #   - an entry is either `reserved` (no compiler claims it) or claimed by >= 1
-#   - the generated files match, byte for byte
+#   - EVERY CLAIM IS LIVE: a claimed member must be mentioned by that compiler's own
+#     source. A claim naming a member nobody emits is a lie the registry tells about
+#     itself, and 22 rows were telling it. (The converse is structural: a code that is
+#     emitted cannot be absent here, because the enum is generated -- `ErrorCode.Foo`
+#     does not compile unless this file put Foo in it.)
+#   - every entry has at least one `doc` line
+#   - the four generated files match, byte for byte
 #
 # The STAGE is DERIVED from the leading digit -- it is never written down:
 #   1xxx lexer   2xxx parser   3xxx semantic   4xxx IR   5xxx code emitter
 #   6xxx PE writer                                       9xxx internal
 #
-# TO ADD A CODE: take the next free number in the right band, add an entry here,
-# run `maxon error-codes generate`, and use the member it emits. Do not hand-edit
-# a generated file -- the check will catch you, which is the idea.
+# TO ADD A CODE: take the next free number in the right band, add an entry here, run
+# `maxon error-codes generate`, and WRITE THE CODE THAT EMITS IT -- the liveness rule
+# fails the build if you stop after generating. Do not hand-edit a generated file; the
+# check will catch you, which is the idea.
+#
+# NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THIS FILE. Use the generated member
+# (`ErrorCode.SemanticUnneededCast`, and `.Format()` if you need the "E3010" spelling).
+# A literal "E3010" in a source file is a fourth copy of the number space, and renumbering
+# the code leaves it pointing at nothing while every gate stays green.
 
 E1001 LexerUnexpectedCharacter
-	csharp LexerUnexpectedCharacter
 	selfhosted lexerUnexpectedCharacter
 	doc The lexer met a character that cannot begin any token.
 
@@ -52,7 +77,7 @@ E1002 LexerUnterminatedString
 	doc A string literal reached end-of-line or end-of-file with no closing quote.
 
 E1003 LexerUnterminatedChar
-	csharp LexerUnterminatedChar
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A character literal reached end-of-line or end-of-file with no closing quote.
 
 E1004 LexerInvalidEscape
@@ -61,7 +86,7 @@ E1004 LexerInvalidEscape
 	doc A backslash escape in a string or character literal names no known escape.
 
 E1005 LexerInvalidNumber
-	csharp LexerInvalidNumber
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A numeric literal is malformed (a stray radix prefix, a digit outside the radix, or a misplaced separator).
 
 E1006 LexerUnescapedBrace
@@ -90,7 +115,7 @@ E2001 ParserUnexpectedToken
 	doc The parser met a token that cannot appear at this point in the grammar.
 
 E2002 ParserExpectedIdentifier
-	csharp ParserExpectedIdentifier
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc An identifier was required here (a declaration name, a parameter name, a field name).
 
 E2003 ParserExpectedType
@@ -105,11 +130,11 @@ E2004 ParserExpectedExpression
 	doc An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
 
 E2005 ParserExpectedStatement
-	csharp ParserExpectedStatement
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A statement was required here and the token stream had something else.
 
 E2006 ParserExpectedEnd
-	csharp ParserExpectedEnd
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A block was left unterminated: its 'end' is missing.
 
 E2007 ParserUnexpectedEof
@@ -123,7 +148,7 @@ E2008 ParserMismatchedEndLabel
 	doc A block's 'end' label does not match the label its header opened.
 
 E2009 ParserInvalidAssignment
-	csharp ParserInvalidAssignment
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The left side of an assignment is not an assignable place.
 
 E2010 ParserExpectedToken
@@ -201,7 +226,7 @@ E2043 ParserMatchMismatchedBlockId
 	doc A match arm's block label does not match the label its arm opened.
 
 E2044 ParserMatchDefaultWithEnum
-	csharp ParserMatchDefaultWithEnum
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A match over an enum has a 'default' arm. Enums are matched exhaustively so that adding a case forces every site to handle it.
 
 E2045 ParserNonConstantInitializer
@@ -262,7 +287,6 @@ E2053 ParserCallArgMissingLabel
 
 E2054 ParserShiftCountNegative
 	csharp ParserShiftCountNegative
-	selfhosted parserShiftCountNegative
 	shv2 shiftCountNegative
 	doc A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
 	doc 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
@@ -467,7 +491,7 @@ E3059 SemanticErrorTypeMismatch
 	doc An 'otherwise' handler's value has a type other than the 'try' expression's type.
 
 E3060 SemanticAmbiguousTypeReference
-	csharp SemanticAmbiguousTypeReference
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A bare type name has more than one reachable definition; qualify it.
 
 E3061 SemanticDuplicateTypeAlias
@@ -537,7 +561,6 @@ E3068 SemanticRefIdentityOnPrimitive
 
 E3069 SemanticEqRequiresEquatable
 	csharp SemanticEqRequiresEquatable
-	selfhosted semanticEqualsRequiresEquatable
 	doc '=='/'!=' is applied to a type that does not implement Equatable.
 
 E3070 SemanticBorrowConflict
@@ -640,7 +663,7 @@ E3079 SemanticEnumCannotHaveAssociatedValues
 	doc An 'enum' declares a case with associated values. Cases with payloads make it a 'union'.
 
 E3080 SemanticUnionCannotHaveRawValues
-	csharp SemanticUnionCannotHaveRawValues
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A 'union' declares raw values. Raw values belong to 'enum'.
 
 E3081 SemanticMatchDiscardedBindings
@@ -778,7 +801,6 @@ E3097 SemanticEnumAccessorComparison
 
 E3098 SemanticPromiseErrorTypeMismatch
 	csharp SemanticPromiseErrorTypeMismatch
-	selfhosted semanticPromiseErrorTypeMismatch
 	doc A promise is stored in a Promise type that does not name the error its thunk throws.
 	doc `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
 	doc `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
@@ -797,7 +819,6 @@ E3098 SemanticPromiseErrorTypeMismatch
 
 E3099 SemanticCapturingClosureEscapes
 	csharp SemanticCapturingClosureEscapes
-	selfhosted semanticCapturingClosureEscapes
 	doc A closure that CAPTURES, ESCAPING the frame its captures point into.
 	doc THE RULE: a closure that captures may not escape its defining frame.
 	doc A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
@@ -838,7 +859,6 @@ E3099 SemanticCapturingClosureEscapes
 
 E3100 SemanticPromiseAlreadyAwaited
 	csharp SemanticPromiseAlreadyAwaited
-	selfhosted semanticPromiseAlreadyAwaited
 	doc A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
 	doc 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
 	doc this was in review. Both of us picked "the next code free" and both of us were right, because
@@ -859,19 +879,19 @@ E4001 IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.
 
 E4002 IrUnsupportedStatement
-	csharp IrUnsupportedStatement
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The IR builder met a statement form it cannot lower.
 
 E4003 IrUndefinedType
-	csharp IrUndefinedType
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A type reached the IR builder unresolved.
 
 E4004 IrUndefinedVariable
-	csharp IrUndefinedVariable
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A variable reached the IR builder unresolved.
 
 E4005 IrUndefinedFunction
-	csharp IrUndefinedFunction
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A function reached the IR builder unresolved.
 
 E4006 IrInvalidFieldAccess
@@ -884,7 +904,7 @@ E4007 IrInvalidMethodCall
 	doc A method call could not be lowered.
 
 E4008 IrUnsupportedInstruction
-	csharp IrUnsupportedInstruction
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc A lowering pass met an IR instruction it does not handle.
 
 E4014 IrTypeCycle
@@ -911,11 +931,11 @@ E5001 CodeEmitterRegisterPressure
 	doc Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 
 E5002 CodeEmitterUnsupportedInstruction
-	csharp CodeEmitterUnsupportedInstruction
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The code emitter met an IR instruction it cannot encode for this target.
 
 E6001 PeWriteError
-	csharp PeWriteError
+	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The PE writer could not produce the output image.
 
 E9001 InternalError

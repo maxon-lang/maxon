@@ -14,7 +14,7 @@
 //   {"present": true}, {"absent": true}, {"contains": "..."}, {"length": N},
 //   {"parseJsonText": <inner>}, plus bare objects/arrays which recurse.
 
-typealias TestCount = int(0 to u64.max)
+export typealias TestCount = int(0 to u64.max)
 
 // Used wherever a subprocess exit code crosses the runner — the value comes
 // from `CollectedOutput.exitCode()` and feeds back into integer assertions
@@ -23,7 +23,7 @@ typealias ExitCode64 = int(i64.min to i64.max)
 
 // Generous per-fixture timeout. Most fixtures finish in <1s, but the
 // `build`/`run_spec_test` tools shell out further and can take longer.
-let perFixtureTimeoutMs = 600000
+export let perFixtureTimeoutMs = 600000
 
 function main() returns ExitCode
 	let repoRoot = resolveRepoRoot()
@@ -52,7 +52,12 @@ function main() returns ExitCode
 		end 'fail'
 	end 'each'
 
-	print("\n[mcp-test] {passed} passed, {failed} failed (of {total})\n")
+	let conformance = runRegistryConformance(repoRoot, binary: binary)
+	passed = passed + conformance.passed
+	failed = failed + conformance.failed
+
+	let grandTotal = total + conformance.passed + conformance.failed
+	print("\n[mcp-test] {passed} passed, {failed} failed (of {grandTotal})\n")
 	if failed > 0 'anyFailed'
 		return 1
 	end 'anyFailed'
@@ -66,7 +71,7 @@ end 'main'
 // The host's executable-file suffix: `.exe` on Windows, empty elsewhere. The
 // server and compiler binaries this runner locates carry it only on Windows;
 // hardcoding `.exe` made every path probe miss on macOS/Linux.
-function exeSuffix() returns String
+export function exeSuffix() returns String
 	#if os(Windows)
 		return ".exe"
 	#else
@@ -187,7 +192,7 @@ function parentDir(path FilePath) returns FilePath
 	return path
 end 'parentDir'
 
-function lastSegment(path FilePath) returns String
+export function lastSegment(path FilePath) returns String
 	let s = path.path
 	let bytes = s.toByteArray()
 	let n = bytes.count()
@@ -202,12 +207,12 @@ function lastSegment(path FilePath) returns String
 	return s
 end 'lastSegment'
 
-function joinPath(parent FilePath, segment String) returns FilePath
+export function joinPath(parent FilePath, segment String) returns FilePath
 	let joined = "{parent.path}/{segment}"
 	return try FilePath.from(joined) otherwise panic("joinPath: derived '{joined}' is invalid")
 end 'joinPath'
 
-function stripSuffix(s String, suffix String) returns String
+export function stripSuffix(s String, suffix String) returns String
 	if not s.endsWith(suffix) 'noMatch'
 		return s
 	end 'noMatch'
@@ -352,7 +357,7 @@ typealias JsonDocArray = Array with JsonDoc
 
 // Split the captured stdout into one JsonDoc per non-blank line. Blank lines
 // are skipped so a trailing newline doesn't produce a spurious empty doc.
-function splitJsonLines(s String) returns JsonDocArray
+export function splitJsonLines(s String) returns JsonDocArray
 	var out = JsonDocArray.create()
 	let lines = s.split("\n")
 	let n = lines.count()

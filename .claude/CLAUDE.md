@@ -190,34 +190,65 @@ Apply these standards when writing or reviewing any code:
 - **Blank lines for readability** — add blank lines around control flow statements and between logical sections.
 - **No magic values** — replace bare literal constants (numbers, strings) with named `static` constants that describe their meaning. When a set of related constants belongs together, group them into a `static enum` instead of scattering individual constants.
 
-## Error codes — ONE registry, and it is not a compiler's
+## Error codes — ONE registry, ONE parser, and neither is a compiler's
 
 **`docs/error-codes.txt` is the single source of truth for the 4-digit error-code space.**
-All three compiler enums are **GENERATED** from it and must never be hand-edited:
+**FOUR** files are **GENERATED** from it and must never be hand-edited:
 
 ```
-maxon-sharp/Compiler/ErrorCode.g.cs             (C# bootstrap)
-maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon   (v1)
-maxon-shv2/Compiler/ErrorCodeRegistry.maxon         (shv2)
+maxon-sharp/Compiler/ErrorCode.g.cs                (C# bootstrap's enum)
+maxon-selfhosted/Compiler/ErrorCodeRegistry.maxon  (v1's enum)
+maxon-shv2/Compiler/ErrorCodeRegistry.maxon        (shv2's enum)
+docs/error-codes.json                              (the artifact TOOLS read)
 ```
 
 **To add a diagnostic:** take the next free number in the right band, add an entry to
 `docs/error-codes.txt` (canonical name + `doc` + a `csharp`/`selfhosted`/`shv2` line per
-compiler that will emit it), run **`maxon error-codes generate`**, and use the member it
-emits. Commit the regenerated files with your change.
+compiler that will emit it), run **`maxon error-codes generate`**, **write the code that
+emits it**, and commit the regenerated files with your change.
 
-- **`maxon error-codes check` runs on every `dotnet build` and FAILS THE BUILD** on a
-  duplicate number (naming both claimants and their lines), a duplicate name, or a
-  generated file that has drifted. Do not grep an enum to find a free number — the enums
-  are derived, and grepping one of three copies is exactly how two agents took E3099 on
-  the same day.
+- **`maxon error-codes check` FAILS THE BUILD** on a duplicate number (naming both
+  claimants and their lines), a duplicate name, a generated file that has drifted, or a
+  **DEAD CLAIM**. Do not grep an enum to find a free number — the enums are derived, and
+  grepping one of three copies is exactly how two agents took E3099 on the same day.
+- **It runs wherever a generated file is USED, not only where it is produced**: on every
+  `dotnet build`, AND on `maxon build maxon-shv2` / `maxon build maxon-selfhosted`. Bolted
+  only to the bootstrap's build, it let an shv2 agent hand-edit shv2's enum and take a
+  green 275/0.
+- **A CLAIM MUST BE LIVE.** A `csharp`/`selfhosted`/`shv2` line must name a member that
+  compiler's source actually mentions; 22 rows named members nobody emitted. (The converse
+  is structural — a code that is emitted cannot be missing from the registry, because
+  `ErrorCode.Foo` does not compile unless the registry generated `Foo`. Keep it that way.)
 - **A reserved number is a real entry** (`reserved <why>`, no compiler claims). It occupies
   the number space. A reservation written in a comment is not a reservation.
 - **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never
   written down, so it cannot disagree.
-- **`lookup_error_code` reads the registry**, so it reports a code's one meaning plus which
-  compilers emit it (`emittedBy`, each with its own spelling) and which do not
-  (`notEmittedBy`). It can no longer answer for the wrong compiler.
+- **NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THE REGISTRY.** Use the generated member
+  (`ErrorCode.SemanticUnneededCast`, plus `.Format()` for the `"E3010"` spelling). A literal
+  `"E3010"` in a source file is a fourth copy of the number space: renumber the code and
+  every gate stays green while the code that matched it silently stops matching anything.
+- **The format has exactly ONE parser** (`maxon-sharp/Compiler/ErrorCodeRegistry.cs`). It
+  briefly had two, and the second one — the MCP's — reported `emittedBy: {}` for a code the
+  bootstrap declares. **Do not write a second one.** Tools read `docs/error-codes.json`,
+  which the parser generates and stamps with a hash of the registry's bytes.
+- **`lookup_error_code` reads `docs/error-codes.json`** and re-hashes `docs/error-codes.txt`
+  before trusting it, so it reports a code's one meaning plus `emittedBy` (each compiler's
+  own spelling) and `notEmittedBy` — **or REFUSES.** If it says the artifact is STALE, run
+  `maxon error-codes generate`. It cannot answer for the wrong compiler and it cannot answer
+  from a registry nothing checked.
+
+### ⚠ THE MCP SERVER'S BINARY IS GITIGNORED AND NOTHING REBUILDS IT
+
+**If you edit anything under `maxon-dev-mcp/mcp/`, rebuild it — `maxon build maxon-dev-mcp/mcp`
+— AND RESTART THE MCP SERVER.** A rebuild alone does not replace the running process.
+
+You will not get away with forgetting: **every `tools/call` compares the running binary's
+timestamp against its own sources and REFUSES if a source is newer**, naming the file and the
+fix. (`tools/list` still answers, so the host can still tell you why.) That guard exists
+because a commit once rewrote `lookup_error_code`, nothing rebuilt the binary, the tool went
+on answering `not found` for all 130 codes from code that no longer existed — and this file
+was edited by the same commit to say it worked. **A tool that answers confidently from stale
+code is worse than one that refuses.**
 
 ## Spec Files
 
