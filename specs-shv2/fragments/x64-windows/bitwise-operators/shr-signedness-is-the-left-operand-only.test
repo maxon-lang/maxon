@@ -1,0 +1,84 @@
+// Test: shr-signedness-is-the-left-operand-only
+typealias Num = int(i64.min to i64.max)
+typealias ShiftBits = int(0 to 63)
+
+function shiftRight(value Num, distance ShiftBits) returns Num
+	return value shr distance
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftRight(0 - 8, distance: 60) != 0 - 1 'rangedDistance'
+		return 1
+	end 'rangedDistance'
+	if shiftRight(0 - 1, distance: 63) != 0 - 1 'allSign'
+		return 2
+	end 'allSign'
+	if shiftRight(8, distance: 2) != 2 'nonNegative'
+		return 3
+	end 'nonNegative'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shiftRight {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegReg rcx, rdx
+    x64.orRegReg rcx, rdx, rax
+    x64.sarRegCl r8, r8
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -8
+    x64.movRegImm32 rdx, 60
+    x64.callDirect shiftRight
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, rangedDistance
+    x64.jmp ifcont
+  rangedDistance:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -1
+    x64.movRegImm32 rdx, 63
+    x64.callDirect shiftRight
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, allSign
+    x64.jmp ifcont
+  allSign:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 2
+    x64.callDirect shiftRight
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, nonNegative
+    x64.jmp ifcont
+  nonNegative:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+}

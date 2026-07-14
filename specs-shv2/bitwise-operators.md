@@ -235,6 +235,42 @@ end 'main'
 42
 ```
 
+<!-- test: shr-signedness-is-the-left-operand-only -->
+A shift is NOT symmetric in its operands: the right one is a DISTANCE, and its declared type says
+nothing about how the shift fills. Only the value being SHIFTED decides that.
+
+This is pinned in BOTH suites because the BOOTSTRAP got it wrong: a shift took its optimal type from
+`lhs ?? rhs`, so a count declared `int(0 to 63)` — an *unsigned* optimal type, and the most natural
+way there is to declare a shift distance — reported the whole shift as unsigned and made a signed
+`shr` ZERO-fill. `(0-8) shr 60` answered -1 for a plain count and **15** for that one. shv2 has no
+such narrowing (every int is a signed i64), so it was right by construction — but "right by
+construction" is exactly the claim that rots unpinned, and this file's whole subject is two compilers
+agreeing.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias ShiftBits = int(0 to 63)
+
+function shiftRight(value Num, distance ShiftBits) returns Num
+	return value shr distance
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftRight(0 - 8, distance: 60) != 0 - 1 'rangedDistance'
+		return 1
+	end 'rangedDistance'
+	if shiftRight(0 - 1, distance: 63) != 0 - 1 'allSign'
+		return 2
+	end 'allSign'
+	if shiftRight(8, distance: 2) != 2 'nonNegative'
+		return 3
+	end 'nonNegative'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: shr-nonnegative-zero-fills -->
 The other half of the same rule: an arithmetic shift of a NON-NEGATIVE value fills with a sign bit
 that is 0, so it zero-fills naturally. Making `shr` arithmetic did not change this.

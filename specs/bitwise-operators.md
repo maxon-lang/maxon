@@ -430,6 +430,64 @@ end 'main'
 0
 ```
 
+<!-- test: shr-signedness-is-the-left-operand-only -->
+A shift is NOT symmetric in its operands: the right one is a DISTANCE, and its declared type says
+nothing about how the shift fills. Only the value being SHIFTED decides that.
+
+This is pinned because the compiler got it wrong. A shift took its `OptimalType` from `lhs ?? rhs`,
+so a count declared `int(0 to 63)` — an *unsigned* optimal type, and the most natural way there is
+to declare a shift distance — reported the whole shift as unsigned and made a SIGNED `shr`
+zero-fill. `(0-8) shr 60` answered -1 for a plain count and **15** for that one: the same shift,
+two answers, chosen by an irrelevant property of the other operand.
+
+Every line below is the same arithmetic shift and must print -1.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias ShiftBits = int(0 to 63)
+typealias Unsigned64 = int(0 to u64.max)
+
+function plainCount(n Num) returns Num
+	return n
+end 'plainCount'
+
+function bitsCount(n ShiftBits) returns ShiftBits
+	return n
+end 'bitsCount'
+
+function wideCount(n Unsigned64) returns Unsigned64
+	return n
+end 'wideCount'
+
+function shiftRight(value Num, distance ShiftBits) returns Num
+	return value shr distance
+end 'shiftRight'
+
+function main() returns ExitCode
+	let neg = 0 - 8
+	print("{neg shr plainCount(60)}\n")
+	print("{neg shr bitsCount(60)}\n")
+	print("{neg shr wideCount(60)}\n")
+	print("{neg shr 60}\n")
+	// The realest shape of all, and the one a programmer would actually write: BOTH operands are
+	// parameters, and the distance is declared with the range a distance has. Neither the fold nor
+	// the guard may look at `distance`'s type to decide how `value` fills.
+	print("{shiftRight(0 - 8, distance: 60)}\n")
+	print("{shiftRight(0 - 1, distance: 63)}\n")
+	return 0
+end 'main'
+```
+```stdout
+-1
+-1
+-1
+-1
+-1
+-1
+```
+```exitcode
+0
+```
+
 <!-- test: shift-by-negative-runtime-count-panics -->
 Go: "if the shift count is negative at run time, a run-time panic occurs". The compiler could not
 fold this count, so the program proves it — and refuses to compute the masked `4 shl 63` the
