@@ -248,7 +248,59 @@ negative count reads as "shift the other way" and silently becomes the *maximum 
 "overflows i64 left-shift, so a full-width target is left unmasked" — a developer already hit this and
 worked around it in prose.
 
-### 8. The bootstrap cannot CALL a function-typed FIELD — only a function-typed parameter
+### 12. ⚠ NEW — the ERROR-CODE REGISTRY is written down TWICE, and two agents collided on E3099
+`maxon-sharp/Compiler/ErrorCode.cs` and `maxon-selfhosted/Compiler/ErrorCode.maxon` are **two registries
+for one number space**, and nothing makes them agree. `mcp__maxon-dev__lookup_error_code` parses only the
+**`.maxon`** one — so a code added to the C# side alone is **undiscoverable** (E3098 was exactly that).
+
+**It has already cost a real collision.** Two agents, in two worktrees, on the same day, each looked for
+"the next free code" and each correctly found **E3099**:
+- `SemanticCapturingClosureInField = 3099` (a capturing closure stored in a struct field)
+- `semanticPromiseAlreadyAwaited = 3099` (a promise awaited twice)
+
+Caught at merge, by hand. **Nothing in the build would have caught it** — two enums in two languages, one
+number space, no cross-check. The second was renumbered to **E3100**.
+
+⇒ **The fix is the usual one: make it ONE fact.** Either generate one registry from the other, or add a
+build-time check that the two agree and that no number is issued twice. Until then, **every new error code
+is a coin flip**, and the next collision will be found by a user, not by a merge.
+
+### ~~8. The bootstrap cannot CALL a function-typed FIELD~~ ✅ FIXED (`b443f497e`) — and a bigger bug is behind it
+The indirect-call lowering existed in **exactly one place**: the bare-identifier branch of `ParsePrimary`.
+That is why a function-typed **parameter** worked and *nothing else did*. Every other producer of a function
+value handed it back and **never looked for a `(` suffix**. Fixed by giving the postfix chain a call arm, so
+a function value is callable **wherever it lands** — a field, `self.op`, a field chain, an array element, a
+returned function, and as a **statement** (which had no notion of a function value at all).
+
+⚠ **BEHIND IT, A SILENT MISCOMPILE THAT IS *NOT* ABOUT FIELDS — see #13.**
+
+### 13. 🔴 NEW, AND THE REAL ONE: a capturing closure that ESCAPES its frame nil-derefs, by ANY route
+Closures capture **by reference** — `LowerClosureCreate` stores the *addresses of the enclosing frame's
+stack slots*. So a capturing closure that outlives its frame reads a dead frame. **It compiles clean and
+dies at runtime.** This is the classic upward-funarg problem, and **fields are only one route**:
+
+```maxon
+function makeAdder(bump Integer) returns IntFn
+	let f = function(n Integer) gives n + bump
+	return f                    ⇒ compiles. Then: panic: nil pointer, in _$closure_0
+end 'makeAdder'
+```
+**Measured, not inferred** (2026-07-14, against the bootstrap).
+
+**Partially guarded (`3f42ecd7d`): `E3099` rejects a capturing closure stored in a struct FIELD** — at the
+struct literal, the field assignment, and the nascent-self slot, followed through a `let` binding. The
+non-capturing case needs no exception: a closure that captures nothing lowers to a plain
+`MaxonFunctionRefOp` and can never carry an env, so it passes *by construction*.
+
+**Still open — every other escape route:** `return`ing one (above), storing one in a **global**, in an
+**Array/Map element**, or passing one to a function that does any of those (the **interprocedural** route:
+at the store the value is a *parameter*, and whether it carries an env is a fact about the *caller*).
+
+⇒ **The single principled rule is: a closure that CAPTURES may not ESCAPE its defining frame** — and the
+mechanism that decides it is **escape analysis**, which is *exactly* shv2's **P1.5**, where capture-into-heap
+**IS** escape and closures co-land with `async` for that reason. **This is the same mechanism, found in the
+bootstrap first.** Whether to build a miniature of it in the bootstrap (which shv2 retires) or to accept a
+partial guard there is a **scope decision, not a technical one.** — only a function-typed parameter
 `spec.handler(doc, id)` ⇒ `E9001: Cannot determine function type from MaxonFieldAccessOp`
 (`2-Parser.cs:9223`). The same value calls fine once it arrives as a **parameter**. So a struct can
 *store* a function but nothing can call it from there.
