@@ -131,9 +131,14 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	var results = SpecTestResultArray.create()
 
 	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"))
-	if isDraftSpec(specFile) 'draftSpec'
+	let tests = selectedTests(specFile, specName: specName, filter: filter)
+	if tests.count() == 0 'selectsNothing'
+		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
+		// such a spec — its parent built the same list from the same function — so this is not the
+		// path a pool run takes; returning here keeps the scratch directories below from being made
+		// for a spec that would write nothing into them.
 		return results
-	end 'draftSpec'
+	end 'selectsNothing'
 
 	let tempDir = specTempDirFor(specDir, specName: specName)
 	if not Directory.create(tempDir) 'noTempDir'
@@ -147,11 +152,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	// (checkTestFragment swallows the ensuing write error) — never a test gate.
 	_ = Directory.create(fragmentDir)
 
-	for test in specFile.tests 'eachTest'
-		if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
-			continue
-		end 'notSelected'
-
+	for test in tests 'eachTest'
 		let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 	end 'eachTest'
@@ -159,13 +160,31 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	return results
 end 'runOneSpec'
 
-// A `draft` spec is not run. The rule lives here, not at each call site, because BOTH halves
-// of the pool ask it — the parent when it decides what the run will report, the worker when
-// it runs a job — and a disagreement would leave the parent waiting for results the worker
-// was never going to produce.
-export function isDraftSpec(specFile SpecFile) returns bool
-	return specFile.status == DraftStatus
-end 'isDraftSpec'
+// The tests of `specFile` that this run will actually execute, in DECLARATION order.
+//
+// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip and the `--filter` match — and it has to
+// be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT PROCESSES. The parent asks
+// it to decide what the run will report and to weight the job queue (`buildPlans`); the worker asks
+// it to decide what to run (`runOneSpec`). Written out twice, the two copies could drift — a rule
+// added to one and not the other — and the drift would not read as a bug: the parent would sit
+// waiting for records the worker was never going to send, or count tests nobody ran.
+// `resultsFromLines` turns that into a panic, but ONE shared rule is what makes the panic
+// unreachable rather than merely loud.
+export function selectedTests(specFile SpecFile, specName String, filter String) returns SpecTestArray
+	var selected = SpecTestArray.create()
+
+	if specFile.status == DraftStatus 'draftSpec'
+		return selected
+	end 'draftSpec'
+
+	for test in specFile.tests 'eachTest'
+		if selectedByFilter(specName, testName: test.name, filter: filter) 'isSelected'
+			selected.push(test)
+		end 'isSelected'
+	end 'eachTest'
+
+	return selected
+end 'selectedTests'
 
 // This spec's private scratch directory: `<specDir>/.spec-tmp/<specName>/`.
 //
@@ -197,9 +216,9 @@ end 'specTempRootDir'
 // test wherever it lives, and `spec/test` takes exactly one. An empty pattern
 // (no `--filter` given) selects everything.
 //
-// Exported because the parent and the worker must select the SAME tests: the parent counts
-// them to build its report, the worker runs them. One rule, one function.
-export function selectedByFilter(specName String, testName String, filter String) returns bool
+// Private: `selectedTests` above is the only door in, so neither half of the pool can apply this
+// rule without also applying the `draft` rule that sits beside it.
+function selectedByFilter(specName String, testName String, filter String) returns bool
 	if filter.isEmpty() 'wholeSuite'
 		return true
 	end 'wholeSuite'

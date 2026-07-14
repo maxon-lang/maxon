@@ -87,8 +87,20 @@ let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
 let ProtocolFieldSep = ":"
 
-// How long the dispatcher parks when no worker has an answer ready. Non-zero on purpose: a
-// zero-length sleep is a spin, and it would starve the very green threads it is waiting for.
+// How long the dispatcher parks when no worker has an answer ready.
+//
+// This is a POLL, and it is deliberately NOT a busy-spin. `sleep` parks the dispatcher green thread
+// on the runtime's timer heap and hands the scheduler to the drain GTs, which are blocked on genuinely
+// overlapped IOCP reads of their workers' stdout (`maxon_pipe_overlapped_read`) — so the parent burns
+// no CPU while it waits, and every drain progresses while it does. The deadline is honest, too: the
+// timer heap is anchored to the monotonic NANOSECOND clock, not the ~15.6 ms `GetTickCount64` tick
+// that once made `sleep(N)` return EARLY.
+//
+// It is reached only when NO slot is idle and NO drain has finished, so its entire cost is up to one
+// millisecond of added latency before a finished worker is re-fed — against jobs that take tens to
+// hundreds of milliseconds. The alternative, `await`ing one chosen slot, needs no timer at all but
+// reintroduces exactly the head-of-line blocking that `findReadyDrain` exists to prevent: a worker
+// that finished early would sit idle until the awaited one came back.
 let PollYieldMs = 1
 
 // A leak-gated Maxon program exits with this when it leaked. A worker IS such a program, so this
@@ -196,26 +208,18 @@ function buildPlans(specDir FilePath, filter String) returns SpecPlanArray throw
 	let specPaths = try specFilePaths(specDir)
 	for specPath in specPaths 'eachSpec'
 		let specFile = try parseSpecFile(specPath)
-		if isDraftSpec(specFile) 'draftSpec'
-			continue
-		end 'draftSpec'
-
 		let specName = specPath.stem()
+		let tests = selectedTests(specFile, specName: specName, filter: filter)
+		if tests.count() == 0 'selectsNothing'
+			continue
+		end 'selectsNothing'
+
 		var testNames = StringArray.create()
 		var weight = 0 as JobWeight
-
-		for test in specFile.tests 'eachTest'
-			if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
-				continue
-			end 'notSelected'
-
+		for test in tests 'eachTest'
 			testNames.push(test.name)
 			weight = weight + test.source.byteLength()
 		end 'eachTest'
-
-		if testNames.count() == 0 'selectsNothing'
-			continue
-		end 'selectsNothing'
 
 		plans.push(SpecPlan.create(specName, testNames: testNames, weight: weight))
 	end 'eachSpec'
@@ -239,9 +243,10 @@ type SpecJob
 		return Self{planIndex: planIndex, specName: specName, weight: weight}
 	end 'create'
 
-	// The placeholder that pre-fills the per-slot in-flight array. Never sent and never read: a
-	// slot's entry is overwritten by a real job the instant it goes busy, and it is only read on
-	// a busy slot.
+	// The placeholder that pre-fills the per-slot in-flight array, so that array is the same length
+	// as `busy` from the start and the two are indexed by the same slot number. Never sent and never
+	// read: `busy[slot]` is the guard, and `inFlight[slot]` is overwritten by a real job in the same
+	// breath as `busy[slot]` is set (see `sendAndDrain`, which orders those writes deliberately).
 	export static function idle() returns SpecJob
 		return Self{planIndex: 0, specName: "", weight: 0}
 	end 'idle'
@@ -301,12 +306,15 @@ end 'popHeaviestJob'
 // record per test, print READY again. `EXIT` — or stdin EOF, which is what a vanished parent
 // looks like — ends the loop.
 //
-// The READY/job pairing is the whole protocol: the parent's drain reads until READY, so every
-// path through this loop that consumed a job line MUST print exactly one READY afterwards, or the
-// parent waits forever for a line that is never coming.
+// THE READY/JOB PAIRING IS THE WHOLE PROTOCOL, and this loop is where it is honoured. The parent's
+// drain reads this worker's stdout until it sees READY, so every path through the loop that CONSUMED
+// A JOB LINE must print exactly one READY afterwards — the paths that could not run the job
+// included. Print none and the parent waits forever on a line that is never coming; print two and
+// the NEXT job's drain ends early, with that job's records read as the job after it. A blank line,
+// which consumed no job, therefore owes no READY. All three READY sites are below.
 export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool) returns ExitCode
 	var stdin = Console.stdin()
-	emitReady()
+	print("{WorkerReadyMarker}\n")
 
 	while true 'jobLoop'
 		let line = try stdin.readLine() otherwise 'parentGone'
@@ -319,6 +327,8 @@ export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filt
 			break
 		end 'shutDown'
 
+		// Consumed no job, so it owes no READY — printing one here would end the drain of a job this
+		// worker has not been given yet.
 		if job.isEmpty() 'blankLine'
 			continue
 		end 'blankLine'
@@ -328,20 +338,16 @@ export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filt
 			// print the READY this loop now owes. Silently dropping the line would deadlock the
 			// parent instead of diagnosing it.
 			printError("spec worker: unknown job line: '{job}'\n")
-			emitReady()
+			print("{WorkerReadyMarker}\n")
 			continue
 		end 'unknownJob'
 
 		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired)
-		emitReady()
+		print("{WorkerReadyMarker}\n")
 	end 'jobLoop'
 
 	return 0
 end 'runPersistentWorker'
-
-function emitReady()
-	print("{WorkerReadyMarker}\n")
-end 'emitReady'
 
 // Run every selected test of one spec and emit one record per test, in declaration order.
 //
@@ -482,32 +488,48 @@ function decodeWorkerLine(line String) returns WorkerRecord
 	panic("spec worker pool: a worker emitted a line that is neither a PASS nor a FAIL record: '{line}'")
 end 'decodeWorkerLine'
 
+// One structural separator consumed: the field in front of it, and everything behind it.
+type RecordSplit
+	export let field as String
+	export let rest as String
+
+	export static function create(field String, rest String) returns RecordSplit
+		return Self{field: field, rest: rest}
+	end 'create'
+end 'RecordSplit'
+
+// Cut `body` at its FIRST separator. A record is a run of these — PASS takes one cut, FAIL takes
+// two — so the field walk is written once here rather than once per record kind, where the two
+// copies would have to agree about what a field is.
+//
+// It cuts at the first separator ONLY, which is what makes it right for the FAIL payload: the
+// remainder after the last structural cut is an escaped compiler diagnostic, full of colons, and it
+// is carried out whole in `rest` rather than being split again.
+//
+// `expected` names the field that should have followed the separator, so a malformed record reads
+// as the protocol break it is instead of a string-index failure.
+function splitAtFieldSep(body String, expected String, line String) returns RecordSplit
+	let sep = try body.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: record has no {expected} field: '{line}'")
+	let restStart = try body.indexAfter(sep) otherwise panic("spec worker pool: record ends at the separator before its {expected} field: '{line}'")
+
+	return RecordSplit.create(body.slice(body.startIndex(), endIndex: sep), rest: body.slice(restStart, endIndex: body.endIndex()))
+end 'splitAtFieldSep'
+
 // `WORKER_SINGLE_RESULT:<spec>:<test>`. Neither field can contain the separator — a spec name is a
 // FILE STEM and a test name comes from a `<!-- test: NAME -->` marker — so the one separator
 // between them is unambiguous.
 function decodePassRecord(line String) returns WorkerRecord
-	let body = sliceAfterPrefix(line, prefix: WorkerPassMarker)
-	let sep = try body.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: PASS record has no test field: '{line}'")
-	let testStart = try body.indexAfter(sep) otherwise panic("spec worker pool: PASS record ends at its separator: '{line}'")
-
-	return WorkerRecord.pass(body.slice(body.startIndex(), endIndex: sep), testName: body.slice(testStart, endIndex: body.endIndex()))
+	let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerPassMarker), expected: "test", line: line)
+	return WorkerRecord.pass(spec.field, testName: spec.rest)
 end 'decodePassRecord'
 
-// `WORKER_SINGLE_FAIL:<spec>:<test>:<payload>`. Only the FIRST TWO separators are structural: the
-// payload is an escaped compiler diagnostic and is full of colons, so this walks the two
-// separators one at a time rather than splitting the line on `:`.
+// `WORKER_SINGLE_FAIL:<spec>:<test>:<payload>`. Only the FIRST TWO separators are structural; the
+// payload keeps every colon it contains.
 function decodeFailRecord(line String) returns WorkerRecord
-	let body = sliceAfterPrefix(line, prefix: WorkerFailMarker)
-	let specSep = try body.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: FAIL record has no test field: '{line}'")
-	let afterSpec = try body.indexAfter(specSep) otherwise panic("spec worker pool: FAIL record ends at its first separator: '{line}'")
-	let specName = body.slice(body.startIndex(), endIndex: specSep)
+	let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerFailMarker), expected: "test", line: line)
+	let test = splitAtFieldSep(spec.rest, expected: "reason", line: line)
 
-	let rest = body.slice(afterSpec, endIndex: body.endIndex())
-	let testSep = try rest.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: FAIL record has no reason field: '{line}'")
-	let afterTest = try rest.indexAfter(testSep) otherwise panic("spec worker pool: FAIL record ends at its second separator: '{line}'")
-
-	let reason = decodeFailPayload(rest.slice(afterTest, endIndex: rest.endIndex()))
-	return WorkerRecord.fail(specName, testName: rest.slice(rest.startIndex(), endIndex: testSep), reason: reason)
+	return WorkerRecord.fail(spec.field, testName: test.field, reason: decodeFailPayload(test.rest))
 end 'decodeFailRecord'
 
 // Turn one worker's drained lines into that spec's results, in the order the parent decided they
@@ -658,8 +680,17 @@ type PersistentWorkerHandle
 	end 'spawnNoWait'
 
 	// Drain the startup hello. Pairs with `spawnNoWait`'s two-phase startup.
+	//
+	// EVERY failing path releases the handle before it throws — the unreadable-pipe path included,
+	// which used to propagate the read error with the handle still open. A worker that never says
+	// hello is a worker nobody will hold a handle to again, and the caller's job is to report that,
+	// not to clean up after this one.
 	export function awaitReady() throws SubprocessError
-		let hello = try child.readStdoutLine()
+		let hello = try child.readStdoutLine() otherwise (e) 'helloUnreadable'
+			child.release()
+			throw e
+		end 'helloUnreadable'
+
 		if hello.trim() != WorkerReadyMarker 'badHello'
 			child.release()
 			throw SubprocessError.ioFailed("worker {workerId} startup: expected {WorkerReadyMarker}, got '{hello}'")
@@ -679,10 +710,17 @@ type PersistentWorkerHandle
 	// exited, so its write end is closed: the read loop consumes what the pipe buffered and then
 	// sees EOF. A worker emits nothing on stderr on the happy path, so deferring the drain costs
 	// nothing and cannot fill the pipe.
+	//
+	// A FAILED shutdown releases the handle TOO, and it must: `shutdownPool` merely reports that
+	// error and moves on to the next worker, so a handle abandoned here would be an OS handle held
+	// for the rest of the run — in a parent that is itself leak-gated. The stderr drain is skipped
+	// on that path: it terminates only because the child has EXITED, and a shutdown that failed is
+	// exactly the case where we cannot say that it has.
 	export function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
-		try child.writeStdinLine(ExitCommand)
-		child.closeStdin()
-		let code = try child.wait()
+		let code = try requestExitAndWait() otherwise (e) 'shutdownFailed'
+			child.release()
+			throw e
+		end 'shutdownFailed'
 
 		let stderr = drainChildStderr(child)
 		if not stderr.isEmpty() 'workerSpoke'
@@ -692,6 +730,15 @@ type PersistentWorkerHandle
 		child.release()
 		return code
 	end 'shutdownAndDrainStderr'
+
+	// Ask the worker to leave, close its stdin so an unresponsive one still sees EOF, and wait for
+	// it. Split out from the above so that BOTH of its throwing calls land on one failure path, and
+	// that path can release the handle before it rethrows.
+	function requestExitAndWait() returns ExitInt throws SubprocessError
+		try child.writeStdinLine(ExitCommand)
+		child.closeStdin()
+		return try child.wait()
+	end 'requestExitAndWait'
 end 'PersistentWorkerHandle'
 
 typealias PersistentWorkerHandleArray = Array with PersistentWorkerHandle
@@ -775,6 +822,11 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
 	// and splitting out only that one field would read worse than splitting all of them.
+	//
+	// THE THREE ARE INDEXED BY THE SAME SLOT NUMBER AND `busy` IS THE GUARD FOR THE OTHER TWO:
+	// `inFlight[slot]` and `drains[slot]` are read ONLY where `busy[slot]` is true, and `sendAndDrain`
+	// establishes all three before it sets the guard — so a slot is never observable as busy with a
+	// stale job or a missing promise.
 	var busy = BoolArray.create()
 	var inFlight = SpecJobArray.create()
 	var drains = DrainPromiseArray.create()
@@ -822,9 +874,9 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 		if let readySlot = try findReadyDrain(busy, drains: drains, cursor: drainCursor) 'haveAnswer'
 			var handle = try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")
 			// Cloned out of the array so the borrow does not pin `inFlight` for the re-dispatch
-			// two lines down, which overwrites this very slot.
+			// below, which overwrites this very slot.
 			let job = (try inFlight.get(readySlot) otherwise panic("runSpecPool: inFlight.get({readySlot}) is in bounds by construction")).clone()
-			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise")
+			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise, and slot {readySlot} is busy")
 
 			// No `(e)` binding on this `otherwise`: a bound name on an `await` binds the promise's
 			// VALUE type, not its error, so `e` would come through as a StringArray's element rather
@@ -927,6 +979,13 @@ end 'spawnPool'
 // (the idle scan starts at cursor 0 and every slot starts idle), so the push always lands at the
 // right index, and the strict split below turns any future reordering into a panic rather than a
 // silently mis-indexed promise.
+//
+// THE ORDER OF THE THREE SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
+// that tells the two scans below that `inFlight[slot]` and `drains[slot]` may be read, so it is set
+// only once both of them hold this job's values. Setting it first — as this used to — leaves a
+// window in which the slot claims to be busy while its promise is still the PREVIOUS job's, and that
+// window is safe today only because nothing between the writes happens to yield to another green
+// thread. That is a property of the current code, not of the invariant, so it is not one to rest on.
 function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray)
 	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
 
@@ -937,7 +996,6 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	end 'sendFailed'
 
 	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
-	try busy.set(slot, value: true) otherwise panic("sendAndDrain: busy.set({slot}) is in bounds by construction")
 
 	let drain = async drainResultsThunk(handle.child)
 	if slot == drains.count() 'firstDispatchToThisSlot'
@@ -947,6 +1005,8 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	end 'redispatch' else 'indexGap'
 		panic("sendAndDrain: slot {slot} has no promise slot yet and is not the next one ({drains.count()}) — the initial dispatch went out of slot order")
 	end 'indexGap'
+
+	try busy.set(slot, value: true) otherwise panic("sendAndDrain: busy.set({slot}) is in bounds by construction")
 end 'sendAndDrain'
 
 // EXIT every worker, wait for it, forward whatever it left on stderr, release its handle — and
@@ -975,7 +1035,9 @@ function shutdownPool(workers PersistentWorkerHandleArray) returns WorkerTally
 end 'shutdownPool'
 
 // The next idle slot at or after `cursor`, wrapping. Round-robin rather than always-from-zero, so
-// the pool does not pin its work to the low-numbered workers.
+// the pool does not pin its work to the low-numbered workers. Both scans below sweep all `poolSize`
+// slots before giving up, so the cursor's position can never starve a slot — it only chooses which
+// of several eligible slots is served first.
 function findIdleSlot(busy BoolArray, cursor WorkerId) returns WorkerId throws NoSlot
 	let poolSize = busy.count()
 
@@ -1003,7 +1065,7 @@ function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerI
 			continue
 		end 'skipIdle'
 
-		let drain = try drains.get(slot) otherwise panic("findReadyDrain: a busy slot always has a drain promise")
+		let drain = try drains.get(slot) otherwise panic("findReadyDrain: a busy slot always has a drain promise, and slot {slot} is busy")
 		if __Builtins.gtIsComplete(drain.inner) != 0 'hasAnswered'
 			return slot
 		end 'hasAnswered'
