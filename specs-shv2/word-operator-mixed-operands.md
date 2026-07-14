@@ -18,18 +18,12 @@ The int-on-the-LEFT direction is the dangerous one, because it looks like it wor
 while `5 and flag` computes `5 & 1` = **1** and behaves exactly like `flag`. Same expression
 shape, opposite behaviour, decided by a bit of the constant. Both are rejected.
 
+A mixture is the one case the word operators reject. `bool <op> bool` (logical) and
+`int <op> int` (bitwise) are both legal, and the rest of the bool/int rule — arithmetic, shifts,
+comparisons, conditions, `return`, call arguments — is `bool-int-type-discipline.md`. Both ask
+the same question, in one place: `TypeRules.typesAgree`.
+
 ## Tests
-
-> **All four cases below are SHELVED for a HARNESS reason ONLY — the compiler is already
-> right.** They are written in the upstream `maxoncstderr` convention
-> (`specs/fragments/<spec>/<test>.test:<line>:<col>`). This branch is based BEFORE the
-> fragment-convention rung, so the runner here still reports `<fragment>:<line>` and its line
-> numbers are one lower (it prepends no `// Test:` header). The message text and the COLUMN
-> already match byte-for-byte — only the path and the +1 line offset differ, which is exactly
-> what that rung normalizes.
->
-> **Flip all four to `test:` once this branch is rebased onto it. Nothing else is needed.**
-
 
 <!-- test: bool-and-int -->
 ```maxon

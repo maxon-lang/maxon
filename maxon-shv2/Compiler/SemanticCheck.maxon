@@ -19,9 +19,10 @@ let NoMainMessage = "No 'main' function found"
 let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 
 // Run the semantic checks over the resolved project + module. M1 checks `main`; M5
-// adds per-call-site validation (the callee exists, the argument count matches, and
-// every `name:` label names a distinct parameter) — the checks that need the callee's
-// signature, which only the whole-program `funcSignatures` registry carries.
+// adds per-call-site validation (the callee exists, the argument count matches, every
+// `name:` label names a distinct parameter, and every argument's TYPE agrees with its
+// parameter's) — the checks that need the callee's signature, which only the whole-program
+// `funcSignatures` registry carries.
 export function semanticCheck(project Project, module MaxonModule)
 	checkMainFunction(project)
 	checkCalls(project, module: module)
@@ -47,9 +48,10 @@ function checkCalls(project Project, module MaxonModule)
 end 'checkCalls'
 
 // Validate one call site. Reports the FIRST error found (unknown callee, then the arg
-// slotting result: arity, unknown label, or a parameter given two arguments). The call
-// site's own span (`project.opRanges[opIndex]`) anchors the callee/arity errors; an
-// argument's own span (`argRanges[argIndex]`) anchors a per-argument label error.
+// slotting result: arity, unknown label, or a parameter given two arguments; then, on a
+// cleanly slotted call, the per-argument TYPES). The call site's own span
+// (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
+// (`argRanges[argIndex]`) anchors a per-argument label error.
 function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
@@ -61,12 +63,49 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 	match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-		ordered then break 'slot'
+		ordered(argIds) then checkArgTypes(project, func: func, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{String.from(callee)}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
 		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{String.from(callee)}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{String.from(callee)}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
+
+// **The one type rule that cannot live in the parser.** An argument must agree with the
+// parameter it fills, and the callee may be declared in another FILE — so the question needs
+// the whole-program `funcSignatures` registry, which only this pass has. It asks the SAME
+// `typesAgree` every operator asks (TypeRules.maxon); what it brings is the second half of the
+// question, from two places the parser could not put together:
+//
+//   • the ARGUMENT's type — off the calling function's published per-value type column
+//     (`IrFunction.valueTags`, which the parser built and handed over);
+//   • the PARAMETER's type — off the callee's signature, RESOLVED (`resolveTypes` runs first
+//     and has already collapsed every `named` alias in it to its primitive).
+//
+// `argIds` arrives in DECLARATION order (`slotCallArgs` applied the `name:` label reordering),
+// so `argIds[i]` is the value filling parameter `i` and pairs directly with `sig.paramTypes[i]`
+// — the reordering is done ONCE, by the one function that owns it, and neither this check nor
+// `lowerCall` re-derives it.
+//
+// The diagnostic anchors on the CALL SITE, not on the argument, and that is the reference
+// compiler's anchor: specs/implicit-type-conversion.md's `no-bool-to-int` expects column 9 of
+// `\treturn takeInt(b)` — the `takeInt` token, not the `b`. It names the PARAMETER rather than
+// the callee, which is also the reference's text — the parameter is what the argument failed to
+// match, and the call site already says which function it belongs to.
+function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+	for i in 0 upto argIds.count() 'eachArg'
+		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")
+		let paramType = try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature")
+		let argTag = try func.valueTags.get(argId) otherwise panic("checkArgTypes: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+
+		let paramTag = maxonTypeTag(paramType)
+		if typesAgree(argTag, right: paramTag) 'agree'
+			continue
+		end 'agree'
+
+		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+	end 'eachArg'
+end 'checkArgTypes'
 
 // Report a per-ARGUMENT call error anchored on the offending argument's own source
 // span (from the call op's inline `argRanges`), so the diagnostic points at the bad

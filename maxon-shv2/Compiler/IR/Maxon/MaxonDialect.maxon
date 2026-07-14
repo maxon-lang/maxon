@@ -182,6 +182,19 @@ export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
 	end 'check'
 end 'maxonReturnTypeIsVoid'
 
+// The `ValueTypeTag` of a function's declared return type — what a `return <expr>` must agree
+// with (TypeRules' `typesAgree`). Void has NO tag: void is not a type, so there is nothing for
+// a value to agree with, and manufacturing a tag for it would be exactly the sentinel this
+// codebase forbids. Every caller has already established the function returns a value —
+// `maxonReturnTypeIsVoid` is the gate, and a void `return <expr>` is its own diagnostic
+// (`ParseError.returnValueFromVoid`) — so the void arm is a caller bug and panics.
+export function maxonReturnTypeTag(ref MaxonReturnType) returns ValueTypeTag
+	match ref 'k'
+		void then panic("maxonReturnTypeTag: a void return type has no value tag — the caller must gate on maxonReturnTypeIsVoid first")
+		value(inner) then return maxonTypeTag(inner)
+	end 'k'
+end 'maxonReturnTypeTag'
+
 // --- MaxonOp ---
 //
 // **Value operands are `ValueId`s, minted by the PARSER.** Every op's result gets

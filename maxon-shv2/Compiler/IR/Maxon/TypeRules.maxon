@@ -1,0 +1,266 @@
+// TypeRules — THE source-level type rules of the Maxon tier: when two types AGREE, and what
+// an operator's operands are allowed to be.
+//
+// ONE FILE, BECAUSE THERE IS ONE RULE. "Do these two types agree?" is asked from five places
+// that share nothing else — the word operators (`and`/`or`/`xor`), every comparison, every
+// `return`, every `if`/`while` condition, and (in SemanticCheck, the only one with the
+// whole-program signatures it needs) every call argument. A second copy of the rule would not
+// stay a copy. It would drift, and the drift surfaces as a program the compiler accepts on one
+// path and rejects on the other — a WRONG ANSWER, not a compile error. That is not a
+// hypothetical here: `4 and flag` was correctly rejected while `4 + flag` compiled to `4 + 1`
+// and `takeInt(flag)` passed a bool into an int parameter, precisely because the only rule that
+// existed lived on the `and`/`or`/`xor` path and nothing else asked it anything.
+//
+// EVERY RULE IS STATED OVER `ValueTypeTag`, NEVER `MaxonType`. A Maxon union value is a heap
+// object, so a rule that took or returned a `MaxonType` would ALLOCATE on the per-operator path
+// — see MaxonDialect's ValueTypeTag header, where `scale-test` charged the first cut of exactly
+// that +4,165 allocations on the smallest rung. A tag is a scalar.
+//
+// Ported from maxon-selfhosted's `CastCategory` + `validateCompareOp` (TypeResolution.maxon:
+// 1863-1898 and 2726-2740), which partitions every type into a CATEGORY and requires two
+// operands to share one. The DIVERGENCE is where it runs: v1 validates at type resolution,
+// shv2 at the PARSER. The parser is already the tier that must know a value's source type (a
+// bool `and` is CONTROL FLOW — see Parser.emitShortCircuit — and no later pass can retrofit
+// that decision), so it already holds a per-value type column. Putting the check anywhere else
+// would mean a SECOND type oracle downstream, which is the very duplication this file exists to
+// prevent. The one rule that genuinely cannot live in the parser — a call argument, whose
+// callee may be in another file — reads the same column, published on `IrFunction.valueTags`.
+
+// The type CLASSES the language's implicit-conversion lattice has. Two types AGREE iff they
+// land in the same class.
+//
+//   • `numeric` — every NUMBER: `int`, `float`, `ExitCode`, and every ranged typealias.
+//     Conversions WITHIN the class are implicit (specs/implicit-type-conversion.md: an int
+//     promotes to a float, a float truncates to an int), which is exactly why the class — and
+//     not the individual type — is the unit of agreement.
+//   • `boolean` — `bool`, and nothing else. **A bool converts to nothing, and nothing converts
+//     to a bool.** That single sentence is the whole rule this file enforces; `takeInt(flag)`,
+//     `4 + flag`, `4 < flag` and `if 4` are one error wearing four syntaxes.
+//   • `unknown` — a type the parser could not pin. Reachable for exactly one thing today: a
+//     call to a function this FILE does not declare (a cross-file return type resolves in
+//     TypeResolution, long after the parser has had to commit). It agrees with EVERYTHING —
+//     that is a DEFERRAL, not a contradiction, and it is the conservative direction: refusing
+//     to judge is what stops a cross-file call being rejected on a guess.
+export enum TypeClass
+	boolean
+	numeric
+	unknown
+end 'TypeClass'
+
+// The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
+// cannot be added without being placed in the lattice.
+function typeClassOf(tag ValueTypeTag) returns TypeClass
+	return match tag 'k'
+		boolean gives TypeClass.boolean
+		integer gives TypeClass.numeric
+		float gives TypeClass.numeric
+		// A `named` type is a ranged typealias, and EVERY alias shv2 can declare is an INT one:
+		// `Parser.parseTypeAlias` accepts only `int(low to high)` — it rejects every other form
+		// with a positioned `unsupported` — and hands `RangedTypeAlias.create` a literal
+		// `MaxonType.integer` as the underlying type at its single construction site. So this
+		// arm is a THEOREM about the current compiler, not a guess. It stops being one the day a
+		// `bool` or `float` alias becomes legal, and on that day this arm must resolve through
+		// the alias registry — which needs the alias's NAME id, which the parser already
+		// computes (`Parser.valueNameIds`) and would then have to publish alongside the tags.
+		named gives TypeClass.numeric
+		exitCode gives TypeClass.numeric
+		unresolved gives TypeClass.unknown
+	end 'k'
+end 'typeClassOf'
+
+// **THE decision.** Every type-agreement question in the compiler bottoms out here, and
+// nothing else answers one. Two classes agree iff they are the same class — unless either is
+// `unknown`, which agrees with anything (see TypeClass: a deferral, not a judgment).
+function typeClassesAgree(left TypeClass, right TypeClass) returns bool
+	if left == TypeClass.unknown or right == TypeClass.unknown 'deferred'
+		return true
+	end 'deferred'
+	return left == right
+end 'typeClassesAgree'
+
+// Do two VALUES' types agree? The form the symmetric rules ask in: a word operator's two
+// operands, a comparison's two operands, a `return`'s value against the declared return type,
+// a call argument against its parameter.
+export function typesAgree(left ValueTypeTag, right ValueTypeTag) returns bool
+	return typeClassesAgree(typeClassOf(left), right: typeClassOf(right))
+end 'typesAgree'
+
+// May a value of type `tag` stand where a value of class `required` is demanded? The form the
+// one-sided rules ask in — the operator names a DOMAIN rather than a second operand: `+` and
+// `shl` and unary `-` require a number, an `if` requires a bool. It is the same decision, asked
+// of a class instead of a second type.
+export function typeClassAdmits(required TypeClass, tag ValueTypeTag) returns bool
+	return typeClassesAgree(required, right: typeClassOf(tag))
+end 'typeClassAdmits'
+
+// The name a type prints under in a diagnostic: the RESOLVED PRIMITIVE, never the alias the
+// source wrote. That is what both reference compilers print — the C# bootstrap reports a
+// parameter declared `Integer` (a `typealias Integer = int(i64.min to i64.max)`) as
+// `expected 'int'`, and specs/implicit-type-conversion.md's `no-bool-to-int` case gates that
+// text byte-for-byte.
+export function typeTagName(tag ValueTypeTag) returns String
+	return match tag 'k'
+		boolean gives "bool"
+		integer gives "int"
+		float gives "float"
+		// Both render as `int` for the same reason they classify as `numeric`: every alias is a
+		// ranged int, and `ExitCode` is an unsigned 32-bit one. The bootstrap agrees — it reports
+		// `return <bool>` from a `returns ExitCode` function as "declared to return 'int'".
+		named gives "int"
+		exitCode gives "int"
+		// A type the parser could not pin. It AGREES with everything, so it is never the side
+		// that FAILS a rule — but it can be the OTHER side of one (`f() + flag`, where the bool
+		// is what is wrong), and that message still has to name it. "unknown" is the honest word:
+		// shv2 genuinely does not know, and no reference expectation covers the case (the corpus
+		// is single-file, so nothing in it is cross-file unresolved).
+		unresolved gives "unknown"
+	end 'k'
+end 'typeTagName'
+
+// --- The type-DIRECTED operators ---
+//
+// `and` / `or` / `xor` / `not` mean different things on a `bool` than on an `int`, and the
+// PARSER is the tier that decides which: it is the only one holding an expression's
+// source-level type, and (for `and`/`or`) the decision is CONTROL FLOW, which no later pass
+// can retrofit. These are the rules that decision reads.
+
+// True for the tag of a `bool`, and ONLY for it. Distinct from
+// `typeClassAdmits(TypeClass.boolean, …)`, and the difference is load-bearing: this asks "is
+// this DEFINITELY a bool?", which is what the short-circuit gate and the `not` opcode choice
+// need (an `unresolved` operand must NOT short-circuit, and must not be guessed at), while
+// `typeClassAdmits` asks "is this ALLOWED to be a bool?", which is what a CONDITION needs (an
+// `unresolved` condition is deferred, not rejected). Two questions, deliberately not one.
+export function tagIsBool(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.boolean
+end 'tagIsBool'
+
+// True when a type could not be pinned at parse time — see TypeClass's `unknown`.
+export function tagIsUnresolved(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.unresolved
+end 'tagIsUnresolved'
+
+// The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
+// shift is integral by definition, on both sides.
+export function wordOperator(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to mod gives false
+		bitAnd to bitXor gives true
+		shl to shr gives false
+	end 'k'
+end 'wordOperator'
+
+// The result type of a WORD operator (`and`/`or`/`xor`) — the one place the bitwise/logical
+// duality is resolved, ported from maxon-selfhosted's `binOpOperandType` (Parser.maxon:
+// 11534-11542):
+//
+//   • either operand `bool` ⇒ `boolean`   — the LOGICAL reading, whose result is a bool
+//   • either operand unresolved ⇒ `unresolved` — defer rather than guess; forcing `integer`
+//     here is what made v1 type a `boolA or boolB` as an int and reject it against a `bool`
+//     parameter
+//   • otherwise ⇒ `integer`               — the BITWISE reading
+//
+// The operands have already been checked to AGREE by the time this runs (`checkBinOpOperands`),
+// so "either operand is a bool" and "both operands are bools" name the same case here.
+export function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	if tagIsBool(left) or tagIsBool(right) 'logical'
+		return ValueTypeTag.boolean
+	end 'logical'
+	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
+		return ValueTypeTag.unresolved
+	end 'defer'
+	return ValueTypeTag.integer
+end 'wordOpResultTag'
+
+// The type a `binOp` yields. Arithmetic, the division family and the shifts are integral by
+// definition (v1 says the same of `shl`/`shr`/`mod`: "integer-only by definition",
+// Parser.maxon:11524). Only the WORD operators follow their operands.
+export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	return match op 'k'
+		add to mod gives ValueTypeTag.integer
+		bitAnd to bitXor gives wordOpResultTag(left, right: right)
+		shl to shr gives ValueTypeTag.integer
+	end 'k'
+end 'binOpResultTag'
+
+// What is wrong with a binary operator's operands, if anything.
+//
+// An `enum`, NOT a `union`, and the distinction is measured rather than stylistic: no arm
+// carries a payload, and **a Maxon union value is a heap object even for a payload-free case**
+// (MaxonDialect's ValueTypeTag header). A union here would put one allocation on EVERY BINARY
+// OPERATOR of every expression of every function — the compiler's hottest path, and the exact
+// trap that column was rebuilt to escape. `scale-test` charged the union form of this verdict
+// +62 allocations on the smallest rung and +1,550 on the largest; as an enum it is a scalar and
+// costs nothing.
+export enum BinOpOperands
+	ok
+	// A WORD operator whose operands land in different classes — one bool, one number. The word
+	// operators are CONTEXT-DEPENDENT, not polymorphic: `bool <op> bool` is the logical reading
+	// and `int <op> int` the bitwise one, but a MIXTURE is neither, and either reading silently
+	// discards what the other operand meant. The int-on-the-left direction is the nastier one
+	// because it looks like it works: `5 and flag` computes `5 & 1` = 1 and behaves exactly like
+	// `flag`, while `4 and flag` computes `4 & 1` = 0 and is ALWAYS FALSE — same shape, opposite
+	// behaviour, decided by a bit of the constant.
+	mixedWordOperands
+	// An ARITHMETIC / DIVISION / SHIFT operator with a non-numeric operand. These are numeric BY
+	// DEFINITION on both sides: there is no reading of `4 + flag` at all. So this fires for a
+	// bool on EITHER side — and for two bools (`true + false`), which merely AGREE with each
+	// other and would sail past a pure agreement rule. Agreement is necessary, not sufficient.
+	nonNumericOperands
+end 'BinOpOperands'
+
+// The operand rule for EVERY binary operator, in one classifier. Which of the two questions is
+// asked depends only on the operator's family, and both bottom out in `typeClassesAgree`.
+//
+// This is the function whose ABSENCE was the bug: the mixed-word-operand rule existed, and
+// nothing at all guarded arithmetic, the shifts, or the division family — so `4 + flag`,
+// `4 * flag` and `flag shl 4` compiled to arithmetic on the bool's 0/1 payload and returned 5,
+// 4 and 16. Every binary operator now comes through here.
+export function checkBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns BinOpOperands
+	if wordOperator(op) 'word'
+		if typesAgree(left, right: right) 'agree'
+			return BinOpOperands.ok
+		end 'agree'
+		return BinOpOperands.mixedWordOperands
+	end 'word'
+
+	if typeClassAdmits(TypeClass.numeric, tag: left) and typeClassAdmits(TypeClass.numeric, tag: right) 'numeric'
+		return BinOpOperands.ok
+	end 'numeric'
+	return BinOpOperands.nonNumericOperands
+end 'checkBinOpOperands'
+
+// Which `not` a prefix `not` means, from its operand's type — the LOGICAL one on a bool (flip
+// bit 0), the BITWISE one on an integer (complement all 64).
+//
+// AN UNRESOLVED OPERAND HAS NO SAFE ANSWER, AND SO IS NOT GIVEN ONE. `not` is the one
+// type-directed operator whose two readings disagree about the VALUE, not merely about the side
+// effects: `and`/`or`/`xor` fall back to the bitwise reading when they cannot pin a type, and on
+// the 0/1 bool domain the bitwise answer IS the logical one (only the short-circuit elision is
+// lost). `not` has no such luck — the bitwise reading of `false` is -1 and of `true` is -2, and
+// BOTH read as TRUE in a condition, so `if not isReady()` would be taken unconditionally. That
+// is a silent miscompile, not a degradation, and it is exactly what
+// specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees` case exists to
+// forbid.
+//
+// So a `not` whose operand's type the parser cannot determine is REJECTED with a positioned
+// diagnostic. The only way to reach it today is a call to a function declared in ANOTHER FILE
+// (`scanFunctionSignatures` pins every function in this one, in any order). v1 avoids the choice
+// by emitting a single `logicalNot` and resolving it in its lowering, which re-reads the operand
+// type after TypeResolution — a route shv2's Std tier does not have, because it keeps no
+// per-value source type (see MaxonUnaryOp). The real fix is a project-wide callee signature
+// query; until then, refusing beats guessing.
+export union NotOperator
+	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
+	// The operand's type could not be determined, so neither reading can be chosen.
+	unknownOperandType
+end 'NotOperator'
+
+export function notOperatorFor(operand ValueTypeTag) returns NotOperator
+	if tagIsBool(operand) 'logical'
+		return NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
+	end 'logical'
+	if tagIsUnresolved(operand) 'cannotChoose'
+		return NotOperator.unknownOperandType
+	end 'cannotChoose'
+	return NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+end 'notOperatorFor'

@@ -16,13 +16,19 @@
 // `noMainFunction` / `mainWrongReturnType` are the two `basics.md` semantic
 // codes with exact spec-gated text. `parserExpectedToken` (E2010) is the
 // positioned "Expected X but got Y" parse diagnostic that `variables.md`'s
-// type-annotation-rejection tests gate on. `parserExpectedExpression` (E2004) is the
-// EXPRESSION-LEVEL parse failure — it carries two messages, matching the reference
-// compilers (`maxon-sharp` ErrorCode.cs:27, `maxon-selfhosted` ErrorCode.maxon:19,
-// both `ParserExpectedExpression = 2004`): "Expected expression but got X" where a
-// primary was required and the token stream had something else (`unary-operators.md`'s
-// `- -x`), and "Undefined variable 'x'" where a name in an expression has no binding
-// in scope (`block-scoping.md`, every case that reaches past a closed block).
+// type-annotation-rejection tests gate on. `parserExpressionError` (E2004) is the
+// EXPRESSION-LEVEL parse failure. Both reference registries name it
+// `ParserExpectedExpression` (`maxon-sharp` ErrorCode.cs:27, `maxon-selfhosted`
+// ErrorCode.maxon:19, both `= 2004`) and both then report FOUR distinct messages under
+// it, so the code is broader than that name — it is "this expression is not well
+// formed", and shv2 names it for what it IS rather than for one of its four uses:
+//   • "Expected expression but got X" — a primary was required and the token stream had
+//     something else (`unary-operators.md`'s `- -x`);
+//   • "Undefined variable 'x'" — a name in an expression has no binding in scope
+//     (`block-scoping.md`, every case that reaches past a closed block);
+//   • "Cannot operate on int and bool" — a binary arithmetic / shift operator with a
+//     non-numeric operand (the C# bootstrap's own text, 2-Parser.cs:17785);
+//   • "Cannot negate bool" — the same rule, asked of a unary `-`.
 // `lexerError` / `parserError` are generic placeholders the query layer reports the
 // remaining front-end failures under — the authored specs never trigger them (every
 // other authored program lexes and parses cleanly), so they carry no spec-gated text
@@ -38,7 +44,7 @@ export enum ErrorCode
 	duplicateParameter = "E2002"
 	noMainFunction = "E3001"
 	mainWrongReturnType = "E3002"
-	parserExpectedExpression = "E2004"
+	parserExpressionError = "E2004"
 	parserExpectedToken = "E2010"
 	lexerError = "E1001"
 	parserError = "E3010"

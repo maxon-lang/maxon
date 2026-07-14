@@ -101,13 +101,52 @@ export union ParseError implements Error
 	// falling off the end, because it is the same defect wearing a `return` keyword.
 	// Positioned at the `return`, which is where the missing value belongs.
 	returnWithoutValue(name String, line LineNumber, column ColumnNumber)
-	// A SHORT-CIRCUIT `and`/`or` whose left operand is a `bool` and whose right operand is
-	// an `int`. Renders as E3005 (a type mismatch), positioned at the operator. The word
-	// operators are context-dependent, not polymorphic: `bool and bool` is logical and
-	// `int and int` is bitwise, but `bool and int` is neither, and silently taking one
-	// reading would mean silently discarding the other operand's meaning. v1 reports the
-	// identical case with the identical message (Parser.maxon:11771).
+	// A WORD operator (`and`/`or`/`xor`) whose operands are one `bool` and one `int` — in
+	// either order, and on either of the two paths such an operator can take (a `binOp`, or
+	// the short-circuit lowering). Renders as E3005 (a type mismatch), positioned at the
+	// operator. See TypeRules' `BinOpOperands.mixedWordOperands` for why a mixture has no
+	// reading at all. v1 reports the identical case with the identical message
+	// (Parser.maxon:11771).
 	operandTypeMismatch(op String, line LineNumber, column ColumnNumber)
+	// An ARITHMETIC / DIVISION / SHIFT operator with a non-numeric operand — `4 + flag`,
+	// `flag shl 4`, `true + false`. Renders as E2004 (`Cannot operate on int and bool`),
+	// positioned at the operator, which is the code, text and anchor the C# bootstrap uses
+	// (2-Parser.cs:17785). Both operand type names ride along because the message names both.
+	nonNumericOperands(left String, right String, line LineNumber, column ColumnNumber)
+	// A prefix `-` applied to a non-numeric operand (`-flag`). The same rule as
+	// `nonNumericOperands`, asked of the one operand a unary has. Renders as E2004,
+	// positioned at the `-`. The bootstrap has no diagnostic for this at all — it reaches its
+	// lowering and dies with an internal error (E9001 `Unsupported binop: Sub on Bool`), which
+	// is a bootstrap BUG, not a spec.
+	nonNumericNegation(operand String, line LineNumber, column ColumnNumber)
+	// A comparison whose operands are in different type classes (`4 < flag`). Renders as
+	// E3005 with the bootstrap's exact text — `type mismatch: 'cannot compare int with bool'`
+	// (2-Parser.cs:17777) — positioned at the comparison operator. A comparison over two
+	// bools is LEGAL (`a == b`); it is the MIXTURE that is meaningless, because the compare
+	// would be over the bool's 0/1 payload rather than over anything the source wrote.
+	comparisonTypeMismatch(left String, right String, line LineNumber, column ColumnNumber)
+	// An `if` / `while` condition that is not a `bool` (`if 4`). Renders as E3005, positioned
+	// at the CONDITION's first token — the expression the message is about, not the keyword
+	// that introduced it. `keyword` is "if"/"while", so one message template serves both.
+	//
+	// AUTHORED, not ported: the C# bootstrap accepts `if 4` through its front end and then
+	// fails an internal cast in its Maxon→Std lowering, reporting E9001 (an INTERNAL-ERROR
+	// code, with a .NET stack trace). An internal error leaking to a user is a bootstrap bug —
+	// it names no source position and describes no defect in the program — so it is not a
+	// diagnostic to copy. shv2 rejects the condition where the type is known: in the parser.
+	nonBoolCondition(keyword String, got String, line LineNumber, column ColumnNumber)
+	// A reassignment whose value does not agree with the target binding's DECLARED type
+	// (`var x = 5` then `x = true`). Renders as E3005, positioned at the variable name — the
+	// same anchor `assignToImmutable` uses, because it is the same statement failing for the
+	// other reason a binding can refuse a value. See `parseAssignment` for why this one check
+	// is what makes every merge phi's type honest.
+	assignTypeMismatch(name String, got String, expected String, line LineNumber, column ColumnNumber)
+	// A `return <expr>` whose value's type class differs from the function's declared return
+	// type (`return flag` from a function declared `returns Integer`). Renders as E3005 with
+	// the bootstrap's exact text — `Cannot return 'bool' from function declared to return
+	// 'int'` (2-Parser.cs:7840) — positioned at the `return`. The declared type prints as its
+	// RESOLVED primitive, which is what the bootstrap prints (see TypeRules' typeTagName).
+	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
 	// A `not` whose operand's type the parser cannot determine — reachable only for a call to
 	// a function declared in ANOTHER FILE. Renders as E3005, positioned at the `not`. It is a
 	// REJECTION rather than a guess because `not`'s two readings disagree about the VALUE: the
@@ -381,127 +420,26 @@ function comparisonOperator(kind TokenKind) returns bool
 	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
 end 'comparisonOperator'
 
-// --- Source-level type rules, for the type-DIRECTED operators ---
-//
-// `and` / `or` / `xor` / `not` mean different things on `bool` than on `int`, and the
-// PARSER is the tier that decides which — it is the only one with an expression's
-// source-level type, and (for `and`/`or`) the decision is control flow, which cannot be
-// retrofitted by a later pass. These are the rules that decision reads.
-//
-// EVERY ONE OF THEM TAKES AND RETURNS A `ValueTypeTag`, NOT A `MaxonType`, and that is
-// load-bearing rather than incidental: a Maxon union value is a heap object (see
-// MaxonDialect's ValueTypeTag), so a rule returning `MaxonType.integer` ALLOCATES — on every
-// binary operator of every expression of every function. A tag is a scalar. `scale-test`
-// measured the difference at +4,165 allocations on the smallest rung.
+// The SOURCE-LEVEL TYPE RULES the parser enforces — what an operator's operands may be, and
+// when two types agree — live in TypeRules.maxon, NOT here. They are shared with SemanticCheck
+// (whose call-argument check is the one rule that needs whole-program signatures and so cannot
+// live in the parser), and a rule with two homes is a rule that will eventually disagree with
+// itself. See that file's header. What lives here is only the RAISING of them: turning a
+// verdict into a positioned `ParseError`.
 
-function tagIsBool(tag ValueTypeTag) returns bool
-	return tag == ValueTypeTag.boolean
-end 'tagIsBool'
-
-// True when a type could not be pinned at parse time. Reachable for exactly one thing
-// today: a call to a function this FILE does not declare (the signature pre-scan covers
-// every function it does, in any order). Cross-file return types resolve in
-// TypeResolution, which runs after the parser has already had to commit.
-function tagIsUnresolved(tag ValueTypeTag) returns bool
-	return tag == ValueTypeTag.unresolved
-end 'tagIsUnresolved'
-
-// The result type of a WORD operator (`and`/`or`/`xor`) — the one place the bitwise/logical
-// duality is resolved, ported from maxon-selfhosted's `binOpOperandType`
-// (Parser.maxon:11534-11542):
-//
-//   • either operand `bool` ⇒ `boolean`   — the LOGICAL reading, whose result is a bool
-//   • either operand unresolved ⇒ `unresolved` — defer rather than guess; forcing `integer`
-//     here is what made v1 type a `boolA or boolB` as an int and reject it against a `bool`
-//     parameter
-//   • otherwise ⇒ `integer`               — the BITWISE reading
-function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
-	if tagIsBool(left) or tagIsBool(right) 'logical'
-		return ValueTypeTag.boolean
-	end 'logical'
-	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
-		return ValueTypeTag.unresolved
-	end 'defer'
-	return ValueTypeTag.integer
-end 'wordOpResultTag'
-
-// True for a WORD operator with EXACTLY ONE bool operand — `flag and 5`, or `5 and flag`.
-// The word operators are CONTEXT-DEPENDENT, not polymorphic: `bool <op> bool` is the logical
-// reading and `int <op> int` is the bitwise one, but a mixture is neither, and either reading
-// silently discards what the other operand meant. `5 and flag` is the nastier direction —
-// it computes `5 & 1` = 1 and reads as `flag`, while `4 and flag` computes `4 & 1` = 0 and
-// reads as ALWAYS FALSE — so the check has to be symmetric, and it therefore lives here (on
-// the path EVERY word operator takes) rather than inside the short-circuit lowering (which
-// only sees the cases whose LEFT operand is a bool).
-//
-// An `unresolved` operand is not a mismatch: it is a type the parser could not pin (a
-// cross-file call), and pairing it with either reading is a deferral, not a contradiction.
-function wordOpMixesBoolAndInt(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns bool
-	if not wordOperator(op) 'notAWordOp'
-		return false
-	end 'notAWordOp'
-	if tagIsUnresolved(left) or tagIsUnresolved(right) 'deferred'
-		return false
-	end 'deferred'
-	return tagIsBool(left) != tagIsBool(right)
-end 'wordOpMixesBoolAndInt'
-
-// The three operators whose meaning follows their operands' TYPE. `shl`/`shr` are absent:
-// a shift is integral by definition, on both sides.
-function wordOperator(op MaxonBinOp) returns bool
-	return match op 'k'
-		add to mod gives false
-		bitAnd to bitXor gives true
-		shl to shr gives false
-	end 'k'
-end 'wordOperator'
-
-// The type a `binOp` yields. Arithmetic, the division family and the shifts are integral by
-// definition (v1 says the same of `shl`/`shr`/`mod`: "integer-only by definition",
-// Parser.maxon:11524). Only the WORD operators follow their operands.
-function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
-	return match op 'k'
-		add to mod gives ValueTypeTag.integer
-		bitAnd to bitXor gives wordOpResultTag(left, right: right)
-		shl to shr gives ValueTypeTag.integer
-	end 'k'
-end 'binOpResultTag'
-
-// Which `not` a prefix `not` means, from its operand's type — the LOGICAL one on a bool
-// (flip bit 0), the BITWISE one on an integer (complement all 64).
-//
-// AN UNRESOLVED OPERAND HAS NO SAFE ANSWER, AND SO IS NOT GIVEN ONE. `not` is the one
-// type-directed operator whose two readings disagree about the VALUE, not merely about the
-// side effects: `and`/`or`/`xor` fall back to the bitwise reading when they cannot pin a
-// type, and on the 0/1 bool domain the bitwise answer IS the logical one (only the
-// short-circuit elision is lost). `not` has no such luck — the bitwise reading of `false` is
-// -1 and of `true` is -2, and BOTH read as TRUE in a condition, so `if not isReady()` would
-// be taken unconditionally. That is a silent miscompile, not a degradation, and it is
-// exactly what specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees`
-// case exists to forbid.
-//
-// So a `not` whose operand's type the parser cannot determine is REJECTED with a positioned
-// diagnostic. The only way to reach it today is a call to a function declared in ANOTHER FILE
-// (`scanFunctionSignatures` pins every function in this one, in any order). v1 avoids the
-// choice by emitting a single `logicalNot` and resolving it in its lowering, which re-reads
-// the operand type after TypeResolution — a route shv2's Std tier does not have, because it
-// keeps no per-value source type (see MaxonUnaryOp). The real fix is a project-wide callee
-// signature query; until then, refusing beats guessing.
-union NotOperator
-	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
-	// The operand's type could not be determined, so neither reading can be chosen.
-	unknownOperandType
-end 'NotOperator'
-
-function notOperatorFor(operand ValueTypeTag) returns NotOperator
-	if tagIsBool(operand) 'logical'
-		return NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
-	end 'logical'
-	if tagIsUnresolved(operand) 'cannotChoose'
-		return NotOperator.unknownOperandType
-	end 'cannotChoose'
-	return NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
-end 'notOperatorFor'
+// The binary-operand rule, RAISED. **Both paths a word operator can take come through it** —
+// the ordinary `binOp` emit, and the short-circuit lowering, which emits no `binOp` at all
+// (the blocks are laid down instead) and would otherwise need its own copy of "what counts as
+// a mixed operand". A second copy on the OTHER path every `and`/`or` can take is free to
+// drift from the first, and the drift would show up as a `bool and int` silently accepted on
+// one path and rejected on the other — a wrong answer, not a compile error.
+function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag, opTok Token) throws ParseError
+	match checkBinOpOperands(op, left: left, right: right) 'operands'
+		ok then break 'operands'
+		mixedWordOperands then throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+		nonNumericOperands then throw ParseError.nonNumericOperands(typeTagName(left), right: typeTagName(right), line: opTok.line, column: opTok.column)
+	end 'operands'
+end 'requireBinOpOperands'
 
 // The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
 // operand determines the whole expression), `true` for `or`.
@@ -821,7 +759,18 @@ export type Parser
 	// MaxonDialect's `ValueTypeTag` for the measurement that settled it.
 	//
 	// Seeded with the parameter types (which own ids 0..paramCount-1) and appended in
-	// lockstep with `valueIds` by `mintValue`. Reset per function.
+	// lockstep with `valueIds` by `mintValue`. Re-CREATED per function (never cleared) —
+	// which is what makes the next line safe:
+	//
+	// **`valueTags` IS THE FUNCTION'S OWN COLUMN, SHARED BY REFERENCE.** `parseFunction` hands
+	// this very array to `IrFunction.create`, so every `mintValue` during the body parse pushes
+	// straight into `func.valueTags`. That is not an optimization detail to be tidied away: the
+	// column has a SECOND reader (SemanticCheck, for the one type rule that needs a callee's
+	// signature and so cannot live here — see IrFunction.valueTags), and copying it out at the
+	// end of each body would allocate a dead array per function for nothing.
+	//
+	// `valueNameIds` is NOT shared — nothing downstream needs an alias's NAME, only its class
+	// (TypeRules' `typeClassOf`), so it stays parser-local and is dropped at the next function.
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
 	// Every function DECLARED in this file, with its return type — filled by a token-level
@@ -1126,7 +1075,12 @@ export type Parser
 		// (a reassignment is E2013); mutating a parameter needs a local shadow.
 		self.bindParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: nameTok.line)
+		// `self.valueTags` is handed over BY REFERENCE, already seeded with the parameter types.
+		// Every `mintValue` below therefore pushes straight into the function's own type column
+		// — there is no second array and no copy-back at the end of the body. It is safe because
+		// `self.valueTags` is re-created (not cleared) for the next function, so nothing aliases
+		// this one afterwards. See IrFunction.valueTags for what the column is FOR.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, returnLine: nameTok.line)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath
@@ -1426,16 +1380,56 @@ export type Parser
 	// no store op: the value model is on-the-fly SSA (the reassignment is just a
 	// rebinding of the variable's current ValueId, and the loop machinery inserts
 	// phis where the rebinding crosses a control-flow merge).
+	//
+	// **THE ASSIGNED VALUE MUST AGREE WITH THE BINDING'S DECLARED TYPE, AND THAT CHECK IS WHAT
+	// MAKES EVERY MERGE PHI'S TYPE TRUE.** A binding's type is fixed where it is declared
+	// (`var x = 5` is an int) and `VarInfo.varType` holds it; a reassignment does not redeclare
+	// it. There are therefore TWO records of a value's type — the per-VALUE column
+	// (`self.valueTags`, which follows the value) and the per-BINDING one (`varType`, frozen at
+	// the declaration) — and they meet in exactly one place: `mintPhiForBinding`, which stamps
+	// a merge phi with the BINDING's type while the phi carries the REASSIGNED value.
+	//
+	// So without this check the binding type is a LIE that the phi launders into the value
+	// column, and every rule downstream reads the lie and is satisfied:
+	//
+	//     var x = 5
+	//     if c 'b'
+	//         x = false        // unchecked: the binding still claims `int`
+	//     end 'b'
+	//     return x + 1         // the phi is tagged `integer`, so `+` sees two ints — and adds
+	//                          // a bool. THE ENTIRE RUNG, defeated by one `if`.
+	//
+	// Checking the ASSIGNMENT — one statement — makes all three phi mint sites (if-merge, loop
+	// header, loop exit) sound BY CONSTRUCTION, with no per-edge check anywhere. Deriving each
+	// phi's tag from its incoming values instead cannot work: the loop-header phi is minted
+	// EAGERLY, before the body that writes those values has been parsed.
+	//
+	// AUTHORED, not ported — like the `if <int>` rule, and for the same reason. The C# bootstrap
+	// has no assignment type check at all: it accepts `var x = 5` / `x = true` outright, and
+	// catches the laundered value only when it is USED, in its Maxon→Std lowering, as an
+	// INTERNAL error (E9001, a .NET cast failure with a stack trace and no source position). It
+	// does not consider such a program valid — it just has nowhere to say so. shv2 says so here,
+	// at the statement that introduces the contradiction.
 	function parseAssignment(func IrFunction, block IrBlock) throws ParseError
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 		if not self.scope.contains(nameTok.value) 'undeclared'
 			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'undeclared'
-		if not self.scope.getInfo(nameTok.value).mutable 'immutable'
+
+		let binding = self.scope.getInfo(nameTok.value)
+		if not binding.mutable 'immutable'
 			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'immutable'
+
 		let value = try self.parseExpression(func, block: block)
+
+		let valueTag = self.tagOf(value)
+		let declaredTag = maxonTypeTag(binding.varType)
+		if not typesAgree(valueTag, right: declaredTag) 'mismatch'
+			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(valueTag), expected: typeTagName(declaredTag), line: nameTok.line, column: nameTok.column)
+		end 'mismatch'
+
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
 
@@ -1490,6 +1484,21 @@ export type Parser
 		// the merge; terminating `block` instead would leave the merge unterminated (a
 		// backend panic) and put the `ret` on a path the value it returns does not reach.
 		let retVal = try self.parseExpression(func, block: block)
+
+		// The value must AGREE with what the function PROMISED — the same `typesAgree` rule the
+		// operators and the call arguments ask. `return flag` from a function declared
+		// `returns Integer` is the argument-position bug in reverse: the bool's 1 payload would
+		// be handed back through the return register as the integer 1.
+		//
+		// The declared type here is the RAW parse-time one (a `named` alias, not yet resolved),
+		// which is exactly what `typeClassOf` is built to take — every alias shv2 can declare is
+		// a ranged int, and `typeTagName` prints the resolved primitive the bootstrap prints.
+		let retTag = self.tagOf(retVal)
+		let declaredTag = maxonReturnTypeTag(func.maxonReturnType)
+		if not typesAgree(retTag, right: declaredTag) 'mismatch'
+			throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+		end 'mismatch'
+
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
@@ -1527,7 +1536,7 @@ export type Parser
 	// `entryVals` / `thenVals` / `elseVals` positionally aligned.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
-		let cond = try self.parseExpression(func, block: block)
+		let cond = try self.parseBoolCondition(func, block: block, kwTok: ifTok)
 		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
 		// has already branched, and control now sits in ITS merge block. That — not the
 		// block the `if` started in — is where the two-way branch belongs, and it is the
@@ -1750,7 +1759,7 @@ export type Parser
 		// header and the two-way branch; `condExit` is the block it ends in, and that is
 		// where the branch — and the exit's incoming edge — belong. The header stays the
 		// loop's entry, so nothing about `continue` or the back edge changes.
-		let cond = try self.parseExpression(func, block: header)
+		let cond = try self.parseBoolCondition(func, block: header, kwTok: whileTok)
 		var condExit = self.currentBlock
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
@@ -1986,21 +1995,50 @@ export type Parser
 
 	// Expression entry — EVERY value context: a `let`/`var` initializer, an assignment's
 	// right-hand side, a `return` value, a call argument, an `if`/`while` CONDITION, the
-	// inside of a parenthesis. There is only one now: `parseCondition` is gone.
+	// inside of a parenthesis. There is ONE GRAMMAR for all of them.
 	//
-	// It was a separate, FLATTER grammar (`operand [cmpOp operand]`, operands parsed at
-	// additive precedence) that existed for exactly one reason — a comparison could only be
-	// consumed by a branch, because the backend had no way to write a boolean into a
-	// register. Two things end that. `setcc` gives it one (`let r = 5 > 3` compiles), and
-	// `and`/`or` bind LOOSER than comparison, so `if a > 0 and b > 0` cannot even be
-	// expressed by a grammar whose top level is a single comparison. One climber, one set of
-	// precedences, and a condition is simply an expression that happens to feed a branch.
+	// A condition once had its own, FLATTER grammar (`operand [cmpOp operand]`, operands parsed
+	// at additive precedence), for exactly one reason — a comparison could only be consumed by
+	// a branch, because the backend had no way to write a boolean into a register. Two things
+	// ended that. `setcc` gives it one (`let r = 5 > 3` compiles), and `and`/`or` bind LOOSER
+	// than comparison, so `if a > 0 and b > 0` cannot even be expressed by a grammar whose top
+	// level is a single comparison. One climber, one set of precedences, and a condition is
+	// simply an expression that happens to feed a branch — plus a TYPE rule, which is
+	// `parseBoolCondition` below, not a second grammar.
 	//
 	// Seeds `currentBlock`, which every emit below targets — see the field.
 	function parseExpression(func IrFunction, block IrBlock) returns ValueId throws ParseError
 		self.currentBlock = block
 		return try self.parseBinary(func, minPrec: OrPrecedence)
 	end 'parseExpression'
+
+	// An `if` / `while` condition: an ordinary expression that must have type `bool`.
+	//
+	// **MAXON HAS NO C-STYLE TRUTHINESS.** `if 4` is not "if 4 is nonzero" — it is a type
+	// error, and the ONLY tier that can say so is this one, because it is the only one holding
+	// the expression's source type. The x64 lowering tests a non-fused condition with
+	// `cmp reg, 0` + `jne`, which is exactly right for a bool (a bool IS 0 or 1, and a call
+	// result, a parameter or a merge phi has no flags to fuse) — and is precisely why an `int`
+	// condition silently "worked", branching on `n != 0`. The instruction cannot tell the two
+	// apart. The type can.
+	//
+	// An `unresolved` condition is ADMITTED, not rejected: a cross-file callee's return type is
+	// not known here, and `if isReady()` must compile. `typeClassAdmits` defers on `unknown`.
+	//
+	// The diagnostic anchors on the CONDITION's first token, not on the keyword: the message is
+	// about the expression's type, and that is where the reader has to look — an `if` whose
+	// condition spans three lines should not point at the `if`.
+	function parseBoolCondition(func IrFunction, block IrBlock, kwTok Token) returns ValueId throws ParseError
+		let condTok = self.current()
+		let cond = try self.parseExpression(func, block: block)
+
+		let condTag = self.tagOf(cond)
+		if not typeClassAdmits(TypeClass.boolean, tag: condTag) 'notABool'
+			throw ParseError.nonBoolCondition(kwTok.kind.rawValue, got: typeTagName(condTag), line: condTok.line, column: condTok.column)
+		end 'notABool'
+
+		return cond
+	end 'parseBoolCondition'
 
 	// The precedence-climbing core. Parse a unary/primary operand, then while the next token
 	// is a binary operator whose precedence is >= `minPrec`, consume it and recurse for the
@@ -2045,7 +2083,7 @@ export type Parser
 			let right = try self.parseBinary(func, minPrec: prec + 1)
 
 			if comparisonOperator(opTok.kind) 'comparison'
-				left = self.emitCompare(left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
+				left = try self.emitCompare(left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
 				continue
 			end 'comparison'
 
@@ -2103,20 +2141,10 @@ export type Parser
 		// the one that must branch here.
 		var rhsEnd = self.currentBlock
 
-		// The SHORT-CIRCUIT half of the same symmetric rule `emitBinOp` enforces, and it ASKS
-		// `emitBinOp`'S QUESTION rather than restating it. A short-circuit emits no `binOp` at
-		// all — the blocks above have already been laid down — so `emitBinOp` never sees this
-		// operator and cannot be the one place the rule lives. But the rule itself is the same
-		// one, with the left operand already known to be a bool (that is what brought us here),
-		// so it is CALLED with that knowledge. Written out longhand instead, it would be a
-		// second copy of "what counts as a mixed operand" sitting on the OTHER path every
-		// `and`/`or` can take, free to drift from the first — and the drift would show up as a
-		// `bool and int` silently accepted on one path and rejected on the other, which is a
-		// wrong answer, not a compile error.
-		let rhsTag = self.tagOf(rhsValue)
-		if wordOpMixesBoolAndInt(infixMaxonOp(opTok.kind), left: ValueTypeTag.boolean, right: rhsTag) 'mixedOperands'
-			throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-		end 'mixedOperands'
+		// The SHORT-CIRCUIT half of the same rule `emitBinOp` enforces — ASKED, not restated
+		// (see `requireBinOpOperands`). The left operand is already known to be a bool: that is
+		// what brought control here.
+		try requireBinOpOperands(infixMaxonOp(opTok.kind), left: ValueTypeTag.boolean, right: self.tagOf(rhsValue), opTok: opTok)
 
 		var merge = self.newBlock(func, label: b"scmerge", line: opTok.line)
 		let result = self.mintPhi(merge, tag: ValueTypeTag.boolean, nameId: UnnamedTypeId)
@@ -2159,11 +2187,21 @@ export type Parser
 	// instructions, and choosing the integer one for a bool would give -1/-2 — both of which
 	// still read as TRUE in a condition. So the parser, which is the tier that knows the
 	// type, picks the opcode; the Std tier just lowers what it is given.
+	//
+	// `-` is NOT type-directed: it is ARITHMETIC, so its operand must be a number. `-flag` has
+	// no reading — it negated the bool's 1 payload and produced -1, which is still TRUE in a
+	// condition — so it is rejected by the same numeric-domain rule the binary arithmetic
+	// operators use (TypeRules' `typeClassAdmits`).
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
 			let operand = try self.parsePrimary(func)
-			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: self.tagOf(operand), opTok: opTok)
+			let operandTag = self.tagOf(operand)
+			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
+				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
+			end 'notANumber'
+
+			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, opTok: opTok)
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
@@ -2180,19 +2218,13 @@ export type Parser
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
-	// follow their operands (see `wordOpResultType`) — the ONE place a bitwise op's result
+	// follow their operands (see `wordOpResultTag`) — the ONE place a bitwise op's result
 	// could be a bool, which is what `consume(f.a or f.b)` against a `bool` parameter needs.
 	// The source range anchors on the operator token (the conventional binop anchor).
 	function emitBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
-		// The word operators reach here in their BITWISE reading (a bool `and`/`or` became
-		// control flow long before, and a bool `xor` is the same bit op on the 0/1 domain).
-		// So exactly one bool operand is a genuine type error, and this is the one place on
-		// the path of EVERY word operator — either operand order — where it can be caught.
-		if wordOpMixesBoolAndInt(op, left: leftTag, right: rightTag) 'mixedOperands'
-			throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-		end 'mixedOperands'
+		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
 		let result = self.mintValue(binOpResultTag(op, left: leftTag, right: rightTag), nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
@@ -2210,7 +2242,20 @@ export type Parser
 	// Append a `compare` op over two SSA values; return the BOOLEAN ValueId it defines.
 	// Mirrors emitBinOp but emits the distinct comparison variant (a comparison is not a
 	// `binOp` — see MaxonCmpOp). The source range anchors on the comparison operator.
-	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId
+	//
+	// A comparison is CLASS-STRICT: both operands must agree (TypeRules' `typesAgree` — the same
+	// decision the word operators ask). Two bools compare fine (`a == b`); two numbers compare
+	// fine; a MIXTURE does not, because the only thing there is to compare is the bool's 0/1
+	// payload, which is not what the source wrote — `4 < flag` is `4 < 1`, i.e. always false.
+	// v1 states the identical rule at TypeResolution.maxon:2726 ("Comparisons are
+	// category-strict: both sides must land in the same CastCategory").
+	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		let leftTag = self.tagOf(lhs)
+		let rightTag = self.tagOf(rhs)
+		if not typesAgree(leftTag, right: rightTag) 'mismatch'
+			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
+		end 'mismatch'
+
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
@@ -2435,15 +2480,24 @@ export type Parser
 	// A callee this file does not declare — a cross-FILE call — is `unresolved`, and that is
 	// the honest answer rather than a guess: whether the call yields a bool decides whether an
 	// enclosing `and`/`or` short-circuits, and the parser cannot see another file's
-	// declarations. `wordOpResultType` and the short-circuit gate both treat `unresolved`
+	// declarations. `wordOpResultTag` and the short-circuit gate both treat `unresolved`
 	// conservatively (no short-circuit; defer the result type), so a cross-file bool `and`
 	// evaluates both operands and still computes the right ANSWER — v1's behaviour exactly
 	// (specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees` case
 	// documents that fallback as the language's own).
 	//
-	// A VOID callee is `unresolved` too — there is no value, and the op's result is a dead
-	// id nothing reads. (SemanticCheck rejects using a void call's result; it is not typed
-	// here.)
+	// ⚠ A VOID callee is `unresolved` TOO, and that is a SENTINEL DOING DOUBLE DUTY — a known
+	// hole, not a design. `unresolved` means "the parser could not pin this type" (defer, and
+	// TypeRules' `TypeClass.unknown` therefore agrees with everything), but a void call has NO
+	// type to pin: there is no value at all. So `let x = noop()` followed by `x + 4` or `if x`
+	// is silently ADMITTED by every rule in TypeRules, because they all correctly defer on
+	// `unknown`. The C# bootstrap rejects it (`error E2004: Function 'noop' does not return a
+	// value`); shv2 does not, and did not before this rung either — the deferral is not what
+	// broke it, the missing `void` tag is.
+	//
+	// Fixing it needs a distinct "no value" tag (or a use-of-void-result check in
+	// SemanticCheck) plus its own spec, and it is NOT a bool/int conversion — it is its own
+	// rung. Recorded here rather than in a report so the next reader of this function finds it.
 	function calleeResultType(callee ByteArray) returns MaxonType
 		let declared = try self.declaredReturnTypes.get(callee) otherwise return MaxonType.unresolved
 		return match declared 'r'

@@ -83,6 +83,29 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
+	// THE MAXON TIER'S PER-VALUE TYPE ORACLE: the source-level type of every SSA value this
+	// function's ops define, DENSE by ValueId (parameter `i` owns id `i`, so `valueTags[i]` is
+	// parameter `i`'s declared type from the very first lookup).
+	//
+	// The parser builds it — it MUST, because the word operators are type-directed and a bool
+	// `and` is control flow, so the type decision cannot be deferred (see Parser.valueTags) —
+	// and it is PUBLISHED here rather than dropped at the end of the parse, because one type
+	// rule genuinely cannot run in the parser: a call ARGUMENT must agree with its parameter,
+	// and the callee may be in another file. SemanticCheck is the pass with the whole-program
+	// signatures, and this is what gives it the other half of the question. Without it,
+	// SemanticCheck would have to RE-DERIVE every value's type by walking the ops — a second
+	// type oracle, free to disagree with the parser's, which is the exact duplication
+	// TypeRules.maxon exists to prevent.
+	//
+	// TAGS, not `MaxonType`s: a Maxon union value is a heap object, so a `MaxonTypeArray` here
+	// would put one live allocation on every SSA value in the program (MaxonDialect's
+	// ValueTypeTag header has the measurement). The parallel `TypeNameId` column the parser
+	// keeps is deliberately NOT published — nothing downstream needs an alias's NAME, only its
+	// class, and every alias shv2 can declare is a ranged int (TypeRules' `typeClassOf`).
+	//
+	// Empty on a Std-phase function (`createFromStd`) — the tier that reads it is upstream of
+	// those.
+	export var valueTags as ValueTypeTagArray
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -113,7 +136,13 @@ export type IrFunction
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	//
+	// `valueTags` is taken, not created: the parser has already seeded it with the parameter
+	// types before it gets here, and it goes on pushing into it — BY REFERENCE — as the body's
+	// values are minted. Constructing an empty one here and having the parser overwrite it at
+	// the end of the body would leave one dead array per function on the heap (`scale-test`
+	// charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -127,6 +156,7 @@ export type IrFunction
 			nameColumn: 0,
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
+			valueTags: valueTags,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -156,6 +186,7 @@ export type IrFunction
 			nameColumn: 0,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
+			valueTags: ValueTypeTagArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -189,6 +220,7 @@ export type IrFunction
 			nameColumn: src.nameColumn,
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
+			valueTags: src.valueTags,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,

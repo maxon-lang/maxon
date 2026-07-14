@@ -1,0 +1,53 @@
+// Test: reassign-within-class
+function main() returns ExitCode
+	var flag = true
+	var n = 5
+
+	if n > 0 'pos'
+		flag = false
+		n = n * 2
+	end 'pos'
+
+	if flag 'stillTrue'
+		return 99
+	end 'stillTrue'
+
+	if n == 10 'doubled'
+		return 1
+	end 'doubled'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 5
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greater, pos
+    x64.jmp critsplit
+  pos:
+    x64.movRegImm32 rax, 0
+    x64.imulRegRegImm32 rcx, rcx, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, stillTrue
+    x64.jmp ifcont
+  stillTrue:
+    x64.movRegImm32 r8, 99
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc equal, doubled
+    x64.jmp ifcont
+  doubled:
+    x64.movRegImm32 r8, 1
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}

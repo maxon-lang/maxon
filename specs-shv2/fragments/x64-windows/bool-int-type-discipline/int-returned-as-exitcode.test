@@ -1,0 +1,27 @@
+// Test: int-returned-as-exitcode
+typealias Integer = int(i64.min to i64.max)
+
+function double(n Integer) returns Integer
+	return n * 2
+end 'double'
+
+function main() returns ExitCode
+	return double(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @double {
+  entry:
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 21
+    x64.callDirect double
+    x64.epilogue 40
+    x64.ret
+}
