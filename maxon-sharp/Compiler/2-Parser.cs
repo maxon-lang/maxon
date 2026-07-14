@@ -9976,6 +9976,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "strings) currently live. Reported at exit as `MM raw leak: N`.\n\n"
       + "`__Builtins.mmRawAllocLive() returns int`",
       "maxon_mm_raw_alloc_live", [], true),
+    ["mmRawAllocTotal"] = RuntimeCallIntrinsic(
+      "Cumulative count of RAW allocations since process start. Monotonic. Counts every "
+      + "array element buffer and string buffer, and every REGROW of one — a grow is a fresh "
+      + "buffer plus a memcpy plus a free, and it is counted as the allocation it is. An "
+      + "`allocs` figure that omits this cannot see an array growth policy at all: it reads "
+      + "dead flat while the byte volume moves.\n\n`__Builtins.mmRawAllocTotal() returns int`",
+      "maxon_mm_raw_alloc_total", [], true),
     ["mmRawAllocBytes"] = RuntimeCallIntrinsic(
       "Cumulative bytes handed out by RAW allocations. Monotonic. This is where a program's "
       + "byte VOLUME actually lives: array element buffers and string bytes are raw, and the "

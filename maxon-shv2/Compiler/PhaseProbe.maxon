@@ -90,8 +90,8 @@ export type PhaseProbe
 	// Counters first, clock last — see this file's header.
 	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
-		let allocTotal = __Builtins.mmAllocTotal() as AllocCount
-		let allocLive = __Builtins.mmAllocLive() as AllocCount
+		let allocTotal = totalAllocs()
+		let allocLive = liveAllocs()
 		let bytes = totalAllocBytes()
 		return Self{nanos: Clock.nowNanos(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
 	end 'begin'
@@ -115,10 +115,16 @@ export type PhaseProbe
 	// this — see RuntimeEmitter.EmitMmGlobals). But `live = total - freed` holds at every
 	// instant by definition, so over any interval `freed = Δtotal - Δlive`, exactly. No
 	// counter is missing; one is redundant.
+	//
+	// A REGROWN BUFFER lands here as ONE ALLOCATION AND ONE FREE, and through that same
+	// identity rather than any special case: growing an array takes a fresh buffer off the
+	// slab (cumulative +1) and frees the old one (live unchanged), so `Δtotal - Δlive` bills
+	// the free with nobody counting it. Array growth IS reallocation, so this is the whole
+	// difference between an alloc column that can see a growth policy and one that cannot.
 	export function elapsed() returns PhaseDelta
 		let elapsedNanos = Clock.elapsedNanos(self.nanos)
-		let endAllocTotal = __Builtins.mmAllocTotal() as AllocCount
-		let endAllocLive = __Builtins.mmAllocLive() as AllocCount
+		let endAllocTotal = totalAllocs()
+		let endAllocLive = liveAllocs()
 		let endBytes = totalAllocBytes()
 
 		let allocs = endAllocTotal - self.allocTotal
@@ -128,16 +134,29 @@ export type PhaseProbe
 	end 'elapsed'
 end 'PhaseProbe'
 
-// Every byte the process's allocator has handed out, both layers summed.
+// THE ALLOCATOR HAS TWO LAYERS, AND EVERY FIGURE THIS FILE REPORTS SUMS BOTH.
 //
-// The allocator has two: TRACKED objects (a struct, an array's handle, a String) carry a
-// header and are counted by `mmAllocTotal`; the RAW buffers behind them (array elements,
-// string bytes) are header-free. Almost all of a compiler's byte VOLUME is in the raw
-// layer — the tracked layer sees little but 8- and 24-byte handles — so a "bytes" figure
-// that omitted it would report a compiler's memory traffic as very nearly flat, which is
-// the one thing this instrument must never do.
+// TRACKED objects (a struct, an array's outer handle, a String) carry a refcount header. The
+// RAW buffers behind them (array elements, string bytes) are header-free. The runtime counts
+// them separately — it must, because only the raw live count can say whether a BUFFER leaked —
+// and it is the reader's job to add them up.
+//
+// It matters in both columns, for one reason: THE INTERESTING MEMORY IS RAW. The tracked layer
+// sees little but 8- and 24-byte handles, so a "bytes" figure that omitted the raw layer would
+// report a compiler's memory traffic as very nearly flat. And an "allocs" figure that omitted it
+// cannot see an array buffer being allocated or REGROWN at all — which is not a hypothetical:
+// with the raw count missing, a change of the Array growth policy moved the byte column 22% at
+// the top rung and this column, on the same runs, by exactly zero at every rung.
+function totalAllocs() returns AllocCount
+	return (__Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()) as AllocCount
+end 'totalAllocs'
+
+function liveAllocs() returns AllocCount
+	return __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
+end 'liveAllocs'
+
 function totalAllocBytes() returns ByteCount
-	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+	return __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
 end 'totalAllocBytes'
 
 // --- Recording a closed bracket against a phase ---

@@ -64,6 +64,7 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(MmBytesByPLabel, 8, 0);          // -> max_procs * 64 bytes (see __slab_init)
     _b.DefineGlobal(MmAllocBytesNoPLabel, 8, 0);     // atomic fallback, tracked layer
     _b.DefineGlobal(MmRawAllocBytesNoPLabel, 8, 0);  // atomic fallback, raw layer
+    _b.DefineGlobal(MmRawAllocTotalNoPLabel, 8, 0);  // atomic fallback, raw ALLOCATION COUNT
 
     // Per-tag live-allocation counters for --mm-debug leak breakdown.
     // Array of int64, one slot per tag index (index 0 reserved for "no tag").
@@ -540,8 +541,8 @@ public partial class RuntimeEmitter {
   // measurements that forced it)
   // =========================================================================
 
-  // The per-P byte-counter table: one CACHE LINE per P, so two Ps accumulating at the
-  // same time never share a line. Two counters live in it, at the offsets below.
+  // The per-P counter table: one CACHE LINE per P, so two Ps accumulating at the same time
+  // never share a line. Three cumulative counters live in it, at the offsets below.
   // Allocated and zeroed by __slab_init, which is also the only place that knows
   // __sched_max_procs — hence the table's size lives there and its shape lives here.
   public const string MmBytesByPLabel = "__mm_bytes_by_p";
@@ -550,24 +551,43 @@ public partial class RuntimeEmitter {
   public const int MmBytesOffTracked = 0;
   public const int MmBytesOffRaw = 8;
 
+  // THE CUMULATIVE COUNT OF RAW ALLOCATIONS, and it is here rather than in an atomic word
+  // for the same reason the byte counters are: mm_raw_alloc is the hot path.
+  //
+  // WHY IT EXISTS AT ALL. The tracked layer's cumulative count is __mm_alloc_id_counter,
+  // which mm_alloc must bump anyway to mint an id — so counting tracked objects was free and
+  // it was done. The RAW layer had only a LIVE count (__mm_raw_alloc_count, for the leak
+  // check) and no cumulative one, so `allocs` — which is read as "how many allocations did
+  // this program make" — could not see a single array buffer, nor a single REGROW of one.
+  // Measured: changing the Array growth policy moved the byte column 22% at the top rung and
+  // the alloc column by ZERO, at every rung. That is the same argument the byte counters were
+  // added under (a bytes figure that omitted the raw layer "would report a compiler's memory
+  // traffic as very nearly flat"), and it applies to the COUNT exactly as it did to the
+  // volume: array growth IS reallocation, and reallocation lives entirely in this layer.
+  public const int MmCountOffRaw = 16;
+
   // The shared fallback words, for allocations with no P to accumulate into: raw OS
   // threads (no TLS P) and anything allocated before __slab_init has built the table.
   // Genuinely shared, hence genuinely atomic — and off the hot path, so the cost is moot.
   private const string MmAllocBytesNoPLabel = "__mm_alloc_bytes_no_p";
   private const string MmRawAllocBytesNoPLabel = "__mm_raw_alloc_bytes_no_p";
+  private const string MmRawAllocTotalNoPLabel = "__mm_raw_alloc_total_no_p";
 
   /// <summary>
-  /// Add the bytes an allocation just handed out to this P's byte counter — a plain,
-  /// unlocked add, because the P owns the slot (see EmitMmGlobals). Falls back to an
-  /// atomic add on a shared word when there is no P, or before the table exists.
+  /// Add to one of this P's cumulative counters — a plain, unlocked add, because the P owns
+  /// the slot (see EmitMmGlobals). Falls back to an atomic add on a shared word when there is
+  /// no P, or before the table exists.
+  ///
+  /// <paramref name="sizeSlot"/> names the stack slot holding the amount to add; pass null to
+  /// add ONE, which is how the allocation COUNTERS use it and how the BYTE counters do not.
   ///
   /// Cumulative by construction: nothing on the free path ever undoes it.
   ///
   /// Clobbers Scratch0/1/2.
   /// </summary>
-  private void EmitAllocBytesCounter(int fieldOffset, string fallbackGlobal, int sizeSlot) {
-    var fallback = UniqueLabel("mm_bytes_no_p");
-    var done = UniqueLabel("mm_bytes_done");
+  private void EmitPerPCumulativeAdd(int fieldOffset, string fallbackGlobal, int? sizeSlot) {
+    var fallback = UniqueLabel("mm_counter_no_p");
+    var done = UniqueLabel("mm_counter_done");
 
     _b.LoadGlobal(VReg.Scratch1, MmBytesByPLabel);
     _b.JumpIfZero(VReg.Scratch1, fallback); // pre-__slab_init allocation
@@ -580,17 +600,27 @@ public partial class RuntimeEmitter {
     _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
 
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, fieldOffset);
-    _b.LoadLocal(VReg.Scratch2, sizeSlot);
+    EmitLoadAddend(sizeSlot);
     _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.StoreIndirect(VReg.Scratch0, fieldOffset, VReg.Scratch1);
     _b.Jump(done);
 
     _b.DefineLabel(fallback);
-    _b.LoadLocal(VReg.Scratch2, sizeSlot);
+    EmitLoadAddend(sizeSlot);
     _b.LeaGlobal(VReg.Scratch0, fallbackGlobal);
     _b.AtomicXadd(VReg.Scratch0, 0, VReg.Scratch2);
 
     _b.DefineLabel(done);
+  }
+
+  /// <summary>The amount EmitPerPCumulativeAdd adds, into Scratch2: the i64 in a stack slot
+  /// for a byte volume, or the literal 1 for an allocation count.</summary>
+  private void EmitLoadAddend(int? sizeSlot) {
+    if (sizeSlot is int slot) {
+      _b.LoadLocal(VReg.Scratch2, slot);
+    } else {
+      _b.MovRegImm(VReg.Scratch2, 1);
+    }
   }
 
   // =========================================================================
@@ -759,7 +789,7 @@ public partial class RuntimeEmitter {
     // number is identical under --mm-debug — whose canary would otherwise silently add 8
     // bytes to every allocation in the report, making the debug and release builds
     // disagree about a figure the suite gates on.
-    EmitAllocBytesCounter(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 0);
+    EmitPerPCumulativeAdd(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 0);
 
     // Under --mm-debug: atomic increment __mm_alloc_count_by_tag[tag_index]
     if (mmDebug) {
@@ -898,7 +928,30 @@ public partial class RuntimeEmitter {
     // it is exactly the traffic a quadratic in array growth would show up as. mm_alloc is
     // not on this path (the block comes straight from __slab_alloc_raw below), so nothing
     // else would account for it.
-    EmitAllocBytesCounter(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 2);
+    EmitPerPCumulativeAdd(MmBytesOffTracked, MmAllocBytesNoPLabel, sizeSlot: 2);
+
+    // A REALLOC IS AN ALLOCATION, AND IT IS COUNTED AS ONE — for the same reason its bytes
+    // are. This path takes a fresh block off the slab and frees the old one, so a counter
+    // that billed the bytes and not the COUNT would report one half of a real event, and
+    // nothing else on this path would account for it (mm_alloc is not called here).
+    //
+    // The LIVE count (__mm_alloc_count) is deliberately NOT touched: one block was born as
+    // one died, so the number of live objects is unchanged and the leak check that reads it
+    // stays exact. That is also what makes the free side come out right with no free counter
+    // at all — the probes derive `frees = Δtotal − Δlive` (PhaseProbe.elapsed), so a realloc
+    // reports as precisely what it is: one allocation and one free.
+    //
+    // It consumes an alloc id it never assigns. The reallocated block KEEPS its original
+    // packed_id — a realloc MOVES an object, it does not create one, and the trace must be
+    // able to follow it across the move — so ids stay unique and monotone but stop being
+    // dense. Nothing indexes them; the trace and the leak report only print them.
+    //
+    // (ARRAY GROWTH DOES NOT COME THROUGH HERE. `__ManagedMemory.grow` lowers to
+    // mm_raw_realloc, because an array's element buffer is a RAW, header-free allocation;
+    // this function reallocates a TRACKED, header-carrying one. The raw layer's counterpart
+    // to this count is MmCountOffRaw, and that is the one array growth moves.)
+    _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_id_counter");
+    _b.AtomicInc(VReg.Scratch0, 0);
 
     // Trace mm_realloc BEFORE slab calls (top-down order)
     if (mmTrace) {
@@ -1048,7 +1101,14 @@ public partial class RuntimeEmitter {
     // Cumulative raw bytes. This is where a compiler's byte VOLUME actually lives: array
     // element buffers and string bytes are header-free raw buffers, and the tracked layer
     // above sees only their 8- and 24-byte handles.
-    EmitAllocBytesCounter(MmBytesOffRaw, MmRawAllocBytesNoPLabel, sizeSlot: 0);
+    EmitPerPCumulativeAdd(MmBytesOffRaw, MmRawAllocBytesNoPLabel, sizeSlot: 0);
+
+    // Cumulative raw allocation COUNT — the twin of the volume above, and the only counter
+    // that can see array growth: `mm_raw_realloc` grows a buffer by calling straight into
+    // this function, so every regrow arrives here and is one allocation. Without it the count
+    // above it (`__mm_alloc_id_counter`, tracked-only) reports a growth-policy change as a
+    // dead-flat zero while the bytes move by a fifth. See MmCountOffRaw.
+    EmitPerPCumulativeAdd(MmCountOffRaw, MmRawAllocTotalNoPLabel, sizeSlot: null);
 
     if (mmTrace) {
       // Assign raw alloc ID
@@ -1442,18 +1502,24 @@ public partial class RuntimeEmitter {
   // Reachable from ordinary Maxon as `__Builtins.mmAllocTotal()` etc. (registered in
   // 2-Parser.cs's CompilerBuiltins table), so no stdlib wrapper is needed.
   //
-  // WHY FIVE AND NOT THREE: `frees` is not counted, it is DERIVED as
-  // `Δtotal − Δlive` — which needs BOTH a cumulative and a live counter. Those two,
-  // plus the two cumulative byte volumes (tracked + raw), plus the live raw count that
-  // makes a raw leak visible, are the five. Three of them already existed; only the two
-  // byte counters are new, and only they cost anything.
+  // WHY SIX: `frees` is not counted, it is DERIVED as `Δtotal − Δlive` — which needs BOTH a
+  // cumulative and a live counter, IN EACH LAYER. So: cumulative + live for tracked objects,
+  // cumulative + live for raw buffers, and the two cumulative byte volumes. A caller sums the
+  // layers (PhaseProbe does, for counts exactly as it already did for bytes); it is the
+  // runtime's job to keep them separate and exact, because only the raw live count can say
+  // whether a BUFFER leaked.
+  //
+  // maxon_mm_raw_alloc_total is the newest, and it is the one that closed the hole: an
+  // `allocs` figure summed from the other five could not see an array buffer being allocated
+  // OR regrown, so it read zero-change through a growth-policy change that moved 62 MB.
   // =========================================================================
   public void EmitMmCounterAccessors() {
     EmitGlobalReader("maxon_mm_alloc_total", "__mm_alloc_id_counter");
     EmitGlobalReader("maxon_mm_alloc_live", "__mm_alloc_count");
     EmitGlobalReader("maxon_mm_raw_alloc_live", "__mm_raw_alloc_count");
-    EmitPerPBytesReader("maxon_mm_alloc_bytes", MmBytesOffTracked, MmAllocBytesNoPLabel);
-    EmitPerPBytesReader("maxon_mm_raw_alloc_bytes", MmBytesOffRaw, MmRawAllocBytesNoPLabel);
+    EmitPerPCounterReader("maxon_mm_alloc_bytes", MmBytesOffTracked, MmAllocBytesNoPLabel);
+    EmitPerPCounterReader("maxon_mm_raw_alloc_bytes", MmBytesOffRaw, MmRawAllocBytesNoPLabel);
+    EmitPerPCounterReader("maxon_mm_raw_alloc_total", MmCountOffRaw, MmRawAllocTotalNoPLabel);
   }
 
   /// <summary>A runtime function that returns the i64 held in one global. Shaped exactly
@@ -1465,10 +1531,11 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// Sum one byte counter across every P's slot, plus the no-P fallback word. This is the
-  /// read side of the per-P scheme in EmitMmGlobals: the write side is a plain unlocked
-  /// add precisely because the read side pays for it here instead, and reads happen a few
-  /// dozen times per compile against millions of allocations.
+  /// Sum one per-P counter across every P's slot, plus the no-P fallback word — a byte volume
+  /// or an allocation count, the read is the same. This is the read side of the per-P scheme
+  /// in EmitMmGlobals: the write side is a plain unlocked add precisely because the read side
+  /// pays for it here instead, and reads happen a few dozen times per compile against millions
+  /// of allocations.
   ///
   /// Racy against a concurrently-allocating P by construction — it walks the slots one at
   /// a time. That is exactly as racy as asking "how much memory has this program allocated"
@@ -1477,7 +1544,7 @@ public partial class RuntimeEmitter {
   ///
   /// Stack slots: 0 = accumulator, 1 = index, 2 = table base.
   /// </summary>
-  private void EmitPerPBytesReader(string funcName, int fieldOffset, string fallbackGlobal) {
+  private void EmitPerPCounterReader(string funcName, int fieldOffset, string fallbackGlobal) {
     _b.FunctionStart(funcName, 0, 0x40);
 
     // Seed with the no-P total, so a thread that never had a P is never lost.
