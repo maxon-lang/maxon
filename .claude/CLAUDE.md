@@ -42,12 +42,16 @@ Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target
 
 ✅ **The gate apparatus is GONE** (2026-07-14): the committed memory goldens, the exponent budgets, `--update-required` and the PASS/FAIL/VOID/NOISY verdicts have all been deleted, along with `ScaleGates.maxon` and `ScaleBaseline.maxon`. **Do not reintroduce them.** `scale-test` exits **0** whatever the numbers say; a non-zero exit means the **RUN ITSELF BROKE** (a degenerate corpus, a rung that failed to compile, an IO failure) and produced no valid data — never that a number was surprising.
 
-How to read the numbers:
+### ⚠ IT COLLECTS MEMORY. NOT TIME, AND NO CURVES.
 
-- **Per-rung memory** (allocations / frees / bytes) — **EXACT and bit-for-bit reproducible.** Load cannot move them, so any movement for the same input is REAL, every time. This is the most informative thing in the report. **Explain and attribute what moved**, and record the reason in the log at the one moment it is still known — the instrument can see exactly WHAT moved and can never see WHY.
-- **Per-phase growth exponents** (time AND allocations) — **reproducible to ~1% across runs**, which makes them a poor boolean but an **excellent tracked number**. Watch one move down the log and you see a phase go superlinear, with no threshold needed. *(`regalloc`'s `splitting`/`liveness` are KNOWN superlinear — the splitter recomputes liveness after every split, `ARCHITECTURE.md:1336-1345`.)*
-- **Aggregate time / memory** — sums of curves with different exponents, so they bend by construction. The signal is in the per-phase rows.
-- **Absolute milliseconds** — machine-dependent. Never conclude anything from them.
+**`scale-test` measures per-rung, per-phase MEMORY — allocations, frees, bytes — and nothing else.** No timing, no exponent fits, no residuals. That is deliberate, and both halves have a reason:
+
+- **The ladder DOUBLES, so the RATIO between consecutive rungs IS the growth.** Linear ⇒ allocations double. Quadratic ⇒ they quadruple. **You read it straight off the raw numbers.** An exponent fit adds no information the doubling ladder does not already give you — it is *interpretation dressed up as measurement*, and it is what dragged in the residual, which dragged in the NOISY verdict, which is what once led an agent to **edit the instrument to stop it complaining**.
+- **Time cannot be trended.** It is machine-dependent, so a dated table would be comparing a loaded box in July against an idle one in August. **Memory is exact and bit-for-bit reproducible — it is the only column where a difference MEANS something.** *(Measured: allocation deltas read 0.000 across every curve on an unchanged compiler while time deltas read +0.09…+0.29, purely because the machine was busy.)*
+
+⚠ This is only true of **`scale-test`**. The compiler's own per-phase timing (`--metrics=<path>`, `--log=compiler:debug`) is a different thing, is useful interactively, and stays.
+
+**So: read the per-rung memory numbers. Any movement for the same input is REAL, every time.** Explain it, attribute it, and record the reason in the log at the one moment it is still known — the instrument can see exactly WHAT moved and can never see WHY.
 
 `perType: true` adds an untimed `--mm-trace` pass that prints TWO ranked tables, each with its own growth exponent:
 
