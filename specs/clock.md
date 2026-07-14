@@ -49,6 +49,36 @@ since a prior reading from the matching clock, clamping to 0 if the source
 somehow moves backwards (it never does on a monotonic clock, but the guard
 protects against bugs).
 
+### WallClock — the calendar
+
+`Clock` is a stopwatch. `WallClock` is a calendar, and they are different
+instruments.
+
+Every reading `Clock` gives you is monotonic: its absolute value is meaningless
+(milliseconds since boot, performance-counter ticks) and only the DIFFERENCE
+between two readings means anything. That makes it exactly right for "how long
+did this take" and useless for "what is today's date" — no arithmetic turns an
+uptime into a calendar day.
+
+`WallClock.nowUnixSeconds()` returns whole seconds since the Unix epoch
+(1970-01-01 UTC), read from `GetSystemTimeAsFileTime` on Windows and
+`clock_gettime(CLOCK_REALTIME)` on macOS/Linux.
+
+```text
+let now = WallClock.nowUnixSeconds()  // e.g. 1783990842
+```
+
+It must never be used to measure a duration. A wall clock can step BACKWARDS —
+NTP corrects a drift, a user changes the timezone, a VM resumes from a snapshot —
+and a duration measured across such a step comes out negative or absurd. That is
+precisely the bug `Clock`'s monotonic guarantee exists to prevent.
+
+    duration → Clock.elapsedNanos / Clock.elapsedMs
+    date     → WallClock.nowUnixSeconds
+
+No timezone is applied. The caller converts if it wants local time, because the
+offset is a policy decision the stdlib has no business guessing.
+
 ## Tests
 
 <!-- test: clock.now-monotonic -->
@@ -265,4 +295,58 @@ end 'main'
 ```
 ```stdout
 score=3
+```
+
+<!-- test: clock.wall-clock-is-a-calendar-time -->
+`WallClock.nowUnixSeconds()` returns a real calendar time, and the bounds are the
+whole test.
+
+The LOWER bound is what catches the regression this exists for: a wall clock
+silently wired to the monotonic source. `GetTickCount64` reports milliseconds
+since BOOT, so seconds-since-boot on any real machine is at most a few million —
+a host would have to have been powered on continuously since 1970 to reach
+1735689600. Any monotonic source fails this by four orders of magnitude.
+
+The UPPER bound catches the other half: a mis-scaled unit. Had the reading come
+back in milliseconds (~1.78e12) or nanoseconds (~1.78e18) rather than seconds, it
+would sail past 2100 and fail.
+
+```maxon
+function main() returns ExitCode
+		let now = WallClock.nowUnixSeconds()
+		var score = 0
+		if now > 1735689600 'afterKnownPast'
+				score = score + 1
+		end 'afterKnownPast'
+		if now < 4102444800 'beforeFarFuture'
+				score = score + 1
+		end 'beforeFarFuture'
+		print("score={score}\n")
+		return 0
+end 'main'
+```
+```stdout
+score=2
+```
+
+<!-- test: clock.wall-clock-advances -->
+The clock is live, not a constant folded in at compile time. Sleeping 1.1 s must
+cross at least one whole-second boundary no matter where in the current second the
+first reading landed.
+
+```maxon
+function main() returns ExitCode
+		let before = WallClock.nowUnixSeconds()
+		sleep(1100)
+		let after = WallClock.nowUnixSeconds()
+		var ok = 0
+		if after >= before + 1 'advanced'
+				ok = 1
+		end 'advanced'
+		print("ok={ok}\n")
+		return 0
+end 'main'
+```
+```stdout
+ok=1
 ```

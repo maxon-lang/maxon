@@ -53,3 +53,32 @@ export type Clock
 		return now - since
 	end 'elapsedNanos'
 end 'Clock'
+
+/// Whole seconds since the Unix epoch, 1970-01-01 00:00:00 UTC.
+export typealias UnixSeconds = int(0 to u64.max)
+
+/// The WALL clock — the calendar, as opposed to `Clock`, which is a stopwatch.
+///
+/// These are two different instruments and the distinction is not pedantry. Every reading
+/// `Clock` gives you is monotonic: its absolute value is meaningless (milliseconds since boot,
+/// performance-counter ticks) and only the DIFFERENCE between two readings means anything. That
+/// makes it exactly right for "how long did this take" and completely useless for "what is
+/// today's date" — no arithmetic turns an uptime into a calendar day.
+///
+/// `WallClock` answers the second question and must never be used for the first. A wall clock can
+/// step BACKWARDS: NTP corrects a drift, a user changes the timezone, a VM resumes from a
+/// snapshot. A duration measured across such a step comes out negative or absurd, which is
+/// precisely the bug `Clock`'s monotonic guarantee exists to prevent.
+///
+///   duration → Clock.elapsedNanos / Clock.elapsedMs
+///   date     → WallClock.nowUnixSeconds
+///
+/// @category System
+export type WallClock
+	/// Seconds since the Unix epoch, UTC. No timezone is applied — the caller converts if it
+	/// wants local time, because the offset is a policy decision the stdlib has no business
+	/// guessing.
+	export static function nowUnixSeconds() returns UnixSeconds
+		return __Builtins.currentUnixTimeSeconds()
+	end 'nowUnixSeconds'
+end 'WallClock'

@@ -9604,6 +9604,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "tick — this resolves sub-microsecond durations, so it is the one to use for "
       + "profiling and benchmarking.\n\n`__Builtins.currentTimeNanos() returns int`",
       "maxon_current_time_nanos", [], true),
+    ["currentUnixTimeSeconds"] = RuntimeCallIntrinsic(
+      "Returns WALL-CLOCK time as whole seconds since the Unix epoch (1970-01-01 UTC). This is the "
+      + "only calendar time source: currentTimeMs and currentTimeNanos are MONOTONIC, so their "
+      + "absolute values are meaningless and no arithmetic turns them into a date. The trade is that "
+      + "a wall clock can step backwards when the system clock is adjusted, so it must never be used "
+      + "to measure a duration.\n\n`__Builtins.currentUnixTimeSeconds() returns int`",
+      "maxon_current_unix_time_seconds", [], true),
     // === Memory-traffic counters ===
     //
     // The allocator's own counters, readable from a RELEASE binary — which is the point:

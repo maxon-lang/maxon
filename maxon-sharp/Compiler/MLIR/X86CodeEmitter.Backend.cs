@@ -470,6 +470,40 @@ public partial class X86CodeEmitter {
         _e.EmitMovRegReg(destReg, X86Register.Rax);
     }
 
+    /// <summary>100 ns ticks between the FILETIME epoch (1601-01-01) and the Unix epoch (1970-01-01).</summary>
+    private const long FileTimeTicksToUnixEpoch = 116_444_736_000_000_000L;
+
+    /// <summary>A FILETIME tick is 100 ns, so this many of them make a second.</summary>
+    private const long FileTimeTicksPerSecond = 10_000_000L;
+
+    public void GetCurrentUnixTimeSeconds(VReg dest, int scratchSlot) {
+      // GetSystemTimeAsFileTime(&ft) writes a FILETIME — a 64-bit count of 100 ns ticks since
+      // 1601-01-01 UTC — through an out-param in RCX. Slot N lives at [rbp-(N+1)*8].
+      //
+      // It is the cheap read: a user-mode load out of KUSER_SHARED_DATA, no syscall. Its
+      // resolution is the same ~15.6 ms scheduler tick as GetTickCount64, which is irrelevant
+      // here — a caller asking for whole SECONDS cannot observe the difference.
+      int fileTimeDisp = -(scratchSlot + 1) * 0x08;
+      _e.EmitLeaRegMem(X86Register.Rcx, fileTimeDisp);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "GetSystemTimeAsFileTime");
+
+      // seconds = (filetime - ticksToUnixEpoch) / ticksPerSecond.
+      //
+      // DIV (not IDIV) is correct and cannot trap: the subtraction cannot go negative unless the
+      // system clock is set before 1970, and the quotient — seconds since the epoch — does not
+      // approach 2^64. RDX must be zeroed first because DIV divides the full 128-bit RDX:RAX.
+      _e.EmitMovRegMem(X86Register.Rax, fileTimeDisp, 8);
+      _e.EmitMovRegImm(X86Register.Rcx, FileTimeTicksToUnixEpoch);
+      _e.EmitBytes(0x48, 0x29, 0xC8);                        // SUB RAX, RCX
+      _e.EmitBytes(0x48, 0x31, 0xD2);                        // XOR RDX, RDX
+      _e.EmitMovRegImm(X86Register.Rcx, FileTimeTicksPerSecond);
+      _e.EmitBytes(0x48, 0xF7, 0xF1);                        // DIV RCX => RAX = unix seconds
+
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
     public void GetCurrentProcessId(VReg dest) {
       // GetCurrentProcessId() returns a DWORD (process ID). Zero-extends
       // into RAX naturally for the caller's i64 result.

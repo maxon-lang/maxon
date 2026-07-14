@@ -286,6 +286,24 @@ public interface IEmitterBackend {
   void GetCurrentTimeNanos(VReg dest, int scratchSlot);
 
   /// <summary>
+  /// Get the current WALL-CLOCK time, in whole seconds since the Unix epoch (1970-01-01 UTC),
+  /// into dest.
+  /// Windows: GetSystemTimeAsFileTime -> rebase from the 1601 FILETIME epoch and scale
+  ///          its 100 ns ticks down to seconds.
+  /// macOS:   clock_gettime(CLOCK_REALTIME) -> tv_sec, which already counts from the epoch.
+  /// This is the ONLY calendar time source. <see cref="GetCurrentTimeMs"/> and
+  /// <see cref="GetCurrentTimeNanos"/> are both MONOTONIC — their absolute values are
+  /// meaningless (milliseconds since boot, performance-counter ticks) and only differences
+  /// between two readings mean anything. Neither can answer "what is today's date"; only
+  /// this can. The trade is the usual one: a wall clock can jump backwards when the system
+  /// clock is adjusted, so it must never be used to measure a duration.
+  /// The <paramref name="scratchSlot"/> parameter provides a stack slot used as the API's
+  /// out-parameter buffer (a FILETIME on Windows, a timespec on POSIX).
+  /// Clobbers Arg0..Arg4 and Scratch0..Scratch2.
+  /// </summary>
+  void GetCurrentUnixTimeSeconds(VReg dest, int scratchSlot);
+
+  /// <summary>
   /// Get current process ID into dest register (zero-extended).
   /// Windows: GetCurrentProcessId.
   /// macOS / POSIX: getpid.

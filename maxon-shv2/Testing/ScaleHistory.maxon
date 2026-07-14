@@ -20,18 +20,26 @@
 
 export let OptimizationLogRelativePath = "docs/optimization-log.md"
 
-// Signed, because every number here is a DIFFERENCE between two counts and the entire point is that
-// it can be negative. AllocCount and ByteCount are unsigned and cannot hold one.
+// The two tables the log keeps, each read DOWNWARDS: one row per accepted change, one column per
+// rung, so a column is that rung's history and the progression is the thing you actually see. A new
+// row is inserted immediately BEFORE the marker that closes its table.
+//
+// Anchoring on a marker rather than appending to the end of the file is what lets the document have
+// prose after the tables — the commentary explaining WHY a number moved, which is the whole point of
+// keeping it in markdown instead of a TSV.
+let AllocationsTableMarker = "<!-- scale-history:allocations -->"
+let BytesTableMarker = "<!-- scale-history:bytes -->"
+
+// The counts as the table prints them. Signed because groupDigits walks a rendered number and the
+// rung metrics arrive already signed; nothing here is ever negative in practice.
 typealias Delta = int(i64.min to i64.max)
 
-// A percentage carried to one decimal place, held as TENTHS of a percent: -107 is -10.7%. Integer
-// arithmetic all the way down — a compiler's test harness has no business reaching for floating
-// point to print a percentage.
-typealias PercentTenths = int(i64.min to i64.max)
+typealias CivilPart = int(0 to u64.max)
+typealias DayCount = int(0 to u64.max)
+typealias GroupIndex = int(0 to u64.max)
 
-// (delta / before) * 100 * 10 == (delta * 1000) / before, in tenths of a percent.
-let TenthsOfPercentPerUnit = 1000 as Delta
-let TenthsPerWholePercent = 10 as PercentTenths
+let SecondsPerDay = 86400 as UnixSeconds
+let DigitGroupSize = 3 as GroupIndex
 
 // Append one entry to the log. Called BEFORE the goldens are rewritten, so that a failure to record
 // the change leaves the committed goldens untouched: a tree with new goldens and no matching log
@@ -42,7 +50,7 @@ export function appendOptimizationLog(baseline ScaleBaseline, results RungResult
 		return 1
 	end 'badPath'
 
-	// The log is hand-written prose with a machine-appended table; the suite adds to it and never
+	// The log is hand-written prose with machine-appended table rows; the suite adds to it and never
 	// creates it. If it is missing, the likely cause is a run from the wrong directory, and silently
 	// minting a fresh file would bury the real history rather than extend it.
 	if not File.exists(path) 'missing'
@@ -60,13 +68,25 @@ export function appendOptimizationLog(baseline ScaleBaseline, results RungResult
 		return 1
 	end 'unreadable'
 
-	let entry = renderEntry(baseline, results: results, note: note)
-	try File.writeText(path, content: "{existing}{entry}") otherwise 'writeFailed'
+	if not existing.contains(AllocationsTableMarker) or not existing.contains(BytesTableMarker) 'noMarkers'
+		printError("scale-test: {OptimizationLogRelativePath} is missing its table markers ({AllocationsTableMarker} / {BytesTableMarker}).\n")
+		printError("            A row is inserted immediately before each marker; without them there is no table to extend.\n")
+		return 1
+	end 'noMarkers'
+
+	let today = todayUtc()
+	let allocationsRow = renderRow(results, note: note, date: today, ofBytes: false)
+	let bytesRow = renderRow(results, note: note, date: today, ofBytes: true)
+
+	var updated = existing.replace(AllocationsTableMarker, with: "{allocationsRow}{AllocationsTableMarker}")
+	updated = updated.replace(BytesTableMarker, with: "{bytesRow}{BytesTableMarker}")
+
+	try File.writeText(path, content: updated) otherwise 'writeFailed'
 		printError("scale-test: could not write {OptimizationLogRelativePath}\n")
 		return 1
 	end 'writeFailed'
 
-	print("\nscale-test: appended '{note}' to {OptimizationLogRelativePath}\n")
+	print("\nscale-test: logged '{note}' ({today}) to {OptimizationLogRelativePath}\n")
 	return 0
 end 'appendOptimizationLog'
 
@@ -94,65 +114,123 @@ function anyGoldenMoved(baseline ScaleBaseline, results RungResultArray) returns
 	return false
 end 'anyGoldenMoved'
 
-// FREES ARE NOT IN THE TABLE, and their absence is deliberate. What a reader wants from this log is
-// "how much less does the compiler allocate", and frees track allocations almost exactly — a column
-// of them would be a near-duplicate of the allocations column, paid for in width. What frees are
-// genuinely FOR is the leak check (allocs - frees must not grow), and that belongs in the goldens,
-// where it is gated, not in a document nobody diffs.
-function renderEntry(baseline ScaleBaseline, results RungResultArray, note String) returns String
-	var out = "\n## {note}\n\n"
-	out.append("| rung | allocations | bytes |\n")
-	out.append("| ---: | --- | --- |\n")
+// One row: the date, the reason, then this run's number at every rung.
+//
+// The rows carry ABSOLUTE numbers, not deltas. A delta answers "did this change help", which the
+// scale-test verdict already told you at the moment you ran it; the column answers "where are we
+// now, and how did we get here", which is the only question worth keeping a log to answer. Reading a
+// rung's column downwards IS the progression.
+//
+// FREES ARE NOT LOGGED, and their absence is deliberate. They track allocations almost exactly, so a
+// third table of them would be a near-duplicate paid for in width. What frees are genuinely FOR is
+// the leak check — allocs minus frees must not grow — and that belongs in the goldens, where it is
+// gated, not in a document nobody diffs.
+function renderRow(results RungResultArray, note String, date String, ofBytes bool) returns String
+	var row = "| {date} | {note} |"
 
 	for result in results 'eachRung'
-		let golden = try baseline.goldenFor(result.rung) otherwise 'newRung'
-			out.append("| {result.rung} | {result.total.allocs} (new rung) | {result.total.bytes} (new rung) |\n")
-			continue
-		end 'newRung'
-
-		let allocs = renderChange(golden.allocs as Delta, after: result.total.allocs)
-		let bytes = renderChange(golden.bytes as Delta, after: result.total.bytes)
-		out.append("| {result.rung} | {allocs} | {bytes} |\n")
+		var value = result.total.allocs
+		if ofBytes 'wantBytes'
+			value = result.total.bytes
+		end 'wantBytes'
+		row.append(" {groupDigits(value as Delta)} |")
 	end 'eachRung'
 
-	return out
-end 'renderEntry'
+	row.append("\n")
+	return row
+end 'renderRow'
 
-function renderChange(before Delta, after Delta) returns String
-	let delta = after - before
-	if delta == 0 'unchanged'
-		return "{after} (unchanged)"
-	end 'unchanged'
+// ===========================================================================================
+// Formatting
+// ===========================================================================================
 
-	return "{before} -> {after} ({renderSigned(delta)}, {renderPercent(delta, before: before)})"
-end 'renderChange'
+// 19261978 -> "19,261,978". Six-figure allocation counts stacked in a column are unreadable without
+// separators, and this table exists to be read at a glance.
+function groupDigits(value Delta) returns String
+	let digits = "{value}"
+	let count = digits.count()
 
-function renderSigned(delta Delta) returns String
-	if delta < 0 'negative'
-		return "-{0 - delta}"
-	end 'negative'
+	var grouped = ""
+	var index = 0 as GroupIndex
+	for digit in digits 'eachDigit'
+		// A separator goes before every digit whose distance from the END is a multiple of three —
+		// except the first, which would otherwise produce a leading comma.
+		if index > 0 and (count - index) mod DigitGroupSize == 0 'boundary'
+			grouped.append(",")
+		end 'boundary'
 
-	return "+{delta}"
-end 'renderSigned'
+		grouped.append("{digit}")
+		index = index + 1
+	end 'eachDigit'
 
-function renderPercent(delta Delta, before Delta) returns String
-	// Only reachable for a rung that HAS a committed golden, and a golden of zero allocations would
-	// mean the compiler ran without allocating. Guarded anyway: dividing by it would trap, and a
-	// crash in the logger is a poor way to learn that.
-	if before == 0 'noBase'
-		return "n/a"
-	end 'noBase'
+	return grouped
+end 'groupDigits'
 
-	var magnitude = delta
-	var sign = "+"
-	if delta < 0 'isNegative'
-		magnitude = 0 - delta
-		sign = "-"
-	end 'isNegative'
+// ===========================================================================================
+// The calendar
+// ===========================================================================================
 
-	let tenths = ((magnitude * TenthsOfPercentPerUnit) / before) as PercentTenths
-	let whole = tenths / TenthsPerWholePercent
-	let fraction = tenths mod TenthsPerWholePercent
+// Today, as YYYY-MM-DD in UTC.
+//
+// UTC, NOT local time, and that is a real decision rather than laziness: the log is committed and
+// read by whoever picks the work up next, and a local date silently means something different
+// depending on who ran the command. An entry stamped a day "early" because the machine was in
+// Sydney is worse than one stamped in a timezone everyone can agree on.
+function todayUtc() returns String
+	let days = WallClock.nowUnixSeconds() / SecondsPerDay
+	let civil = civilFromDays(days)
+	return "{civil.year}-{padTwo(civil.month)}-{padTwo(civil.day)}"
+end 'todayUtc'
 
-	return "{sign}{whole}.{fraction}%"
-end 'renderPercent'
+type CivilDate
+	export let year as CivilPart
+	export let month as CivilPart
+	export let day as CivilPart
+
+	static function create(year CivilPart, month CivilPart, day CivilPart) returns CivilDate
+		return Self{year: year, month: month, day: day}
+	end 'create'
+end 'CivilDate'
+
+// Days-since-the-Unix-epoch to a civil (proleptic Gregorian) date.
+//
+// This is Howard Hinnant's `civil_from_days`, and the reason it looks like nothing is because it is
+// doing something genuinely awkward: the Gregorian calendar's leap rule repeats on a 400-year ERA of
+// exactly 146097 days, but the year does not START where that cycle is easiest to count from. The
+// trick is to shift the epoch to 0000-03-01 (the +719468) so that the leap day lands at the END of
+// the year, which makes February's irregularity fall off the end of the arithmetic instead of
+// sitting in the middle of it. March is then month 0, and the last two lines put January and
+// February back where humans expect them.
+//
+// It is branch-free integer arithmetic, exact for every date, and it is not worth re-deriving. See
+// https://howardhinnant.github.io/date_algorithms.html#civil_from_days
+function civilFromDays(days DayCount) returns CivilDate
+	let shifted = days + 719468
+	let era = shifted / 146097
+	let dayOfEra = shifted - era * 146097
+	let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
+	let year = yearOfEra + era * 400
+	let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+
+	// Months counted from March, so a leap day cannot land in the middle of the sequence.
+	let marchMonth = (5 * dayOfYear + 2) / 153
+	let day = dayOfYear - (153 * marchMonth + 2) / 5 + 1
+
+	var month = marchMonth + 3
+	var calendarYear = year
+	if marchMonth >= 10 'januaryOrFebruary'
+		// March-relative months 10 and 11 are January and February — of the NEXT calendar year.
+		month = marchMonth - 9
+		calendarYear = year + 1
+	end 'januaryOrFebruary'
+
+	return CivilDate.create(calendarYear as CivilPart, month: month, day: day)
+end 'civilFromDays'
+
+function padTwo(value CivilPart) returns String
+	if value < 10 'single'
+		return "0{value}"
+	end 'single'
+
+	return "{value}"
+end 'padTwo'

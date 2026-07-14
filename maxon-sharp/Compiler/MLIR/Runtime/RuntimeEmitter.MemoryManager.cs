@@ -1410,6 +1410,29 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_current_unix_time_seconds() -> i64 (WALL-CLOCK seconds since 1970-01-01 UTC)
+  //
+  // The odd one out, and deliberately so. The two clocks above are MONOTONIC: their
+  // absolute values are meaningless (milliseconds since boot, performance-counter ticks)
+  // and only the difference between two readings means anything. That makes them right
+  // for durations and useless for dates — no amount of arithmetic turns "42 seconds since
+  // this machine booted" into a calendar day.
+  //
+  // This one reads the wall clock, so it can answer "what is today's date" and must never
+  // be used to measure a duration: the system clock can be stepped backwards (NTP, a user
+  // changing the timezone), and a duration computed across such a step comes out negative.
+  //
+  // The frame carries 0x40 like the nanosecond clock: both platform entry points write
+  // their result through an out-parameter (a FILETIME on Windows, a timespec on POSIX), so
+  // slots 0 and 1 are reserved as that buffer on top of Windows's 0x20 call shadow space.
+  // =========================================================================
+  public void EmitCurrentUnixTimeSeconds() {
+    _b.FunctionStart("maxon_current_unix_time_seconds", 0, 0x40);
+    _b.GetCurrentUnixTimeSeconds(VReg.Scratch0, scratchSlot: 0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // The memory-traffic counter accessors: one runtime function per counter a caller can
   // read, each a bare load. Together they are what makes a compiler's memory measurable
   // from inside itself, in a RELEASE binary — the same binary whose time is being

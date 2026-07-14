@@ -588,6 +588,7 @@ public partial class ARM64CodeEmitter {
 
     private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
     private const int CLOCK_MONOTONIC = 0x06;  // macOS _CLOCK_MONOTONIC (POSIX-standard monotonic)
+    private const int CLOCK_REALTIME = 0x00;   // macOS _CLOCK_REALTIME (wall clock, counts from the Unix epoch)
 
     /// <summary>Nanoseconds in a second: the tv_sec -> nanosecond scale of a `struct timespec`.</summary>
     private const long NanosPerSecond = 1_000_000_000L;
@@ -629,6 +630,23 @@ public partial class ARM64CodeEmitter {
       _e.EmitWord(0x9B037C42); // MUL X2, X2, X3
       _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, tsOff + 8, 8); // tv_nsec
       _e.EmitWord(0x8B040042); // ADD X2, X2, X4
+
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X2)
+        _e.EmitMovRegReg(destReg, ARM64Register.X2);
+    }
+
+    public void GetCurrentUnixTimeSeconds(VReg dest, int scratchSlot) {
+      // clock_gettime(CLOCK_REALTIME, &timespec), occupying slots scratchSlot and scratchSlot+1.
+      int tsOff = 16 + scratchSlot * 8; // [x29 + 16 + slot*8]
+      _e.EmitMovRegImm(ARM64Register.X0, CLOCK_REALTIME);
+      _e.EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, tsOff, isAdd: true);
+      _e.EmitCallImport("clock_gettime");
+
+      // tv_sec IS the answer. CLOCK_REALTIME already counts from the Unix epoch, so unlike the
+      // two monotonic clocks above there is nothing to rebase and nothing to scale — tv_nsec is
+      // simply dropped, which is exactly the truncation to whole seconds the caller asked for.
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, tsOff, 8); // tv_sec
 
       var destReg = R(dest);
       if (destReg != ARM64Register.X2)
