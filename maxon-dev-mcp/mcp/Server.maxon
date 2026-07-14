@@ -1,7 +1,6 @@
 // MCP server dispatch loop. Reads requests, routes by method name, writes
-// responses. Tools are registered in `registerTools()` below; in Phase 1
-// each tool returns a "not yet implemented" error so the wire protocol can
-// be exercised end-to-end before the real tool bodies are wired in.
+// responses. Tools live in `toolRegistry()` at the bottom of this file — one row
+// per tool, carrying everything `tools/list` and `tools/call` need from it.
 
 // Outcome of a tool invocation. A clean union keeps the response writer
 // uniform: it always either splices a result doc into the envelope or emits
@@ -24,28 +23,53 @@ export function repoRootErrorOutcome(tool String) returns ToolOutcome
 	return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{tool}: could not locate the Maxon repo root — no `bin/maxon{exeSuffix()}` found above the server binary. Build the C# bootstrap first (run `dotnet build` in maxon-sharp).")
 end 'repoRootErrorOutcome'
 
-// Names of all registered tools, in the order shown in `tools/list`. Kept as
-// a flat array because Maxon's compiler currently crashes (E9001) on a
-// `Map<String, FunctionType>` typealias — once that's resolved we can switch
-// to a real registry. Dispatch happens through `invokeTool` below, a hand-
-// written if/else chain keyed by the same names.
-typealias ToolNameArray = Array with String
+// =============================================================================
+// What a tool IS
+// =============================================================================
+
+// Builds one tool's input-schema FIELDS — its arguments, and nothing else. The
+// object that wraps them (and, decisively, the `description` on that object) is
+// put on by `buildToolDescriptor`, which is the only code that ever names a
+// description. A `schemaFieldsFor*` builder therefore CANNOT describe its own
+// tool a second time: it never sees the object it will be wrapped in.
+typealias SchemaFieldsBuilder = function(JsonDoc) returns SchemaFieldArray
+
+// Runs one tool: (the doc holding `arguments`, the `arguments` node) -> outcome.
+// Every handler in BuildTool.maxon, SpecTestTool.maxon, ... has this shape.
+typealias ToolHandler = function(JsonDoc, JsonNodeId) returns ToolOutcome
+
+// One tool: its name, its ONE description, its arguments, and the code that runs
+// it. `tools/list` and `tools/call` both walk the same rows, so a tool cannot be
+// half-registered — the shape that used to ship a tool with a missing or wrong
+// half when only one of two parallel `name.equals(...)` ladders got updated.
+type ToolSpec
+	export let name as String
+	export let description as String
+	export let schemaFields as SchemaFieldsBuilder
+	export let handler as ToolHandler
+
+	export static function create(name String, description String, schemaFields SchemaFieldsBuilder, handler ToolHandler) returns ToolSpec
+		return Self{name: name, description: description, schemaFields: schemaFields, handler: handler}
+	end 'create'
+end 'ToolSpec'
+
+typealias ToolSpecArray = Array with ToolSpec
 
 export function runServer()
 	var stdin = Console.stdin()
-	let toolNames = toolRegistry()
+	let tools = toolRegistry()
 
 	while true 'mainLoop'
 		let result = readRpcRequest(stdin)
 		match result 'r'
-			request(req) then handleRequest(req, toolNames: toolNames)
+			request(req) then handleRequest(req, tools: tools)
 			eof then return
 			protocolError(msg) then writeRpcParseError(msg)
 		end 'r'
 	end 'mainLoop'
 end 'runServer'
 
-function handleRequest(req RpcRequest, toolNames ToolNameArray)
+function handleRequest(req RpcRequest, tools ToolSpecArray)
 	let idIsNull = isJsonNull(req.doc, id: req.idNodeId)
 
 	if req.method.equals("initialize") 'init'
@@ -59,13 +83,13 @@ function handleRequest(req RpcRequest, toolNames ToolNameArray)
 	end 'initd'
 
 	if req.method.equals("tools/list") 'tl'
-		let resultDoc = buildToolsListResult(toolNames)
+		let resultDoc = buildToolsListResult(tools)
 		writeRpcResult(req.doc, idNodeId: req.idNodeId, resultDoc: resultDoc, resultRoot: resultDoc.root)
 		return
 	end 'tl'
 
 	if req.method.equals("tools/call") 'tc'
-		dispatchToolCall(req, toolNames: toolNames)
+		dispatchToolCall(req, tools: tools)
 		return
 	end 'tc'
 
@@ -132,17 +156,16 @@ end 'buildInitializeResult'
 // tools/list
 // =============================================================================
 
-function buildToolsListResult(toolNames ToolNameArray) returns JsonDoc
+function buildToolsListResult(tools ToolSpecArray) returns JsonDoc
 	var doc = JsonDoc.create()
 	var toolNodes = JsonNodeIdArray.create()
 
-	let n = toolNames.count()
+	let n = tools.count()
 	for i in 0 upto n 'each'
-		let name = try toolNames.get(i) otherwise 'getErr'
-			panic("buildToolsListResult: toolNames.get OOB — i bounds-checked")
+		let spec = try tools.get(i) otherwise 'getErr'
+			panic("buildToolsListResult: tools.get OOB — i bounds-checked")
 		end 'getErr'
-		let toolNode = buildToolDescriptor(doc, name: name)
-		toolNodes.push(toolNode)
+		toolNodes.push(buildToolDescriptor(doc, name: spec.name, description: spec.description, schemaFields: spec.schemaFields))
 	end 'each'
 
 	let toolsArr = doc.add(JsonNode.arrayNode(toolNodes))
@@ -155,63 +178,186 @@ function buildToolsListResult(toolNames ToolNameArray) returns JsonDoc
 	return doc
 end 'buildToolsListResult'
 
-// Tool descriptor: name + human description + JSON Schema describing the
-// shape of `arguments` for tools/call. Clients (Claude Code, MCP Inspector)
-// use the schema to populate completion and validate arguments before they
-// hit our handler.
-function buildToolDescriptor(doc JsonDoc, name String) returns JsonNodeId
-	let description = doc.add(JsonNode.stringNode(toolDescription(name)))
+// Tool descriptor: name + human description + JSON Schema describing the shape
+// of `arguments` for tools/call. Clients (Claude Code, MCP Inspector) use the
+// schema to populate completion and validate arguments before they hit our
+// handler.
+//
+// `tools/list` carries a tool's description in TWO places — the descriptor's
+// `description`, and the one on its input-schema object. Both are written here,
+// from the SAME argument. That is the single site `toolRegistry`'s comment is
+// about; keep it single.
+//
+// The spec is destructured into three parameters instead of being passed whole
+// because the C# bootstrap cannot CALL a function-typed FIELD: `spec.schemaFields(doc)`
+// is `E9001: Cannot determine function type from MaxonFieldAccessOp`. The same
+// value, arriving as a PARAMETER, calls fine — which is the idiom the language
+// reference itself uses (`function apply(f UnaryOp, x Integer)`).
+function buildToolDescriptor(doc JsonDoc, name String, description String, schemaFields SchemaFieldsBuilder) returns JsonNodeId
 	let nameId = doc.add(JsonNode.stringNode(name))
-	let schemaId = toolSchema(doc, name: name)
+	let descriptionId = doc.add(JsonNode.stringNode(description))
+	let schemaId = schemaObject(doc, fields: schemaFields(doc), description: description)
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 	keys.push("name")
 	children.push(nameId)
 	keys.push("description")
-	children.push(description)
+	children.push(descriptionId)
 	keys.push("inputSchema")
 	children.push(schemaId)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'buildToolDescriptor'
 
-// Hand-written schema table. Mirrors the structure of `toolDescription`
-// and `invokeTool` — adding a new tool means touching three sites, which
-// is good: the schema MUST stay in sync with the handler's actual arg
-// parsing, and divergence between them is the whole reason we surface
-// schemas at all.
-function toolSchema(doc JsonDoc, name String) returns JsonNodeId
-	if name.equals("build") 'b'
-		return schemaForBuild(doc)
-	end 'b'
-	if name.equals("run_spec_test") 'rst'
-		return schemaForRunSpecTest(doc)
-	end 'rst'
-	if name.equals("lookup_error_code") 'lec'
-		return schemaForLookupErrorCode(doc)
-	end 'lec'
-	if name.equals("dump_ir") 'di'
-		return schemaForDumpIr(doc)
-	end 'di'
-	if name.equals("run_program") 'rp'
-		return schemaForRunProgram(doc)
-	end 'rp'
-	if name.equals("fmt") 'fm'
-		return schemaForFmt(doc)
-	end 'fm'
-	if name.equals("spec_test_outcome") 'sto'
-		return schemaForSpecTestOutcome(doc)
-	end 'sto'
-	if name.equals("mm_trace_analyze") 'mta'
-		return schemaForMmTraceAnalyze(doc)
-	end 'mta'
-	if name.equals("run_scale_test") 'rsct'
-		return schemaForScaleTest(doc)
-	end 'rsct'
-	// Unknown tool — fall back to the permissive empty-object schema so
-	// the descriptor still validates against the MCP spec.
-	return schemaEmptyObject(doc)
-end 'toolSchema'
+// =============================================================================
+// The tools: one description + one argument list each, in registry order
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// build
+// -----------------------------------------------------------------------------
+let BuildDescription = "Build a Maxon compiler. Target is csharp (the bootstrap, via dotnet build) or shv2 (built by the bootstrap). One compiler per call."
+
+function schemaFieldsForBuild(doc JsonDoc) returns SchemaFieldArray
+	let targetSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build. One per call: csharp is built by `dotnet build`; shv2 is built BY the csharp bootstrap, so build csharp first if it is stale.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
+	return fields
+end 'schemaFieldsForBuild'
+
+// -----------------------------------------------------------------------------
+// run_spec_test
+// -----------------------------------------------------------------------------
+let RunSpecTestDescription = "Run a Maxon spec-test suite, optionally filtered, returning structured pass/fail counts. compiler=shv2 runs the specs-shv2 suite."
+
+function schemaFieldsForRunSpecTest(doc JsonDoc) returns SchemaFieldArray
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler's spec-test runner to invoke. Default csharp. `shv2` runs the specs-shv2 suite.")
+	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>; matches test names. For shv2 it is a substring of the `<spec>/<test>` label.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks (csharp) or the committed .test goldens (shv2) in place. Pair it with `filter` — unfiltered, it rewrites the whole suite.")
+	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
+	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output. Not supported by shv2.")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
+	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
+	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
+	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
+	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
+	return fields
+end 'schemaFieldsForRunSpecTest'
+
+// -----------------------------------------------------------------------------
+// lookup_error_code
+// -----------------------------------------------------------------------------
+let LookupErrorCodeDescription = "Look up a 4-digit Maxon error code (e.g. E3014) by its numeric value, returning the source-of-truth doc comment and the spec files that exercise it."
+
+function schemaFieldsForLookupErrorCode(doc JsonDoc) returns SchemaFieldArray
+	let intAlt = schemaInteger(doc, description: "Numeric error code, e.g. 3014.")
+	let strAlt = schemaString(doc, description: "Error code as a string, e.g. \"E3014\" or \"3014\".")
+	var alts = JsonNodeIdArray.create()
+	alts.push(intAlt)
+	alts.push(strAlt)
+	let codeSchema = schemaOneOf(doc, alternatives: alts, description: "4-digit error code, given as either a number or a string with optional E prefix.")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("code", schemaId: codeSchema, required: true))
+	return fields
+end 'schemaFieldsForLookupErrorCode'
+
+// -----------------------------------------------------------------------------
+// dump_ir
+// -----------------------------------------------------------------------------
+let DumpIrDescription = "Compile a snippet or file with --emit-ir using the chosen compiler (csharp | shv2) and return the resulting .ir text (optionally per-stage when dumpStages=true; shv2 emits no stages)."
+
+function schemaFieldsForDumpIr(doc JsonDoc) returns SchemaFieldArray
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build with. Required — there is no default.")
+	let sourceSchema = schemaSource(doc)
+	let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.). Not supported by shv2.")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
+	return fields
+end 'schemaFieldsForDumpIr'
+
+// -----------------------------------------------------------------------------
+// run_program
+// -----------------------------------------------------------------------------
+let RunProgramDescription = "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | shv2), returning build + run exit codes, durations, and stdout/stderr."
+
+function schemaFieldsForRunProgram(doc JsonDoc) returns SchemaFieldArray
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build the program with. Required — there is no default.")
+	let sourceSchema = schemaSource(doc)
+	let argvItemSchema = schemaString(doc, description: "One argv entry.")
+	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
+	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
+	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 30000.")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
+	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
+	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
+	return fields
+end 'schemaFieldsForRunProgram'
+
+// -----------------------------------------------------------------------------
+// fmt
+// -----------------------------------------------------------------------------
+//
+// NO `compiler` FIELD — `maxon fmt` is a C# bootstrap command and shv2 has no
+// formatter, so the tool is fixed to the bootstrap rather than offering a choice
+// one of the two answers with a usage dump.
+let FmtDescription = "Format a Maxon snippet or file via `maxon fmt` (C# bootstrap). Files are formatted in-place; snippets return the formatted text."
+
+function schemaFieldsForFmt(doc JsonDoc) returns SchemaFieldArray
+	let sourceSchema = schemaSource(doc)
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	return fields
+end 'schemaFieldsForFmt'
+
+// -----------------------------------------------------------------------------
+// spec_test_outcome
+// -----------------------------------------------------------------------------
+let SpecTestOutcomeDescription = "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a per-spec failure summary. Works against csharp or shv2."
+
+function schemaFieldsForSpecTestOutcome(doc JsonDoc) returns SchemaFieldArray
+	let filterSchema = schemaString(doc, description: "Pattern passed to --filter=<pattern>. Typically a single test name like `arithmetic/addition`.")
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler. Default csharp.")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
+	return fields
+end 'schemaFieldsForSpecTestOutcome'
+
+// -----------------------------------------------------------------------------
+// mm_trace_analyze
+// -----------------------------------------------------------------------------
+let MmTraceAnalyzeDescription = "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
+
+function schemaFieldsForMmTraceAnalyze(doc JsonDoc) returns SchemaFieldArray
+	let sourceSchema = schemaSource(doc)
+	let argvItemSchema = schemaString(doc, description: "One argv entry.")
+	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
+	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
+	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 60000.")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
+	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
+	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
+	return fields
+end 'schemaFieldsForMmTraceAnalyze'
 
 // -----------------------------------------------------------------------------
 // run_scale_test
@@ -224,23 +370,9 @@ end 'toolSchema'
 //
 // NO `updateRequired` EITHER. It rewrote committed memory goldens, and there are none: scale-test is
 // an instrument, not a gate. `note` is what RECORDS a run now, and it stands alone.
-//
-// ⚠ THE TOOL IS DESCRIBED ONCE, IN `ScaleTestDescription`, AND THAT IS DELIBERATE.
-//
-// Every tool in this server carries TWO descriptions — the one `toolDescription` returns, and the one
-// on its input-schema object — and both are shipped to the caller in `tools/list`. They are two
-// hand-maintained accounts of the same tool with nothing making them agree, and a model reading two
-// different accounts cannot tell which is current. This one is now a single constant used by both.
-//
-// It is not a hypothetical failure. The previous version of these strings told a caller that
-// scale-test "checks the per-rung memory goldens exactly" and "returns PASS / FAIL / VOID / NOISY"
-// long after the goldens and the verdict had been deleted — and a model that loaded the schema
-// believed it, and worked from it. THE MCP DESCRIPTION IS WHAT A MODEL READS INSTEAD OF THE SOURCE.
-// It is the highest-leverage documentation in this repo, and the easiest to leave stale.
-//
-// (The other eight tools still have the two-description shape. Collapsing them is the same edit
-// applied eight more times, and it belongs in its own change rather than smuggled into this one.)
-function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
+let ScaleTestDescription = "Run the maxon-shv2 MEMORY-scaling instrument (shv2 only): compile a ladder of generated programs, each rung DOUBLE the last, and report per-rung and per-phase MEMORY — allocations, frees, bytes — plus the delta from the last run recorded in docs/optimization-log.md, which is the trend it feeds. IT COLLECTS NO TIME AND FITS NO CURVES, and both are deliberate. Memory is bit-for-bit reproducible (the same source makes the same allocations on an idle box or a loaded one), so a number that MOVED, moved for a reason; wall time is machine-dependent and cannot be trended at all — for the milliseconds of a single compile, pass log=\"compiler:debug\" and read the COMPILER's own table. And because the ladder DOUBLES, the RATIO between two rungs IS the growth: x2.00 is linear, x4.00 is quadratic, read straight off the counts, so there is nothing to fit and no exponent, residual or share to interpret. It renders NO VERDICT — there is nothing to pass and no green light to chase, and a surprising number is a reading to EXPLAIN. A non-zero exitCode means the RUN BROKE and measured nothing (a rung would not compile, or the generated corpus folded away); it is never a judgement about the numbers."
+
+function schemaFieldsForScaleTest(doc JsonDoc) returns SchemaFieldArray
 	let rungsSchema = schemaInteger(doc, description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the generated program, so this is exponential in cost: 6 rungs is a 32x span and about 20 seconds.")
 	let noteSchema = schemaString(doc, description: "RECORD this run in docs/optimization-log.md — one dated row of the per-rung allocations and bytes, with this text as the reason. Without it a run reports and records nothing, because scale-test is run dozens of times a day against dirty trees and a log of all of them is a log nobody reads. WITH it the row is ALWAYS written, moved or not: it is an instruction, and you are the only party who knows whether the run is a datapoint. The instrument can see exactly WHAT moved and can never see why: that has to come from you, now.")
 	let perTypeSchema = schemaBoolean(doc, description: "Also run the --mm-trace pass, which attributes allocations to the TYPE allocated AND to the SCOPE that allocated it — the scope table is the one that finds things, because a `String` row can never tell you 150 of them came from one function. Off by default: it is a differently-compiled binary from the one being measured, and it traces every allocation individually.")
@@ -253,176 +385,14 @@ function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
 	fields.push(SchemaField.create("perType", schemaId: perTypeSchema, required: false))
 	fields.push(SchemaField.create("emitCorpus", schemaId: emitCorpusSchema, required: false))
 	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
-	return schemaObject(doc, fields: fields, description: ScaleTestDescription)
-end 'schemaForScaleTest'
-
-// THE description of `run_scale_test` — the tool's, and its input schema's. One string, one truth.
-let ScaleTestDescription = "Run the maxon-shv2 MEMORY-scaling instrument (shv2 only): compile a ladder of generated programs, each rung DOUBLE the last, and report per-rung and per-phase MEMORY — allocations, frees, bytes — plus the delta from the last run recorded in docs/optimization-log.md, which is the trend it feeds. IT COLLECTS NO TIME AND FITS NO CURVES, and both are deliberate. Memory is bit-for-bit reproducible (the same source makes the same allocations on an idle box or a loaded one), so a number that MOVED, moved for a reason; wall time is machine-dependent and cannot be trended at all — for the milliseconds of a single compile, pass log=\"compiler:debug\" and read the COMPILER's own table. And because the ladder DOUBLES, the RATIO between two rungs IS the growth: x2.00 is linear, x4.00 is quadratic, read straight off the counts, so there is nothing to fit and no exponent, residual or share to interpret. It renders NO VERDICT — there is nothing to pass and no green light to chase, and a surprising number is a reading to EXPLAIN. A non-zero exitCode means the RUN BROKE and measured nothing (a rung would not compile, or the generated corpus folded away); it is never a judgement about the numbers."
-
-function schemaEmptyObject(doc JsonDoc) returns JsonNodeId
-	let typeId = doc.add(JsonNode.stringNode("object"))
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
-	keys.push("type")
-	children.push(typeId)
-	return doc.add(JsonNode.objectNode(keys, children: children))
-end 'schemaEmptyObject'
-
-// -----------------------------------------------------------------------------
-// build
-// -----------------------------------------------------------------------------
-function schemaForBuild(doc JsonDoc) returns JsonNodeId
-	let targetSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build. One per call: csharp is built by `dotnet build`; shv2 is built BY the csharp bootstrap, so build csharp first if it is stale.")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
-	return schemaObject(doc, fields: fields, description: "Build the Maxon compiler.")
-end 'schemaForBuild'
-
-// -----------------------------------------------------------------------------
-// run_spec_test
-// -----------------------------------------------------------------------------
-function schemaForRunSpecTest(doc JsonDoc) returns JsonNodeId
-	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler's spec-test runner to invoke. Default csharp. `shv2` runs the specs-shv2 suite.")
-	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>; matches test names. For shv2 it is a substring of the `<spec>/<test>` label.")
-	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks (csharp) or the committed .test goldens (shv2) in place. Pair it with `filter` — unfiltered, it rewrites the whole suite.")
-	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
-	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output. Not supported by shv2.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
-	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
-	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
-	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
-	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
-	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Run the spec-test suite and return structured pass/fail counts.")
-end 'schemaForRunSpecTest'
-
-// -----------------------------------------------------------------------------
-// spec_test_outcome
-// -----------------------------------------------------------------------------
-function schemaForSpecTestOutcome(doc JsonDoc) returns JsonNodeId
-	let filterSchema = schemaString(doc, description: "Pattern passed to --filter=<pattern>. Typically a single test name like `arithmetic/addition`.")
-	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler. Default csharp.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
-	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
-	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Run spec-tests filtered to a pattern and return per-test PASS/FAIL entries plus each failure's message.")
-end 'schemaForSpecTestOutcome'
-
-// -----------------------------------------------------------------------------
-// lookup_error_code
-// -----------------------------------------------------------------------------
-function schemaForLookupErrorCode(doc JsonDoc) returns JsonNodeId
-	let intAlt = schemaInteger(doc, description: "Numeric error code, e.g. 3014.")
-	let strAlt = schemaString(doc, description: "Error code as a string, e.g. \"E3014\" or \"3014\".")
-	var alts = JsonNodeIdArray.create()
-	alts.push(intAlt)
-	alts.push(strAlt)
-	let codeSchema = schemaOneOf(doc, alternatives: alts, description: "4-digit error code, given as either a number or a string with optional E prefix.")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("code", schemaId: codeSchema, required: true))
-	return schemaObject(doc, fields: fields, description: "Look up a Maxon error code's definition and the spec files that exercise it.")
-end 'schemaForLookupErrorCode'
-
-// -----------------------------------------------------------------------------
-// dump_ir / fmt — both take a `source` block; dump_ir adds compiler + dumpStages
-// -----------------------------------------------------------------------------
-function schemaForDumpIr(doc JsonDoc) returns JsonNodeId
-	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build with. Required — there is no default.")
-	let sourceSchema = schemaSource(doc)
-	let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.). Not supported by shv2.")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
-	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
-	fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Compile a Maxon source with the chosen compiler and emit IR.")
-end 'schemaForDumpIr'
-
-// NO `compiler` FIELD — `maxon fmt` is a C# bootstrap command and shv2 has no
-// formatter, so the tool is fixed to the bootstrap rather than offering a choice
-// one of the two answers with a usage dump.
-function schemaForFmt(doc JsonDoc) returns JsonNodeId
-	let sourceSchema = schemaSource(doc)
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
-	return schemaObject(doc, fields: fields, description: "Format a Maxon source: either a file/project or an inline snippet.")
-end 'schemaForFmt'
-
-// -----------------------------------------------------------------------------
-// run_program
-// -----------------------------------------------------------------------------
-function schemaForRunProgram(doc JsonDoc) returns JsonNodeId
-	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler to build the program with. Required — there is no default.")
-	let sourceSchema = schemaSource(doc)
-	let argvItemSchema = schemaString(doc, description: "One argv entry.")
-	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
-	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
-	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 30000.")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: true))
-	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
-	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
-	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
-	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Compile (with the chosen compiler) and execute a Maxon snippet or file; returns build+run exit codes, durations, and stdout/stderr.")
-end 'schemaForRunProgram'
-
-// -----------------------------------------------------------------------------
-// mm_trace_analyze
-// -----------------------------------------------------------------------------
-function schemaForMmTraceAnalyze(doc JsonDoc) returns JsonNodeId
-	let sourceSchema = schemaSource(doc)
-	let argvItemSchema = schemaString(doc, description: "One argv entry.")
-	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
-	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
-	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 60000.")
-	var fields = SchemaFieldArray.create()
-	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
-	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
-	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
-	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Build a snippet/file with --mm-trace, run it, then pipe the trace through scripts/analyze_mm_trace.py and return the structured report.")
-end 'schemaForMmTraceAnalyze'
-
-function toolDescription(name String) returns String
-	if name.equals("build") 'b'
-		return "Build a Maxon compiler. Target is csharp (the bootstrap, via dotnet build) or shv2 (built by the bootstrap). One compiler per call."
-	end 'b'
-	if name.equals("run_spec_test") 'rst'
-		return "Run a Maxon spec-test suite, optionally filtered, returning structured pass/fail counts. compiler=shv2 runs the specs-shv2 suite."
-	end 'rst'
-	if name.equals("lookup_error_code") 'lec'
-		return "Look up a 4-digit Maxon error code (e.g. E3014) by its numeric value, returning the source-of-truth doc comment and the spec files that exercise it."
-	end 'lec'
-	if name.equals("dump_ir") 'di'
-		return "Compile a snippet or file with --emit-ir using the chosen compiler (csharp | shv2) and return the resulting .ir text (optionally per-stage when dumpStages=true; shv2 emits no stages)."
-	end 'di'
-	if name.equals("run_program") 'rp'
-		return "Compile and execute a Maxon snippet or file with the chosen compiler (csharp | shv2), returning build + run exit codes, durations, and stdout/stderr."
-	end 'rp'
-	if name.equals("fmt") 'fm'
-		return "Format a Maxon snippet or file via `maxon fmt` (C# bootstrap). Files are formatted in-place; snippets return the formatted text."
-	end 'fm'
-	if name.equals("spec_test_outcome") 'sto'
-		return "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a per-spec failure summary. Works against csharp or shv2."
-	end 'sto'
-	if name.equals("mm_trace_analyze") 'mta'
-		return "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
-	end 'mta'
-	if name.equals("run_scale_test") 'rsct'
-		return ScaleTestDescription
-	end 'rsct'
-	return "(no description)"
-end 'toolDescription'
+	return fields
+end 'schemaFieldsForScaleTest'
 
 // =============================================================================
 // tools/call
 // =============================================================================
 
-function dispatchToolCall(req RpcRequest, toolNames ToolNameArray)
+function dispatchToolCall(req RpcRequest, tools ToolSpecArray)
 	if not req.paramsPresent 'noPar'
 		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call requires `params`")
 		return
@@ -433,74 +403,41 @@ function dispatchToolCall(req RpcRequest, toolNames ToolNameArray)
 		return
 	end 'noName'
 
-	if not toolNameRegistered(toolName, toolNames: toolNames) 'unknown'
+	let spec = try findTool(tools, name: toolName) otherwise 'unknown'
 		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "unknown tool: {toolName}")
 		return
 	end 'unknown'
 
-	let argumentsId = try req.doc.getChild(req.paramsNodeId, key: "arguments") otherwise 'noArgs'
-		let nullId = req.doc.add(JsonNode.nullNode())
-		let outcome = invokeTool(toolName, argsDoc: req.doc, argsId: nullId)
-		emitOutcome(outcome, req: req)
-		return
-	end 'noArgs'
-	let outcome = invokeTool(toolName, argsDoc: req.doc, argsId: argumentsId)
-	emitOutcome(outcome, req: req)
+	// `arguments` is optional in the MCP wire format; a handler reading a JSON
+	// null finds every one of its keys missing, which is exactly what a call
+	// with no arguments means.
+	let argsId = try req.doc.getChild(req.paramsNodeId, key: "arguments") otherwise req.doc.add(JsonNode.nullNode())
+	invokeAndEmit(spec.handler, req: req, argsId: argsId)
 end 'dispatchToolCall'
 
-function toolNameRegistered(name String, toolNames ToolNameArray) returns bool
-	let n = toolNames.count()
+function findTool(tools ToolSpecArray, name String) returns ToolSpec throws NotFound
+	let n = tools.count()
 	for i in 0 upto n 'scan'
-		let registered = try toolNames.get(i) otherwise 'gErr'
-			panic("toolNameRegistered: get OOB — i bounds-checked")
+		let spec = try tools.get(i) otherwise 'gErr'
+			panic("findTool: tools.get OOB — i bounds-checked")
 		end 'gErr'
-		if registered.equals(name) 'hit'
-			return true
+		if spec.name.equals(name) 'hit'
+			return spec
 		end 'hit'
 	end 'scan'
-	return false
-end 'toolNameRegistered'
+	throw NotFound.notFound
+end 'findTool'
 
-// Hand-written dispatch table. Each branch calls the named tool's handler;
-// because Maxon currently can't hold a function reference in a map, the
-// dispatch is spelled out here.
-function invokeTool(name String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	if name.equals("build") 'b'
-		return buildToolHandler(argsDoc, argsId: argsId)
-	end 'b'
-	if name.equals("run_spec_test") 'rst'
-		return specTestHandler(argsDoc, argsId: argsId)
-	end 'rst'
-	if name.equals("lookup_error_code") 'lec'
-		return lookupErrorCodeHandler(argsDoc, argsId: argsId)
-	end 'lec'
-	if name.equals("dump_ir") 'di'
-		return dumpIrHandler(argsDoc, argsId: argsId)
-	end 'di'
-	if name.equals("run_program") 'rp'
-		return runProgramHandler(argsDoc, argsId: argsId)
-	end 'rp'
-	if name.equals("fmt") 'fm'
-		return fmtHandler(argsDoc, argsId: argsId)
-	end 'fm'
-	if name.equals("spec_test_outcome") 'sto'
-		return specOutcomeHandler(argsDoc, argsId: argsId)
-	end 'sto'
-	if name.equals("mm_trace_analyze") 'mta'
-		return mmTraceAnalyzeHandler(argsDoc, argsId: argsId)
-	end 'mta'
-	if name.equals("run_scale_test") 'rsct'
-		return scaleTestHandler(argsDoc, argsId: argsId)
-	end 'rsct'
-	panic("invokeTool: tool name '{name}' passed registration check but no dispatch branch matched")
-end 'invokeTool'
-
-function emitOutcome(outcome ToolOutcome, req RpcRequest)
+// Run the tool and write whatever it produced. The handler arrives as a PARAMETER
+// rather than being reached through `spec.handler(...)` for the reason spelled out
+// on `buildToolDescriptor`: the bootstrap cannot call a function-typed field.
+function invokeAndEmit(handler ToolHandler, req RpcRequest, argsId JsonNodeId)
+	let outcome = handler(req.doc, argsId)
 	match outcome 'o'
 		success(doc, root) then emitToolSuccess(doc, root: root, req: req)
 		error(code, message) then writeRpcError(req.doc, idNodeId: req.idNodeId, code: code, message: message)
 	end 'o'
-end 'emitOutcome'
+end 'invokeAndEmit'
 
 // MCP's `tools/call` response shape is `{ content: [{type, text}], isError? }`,
 // not the bare structured result a JSON-RPC envelope would otherwise carry.
@@ -582,16 +519,39 @@ end 'copyJsonObject'
 // Tool registry
 // =============================================================================
 
-function toolRegistry() returns ToolNameArray
-	var names = ToolNameArray.create()
-	names.push("build")
-	names.push("run_spec_test")
-	names.push("lookup_error_code")
-	names.push("dump_ir")
-	names.push("run_program")
-	names.push("fmt")
-	names.push("spec_test_outcome")
-	names.push("mm_trace_analyze")
-	names.push("run_scale_test")
-	return names
+// ⚠ A TOOL IS DESCRIBED ONCE — HERE — AND THAT IS DELIBERATE. Do not helpfully
+// add a second description anywhere; there is nowhere left to put one, and that
+// is the point.
+//
+// `tools/list` ships a tool's description TWICE: once as the descriptor's
+// `description`, and once on its input-schema object. Both used to be written by
+// hand, in two parallel `name.equals(...)` ladders, with nothing making them
+// agree — and a model reading two different accounts of the same tool cannot tell
+// which one is current.
+//
+// That is not a hypothetical failure. `run_scale_test`'s two copies drifted: the
+// schema went on telling callers that scale-test "checks the per-rung memory
+// goldens exactly" and "returns PASS / FAIL / VOID / NOISY" long after the goldens
+// and the verdicts had been deleted from the code. A model read it, believed it,
+// and built a whole mental model on it — chasing a green light that no longer
+// existed, and at one point editing the instrument to make a number look better.
+// THE MCP DESCRIPTION IS WHAT A MODEL READS INSTEAD OF THE SOURCE: it is the
+// highest-leverage documentation in this repo and the easiest to leave stale,
+// because its audience cannot go and check.
+//
+// So: one row per tool, one description per row, and one list — walked by
+// `tools/list` to describe the tool and by `tools/call` to run it. Registering a
+// tool is one edit, and half-registering it is not expressible.
+function toolRegistry() returns ToolSpecArray
+	var tools = ToolSpecArray.create()
+	tools.push(ToolSpec.create("build", description: BuildDescription, schemaFields: schemaFieldsForBuild, handler: buildToolHandler))
+	tools.push(ToolSpec.create("run_spec_test", description: RunSpecTestDescription, schemaFields: schemaFieldsForRunSpecTest, handler: specTestHandler))
+	tools.push(ToolSpec.create("lookup_error_code", description: LookupErrorCodeDescription, schemaFields: schemaFieldsForLookupErrorCode, handler: lookupErrorCodeHandler))
+	tools.push(ToolSpec.create("dump_ir", description: DumpIrDescription, schemaFields: schemaFieldsForDumpIr, handler: dumpIrHandler))
+	tools.push(ToolSpec.create("run_program", description: RunProgramDescription, schemaFields: schemaFieldsForRunProgram, handler: runProgramHandler))
+	tools.push(ToolSpec.create("fmt", description: FmtDescription, schemaFields: schemaFieldsForFmt, handler: fmtHandler))
+	tools.push(ToolSpec.create("spec_test_outcome", description: SpecTestOutcomeDescription, schemaFields: schemaFieldsForSpecTestOutcome, handler: specOutcomeHandler))
+	tools.push(ToolSpec.create("mm_trace_analyze", description: MmTraceAnalyzeDescription, schemaFields: schemaFieldsForMmTraceAnalyze, handler: mmTraceAnalyzeHandler))
+	tools.push(ToolSpec.create("run_scale_test", description: ScaleTestDescription, schemaFields: schemaFieldsForScaleTest, handler: scaleTestHandler))
+	return tools
 end 'toolRegistry'
