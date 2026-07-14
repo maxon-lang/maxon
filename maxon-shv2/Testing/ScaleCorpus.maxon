@@ -157,6 +157,48 @@ let CallChainBase = 8 as KnobSize
 // the allocator sits on x1.99.
 let PressuredLoopsBase = 2 as KnobSize
 
+// How many MUTABLE LOCALS a long generated function carries. NOT a doubling knob — it is a fixed,
+// realistic number, and that is the whole point.
+//
+// ⚠ THIS EXISTS BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION THAT MATTERS.
+// The parser builds SSA on the fly, and it costs **O(vars-in-scope)** at every branch: each `if`
+// SNAPSHOTS the whole mutable-var set, and each `while` MINTS A PHI PER MUTABLE VAR IN SCOPE. So the
+// real cost is O(V x B) — and `longFunction` and `deepBlocks` each declared exactly **ONE**
+// accumulator and mutated it in every branch. **V = 1, so O(V x B) collapsed to O(B), and the entire
+// V dimension was unmeasurable.** The knob named for growing branches could not see the cost of
+// growing branches.
+//
+// A knob built to expose a bug you already found only finds bugs you already found. So the fix is to
+// make the generated functions REALISTIC — real Maxon functions carry a handful of locals mutated
+// across many branches — and let the cost surface on its own, along with any other V-dependent cost
+// nobody has thought to look for.
+//
+// SIX is chosen, not round: enough that a snapshot is not a special case (V=1 and V=2 both flatter
+// the parser), few enough to stay honest about what a function really holds, and well inside the
+// 14-GPR pool so this knob provokes no spill and stays a measurement of the PARSER rather than an
+// accidental second copy of `pressuredLoops`.
+let LocalsPerFunction = 6 as KnobSize
+
+// Declare the mutable locals, each seeded from the parameter `a` so the folder cannot see through
+// them and constant-fold the function away.
+function mutableLocalsDecl() returns String
+	var out = ""
+	for v in 0 upto LocalsPerFunction 'decl'
+		out.append("\tvar l{v} = a + {v + 1}\n")
+	end 'decl'
+	return out
+end 'mutableLocalsDecl'
+
+// Read every local back into a sum. Without this the later ones are DEAD, and a dead var is a var a
+// future pass may legitimately drop — which would silently take the V dimension away again.
+function mutableLocalsSum() returns String
+	var out = "\tvar sum = a\n"
+	for v in 0 upto LocalsPerFunction 'sum'
+		out.append("\tsum = sum + l{v}\n")
+	end 'sum'
+	return out
+end 'mutableLocalsSum'
+
 // How many accumulators each pressured loop holds live ACROSS a call.
 //
 // EIGHT IS A CHOSEN NUMBER, not a round one. The allocatable pool is 14 GPRs, of which only 5 are
@@ -350,9 +392,15 @@ function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize
 	return total
 end 'writeManyFunctions'
 
-// One small function of the realistic-codebase shape: a couple of arithmetic ops and a branch.
-// Everything derives from the parameter `a`, which is a call argument at every call site and
+// One small function of the realistic-codebase shape: a couple of arithmetic ops and a guarded
+// branch. Everything derives from the parameter `a`, which is a call argument at every call site and
 // therefore opaque to the folder.
+//
+// The guard is a SHORT-CIRCUIT `and`. This is the knob that doubles the FUNCTION COUNT, so it is
+// where a per-function cost shows up — and short-circuit lowering is not free: it mints two blocks, a
+// merge phi and a seed literal per `and`. The corpus contained no `and`/`or` at all until 2026-07-14,
+// which meant the compare/branch fusion path — the commonest conditional shape in the language — was
+// measured by nothing.
 function smallFunctionSource(fileIndex KnobSize, slot KnobSize, salt KnobSize) returns String
 	let name = smallFunctionName(fileIndex, slot: slot)
 	// `salt` varies the constants across functions so they are not textually identical — identical
@@ -361,7 +409,7 @@ function smallFunctionSource(fileIndex KnobSize, slot KnobSize, salt KnobSize) r
 	var out = "\nfunction {name}(a int) returns int\n"
 	out.append("\tlet b = a + {k}\n")
 	out.append("\tlet c = b * 3\n")
-	out.append("\tif c > a 'grew'\n")
+	out.append("\tif c > a and b < c 'grew'\n")
 	out.append("\t\treturn c - a\n")
 	out.append("\tend 'grew'\n")
 	out.append("\treturn c + a\n")
@@ -373,19 +421,38 @@ function smallFunctionName(fileIndex KnobSize, slot KnobSize) returns String
 	return "sf{fileIndex}_{slot}"
 end 'smallFunctionName'
 
-// The `longFunction` knob: ONE function, N sequential `if`s. At rung 5 this is the 3,200-`if`
-// benchmark ARCHITECTURE.md quotes a measurement for. It grows OPS in a near-straight line; the CFG
-// grows with it but stays a simple chain.
+// The `longFunction` knob: ONE function, N sequential `if`s over `LocalsPerFunction` mutable locals.
+// At rung 5 this is the 3,200-`if` benchmark ARCHITECTURE.md quotes a measurement for. It grows OPS
+// in a near-straight line; the CFG grows with it but stays a simple chain.
+//
+// Two things here are load-bearing, and the knob measured nothing without them (see
+// `LocalsPerFunction`):
+//
+//   • SEVERAL locals, so V > 1 and the parser's per-branch O(vars-in-scope) snapshot is visible at
+//     all. It used to be one `var acc`.
+//   • Each branch mutates a ROTATING SUBSET, never all of them. A branch that wrote EVERY local
+//     would make "cost O(vars in scope)" and "cost O(vars actually assigned)" the same number, and
+//     the corpus could not tell the two apart — which is precisely the distinction that decides
+//     whether a write-trail is worth building.
+//
+// The guard is a SHORT-CIRCUIT `and`, which is what real code writes and which — measured
+// 2026-07-14, while fixing the `const` flags bug — appeared in this corpus **exactly nowhere**. A
+// codegen change to the commonest conditional shape in the language was invisible to the instrument.
 function longFunctionSource(ifCount KnobSize) returns String
-	var out = "// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs.\n"
+	var out = "// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs over {LocalsPerFunction} locals.\n"
 	out.append("function scaleLongIf(a int) returns int\n")
-	out.append("\tvar acc = a\n")
+	out.append(mutableLocalsDecl())
 	for i in 0 upto ifCount 'eachIf'
-		out.append("\tif acc > {i} 'c{i}'\n")
-		out.append("\t\tacc = acc + {i mod 5 + 1}\n")
+		let p = i mod LocalsPerFunction
+		let q = (i + 1) mod LocalsPerFunction
+		let r = (i + 2) mod LocalsPerFunction
+		out.append("\tif l{p} > {i} and l{q} < l{r} 'c{i}'\n")
+		out.append("\t\tl{p} = l{p} + {i mod 5 + 1}\n")
+		out.append("\t\tl{q} = l{q} + l{r}\n")
 		out.append("\tend 'c{i}'\n")
 	end 'eachIf'
-	out.append("\treturn acc\n")
+	out.append(mutableLocalsSum())
+	out.append("\treturn sum\n")
 	out.append("end 'scaleLongIf'\n")
 	return out
 end 'longFunctionSource'
@@ -394,18 +461,25 @@ end 'longFunctionSource'
 // else, continuation), so this lands near 3x its knob — ~19,200 blocks at rung 5, which is the
 // shape that used to SIGSEGV and the reason "no CFG traversal may recurse" is a rule rather than a
 // preference. Distinct from `longFunction`: that grows ops along a chain, this grows the CFG.
+// ⚠ THE TWO ARMS MUTATE DIFFERENT LOCALS, DELIBERATELY. That is what makes the merge do real work:
+// each arm leaves a different subset of the locals changed, so the join genuinely has to reconcile
+// them. When both arms wrote the SAME single `acc`, every merge was the trivial one-phi case and the
+// snapshot-and-reconcile cost this knob is supposed to provoke never appeared.
 function deepBlocksSource(ifElseCount KnobSize) returns String
-	var out = "// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks.\n"
+	var out = "// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks, {LocalsPerFunction} locals.\n"
 	out.append("function scaleDeepBlocks(a int) returns int\n")
-	out.append("\tvar acc = a\n")
+	out.append(mutableLocalsDecl())
 	for i in 0 upto ifElseCount 'eachIfElse'
-		out.append("\tif acc > {i} 'd{i}'\n")
-		out.append("\t\tacc = acc + {i mod 3 + 1}\n")
+		let p = i mod LocalsPerFunction
+		let q = (i + 1) mod LocalsPerFunction
+		out.append("\tif l{p} > {i} 'd{i}'\n")
+		out.append("\t\tl{p} = l{p} + {i mod 3 + 1}\n")
 		out.append("\tend 'd{i}' else 'e{i}'\n")
-		out.append("\t\tacc = acc - {i mod 2 + 1}\n")
+		out.append("\t\tl{q} = l{q} - {i mod 2 + 1}\n")
 		out.append("\tend 'e{i}'\n")
 	end 'eachIfElse'
-	out.append("\treturn acc\n")
+	out.append(mutableLocalsSum())
+	out.append("\treturn sum\n")
 	out.append("end 'scaleDeepBlocks'\n")
 	return out
 end 'deepBlocksSource'
