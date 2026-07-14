@@ -24,14 +24,17 @@
 // WHAT AN EXIT CODE STILL MEANS
 // ===========================================================================================
 //
-// Exit 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself broke
-// and produced no valid data:
+// Exit 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself broke —
+// it could not measure, or could not deliver what it measured:
 //
 //   - a rung would not compile,
 //   - a metrics file was missing or malformed,
 //   - the generated corpus was DEGENERATE — it folded away, so nothing was measured at all
 //     (ScaleCorpus.assertCorpusCompiled),
-//   - the trend log could not be read, or a `--note` could not honestly be recorded in it.
+//   - the trend log could not be read, or a `--note` could not honestly be recorded in it,
+//   - a `--result-json` document was asked for and could not be written. The caller that asks for
+//     that file is a MACHINE, and a run that answers it with an exit code of 0 and no file has told
+//     it a successful-looking lie.
 //
 // A broken MEASUREMENT is a broken run. A SURPRISING NUMBER is not. The report says which happened,
 // loudly, and never confuses the two.
@@ -212,7 +215,9 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	printCorpusGrowth(results)
 
 	if not args.resultJson.isEmpty() 'json'
-		writeResultJson(args.resultJson, results: results, curves: curves, trend: trend)
+		try writeResultJson(args.resultJson, results: results, curves: curves, trend: trend) otherwise (error) 'jsonFailed'
+			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
+		end 'jsonFailed'
 	end 'json'
 
 	if not args.note.isEmpty() 'record'
@@ -229,13 +234,18 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	return 0
 end 'runScaleTest'
 
-// The ONE way this instrument fails: the run broke and produced no data. It says so in those words,
-// so that a reader can never mistake it for a judgement about the numbers — there is no judgement
-// about the numbers.
+// The ONE way this instrument fails: the RUN broke — it could not measure, or could not deliver what
+// it measured. It says so in those words, so that a reader can never mistake it for a judgement about
+// the numbers; there is no judgement about the numbers.
+//
+// Each caller names what broke, and the causes are not interchangeable: a degenerate corpus measured
+// NOTHING, while a result document that could not be written measured everything and could not hand
+// it over. This line therefore says "the run", which is true of both, rather than "nothing was
+// measured", which was written for the first and is a lie about the second.
 function brokenRun(what String, detail String) returns ExitCode
 	printError("\nscale-test: BROKEN RUN — {what}.\n")
 	printError("  {detail}\n")
-	printError("  This is not a verdict about the compiler: nothing was measured. Fix the run and re-run.\n")
+	printError("  The RUN failed. This is not a verdict about the compiler's numbers. Fix it and re-run.\n")
 	return 1
 end 'brokenRun'
 

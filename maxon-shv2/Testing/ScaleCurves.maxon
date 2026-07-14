@@ -25,15 +25,71 @@ export let AggregateCurveName = "aggregate"
 let PhaseCurvePrefix = "phase:"
 let RegAllocCurvePrefix = "regalloc:"
 
+// WHAT one curve is measured FROM. A union rather than three loops, because the SET of curves and
+// their ORDER are read by two places that must not be allowed to disagree — see `scaleCurveSources`.
+export union CurveSource
+	phase(phase CompilePhase)
+	regAlloc(sub RegAllocPhase)
+	// The whole compile. Not a phase, and the row every other row is a fraction of.
+	wholeCompile
+end 'CurveSource'
+
+export typealias CurveSourceArray = Array with CurveSource
+
+// THE ENUMERATION. Every curve this instrument fits, in the order it fits them — and there is exactly
+// one of these lists.
+//
+// THAT IS THE POINT, and it is not tidiness. The trend log's exponent row is written cell-by-cell in
+// the order `fitScaleCurves` produced its curves, and read back column-by-column by the NAMES in the
+// table's header, which `ScaleHistory.exponentTableHeader` builds. Those were two independent walks of
+// `CompilePhase.allCases` + `RegAllocPhase.allCases` + the aggregate, and the only thing making them
+// agree was a comment saying they must. Reorder one — put the aggregate first, say, which is a
+// perfectly reasonable thing to want — and every historical exponent in the log is silently
+// re-attributed to the wrong curve: a wrong answer, not a compile error, in a document whose entire
+// purpose is to be differenced against. Both now walk this.
+export function scaleCurveSources() returns CurveSourceArray
+	var sources = CurveSourceArray.create()
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		sources.push(CurveSource.phase(phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		sources.push(CurveSource.regAlloc(sub))
+	end 'eachSub'
+
+	sources.push(CurveSource.wholeCompile)
+	return sources
+end 'scaleCurveSources'
+
 // THE one place a curve's name is built, so the report, the JSON document and the trend log's
 // column headings cannot disagree about what a row is called.
-export function phaseCurveName(phase CompilePhase) returns String
-	return "{PhaseCurvePrefix}{phase.name}"
-end 'phaseCurveName'
+export function curveNameOf(source CurveSource) returns String
+	return match source 'src'
+		phase(phase) gives "{PhaseCurvePrefix}{phase.name}"
+		regAlloc(sub) gives "{RegAllocCurvePrefix}{sub.name}"
+		wholeCompile gives AggregateCurveName
+	end 'src'
+end 'curveNameOf'
 
-export function regAllocCurveName(sub RegAllocPhase) returns String
-	return "{RegAllocCurvePrefix}{sub.name}"
-end 'regAllocCurveName'
+// The curve names, in fitting order — the trend log's exponent columns ARE this list.
+export function scaleCurveNames() returns StringArray
+	var names = StringArray.create()
+	for source in scaleCurveSources() 'each'
+		names.push(curveNameOf(source))
+	end 'each'
+	return names
+end 'scaleCurveNames'
+
+// One rung's numbers for one curve. The whole compile's are the rung's total, which is why the
+// aggregate needs no special case anywhere below: its share of itself is simply 100%.
+function curveMetricOf(source CurveSource, result RungResult) returns PhaseMetric
+	return match source 'src'
+		phase(phase) gives result.phaseAt(phase)
+		regAlloc(sub) gives result.regAllocAt(sub)
+		wholeCompile gives result.total
+	end 'src'
+end 'curveMetricOf'
 
 // Thousandths of the top rung — the unit every share here is in. `Milli` because it is the same
 // fixed-point convention the exponents use, and a report that mixed percent and per-mille would be
@@ -59,7 +115,7 @@ end 'ScaleCurve'
 
 export typealias ScaleCurveArray = Array with ScaleCurve
 
-// Fit every curve of one ladder. The order is the enums' order, and it is the order the report
+// Fit every curve of one ladder, in `scaleCurveSources`' order — which is the order the report
 // prints, the JSON lists, and the trend log's columns are in.
 export function fitScaleCurves(results RungResultArray) returns ScaleCurveArray
 	let sizes = sourceSizes(results)
@@ -67,37 +123,20 @@ export function fitScaleCurves(results RungResultArray) returns ScaleCurveArray
 
 	var curves = ScaleCurveArray.create()
 
-	for phase in CompilePhase.allCases 'eachPhase'
+	for source in scaleCurveSources() 'eachCurve'
 		var nanos = FitPointArray.create()
 		var allocs = FitPointArray.create()
 		for result in results 'eachRung'
-			nanos.push(result.phaseAt(phase).nanos as Real)
-			allocs.push(result.phaseAt(phase).allocs as Real)
+			let metric = curveMetricOf(source, result: result)
+			nanos.push(metric.nanos as Real)
+			allocs.push(metric.allocs as Real)
 		end 'eachRung'
-		let timeShare = shareOf(top.phaseAt(phase).nanos, total: top.total.nanos)
-		let allocShare = shareOf(top.phaseAt(phase).allocs, total: top.total.allocs)
-		curves.push(ScaleCurve.create(phaseCurveName(phase), time: fitPowerLaw(sizes, costs: nanos), timeShare: timeShare, allocs: fitPowerLaw(sizes, costs: allocs), allocShare: allocShare))
-	end 'eachPhase'
 
-	for sub in RegAllocPhase.allCases 'eachSub'
-		var nanos = FitPointArray.create()
-		var allocs = FitPointArray.create()
-		for result in results 'eachRung'
-			nanos.push(result.regAllocAt(sub).nanos as Real)
-			allocs.push(result.regAllocAt(sub).allocs as Real)
-		end 'eachRung'
-		let timeShare = shareOf(top.regAllocAt(sub).nanos, total: top.total.nanos)
-		let allocShare = shareOf(top.regAllocAt(sub).allocs, total: top.total.allocs)
-		curves.push(ScaleCurve.create(regAllocCurveName(sub), time: fitPowerLaw(sizes, costs: nanos), timeShare: timeShare, allocs: fitPowerLaw(sizes, costs: allocs), allocShare: allocShare))
-	end 'eachSub'
-
-	var totalNanos = FitPointArray.create()
-	var totalAllocs = FitPointArray.create()
-	for result in results 'eachRung'
-		totalNanos.push(result.total.nanos as Real)
-		totalAllocs.push(result.total.allocs as Real)
-	end 'eachRung'
-	curves.push(ScaleCurve.create(AggregateCurveName, time: fitPowerLaw(sizes, costs: totalNanos), timeShare: PermilleFull, allocs: fitPowerLaw(sizes, costs: totalAllocs), allocShare: PermilleFull))
+		let atTop = curveMetricOf(source, result: top)
+		let timeShare = shareOf(atTop.nanos, total: top.total.nanos)
+		let allocShare = shareOf(atTop.allocs, total: top.total.allocs)
+		curves.push(ScaleCurve.create(curveNameOf(source), time: fitPowerLaw(sizes, costs: nanos), timeShare: timeShare, allocs: fitPowerLaw(sizes, costs: allocs), allocShare: allocShare))
+	end 'eachCurve'
 
 	return curves
 end 'fitScaleCurves'
@@ -117,6 +156,8 @@ end 'sourceSizes'
 // differing only in the name of its parameter, is the duplication this file was written to remove.
 export typealias TopRungMeasure = int(0 to u64.max)
 
+// The whole compile is its own share of itself, so `aggregate` reads 100.0% out of the same
+// arithmetic every phase does rather than out of a special case beside it.
 function shareOf(part TopRungMeasure, total TopRungMeasure) returns Milli
 	if total == 0 'nothingMeasured'
 		return 0

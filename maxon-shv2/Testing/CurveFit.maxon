@@ -127,7 +127,6 @@ end 'fitPowerLaw'
 // Ordinary least squares through the log-log points: slope = Sxy / Sxx, intercept = ybar - slope*xbar.
 function leastSquaresSlope(logSizes FitPointArray, logCosts FitPointArray) returns FitResult
 	let n = logSizes.count()
-	let count = n
 
 	var sumX = 0.0
 	var sumY = 0.0
@@ -135,8 +134,8 @@ function leastSquaresSlope(logSizes FitPointArray, logCosts FitPointArray) retur
 		sumX = sumX + (try logSizes.get(i) otherwise panic("leastSquaresSlope: logSizes.get OOB at {i}"))
 		sumY = sumY + (try logCosts.get(i) otherwise panic("leastSquaresSlope: logCosts.get OOB at {i}"))
 	end 'sums'
-	let meanX = sumX / count
-	let meanY = sumY / count
+	let meanX = sumX / n
+	let meanY = sumY / n
 
 	var sxy = 0.0
 	var sxx = 0.0
@@ -240,7 +239,23 @@ export function parseMilliText(raw String) returns Milli throws ScaleError
 		throw ScaleError.reason("'{raw}' has {frac.count()} fractional digit(s); milliText always writes {MilliFractionDigits}, and fewer would not say whether .03 meant .030 or .003")
 	end 'wrongPrecision'
 
+	// The whole part is REJECTED before it is scaled, not after. `parseCount` accepts anything up to
+	// `u64.max`, and multiplying such a value by {MilliScaleInt} to reach thousandths overflows `Milli`
+	// — which TRAPS on its range rather than throwing. The log is a document a human edits, so a
+	// nonsense exponent in it is bad input and must come back as a ScaleError naming the file, never as
+	// a panic in a fitting routine.
+	if whole.count() > MilliWholeMaxDigits 'wouldOverflow'
+		throw ScaleError.reason("'{raw}' has a {whole.count()}-digit whole part; no growth exponent is that number, and scaling it to thousandths would overflow rather than be rejected")
+	end 'wouldOverflow'
+
 	return (try parseCount(whole)) * MilliScaleInt + (try parseCount(frac))
 end 'parseMilliText'
 
 let MilliFractionDigits = 3
+
+// Fifteen digits, times a thousand, is 10^18 — inside i64, with room to spare for the fraction added
+// to it. It is a bound on the ARITHMETIC, deliberately, and not a claim about how large an exponent
+// this suite considers sane: a curve going quadratic is the thing being watched for, and an
+// instrument that refused to read back a number because it disapproved of it would be the gauge
+// deciding what the engine is allowed to have done.
+let MilliWholeMaxDigits = 15

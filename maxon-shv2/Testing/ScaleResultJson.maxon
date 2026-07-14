@@ -28,11 +28,16 @@
 // the trend log records (1.037 is 1037). One representation end to end: no consumer has to know that
 // a number changed units on its way out.
 
-export function writeResultJson(path String, results RungResultArray, curves ScaleCurveArray, trend ScaleTrend)
-	let target = try FilePath.from(path) otherwise 'badPath'
-		logError(LogCategory.compiler, message: function() gives "Invalid --result-json path '{path}'")
-		return
-	end 'badPath'
+// A FAILURE HERE IS A BROKEN RUN, and it throws.
+//
+// It used to log and return, leaving the process to exit 0 — and the caller that asked for the
+// document is a MACHINE. The MCP tool deletes any stale result file before the run precisely so that
+// its absence is meaningful, then reports `error: scale-test wrote no result document` beside an
+// `exitCode` of 0: the two halves of one envelope contradicting each other, with the exit code — the
+// half a script reads — saying everything was fine. A run asked for its measurements in a file and
+// could not put them there. That is the run breaking, exactly as a trend log it cannot write is.
+export function writeResultJson(path String, results RungResultArray, curves ScaleCurveArray, trend ScaleTrend) throws ScaleError
+	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
 	var doc = JsonDoc.create()
 	var keys = StringArray.create()
@@ -52,10 +57,7 @@ export function writeResultJson(path String, results RungResultArray, curves Sca
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
-	try File.writeText(target, content: Json.stringifyPrettyNode(doc, root: doc.root)) otherwise 'writeFailed'
-		logError(LogCategory.compiler, message: function() gives "Failed to write scale result JSON to {path}")
-		return
-	end 'writeFailed'
+	try File.writeText(target, content: Json.stringifyPrettyNode(doc, root: doc.root)) otherwise throw ScaleError.reason("could not write the result document to {path}")
 end 'writeResultJson'
 
 // ===========================================================================================

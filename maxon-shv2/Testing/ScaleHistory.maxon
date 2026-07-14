@@ -37,6 +37,15 @@ let AllocationsTableMarker = "<!-- scale-history:allocations -->"
 let BytesTableMarker = "<!-- scale-history:bytes -->"
 let ExponentsTableMarker = "<!-- scale-history:exponents -->"
 
+// What all three markers above begin with, and the ONE thing a `--note` is checked against — see
+// `assertRecordable`. A note is written verbatim into the row inserted above each marker in turn, so
+// a note that carried a marker's own text would forge one: the row for the first table would contain
+// an anchor the second table's insert then found. Screening the shared PREFIX refuses that whole
+// family — including any marker a later table adds — rather than three literals a fourth could
+// silently escape. (`insertRowBefore` is the backstop, and it reads the document rather than the
+// note.)
+let TableMarkerPrefix = "<!-- scale-history:"
+
 // The two fixed leading columns every table carries. The rest are rungs (memory) or curves
 // (exponents), which is what `LeadingColumns` is subtracted to find.
 let DateColumnHeading = "date"
@@ -177,6 +186,8 @@ function readTable(text String, marker String) returns LogTable throws ScaleErro
 	end 'noHeader'
 
 	let header = splitRow(try lines.get(top) otherwise panic("readTable: header line is inside the block"))
+	try assertSeparatorRow(splitRow(try lines.get(top + 1) otherwise panic("readTable: the separator line is inside the block")), header: header, marker: marker)
+
 	if rowCount == TableHeaderLines 'headerOnly'
 		return LogTable.create(header, last: LogTableRow.none)
 	end 'headerOnly'
@@ -191,6 +202,45 @@ end 'readTable'
 
 // A markdown table always opens with a heading row and a `| --- |` separator; data rows come after.
 let TableHeaderLines = 2
+
+// The second line of the block IS the separator — CHECKED, never assumed.
+//
+// `readTable` finds the header by walking UP from the marker to the topmost `|` line, so a separator
+// that has been damaged (deleted, blanked, or pushed apart by a stray blank line) does not fail: it
+// yields a table one line shorter, in which the first DATA row is read as the header and every row
+// below it is discarded. The log then cheerfully reports "no rows yet — this run is the first
+// datapoint" over a document full of history, `assertRecordable` stops pinning the ladder's width
+// because it believes there is nothing to be ragged against, and a `--note` appends a row to a table
+// nobody read correctly. Every one of those is silent, which is why this is a throw and not a repair.
+function assertSeparatorRow(cells StringArray, header StringArray, marker String) throws ScaleError
+	if cells.count() != header.count() 'wrongWidth'
+		throw ScaleError.reason("the separator under the header of the table above `{marker}` in {OptimizationLogRelativePath} has {cells.count()} cell(s) and the header has {header.count()}")
+	end 'wrongWidth'
+
+	for cell in cells 'eachCell'
+		if not isSeparatorCell(cell) 'notASeparator'
+			throw ScaleError.reason("the second line of the table above `{marker}` in {OptimizationLogRelativePath} is not a `| --- | ---: |` separator — its cell '{cell}' is not one. A markdown header is followed by exactly one separator, and without it the first DATA row is read as the header and every row below it is silently lost.")
+		end 'notASeparator'
+	end 'eachCell'
+end 'assertSeparatorRow'
+
+// `---`, `:---`, `---:`, `:---:` — a markdown alignment cell is dashes and colons, and nothing else.
+function isSeparatorCell(cell String) returns bool
+	if cell.isEmpty() 'empty'
+		return false
+	end 'empty'
+
+	for ch in cell.toByteArray() 'eachByte'
+		if ch != AsciiDash and ch != AsciiColon 'notAlignment'
+			return false
+		end 'notAlignment'
+	end 'eachByte'
+
+	return true
+end 'isSeparatorCell'
+
+let AsciiDash = 0x2D
+let AsciiColon = 0x3A
 
 // `| a | b | c |` -> ["a", "b", "c"]. The leading and trailing pipes each produce an empty field,
 // which is what the two drops are for.
@@ -326,19 +376,23 @@ function curveColumnMismatch(detail String) returns String
 	return "the exponents table in {OptimizationLogRelativePath} no longer describes this compiler's phases: {detail}.\n            The columns come from CompilePhase + RegAllocPhase, so a phase was added or removed.\n            Rewrite its header row to exactly:\n\n{renderRow(exponentTableHeader())}\n            ...and decide what to do with the rows above it: a column whose meaning changed partway\n            down is a trend that lies. Starting a new table is often the honest answer."
 end 'curveColumnMismatch'
 
-// The exponents table's header: the two fixed columns, then every curve this compiler fits, in the
-// order `fitScaleCurves` produces them.
+// The exponents table's header: the two fixed columns, then every curve this compiler fits.
+//
+// The curve names come from `scaleCurveNames`, which is the SAME list `fitScaleCurves` walks to
+// produce the cells `renderExponentRow` writes — one enumeration, not two. This function used to walk
+// `CompilePhase` and `RegAllocPhase` itself, and a comment was the only thing keeping its order in
+// step with the order the cells were written in: reorder the fit and every historical exponent would
+// be read back under the wrong curve's name, silently, in the one document that exists to be
+// differenced against.
 function exponentTableHeader() returns StringArray
 	var cells = StringArray.create()
 	cells.push(DateColumnHeading)
 	cells.push(NoteColumnHeading)
-	for phase in CompilePhase.allCases 'eachPhase'
-		cells.push(phaseCurveName(phase))
-	end 'eachPhase'
-	for sub in RegAllocPhase.allCases 'eachSub'
-		cells.push(regAllocCurveName(sub))
-	end 'eachSub'
-	cells.push(AggregateCurveName)
+
+	for name in scaleCurveNames() 'eachCurve'
+		cells.push(name)
+	end 'eachCurve'
+
 	return cells
 end 'exponentTableHeader'
 
@@ -399,6 +453,11 @@ export function assertRecordable(trend ScaleTrend, note String, rungs RungCount)
 		throw ScaleError.reason("a --note may not contain `|` or a newline: the tables in {OptimizationLogRelativePath} are markdown rows, and either would silently shift the columns rather than fail")
 	end 'wouldBreakTheTable'
 
+	// And it may not forge a table marker — the anchor every row is inserted above.
+	if note.contains(TableMarkerPrefix) 'wouldForgeAMarker'
+		throw ScaleError.reason("a --note may not contain `{TableMarkerPrefix}`: the three table markers in {OptimizationLogRelativePath} begin with it, the note is written verbatim into the row inserted above each of them, and a forged marker would decide where the NEXT row landed")
+	end 'wouldForgeAMarker'
+
 	match trend.memory 'm'
 		absent then return
 		present then break 'm'
@@ -421,14 +480,47 @@ export function recordScaleRun(results RungResultArray, curves ScaleCurveArray, 
 	let existing = try File.readText(path) otherwise throw ScaleError.reason("could not re-read {OptimizationLogRelativePath}")
 
 	let today = todayUtc()
-	var updated = existing.replace(AllocationsTableMarker, with: "{renderMemoryRow(results, note: note, date: today, ofBytes: false)}{AllocationsTableMarker}")
-	updated = updated.replace(BytesTableMarker, with: "{renderMemoryRow(results, note: note, date: today, ofBytes: true)}{BytesTableMarker}")
-	updated = updated.replace(ExponentsTableMarker, with: "{renderExponentRow(curves, note: note, date: today)}{ExponentsTableMarker}")
+	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: false))
+	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: true))
+	updated = try insertRowBefore(updated, marker: ExponentsTableMarker, row: renderExponentRow(curves, note: note, date: today))
 
 	try File.writeText(path, content: updated) otherwise throw ScaleError.reason("could not write {OptimizationLogRelativePath}")
 
 	print("\nscale-test: recorded '{note}' ({today}) in {OptimizationLogRelativePath}\n")
 end 'recordScaleRun'
+
+// Insert one row immediately above one marker — THE way a row reaches any of the three tables.
+//
+// THE MARKER MUST APPEAR EXACTLY ONCE, and that is now checked rather than assumed. This was three
+// calls to `String.replace`, which replaces EVERY occurrence, against a reader (`readTable`) that
+// anchors on the FIRST — so the writer and the reader did not even agree on where a table was, and
+// two things fell out of that:
+//
+//   - A marker that had gone MISSING (the file is a document a human edits, and this re-reads it
+//     after the ladder has been climbed) made `replace` a silent no-op. The file was rewritten
+//     unchanged and the tool then printed `recorded '<note>'`. A lie, and the kind that is only
+//     discovered six months later when the row is not there.
+//   - A `--note` carrying a marker's text was written into the row inserted for the FIRST table, and
+//     the replacement for the SECOND then matched it — injecting a bytes row into the middle of the
+//     allocations table. (`assertRecordable` refuses such a note up front; this is the backstop that
+//     makes the document itself, rather than a guess about what a note might contain, the thing that
+//     decides.)
+//
+// It throws BEFORE anything is written — the three inserts all run against a string, and the file is
+// written once, at the end — so a log that fails here is left exactly as it was.
+function insertRowBefore(text String, marker String, row String) returns String throws ScaleError
+	let parts = text.split(marker)
+	if parts.count() != MarkerSplitParts 'notExactlyOnce'
+		throw ScaleError.reason("`{marker}` appears {parts.count() - 1} time(s) in {OptimizationLogRelativePath} and must appear exactly once — a row is inserted immediately above it, and `readTable` reads the table immediately above it")
+	end 'notExactlyOnce'
+
+	let before = try parts.get(0) otherwise panic("insertRowBefore: split gave {MarkerSplitParts} parts but get(0) failed")
+	let after = try parts.get(1) otherwise panic("insertRowBefore: split gave {MarkerSplitParts} parts but get(1) failed")
+	return "{before}{row}{marker}{after}"
+end 'insertRowBefore'
+
+// Splitting on a needle that occurs exactly once yields exactly two parts, one of which may be empty.
+let MarkerSplitParts = 2
 
 // One memory row: the date, the reason, then this run's number at every rung.
 //
