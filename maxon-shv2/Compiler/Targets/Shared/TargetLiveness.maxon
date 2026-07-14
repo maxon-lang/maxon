@@ -60,10 +60,8 @@ export typealias LoopDepthArray = Array with LoopDepth
 export typealias OpSeq = int(0 to u64.max)
 export typealias OpSeqArray = Array with OpSeq
 
-// An op's position WITHIN ONE BLOCK — an index into `block.opRefs` (or into the `collectBlockOps`
-// list, which appends the terminator). Restarts at 0 in every block, and SHIFTS whenever the
-// splitter splices an op in, which is why nothing caches one.
-export typealias BlockOpPos = int(0 to u64.max)
+// `BlockOpPos` — an op's position within one block — is an index into `block.opRefs` and so
+// belongs with the IR, not the target tier. It lives in `IrValueId.maxon`.
 
 // A BLOCK-ARG's position among a block's phis — which is also the position of the value each
 // predecessor passes it on an edge, because `blockArgs` and an edge's `argIds` are paired
@@ -496,16 +494,16 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
 	// in lockstep with `newRefs`, so it IS the permutation the block list just underwent, and
 	// `permuteTopology` re-indexes the skeleton by it rather than rebuilding it.
 	var oldByNew = CfgIndexArray.create()
-	var newRefs = BlockRefList.create()
+	var newRefs = BlockRefArray.create()
 	for ri in 0 upto postorder.count() 'reverse'
 		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
 		oldByNew.push(local)
-		newRefs.append(try topo.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
+		newRefs.push(try topo.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
 	end 'reverse'
 	for i in 0 upto topo.numBlocks 'appendUnreachable'
 		if not (try visited.get(i) otherwise panic("reorderFuncBlocksRpo: visited.get OOB")) 'unreached'
 			oldByNew.push(i)
-			newRefs.append(try topo.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
+			newRefs.push(try topo.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
 		end 'unreached'
 	end 'appendUnreachable'
 

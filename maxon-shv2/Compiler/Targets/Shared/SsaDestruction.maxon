@@ -269,7 +269,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
 		let bodyCount = block.opRefs.count()
 
-		var newRefs = OpIndexList.create()
+		var newRefs = OpIndexArray.create()
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB")
 			let colored = colorTargetOp(try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops"), alloc: alloc)
@@ -278,7 +278,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				continue
 			end 'selfMove'
 			spliceReuseCopyBefore(module, reuseCopies: reuseCopies, seq: seq + pos, newRefs: newRefs)
-			newRefs.append(opIdx)
+			newRefs.push(opIdx)
 		end 'eachOp'
 		block.opRefs = newRefs
 		seq = seq + bodyCount
@@ -295,18 +295,18 @@ end 'colorAndDropSelfMoves'
 // `mov dest, input` the allocator recorded into `newRefs` BEFORE the op's own index —
 // so at run time the destination register holds the reuse input when the two-address
 // op executes. A new op index is minted at the end of `module.ops`.
-function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, seq OpSeq, newRefs OpIndexList)
+function spliceReuseCopyBefore(module TargetModule, reuseCopies ReuseCopyPlan, seq OpSeq, newRefs OpIndexArray)
 	match reuseCopies.at(seq) 'rc'
 		none then break 'rc'
 		copy(destReg, srcReg) then appendReuseCopyOp(module, destReg: destReg, srcReg: srcReg, newRefs: newRefs)
 	end 'rc'
 end 'spliceReuseCopyBefore'
 
-function appendReuseCopyOp(module TargetModule, destReg RegNum, srcReg RegNum, newRefs OpIndexList)
+function appendReuseCopyOp(module TargetModule, destReg RegNum, srcReg RegNum, newRefs OpIndexArray)
 	let copyOp = TargetOp.movRegReg(X64VReg.physical(regFromNum(destReg)), srcReg: X64VReg.physical(regFromNum(srcReg)))
 	let copyIdx = module.ops.count()
 	module.ops.push(copyOp)
-	newRefs.append(copyIdx)
+	newRefs.push(copyIdx)
 end 'appendReuseCopyOp'
 
 // True for a `mov r, r` — a no-op the biased coloring produced (a coalesced seed
@@ -361,8 +361,8 @@ function spliceSuccStart(module TargetModule, plan EdgeMovePlan)
 	for i in 0 upto plan.moveCount() 'eachMove'
 		let opIdx = module.ops.count()
 		module.ops.push(moveOpOf(plan, i: i))
-		let succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
-		try succBlock.opRefs.insert(i, value: opIdx) otherwise panic("spliceSuccStart: opRefs.insert OOB")
+		var succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
+		insertOpRef(succBlock, at: i, opIdx: opIdx)
 	end 'eachMove'
 end 'spliceSuccStart'
 
@@ -454,7 +454,7 @@ function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) r
 	func.nextBlockId = func.nextBlockId + 1
 	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel))
 	let newRef = module.blocks.count() - 1
-	func.blockRefs.append(newRef)
+	func.blockRefs.push(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
 	module.setTerminator(splitBlock, op: TargetOp.jmp(succId))
 	return newRef

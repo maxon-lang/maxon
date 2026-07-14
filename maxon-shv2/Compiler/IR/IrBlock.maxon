@@ -147,7 +147,7 @@ end 'CondBranch'
 export type IrBlock
 	export var id as BlockId
 	export var label as ByteArray
-	export var opRefs as OpIndexList
+	export var opRefs as OpIndexArray
 	export var terminator as Terminator
 	// The block's conditional-branch body op, when it has one. Set ONLY by
 	// `IrModule.appendCondBranch`, which is the only way a conditional branch may enter
@@ -169,7 +169,7 @@ export type IrBlock
 		return Self{
 			id: id,
 			label: label,
-			opRefs: OpIndexList.create(),
+			opRefs: OpIndexArray.create(),
 			terminator: Terminator.unset,
 			condBranch: CondBranch.none,
 			blockArgs: IrBlockArgArray.create(),
@@ -256,9 +256,25 @@ export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns 
 	return "block_{blockId}".toByteArray()
 end 'resolveBlockLabel'
 
+// Insert an op reference at `at`, which must name a position INSIDE the block or one
+// past its end.
+//
+// This exists because `Array.insert` CLAMPS an out-of-range index to the tail, and every
+// caller here computes `at` from a live-range position or an op's index within the block
+// — so a position past the end is a bug in the caller, not a request to append. Clamping
+// would put a spill store or a reload at the wrong place and miscompile silently; the
+// `List` this used to be threw instead, and that guard is worth keeping.
+export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
+	if at > block.opRefs.count() 'oob'
+		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")
+	end 'oob'
+
+	block.opRefs.insert(at, value: opIdx)
+end 'insertOpRef'
+
 // Collect the IrBlocks referenced by a function's blockRefs list.
 // Used by IR printers across all phases to iterate a function's blocks.
-module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefList) returns IrBlockArray
+module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) returns IrBlockArray
 	var result = IrBlockArray.create()
 	for blockRef in blockRefs 'each'
 		let block = try blocks.get(blockRef) otherwise panic("invariant: blockRef from blockRefs not in blocks")

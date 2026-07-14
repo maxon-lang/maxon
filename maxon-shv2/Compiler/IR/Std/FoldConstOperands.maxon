@@ -215,13 +215,13 @@ function dceUnreferencedConsts(module StdModule, func IrFunction)
 	let referenced = collectReferencedValues(module, func: func)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("foldConstOperands: blockRef from func.blockRefs not in module.blocks")
-		var newRefs = OpIndexList.create()
+		var newRefs = OpIndexArray.create()
 		for opIdx in block.opRefs 'eachRef'
 			let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")
 			if isUnreferencedConst(op, referenced: referenced) 'dead'
 				continue
 			end 'dead'
-			newRefs.append(opIdx)
+			newRefs.push(opIdx)
 		end 'eachRef'
 		block.opRefs = newRefs
 	end 'eachBlock'

@@ -79,17 +79,17 @@ export type IrModule uses Op
 	// `compactOps`). A consumer that scans `self.ops` therefore sees dead ops from
 	// every prior pass — which is a false positive for anything asking "did this
 	// pass leave a forbidden op behind?".
-	export function liveOpIndices(func IrFunction) returns OpIndexList
-		var indices = OpIndexList.create()
+	export function liveOpIndices(func IrFunction) returns OpIndexArray
+		var indices = OpIndexArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.blocks.get(blockRef) otherwise panic("liveOpIndices: blockRef from func.blockRefs not in blocks")
 
 			for opIdx in block.opRefs 'eachOp'
-				indices.append(opIdx)
+				indices.push(opIdx)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'hasTerm'
-				indices.append(block.terminatorIndex())
+				indices.push(block.terminatorIndex())
 			end 'hasTerm'
 		end 'eachBlock'
 		return indices
@@ -284,7 +284,7 @@ export type IrModule uses Op
 		end 'pastCondBranch'
 		let idx = self.ops.count()
 		self.ops.push(op)
-		block.opRefs.append(idx)
+		block.opRefs.push(idx)
 	end 'appendOp'
 
 	// Append the block's CONDITIONAL-branch body op (x64 `jcc`) and record where it landed.
@@ -304,7 +304,7 @@ export type IrModule uses Op
 		end 'second'
 		let idx = self.ops.count()
 		self.ops.push(op)
-		block.opRefs.append(idx)
+		block.opRefs.push(idx)
 		block.condBranch = CondBranch.opIndex(idx)
 	end 'appendCondBranch'
 
@@ -343,11 +343,11 @@ export type IrModule uses Op
 	// Create a new IrBlock, append it to the blocks array, and register its
 	// index in the function's blockRefs. The caller must bump func.nextBlockId
 	// after calling this (the function returns the allocated id via the block).
-	function createAndRegisterBlock(blockRefs BlockRefList, id BlockId, label ByteArray) returns IrBlock
+	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray) returns IrBlock
 		let blockIdx = blocks.count()
 		let block = IrBlock.create(id, label: label)
 		blocks.push(block)
-		blockRefs.append(blockIdx)
+		blockRefs.push(blockIdx)
 		return block
 	end 'createAndRegisterBlock'
 
@@ -470,8 +470,6 @@ module type OpCompactionPlan
 	end 'create'
 end 'OpCompactionPlan'
 
-export typealias OpIndexArray = Array with OpIndex
-
 // Turn a liveness bitmap into a compaction forwarding map. Shared by the op and
 // block compaction planners, which differ only in how they MARK liveness — the
 // slot-assignment arithmetic is identical for both.
@@ -526,24 +524,22 @@ module function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArr
 end 'computeOpCompaction'
 
 // Rewrite every block's `opRefs` entries and `opIndex` terminator through a
-// compaction plan's forwarding map. `OpIndexList` is a linked list with no
-// in-place `set`, so each block's `opRefs` is rebuilt as a fresh list of
-// forwarded indices (cheap — proportional to the live op count). Shared by both
-// module compactors. Must run AFTER the op-array move + truncate so the
+// compaction plan's forwarding map, IN PLACE — an entry is replaced by its
+// forwarded index, so no second array is built and nothing is allocated. Shared by
+// both module compactors. Must run AFTER the op-array move + truncate so the
 // renumbered indices line up with the relocated ops.
 module function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
 	for func in functions 'rewriteFunc'
 		for blockRef in func.blockRefs 'rewriteBlock'
 			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
-			var newRefs = OpIndexList.create()
-			for oldIdx in block.opRefs 'eachRef'
+			for pos in 0 upto block.opRefs.count() 'eachRef'
+				let oldIdx = try block.opRefs.get(pos) otherwise panic("rewriteBlockOpRefs: opRefs.get OOB at {pos}")
 				let newIdx = try plan.forward.get(oldIdx) otherwise panic("rewriteBlockOpRefs: forward.get OOB at opRef {oldIdx}")
 				if newIdx == plan.deadMarker 'orphanRef'
 					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' references orphaned op {oldIdx} — live op marked dead")
 				end 'orphanRef'
-				newRefs.append(newIdx)
+				try block.opRefs.set(pos, value: newIdx) otherwise panic("rewriteBlockOpRefs: opRefs.set OOB at {pos}")
 			end 'eachRef'
-			block.opRefs = newRefs
 			if block.hasTerminatorOp() 'rewriteTerm'
 				let oldTerm = block.terminatorIndex()
 				let newTerm = try plan.forward.get(oldTerm) otherwise panic("rewriteBlockOpRefs: forward.get OOB at terminator {oldTerm}")
@@ -590,22 +586,19 @@ function computeBlockCompaction(functions IrFunctionArray, blockCount BlockCount
 end 'computeBlockCompaction'
 
 // Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
-// compaction plan's forwarding map. `BlockRefList` is a linked list with no
-// in-place `set`, so each function's `blockRefs` is rebuilt as a fresh list of
-// forwarded indices. Must run AFTER the blocks-array move + truncate so the
-// renumbered indices line up with the relocated blocks.
+// compaction plan's forwarding map, IN PLACE. Must run AFTER the blocks-array move +
+// truncate so the renumbered indices line up with the relocated blocks.
 function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
 	for funcIdx in 0 upto functions.count() 'rewriteFunc'
-		var func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
-		var newRefs = BlockRefList.create()
-		for oldRef in func.blockRefs 'eachRef'
+		let func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
+		for pos in 0 upto func.blockRefs.count() 'eachRef'
+			let oldRef = try func.blockRefs.get(pos) otherwise panic("rewriteFuncBlockRefs: blockRefs.get OOB at {pos}")
 			let newRef = try plan.forward.get(oldRef) otherwise panic("rewriteFuncBlockRefs: forward.get OOB at blockRef {oldRef}")
 			if newRef == plan.deadMarker 'orphanRef'
 				panic("rewriteFuncBlockRefs: func '{String.from(func.name)}' references orphaned block {oldRef} — live block marked dead")
 			end 'orphanRef'
-			newRefs.append(newRef)
+			try func.blockRefs.set(pos, value: newRef) otherwise panic("rewriteFuncBlockRefs: blockRefs.set OOB at {pos}")
 		end 'eachRef'
-		func.blockRefs = newRefs
 	end 'rewriteFunc'
 end 'rewriteFuncBlockRefs'
 
@@ -623,7 +616,7 @@ function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
 	for opIdx in src.opRefs 'eachOp'
-		block.opRefs.append(opIdx + opOffset)
+		block.opRefs.push(opIdx + opOffset)
 	end 'eachOp'
 	block.terminator = match src.terminator 'relocate'
 		unset gives Terminator.unset

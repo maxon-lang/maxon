@@ -1669,9 +1669,9 @@ end 'rewriteEdgeArgsIn'
 // it is live there by construction and the store reads it from its own register.
 function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, afterOpIdx OpIndex, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
-	try block.opRefs.insert(anchorPos + 1, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAfter: opRefs.insert OOB")
+	insertOpRef(block, at: anchorPos + 1, opIdx: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId))))
 end 'insertStoreAfter'
 
 // Insert `storeSlotReg(slot, valueId)` at the very TOP of `blockLocal` — the PHI anchor. A
@@ -1680,8 +1680,8 @@ end 'insertStoreAfter'
 // correctly. Its block dominates every use of it, so this store dominates every reload.
 function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId ValueId, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	try block.opRefs.insert(0, value: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)))) otherwise panic("insertStoreAtBlockEntry: opRefs.insert OOB")
+	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	insertOpRef(block, at: 0, opIdx: appendOp(module, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId))))
 end 'insertStoreAtBlockEntry'
 
 // Insert `loadRegSlot(freshId, slot)` right before `beforeOpIdx` (the first after-peak OP use in
@@ -1689,9 +1689,9 @@ end 'insertStoreAtBlockEntry'
 // one, and the edge arg is read after them all). The caller rewrites those uses.
 function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, beforeOpIdx OpIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = positionInBlock(block, opIdx: beforeOpIdx)
-	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadBefore: opRefs.insert OOB")
+	insertOpRef(block, at: pos, opIdx: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot)))
 end 'insertReloadBefore'
 
 // Insert `loadRegSlot(freshId, slot)` at the END of `blockLocal`'s body — after every op, ahead of
@@ -1707,9 +1707,9 @@ end 'insertReloadBefore'
 // compare and the `jcc` that reads that compare's EFLAGS.
 function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = beforeBranchPosition(block)
-	try block.opRefs.insert(pos, value: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot))) otherwise panic("insertReloadAtBlockEnd: opRefs.insert OOB")
+	insertOpRef(block, at: pos, opIdx: appendOp(module, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot)))
 end 'insertReloadAtBlockEnd'
 
 // The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
@@ -1768,7 +1768,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 		// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
 		// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
 		// of the 32-vs-64-bit size choice that can drift from it.
-		try block.opRefs.insert(usePos, value: appendOp(module, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue))) otherwise panic("rematerializeConstant: opRefs.insert OOB")
+		insertOpRef(block, at: usePos, opIdx: appendOp(module, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue)))
 		rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 		// The re-emitted copy derives from the original constant — record it so a
 		// rematerialized id in an E5001 blocking set chases back to the constant's source

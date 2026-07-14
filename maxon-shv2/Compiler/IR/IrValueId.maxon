@@ -30,10 +30,9 @@ export typealias VarSlot = int(0 to u64.max)
 export typealias BlockId = int(0 to u64.max)
 export typealias BlockIdArray = Array with BlockId
 
-// BlockRefList: a list of indices into a module's flat blocks array.
-// Functions use this to record their ordered set of blocks.
+// BlockRef: an index into a module's flat blocks array. Functions record their
+// ordered set of blocks as a BlockRefArray.
 export typealias BlockRef = int(0 to u64.max)
-export typealias BlockRefList = List with BlockRef
 export typealias BlockRefArray = Array with BlockRef
 export typealias ParamCount = int(0 to u64.max)
 export typealias StdTypeArray = Array with StdType
@@ -62,5 +61,18 @@ end 'allocValueId'
 
 // OpIndex: a plain integer index into a module's flat ops array.
 // Shared across all IR phases (Maxon, Std, Target).
+//
+// A block's `opRefs` and a function's `blockRefs` are flat ARRAYS of these, not linked
+// lists. They were `List` once, which cost a heap node per op reference plus a heap
+// iterator per traversal — ~17% of every allocation the compiler made — and bought
+// nothing: `List`'s only asymptotic edge is O(1) insert at a NODE, and every caller here
+// names a POSITION, so it paid `walkTo`'s O(n) pointer chase anyway. Indexed access, which
+// the register allocator does constantly, was O(n) on a list and is O(1) on an array.
 export typealias OpIndex = int(0 to u64.max)
-export typealias OpIndexList = List with OpIndex
+export typealias OpIndexArray = Array with OpIndex
+
+// An op's position WITHIN ONE BLOCK — an index into `block.opRefs` (or into the
+// `collectBlockOps` list, which appends the terminator). Restarts at 0 in every block, and
+// SHIFTS whenever the splitter splices an op in, which is why nothing caches one. Distinct
+// from `OpIndex`, which indexes the module's flat ops array.
+export typealias BlockOpPos = int(0 to u64.max)
