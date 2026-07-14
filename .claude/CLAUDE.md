@@ -4,9 +4,42 @@ Do not use "cmd /c" to run commands
 
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
-## maxon-dev MCP tools (PREFER THESE)
+## maxon-dev MCP tools (PREFER THESE — **BUT NOT IN A WORKTREE. SEE THE BOX.**)
 
-When working in this repo, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` should only be used when no MCP tool covers the case.
+> ## 🔴 THE MCP TOOLS ALWAYS DRIVE THE **MAIN REPO**, NEVER YOUR WORKTREE
+>
+> **If you are working in a git worktree — which every rung/agent workflow does — DO NOT USE THE MCP
+> TOOLS TO BUILD OR GATE. They will hand you a confident FALSE GREEN.**
+>
+> `repoRootPath()` ([maxon-dev-mcp/mcp/Util.maxon:149](maxon-dev-mcp/mcp/Util.maxon#L149)) resolves the
+> repo root from **`Process.executablePath()` — the MCP SERVER's own binary**, which lives in the main
+> repo — and walks up to find `bin/maxon.exe`. **It never looks at the caller's working directory, and
+> it cannot: one server process is shared by every agent.** So:
+>
+> - **`build`** builds the **main tree's** compiler. Your worktree's changes are not in it. It returns
+>   `success: true` on a tree containing none of your work.
+> - **`run_spec_test`** runs the **main tree's** binary against the **main tree's** specs. It says
+>   nothing about your change. ⚠ **`updateRequired: true` REWRITES THE MAIN TREE'S COMMITTED GOLDENS.**
+> - **`run_scale_test`** measures the **main tree's** shv2, and `note:` writes a row into the **main
+>   tree's** `docs/optimization-log.md`.
+> - **`run_program` / `dump_ir` / `fmt`** compile with the **main tree's** compiler. (Reproducing a bug
+>   this way is still valid — that IS the unfixed compiler, the correct BEFORE case. Confirming a FIX
+>   this way is not.)
+> - ⚠ **`fmt` runs with the MAIN REPO as its working directory**, and `maxon fmt` with arguments
+>   reformats the entire tree in place. It can destroy files outside your worktree.
+>
+> **Only `lookup_error_code` (parses a source file) and `mm_trace_analyze` (parses stderr text you
+> produce yourself) are worktree-safe.**
+>
+> ⇒ **In a worktree, drive the binaries by hand** — `dotnet build` from `maxon-sharp/`, then
+> `./bin/maxon.exe …` and `./maxon-shv2/.maxon/maxon-shv2.exe …`, **all in your worktree**. See
+> *Building and Testing*.
+>
+> *(Found 2026-07-14, after this file's "PREFER THESE" and the worktree-based rung workflow had been
+> silently contradicting each other for some time. It is the project's own signature bug — one fact
+> written down twice — at the tooling level.)*
+
+When working in the **main tree**, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` should only be used when no MCP tool covers the case.
 
 Two compilers are driveable, and every tool that drives one takes a `compiler`
 (or `target`) naming which: `"csharp"` (the C# bootstrap) or `"shv2"` (the
