@@ -245,8 +245,8 @@ lines in v1; defining it early costs almost nothing and buys the whole design-in
 
 **Grep-verified against `maxon-shv2/Testing/` (704 lines: `SpecParser` 297 + `SpecTestRunner`
 407), not guessed.** The harness is *already* architecturally standalone:
-`runSpecDir(compilerExe FilePath, specDir, …)`
-([SpecTestRunner.maxon:116](maxon-shv2/Testing/SpecTestRunner.maxon#L116)) takes the compiler as
+`runOneSpec(compilerExe FilePath, specDir, …)`
+([SpecTestRunner.maxon:130](maxon-shv2/Testing/SpecTestRunner.maxon#L130)) takes the compiler as
 a **parameter** and spawns it as a subprocess — deliberately, so "a compiler crash is isolated to
 the one test that triggered it." Extracting a standalone `spec-runner` program is nearly free.
 

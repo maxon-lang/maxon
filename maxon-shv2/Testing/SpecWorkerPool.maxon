@@ -1,0 +1,1029 @@
+// Testing/SpecWorkerPool.maxon — run the specs-shv2 suite on a pool of PERSISTENT worker
+// subprocesses, driven by `async` / `await` / `Promise` over the green-thread runtime.
+//
+// ============================================================================================
+// WHY THIS EXISTS, AND IT IS NOT THE SECONDS
+// ============================================================================================
+//
+// The serial suite took ~3 s, and that was fine. The pool is here because `async` is a HARD
+// MECHANISM shv2 must eventually implement in its own backend — a value captured into a green
+// thread ESCAPES, exactly as a closure capturing into a heap env block does — and this harness
+// is that mechanism's dogfood and its acceptance test. A "parallel" runner that fanned out N
+// children and blocking-`wait()`ed each one in turn would need no green threads at all, and
+// would therefore prove nothing about the thing being built. `Subprocess` offers exactly that
+// API. This file does not use it.
+//
+// ============================================================================================
+// THE CONTRACT: `--workers=1` AND `--workers=N` PRINT BYTE-IDENTICAL STDOUT
+// ============================================================================================
+//
+// That is the sharpest test of async correctness there is — a dropped capture, a double-freed
+// Promise or a raced result buffer surfaces as a FLAKE, and a flake is a bug — and it dictates
+// the design rather than merely being checked afterwards:
+//
+//   * The parent NEVER prints a result as it arrives. Workers complete out of order.
+//   * Before it dispatches anything, the parent already knows the exact ordered list of tests
+//     each spec will report: it parses the specs itself to weight the job queue, so the
+//     selection is in hand anyway. A worker's drained lines are therefore not merely collected,
+//     they are CHECKED against that list, name for name, in order. A record that goes missing,
+//     arrives twice, arrives out of order, or names a test the parent never selected — the exact
+//     symptom of a flag the parent forgot to forward — is a PANIC, not a quiet miscount.
+//   * Results are reassembled into serial order (spec-directory-listing order, then declaration
+//     order within a spec) and printed by Main's ONE reporter, `reportResults`.
+//
+// `--workers=1` is this same pool with one worker in it, not a separate serial branch that could
+// drift away from the parallel one.
+//
+// ============================================================================================
+// THE PROTOCOL
+// ============================================================================================
+//
+//   parent -> worker (stdin, one line each):
+//       JOB:singles:<spec>                            run every selected test of <spec>
+//       EXIT                                          shut down cleanly
+//
+//   worker -> parent (stdout, one line each):
+//       WORKER_READY                                  at startup, and again after every job
+//       WORKER_SINGLE_RESULT:<spec>:<test>            that test PASSED
+//       WORKER_SINGLE_FAIL:<spec>:<test>:<payload>    that test FAILED; <payload> is its reason,
+//                                                     escaped onto this one line
+//
+// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The three
+// lines above are the only ones it can write and all three are non-empty — so an empty line back
+// from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
+// no effort here: the compiles and the compiled test programs a worker spawns all run under
+// `Subprocess.run` with COLLECTED output, so their streams are captured, never inherited.
+//
+// ============================================================================================
+// WHAT WAS DELIBERATELY LEFT IN v1
+// ============================================================================================
+//
+// * The STDERR DRAIN IS SYNCHRONOUS, at shutdown. v1 drained it continuously from an `async` GT
+//   and leaked one MM allocation per worker (the Promise box + the GT's arg buffer never
+//   returned to the slab). See `shutdownAndDrainStderr`.
+// * NO WATCHDOG. v1 needed one because its workers compiled IN-PROCESS, so a compiler infinite
+//   loop hung the worker with no way out. Here every compile is a grandchild subprocess, and a
+//   compiler that hangs hangs the serial runner too — a timeout in the pool would only disguise
+//   where the bug is.
+// * NO `WORKER_COMPILING:` BREADCRUMBS. Same root cause: v1's worker WAS the compiler, so a
+//   compiler panic killed it and the parent needed a breadcrumb to say which fragment did it.
+//   Here a compiler panic is a non-zero exit from a grandchild, which `runOneTest` already turns
+//   into an ordinary FAIL result naming the test.
+
+// --- The CLI the pool speaks -----------------------------------------------------------------
+//
+// A worker is THIS executable, re-launched. The flag spellings it is launched with are declared
+// in Main.maxon, where the parser that reads them back also lives, so the two halves of the
+// command line cannot drift apart into a hang.
+
+// --- The wire protocol -----------------------------------------------------------------------
+//
+// Named, never inlined: these strings are a contract between two PROCESSES built from this one
+// file, and a typo in one half would be a deadlock rather than a compile error.
+let WorkerReadyMarker = "WORKER_READY"
+let WorkerPassMarker = "WORKER_SINGLE_RESULT:"
+let WorkerFailMarker = "WORKER_SINGLE_FAIL:"
+let JobSinglesPrefix = "JOB:singles:"
+let ExitCommand = "EXIT"
+let ProtocolFieldSep = ":"
+
+// How long the dispatcher parks when no worker has an answer ready. Non-zero on purpose: a
+// zero-length sleep is a spin, and it would starve the very green threads it is waiting for.
+let PollYieldMs = 1
+
+// A leak-gated Maxon program exits with this when it leaked. A worker IS such a program, so this
+// code coming back from one means the HARNESS leaked while servicing that worker's tests — a
+// suite failure even if every test it ran passed.
+let LeakCheckExitCode = 101
+
+// The bytes `encodeFailPayload` escapes and `decodeFailPayload` puts back. Named rather than
+// written as character literals so the escape table reads as one table.
+let AsciiBackslash = 0x5C
+let AsciiLowerN = 0x6E
+let AsciiLowerR = 0x72
+let AsciiLineFeed = 0x0A
+let AsciiCarriageReturn = 0x0D
+
+// A pool SIZE: at least one, because a pool of zero workers runs nothing — which is why
+// `--workers=0` is a refused command line rather than a silently empty run. There is no honest
+// upper bound (it is the OS process table), so the range is as wide as a process count can be.
+export typealias WorkerCount = int(1 to u32.max)
+
+// A worker's slot in the pool. Also the round-robin cursors, which are slot numbers.
+typealias WorkerId = int(0 to u32.max)
+
+// A TALLY of workers, which — unlike a pool size — may legitimately be zero ("no worker exited
+// non-zero"). A separate alias precisely because `WorkerCount` may not be.
+typealias WorkerTally = int(0 to u32.max)
+
+// A job's dispatch weight: the total source bytes of the tests it will run. BYTES, not test
+// count — a spec's cost tracks how much source the compiler must chew, and 15 one-liners are
+// cheaper than 6 register-pressure monsters.
+typealias JobWeight = int(0 to u64.max)
+
+// A spec's index into the parent's plan array, which IS the report order. Every job carries it,
+// so an answer that comes back out of order still lands in its place.
+typealias PlanIndex = int(0 to u64.max)
+
+export let DefaultWorkerCount = 12 as WorkerCount
+
+// The largest pool `--workers=` will accept. Not a technical limit — it is the point past which
+// the request is more plausibly a typo than an intent, and every worker is a real OS process.
+let MaxWorkerCount = 1024
+
+// The outcome of parsing `--workers=<n>`. A union rather than a throw, because the caller is
+// inside the argument loop and must neither diverge nor invent a value: `invalid` is recorded as
+// a bad option and the driver then refuses to run at all.
+export union WorkerCountArg
+	valid(count WorkerCount)
+	invalid
+end 'WorkerCountArg'
+
+// Parse `--workers=<n>`.
+//
+// Zero (or a non-number) is REFUSED, never clamped. `--workers=0` asks for a pool that can run
+// nothing; quietly running the default instead would answer a question the caller never asked,
+// and they would believe they had measured a pool size they had not.
+export function parseWorkerCount(raw String) returns WorkerCountArg
+	let value = try int.fromString(raw) otherwise 'notANumber'
+		return WorkerCountArg.invalid
+	end 'notANumber'
+
+	if value < 1 or value > MaxWorkerCount 'outOfRange'
+		return WorkerCountArg.invalid
+	end 'outOfRange'
+
+	return WorkerCountArg.valid(value as WorkerCount)
+end 'parseWorkerCount'
+
+// ============================================================================================
+// THE PLAN — what the parent decides BEFORE anything is dispatched
+// ============================================================================================
+
+// One spec's worth of the answer, as the parent expects it: the spec's name, the ordered names of
+// the tests `--filter` selects, and the weight of running them.
+//
+// `testNames` is the load-bearing field. It is the parent's ORACLE — the drained records are
+// checked against it name for name — and its order is the order the results are printed in, so
+// reassembling out-of-order answers needs no sorting and no comparison operator on String.
+type SpecPlan
+	export let specName as String
+	export let testNames as StringArray
+	export let weight as JobWeight
+
+	export static function create(specName String, testNames StringArray, weight JobWeight) returns SpecPlan
+		return Self{specName: specName, testNames: testNames, weight: weight}
+	end 'create'
+end 'SpecPlan'
+
+typealias SpecPlanArray = Array with SpecPlan
+
+// One bucket of results per plan, filled OUT OF ORDER by whichever worker finished that spec, and
+// concatenated in plan order at the end. This is where worker-count invariance is actually won.
+typealias SpecResultBuckets = Array with SpecTestResultArray
+
+// Decide, before a single worker starts, exactly what this run will report. Specs are visited in
+// directory-listing order — which is the report order — and a spec that selects no test gets no
+// plan, and therefore no job.
+//
+// The parent parses the specs even though every worker will parse its own again, and the
+// redundancy is the point: the parent's list is the oracle the answers are checked against. It is
+// also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
+// about to dispatch.
+function buildPlans(specDir FilePath, filter String) returns SpecPlanArray throws CompileError
+	var plans = SpecPlanArray.create()
+
+	let specPaths = try specFilePaths(specDir)
+	for specPath in specPaths 'eachSpec'
+		let specFile = try parseSpecFile(specPath)
+		if isDraftSpec(specFile) 'draftSpec'
+			continue
+		end 'draftSpec'
+
+		let specName = specPath.stem()
+		var testNames = StringArray.create()
+		var weight = 0 as JobWeight
+
+		for test in specFile.tests 'eachTest'
+			if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
+				continue
+			end 'notSelected'
+
+			testNames.push(test.name)
+			weight = weight + test.source.byteLength()
+		end 'eachTest'
+
+		if testNames.count() == 0 'selectsNothing'
+			continue
+		end 'selectsNothing'
+
+		plans.push(SpecPlan.create(specName, testNames: testNames, weight: weight))
+	end 'eachSpec'
+
+	return plans
+end 'buildPlans'
+
+// ============================================================================================
+// THE JOB QUEUE
+// ============================================================================================
+
+// One dispatchable unit of work: everything the worker needs (the spec NAME — a path would bind
+// the wire format to the parent's working directory) plus everything the parent needs to file the
+// answer away (`planIndex`) and to order the queue (`weight`).
+type SpecJob
+	export let planIndex as PlanIndex
+	export let specName as String
+	export let weight as JobWeight
+
+	export static function create(planIndex PlanIndex, specName String, weight JobWeight) returns SpecJob
+		return Self{planIndex: planIndex, specName: specName, weight: weight}
+	end 'create'
+
+	// The placeholder that pre-fills the per-slot in-flight array. Never sent and never read: a
+	// slot's entry is overwritten by a real job the instant it goes busy, and it is only read on
+	// a busy slot.
+	export static function idle() returns SpecJob
+		return Self{planIndex: 0, specName: "", weight: 0}
+	end 'idle'
+
+	// Shallow copy. `popHeaviestJob` and the drain path both need a value that has cut its borrow
+	// on the array's storage before they mutate that array.
+	export function clone() returns SpecJob
+		return Self{planIndex: planIndex, specName: specName, weight: weight}
+	end 'clone'
+
+	// The wire line the worker reads off its stdin.
+	export function toJobLine() returns String
+		return "{JobSinglesPrefix}{specName}"
+	end 'toJobLine'
+end 'SpecJob'
+
+typealias SpecJobArray = Array with SpecJob
+
+// Pop the heaviest job, backfilling its slot from the queue's tail.
+//
+// SLOWEST-FIRST, so the long-pole specs start first and overlap with everything else instead of
+// turning up last and gating wall time on their own. Ties go to the lower index, which keeps the
+// dispatch order deterministic for a given corpus.
+function popHeaviestJob(queue SpecJobArray) returns SpecJob
+	let n = queue.count()
+	if n == 0 'emptyQueue'
+		panic("popHeaviestJob: the dispatch loop only pops from a queue it has proved non-empty")
+	end 'emptyQueue'
+
+	var bestIdx = 0
+	var bestWeight = 0 as JobWeight
+	for i in 0 upto n 'scan'
+		let candidate = try queue.get(i) otherwise panic("popHeaviestJob: queue.get({i}) is in bounds by construction")
+		if candidate.weight > bestWeight 'heavier'
+			bestIdx = i
+			bestWeight = candidate.weight
+		end 'heavier'
+	end 'scan'
+
+	// `.clone()` cuts the borrow on the queue's storage, without which the `set` below is refused.
+	let chosen = (try queue.get(bestIdx) otherwise panic("popHeaviestJob: queue.get({bestIdx}) is in bounds by construction")).clone()
+	let lastIdx = n - 1
+	if bestIdx != lastIdx 'notAlreadyLast'
+		let last = (try queue.get(lastIdx) otherwise panic("popHeaviestJob: queue.get({lastIdx}) is in bounds by construction")).clone()
+		try queue.set(bestIdx, value: last) otherwise panic("popHeaviestJob: queue.set({bestIdx}) is in bounds by construction")
+	end 'notAlreadyLast'
+	_ = try queue.pop() otherwise panic("popHeaviestJob: pop() on a queue proved non-empty above")
+
+	return chosen
+end 'popHeaviestJob'
+
+// ============================================================================================
+// THE WORKER SIDE
+// ============================================================================================
+
+// A worker process. Print READY, then read one JOB line at a time from stdin, run it, print one
+// record per test, print READY again. `EXIT` — or stdin EOF, which is what a vanished parent
+// looks like — ends the loop.
+//
+// The READY/job pairing is the whole protocol: the parent's drain reads until READY, so every
+// path through this loop that consumed a job line MUST print exactly one READY afterwards, or the
+// parent waits forever for a line that is never coming.
+export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool) returns ExitCode
+	var stdin = Console.stdin()
+	emitReady()
+
+	while true 'jobLoop'
+		let line = try stdin.readLine() otherwise 'parentGone'
+			// EOF on stdin: the parent exited without sending EXIT. Nothing left to serve.
+			break
+		end 'parentGone'
+
+		let job = line.trim()
+		if job == ExitCommand 'shutDown'
+			break
+		end 'shutDown'
+
+		if job.isEmpty() 'blankLine'
+			continue
+		end 'blankLine'
+
+		if not job.startsWith(JobSinglesPrefix) 'unknownJob'
+			// Surface it on stderr — where the parent's shutdown drain will forward it — and still
+			// print the READY this loop now owes. Silently dropping the line would deadlock the
+			// parent instead of diagnosing it.
+			printError("spec worker: unknown job line: '{job}'\n")
+			emitReady()
+			continue
+		end 'unknownJob'
+
+		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired)
+		emitReady()
+	end 'jobLoop'
+
+	return 0
+end 'runPersistentWorker'
+
+function emitReady()
+	print("{WorkerReadyMarker}\n")
+end 'emitReady'
+
+// Run every selected test of one spec and emit one record per test, in declaration order.
+//
+// A spec this worker cannot run is a PANIC, not a job that quietly produces nothing. The parent
+// parsed this same spec moments ago to build its plan, so a failure here means something underneath
+// broke — the file vanished, the scratch directory cannot be made — and there is no useful work
+// left to do. Dying is also the only way to get the reason OUT: the parent drains a worker's stderr
+// when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
+// Returning quietly instead would leave the parent to notice a missing record and abort with no
+// idea why.
+function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool)
+	let results = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired) otherwise (e) 'specFailed'
+		reportCompileError(e)
+		panic("spec worker: could not run spec '{specName}' — see the error above")
+	end 'specFailed'
+
+	for result in results 'eachResult'
+		match result.outcome 'verdict'
+			pass then print("{WorkerPassMarker}{specName}{ProtocolFieldSep}{result.testName}\n")
+			fail(reason) then print("{WorkerFailMarker}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeFailPayload(reason)}\n")
+		end 'verdict'
+	end 'eachResult'
+end 'runSinglesJob'
+
+// ============================================================================================
+// THE FAIL PAYLOAD — a multi-line reason on a line-based wire
+// ============================================================================================
+
+// Escape a failure reason onto ONE line. A golden-mismatch reason is genuinely multi-line (see
+// `checkTestFragment`), and an un-escaped newline in it would not corrupt one record — it would
+// desynchronise the parent's reader for the rest of the job.
+//
+// Backslash FIRST, so the newline and CR rules that follow cannot double-escape the backslashes
+// this rule just inserted.
+function encodeFailPayload(reason String) returns String
+	var escaped = reason.replace("\\", with: "\\\\")
+	escaped = escaped.replace("\n", with: "\\n")
+	escaped = escaped.replace("\r", with: "\\r")
+	return escaped
+end 'encodeFailPayload'
+
+// The inverse. Walks the bytes ONCE rather than running three `replace`s, because a replace-based
+// decode re-expands what it just produced: `\\n` (an escaped backslash followed by an `n`) would
+// come back as a newline instead of the two characters it started as.
+function decodeFailPayload(payload String) returns String
+	let bytes = payload.toByteArray()
+	let n = bytes.count()
+	var decoded = ByteArray.create()
+	var i = 0
+
+	while i < n 'walk'
+		let b = try bytes.get(i) otherwise panic("decodeFailPayload: bytes.get({i}) is in bounds by construction")
+		if b != AsciiBackslash or i + 1 >= n 'literalByte'
+			decoded.push(b)
+			i = i + 1
+			continue
+		end 'literalByte'
+
+		let escaped = try bytes.get(i + 1) otherwise panic("decodeFailPayload: bytes.get({i} + 1) is in bounds by the guard above")
+		if escaped == AsciiLowerN 'newline'
+			decoded.push(AsciiLineFeed as Byte)
+			i = i + 2
+			continue
+		end 'newline'
+
+		if escaped == AsciiLowerR 'carriageReturn'
+			decoded.push(AsciiCarriageReturn as Byte)
+			i = i + 2
+			continue
+		end 'carriageReturn'
+
+		if escaped == AsciiBackslash 'backslash'
+			decoded.push(AsciiBackslash as Byte)
+			i = i + 2
+			continue
+		end 'backslash'
+
+		// A backslash that begins no escape this encoder emits. It can only have come from the
+		// reason text itself, so it IS the text: pass it through untouched.
+		decoded.push(b)
+		i = i + 1
+	end 'walk'
+
+	return String.from(decoded)
+end 'decodeFailPayload'
+
+// The remainder of `line` after a literal ASCII `prefix` the caller has already matched with
+// `startsWith`. Byte position equals character position for every marker in this protocol, so
+// advancing `prefix.byteLength()` indices lands exactly past it.
+//
+// It deliberately does NOT trim: what follows a FAIL record's markers is the failure reason
+// VERBATIM, and trimming it would quietly rewrite the text a spec author reads.
+function sliceAfterPrefix(line String, prefix String) returns String
+	var pos = line.startIndex()
+	for _ in 0 upto prefix.byteLength() 'skipPrefix'
+		pos = try line.indexAfter(pos) otherwise panic("sliceAfterPrefix: '{line}' is shorter than the prefix '{prefix}' it startsWith")
+	end 'skipPrefix'
+	return line.slice(pos, endIndex: line.endIndex())
+end 'sliceAfterPrefix'
+
+// ============================================================================================
+// DECODING A WORKER'S RECORDS
+// ============================================================================================
+
+// One decoded result record. TWO cases, because the worker emits exactly two kinds — a line that
+// is neither is a protocol break between two halves of this same file, so `decodeWorkerLine`
+// panics on it rather than modelling it as a third case a future arm could forget.
+union WorkerRecord
+	pass(specName String, testName String)
+	fail(specName String, testName String, reason String)
+
+	// The spec and the test this record is ABOUT, whatever its verdict — the two fields the
+	// dispatcher checks against its plan before it trusts anything else in the record.
+	export function spec() returns String
+		return match self 's'
+			pass(s, _) gives s
+			fail(s, _, _) gives s
+		end 's'
+	end 'spec'
+
+	export function test() returns String
+		return match self 't'
+			pass(_, t) gives t
+			fail(_, t, _) gives t
+		end 't'
+	end 'test'
+end 'WorkerRecord'
+
+function decodeWorkerLine(line String) returns WorkerRecord
+	if line.startsWith(WorkerFailMarker) 'isFail'
+		return decodeFailRecord(line)
+	end 'isFail'
+
+	if line.startsWith(WorkerPassMarker) 'isPass'
+		return decodePassRecord(line)
+	end 'isPass'
+
+	panic("spec worker pool: a worker emitted a line that is neither a PASS nor a FAIL record: '{line}'")
+end 'decodeWorkerLine'
+
+// `WORKER_SINGLE_RESULT:<spec>:<test>`. Neither field can contain the separator — a spec name is a
+// FILE STEM and a test name comes from a `<!-- test: NAME -->` marker — so the one separator
+// between them is unambiguous.
+function decodePassRecord(line String) returns WorkerRecord
+	let body = sliceAfterPrefix(line, prefix: WorkerPassMarker)
+	let sep = try body.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: PASS record has no test field: '{line}'")
+	let testStart = try body.indexAfter(sep) otherwise panic("spec worker pool: PASS record ends at its separator: '{line}'")
+
+	return WorkerRecord.pass(body.slice(body.startIndex(), endIndex: sep), testName: body.slice(testStart, endIndex: body.endIndex()))
+end 'decodePassRecord'
+
+// `WORKER_SINGLE_FAIL:<spec>:<test>:<payload>`. Only the FIRST TWO separators are structural: the
+// payload is an escaped compiler diagnostic and is full of colons, so this walks the two
+// separators one at a time rather than splitting the line on `:`.
+function decodeFailRecord(line String) returns WorkerRecord
+	let body = sliceAfterPrefix(line, prefix: WorkerFailMarker)
+	let specSep = try body.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: FAIL record has no test field: '{line}'")
+	let afterSpec = try body.indexAfter(specSep) otherwise panic("spec worker pool: FAIL record ends at its first separator: '{line}'")
+	let specName = body.slice(body.startIndex(), endIndex: specSep)
+
+	let rest = body.slice(afterSpec, endIndex: body.endIndex())
+	let testSep = try rest.findFirst(ProtocolFieldSep) otherwise panic("spec worker pool: FAIL record has no reason field: '{line}'")
+	let afterTest = try rest.indexAfter(testSep) otherwise panic("spec worker pool: FAIL record ends at its second separator: '{line}'")
+
+	let reason = decodeFailPayload(rest.slice(afterTest, endIndex: rest.endIndex()))
+	return WorkerRecord.fail(specName, testName: rest.slice(rest.startIndex(), endIndex: testSep), reason: reason)
+end 'decodeFailRecord'
+
+// Turn one worker's drained lines into that spec's results, in the order the parent decided they
+// must appear.
+//
+// THIS IS THE INVARIANCE GATE, enforced rather than assumed. Every record is matched against the
+// plan name for name, in order, and a mismatch is a panic: a lost record (a broken pipe), an extra
+// one, a reordered one, or one naming a test the parent never selected (a flag that failed to
+// reach the worker) would otherwise show up as a suite that quietly reported a different set of
+// tests than the one it claims to have run.
+function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResultArray
+	var results = SpecTestResultArray.create()
+
+	if lines.count() != plan.testNames.count() 'wrongRecordCount'
+		panic("spec worker pool: '{plan.specName}' returned {lines.count()} record(s), expected {plan.testNames.count()} — a result was lost, or the worker selected different tests than the parent did")
+	end 'wrongRecordCount'
+
+	for i in 0 upto lines.count() 'eachRecord'
+		let line = try lines.get(i) otherwise panic("resultsFromLines: lines.get({i}) is in bounds by construction")
+		let expectedTest = try plan.testNames.get(i) otherwise panic("resultsFromLines: testNames.get({i}) is in bounds by construction")
+		let record = decodeWorkerLine(line)
+
+		if record.spec() != plan.specName or record.test() != expectedTest 'wrongTest'
+			panic("spec worker pool: expected a record for '{plan.specName}/{expectedTest}', got '{record.spec()}/{record.test()}' — the parent and the worker disagree about which tests this spec runs, or in what order")
+		end 'wrongTest'
+
+		// Built from the PARENT's own names, which the check above has just proved equal to the
+		// worker's. The report is therefore assembled entirely from the parent's plan; nothing
+		// that crossed a pipe reaches the printed line but the failure reason.
+		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: outcomeOf(record)))
+	end 'eachRecord'
+
+	return results
+end 'resultsFromLines'
+
+function outcomeOf(record WorkerRecord) returns TestOutcome
+	return match record 'verdict'
+		pass gives TestOutcome.pass
+		fail(_, _, reason) gives TestOutcome.fail(reason)
+	end 'verdict'
+end 'outcomeOf'
+
+// ============================================================================================
+// THE DRAIN — the one green thread in the design
+// ============================================================================================
+
+// Promise carrying one worker's drained records. The dispatcher holds one per slot. Every drain is
+// spawned AT DISPATCH TIME, so all N overlapped stdout reads sit pending in the runtime at once
+// and a slow worker never gates a fast one.
+typealias DrainPromise = Promise with StringArray
+typealias DrainPromiseArray = Array with DrainPromise
+
+// Read record lines from `child` until its next WORKER_READY. Throws on EOF before READY — the
+// worker exited mid-job — so the dispatcher's `otherwise 'workerDied` fires.
+//
+// A FREE FUNCTION, not a method on PersistentWorkerHandle, and deliberately so: `async
+// handle.drain()` would capture the handle STRUCT, which the dispatcher must keep mutating while
+// the green thread runs. Passing the inner `child` by value hands the GT its own copy —
+// StreamingSubprocess copies share the runtime-side pipe by handle, so the GT and the parent still
+// address the same OS object.
+function drainResultsThunk(child StreamingSubprocess) returns StringArray throws SubprocessError
+	var lines = StringArray.create()
+
+	while true 'lineLoop'
+		let line = try child.readStdoutLine()
+		if line.isEmpty() 'eof'
+			// Workers never print an empty line (see the protocol note at the top of this file),
+			// so this IS EOF: the worker died with the job unfinished.
+			throw SubprocessError.ioFailed("stdout reached EOF before {WorkerReadyMarker}")
+		end 'eof'
+
+		if line.trim() == WorkerReadyMarker 'jobDone'
+			return lines
+		end 'jobDone'
+
+		lines.push(line)
+	end 'lineLoop'
+
+	panic("drainResultsThunk: the loop above is only left by `return` or `throw`")
+end 'drainResultsThunk'
+
+// Everything a (now-exited) worker left in its stderr pipe, joined. Shared by the clean-shutdown
+// path and the crash-abort path so both consume stderr the same way.
+//
+// ONLY EVER CALLED ON A CHILD THAT HAS EXITED, and that is what makes it terminate: the write end
+// of the pipe is closed, so the reads hand back what was buffered and then EOF. Called on a live
+// worker it would block until that worker exited. It stops on EOF or on the first read error — a
+// read error here means the handle is already gone, and there is nothing left to say about a worker
+// whose pipe we can no longer read.
+function drainChildStderr(child StreamingSubprocess) returns String
+	var out = ""
+	var first = true
+
+	while true 'lineLoop'
+		let line = try child.readStderrLine() otherwise break
+		if line.isEmpty() 'eof'
+			break
+		end 'eof'
+
+		if first 'firstLine'
+			out = line
+			first = false
+		end 'firstLine' else 'laterLine'
+			out = "{out}\n{line}"
+		end 'laterLine'
+	end 'lineLoop'
+
+	return out
+end 'drainChildStderr'
+
+// ============================================================================================
+// THE WORKER HANDLE
+// ============================================================================================
+
+type PersistentWorkerHandle
+	export var child as StreamingSubprocess
+	export var workerId as WorkerId
+
+	// Spawn the child WITHOUT waiting for its WORKER_READY hello.
+	//
+	// Two-phase startup: the caller fires all N spawns back to back and only then drains the N
+	// hellos, so every worker's process creation and runtime init OVERLAP under a single readiness
+	// barrier instead of each one queueing behind the previous worker's hello.
+	//
+	// `filter` and `updateRequired` MUST be forwarded. A worker that selected a different set of
+	// tests than the parent counted would return records the parent never asked for and omit ones
+	// it did — `resultsFromLines` turns that into a panic, but forwarding the flag is the actual
+	// fix, and the panic is only there to make forgetting it impossible to miss.
+	export static function spawnNoWait(compilerExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool) returns PersistentWorkerHandle throws SubprocessError
+		var argv = StringArray.create()
+		argv.push(SpecTestCommandName)
+		argv.push(WorkerPersistentFlag)
+		// The RESOLVED spec directory, not the default the worker would otherwise re-derive from
+		// its inherited working directory. The parent already decided which directory this run is
+		// about; a worker that decided again could decide differently.
+		argv.push(specDir.toString())
+
+		if not filter.isEmpty() 'hasFilter'
+			argv.push("{FilterFlagPrefix}{filter}")
+		end 'hasFilter'
+
+		if updateRequired 'isUpdate'
+			argv.push(UpdateRequiredFlag)
+		end 'isUpdate'
+
+		let child = try StreamingSubprocess.spawn(Executable.path(compilerExe), arguments: argv)
+		return Self{child: child, workerId: workerId}
+	end 'spawnNoWait'
+
+	// Drain the startup hello. Pairs with `spawnNoWait`'s two-phase startup.
+	export function awaitReady() throws SubprocessError
+		let hello = try child.readStdoutLine()
+		if hello.trim() != WorkerReadyMarker 'badHello'
+			child.release()
+			throw SubprocessError.ioFailed("worker {workerId} startup: expected {WorkerReadyMarker}, got '{hello}'")
+		end 'badHello'
+	end 'awaitReady'
+
+	export function sendJob(jobLine String) throws SubprocessError
+		try child.writeStdinLine(jobLine)
+	end 'sendJob'
+
+	// EXIT, close stdin, wait, drain stderr, release. Returns the child's exit code, which the
+	// caller must inspect: 101 is the leak gate.
+	//
+	// The stderr drain is SYNCHRONOUS, after `wait()`, and that is not an oversight. v1 drained it
+	// continuously from an `async` GT and leaked one MM allocation per worker — the Promise box and
+	// the GT's argument buffer never returned to the slab. By the time we get here the child has
+	// exited, so its write end is closed: the read loop consumes what the pipe buffered and then
+	// sees EOF. A worker emits nothing on stderr on the happy path, so deferring the drain costs
+	// nothing and cannot fill the pipe.
+	export function shutdownAndDrainStderr() returns ExitInt throws SubprocessError
+		try child.writeStdinLine(ExitCommand)
+		child.closeStdin()
+		let code = try child.wait()
+
+		let stderr = drainChildStderr(child)
+		if not stderr.isEmpty() 'workerSpoke'
+			printError("{stderr}\n")
+		end 'workerSpoke'
+
+		child.release()
+		return code
+	end 'shutdownAndDrainStderr'
+end 'PersistentWorkerHandle'
+
+typealias PersistentWorkerHandleArray = Array with PersistentWorkerHandle
+
+// A worker died. Print whatever it managed to write to stderr — its panic message and stack trace,
+// if it panicked — and take the whole run down with it.
+//
+// There is deliberately no recovery. A dead worker is not a flaky test to be retried: it is the
+// harness itself crashing, and rerouting its job to a surviving worker would turn a hard bug into
+// an intermittently green suite. The panic tears the process down, so the handle is not released
+// here — the OS reclaims it.
+function abortOnDeadWorker(handle PersistentWorkerHandle, job SpecJob, reason String)
+	printError("\n=== spec worker {handle.workerId} died on '{job.specName}' — aborting the run ===\n")
+	printError("{reason}\n")
+
+	let stderr = drainChildStderr(handle.child)
+	if stderr.isEmpty() 'silent'
+		printError("(the worker wrote nothing to stderr before dying)\n")
+	end 'silent' else 'spoke'
+		printError("{stderr}\n")
+	end 'spoke'
+
+	panic("spec worker {handle.workerId} died while running '{job.specName}'; see stderr above")
+end 'abortOnDeadWorker'
+
+// ============================================================================================
+// THE DISPATCHER
+// ============================================================================================
+
+// What one pool run produced: every test's verdict in report order, and how many workers exited
+// NON-ZERO.
+//
+// The worker exit codes are carried out rather than acted on in here, because they are not a TEST
+// result and must never reach the reporter — but they still have to fail the suite. A worker is
+// itself a leak-gated Maxon program: exit 101 means the harness leaked while servicing its tests,
+// and a green suite that swallowed that would be a leak gate that never fires.
+export type PoolRun
+	export let results as SpecTestResultArray
+	export let failedWorkers as WorkerTally
+
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers}
+	end 'create'
+end 'PoolRun'
+
+// Raised by the slot scans when no slot qualifies. A THROW rather than a sentinel index: "no worker
+// is idle" and "no worker has answered yet" are routine, expected states of the dispatch loop, and
+// `if let` reads them directly.
+enum NoSlot implements Error
+	none
+end 'NoSlot'
+
+// Run the whole suite on a pool of `workerCount` persistent workers and return every verdict in
+// report order.
+export function runSpecPool(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount) returns PoolRun throws CompileError
+	let plans = try buildPlans(specDir, filter: filter)
+	if plans.count() == 0 'selectsNothing'
+		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.
+		// Spawning a pool only to tell it there is nothing to do would add a way for that message
+		// to go missing, and nothing else.
+		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0)
+	end 'selectsNothing'
+
+	try prepareSharedDirs(specDir)
+
+	var jobQueue = SpecJobArray.create()
+	for i in 0 upto plans.count() 'enqueue'
+		let plan = try plans.get(i) otherwise panic("runSpecPool: plans.get({i}) is in bounds by construction")
+		jobQueue.push(SpecJob.create(i, specName: plan.specName, weight: plan.weight))
+	end 'enqueue'
+
+	// A worker with no job would spawn, say hello, and be shut down again — pure cost, and one more
+	// process to go wrong.
+	var poolSize = workerCount
+	if jobQueue.count() < poolSize 'moreWorkersThanJobs'
+		poolSize = jobQueue.count() as WorkerCount
+	end 'moreWorkersThanJobs'
+
+	var workers = spawnPool(compilerExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired)
+
+	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
+	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
+	// and splitting out only that one field would read worse than splitting all of them.
+	var busy = BoolArray.create()
+	var inFlight = SpecJobArray.create()
+	var drains = DrainPromiseArray.create()
+	let idleJob = SpecJob.idle()
+	for _ in 0 upto poolSize 'initSlots'
+		busy.push(false)
+		inFlight.push(idleJob)
+	end 'initSlots'
+
+	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
+	// where worker-count invariance is won: nothing is reported as it arrives.
+	var buckets = SpecResultBuckets.create()
+	for _ in 0 upto plans.count() 'initBuckets'
+		buckets.push(SpecTestResultArray.create())
+	end 'initBuckets'
+
+	// Round-robin cursors. Without them the loop re-dispatches to the slot it just drained and then
+	// drains that same slot again, while every other worker sits on a finished job nobody reads.
+	var dispatchCursor = 0 as WorkerId
+	var drainCursor = 0 as WorkerId
+	var dispatched = 0
+	var completed = 0
+
+	while true 'dispatchLoop'
+		// Feed the pool before draining it: the parallelism does not exist until every worker has a
+		// job, so an idle slot always outranks a ready answer.
+		if let idleSlot = try findIdleSlot(busy, cursor: dispatchCursor) 'haveIdleWorker'
+			if jobQueue.count() > 0 'haveWork'
+				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains)
+				dispatched = dispatched + 1
+				dispatchCursor = wrapSlot(idleSlot + 1, poolSize: poolSize)
+				continue
+			end 'haveWork'
+
+			// The queue is empty. If nobody is still working, every job has been accounted for.
+			if not anySlotBusy(busy) 'runComplete'
+				break
+			end 'runComplete'
+		end 'haveIdleWorker'
+
+		// Serve whichever busy worker has ALREADY answered, rather than awaiting slots in order.
+		// The queue is slowest-first, so slot 0 holds the heaviest spec — a parent that awaited in
+		// slot order would park on it while every other worker sat idle with its answer already in
+		// the pipe. That is head-of-line blocking, and it is what the non-blocking peek prevents.
+		if let readySlot = try findReadyDrain(busy, drains: drains, cursor: drainCursor) 'haveAnswer'
+			var handle = try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")
+			// Cloned out of the array so the borrow does not pin `inFlight` for the re-dispatch
+			// two lines down, which overwrites this very slot.
+			let job = (try inFlight.get(readySlot) otherwise panic("runSpecPool: inFlight.get({readySlot}) is in bounds by construction")).clone()
+			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise")
+
+			// No `(e)` binding on this `otherwise`: a bound name on an `await` binds the promise's
+			// VALUE type, not its error, so `e` would come through as a StringArray's element rather
+			// than the SubprocessError. The drain has exactly two ways to fail and both are named
+			// below, so nothing is lost.
+			let lines = try await drain otherwise 'workerDied'
+				abortOnDeadWorker(handle, job: job, reason: "its stdout gave EOF or an I/O error before {WorkerReadyMarker}")
+			end 'workerDied'
+
+			// Keep the slot fed BEFORE decoding what it just said. The worker has been idle since
+			// the instant it printed WORKER_READY, so the next job overlaps with the parent's
+			// decode — and with a slowest-first queue, the next job is the best one left.
+			if jobQueue.count() > 0 'moreWork'
+				sendAndDrain(workers, slot: readySlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains)
+				dispatched = dispatched + 1
+			end 'moreWork' else 'queueDrained'
+				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
+			end 'queueDrained'
+
+			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
+			try buckets.set(job.planIndex, value: resultsFromLines(lines, plan: plan)) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
+			completed = completed + 1
+			drainCursor = wrapSlot(readySlot + 1, poolSize: poolSize)
+			continue
+		end 'haveAnswer'
+
+		// Nobody idle, nobody answered. Park, so the scheduler can run the drain green threads —
+		// every one of them blocked on an overlapped read of its worker's stdout.
+		sleep(PollYieldMs)
+	end 'dispatchLoop'
+
+	if dispatched != completed 'jobLost'
+		panic("runSpecPool: dispatched {dispatched} job(s) but completed {completed} — a job was lost in the dispatch loop")
+	end 'jobLost'
+
+	let failedWorkers = shutdownPool(workers)
+	return PoolRun.create(concatBuckets(buckets), failedWorkers: failedWorkers)
+end 'runSpecPool'
+
+// The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
+// whatever order the workers happened to finish.
+function concatBuckets(buckets SpecResultBuckets) returns SpecTestResultArray
+	var results = SpecTestResultArray.create()
+
+	for bucket in buckets 'eachSpec'
+		for result in bucket 'eachResult'
+			results.push(result)
+		end 'eachResult'
+	end 'eachSpec'
+
+	return results
+end 'concatBuckets'
+
+// Create the directories every worker writes into, ONCE, in the parent. Each worker owns a private
+// per-spec subdirectory under each root, so the only thing they could race on is the creation of
+// the shared parent — and `Directory.create`'s mkdir -p from N processes at once is exactly that
+// race.
+function prepareSharedDirs(specDir FilePath) throws CompileError
+	let tempRoot = specTempRootDir(specDir)
+	if not Directory.create(tempRoot) 'noTempRoot'
+		throw CompileError.directoryNotFound(tempRoot)
+	end 'noTempRoot'
+
+	// A fragments root that cannot be created is NOT a gate — `checkTestFragment` swallows the
+	// ensuing write error and the behaviour tests still run — so unlike the scratch root, a failure
+	// here is not fatal. It is created up front only so that N workers do not race to make it.
+	_ = Directory.create(fragmentsRootDir(specDir, target: detectHostTarget()))
+end 'prepareSharedDirs'
+
+// Two-phase startup: fire all N spawns back to back, THEN drain the N hellos.
+//
+// A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
+// There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
+// it was asked for would be a harness lying about what it did.
+function spawnPool(compilerExe FilePath, count WorkerCount, specDir FilePath, filter String, updateRequired bool) returns PersistentWorkerHandleArray
+	var workers = PersistentWorkerHandleArray.create()
+
+	for i in 0 upto count 'spawnPhase'
+		let handle = try PersistentWorkerHandle.spawnNoWait(compilerExe, workerId: i, specDir: specDir, filter: filter, updateRequired: updateRequired) otherwise (e) 'spawnFailed'
+			panic("spec worker pool: could not spawn worker {i}: {e.displayReason()}")
+		end 'spawnFailed'
+		workers.push(handle)
+	end 'spawnPhase'
+
+	for i in 0 upto count 'readyPhase'
+		var handle = try workers.get(i) otherwise panic("spawnPool: workers.get({i}) is in bounds by construction")
+		try handle.awaitReady() otherwise (e) 'noHello'
+			panic("spec worker pool: worker {i} never said {WorkerReadyMarker}: {e.displayReason()}")
+		end 'noHello'
+	end 'readyPhase'
+
+	return workers
+end 'spawnPool'
+
+// Hand `job` to slot `slot` and immediately spawn the green thread that will drain its answer.
+//
+// The drain is spawned AT DISPATCH, not when the parent gets round to reading: that is what puts
+// all N overlapped stdout reads in flight at once. The promise array grows by PUSH on a slot's
+// first dispatch and by SET on every dispatch after — the initial dispatches go out in slot order
+// (the idle scan starts at cursor 0 and every slot starts idle), so the push always lands at the
+// right index, and the strict split below turns any future reordering into a panic rather than a
+// silently mis-indexed promise.
+function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray)
+	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
+
+	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
+		// A broken stdin pipe means the worker is already gone. Rerouting the job to a surviving
+		// worker would mask a death that must never happen.
+		abortOnDeadWorker(handle, job: job, reason: "could not send it the job: {e.displayReason()}")
+	end 'sendFailed'
+
+	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
+	try busy.set(slot, value: true) otherwise panic("sendAndDrain: busy.set({slot}) is in bounds by construction")
+
+	let drain = async drainResultsThunk(handle.child)
+	if slot == drains.count() 'firstDispatchToThisSlot'
+		drains.push(drain)
+	end 'firstDispatchToThisSlot' else if slot < drains.count() 'redispatch'
+		try drains.set(slot, value: drain) otherwise panic("sendAndDrain: drains.set({slot}) is in bounds by construction")
+	end 'redispatch' else 'indexGap'
+		panic("sendAndDrain: slot {slot} has no promise slot yet and is not the next one ({drains.count()}) — the initial dispatch went out of slot order")
+	end 'indexGap'
+end 'sendAndDrain'
+
+// EXIT every worker, wait for it, forward whatever it left on stderr, release its handle — and
+// count the ones that exited NON-ZERO. Releasing is not optional: a leaked handle is a leaked OS
+// process slot.
+function shutdownPool(workers PersistentWorkerHandleArray) returns WorkerTally
+	var failed = 0 as WorkerTally
+
+	for i in 0 upto workers.count() 'eachWorker'
+		var handle = try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")
+
+		let code = try handle.shutdownAndDrainStderr() otherwise (e) 'shutdownFailed'
+			printError("error: spec worker {i} did not shut down cleanly: {e.displayReason()}\n")
+			failed = failed + 1
+			continue
+		end 'shutdownFailed'
+
+		if code != 0 'nonZeroExit'
+			let leakHint = " — the leak gate: this worker's compiles leaked memory" if code == LeakCheckExitCode else ""
+			printError("error: spec worker {i} exited with code {code}{leakHint}\n")
+			failed = failed + 1
+		end 'nonZeroExit'
+	end 'eachWorker'
+
+	return failed
+end 'shutdownPool'
+
+// The next idle slot at or after `cursor`, wrapping. Round-robin rather than always-from-zero, so
+// the pool does not pin its work to the low-numbered workers.
+function findIdleSlot(busy BoolArray, cursor WorkerId) returns WorkerId throws NoSlot
+	let poolSize = busy.count()
+
+	for offset in 0 upto poolSize 'scan'
+		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
+		let isBusy = try busy.get(slot) otherwise panic("findIdleSlot: busy.get({slot}) is in bounds by construction")
+		if not isBusy 'isIdle'
+			return slot
+		end 'isIdle'
+	end 'scan'
+
+	throw NoSlot.none
+end 'findIdleSlot'
+
+// The next BUSY slot at or after `cursor` whose drain green thread has already COMPLETED — a
+// non-blocking peek at the promise, which is what lets the loop serve whoever finished first
+// instead of whoever it happened to await first.
+function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerId) returns WorkerId throws NoSlot
+	let poolSize = busy.count()
+
+	for offset in 0 upto poolSize 'scan'
+		let slot = wrapSlot(cursor + offset, poolSize: poolSize)
+		let isBusy = try busy.get(slot) otherwise panic("findReadyDrain: busy.get({slot}) is in bounds by construction")
+		if not isBusy 'skipIdle'
+			continue
+		end 'skipIdle'
+
+		let drain = try drains.get(slot) otherwise panic("findReadyDrain: a busy slot always has a drain promise")
+		if __Builtins.gtIsComplete(drain.inner) != 0 'hasAnswered'
+			return slot
+		end 'hasAnswered'
+	end 'scan'
+
+	throw NoSlot.none
+end 'findReadyDrain'
+
+function anySlotBusy(busy BoolArray) returns bool
+	for isBusy in busy 'eachSlot'
+		if isBusy 'stillWorking'
+			return true
+		end 'stillWorking'
+	end 'eachSlot'
+
+	return false
+end 'anySlotBusy'
+
+// `slot` reduced modulo the pool size. Spelled as a subtract-divide because Maxon has no remainder
+// operator; `poolSize` is never zero, since a pool with no workers never reaches the dispatch loop.
+function wrapSlot(slot WorkerId, poolSize WorkerCount) returns WorkerId
+	return slot - (slot / poolSize) * poolSize
+end 'wrapSlot'

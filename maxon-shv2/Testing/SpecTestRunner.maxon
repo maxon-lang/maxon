@@ -8,11 +8,16 @@
 // output-path derivation) is exercised, not bypassed. A panic inside the compiler exits that
 // build non-zero, which surfaces as a FAILED test rather than a dead runner.
 //
-// Trimmed HARD from v1's SpecTestRunner: no fragment cache, no parallel worker
-// pool / IPC, no per-target run-command building, no wasm/wasmtime path. Those
-// return when a milestone needs them. What IS here: the committed `.test` goldens
-// (`checkTestFragment`), `--update-required` to regenerate them, and `--filter` to
-// scope a run to one spec or one test.
+// Trimmed HARD from v1's SpecTestRunner: no fragment cache, no per-target run-command
+// building, no wasm/wasmtime path. Those return when a milestone needs them. What IS
+// here: the committed `.test` goldens (`checkTestFragment`), `--update-required` to
+// regenerate them, and `--filter` to scope a run to one spec or one test.
+//
+// The parallel worker pool — the one omission that DID come back — lives next door in
+// SpecWorkerPool.maxon. This file no longer walks the spec directory itself: `runOneSpec`
+// runs exactly ONE spec, because that is the unit the pool dispatches (one job, one spec,
+// one worker). The pool builds the ordered spec list from `specFilePaths` and reassembles
+// the workers' answers back into that order.
 
 let SpecFileExtension = ".md"
 let MaxonFragmentExtension = ".maxon"
@@ -113,54 +118,77 @@ export function runProcess(exe FilePath, argv StringArray) returns ProcessCaptur
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
-// Run the active tests in every `*.md` spec under `specDir` through `compilerExe`,
-// returning one result per test that `filter` selects (draft specs skipped; an
-// empty filter selects everything). Throws only on a spec-directory / spec-file IO
-// failure; a per-test compile or run failure is captured as a FAIL result, never
-// thrown, so one bad test can't abort the suite.
-export function runSpecDir(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool) returns SpecTestResultArray throws CompileError
+// Run the active tests of ONE spec — `<specDir>/<specName>.md` — through `compilerExe`,
+// returning one result per test that `filter` selects, in DECLARATION order (a `draft`
+// spec yields none). Throws only on a spec-file IO failure; a per-test compile or run
+// failure is captured as a FAIL result, never thrown, so one bad test can't abort the run.
+//
+// One spec is the unit of work the pool dispatches (see SpecWorkerPool): a worker gets a
+// spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
+// — the pool does that once, in the parent, because the listing ORDER is also the report
+// order and only one process may own it.
+export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool) returns SpecTestResultArray throws CompileError
 	var results = SpecTestResultArray.create()
 
-	// Build the temp path through a FilePath component (not the String overload):
-	// `TempSubdirName` is a fixed valid relative path, and a FilePath argument
-	// picks `join(FilePath)` unambiguously (a bare String constant is ambiguous
-	// between join's String/FilePath overloads).
-	let tempSub = try FilePath.from(TempSubdirName) otherwise panic("SpecTestRunner: TempSubdirName '{TempSubdirName}' must be a valid relative path")
-	let tempDir = specDir.join(tempSub)
+	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"))
+	if isDraftSpec(specFile) 'draftSpec'
+		return results
+	end 'draftSpec'
+
+	let tempDir = specTempDirFor(specDir, specName: specName)
 	if not Directory.create(tempDir) 'noTempDir'
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
 	let host = detectHostTarget()
 	let exeExtension = executableExtension(host)
-	let fragmentsRoot = fragmentsRootDir(specDir, target: host)
+	let fragmentDir = fragmentsRootDir(specDir, target: host).join(specName)
+	// mkdir -p; a create failure just means fragments for this spec won't be written
+	// (checkTestFragment swallows the ensuing write error) — never a test gate.
+	_ = Directory.create(fragmentDir)
 
-	let specPaths = try specFilePaths(specDir)
-	for specPath in specPaths 'eachSpec'
-		let specFile = try parseSpecFile(specPath)
-		if specFile.status == DraftStatus 'draftSpec'
+	for test in specFile.tests 'eachTest'
+		if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
 			continue
-		end 'draftSpec'
+		end 'notSelected'
 
-		let specName = specPath.stem()
-		let fragmentDir = fragmentsRoot.join(specName)
-		// mkdir -p; a create failure just means fragments for this spec won't be
-		// written (writeTestFragment swallows the ensuing write error) — never a
-		// test gate.
-		_ = Directory.create(fragmentDir)
-
-		for test in specFile.tests 'eachTest'
-			if not selectedByFilter(specName, testName: test.name, filter: filter) 'notSelected'
-				continue
-			end 'notSelected'
-
-			let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
-			results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
-		end 'eachTest'
-	end 'eachSpec'
+		let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
+		results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
+	end 'eachTest'
 
 	return results
-end 'runSpecDir'
+end 'runOneSpec'
+
+// A `draft` spec is not run. The rule lives here, not at each call site, because BOTH halves
+// of the pool ask it — the parent when it decides what the run will report, the worker when
+// it runs a job — and a disagreement would leave the parent waiting for results the worker
+// was never going to produce.
+export function isDraftSpec(specFile SpecFile) returns bool
+	return specFile.status == DraftStatus
+end 'isDraftSpec'
+
+// This spec's private scratch directory: `<specDir>/.spec-tmp/<specName>/`.
+//
+// PER-SPEC, and that is a CORRECTNESS requirement, not tidiness. Test names are unique WITHIN
+// a spec but not ACROSS specs, so a single shared scratch directory has two workers writing,
+// compiling and deleting the same `<testName>.maxon` at the same time — a race that shows up
+// as an unreproducible compile failure in whichever worker lost. One spec is only ever in
+// flight on one worker, so keying the directory by spec name makes the collision impossible by
+// construction, and needs no worker id on the wire to do it.
+export function specTempDirFor(specDir FilePath, specName String) returns FilePath
+	return specTempRootDir(specDir).join(specName)
+end 'specTempDirFor'
+
+// The root the per-spec scratch directories hang off. The pool creates it once, in the parent,
+// so N workers don't race `Directory.create`'s mkdir -p on the shared parent.
+//
+// Built through a FilePath component (not the String overload): `TempSubdirName` is a fixed
+// valid relative path, and a FilePath argument picks `join(FilePath)` unambiguously (a bare
+// String constant is ambiguous between join's String/FilePath overloads).
+export function specTempRootDir(specDir FilePath) returns FilePath
+	let tempSub = try FilePath.from(TempSubdirName) otherwise panic("SpecTestRunner: TempSubdirName '{TempSubdirName}' must be a valid relative path")
+	return specDir.join(tempSub)
+end 'specTempRootDir'
 
 // Does `--filter=<pattern>` select this test? The pattern is matched as a
 // SUBSTRING of the `<spec>/<test>` label the runner reports — the same string a
@@ -168,7 +196,10 @@ end 'runSpecDir'
 // narrow a run: a bare spec name takes that whole spec, a bare test name takes that
 // test wherever it lives, and `spec/test` takes exactly one. An empty pattern
 // (no `--filter` given) selects everything.
-function selectedByFilter(specName String, testName String, filter String) returns bool
+//
+// Exported because the parent and the worker must select the SAME tests: the parent counts
+// them to build its report, the worker runs them. One rule, one function.
+export function selectedByFilter(specName String, testName String, filter String) returns bool
 	if filter.isEmpty() 'wholeSuite'
 		return true
 	end 'wholeSuite'
@@ -179,7 +210,10 @@ end 'selectedByFilter'
 // The committed-fragment root for this host target: `<specDir>/fragments/<target>`
 // (e.g. `specs-shv2/fragments/x64-windows`). Each spec's `.test` files hang off a
 // per-spec subdirectory of this root.
-function fragmentsRootDir(specDir FilePath, target Target) returns FilePath
+//
+// Exported for the same reason as `specTempRootDir`: the pool creates this shared parent once,
+// in the parent process, rather than letting N workers race to make it.
+export function fragmentsRootDir(specDir FilePath, target Target) returns FilePath
 	let rel = "{FragmentsSubdir}/{targetToString(target)}"
 	let relPath = try FilePath.from(rel) otherwise panic("SpecTestRunner: fragments path '{rel}' must be a valid relative path")
 	return specDir.join(relPath)
@@ -188,7 +222,10 @@ end 'fragmentsRootDir'
 // The `*.md` spec files directly under `specDir`, in directory-listing order —
 // deterministic per host filesystem (String is not Comparable, so there is no
 // portable key to sort on; NTFS returns names in a stable order).
-function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
+//
+// THIS ORDER IS THE REPORT ORDER. The pool reassembles every worker's out-of-order answers
+// back into it, which is how `--workers=1` and `--workers=N` print the same bytes.
+export function specFilePaths(specDir FilePath) returns FilePathArray throws CompileError
 	let entries = try Directory.list(specDir) otherwise throw CompileError.directoryNotFound(specDir)
 	var specs = FilePathArray.create()
 	for entry in entries 'eachEntry'

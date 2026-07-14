@@ -12,11 +12,22 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]
 //   maxon-shv2 verify-warm-rebuild <file>
-//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required]
+//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>]
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
 let DefaultSpecDir = "specs-shv2"
+
+// The CLI spellings the spec-test WORKER POOL has to re-emit, because a worker is this same
+// executable re-launched with this same command line (see SpecWorkerPool). Named here — where the
+// parser that reads them back also lives — so the two halves of that command line cannot drift
+// apart into a hang. The rest of the driver's flags are matched inline: they are read here and
+// nowhere else.
+export let SpecTestCommandName = "spec-test"
+export let WorkerPersistentFlag = "--worker-persistent"
+export let FilterFlagPrefix = "--filter="
+export let UpdateRequiredFlag = "--update-required"
+let WorkersFlagPrefix = "--workers="
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
@@ -88,11 +99,16 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	return 1
 end 'runVerifyWarmRebuild'
 
-// The `spec-test [dir]` command: resolve the running compiler's own path, run
-// every active test in `dir` (default `specs-shv2`) through it, print per-test
-// PASS/FAIL + an `N passed, M failed` summary, and exit non-zero iff any test
-// failed. The compiler under test is the RUNNING executable (`Process.
-// executablePath`), so a freshly built `maxon-shv2.exe` tests itself.
+// The `spec-test [dir]` command: resolve the running compiler's own path, run every active test in
+// `dir` (default `specs-shv2`) through it on a pool of persistent worker subprocesses, print
+// per-test PASS/FAIL + an `N passed, M failed` summary, and exit non-zero iff any test failed. The
+// compiler under test is the RUNNING executable (`Process.executablePath`), so a freshly built
+// `maxon-shv2.exe` tests itself — and so does every worker it spawns, since a worker IS this
+// executable.
+//
+// There is ONE path through the pool, taken by every worker count including `--workers=1`. A serial
+// in-process branch for the single-worker case would be a second implementation of "run the suite",
+// and the two would drift — which is exactly what the worker-count-invariance gate exists to catch.
 function runSpecTest(args MaxonArgs) returns ExitCode
 	let specDir = try resolveSpecDir(args) otherwise 'badSpecDir'
 		printError("error: invalid spec directory: {args.path}\n")
@@ -104,7 +120,14 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noExe'
 
-	let results = try runSpecDir(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired) otherwise (e) 'runErr'
+	// A WORKER, not a dispatcher: this process was spawned by a parent's pool and speaks the job
+	// protocol on stdin/stdout instead of running a suite and reporting on it. It must be checked
+	// before anything is printed — a worker's stdout is a wire, not a report.
+	if args.workerPersistent 'isPoolWorker'
+		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired)
+	end 'isPoolWorker'
+
+	let run = try runSpecPool(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
@@ -114,12 +137,25 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// tested nothing, which is the most expensive kind of lie a test runner can
 	// tell. It is worse still under `--update-required`, where an empty selection
 	// silently regenerates no goldens while looking like it did the work.
-	if results.count() == 0 'selectedNothing'
+	if run.results.count() == 0 'selectedNothing'
 		printError("error: no tests selected{filterSuffix(args.filter)}\n")
 		return 1
 	end 'selectedNothing'
 
-	return reportResults(results)
+	let testsExit = reportResults(run.results)
+	if testsExit != 0 'someTestFailed'
+		return testsExit
+	end 'someTestFailed'
+
+	// Every test passed — and a worker that exited NON-ZERO is still a suite failure. A worker is
+	// itself a leak-gated Maxon program, so exit 101 means the harness leaked memory while
+	// servicing its tests. Green tests must never be allowed to mask that.
+	if run.failedWorkers > 0 'workerFailed'
+		printError("error: {run.failedWorkers} spec worker(s) exited non-zero (see above) — failing the suite despite {run.results.count()} passing tests\n")
+		return 1
+	end 'workerFailed'
+
+	return 0
 end 'runSpecTest'
 
 // The trailing ` matching --filter=<pattern>` clause of the "no tests selected"
@@ -230,6 +266,11 @@ function printUsage()
 	print("                                is CORRECT; only the pinned IR proves the code did not get\n")
 	print("                                WORSE. REVIEW THE RESULTING DIFF. Pair it with --filter: an\n")
 	print("                                unfiltered run rewrites EVERY golden in the suite.\n")
+	print("  --workers=<n>                 (spec-test) Run the suite on <n> persistent worker\n")
+	print("                                subprocesses (default {DefaultWorkerCount}). 1 is this same pool with one\n")
+	print("                                worker in it, NOT a serial path — every worker count must\n")
+	print("                                print BYTE-IDENTICAL output, and that invariance is the\n")
+	print("                                pool's sharpest gate.\n")
 	print("  --rungs=<n>                   (scale-test) Climb <n> rungs (default {DefaultRungCount},\n")
 	print("                                range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the\n")
 	print("                                program, so this is exponential in cost.\n")
@@ -273,6 +314,14 @@ export type MaxonArgs
 	// (an extra spill still computes the right answer). So regenerating them is the one way a
 	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
 	export let updateRequired as bool
+	// `--workers=<n>` (spec-test only): how many persistent worker subprocesses the pool runs. 1 is
+	// the SAME pool with one worker in it, not a serial in-process branch — see runSpecTest.
+	export let workers as WorkerCount
+	// `--worker-persistent` (spec-test only, INTERNAL): this process IS a pool worker. Set by the
+	// parent dispatcher on the command line it spawns, never typed by a person, and therefore left
+	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
+	// worker whose own flag was not understood would fail to start at all.
+	export let workerPersistent as bool
 	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
 	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
 	// `--log=compiler:debug`, which prints the same numbers as a table.
@@ -316,6 +365,8 @@ export type MaxonArgs
 		var emitIr = false
 		var filter = ""
 		var updateRequired = false
+		var workers = DefaultWorkerCount
+		var workerPersistent = false
 		var metricsPath = ""
 		var emitCorpus = ""
 		var rungs = DefaultRungCount
@@ -331,7 +382,7 @@ export type MaxonArgs
 				command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
 				command = MaxonCommand.verifyWarmRebuild
-			end 'verifyCmd' else if arg == "spec-test" 'specTestCmd'
+			end 'verifyCmd' else if arg == SpecTestCommandName 'specTestCmd'
 				command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
 				command = MaxonCommand.scaleTest
@@ -342,11 +393,22 @@ export type MaxonArgs
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == "--emit-ir" 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else if arg.startsWith("--filter=") 'filterFlag'
+			end 'emitIrFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
 				filter = try CommandLine.optionValue(arg) otherwise ""
-			end 'filterFlag' else if arg == "--update-required" 'updateRequiredFlag'
+			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
 				updateRequired = true
-			end 'updateRequiredFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
+			end 'updateRequiredFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				// A bad value is a BAD OPTION, not a clamp — the same door as `--rungs`. `--workers=0`
+				// asks for a pool that can run nothing; quietly running the default instead would
+				// answer a question the caller never asked. See SpecWorkerPool.parseWorkerCount.
+				match parseWorkerCount(raw) 'workersArg'
+					valid(count) then workers = count
+					invalid then badOption = firstBadOption(badOption, arg: arg)
+				end 'workersArg'
+			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
+				workerPersistent = true
+			end 'workerPersistentFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
 				metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
 				emitCorpus = try CommandLine.optionValue(arg) otherwise ""
@@ -382,6 +444,6 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, resultJson: resultJson, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, resultJson: resultJson, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

@@ -1819,8 +1819,8 @@ the self-host boundary.
 ## Spec-test harness
 
 `maxon-shv2 spec-test [dir]` (default `specs-shv2`) is shv2's own spec runner —
-`Testing/{SpecParser,SpecTestRunner}.maxon`, compiled by `maxon.exe` like the rest of shv2, so it
-can use the full stdlib (File, String, `Subprocess`).
+`Testing/{SpecParser,SpecTestRunner,SpecWorkerPool}.maxon`, compiled by `maxon.exe` like the rest of
+shv2, so it can use the full stdlib (File, String, `Subprocess`, `async`).
 
 `SpecParser.parseSpecFile` extracts `<!-- test: NAME -->` markers + the ` ```maxon ` block + one
 expected block (` ```exitcode ` or ` ```maxoncstderr `) into a `SpecTest{name, source, expectation}`
@@ -1829,13 +1829,31 @@ next `## ` heading): deferred tests live under a marker-less `## Deferred` secti
 comments do not nest** — `<!-- … <!-- test: … --> … -->` closes at the first `-->`, so a
 comment-wrapped deferral would still be run.
 
-`SpecTestRunner.runSpecDir` writes each test's source verbatim (headerless, code at line 1) to a
-temp fragment and spawns `<compiler> build` as a **subprocess** through the single `runProcess`
-choke point — which isolates a compiler crash to one test and exercises the real CLI. For a
-`compilerError` test it normalizes the fragment's absolute path to `<fragment>` (line/col stay
-shv2-native) and compares; for an `exitCode` test it runs the produced exe and compares the exit.
-`Main` resolves the compiler via `Process.executablePath()` (the runner tests itself), prints
+`SpecTestRunner.runOneSpec` runs **one** spec: it writes each test's source verbatim (headerless,
+code at line 1) to a temp fragment and spawns `<compiler> build` as a **subprocess** through the
+single `runProcess` choke point — which isolates a compiler crash to one test and exercises the real
+CLI. For a `compilerError` test it normalizes the fragment's absolute path to `<fragment>` (line/col
+stay shv2-native) and compares; for an `exitCode` test it runs the produced exe and compares the
+exit. `Main` resolves the compiler via `Process.executablePath()` (the runner tests itself), prints
 per-test PASS/FAIL and `N passed, M failed`, and **exits non-zero iff any failed**.
+
+**The pool** (`SpecWorkerPool.maxon`). One spec is one *job*, and the suite runs on N **persistent
+worker subprocesses** — each of them this same executable, re-launched with `--worker-persistent`,
+reading `JOB:singles:<spec>` lines on stdin and writing one result record per test on stdout. The
+parent dispatches from a **slowest-first** queue, spawns an `async drainResultsThunk(child)` green
+thread per dispatch so all N overlapped stdout reads are in flight at once, and serves whichever
+drain completes first (`__Builtins.gtIsComplete` — a non-blocking peek, without which the parent
+would park on the heaviest spec while every other worker sat idle). *This is not about the seconds*
+(3.2 s → 0.6 s): `async` is a mechanism shv2 must eventually **emit**, and the pool is its dogfood.
+
+**Worker-count invariance is the gate.** `--workers=1` and `--workers=N` must print **byte-identical
+stdout**, so nothing is reported as it arrives: the parent knows each spec's ordered test list
+*before* dispatching (it parses the specs to weight the queue), checks every drained record against
+that list name-for-name — a lost, extra, reordered or unexpected record is a **panic** — and
+reassembles the buckets into spec-listing order for the single reporter, `Main.reportResults`. Each
+spec gets its own scratch dir (`.spec-tmp/<spec>/`) because test names are unique *within* a spec but
+not *across* specs. A worker that dies **aborts the run** with its stderr; there is no retry, because
+a dead worker is the harness crashing, not a flaky test.
 
 **Fragments.** `specs-shv2/fragments/x64-windows/<spec>/<test>.test` = the test source + its
 generated **Target IR** (via `IR/Target/TargetPrinter.maxon` — an exhaustive `match` over every
