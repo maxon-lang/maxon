@@ -64,8 +64,31 @@ let MissingIrPlaceholder = "// (no Target IR: compile produced no sidecar)\n"
 
 // The placeholder that replaces a fragment's on-disk path — in captured compiler output AND in
 // the expected text — so what a ```maxoncstderr block compares is the diagnostic, not where the
-// file happened to live. Both sides are rewritten by the one `normalizeFragmentPath`.
+// file happened to live. Both sides are rewritten by the one `normalizeCompilerOutput`.
 let FragmentPathToken = "<fragment>"
+
+// The punctuation of a positioned diagnostic: `<path>:<line>:<column>: <message>`. Splitting the
+// text after the path on `:` yields `["", line, column, message…]` — three fields before the message
+// begins, and the message may itself contain a `:` (`type mismatch: 'cannot compare int with bool'`),
+// so everything from there on is re-joined rather than dropped.
+let PositionSeparator = ":"
+let MinPositionFields = 3
+// DERIVED, not restated: the message begins exactly where the position's fields end. Written as its
+// own `3` the two would be free to drift, and a drift would silently truncate a diagnostic's message
+// or read a column as one.
+let MessageFieldStart = MinPositionFields
+
+// A diagnostic names its file exactly ONCE, so splitting the line on that path yields exactly two
+// halves — what came before it, and its `:line:col: message`. Any other count is a line this
+// routine does not understand, and it says so by declining to renumber rather than by guessing.
+let PathSplitHalves = 2
+
+// Compiler output is line-oriented — one diagnostic, one line — and the renumbering walks it that way.
+let LineSeparator = "\n"
+
+// The offset for a file whose line numbers ARE the fragment's — every single-file test, where the
+// compiled file IS the fragment. Named because it is a real value in the mapping, not an absence.
+let NoLineOffset = 0 as LineIndex
 
 // The fragment directory a /specs expectation NAMES — the generic, target-free form the C#
 // reference normalizes its diagnostics to before comparing (`TestRunner.cs:1380` rewrites the real
@@ -263,12 +286,53 @@ export function specFilePaths(specDir FilePath) returns FilePathArray throws Com
 	return specs
 end 'specFilePaths'
 
-// Compile one test's fragment via a subprocess build (with `--emit-ir` so the
-// Target-IR sidecar is produced), check its expectation, then check the emitted IR
-// against the committed `.test` golden. The temp fragment / exe / IR sidecar are
-// cleaned up before returning.
+// One path the compiler may PRINT in a diagnostic, and the offset that maps that file's line
+// numbers onto the merged fragment's (see SpecSourceFile.mergedLineOffset).
+type FragmentPathMapping
+	export let compiledPath as String
+	export let lineOffset as LineIndex
+
+	static function create(compiledPath String, lineOffset LineIndex) returns FragmentPathMapping
+		return Self{compiledPath: compiledPath, lineOffset: lineOffset}
+	end 'create'
+end 'FragmentPathMapping'
+
+typealias FragmentPathMappingArray = Array with FragmentPathMapping
+
+// A test's source, STAGED on disk and ready to compile.
+//
+// The two shapes differ in exactly one interesting way, and it is the reason this is a type rather
+// than a path:
+//   • SINGLE-file — one `.maxon` file. The compiled file IS the fragment, so its line numbers are
+//     already the golden's.
+//   • MULTI-file  — a DIRECTORY of files (`// --- file:`), compiled as a project. The compiler
+//     names each file and each file's OWN line numbers, and both must be translated back onto the
+//     merged fragment before anything is compared or committed.
+type StagedTest
+	// What `build` is pointed at: the fragment file, or the test's source directory.
+	export let buildTarget as FilePath
+	// Every path the compiler may name, with the offset that maps it onto the fragment.
+	export let paths as FragmentPathMappingArray
+	// What was written, so it can be removed afterwards.
+	export let writtenFiles as FilePathArray
+
+	static function create(buildTarget FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTarget: buildTarget, paths: paths, writtenFiles: writtenFiles}
+	end 'create'
+end 'StagedTest'
+
+// Staging can fail before a compiler is ever spawned — a write error, or a `// --- file:` marker
+// that names a path escaping the scratch directory. A union, so a failure carries its reason and
+// there is no half-staged state to inspect.
+union StagingResult
+	staged(test StagedTest)
+	failed(reason String)
+end 'StagingResult'
+
+// Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced),
+// check its expectation, then check the emitted IR against the committed `.test` golden. Everything
+// written is cleaned up before returning.
 function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool) returns TestOutcome
-	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
@@ -280,23 +344,29 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 	// changeExtension), so the sidecar sits beside the exe under `.ir`.
 	let irPath = exePath.changeExtension(IrFileExtension)
 
-	if not writeFragment(fragmentPath, test: test) 'writeFailed'
-		return TestOutcome.fail("could not write fragment {fragmentPath.toString()}")
-	end 'writeFailed'
+	match stageTest(tempDir, test: test) 'staging'
+		failed(reason) then return TestOutcome.fail(reason)
+		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, fragmentDir: fragmentDir, updateRequired: updateRequired)
+	end 'staging'
+end 'runOneTest'
 
+// Compile a test whose source is already on disk, check its behaviour, then check its golden.
+// Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
+// say so — the two functions are one story read top to bottom.
+function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, fragmentDir FilePath, updateRequired bool) returns TestOutcome
 	var compileArgv = StringArray.create()
 	compileArgv.push(BuildSubcommand)
-	compileArgv.push(fragmentPath.toString())
+	compileArgv.push(staged.buildTarget.toString())
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
 	compileArgv.push(EmitIrFlag)
 
 	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
-		cleanup(fragmentPath, exePath: exePath, irPath: irPath)
+		cleanup(staged, exePath: exePath, irPath: irPath)
 		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
 
-	let outcome = checkExpectation(test, specName: specName, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
+	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath)
 
 	// The BEHAVIOUR gate ran above: the program compiled, ran, and returned what it should. The
 	// fragment is the CODE-QUALITY gate, and it only makes sense to ask "is this still the code we
@@ -304,15 +374,119 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 	// reporting a golden mismatch on top of it would bury the real failure. Run it before cleanup,
 	// while the `--emit-ir` sidecar is still on disk.
 	if not outcome.isPass() 'behaviourAlreadyFailed'
-		cleanup(fragmentPath, exePath: exePath, irPath: irPath)
+		cleanup(staged, exePath: exePath, irPath: irPath)
 		return outcome
 	end 'behaviourAlreadyFailed'
 
-	let fragmentOutcome = checkTestFragment(fragmentDir, test: test, compile: compile, fragmentPath: fragmentPath, irPath: irPath, updateRequired: updateRequired)
+	let fragmentOutcome = checkTestFragment(fragmentDir, test: test, compile: compile, staged: staged, irPath: irPath, updateRequired: updateRequired)
 
-	cleanup(fragmentPath, exePath: exePath, irPath: irPath)
+	cleanup(staged, exePath: exePath, irPath: irPath)
 	return fragmentOutcome
-end 'runOneTest'
+end 'runStagedTest'
+
+// Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
+// merged fragment. THE one place a test's source reaches the filesystem.
+function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
+	if test.isMultiFile() 'multiFile'
+		return stageSourceFiles(tempDir, test: test)
+	end 'multiFile'
+
+	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
+	if not writeFragment(fragmentPath, test: test) 'writeFailed'
+		return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
+	end 'writeFailed'
+
+	var paths = FragmentPathMappingArray.create()
+	// The compiled file IS the fragment (`fragmentSource` wrote the golden's own bytes), so its
+	// line numbers need no translation.
+	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset))
+
+	var written = FilePathArray.create()
+	written.push(fragmentPath)
+
+	return StagingResult.staged(StagedTest.create(fragmentPath, paths: paths, writtenFiles: written))
+end 'stageTest'
+
+// A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project.
+//
+// The directory is RECONSTRUCTED, never inherited. A `.maxon` left behind by an earlier version of
+// this test would join the build silently and change what the test MEANS — and "the instrument died
+// on its own leftovers" is a failure this project has already had twice (OPEN.md #6). Whatever this
+// run did not write, this run removes.
+function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
+	let testDir = tempDir.join(test.name)
+	if not Directory.create(testDir) 'noTestDir'
+		return StagingResult.failed("could not create source directory {testDir.toString()}")
+	end 'noTestDir'
+	purgeSourceFiles(testDir)
+
+	var paths = FragmentPathMappingArray.create()
+	var written = FilePathArray.create()
+
+	for file in test.sourceFiles 'eachFile'
+		if not isSafeRelativeName(file.name) 'unsafeName'
+			return StagingResult.failed("'{FileMarker}' names '{file.name}': a '.' or '..' segment escapes the test's scratch directory")
+		end 'unsafeName'
+
+		let path = testDir.join(file.name)
+		let parent = try path.parent() otherwise 'noParent'
+			return StagingResult.failed("could not derive a directory for '{file.name}'")
+		end 'noParent'
+		if not Directory.create(parent) 'noSubdir'
+			return StagingResult.failed("could not create directory {parent.toString()}")
+		end 'noSubdir'
+
+		try File.writeText(path, content: file.source) otherwise 'writeFailed'
+			return StagingResult.failed("could not write {path.toString()}")
+		end 'writeFailed'
+
+		paths.push(FragmentPathMapping.create(path.toString(), lineOffset: file.mergedLineOffset))
+		written.push(path)
+	end 'eachFile'
+
+	return StagingResult.staged(StagedTest.create(testDir, paths: paths, writtenFiles: written))
+end 'stageSourceFiles'
+
+// Remove every FILE under `dir`, depth-first. The stdlib has no directory-remove, so empty
+// subdirectories survive — which is harmless, because only a `.maxon` file can join a build.
+function purgeSourceFiles(dir FilePath)
+	let entries = try Directory.list(dir) otherwise return
+	for entry in entries 'each'
+		if Directory.isDirectory(entry) 'isSubdir'
+			purgeSourceFiles(entry)
+		end 'isSubdir' else 'isFile'
+			try File.delete(entry) otherwise ignore
+		end 'isFile'
+	end 'each'
+end 'purgeSourceFiles'
+
+// Would writing this `// --- file:` name stay inside the test's scratch directory? Enforced at the
+// WRITE rather than at the parse, because the write is where the escape would actually happen.
+//
+// It mirrors the C# reference's rejection of `.` and `..` segments (`SpecParser.cs:284`) and then goes
+// FURTHER, because that check has a hole: an ABSOLUTE name has no `..` in it at all, and joining one
+// onto a directory DISCARDS the directory (`Path.Combine(tmp, "/etc/x")` is `/etc/x`; the same is true
+// of `FilePath.join`). A spec is a file anyone can send you, and the whole point of the check is that
+// the name in it cannot decide where the bytes land — so a rooted name, and a Windows drive letter,
+// are refused too.
+function isSafeRelativeName(name String) returns bool
+	if name.isEmpty() 'noName'
+		return false
+	end 'noName'
+
+	let normalized = name.replace(WindowsPathSeparator, with: PathSeparator)
+	if normalized.startsWith(PathSeparator) or normalized.contains(DriveLetterSeparator) 'rooted'
+		return false
+	end 'rooted'
+
+	for segment in normalized.split(PathSeparator) 'eachSegment'
+		if segment == DotSegment or segment == ParentSegment 'escapes'
+			return false
+		end 'escapes'
+	end 'eachSegment'
+
+	return true
+end 'isSafeRelativeName'
 
 // The committed `.test` fragment for one test — its source plus either the generated Target IR
 // (exitCode tests) or the normalized compiler error (compilerError tests) — checked AS A GATE
@@ -331,10 +505,10 @@ end 'runOneTest'
 //
 // `--update-required` regenerates instead of comparing. That is the one door through which a change
 // enters, and it is deliberately a door you have to open: the diff is the review.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, fragmentPath FilePath, irPath FilePath, updateRequired bool) returns TestOutcome
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irPath FilePath, updateRequired bool) returns TestOutcome
 	let content = match test.expectation 'e'
 		exitCode(expected) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
-		compilerError gives buildErrorFragment(test, compile: compile, fragmentPath: fragmentPath)
+		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
 	end 'e'
 
 	let outPath = fragmentDir.join("{test.name}{FragmentExtension}")
@@ -418,16 +592,16 @@ end 'buildExitCodeFragment'
 
 // A compilerError test's fragment: the shared head plus the compiler's normalized
 // stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
-// to track — with the temp fragment's absolute path replaced by `<fragment>`).
-function buildErrorFragment(test SpecTest, compile ProcessCapture, fragmentPath FilePath) returns String
-	let normalizedError = normalizeFragmentPath(compile.stderr, path: fragmentPath.toString()).trim()
+// to track — with every compiled file's path and line rewritten onto the fragment).
+function buildErrorFragment(test SpecTest, compile ProcessCapture, staged StagedTest) returns String
+	let normalizedError = normalizeCompilerOutput(compile.stderr, paths: staged.paths).trim()
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
-function checkExpectation(test SpecTest, specName String, compile ProcessCapture, fragmentPath FilePath, exePath FilePath) returns TestOutcome
+function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath) returns TestOutcome
 	return match test.expectation 'e'
 		exitCode(expected) gives checkExitCode(expected, compile: compile, exePath: exePath)
-		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, fragmentPath: fragmentPath)
+		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
 
@@ -441,13 +615,16 @@ end 'checkExpectation'
 // is a claim about the language, so neither should decide whether a test passes. Everything that
 // IS a claim — the code, the message, the line, the column — survives normalization untouched and
 // is compared exactly.
-function checkCompilerError(expectedText String, specName String, testName String, compile ProcessCapture, fragmentPath FilePath) returns TestOutcome
+function checkCompilerError(expectedText String, specName String, testName String, compile ProcessCapture, staged StagedTest) returns TestOutcome
 	if compile.exitCode == 0 'unexpectedSuccess'
 		return TestOutcome.fail("expected a compile error but compilation succeeded")
 	end 'unexpectedSuccess'
 
-	let actual = normalizeFragmentPath(compile.stderr, path: fragmentPath.toString()).trim()
-	let expected = normalizeFragmentPath(expectedText, path: referenceFragmentPath(specName, testName: testName)).trim()
+	let actual = normalizeCompilerOutput(compile.stderr, paths: staged.paths).trim()
+	// The EXPECTED side needs no renumbering: an expectation — ported or authored — already names
+	// the MERGED fragment's lines, because that is the file a reader has in front of them. Only its
+	// PATH is rewritten, which is one mapping with no offset.
+	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName)).trim()
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
@@ -480,24 +657,111 @@ function writeFragment(fragmentPath FilePath, test SpecTest) returns bool
 	return true
 end 'writeFragment'
 
-// THE ONE REWRITE, and both sides of a compilerError comparison go through it: whatever path a
-// diagnostic names for THIS test becomes the `<fragment>` token. The ACTUAL is rewritten from the
-// scratch file the compiler really compiled; the EXPECTED is rewritten from `referenceFragmentPath`
-// when the expectation was ported from /specs (an shv2-native one already carries the token and
-// passes through untouched).
+// THE ONE REWRITE, and both sides of a compilerError comparison go through it: every path a
+// diagnostic names for THIS test becomes the `<fragment>` token, and — for a multi-file test — its
+// line number becomes the MERGED fragment's.
 //
 // ONE routine because the two sides must mean the SAME thing by "normalized". Written twice — the
-// obvious shape, since the two callers pass different paths — the copies would be free to drift on
-// the token or on what else gets stripped, and a drift there does not read as a bug at either site:
-// it reads as a test that mysteriously stopped matching.
+// obvious shape, since the two callers hold different paths — the copies would be free to drift on
+// the token, on the renumbering, or on what else gets stripped, and a drift there does not read as
+// a bug at either site: it reads as a test that mysteriously stopped matching.
 //
-// Only a path is rewritten, never a `line:col`. The driver renders the path via
-// `FilePath.from(arg).toString()` where `arg` IS `fragmentPath.toString()` (already
-// separator-normalized) and that round-trip is idempotent, so the string emitted is exactly the
-// one passed here.
-function normalizeFragmentPath(text String, path String) returns String
-	return text.replace(path, with: FragmentPathToken)
-end 'normalizeFragmentPath'
+// The MULTI-FILE half is what makes a ported `/specs` expectation work at all. The compiler
+// compiled `…/app/main.maxon` and reported `main.maxon:2:9`; the expectation in the corpus says
+// `specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9`, because that
+// is where the line sits in the merged block a reader is looking at. The C# reference does exactly
+// this translation (`TestRunner.RewriteMultiFileErrorPaths`), and a spec expectation is not a claim
+// about where a temp file lived, so neither side of it should decide a test.
+function normalizeCompilerOutput(text String, paths FragmentPathMappingArray) returns String
+	var out = text
+	for mapping in paths 'eachPath'
+		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset)
+	end 'eachPath'
+	return out
+end 'normalizeCompilerOutput'
+
+// The single mapping an EXPECTED text needs: the path a `/specs` expectation names for this test,
+// and NO renumbering (its lines are already the fragment's). An shv2-native expectation names
+// `<fragment>` already and passes through untouched.
+function referencePathMapping(specName String, testName String) returns FragmentPathMappingArray
+	var paths = FragmentPathMappingArray.create()
+	paths.push(FragmentPathMapping.create(referenceFragmentPath(specName, testName: testName), lineOffset: NoLineOffset))
+	return paths
+end 'referencePathMapping'
+
+// Rewrite every `<path>:<line>:<col>` to `<fragment>:<line + lineOffset>:<col>`.
+//
+// With no offset the path is all that moves, and a whole-text replace does it — that is every
+// single-file test, and it is the path this function had before multi-file tests existed.
+function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex) returns String
+	if lineOffset == NoLineOffset 'linesAlreadyMatch'
+		return text.replace(path, with: FragmentPathToken)
+	end 'linesAlreadyMatch'
+
+	// An explicit if/else, NOT `rewritten if first else "{out}\n{rewritten}"`. Both arms happen to be
+	// owned here so the ternary would not leak — but the construct is a known bootstrap trap the
+	// moment one arm is a borrowed field read (OPEN.md #8b), and it is not worth keeping an instance
+	// of it around for a reader to copy.
+	var out = ""
+	var first = true
+	for line in text.split(LineSeparator) 'eachLine'
+		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset)
+		if first 'firstLine'
+			out = rewritten
+			first = false
+		end 'firstLine' else 'moreLines'
+			out = "{out}{LineSeparator}{rewritten}"
+		end 'moreLines'
+	end 'eachLine'
+	return out
+end 'rewriteDiagnosticPaths'
+
+// Rewrite ONE diagnostic line: `<anything><path>:<line>:<col>:<message>`.
+//
+// Done by SPLITTING ON THE PATH — shv2 has no regex, and it needs none: `split` says precisely
+// what this needs to say, and it keeps the whole routine free of index arithmetic. Anything that
+// does not have the expected shape falls back to replacing the path and nothing else: a line that
+// names the file without a `line:col` has no line number to renumber, and guessing one is worse
+// than leaving it.
+function rewriteDiagnosticLine(line String, path String, lineOffset LineIndex) returns String
+	if not line.contains(path) 'noPath'
+		return line
+	end 'noPath'
+
+	let halves = line.split(path)
+	if halves.count() != PathSplitHalves 'notNamedExactlyOnce'
+		return line.replace(path, with: FragmentPathToken)
+	end 'notNamedExactlyOnce'
+
+	let prefix = try halves.get(0) otherwise panic("rewriteDiagnosticLine: halves.get(0) failed on a {halves.count()}-part split")
+	// `:<line>:<col>:<message>` ⇒ ["", line, col, message…]
+	let tail = try halves.get(1) otherwise panic("rewriteDiagnosticLine: halves.get(1) failed on a {halves.count()}-part split")
+
+	let fields = tail.split(PositionSeparator)
+	if fields.count() < MinPositionFields 'notPositioned'
+		return line.replace(path, with: FragmentPathToken)
+	end 'notPositioned'
+
+	let beforePosition = try fields.get(0) otherwise panic("rewriteDiagnosticLine: fields.get(0) failed on a {fields.count()}-field split")
+	if not beforePosition.isEmpty() 'pathNotFollowedByPosition'
+		return line.replace(path, with: FragmentPathToken)
+	end 'pathNotFollowedByPosition'
+
+	let lineText = try fields.get(1) otherwise panic("rewriteDiagnosticLine: fields.get(1) failed on a {fields.count()}-field split")
+	let sourceLine = try int.fromString(lineText) otherwise return line.replace(path, with: FragmentPathToken)
+	let column = try fields.get(2) otherwise panic("rewriteDiagnosticLine: fields.get(2) failed on a {fields.count()}-field split")
+
+	// The message can itself contain the separator (`type mismatch: 'cannot compare int with bool'`),
+	// so everything from the message field on is re-joined with the separator it was split on rather
+	// than taken as one field and truncated.
+	var message = ""
+	for i in MessageFieldStart upto fields.count() 'rejoinMessage'
+		let field = try fields.get(i) otherwise panic("rewriteDiagnosticLine: fields.get({i}) failed on a {fields.count()}-field split")
+		message = "{message}{PositionSeparator}{field}"
+	end 'rejoinMessage'
+
+	return "{prefix}{FragmentPathToken}{PositionSeparator}{sourceLine + lineOffset}{PositionSeparator}{column}{message}"
+end 'rewriteDiagnosticLine'
 
 // The path a /specs expectation names for this very test — RECONSTRUCTED, not pattern-matched
 // (shv2 has no regex, and needs none: the runner already knows the spec and test names).
@@ -516,12 +780,14 @@ function referenceFragmentPath(specName String, testName String) returns String
 	return "{ReferenceFragmentDir}/{specName}/{testName}{FragmentExtension}"
 end 'referenceFragmentPath'
 
-// Best-effort removal of the per-test temp fragment + produced exe + IR sidecar.
-// A stale temp file never affects correctness (the next test with this name
-// overwrites it), so a delete failure — e.g. the exe/IR were never produced
-// because the compile failed — is ignored.
-function cleanup(fragmentPath FilePath, exePath FilePath, irPath FilePath)
-	try File.delete(fragmentPath) otherwise ignore
+// Best-effort removal of everything this test wrote: its staged source file(s), the produced exe,
+// and the IR sidecar. A delete failure — e.g. the exe/IR were never produced because the compile
+// failed — is ignored. Correctness does not rest on this succeeding: a multi-file test's directory
+// is PURGED before it is written (`stageSourceFiles`), so a leftover can never join a later build.
+function cleanup(staged StagedTest, exePath FilePath, irPath FilePath)
+	for path in staged.writtenFiles 'eachSource'
+		try File.delete(path) otherwise ignore
+	end 'eachSource'
 	try File.delete(exePath) otherwise ignore
 	try File.delete(irPath) otherwise ignore
 end 'cleanup'

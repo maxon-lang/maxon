@@ -111,6 +111,22 @@ export typealias MaxonTypeArray = Array with MaxonType
 // DENSE INT ARRAYS that allocate nothing per value, and a `MaxonType` is materialized only
 // where something genuinely STORES one (a `literal` op's type; a binding's declared type) —
 // which is per-declaration, not per-value.
+//
+// ⚠ `void` IS NOT A MaxonType ARM, AND THAT ASYMMETRY IS THE POINT. Every other tag is the
+// discriminant of a `MaxonType`; `void` is the tag of a ValueId that names NO VALUE — the
+// result slot of a call to a void function, which `MaxonOp.call` must carry an id for (the op
+// shape has one) even though there is nothing in it. It exists because the alternative is a
+// SENTINEL, and that sentinel was a real wrong answer: `calleeResultType` used to report a void
+// callee as `unresolved` — the "I could not pin this type" tag, which `TypeRules.typeClassOf`
+// maps to `unknown`, which AGREES WITH EVERYTHING. So `let x = noop()` then `x + 4` compiled,
+// and returned whatever was in RAX. One sentinel, two meanings, and the rules could not tell
+// them apart because nothing distinguished them.
+//
+// A `void`-tagged value is WRITE-ONLY, by construction: the only one minted is the result of a
+// call in STATEMENT position (`Parser.parseCall`, `resultUsed: false`), whose ValueId is
+// discarded and never enters a scope — and a call in VALUE position to a void callee is
+// REJECTED there with a positioned diagnostic. So no rule can ever be asked about a `void` tag,
+// and every rule that could be says so with a panic rather than an answer.
 export enum ValueTypeTag
 	boolean
 	integer
@@ -118,6 +134,7 @@ export enum ValueTypeTag
 	named
 	exitCode
 	unresolved
+	void
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -155,14 +172,20 @@ export let UnnamedTypeId = 0 as TypeNameId
 // `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only
 // where a `MaxonType` is genuinely stored: a binding's declared type, a `literal` op's type.
 // Never on a per-value or per-op path.
+//
+// The `void` tag has no `MaxonType` to rebuild — a non-value is not a value-type, which is the
+// whole reason void lives on `MaxonReturnType` and not here. Its one caller is `Parser.typeOf`,
+// which types a `let`/`var` BINDING, and a binding can never hold a void call's result: that is
+// a call in value position, which the parser rejects.
 export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns MaxonType
-	return match tag 'k'
-		boolean gives MaxonType.boolean
-		integer gives MaxonType.integer
-		float gives MaxonType.float
-		named gives MaxonType.named(nameId)
-		exitCode gives MaxonType.exitCode
-		unresolved gives MaxonType.unresolved
+	match tag 'k'
+		boolean then return MaxonType.boolean
+		integer then return MaxonType.integer
+		float then return MaxonType.float
+		named then return MaxonType.named(nameId)
+		exitCode then return MaxonType.exitCode
+		unresolved then return MaxonType.unresolved
+		void then panic("maxonTypeOfTag: a `void` tag names no value, so there is no MaxonType to rebuild — a void call's result is only ever a discarded statement result (Parser.parseCall), never a bound value")
 	end 'k'
 end 'maxonTypeOfTag'
 

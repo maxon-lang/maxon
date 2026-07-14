@@ -72,13 +72,19 @@ let MillisTenthsPerMs = 10
 //
 // Each name matches the function that does the work, so a row points at code:
 //   load             Compiler.loadProject      — discover, read, and hash the sources
-//   lex/parse/merge  Queries.*                 — the query spine, timed at the leaves
+//   lex/signatures/parse/merge
+//                    Queries.*                 — the query spine, timed at the leaves
 //   resolveTypes …   PassPipeline.dispatch     — one arm per PassKind (compilePhaseOfPass)
 //   sugarGate … link BackendDispatch.buildBackend — the backend's fixed sequence
 //   writeExe/emitIr  Compiler.compile          — the object write + the --emit-ir sidecar
 export enum CompilePhase
 	load
 	lex
+	// The whole-program signature index (`queryProgramSignatures`): one token sweep per file, folded
+	// into one table. Its OWN phase, not a slice of `parse`, for the reason this file exists — a cost
+	// billed to a neighbour is a cost nobody can act on, and this one is new, whole-program, and
+	// exactly the kind that would hide.
+	signatures
 	parse
 	merge
 	resolveTypes

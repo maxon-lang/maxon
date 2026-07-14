@@ -7,8 +7,15 @@
 // The chain is:
 //   querySourceFile  (input; never computed)
 //     -> queryTokens   (per-file memo; tokenize)
-//       -> queryParseOps (per-file memo; Parser -> FileParseArtifact)
-//         -> queryAllModule (whole-program; mergeArtifact fold)
+//       -> queryProgramSignatures (whole-program memo; every file's DECLARATIONS, from tokens)
+//         -> queryParseOps (per-file memo; Parser -> FileParseArtifact)
+//           -> queryAllModule (whole-program; mergeArtifact fold)
+//
+// `queryProgramSignatures` is a WHOLE-PROGRAM query sitting UNDER a per-file one, which is
+// unusual and is the shape of the problem: a call's result type must be exact at parse time
+// (a bool `and` is control flow), and the callee may be in another file. It reads TOKENS, never
+// parses, so the chain stays acyclic. Its consequence is the one thing to get right in this file:
+// **a parse memo is keyed on the file's bytes AND on that index's hash** (QueryEngine.parseMemoKey).
 //
 // The load-bearing shv2 differences from v1: (1) memo validity is a content-hash
 // compare, not a revision walk; (2) queryParseOps produces a `FileParseArtifact`
@@ -61,12 +68,65 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	return tokens
 end 'queryTokens'
 
+// --- Whole-program query: the DECLARED SIGNATURE of every function, from TOKENS ---
+//
+// Sits between `queryTokens` and `queryParseOps` in the chain, and it is what makes a call's
+// result type exact ACROSS FILES (SignatureIndex.maxon has the wrong answer it exists to kill).
+// Built from tokens, never from parses — which is what keeps it from being circular: a parse
+// needs the index, so the index cannot need a parse.
+//
+// COST: one token-level sweep of every file, per miss. It is linear in the program's tokens and
+// it re-reads them from the TOKEN memo, so an unchanged file is not re-lexed — only re-swept.
+// (A per-file signature memo would save that sweep and buy nothing else: the whole-program fold
+// it feeds is itself O(all declarations), so the two are the same order. Add one if a file count
+// ever makes the sweep visible; do not add one on principle.)
+export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
+	recordDependency(project, dependency: QueryKey.programSignatures)
+
+	if signaturesCacheValid(project) 'hit'
+		project.db.signatureHits = project.db.signatureHits + 1
+		return project.db.signatureCache.value
+	end 'hit'
+	project.db.signatureMisses = project.db.signatureMisses + 1
+
+	pushQuery(project, key: QueryKey.programSignatures)
+	clearDepsFor(project, key: QueryKey.programSignatures)
+
+	var signatures = ProgramSignatures.create()
+	for path in project.db.sourcePaths 'eachFile'
+		// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge`
+		// probe: the tokens query does its own `lex` timing, and a phase that absorbed another's is
+		// the defect CompileTimings' header is about.
+		let tokens = try queryTokens(project, path: path)
+
+		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+		// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
+		// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
+		// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
+		// reads it; nothing else in the Parser needs a signature.
+		var scanner = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures)
+		scanner.foldDeclaredSignaturesInto(signatures)
+		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
+	end 'eachFile'
+
+	popQuery(project)
+
+	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
+	return signatures
+end 'queryProgramSignatures'
+
 // --- Per-file query: parse into a FileParseArtifact ---
 function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
 	let key = QueryKey.parseOps(path)
 	recordDependency(project, dependency: key)
 
-	if parseCacheValid(project, path: path) 'hit'
+	// BEFORE the memo check, because HALF THE MEMO'S KEY IS THIS (see QueryEngine.parseMemoKey):
+	// a parse reads this file's tokens AND every other file's declarations, so a memo validated
+	// against the file's bytes alone would serve a stale parse after a return type changed
+	// elsewhere. The call is a memo hit for every file after the first.
+	let signatures = try queryProgramSignatures(project)
+
+	if parseCacheValid(project, path: path, signatureHash: signatures.hash) 'hit'
 		let memo = try project.db.parseCache.get(path) otherwise panic("queryParseOps: parseCacheValid true but parseCache.get({path}) failed")
 		project.db.parseHits = project.db.parseHits + 1
 		return memo.value
@@ -75,6 +135,13 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 
 	pushQuery(project, key: key)
 	clearDepsFor(project, key: key)
+
+	// The signature edge, recorded now that THIS query is the active one: the read above happened
+	// before `pushQuery` (it had to — its result decides hit vs miss), so it attributed itself to
+	// whatever query was running then, not to this one. `clearDepsFor` has just wiped this query's
+	// edges, so the dependency set being rebuilt would otherwise be missing the one input that is
+	// not this file.
+	recordDependency(project, dependency: QueryKey.programSignatures)
 
 	let tokens = try queryTokens(project, path: path)
 
@@ -88,7 +155,7 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 
 	// M1 single-file build: namespace is empty (no cross-file qualification).
 	// Namespace derivation from the path grows with multi-file builds at M2.
-	var parser = Parser.create(tokens, filePath: path, namespace: "")
+	var parser = Parser.create(tokens, filePath: path, namespace: "", signatures: signatures)
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -100,12 +167,15 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 
 	popQuery(project)
 
-	// Only cache a clean parse — a parse that reported a diagnostic must re-run.
+	// Only cache a clean parse — a parse that reported a diagnostic must re-run. The memo is
+	// stamped with BOTH inputs this parse read (the file's bytes and the signature index's
+	// declarations), through the same `parseMemoKey` that validated it — one function, both
+	// sides, so the stamp and the check can never disagree about what a parse depends on.
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
 		artifact.module.assertAllBlocksTerminated()
-		let entry = try project.db.sourceFiles.get(path) otherwise panic("queryParseOps: source entry for {path} vanished")
-		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: entry.contentHash))
+		let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash)
+		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
 	end 'cacheOk'
 
 	recordPhase(project, phase: CompilePhase.parse, probe: parseProbe)
@@ -232,6 +302,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		assignTypeMismatch(name, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign '{got}' to variable '{name}' of type '{expected}'", line: line, column: column, filePath: path)
 		returnTypeMismatch(got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
 		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
-		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known in this file (it is a call to a function declared elsewhere)", line: line, column: column, filePath: path)
+		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
+		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

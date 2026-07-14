@@ -13,7 +13,9 @@
 
 // Register or update a file's content. Computes the content hash once; if the
 // file is already present with the SAME hash, this is a no-op (an unrelated
-// file's edit never disturbs this file's cache key). A new or changed file is
+// file's edit never disturbs this file's TOKEN cache key — its PARSE key also
+// carries the signature index's hash, which an unrelated file's edit moves only
+// if it changed a DECLARATION; see `parseMemoKey`). A new or changed file is
 // upserted with its fresh hash — no shared revision counter is touched.
 export function fileChanged(project Project, path FilePath, content String)
 	let hash = contentHash(content)
@@ -26,6 +28,11 @@ export function fileChanged(project Project, path FilePath, content String)
 	end 'newFile'
 
 	project.db.sourceFiles.upsert(path, value: SourceFileEntry.create(content, contentHash: hash))
+	// THE ONLY WRITER of the composite-hash memo's dirty flag, because this is the only thing that
+	// can move the composite hash: it is a fold over exactly these entries. The early return above is
+	// on the path where nothing changed, so it must NOT invalidate — an unchanged re-register is a
+	// no-op all the way down.
+	project.db.compositeHashValid = false
 end 'fileChanged'
 
 // --- Dependency tracking ---
@@ -33,40 +40,45 @@ end 'fileChanged'
 // Record that the currently-running query (top of the active stack) read
 // `dependency`. No active query (empty stack) means a top-level call with
 // nothing to attribute the edge to — a no-op.
+//
+// ONE STRUCTURE, and it used to be two. The graph was a flat `Dependency` array (every edge in the
+// project) PLUS a reverse index over it, keyed by dependent — the same fact written down twice, and
+// only the index was ever read. The flat array was WRITE-ONLY, and maintaining it cost a QUADRATIC:
+// see `clearDepsFor`.
 export function recordDependency(project Project, dependency QueryKey)
 	let depth = project.db.activeQueryStack.count()
 	if depth == 0 'noActive'
 		return
 	end 'noActive'
 	let dependent = try project.db.activeQueryStack.get(depth - 1) otherwise panic("recordDependency: activeQueryStack.get({depth - 1}) failed after depth>0 check")
-	let edge = Dependency.create(dependent, dependency: dependency)
-	project.db.dependencies.push(edge)
 
 	let keyStr = queryKeyString(dependent)
 	if var bucket = try project.db.depIndex.get(keyStr) 'exists'
-		bucket.push(edge)
+		bucket.push(dependency)
 	end 'exists' else 'new'
-		var bucket = DependencyArray.create()
-		bucket.push(edge)
+		var bucket = QueryKeyArray.create()
+		bucket.push(dependency)
 		project.db.depIndex.upsert(keyStr, value: bucket)
 	end 'new'
 end 'recordDependency'
 
-// Drop every dependency edge whose `dependent` is `key` — called before a query
-// recomputes so its dependency set is rebuilt fresh (clear-then-record).
+// Drop everything `key` depends on — called before a query recomputes so its dependency set is
+// rebuilt fresh (clear-then-record). **O(1): one query's edges are ONE bucket.**
+//
+// ⚠ IT WAS O(EVERY EDGE IN THE PROJECT), and therefore the whole spine was QUADRATIC in the file
+// count. It rebuilt the flat edge array by scanning it end to end and rendering EVERY edge's
+// dependent to a fresh `String` (`queryKeyString`) just to compare it — so a build that runs one
+// clear per file, over a graph with a few edges per file, allocated O(files²) Strings. Nothing read
+// the array it was so carefully maintaining.
+//
+// Found by `scale-test`, and found only because this rung ADDED an edge (parseOps → programSignatures)
+// and the delta itself grew x3.4 per rung on a ladder that doubles — a linear change cannot do that,
+// so the thing it perturbed was not linear.
 export function clearDepsFor(project Project, key QueryKey)
 	let keyStr = queryKeyString(key)
 	if project.db.depIndex.contains(keyStr) 'hasIndex'
 		_ = project.db.depIndex.remove(keyStr)
 	end 'hasIndex'
-
-	var kept = DependencyArray.create()
-	for edge in project.db.dependencies 'scan'
-		if queryKeyString(edge.dependent) != keyStr 'keep'
-			kept.push(edge)
-		end 'keep'
-	end 'scan'
-	project.db.dependencies = kept
 end 'clearDepsFor'
 
 export function pushQuery(project Project, key QueryKey)
@@ -89,38 +101,93 @@ function currentContentHash(project Project, path FilePath) returns ContentHash 
 	return entry.contentHash
 end 'currentContentHash'
 
-// True iff `memoHash` (a per-file memo's stamped `keyHash`) still equals the
-// file's current content hash. The one place the hash-equality validity rule
-// lives, shared by the token and parse caches.
-function memoHashCurrent(project Project, path FilePath, memoHash ContentHash) returns bool
-	let current = try currentContentHash(project, path: path) otherwise return false
-	return memoHash == current
-end 'memoHashCurrent'
-
-// True iff the token memo for `path` was derived from the file's current bytes.
+// True iff the token memo for `path` was derived from the file's current bytes. Tokenizing reads
+// ONE input — the file — so its key is that file's content hash and nothing else. (Contrast the
+// parse memo below, which is the whole point of this rung.)
 export function tokensCacheValid(project Project, path FilePath) returns bool
 	let memo = try project.db.tokenCache.get(path) otherwise return false
-	return memoHashCurrent(project, path: path, memoHash: memo.keyHash)
+	let current = try currentContentHash(project, path: path) otherwise return false
+	return memo.keyHash == current
 end 'tokensCacheValid'
 
-// True iff the parse memo for `path` was derived from the file's current bytes.
-export function parseCacheValid(project Project, path FilePath) returns bool
+// **A PARSE MEMO IS KEYED ON TWO FACTS, BECAUSE A PARSE READS TWO INPUTS.**
+//
+//   1. the file's OWN bytes — its tokens;
+//   2. the WHOLE-PROGRAM SIGNATURE INDEX — every OTHER file's declarations, which the parser
+//      needs to type a call's result (SignatureIndex.maxon).
+//
+// Keying on (1) alone — which is what shipped, and was correct only while a parse read nothing
+// but its own file — SERVES A STALE PARSE the moment a signature moves: change `isReady`'s
+// return type in `a.maxon` and `b.maxon`'s bytes have not moved, so `b.maxon` is a cache HIT
+// and keeps a parse built against the OLD type. The file did not change; what the file MEANS
+// did. That is the load-bearing half of the signature index, and the easy half to get silently
+// wrong — a wrong answer served out of a cache, visible only on an incremental rebuild.
+//
+// The two halves are mixed rather than compared separately so validity stays what it has always
+// been: ONE stamped hash, ONE equality test (see this file's header). The `mix` is FNV's own
+// step, so the composite is as collision-resistant as either half.
+function parseMemoKey(contentHash ContentHash, signatureHash ContentHash) returns ContentHash
+	return mix(contentHash, value: signatureHash)
+end 'parseMemoKey'
+
+// The key a parse memo for `path` must carry to be valid right now.
+export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash) returns ContentHash throws CompileError
+	return parseMemoKey(try currentContentHash(project, path: path), signatureHash: signatureHash)
+end 'currentParseMemoKey'
+
+// True iff the parse memo for `path` was derived from BOTH the file's current bytes and the
+// current signature index. `signatureHash` is `ProgramSignatures.hash` — the hash of the
+// DECLARATIONS, not of the sources they were read from, which is what keeps an edit to one
+// file's function BODY from invalidating every other file's parse (see ProgramSignatures.hash).
+export function parseCacheValid(project Project, path FilePath, signatureHash ContentHash) returns bool
 	let memo = try project.db.parseCache.get(path) otherwise return false
-	return memoHashCurrent(project, path: path, memoHash: memo.keyHash)
+	let current = try currentParseMemoKey(project, path: path, signatureHash: signatureHash) otherwise return false
+	return memo.keyHash == current
 end 'parseCacheValid'
 
-// The composite whole-program hash: every source file's content hash folded in
-// source-path order. queryAllModule keys its merged-module memo on this, so any
-// file changing (or the file set changing) invalidates the merge while leaving
-// the unchanged files' per-file memos hot.
+// The composite whole-program hash: every source file's content hash folded in source-path order.
+// The whole-program memos (the signature index, the merged module) key on it, so any file changing —
+// or the file SET changing — invalidates them while leaving the unchanged files' per-file memos hot.
+//
+// **MEMOIZED, AND IT HAS TO BE.** The fold is O(files), and since the signature index landed it is
+// asked ONCE PER FILE — every `queryParseOps` must validate the index before it can validate itself,
+// and that validation is this hash. Recomputing it per call made the query spine **O(files²)**: the
+// same shape as the `clearDepsFor` quadratic, discovered the same way (an alloc delta that grew x3
+// per rung on a ladder that doubles), and it is the standing hazard of putting a WHOLE-PROGRAM query
+// underneath a PER-FILE one.
+//
+// The memo has exactly one invalidator — `fileChanged` — because the hash is a fold over exactly the
+// entries `fileChanged` writes. Nothing else can move it, so nothing else may clear the flag.
 export function compositeSourceHash(project Project) returns ContentHash
+	if project.db.compositeHashValid 'memoized'
+		return project.db.compositeHash
+	end 'memoized'
+
 	var h = fnvOffsetBasis()
 	for path in project.db.sourcePaths 'each'
 		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
 		h = mix(h, value: entry.contentHash)
 	end 'each'
+
+	project.db.compositeHash = h
+	project.db.compositeHashValid = true
 	return h
 end 'compositeSourceHash'
+
+// True iff the signature-index memo is present and still keyed on the current composite
+// source hash. The index is read off EVERY file's tokens, so any file's edit can move it —
+// which is exactly what the composite hash tracks.
+//
+// It is keyed on the SOURCE, and it KEYS the parse on the DECLARATIONS. That asymmetry is
+// deliberate and it is what preserves incrementality: a body edit rebuilds the index (cheap: a
+// token sweep, and every unchanged file's tokens are a memo hit) and the rebuilt index hashes
+// IDENTICALLY, so not one other file re-parses.
+export function signaturesCacheValid(project Project) returns bool
+	if not project.db.signatureCache.computed 'never'
+		return false
+	end 'never'
+	return project.db.signatureCache.keyHash == compositeSourceHash(project)
+end 'signaturesCacheValid'
 
 // True iff the merged-module memo is present and still keyed on the current
 // composite source hash.

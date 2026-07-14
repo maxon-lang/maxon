@@ -1,6 +1,6 @@
 // VerifyWarmRebuild — the M2 warm-rebuild gate. `verify-warm-rebuild <file>`
-// asserts two independent properties of the incremental query spine and prints a
-// clear PASS/FAIL per property, so the driver exits 0 iff BOTH hold. This gate
+// asserts three independent properties of the incremental query spine and prints a
+// clear PASS/FAIL per property, so the driver exits 0 iff ALL hold. This gate
 // runs from M2 onward: incrementality and determinism are proven continuously,
 // never bolted on later.
 //
@@ -8,6 +8,15 @@
 //      input must emit byte-identical CodeResults.
 //   2. Cache-hit (incrementality): a re-query over unchanged input must land as a
 //      cache HIT, not recompute.
+//   3. Invalidation (soundness): a re-query over CHANGED input must land as a MISS —
+//      and only the memos that actually read that input may miss.
+//
+// ⚠ **(3) IS THE ONE WITH TEETH, AND IT WAS MISSING FOR AS LONG AS A PARSE READ ONLY ITS OWN
+// FILE.** (1) and (2) both prove a memo is STABLE; neither can catch the opposite failure — a
+// memo that stays valid after an input it read has CHANGED — and that is the failure a cache
+// actually kills you with, because it is a WRONG ANSWER served silently out of a hit. The
+// whole-program signature index made it reachable (a parse now reads every OTHER file's
+// declarations), so the property that keeps it unreachable is now gated. See `verifyInvalidation`.
 //
 // THE MUTATE-THE-MEMO TRAP (why the two checks are structured the way they are):
 // `resolveTypes` mutates the merged `MaxonModule` IN PLACE (named -> concrete),
@@ -63,19 +72,20 @@ end 'EmittedSection'
 
 typealias EmittedSectionArray = Array with EmittedSection
 
-// Run both properties, printing a PASS/FAIL line for each and a final verdict.
-// Returns whether BOTH held (the driver maps that to the process exit code). A
-// file/IO CompileError (fileNotFound/noSourceFiles/readError) propagates to the
-// caller, which prints a specific message.
+// Run every property, printing a PASS/FAIL line for each and a final verdict. Returns whether ALL
+// held (the driver maps that to the process exit code). Each runs on its OWN fresh Project, so no
+// property can be contaminated by another's mutations. A file/IO CompileError
+// (fileNotFound/noSourceFiles/readError) propagates to the caller, which prints a specific message.
 export function verifyWarmRebuild(inputPath FilePath, target Target) returns bool throws CompileError
 	print("verify-warm-rebuild {inputPath}\n")
 
 	let determinismOk = try verifyDeterminism(inputPath, target: target)
 	let cacheOk = try verifyCacheHit(inputPath, target: target)
+	let invalidationOk = try verifyInvalidation(inputPath, target: target)
 
-	let bothOk = determinismOk and cacheOk
-	if bothOk 'passed'
-		print("verify-warm-rebuild: PASS (determinism + cache)\n")
+	let allOk = determinismOk and cacheOk and invalidationOk
+	if allOk 'passed'
+		print("verify-warm-rebuild: PASS (determinism + cache + invalidation)\n")
 		return true
 	end 'passed'
 
@@ -191,16 +201,29 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	// token/parse caches; the second (whole-program HIT) returned early and never
 	// revisited them. Re-query each file directly: a content-hash-valid memo lands as
 	// a HIT (no recompute), so token/parse HITS rise by fileCount while MISSES hold.
+	//
+	// The SIGNATURE index is re-validated on the same probe, and it is the one that had to be
+	// added here: a parse memo is now keyed on the file's bytes AND on that index's hash
+	// (QueryEngine.parseMemoKey), so `parseHits` rising is only meaningful if the index it was
+	// keyed against is the one still in force. Every `queryParseOps` reads the index (that is why
+	// the expected delta is `fileCount`), and if it ever RECOMPUTED it on unchanged input, the
+	// rebuilt index would be a second object whose hash the parse memos were never stamped with —
+	// the exact silent-staleness this key exists to prevent, caught as a miss instead of a wrong
+	// answer.
 	let tokHitBefore = project.db.tokenHits
 	let parHitBefore = project.db.parseHits
+	let sigHitBefore = project.db.signatureHits
 	let tokMissBefore = project.db.tokenMisses
 	let parMissBefore = project.db.parseMisses
+	let sigMissBefore = project.db.signatureMisses
 
 	try probeRebuildCacheHits(project)
 	let tokHitAfter = project.db.tokenHits
 	let parHitAfter = project.db.parseHits
+	let sigHitAfter = project.db.signatureHits
 	let tokMissAfter = project.db.tokenMisses
 	let parMissAfter = project.db.parseMisses
+	let sigMissAfter = project.db.signatureMisses
 
 	// Evaluate every assertion (each prints its own failure detail) before combining,
 	// so a broken gate reports ALL violated properties, not just the first.
@@ -210,12 +233,16 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let secondNoMiss = assertCounterMove("second queryAllModule records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
 	let tokensHitOnRebuild = assertCounterMove("rebuild token re-query hits (tokenHits)", before: tokHitBefore, after: tokHitAfter, expectedDelta: fileCount)
 	let parseHitOnRebuild = assertCounterMove("rebuild parse re-query hits (parseHits)", before: parHitBefore, after: parHitAfter, expectedDelta: fileCount)
+	// One signature read per parse re-query — every `queryParseOps` reads the index before it can
+	// even decide whether its own memo is valid.
+	let signaturesHitOnRebuild = assertCounterMove("rebuild signature re-query hits (signatureHits)", before: sigHitBefore, after: sigHitAfter, expectedDelta: fileCount)
 	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
 	let parseNotRecomputed = assertCounterMove("rebuild does not recompute parse (parseMisses)", before: parMissBefore, after: parMissAfter, expectedDelta: NoCounterMove)
+	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
 
-	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and parseHitOnRebuild and tokensNotRecomputed and parseNotRecomputed
+	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
 	if allOk 'passed'
-		print("PASS cache: allModule miss->hit, tokens/parse hit on rebuild (hits={tokHitAfter}/{parHitAfter}, misses={tokMissAfter}/{parMissAfter})\n")
+		print("PASS cache: allModule miss->hit, tokens/signatures/parse hit on rebuild (hits={tokHitAfter}/{sigHitAfter}/{parHitAfter}, misses={tokMissAfter}/{sigMissAfter}/{parMissAfter})\n")
 		return true
 	end 'passed'
 
@@ -223,16 +250,98 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	return false
 end 'verifyCacheHit'
 
+// --- Property 3: invalidation (a parse memo tracks BOTH of its inputs) ---
+
+// The two synthetic edits property 3 makes. Each is APPENDED to a real source file that has
+// already been shown to parse, so both leave it a valid Maxon file — and they differ in exactly
+// the one way the parse memo's key has to be able to tell apart:
+//
+//   • a COMMENT changes the file's BYTES and nothing it DECLARES;
+//   • a FUNCTION changes both.
+//
+// The probe function is named for what it is, and it is `bool`-returning and trivial so that no
+// program it is appended to can fail to parse because of it.
+let BytesOnlyEditText = "// verify-warm-rebuild: bytes moved, declarations did not."
+let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn true\nend '__warmRebuildProbe'"
+
+// **THE PROPERTY THE SIGNATURE INDEX'S PARSE KEY EXISTS FOR** — and the two halves of it pull in
+// opposite directions, so a key that satisfies one and not the other is simply wrong:
+//
+//   (a) EDIT A DECLARATION IN ONE FILE ⇒ EVERY file's parse must be invalidated. `b.maxon`'s bytes
+//       did not move, but what `isReady()` MEANS inside it did. This is the wrong answer the key
+//       was added for: keying a parse on the file's OWN content hash alone — which is what shipped
+//       — serves `b.maxon` from cache with a parse built against the OLD return type. Property 2
+//       cannot see it: on unchanged input, the shipped key is right.
+//   (b) EDIT ONLY BYTES (a comment, a body) ⇒ ONLY that file's parse may be invalidated. This is
+//       the half a lazy fix throws away: keying the parse on the COMPOSITE SOURCE hash would pass
+//       (a) and re-parse the entire program on every keystroke — sound, and useless.
+//
+// Both are asserted here, on ONE fresh project, by editing a real file in the query database and
+// re-querying. ⚠ On a SINGLE-file input the two assertions coincide (fileCount == 1) and the
+// property proves nothing — point this gate at a multi-file project to give it teeth.
+function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
+	var project = try loadProject(inputPath, target: target)
+	let fileCount = project.db.sourcePaths.count()
+
+	let editedPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
+	let original = entry.content
+
+	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
+	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).
+	_ = try queryAllModule(project)
+	let diagnosticsBefore = project.diagnostics.count()
+
+	fileChanged(project, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
+	let bytesEditMisses = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{DeclarationEditText}\n")
+	let declarationEditMisses = try parseMissesOnRequery(project)
+
+	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
+	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
+	// probe whose premise broke.
+	if project.diagnostics.count() != diagnosticsBefore 'probeBrokeTheProgram'
+		printError("FAIL invalidation: a synthetic probe edit made {editedPath} stop parsing, so the miss counts mean nothing (a failed parse is never cached, and would re-miss regardless of the key)\n")
+		return false
+	end 'probeBrokeTheProgram'
+
+	// `before: NoCounterMove` because each value above is already a DELTA — the misses that one edit
+	// caused. Routed through the same reporter as property 2 so a failure prints the same way.
+	let bytesEditIsLocal = assertCounterMove("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: bytesEditMisses, expectedDelta: OneQuery)
+	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile
+	if allOk 'passed'
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}\n")
+		return true
+	end 'passed'
+
+	printError("FAIL invalidation: a parse memo does not track both of its inputs (see above)\n")
+	return false
+end 'verifyInvalidation'
+
+// Re-query every file's parse and report how many RECOMPUTED. The miss DELTA is the whole
+// measurement: it names exactly which memos the preceding edit invalidated.
+function parseMissesOnRequery(project Project) returns QueryCount throws CompileError
+	let before = project.db.parseMisses
+	try probeRebuildCacheHits(project)
+	return project.db.parseMisses - before
+end 'parseMissesOnRequery'
+
 // Assert a counter moved by exactly `expectedDelta`, printing the offending values
 // (before, delta, after) on failure so a violated assertion is self-describing.
 // Returns whether it held; callers combine several without short-circuiting so
 // every violation is reported.
+//
+// The prefix is property-neutral because BOTH the cache and the invalidation properties report
+// through here — each is a statement about a query counter, and each prints its own summary line.
 function assertCounterMove(label String, before QueryCount, after QueryCount, expectedDelta QueryCount) returns bool
 	let expected = before + expectedDelta
 	if after == expected 'ok'
 		return true
 	end 'ok'
 
-	printError("FAIL cache: {label}: expected {before}+{expectedDelta}={expected}, got {after}\n")
+	printError("FAIL: {label}: expected {before}+{expectedDelta}={expected}, got {after}\n")
 	return false
 end 'assertCounterMove'

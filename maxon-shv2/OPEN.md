@@ -10,41 +10,70 @@ almost every one is a **wrong answer, not a crash**. Recorded 2026-07-14.
 > which tests a spec selects. The ring's size in three places. An MCP tool described twice — which is
 > what taught a *model* the wrong thing about `scale-test`, and cost the most. **When two places must
 > agree and nothing makes them, they will drift, and the failure is a wrong answer.**
+>
+> **⭐ AND ITS OTHER FACE, added 2026-07-14: the duplicate that does not drift, it just COSTS.** The
+> query spine's dependency graph was a reverse index **plus** a flat array of every edge — and nothing
+> ever read the array. It could not go wrong; it went **quadratic**, because `clearDepsFor` rebuilt it by
+> scanning every edge in the project and rendering each one to a `String` to compare it. **The same
+> question finds both: is this fact stored twice? If yes, either they disagree (a wrong answer) or one is
+> dead weight being maintained at cost.** (The error-code registry, #12, is the drifting kind; this is the
+> costing kind. Both are the same question.)
+>
+> **⚠ A STANDING RULE, from the same rung: a WHOLE-PROGRAM query placed UNDER a per-file one is asked
+> ONCE PER FILE.** Anything O(files) inside it is therefore **O(files²)**. Two quadratics hid behind
+> exactly that, and were found only because a new query made the scale-test *delta* grow **x3.4 per rung
+> on a ladder that doubles** — a linear change cannot do that. Before adding work to such a query,
+> multiply by the file count.
 
 ---
 
 ## 🔴 Wrong answers — a correct program compiles and returns the wrong number
 
-### 1. Cross-file callee types DEFER into an unsound ACCEPT
+### ~~1. Cross-file callee types DEFER into an unsound ACCEPT~~ ✅ **FIXED 2026-07-14** (`SignatureIndex.maxon`)
 ```
 a.maxon:  export function isReady() returns bool
 b.maxon:  let x = isReady()
-          return x + 41        ⇒ shv2 COMPILES it and returns 42
-                               ⇒ bootstrap: E2004: Cannot operate on bool and int
+          return x + 41        ⇒ shv2 COMPILED it and returned 42
+                               ⇒ now: E2004: Cannot operate on bool and int  (the bootstrap's own text)
 ```
-The identical defect the bool/int rung fixed *within* one file, surviving where the parser cannot see.
-Its twin is worse — the deferral does not merely fail to reject, **it mints a FALSE TAG**:
-`flag and crossFileInt()` yields a merge phi tagged `boolean` carrying the int `7`, so `if m` branches
-on 7.
+**The fix was UPWARD, as predicted: a whole-program signature index** — `Compiler/SignatureIndex.maxon` +
+`Queries.queryProgramSignatures`. Every file's TOKENS are swept before any file is parsed, so `unresolved`
+is never the answer for a callee some file declares.
 
-**KEEP the deferral.** Refusing an `unresolved` operand would reject `crossFileInt() + 1` — a *correct*
-program — and over-rejection is the worse failure. Making `wordOpResultTag` defer on `unresolved` (the
-tempting one-liner) would type `flag and crossFileBool()` as unknown, and `not` refuses an unknown
-operand, so `if not (ready and enabled())` would stop compiling. Bad trade.
+**THE DEFERRAL WAS KEPT** (refusing an `unresolved` operand would reject `crossFileInt() + 1`, a *correct*
+program) and `wordOpResultTag` still checks `bool` first. Both traps recorded here were real; both are now
+pinned by specs that must keep **compiling**, not just failing. **`unresolved` now means exactly ONE thing:
+a callee NO file declares** — which `SemanticCheck` rejects (E3030), so it can never reach codegen. That is
+what makes the false tag *unreachable* rather than merely *fixed*.
 
-⇒ **The fix is UPWARD: a whole-program signature query**, so `unresolved` is never the answer for a
-callee some file declares. That means a signature table over every file's tokens **and re-keying the
-per-file parse memo on it** — `parseCacheValid` (`QueryEngine.maxon:107`) keys on the file's *own*
-content hash alone, so a cross-file input goes stale under an incremental edit. Blast radius: the query
-spine. Gate: `verify-warm-rebuild`.
+**The memo re-keying was the load-bearing half, and it is now GATED.** A parse reads two inputs, so
+`ParseMemo.keyHash = mix(contentHash, ProgramSignatures.hash)` — and that hash covers the **DECLARATIONS**,
+not the sources they were read from, so a *body* edit re-parses one file while a *return-type* edit
+re-parses all of them. (Keying on the composite SOURCE hash would have been sound and would have destroyed
+incrementality.) `verify-warm-rebuild` grew a **third property, `invalidation`**, because properties 1 and 2
+both prove a memo is STABLE and **neither can catch a memo that stays valid after an input CHANGED** — the
+failure a cache actually kills you with. Proven by negative control: with the old key, determinism and
+cache-hit still **PASS** and invalidation **FAILS**. ⚠ Point it at a **multi-file** project; on one file the
+two halves coincide and it proves nothing.
 
-⚠ **PREREQUISITE — it cannot be gated today.** The `.test` fragment format **cannot express a
-multi-file case**. The harness must grow multi-file spec support *first*, or this ships with no
-regression test.
+**Sibling, same sentinel — ✅ ALSO FIXED.** `calleeResultType` returned `unresolved` for **both** a
+cross-file callee **and a VOID one**. `ValueTypeTag.void` is now the distinct "no value" tag, and a void
+call in VALUE position is rejected at the call site with the bootstrap's exact text (`E2004: Function 'noop'
+does not return a value`). The grammar has exactly two call positions and only one wants a value — that is
+the whole check.
 
-**Sibling, same sentinel:** `calleeResultType` returns `unresolved` for **both** a cross-file callee
-**and a VOID one** — one sentinel, two meanings — so `let x = noop()` then `x + 4` compiles too
-(bootstrap: `E2004: Function 'noop' does not return a value`). Needs a distinct *"no value"* tag.
+> ### ⚠⚠ THE PREREQUISITE THIS ENTRY RECORDED WAS **FALSE**, AND IT WOULD HAVE COST A RUNG
+> It used to say: *"the `.test` fragment format **cannot express a multi-file case**. The harness must grow
+> multi-file spec support first."*
+>
+> **The format expressed it all along.** The convention is `// --- file: name.maxon` inside a ```maxon block
+> — **650 occurrences across 236 files** in `/specs` and its committed fragments — implemented by the C#
+> reference in `SpecParser.cs` (`SplitMultiFileSource` + `FileMarkerRegex`). **shv2's `SpecParser` simply
+> did not read it.** It now does, **ported rather than invented** (a second, shv2-only multi-file syntax
+> would have been this file's own through-line bug, in the one place both versions would "work").
+>
+> **The lesson is about THIS FILE:** a gap in *our* implementation was written down as a limit of *the
+> format*. One `grep` would have caught it. Check the corpus before believing a claim about the corpus.
 
 ### 2. `a / 0` is a raw hardware trap, not a panic  *(= PLAN.md's P1.0d.3)*
 Escapes as `0xC0000094`. `specs/safety.md` demands exit **1** + `panic: integer divide by zero` on
@@ -309,6 +338,23 @@ Fails **loudly** (a compile error, not a miscompile), which is the only reason i
 *before* a pass table gets designed around the workaround.
 
 ---
+
+### 14. ⚠ NEW — the bootstrap LEAKS on a ternary whose arms mix a BORROWED read with an OWNED value
+```maxon
+let t = entry.returnType if remap.isIdentity else remapMaxonReturnType(entry.returnType, remap: remap)
+//      ^^^^^^^^^^^^^^^^ borrowed field read      ^^^^^^^^^^^^^^^^^^^^^^ freshly-allocated union
+```
+⇒ **`MM leak: 7 allocation(s) remain`, exit 101, on EVERY build.** The conditional does not reconcile the
+two ownerships. Written as an `if`/`else` instead it is clean — and hoisting the loop-invariant test out of
+the loop was better code anyway.
+
+**Fails LOUDLY** (the leak gate catches it), which is the only reason it is tolerable. But it cost a **wrong
+diagnosis first**: the leak arrived in the same edit as a `Map` value-type change, and the *obvious* suspect
+— `Array with <union>` as a `Map` value — was **wrong**. A/B'ing one variable at a time found the real
+cause. *Verify your own diagnosis; the plausible one was not it.*
+
+⚠ **shv2 will hit this too** — a ternary is the natural way to write "remap only if the ids moved", and it
+is the natural way to write a dozen other things.
 
 ## 📋 Environment / process notes that cost real time
 

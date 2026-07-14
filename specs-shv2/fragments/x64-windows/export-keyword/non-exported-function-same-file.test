@@ -1,0 +1,27 @@
+// Test: non-exported-function-same-file
+
+typealias Integer = int(i64.min to i64.max)
+
+function privateHelper() returns Integer
+	return 99
+end 'privateHelper'
+
+function main() returns ExitCode
+	return privateHelper()
+end 'main'
+---
+ExitCode: 99
+---
+func @privateHelper {
+  entry:
+    x64.movRegImm32 r8, 99
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect privateHelper
+    x64.epilogue 40
+    x64.ret
+}

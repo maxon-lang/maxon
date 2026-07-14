@@ -36,15 +36,24 @@
 //   • `boolean` — `bool`, and nothing else. **A bool converts to nothing, and nothing converts
 //     to a bool.** That single sentence is the whole rule this file enforces; `takeInt(flag)`,
 //     `4 + flag`, `4 < flag` and `if 4` are one error wearing four syntaxes.
-//   • `unknown` — a type the parser could not pin. Reachable for exactly one thing today: a
-//     call to a function this FILE does not declare (a cross-file return type resolves in
-//     TypeResolution, long after the parser has had to commit). It agrees with EVERYTHING —
-//     that is a DEFERRAL, not a contradiction, and it is the conservative direction: refusing
-//     to judge is what stops a cross-file call being rejected on a guess.
+//   • `unknown` — a type the parser could not pin. Since the whole-program signature index
+//     landed (`Queries.queryProgramSignatures`), it is reachable for exactly one thing: a call
+//     to a function **NO FILE IN THE PROGRAM DECLARES**. It agrees with EVERYTHING — that is a
+//     DEFERRAL, not a contradiction — and that deferral is now SAFE rather than merely
+//     conservative: such a call is reported by `SemanticCheck.validateCall` (E3030, "call to
+//     undefined function"), which reads the post-parse registry, so a program carrying an
+//     `unknown` NEVER reaches codegen. Before the index, `unknown` was also the answer for a
+//     callee declared in ANOTHER FILE — a perfectly good program — and THAT is what made the
+//     deferral unsound: `isReady()` from a second file typed as unknown, agreed with `int`, and
+//     `x + 41` returned 42 off a bool's payload.
+//   • `noValue` — the class of the `void` tag: a ValueId that names no value at all. It agrees
+//     with NOTHING, not even itself, which is the exact opposite of `unknown` and the reason
+//     the two must never share a tag again (they did: see `ValueTypeTag.void`).
 export enum TypeClass
 	boolean
 	numeric
 	unknown
+	noValue
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -65,13 +74,24 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		named gives TypeClass.numeric
 		exitCode gives TypeClass.numeric
 		unresolved gives TypeClass.unknown
+		void gives TypeClass.noValue
 	end 'k'
 end 'typeClassOf'
 
 // **THE decision.** Every type-agreement question in the compiler bottoms out here, and
-// nothing else answers one. Two classes agree iff they are the same class — unless either is
-// `unknown`, which agrees with anything (see TypeClass: a deferral, not a judgment).
+// nothing else answers one.
+//
+// The two special classes pull in OPPOSITE directions, and the order they are tested in is
+// therefore load-bearing:
+//   • `noValue` agrees with NOTHING — including a second `noValue` (`noop() == noop()` compares
+//     two things that are not there). Tested FIRST, so a non-value can never be admitted by the
+//     deferral below.
+//   • `unknown` agrees with ANYTHING — a deferral, not a judgment (see TypeClass).
+// Everything else agrees iff it is the same class.
 function typeClassesAgree(left TypeClass, right TypeClass) returns bool
+	if left == TypeClass.noValue or right == TypeClass.noValue 'nonValue'
+		return false
+	end 'nonValue'
 	if left == TypeClass.unknown or right == TypeClass.unknown 'deferred'
 		return true
 	end 'deferred'
@@ -108,12 +128,17 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// `return <bool>` from a `returns ExitCode` function as "declared to return 'int'".
 		named gives "int"
 		exitCode gives "int"
-		// A type the parser could not pin. It AGREES with everything, so it is never the side
-		// that FAILS a rule — but it can be the OTHER side of one (`f() + flag`, where the bool
-		// is what is wrong), and that message still has to name it. "unknown" is the honest word:
-		// shv2 genuinely does not know, and no reference expectation covers the case (the corpus
-		// is single-file, so nothing in it is cross-file unresolved).
+		// A type the parser could not pin — today, only a call to a function no file declares
+		// (see TypeClass). It AGREES with everything, so it is never the side that FAILS a rule —
+		// but it can be the OTHER side of one (`f() + flag`, where the bool is what is wrong), and
+		// that message still has to name it. "unknown" is the honest word: shv2 genuinely does not
+		// know, and the program is being rejected anyway (E3030, at the call site).
 		unresolved gives "unknown"
+		// A call to a VOID function, used where a value belongs. `Parser.parseCall` rejects that at
+		// the call site with the bootstrap's own text ("Function 'noop' does not return a value"),
+		// so this name reaches no diagnostic today — it is what the operand rules would print if a
+		// second route to a void value ever appeared, and "void" is the only honest word for it.
+		void gives "void"
 	end 'k'
 end 'typeTagName'
 
@@ -161,19 +186,23 @@ end 'wordOperator'
 //
 // ⚠ THE FIRST ARM IS AN OPTIMISTIC GUESS, NOT A THEOREM, AND THE ORDER OF THE TWO ARMS IS THE
 // GUESS. The operands have been checked to AGREE by the time this runs (`checkBinOpOperands`) —
-// but agreement is satisfied by DEFERRAL, so `(boolean, unresolved)` reaches here, and "either
-// operand is a bool" does NOT imply "both operands are bools". The bool-first order therefore
-// answers `boolean` for a pair whose right operand may be an int, and that tag is then believed
-// by every rule downstream. It is reachable only across FILES (a single file pins every callee's
-// return type — `Parser.scanFunctionSignatures`), and it is one half of the cross-file gap
-// recorded on `Parser.calleeResultType`; the whole-program signature query named there closes
-// this arm too, by making `unresolved` unreachable for a declared callee.
+// but agreement is satisfied by DEFERRAL, so `(boolean, unresolved)` still reaches here, and
+// "either operand is a bool" does NOT imply "both operands are bools". The bool-first order
+// therefore answers `boolean` for a pair whose right operand it could not type.
 //
-// Deferring here instead — checking `unresolved` FIRST — would make the tag honest, and is
-// DELIBERATELY NOT DONE: it would type `flag and crossFileBool()` as unknown, and `not` refuses
-// an unknown operand (see `notOperatorFor`), so `if not (ready and enabled())` — a CORRECT
-// program — would stop compiling. Trading a wrong answer in a corner for a rejected correct
-// program is the wrong trade; the signature query fixes both and rejects neither.
+// **THAT USED TO BE A WRONG ANSWER, AND IS NOT ONE ANY MORE — because of what `unresolved` now
+// MEANS, not because of anything in this function.** `flag and crossFileInt()` minted a merge phi
+// tagged `boolean` carrying the int 7, and `if m` then branched on 7: a value the compiler
+// believed was a bool and was not. The fix was UPWARD — the whole-program signature index
+// (`Queries.queryProgramSignatures`) — after which a callee some file declares is never
+// `unresolved`. What remains reachable is a callee NO file declares, and that program is rejected
+// (E3030) before it can run, so the false tag has nothing left to lie to.
+//
+// Deferring here instead — checking `unresolved` FIRST — would make the tag honest, and is STILL
+// DELIBERATELY NOT DONE: it would type `flag and crossFileBool()` as unknown, and `not` refuses an
+// unknown operand (see `notOperatorFor`), so `if not (ready and enabled())` — a CORRECT program —
+// would stop compiling. Trading a rejected correct program for an honest tag on a program that is
+// already rejected is a bad trade in both directions.
 export function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
 	if tagIsBool(left) or tagIsBool(right) 'logical'
 		return ValueTypeTag.boolean
@@ -256,24 +285,35 @@ end 'checkBinOpOperands'
 // forbid.
 //
 // So a `not` whose operand's type the parser cannot determine is REJECTED with a positioned
-// diagnostic. The only way to reach it today is a call to a function declared in ANOTHER FILE
-// (`scanFunctionSignatures` pins every function in this one, in any order). v1 avoids the choice
-// by emitting a single `logicalNot` and resolving it in its lowering, which re-reads the operand
-// type after TypeResolution — a route shv2's Std tier does not have, because it keeps no
-// per-value source type (see MaxonUnaryOp). The real fix is a project-wide callee signature
-// query; until then, refusing beats guessing.
+// diagnostic. v1 avoids the choice by emitting a single `logicalNot` and resolving it in its
+// lowering, which re-reads the operand type after TypeResolution — a route shv2's Std tier does
+// not have, because it keeps no per-value source type (see MaxonUnaryOp).
+//
+// **The project-wide callee signature query this comment used to ask for has LANDED**
+// (`Queries.queryProgramSignatures`), and it drained the case that used to be common: `not
+// crossFileBool()` — a correct program — is now typed exactly and compiles. What is left is `not
+// bogus()`, a call to a function no file declares, and refusing it is right: `not`'s two readings
+// disagree about the VALUE (the bitwise complement of `false` is -1, which reads as TRUE), so
+// there is nothing safe to emit, and the program is being rejected anyway.
 export union NotOperator
 	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
 	// The operand's type could not be determined, so neither reading can be chosen.
 	unknownOperandType
 end 'NotOperator'
 
+// A `match`, not an if-chain, so the tag space is covered EXHAUSTIVELY: the fall-through form
+// silently answered `bitNot` for any tag it had not been told about, which is the shape of every
+// bug this file exists to prevent.
 export function notOperatorFor(operand ValueTypeTag) returns NotOperator
-	if tagIsBool(operand) 'logical'
-		return NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
-	end 'logical'
-	if tagIsUnresolved(operand) 'cannotChoose'
-		return NotOperator.unknownOperandType
-	end 'cannotChoose'
-	return NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+	return match operand 'k'
+		boolean gives NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
+		// Every NUMBER takes the bitwise reading (`not 5` is -6) — `integer` through `exitCode` is
+		// exactly `TypeClass.numeric` (see `typeClassOf`).
+		integer to exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+		// `unresolved` — a call to a function no file declares (there is no reading to choose).
+		// `void` — a call to a function that returns nothing; `Parser.parseCall` rejects it at the
+		// call site, so it cannot arrive here, and if a second route to a void value ever appeared
+		// this is still the only truthful answer: there is no operand to complement.
+		unresolved to void gives NotOperator.unknownOperandType
+	end 'k'
 end 'notOperatorFor'

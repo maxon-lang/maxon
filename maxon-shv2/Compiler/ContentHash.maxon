@@ -42,16 +42,24 @@ export function mix(state ContentHash, value ContentHash) returns ContentHash
 	return s as ContentHash
 end 'mix'
 
-// FNV-1a hash of a string's UTF-8 bytes, with a trailing length tag. This is
-// the per-file source-content key.
-export function contentHash(s String) returns ContentHash
-	var h = fnvOffsetBasis()
-	let bytes = s.toByteArray()
+// Fold a byte sequence into a running hash, with a trailing LENGTH TAG so that
+// "ab" + "c" hashes differently from "a" + "bc" — which matters the moment a hash
+// covers a SEQUENCE of values rather than one blob (the signature index folds a
+// function name, then its return type, then the next function's name).
+//
+// Takes a `ByteArray`, so a caller that already holds one — every interned name is
+// a zero-copy slice of the source — hashes it without building a String.
+export function mixBytes(state ContentHash, bytes ByteArray) returns ContentHash
+	var h = state
 	let n = bytes.count()
 	for i in 0 upto n 'each'
-		let b = try bytes.get(i) otherwise panic("contentHash: bytes.get OOB at {i} (count={n})")
+		let b = try bytes.get(i) otherwise panic("mixBytes: bytes.get OOB at {i} (count={n})")
 		h = mix(h, value: b as ContentHash)
 	end 'each'
-	// Length tag: distinguishes concatenations that share a byte sequence.
 	return mix(h, value: n)
+end 'mixBytes'
+
+// FNV-1a hash of a string's UTF-8 bytes. This is the per-file source-content key.
+export function contentHash(s String) returns ContentHash
+	return mixBytes(fnvOffsetBasis(), bytes: s.toByteArray())
 end 'contentHash'

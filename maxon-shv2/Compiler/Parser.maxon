@@ -147,11 +147,28 @@ export union ParseError implements Error
 	// 'int'` (2-Parser.cs:7840) — positioned at the `return`. The declared type prints as its
 	// RESOLVED primitive, which is what the bootstrap prints (see TypeRules' typeTagName).
 	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
-	// A `not` whose operand's type the parser cannot determine — reachable only for a call to
-	// a function declared in ANOTHER FILE. Renders as E3005, positioned at the `not`. It is a
-	// REJECTION rather than a guess because `not`'s two readings disagree about the VALUE: the
-	// bitwise complement of a bool is -1 or -2, and both read as TRUE (see `notOperatorFor`).
+	// A `not` whose operand's type the parser cannot determine. Since the whole-program signature
+	// index landed, that is reachable only for a call to a function NO FILE DECLARES — a program
+	// already doomed (E3030). Renders as E3005, positioned at the `not`. It is a REJECTION rather
+	// than a guess because `not`'s two readings disagree about the VALUE: the bitwise complement
+	// of a bool is -1 or -2, and both read as TRUE (see `notOperatorFor`).
 	notOnUnknownType(line LineNumber, column ColumnNumber)
+	// A call to a VOID function used where a VALUE belongs — `let x = noop()`, `return noop()`,
+	// `if noop()`, `noop() + 4`. Renders as E2004 with the C# bootstrap's exact text ("Function
+	// 'noop' does not return a value"), positioned at the callee name, which is the bootstrap's
+	// anchor too.
+	//
+	// The parser is the right tier and the CALL SITE is the right anchor, because the parser is the
+	// only place that knows which of the two call positions this is: the grammar has exactly two
+	// (a bare-call STATEMENT, whose whole purpose is to discard the result, and a call inside an
+	// EXPRESSION, which needs one), and `parseCall`'s `resultUsed` is that distinction.
+	//
+	// It was silently ACCEPTED before the signature index, and the deferral is not what broke it:
+	// `calleeResultType` reported a void callee as `MaxonType.unresolved` — the SAME sentinel it
+	// used for "I could not see this callee" — so TypeRules classified "there is no value" as "I
+	// cannot judge this value", and every rule correctly deferred on it. One sentinel, two
+	// meanings. `ValueTypeTag.void` is now the other one.
+	voidCallResultUsed(name String, line LineNumber, column ColumnNumber)
 	// A character literal whose body is not one character: `''`, or a `\` escape the
 	// decoder does not know. Renders as E3010, positioned at the literal. (A literal that
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
@@ -794,16 +811,20 @@ export type Parser
 	// (TypeRules' `typeClassOf`), so it stays parser-local and is dropped at the next function.
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
-	// Every function DECLARED in this file, with its return type — filled by a token-level
-	// pre-scan (`scanFunctionSignatures`) BEFORE any body is parsed. Without it, a call's
-	// result type would depend on whether the callee happened to be declared earlier in the
-	// file, and so would whether `f() and g()` SHORT-CIRCUITS — moving a function to the
-	// bottom of a file would silently change its meaning. That is not a defect worth
-	// inheriting. (v1 lives with it because its TypeResolution re-derives the type later;
-	// shv2's Std tier keeps no per-value source type, so the parser gets one shot.)
-	var declaredReturnTypes as FuncReturnTypeMap
+	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
+	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
+	// parsed and handed to every Parser.
+	//
+	// A call's result type has to be exact HERE, and it cannot wait: `f() and g()` short-circuits
+	// iff `f`'s return type is statically `bool` — a CONTROL-FLOW decision no later pass can
+	// retrofit — and `not` picks its opcode from its operand's type. A file-local scan made that
+	// exact within one file (so declaration ORDER stops deciding what a program means), and left it
+	// WRONG across files: a callee the file could not see was typed `unresolved`, which agrees with
+	// everything, so `let x = isReady()` + `x + 41` compiled and returned 42. The index is the same
+	// sweep, over every file.
+	var signatures as ProgramSignatures
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
 			tokens: tokens,
 			pos: 0,
@@ -818,15 +839,13 @@ export type Parser
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
-			declaredReturnTypes: FuncReturnTypeMap.create()
+			signatures: signatures
 		}
 	end 'create'
 
 	// Parse the whole file into its artifact. Top-level loop: skip blank lines,
 	// dispatch each declaration, stop at EOF.
 	export function parseModule() returns FileParseArtifact throws ParseError
-		self.scanFunctionSignatures()
-
 		while true 'top'
 			self.skipNewlines()
 			if self.isEof() 'done'
@@ -837,19 +856,31 @@ export type Parser
 		return self.artifact
 	end 'parseModule'
 
-	// Record every `function <name>(…) [returns <Type>]` in the file, in ONE token-level
-	// sweep, before any body is parsed. What it buys is the thing the rung's central
-	// warning is about: `f() and g()` short-circuits iff `f`'s return type is statically
-	// `bool`, so without this, a call to a function declared LATER in the file would be
-	// typed `unresolved`, fall back to the bitwise reading, and evaluate `g()` eagerly —
-	// the same program, the same answer, a different number of side effects, and no
-	// diagnostic anywhere. Declaration ORDER must not decide that.
+	// Sweep this file's tokens for every `function <name>(…) [returns <Type>]` it declares, and fold
+	// what is found into the whole-program `index`. THE way the signature index is built
+	// (`queryProgramSignatures` does this once per file, in source-path order); nothing else calls
+	// it, and a Parser used for a sweep parses no body.
 	//
-	// Deliberately TOLERANT: it records only the exact `function NAME ( … ) returns TYPE`
-	// shape and skips anything else without complaint. It is not a validator — the real
-	// parse runs next and produces the positioned diagnostic for whatever is malformed. It
-	// restores the cursor, so it is invisible to everything downstream.
-	function scanFunctionSignatures()
+	// It records `FuncReturnTypeEntry`s — the SAME record the real parse contributes to the
+	// `funcReturnTypes` registry (ParseStaging) — and reads the return type through the SAME
+	// `parseOptionalReturnType` the real parse reads it with. That shared routine is what keeps the
+	// sweep and the parse from drifting into two opinions of what `returns X` means, which is the
+	// standing hazard of having a pre-scan at all.
+	//
+	// The FOLD happens here, not in the caller, because the ids the sweep interns are file-local —
+	// they live in this Parser's own artifact interner, which is private and stays private. Handing
+	// the caller the ids without the table they belong to is precisely the mistake this whole index
+	// is built to avoid (see SignatureIndex's header on why a signature travels by name).
+	//
+	// Deliberately TOLERANT: it records only the exact `function NAME ( … ) returns TYPE` shape and
+	// skips anything else without complaint. It is NOT a validator — the real parse runs afterwards
+	// and produces the positioned diagnostic for whatever is malformed — and it must never become
+	// one: a sweep that could VETO a call would reject a correct program the moment it failed to
+	// recognize a declaration the parser accepts (see `CalleeReturn.undeclared`). It restores the
+	// cursor, so it is invisible to everything downstream.
+	export function foldDeclaredSignaturesInto(index ProgramSignatures)
+		var entries = FuncReturnTypeEntryArray.create()
+
 		let resume = self.pos
 		self.pos = 0
 		while not self.isEof() 'scan'
@@ -858,14 +889,16 @@ export type Parser
 				continue
 			end 'notAFunction'
 			self.advance()
-			self.recordScannedSignature()
+			self.recordScannedSignature(entries)
 		end 'scan'
 		self.pos = resume
-	end 'scanFunctionSignatures'
 
-	// Cursor is just past `function`. Record the declared return type of the function whose
+		index.foldFile(entries, fileTypeNames: self.artifact.typeNames)
+	end 'foldDeclaredSignaturesInto'
+
+	// Cursor is just past `function`. Append the declared return type of the function whose
 	// name follows, if the declaration is well-formed enough to read one off.
-	function recordScannedSignature()
+	function recordScannedSignature(entries FuncReturnTypeEntryArray)
 		if not self.at(TokenKind.identifier) 'noName'
 			return
 		end 'noName'
@@ -875,7 +908,7 @@ export type Parser
 			return
 		end 'malformedParams'
 		let returnType = try self.parseOptionalReturnType() otherwise return
-		self.declaredReturnTypes.upsert(nameTok.value, value: returnType)
+		entries.push(FuncReturnTypeEntry.create(nameTok.value, returnType: returnType))
 	end 'recordScannedSignature'
 
 	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
@@ -1313,9 +1346,10 @@ export type Parser
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
 			try self.parseAssignment(func, block: block)
 		end 'assign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
-			// An identifier followed by `(` is a bare-call statement — the call is
-			// evaluated for its effect and its result discarded (M5).
-			_ = try self.parseCallExpression(func)
+			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
+			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
+			// HERE and nowhere else: this is the position that wants no value.
+			_ = try self.parseCall(func, resultUsed: false)
 		end 'callStmt' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
@@ -2468,7 +2502,9 @@ export type Parser
 			// access lands, and the sized-type names are reserved, so the two cannot
 			// collide. Anything else is a variable reference.
 			if self.peekKind() == TokenKind.leftParen 'callExpr'
-				return try self.parseCallExpression(func)
+				// A call in an EXPRESSION — its result IS the expression, so a void callee has nothing
+				// to give and `parseCall` rejects it (E2004).
+				return try self.parseCall(func, resultUsed: true)
 			end 'callExpr'
 			if self.peekKind() == TokenKind.dot 'qualifiedBound'
 				return try self.parseTypeQualifiedBoundExpression()
@@ -2562,7 +2598,13 @@ export type Parser
 	// The call op lands in `currentBlock` AFTER the arguments are parsed, because an argument
 	// can short-circuit (`f(a or b)`) and move it. Emitting into the block the call STARTED in
 	// would put the call on a path its own arguments do not reach.
-	function parseCallExpression(func IrFunction) returns ValueId throws ParseError
+	// `resultUsed` names the ONE thing the two call positions differ by, and the grammar has exactly
+	// two of them: a bare-call STATEMENT (`greet()` on a line of its own — the result is evaluated
+	// for effect and discarded) and a call inside an EXPRESSION (`let x = f()`, `f() + 1`,
+	// `if ready()`, `g(f())` — the result IS the expression). The parser is therefore the only tier
+	// that can tell a legal void call from an illegal use of nothing, which is why the check lives
+	// here and not in a later pass.
+	function parseCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let calleeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.leftParen)
 
@@ -2572,8 +2614,8 @@ export type Parser
 		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
-		return self.emitCall(calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
-	end 'parseCallExpression'
+		return try self.emitCall(calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
+	end 'parseCall'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves
@@ -2639,65 +2681,57 @@ export type Parser
 	// callee is stored as a `ByteArray` slice of its identifier token; the call span runs
 	// from the callee name through the closing `)` (the conventional call anchor).
 	//
-	// The result's TYPE is the callee's declared return type, read off the FILE-WIDE
-	// signature pre-scan — so it is exact regardless of whether the callee is declared above
-	// or below this call, which is what stops declaration order from deciding whether
-	// `f() and g()` short-circuits.
-	function emitCall(calleeTok Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
-		let result = self.mintValueOfType(self.calleeResultType(calleeTok.value))
+	// The result is minted BEFORE the op is appended, because the op stores its id — and it is
+	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
+	// is emitted for a call the program is not allowed to make.
+	function emitCall(calleeTok Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool) returns ValueId throws ParseError
+		let result = try self.mintCallResult(calleeTok, resultUsed: resultUsed)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: calleeTok.value, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
 		return result
 	end 'emitCall'
 
-	// The source-level type a call to `callee` yields.
+	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index
+	// (SignatureIndex.maxon) — so the type is exact whether the callee is declared above this call,
+	// below it, or in another file entirely.
 	//
-	// A callee this file does not declare — a cross-FILE call — is `unresolved`: the parser
-	// cannot see another file's declarations. The `and`/`or` fallback that follows from it is
-	// benign — the short-circuit gate declines to short-circuit and takes the bitwise reading,
-	// which on the 0/1 bool domain is the same ANSWER with an extra evaluation, v1's behaviour
-	// exactly (specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees`
-	// case documents that fallback as the language's own).
-	//
-	// ⚠ BUT THE DEFERRAL IS NOT BENIGN EVERYWHERE, AND IN ARITHMETIC IT IS A WRONG ANSWER.
-	// `TypeClass.unknown` agrees with EVERYTHING (TypeRules), so a cross-file callee's result is
-	// admitted by every rule this rung added. Two files:
-	//
-	//     a.maxon: export function isReady() returns bool ... end 'isReady'
-	//     b.maxon: let x = isReady()
-	//              return x + 41        // compiles. Returns 42. The bool's 1 payload, added.
-	//
-	// The C# bootstrap rejects it (`E2004: Cannot operate on bool and int`). Same defect the same
-	// program has when both halves live in ONE file — where this rung now rejects it — so the
-	// deferral is not a second bug, it is the SAME bug surviving where the parser cannot see.
-	// (Its twin: `flag and crossFileInt()` mints a `boolean` merge phi over an int — see
-	// TypeRules' `wordOpResultTag`.) DEFERRING IS STILL THE RIGHT MOVE HERE: refusing an
-	// unresolved operand instead would reject `crossFileInt() + 1`, a correct program, and
-	// over-rejection is the worse failure. The fix is upward, not here — a WHOLE-PROGRAM
-	// signature query, so that `unresolved` is never the answer for a callee some file declares.
-	// That means a signature table built from every file's tokens and re-keying the per-file
-	// parse memo on it (today `parseCacheValid` keys on the file's OWN content hash alone), so
-	// it is a rung with the query spine as its blast radius and `verify-warm-rebuild` as its
-	// gate — not a ride-along on a type rule. Recorded here, beside its sibling below.
-	//
-	// ⚠ A VOID callee is `unresolved` TOO, and that is a SENTINEL DOING DOUBLE DUTY — a known
-	// hole, not a design. `unresolved` means "the parser could not pin this type" (defer, and
-	// TypeRules' `TypeClass.unknown` therefore agrees with everything), but a void call has NO
-	// type to pin: there is no value at all. So `let x = noop()` followed by `x + 4` or `if x`
-	// is silently ADMITTED by every rule in TypeRules, because they all correctly defer on
-	// `unknown`. The C# bootstrap rejects it (`error E2004: Function 'noop' does not return a
-	// value`); shv2 does not, and did not before this rung either — the deferral is not what
-	// broke it, the missing `void` tag is.
-	//
-	// Fixing it needs a distinct "no value" tag (or a use-of-void-result check in
-	// SemanticCheck) plus its own spec, and it is NOT a bool/int conversion — it is its own
-	// rung. Recorded here rather than in a report so the next reader of this function finds it.
-	function calleeResultType(callee ByteArray) returns MaxonType
-		let declared = try self.declaredReturnTypes.get(callee) otherwise return MaxonType.unresolved
-		return match declared 'r'
-			void gives MaxonType.unresolved
-			value(inner) gives inner
+	// The index answers with the DECLARATION, undistorted, which is what makes the two cases below
+	// distinguishable at all. The shipped code asked a file-local table and mapped BOTH "this file
+	// does not declare it" and "it declares nothing to return" onto one `MaxonType.unresolved` — a
+	// sentinel with two meanings, and TypeRules' `unknown` (which agrees with everything) is what it
+	// became. That is how `isReady()` from another file added to 41 and made 42, and how
+	// `let x = noop()` then `x + 4` compiled at all.
+	function mintCallResult(calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		match self.signatures.returnTypeOf(calleeTok.value, into: self.artifact.typeNames) 'callee'
+			declared(returnType) then return try self.mintDeclaredCallResult(calleeTok, returnType: returnType, resultUsed: resultUsed)
+			// NO file declares this callee. DEFER, and keep deferring: `SemanticCheck.validateCall` owns
+			// that diagnostic (E3030, "call to undefined function") because it reads the registry the
+			// REAL parse built, and this sweep is the tolerant half of the pair — see
+			// `CalleeReturn.undeclared`. So the program is rejected, just not here, and `unresolved`
+			// therefore never reaches codegen.
+			undeclared then return self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		end 'callee'
+	end 'mintCallResult'
+
+	// The result of a call to a callee some file DOES declare — where the void/value split is
+	// finally a split and not a sentinel.
+	function mintDeclaredCallResult(calleeTok Token, returnType MaxonReturnType, resultUsed bool) returns ValueId throws ParseError
+		match returnType 'r'
+			value(inner) then return self.mintValueOfType(inner)
+			void then break 'r'
 		end 'r'
-	end 'calleeResultType'
+
+		// A VOID callee. In STATEMENT position that is precisely what the position is FOR — the call
+		// runs for its effect — so the result value is minted with the `void` tag and never read
+		// again (ValueTypeTag.void: it is write-only, and this is the only site that writes it).
+		//
+		// In VALUE position there is no value to give. The bootstrap says so (`E2004: Function 'noop'
+		// does not return a value`), and now so does shv2, at the same anchor.
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(calleeTok.value), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+	end 'mintDeclaredCallResult'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal

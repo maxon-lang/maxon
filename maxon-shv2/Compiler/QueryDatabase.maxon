@@ -38,6 +38,30 @@ export type ParseMemo
 	end 'create'
 end 'ParseMemo'
 
+// Whole-program memo: the function signature index (SignatureIndex.maxon), stamped
+// with the COMPOSITE hash folded over every source file's content hash — because the
+// index is read off every file's tokens, so ANY file's edit can move it. `computed`
+// marks emptiness for the same reason `ModuleMemo`'s does.
+//
+// Note the two hashes that meet on this memo and must not be confused: `keyHash` is
+// what makes the INDEX valid (has any source changed?), while the index's own
+// `ProgramSignatures.hash` is what makes a PARSE valid (have any DECLARATIONS
+// changed?). Keying a parse on this one would re-parse the whole program whenever a
+// single body was edited — see ProgramSignatures.hash.
+export type SignatureMemo
+	export var value as ProgramSignatures
+	export var keyHash as ContentHash
+	export var computed as bool
+
+	export static function create(value ProgramSignatures, keyHash ContentHash, computed bool) returns SignatureMemo
+		return Self{value: value, keyHash: keyHash, computed: computed}
+	end 'create'
+
+	export static function empty() returns SignatureMemo
+		return Self{value: ProgramSignatures.create(), keyHash: 0, computed: false}
+	end 'empty'
+end 'SignatureMemo'
+
 // Whole-program memo: the merged Maxon module, stamped with the COMPOSITE hash
 // folded over every source file's content hash in source-path order.
 // `computed` is the sentinel — false means "never built" (a zero hash is a
@@ -83,39 +107,49 @@ export union QueryKey
 	sourceFile(path FilePath)
 	tokens(path FilePath)
 	parseOps(path FilePath)
+	// The whole-program signature index. Not per-file: it is read off EVERY file's tokens
+	// (that is the point of it), so it has no one file to be keyed by — and `parseOps`
+	// depends on it, which is the edge that makes a parse memo's second key half real.
+	programSignatures
 	allModule
 end 'QueryKey'
 
 export typealias QueryKeyArray = Array with QueryKey
 
-// A dependency edge: query `dependent` read query `dependency` while it ran.
-export type Dependency
-	export var dependent as QueryKey
-	export var dependency as QueryKey
-
-	export static function create(dependent QueryKey, dependency QueryKey) returns Dependency
-		return Self{dependent: dependent, dependency: dependency}
-	end 'create'
-end 'Dependency'
-
-export typealias DependencyArray = Array with Dependency
-export typealias DepIndexMap = Map with (String, DependencyArray)
+// The dependency graph, and it is ONE structure: for each query — keyed by the stable string form
+// of its `QueryKey` — the queries it READ while it ran.
+//
+// It was two: a flat array of `(dependent, dependency)` edges AND this reverse index over them. The
+// edge's `dependent` is the bucket's KEY, so the flat array stored it a second time — and nothing
+// ever read the flat array. Maintaining it was O(every edge in the project) per query, which made
+// the spine QUADRATIC in the file count (see QueryEngine.clearDepsFor for the measurement that
+// found it).
+export typealias DepIndexMap = Map with (String, QueryKeyArray)
 
 export type QueryDatabase
 	// Source inputs (path -> content + hash) and insertion-ordered path list.
 	export var sourceFiles as SourceFileMap
 	export var sourcePaths as FilePathArray
 
+	// The composite whole-program source hash, MEMOIZED — every whole-program memo keys on it, and
+	// since the signature index landed it is asked once per FILE, which made re-folding it O(files²).
+	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
+	export var compositeHash as ContentHash
+	export var compositeHashValid as bool
+
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
 	export var tokenCache as TokenCacheMap
 	export var parseCache as ParseCacheMap
 
+	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
+	// every parse reads it, and a parse memo is keyed on it (QueryEngine.parseMemoKey).
+	export var signatureCache as SignatureMemo
+
 	// Whole-program merged-module memo.
 	export var allModuleCache as ModuleMemo
 
-	// Dependency graph: flat edge list + reverse index (dependent-key -> edges)
-	// + the active-query stack recordDependency reads its "current query" from.
-	export var dependencies as DependencyArray
+	// Dependency graph (dependent-key -> the queries it read) + the active-query
+	// stack recordDependency reads its "current query" from.
 	export var depIndex as DepIndexMap
 	export var activeQueryStack as QueryKeyArray
 
@@ -124,6 +158,8 @@ export type QueryDatabase
 	export var tokenMisses as QueryCount
 	export var parseHits as QueryCount
 	export var parseMisses as QueryCount
+	export var signatureHits as QueryCount
+	export var signatureMisses as QueryCount
 	export var allModuleHits as QueryCount
 	export var allModuleMisses as QueryCount
 
@@ -131,26 +167,29 @@ export type QueryDatabase
 		return Self{
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
+			compositeHash: 0, compositeHashValid: false,
 			tokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
+			signatureCache: SignatureMemo.empty(),
 			allModuleCache: ModuleMemo.empty(),
-			dependencies: DependencyArray.create(),
 			depIndex: DepIndexMap.create(),
 			activeQueryStack: QueryKeyArray.create(),
 			tokenHits: 0, tokenMisses: 0,
 			parseHits: 0, parseMisses: 0,
+			signatureHits: 0, signatureMisses: 0,
 			allModuleHits: 0, allModuleMisses: 0
 		}
 	end 'create'
 end 'QueryDatabase'
 
 // Stable string form of a query key, for the dependency reverse index and edge
-// dedup. `sf:`/`tk:`/`po:`/`am` prefixes keep the four key families disjoint.
+// dedup. The `sf:`/`tk:`/`po:`/`ps`/`am` prefixes keep the key families disjoint.
 export function queryKeyString(key QueryKey) returns String
 	return match key 'toStr'
 		sourceFile(path) gives "sf:{path}"
 		tokens(path) gives "tk:{path}"
 		parseOps(path) gives "po:{path}"
+		programSignatures gives "ps"
 		allModule gives "am"
 	end 'toStr'
 end 'queryKeyString'

@@ -4,8 +4,30 @@
 // block (```exitcode or ```maxoncstderr), plus the `status:` frontmatter. Every
 // v1 feature the specs-shv2 corpus does not use — fragment caching, RequiredIR /
 // RequiredRdata / RequiredLowering, per-target `Stdout:<target>`, mm-trace,
-// `Args`/`TimeoutMs` directives, multi-file markers, doc-example extraction — is
-// dropped; each returns when a spec first needs it.
+// `Args`/`TimeoutMs` directives, doc-example extraction — is dropped; each
+// returns when a spec first needs it.
+//
+// MULTI-FILE TESTS — `// --- file: <name>` (added for the cross-file signature rung).
+//
+// ⚠ **THIS CONVENTION IS PORTED, NOT INVENTED, AND THAT IS THE WHOLE POINT.** It already exists
+// and the corpus already uses it: **650 occurrences across 236 files** in `/specs` and its
+// committed fragments, implemented by the C# reference in `SpecParser.cs`'s
+// `SplitMultiFileSource()` + `FileMarkerRegex()`. shv2 simply did not read it. A second,
+// shv2-only multi-file syntax would be this project's signature bug — one fact written down twice
+// — in the one place it would be hardest to notice, because both would "work".
+//
+// The rules, mirrored exactly (`SpecParser.cs:273`):
+//   • the marker is a COMMENT LINE inside the ```maxon block: `// --- file: app/main.maxon`;
+//   • a block with NO marker is a single-file test (this is the common case, and it is unchanged);
+//   • a file's text runs from its marker to the next one (or the end), TRIMMED;
+//   • anything before the FIRST marker is discarded;
+//   • forward slashes make subdirectories — and a `.` or `..` segment is REJECTED, because these
+//     names are written to a temp directory and `..` walks out of it (the reference rejects it at
+//     parse; shv2 rejects it at the WRITE, which is the point where the escape would actually
+//     happen — see SpecTestRunner.writeSourceFiles).
+//
+// The golden `.test` fragment still shows the MERGED block, markers and all — again the
+// reference's behaviour — so what a reviewer reads is what a spec author wrote.
 //
 // DEFERRED-SKIP CONVENTION (why a `## Deferred` section, not a comment):
 // HTML comments do NOT nest. The obvious way to shelve a test —
@@ -68,7 +90,25 @@ let ExitCodeFence = "```exitcode"
 let CompilerErrorFence = "```maxoncstderr"
 let FenceClose = "```"
 
-typealias LineIndex = int(0 to u64.max)
+// The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
+// block's first line. The header is why a file's line 1 is not the block's line 1 — see
+// `SpecSourceFile.mergedLineOffset`, and `SpecTestRunner.fragmentSource`, which writes it.
+export let FileMarker = "// --- file:"
+let FragmentHeaderLines = 1 as LineIndex
+
+// What would let a `// --- file:` marker escape the temp directory it is written into: a `.`/`..`
+// segment, a rooted name, or a Windows drive letter. Checked at the write
+// (SpecTestRunner.isSafeRelativeName), named here beside the marker they qualify.
+export let DotSegment = "."
+export let ParentSegment = ".."
+export let PathSeparator = "/"
+export let WindowsPathSeparator = "\\"
+export let DriveLetterSeparator = ":"
+
+// A 0-based line index into a spec file — and, on `SpecSourceFile.mergedLineOffset`, the distance
+// between a compiled file's line numbers and the merged fragment's. Exported because the RUNNER is
+// what applies that distance to a diagnostic.
+export typealias LineIndex = int(0 to u64.max)
 
 // How many cases in one spec file are shelved behind `<!-- disabled-test: … -->`.
 // Carried (not discarded) because it is the project's progress metric: a rung is
@@ -89,15 +129,55 @@ export union SpecExpectation
 	compilerError(text String)
 end 'SpecExpectation'
 
+// One FILE of a multi-file test — the `// --- file: <name>` sections of one ```maxon block.
+export type SpecSourceFile
+	// The path from the marker, RELATIVE (`app/main.maxon`). Written under the test's own scratch
+	// directory, subdirectories and all.
+	export let name as String
+	// The file's own text, trimmed — exactly what is written to disk and compiled.
+	export let source as String
+	// Add this to a line number the COMPILER reports for this file, and you get the line number in
+	// the MERGED fragment — which is what the golden shows and what every `/specs` expectation was
+	// authored against (`specs/fragments/<spec>/<test>.test:11:9`). Without it a multi-file
+	// diagnostic names a line nobody can find: the compiler saw `main.maxon:2`, the reviewer is
+	// holding a merged file where that line is 11.
+	//
+	// It counts the marker line, everything above it, and the one `// Test: <name>` header line the
+	// fragment carries — the same arithmetic the C# reference does in `TestRunner.ComputeSplitFileMap`.
+	export let mergedLineOffset as LineIndex
+
+	export static function create(name String, source String, mergedLineOffset LineIndex) returns SpecSourceFile
+		return Self{name: name, source: source, mergedLineOffset: mergedLineOffset}
+	end 'create'
+end 'SpecSourceFile'
+
+export typealias SpecSourceFileArray = Array with SpecSourceFile
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
+	// The block VERBATIM — markers and all. This is what the golden `.test` fragment shows and, for
+	// a single-file test, what is compiled. It is never re-derived from `sourceFiles`: the merged
+	// text is the thing the spec author wrote, and a round-trip through the split would let the two
+	// drift.
 	export let source as String
 	export let expectation as SpecExpectation
+	// The `// --- file:` sections, or EMPTY for the ordinary single-file test. Empty is not a
+	// sentinel — it is the literal count of file markers in the block, and "no markers" is exactly
+	// what a single-file test is.
+	export let sourceFiles as SpecSourceFileArray
 
+	// The split is derived HERE, from the very source that will be compiled, so a test can never
+	// exist with a file list that disagrees with its text.
 	export static function create(name String, source String, expectation SpecExpectation) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source)}
 	end 'create'
+
+	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
+	// DIRECTORY of files rather than as one fragment file.
+	export function isMultiFile() returns bool
+		return self.sourceFiles.count() > 0
+	end 'isMultiFile'
 end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
@@ -318,6 +398,60 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 
 	return i
 end 'scanTestFromMarker'
+
+// Split a ```maxon block into its `// --- file:` sections. EMPTY when the block has no marker —
+// the ordinary single-file test, which is most of them.
+//
+// A faithful port of the C# reference's `SplitMultiFileSource` (`SpecParser.cs:273`), including
+// the two things about it that are easy to get subtly different and would silently misreport a
+// diagnostic's line for ever after:
+//   • the text BEFORE the first marker is DISCARDED (a block that opens with prose or a stray
+//     blank line loses it, and no file inherits it);
+//   • each section is TRIMMED, but its line OFFSET is measured from the line right after its
+//     marker — not from its first non-blank line. Both compilers therefore agree on what line a
+//     multi-file diagnostic sits on, which is the only property that matters here, and it is what
+//     makes a `/specs` expectation portable byte-for-byte.
+function splitSourceFiles(source String) returns SpecSourceFileArray
+	var files = SpecSourceFileArray.create()
+	let lines = source.split("\n")
+	let lineCount = lines.count()
+
+	var name = ""
+	var body = ""
+	var haveMarker = false
+	var offset = 0 as LineIndex
+
+	for i in 0 upto lineCount 'eachLine'
+		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceFiles: index {i} >= lineCount {lineCount} despite the upto bound")
+
+		if not line.startsWith(FileMarker) 'notAMarker'
+			if haveMarker 'insideAFile'
+				body = "{body}\n{line}"
+			end 'insideAFile'
+			continue
+		end 'notAMarker'
+
+		if haveMarker 'flushPrevious'
+			files.push(SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset))
+		end 'flushPrevious'
+
+		name = valueAfterKey(line, key: FileMarker)
+		body = ""
+		haveMarker = true
+		// This file's first line is the one AFTER the marker: 0-based block index `i + 1`, which is
+		// block LINE NUMBER `i + 2`, which is fragment line number `i + 2 + FragmentHeaderLines - 1`.
+		// The file's own line 1 must land there, so the offset added to a per-file line is that minus
+		// one. (Checked against the corpus: `export-keyword`'s `error.non-exported-function-cross-file`
+		// expects `:11:9`, and this yields exactly 11.)
+		offset = i + FragmentHeaderLines + 1
+	end 'eachLine'
+
+	if haveMarker 'flushLast'
+		files.push(SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset))
+	end 'flushLast'
+
+	return files
+end 'splitSourceFiles'
 
 // The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
 // " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`.

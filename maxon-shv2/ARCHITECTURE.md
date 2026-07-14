@@ -153,7 +153,7 @@ gotcha worth remembering.)
 ## Query spine (incremental)
 
 `QueryDatabase` / `QueryEngine` / `Queries` implement
-`querySourceFile → queryTokens → queryParseOps → queryAllModule`.
+`querySourceFile → queryTokens → queryProgramSignatures → queryParseOps → queryAllModule`.
 
 **Memo validity is a content-hash compare, not a revision-counter walk.**
 `fileChanged` computes an FNV-1a `ContentHash` per file — there is no shared
@@ -161,6 +161,28 @@ gotcha worth remembering.)
 stamps the `keyHash` it was derived from and is valid iff that still equals the file's
 current hash; `queryAllModule` keys its merged-module memo on the **composite** hash
 folded over every file's hash in source-path order.
+
+### ⭐ A WHOLE-PROGRAM query sits UNDERNEATH a per-file one, and that shapes everything below it
+
+`queryProgramSignatures` (`SignatureIndex.maxon`) sweeps **every file's tokens** for every function
+declaration, before any file is parsed. It has to: a call's result type is a decision the **parser**
+cannot postpone — a bool `and`/`or` is short-circuit **control flow**, and `not` picks its opcode from
+its operand's type — and the callee may be in another file. It reads tokens and never parses, so the
+chain stays acyclic.
+
+**A PARSE THEREFORE READS TWO INPUTS, AND ITS MEMO IS KEYED ON BOTH:**
+`ParseMemo.keyHash = mix(fileContentHash, ProgramSignatures.hash)`. Keying on the file's own bytes
+alone — which is what shipped — serves a **stale parse** when another file's return type changes: the
+file did not change, but what it *means* did. The index's hash covers the **DECLARATIONS**, not the
+sources they were read from, so editing a function *body* re-parses only that file, while editing a
+*return type* re-parses every file. Both directions are gated by `verify-warm-rebuild`'s
+**invalidation** property.
+
+⚠ **The standing hazard of that inversion is COST.** A whole-program query under a per-file one is
+asked *once per file*, so anything O(files) inside it becomes O(files²). Two such quadratics were found
+this way (both pre-existing, both exposed by the extra call): `clearDepsFor` rebuilding a write-only
+flat edge array, and `compositeSourceHash` re-folding every file's hash on every call. Both are now
+O(1)/memoized. **Before adding work to a whole-program query, ask what it costs × the file count.**
 
 `queryParseOps` produces a `FileParseArtifact` and touches no `Project` state (the
 parser is pure). `queryAllModule` on a miss calls `resetMergeTargets` and re-folds the
@@ -173,7 +195,10 @@ diagnostic, returns an empty result uncached), so a fixed file recompiles cleanl
 The dependency graph (`recordDependency` / `clearDepsFor` / `activeQueryStack`) is
 **recorded but does not yet drive invalidation** — content hashes do. It is maintained
 from day one so that when a query genuinely depends on another file's *derived* state,
-the wiring is already there.
+the wiring is already there. It is **one** structure — a map from a query to the queries it
+read. It used to be that map *plus* a flat array of every edge, which nothing ever read and
+which `clearDepsFor` rebuilt (allocating a `String` per edge) on every query: the same fact
+written down twice, at a cost of O(files²).
 
 `verify-warm-rebuild` (`Compiler/VerifyWarmRebuild.maxon`) is the standing gate over
 this spine, asserting two properties and exiting 0 iff both hold:

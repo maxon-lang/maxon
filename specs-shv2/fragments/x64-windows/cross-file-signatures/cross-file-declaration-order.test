@@ -1,0 +1,49 @@
+// Test: cross-file-declaration-order
+// --- file: a-caller.maxon
+function main() returns ExitCode
+	if alwaysTrue() and alwaysTrue() 'both'
+		return 42
+	end 'both'
+	return 1
+end 'main'
+
+// --- file: z-callee.maxon
+export function alwaysTrue() returns bool
+	return true
+end 'alwaysTrue'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect alwaysTrue
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect alwaysTrue
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, both
+    x64.jmp ifcont
+  both:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+}
+
+func @alwaysTrue {
+  entry:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}

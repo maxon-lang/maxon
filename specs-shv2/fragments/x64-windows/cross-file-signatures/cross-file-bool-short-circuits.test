@@ -1,0 +1,68 @@
+// Test: cross-file-bool-short-circuits
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function ready() returns bool
+	return false
+end 'ready'
+
+export function enabled() returns bool
+	var zero = 0
+	return 1 / zero == 0
+end 'enabled'
+
+// --- file: b.maxon
+function main() returns ExitCode
+	if not (ready() and enabled()) 'skipped'
+		return 42
+	end 'skipped'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @ready {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @enabled {
+  entry:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rax, 1
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, r8
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect ready
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect enabled
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, skipped
+    x64.jmp ifcont
+  skipped:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+}

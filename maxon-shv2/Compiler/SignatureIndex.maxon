@@ -1,0 +1,197 @@
+// SignatureIndex — the WHOLE-PROGRAM function signature index: every function DECLARED in any
+// file, with its declared return type, read straight off the TOKENS before any body is parsed.
+//
+// WHY IT MUST EXIST, AND WHY IN THE PARSER. A call's result type is a decision the parser cannot
+// postpone. A bool `and`/`or` is CONTROL FLOW (`Parser.emitShortCircuit` — blocks and a merge phi,
+// which no later pass can retrofit); `not` picks a different OPCODE per operand type; and every
+// operand rule in TypeRules reads a value's tag. By the time a later pass could supply a callee's
+// return type, every decision that needed it has already been made.
+//
+// The FILE-LOCAL version of this — one token sweep of the file being parsed — is why the
+// single-file case was right. Cross-file it was not, and the failure was a WRONG ANSWER, not a
+// rejection:
+//
+//     a.maxon:  export function isReady() returns bool
+//     b.maxon:  let x = isReady()
+//               return x + 41        ⇒ shv2 COMPILED it, and returned 42
+//                                    ⇒ bootstrap: E2004: Cannot operate on bool and int
+//
+// The parser reported an out-of-file callee as `MaxonType.unresolved`; TypeRules maps that to
+// `TypeClass.unknown`; and `unknown` AGREES WITH EVERYTHING. That deferral is the right move for a
+// type you genuinely cannot see, and a catastrophic one for a type you simply did not LOOK for.
+// **The deferral was never the defect. Not looking was.** So this index looks — at every file's
+// tokens, before any file's parse — and `unresolved` is no longer an answer for a callee some file
+// declares. (Its twin was worse: agreement satisfied by deferral let `(boolean, unresolved)` reach
+// `wordOpResultTag`'s bool-first arm, so `flag and crossFileInt()` MINTED a merge phi tagged
+// `boolean` carrying the int 7.)
+//
+// THE ID PROBLEM — why a signature travels by NAME. A `MaxonType.named(id)` is meaningless outside
+// the `TypeNameInterner` that minted the id, and this index is built BEFORE, and APART FROM, the
+// per-file artifact interners the parser fills (ParseStaging's parallel-ready discipline: a file's
+// parse touches no shared state). So the index owns its own interner, and a parser ADOPTS a
+// callee's return type out of it — the type's NAME is re-interned into the parser's own artifact
+// table, so the `MaxonType` handed back is indistinguishable from one that file had parsed itself.
+// `returnTypeOf` is the one door, and it is the one place the two id spaces meet.
+
+// The shape discriminators the signature hash mixes — one per arm of the two type unions, so two
+// declarations that differ only in shape (`returns bool` vs `returns int`) cannot hash alike.
+//
+// Small distinct constants, NOT the enums' ordinals: an ordinal is not a value in Maxon, and — the
+// real reason — a hash that moved when an enum's arms were REORDERED would invalidate every parse
+// memo in the project for a change that means nothing.
+let ReturnShapeVoid = 1 as ContentHash
+let ReturnShapeValue = 2 as ContentHash
+let TypeShapeBoolean = 3 as ContentHash
+let TypeShapeInteger = 4 as ContentHash
+let TypeShapeFloat = 5 as ContentHash
+let TypeShapeNamed = 6 as ContentHash
+let TypeShapeExitCode = 7 as ContentHash
+let TypeShapeUnresolved = 8 as ContentHash
+
+// What the index knows about a callee — the TWO outcomes the old `MaxonType.unresolved` sentinel
+// collapsed into one, plus the third (`void`) that it dropped on the floor.
+export union CalleeReturn
+	// Some file declares this function, and `returnType` is its declaration UNDISTORTED: `void`
+	// means it returns nothing at all (using the call as a value is an error — `Parser.parseCall`),
+	// `value(t)` means it returns a `t`. The old code mapped BOTH of these and the case below onto
+	// one `unresolved`, which is how `let x = noop()` then `x + 4` compiled.
+	declared(returnType MaxonReturnType)
+	// NO file declares it. The parser DEFERS — it types the call `unresolved` — rather than
+	// reporting, and that is deliberate: the authoritative answer belongs to
+	// `SemanticCheck.validateCall`, which reads the registry the REAL parse built (E3030, "call to
+	// undefined function"). This token sweep is the TOLERANT half of the pair (it records only the
+	// exact `function NAME ( … ) returns TYPE` shape and skips anything else without complaint), so
+	// it must never gain a veto: a sweep that missed a declaration the parser accepts would reject
+	// a correct program. Two whole-program tables that could each veto a call would also be one
+	// fact written down twice — and this one is not the authority.
+	undeclared
+end 'CalleeReturn'
+
+export type ProgramSignatures
+	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
+	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
+	// `commitFuncSignatures` (E2001), which fails the build, so the overwrite is never observed.
+	var returnTypes as FuncReturnTypeMap
+	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
+	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
+	var typeNames as TypeNameInterner
+	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
+	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
+	// ENTRIES rather than the FILES is the whole point of it:
+	//   • edit a function's BODY  ⇒ that file's content hash moves (it re-parses); this hash does
+	//     NOT (no other file re-parses). Incrementality is preserved.
+	//   • edit a RETURN TYPE      ⇒ this hash moves, and every file re-parses. Which is exactly
+	//     right: every call to that function, in any file, may have changed meaning.
+	// Keying the parse memo on the composite SOURCE hash instead would be sound and would throw
+	// away the first property — one file's edit would re-parse the whole program.
+	export var hash as ContentHash
+
+	export static function create() returns ProgramSignatures
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeNames: TypeNameInterner.create(), hash: fnvOffsetBasis()}
+	end 'create'
+
+	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
+	// index — and its hash — are a deterministic function of the program, not of the order the
+	// files happened to be visited in.
+	//
+	// `fileTypeNames` is the interner the scan interned into (a `Parser`'s own artifact-local
+	// table), so its ids are file-local. They are folded in and remapped through exactly the
+	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
+	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
+	// into a bigger table" would be free to disagree with this one about what an id means.
+	export function foldFile(scanned FuncReturnTypeEntryArray, fileTypeNames TypeNameInterner)
+		let remap = self.typeNames.foldInto(fileTypeNames)
+
+		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
+		// loop rather than asked once per function — the same shape `mergeArtifact` uses for the same
+		// fold. And the identity case is not merely a shortcut, it avoids an ALLOCATION per declared
+		// function in the program: `remapMaxonReturnType` CONSTRUCTS a `MaxonReturnType`, and a Maxon
+		// union value is a heap object (every case), so remapping ids that did not move would allocate
+		// a fresh copy of the object it was handed, for nothing.
+		//
+		// ⚠ Written as two loops over one `record`, NOT as `x if remap.isIdentity else remap(x)`. The
+		// ternary form LEAKS under the C# bootstrap — its arms mix a BORROWED field read with a
+		// freshly-OWNED value, and the conditional does not reconcile the two ownerships (measured:
+		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
+		if remap.isIdentity 'idsUnchanged'
+			for entry in scanned 'eachUnmapped'
+				self.record(entry.name, returnType: entry.returnType)
+			end 'eachUnmapped'
+			return
+		end 'idsUnchanged'
+
+		for entry in scanned 'eachRemapped'
+			self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap))
+		end 'eachRemapped'
+	end 'foldFile'
+
+	// Add one declaration to the index AND fold it into the hash. The one write, so the table and the
+	// hash that keys every parse memo on it can never disagree about what the index contains.
+	function record(name ByteArray, returnType MaxonReturnType)
+		self.returnTypes.upsert(name, value: returnType)
+		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType)
+	end 'record'
+
+	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
+	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and
+	// is re-interned on arrival, so the id the parser stores is one its own file's merge will
+	// resolve.
+	export function returnTypeOf(callee ByteArray, into TypeNameInterner) returns CalleeReturn
+		let declared = try self.returnTypes.get(callee) otherwise return CalleeReturn.undeclared
+		return CalleeReturn.declared(self.adoptReturnType(declared, into: into))
+	end 'returnTypeOf'
+
+	function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
+		return match rt 'r'
+			void gives rt
+			value(inner) gives self.adoptValueReturn(rt, inner: inner, into: into)
+		end 'r'
+	end 'adoptReturnType'
+
+	// Only a `named` type carries an id, so only it is rebuilt. Every other return type is already
+	// interner-free, and the STORED union is handed straight back — which is what keeps the per-call
+	// path from allocating a fresh `MaxonReturnType` for every `returns bool` in the program (a
+	// Maxon union value is a heap object, every case — see MaxonDialect's ValueTypeTag header).
+	function adoptValueReturn(rt MaxonReturnType, inner MaxonType, into TypeNameInterner) returns MaxonReturnType
+		return match inner 'r'
+			named(id) gives MaxonReturnType.value(MaxonType.named(into.intern(self.nameOfId(id))))
+			boolean to float gives rt
+			exitCode to unresolved gives rt
+		end 'r'
+	end 'adoptValueReturn'
+
+	// Mix one declaration into the running hash: the function's NAME, then its return type's SHAPE,
+	// then — for a named type — that TYPE's name. Names, never ids: an id depends on the order the
+	// index happened to intern in, so hashing one would let a new declaration in an unrelated file
+	// shift every later id and invalidate every parse memo in the project for nothing.
+	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType) returns ContentHash
+		return self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
+	end 'mixDeclaration'
+
+	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash
+		return match returnType 'r'
+			void gives mix(state, value: ReturnShapeVoid)
+			value(inner) gives self.mixType(mix(state, value: ReturnShapeValue), t: inner)
+		end 'r'
+	end 'mixReturnType'
+
+	function mixType(state ContentHash, t MaxonType) returns ContentHash
+		return match t 'r'
+			boolean gives mix(state, value: TypeShapeBoolean)
+			integer gives mix(state, value: TypeShapeInteger)
+			float gives mix(state, value: TypeShapeFloat)
+			named(id) gives mixBytes(mix(state, value: TypeShapeNamed), bytes: self.nameOfId(id))
+			exitCode gives mix(state, value: TypeShapeExitCode)
+			// `Parser.parseTypeReference` produces only `named` and the three primitive keywords, so
+			// a SCANNED signature can never carry `unresolved` — TypeResolution is what mints those,
+			// and it runs long after this. The arm exists because the match is exhaustive, and it
+			// hashes rather than panicking so that a future producer of `unresolved` signatures is a
+			// cache-key question, not a crash.
+			unresolved gives mix(state, value: TypeShapeUnresolved)
+		end 'r'
+	end 'mixType'
+
+	function nameOfId(id TypeNameId) returns ByteArray
+		return try self.typeNames.nameOf(id) otherwise panic("ProgramSignatures: type-name id {id} is not in this index's own interner — every id it stores was minted by foldFile's fold into that table")
+	end 'nameOfId'
+end 'ProgramSignatures'
