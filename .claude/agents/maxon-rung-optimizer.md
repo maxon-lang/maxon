@@ -45,8 +45,18 @@ verdict; the exact memory gates still ran).
 - **`--update-required` rewrites the memory goldens, and THE DIFF IS THE REVIEW.** A golden that moved
   means the compiler allocates differently for the same input — that is the event this suite exists to
   catch. Never regenerate to make red go away; explain the diff or fix the cause.
-- **`perType: true`** attributes allocations to the TYPE allocated — the way to answer "a memory gate
-  fired, but of *what*?" It is slow (minutes) and off by default.
+  ⚠ **It REFUSES to run without a `note`** — one sentence saying *why* the goldens moved. The note and
+  the before/after numbers are appended to **`docs/optimization-log.md`**, the running record of what the
+  compiler's memory traffic has actually done, change by change. The suite can see exactly *what* moved
+  and can never see *why*, so the reason is demanded at the one moment it is still known. **Write a real
+  one.** (A short ladder is also refused rather than allowed to silently delete goldens it did not climb.)
+- **`perType: true`** runs an untimed `--mm-trace` pass printing **two** ranked tables, each with its own
+  growth exponent. It is slow (minutes) and off by default — but it is how you actually find things:
+  - **by TYPE** — answers "a memory gate fired, but of *what*?" Names the data structure (a
+    `LiveIndexColumn` at exponent 2.17 **is** a quadratic).
+  - **by SCOPE** — the *function* that made the allocation, which the type table structurally **cannot**
+    tell you: a `String` row can never say that 150 of them came from `emitFixedToken`. A constant-factor
+    hog hides inside its type and is a single named row here. **This is the column that finds things.**
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
