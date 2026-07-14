@@ -1932,8 +1932,45 @@ public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, Maxon
   public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
+/// What an AWAIT — of either form — must tell the linear-await check (E3100).
+///
+/// There are two await ops (`await` and `try await`), and both consume the promise's result in
+/// exactly the same way, so both are subject to linearity. This interface is what MAKES them agree:
+/// the check matches on it, not on the two classes, so a fact added here and forgotten in one op is
+/// a COMPILE ERROR rather than a silently-defaulted field the check then reads as null. E3100 exists
+/// because one fact about a promise was written down twice and the copies drifted; this is that
+/// lesson applied to the op that carries it.
+public interface IMaxonAwaitOp {
+  /// Source location of the `await` keyword — where a linearity diagnostic points.
+  int? AwaitLine { get; }
+  int? AwaitColumn { get; }
+
+  /// The GREEN THREAD this await consumes — the identity in which `await` is LINEAR (E3100).
+  ///
+  /// This is the KEY the check matches on, and it is the promise VALUE's thread, NOT the
+  /// identifier text. It has to be: `let q = p` gives one green thread two names, so keying on
+  /// the name saw `p` and `q` as unrelated and let `await p; await q` compile — a DOUBLE FREE,
+  /// which is the entire thing E3100 exists to prevent. Nor is it the promise value's SSA `Id`:
+  /// a cross-block read re-tags a fresh MaxonPromise around the same thread, so `Id` would miss
+  /// a second await in another block. MaxonPromise.GreenThreadId is the id that survives both,
+  /// because it is minted once at the `async` spawn and carried by every value derived from it.
+  ///
+  /// Null when the awaited expression is not a named binding (an inline `await async f()`, or an
+  /// `await h.pr`) — see CheckLinearAwait for what that does and does not cover.
+  int? PromiseGreenThreadId { get; }
+
+  /// The BINDING this await read the promise from — what RE-ARMS it. A distinct fact from the
+  /// green thread, and not derivable from it: assigning this name puts a DIFFERENT thread in it,
+  /// so the linearity walk stops there. That is what makes `for p in promises 'each' … await p …
+  /// end` legal — the loop re-arms `p` every iteration, so its single `await` is one await per
+  /// promise, not N awaits of one.
+  ///
+  /// Null exactly when PromiseGreenThreadId is: both come from the same binding lookup.
+  string? PromiseVarName { get; }
+}
+
 /// Waits for a green thread (promise) to complete and extracts its result.
-public sealed class MaxonAwaitOp : MaxonOp {
+public sealed class MaxonAwaitOp : MaxonOp, IMaxonAwaitOp {
   public override MaxonOpKind Kind => MaxonOpKind.Await;
   public override string Mnemonic => "maxon.await";
   public MaxonValue Promise { get; }
@@ -1946,8 +1983,9 @@ public sealed class MaxonAwaitOp : MaxonOp {
   /// needs somewhere to point when it does.
   public int? AwaitLine { get; set; }
   public int? AwaitColumn { get; set; }
-  /// The BINDING the awaited promise was read from — the identity in which `await` is linear.
-  /// See MaxonTryAwaitOp.PromiseVarName.
+  /// <inheritdoc cref="IMaxonAwaitOp.PromiseGreenThreadId"/>
+  public int? PromiseGreenThreadId { get; set; }
+  /// <inheritdoc cref="IMaxonAwaitOp.PromiseVarName"/>
   public string? PromiseVarName { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<MaxonValue> Operands => [Promise];
@@ -1966,7 +2004,7 @@ public sealed class MaxonAwaitOp : MaxonOp {
 
 /// Waits for a throwing green thread (promise) to complete. Extracts both the result and error flag.
 /// Mirrors MaxonTryCallOp but for async/await: the error flag comes from gt.threw.
-public sealed class MaxonTryAwaitOp : MaxonOp {
+public sealed class MaxonTryAwaitOp : MaxonOp, IMaxonAwaitOp {
   public override MaxonOpKind Kind => MaxonOpKind.TryAwait;
   public override string Mnemonic => "maxon.try_await";
   public MaxonValue Promise { get; }
@@ -1974,22 +2012,12 @@ public sealed class MaxonTryAwaitOp : MaxonOp {
   public MaxonInteger ErrorFlag { get; }
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
-  /// Source location of the `await` keyword, carried for the linear-await diagnostic (E3099).
+  /// <inheritdoc cref="IMaxonAwaitOp.AwaitLine"/>
   public int? AwaitLine { get; set; }
   public int? AwaitColumn { get; set; }
-  /// The BINDING the awaited promise was read from — the identity in which `await` is LINEAR
-  /// (E3099). Null when the awaited expression is not a named binding (an inline
-  /// `await async f()`), which can only be awaited once anyway.
-  ///
-  /// It is deliberately the NAME, not the promise value. Every read of a promise variable emits
-  /// a fresh MaxonVarRefOp and re-tags a fresh MaxonPromise around its result, so `await p`
-  /// twice yields two DIFFERENT promise values for one green thread — keying linearity on them
-  /// would see two unrelated promises and catch nothing.
-  ///
-  /// The binding is also the thing that gets RE-ARMED: assigning the variable puts a different
-  /// green thread in it, which is exactly what `for p in promises` does on every iteration. So
-  /// the linearity walk keys on the name and stops at any assignment to it, which makes that
-  /// central idiom's single `await p` one await per promise instead of N awaits of one.
+  /// <inheritdoc cref="IMaxonAwaitOp.PromiseGreenThreadId"/>
+  public int? PromiseGreenThreadId { get; set; }
+  /// <inheritdoc cref="IMaxonAwaitOp.PromiseVarName"/>
   public string? PromiseVarName { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
   public override IReadOnlyList<MaxonValue> Operands => [Promise];

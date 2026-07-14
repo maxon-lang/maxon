@@ -8440,11 +8440,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Replace the MaxonAwaitOp with a MaxonTryAwaitOp. The await's identity and location
       // carry across the substitution: a `try await` is still an await, and is just as
-      // linear (E3099) as a plain one.
+      // linear (E3100) as a plain one.
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
       var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName) {
         AwaitLine = awaitOp.AwaitLine,
         AwaitColumn = awaitOp.AwaitColumn,
+        PromiseGreenThreadId = awaitOp.PromiseGreenThreadId,
         PromiseVarName = awaitOp.PromiseVarName,
       };
       _currentBlock!.AddOp(tryAwaitOp);
@@ -17806,9 +17807,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // `async` that made p — which is the common shape, and which used to both
         // mistype the `(e)` binding and leak an assoc-value payload. There is now
         // exactly one thing to carry, so there is nothing left to drop half of.
+        // The GREEN THREAD rides across too. This is a new SSA value for the SAME thread, so it
+        // carries the original's GreenThreadId rather than naming itself: minting a fresh thread
+        // identity here would make `await p` in one block and `await p` in another look like two
+        // unrelated promises, and the linear-await check would pass a double free.
         if (info.Value is MaxonPromise origPromise) {
           return new MaxonPromise(refOp.Result.Id, origPromise.InnerKind, origPromise.InnerStructTypeName,
-              origPromise.ErrorType);
+              origPromise.ErrorType, origPromise.GreenThreadId);
         }
         return refOp.Result;
     }
@@ -20458,10 +20463,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Waits for the green thread to complete and returns its result.
   /// </summary>
   private ExprResult.Direct ParseAwaitExpression(Token awaitToken) {
-    // The identity `await` is LINEAR in, captured BEFORE ParsePrimary consumes the name.
-    // See MaxonTryAwaitOp.PromiseVarName: linearity is a property of the BINDING, not of the
-    // promise value, which is freshly re-tagged on every read.
-    var promiseVarName = ResolveAwaitedPromiseVarName();
+    // The identity `await` is LINEAR in, captured BEFORE ParsePrimary consumes the name — the
+    // registry still holds what the binding named at THIS point, which is the whole question.
+    var awaited = ResolveAwaitedPromiseIdentity();
 
     var inner = ParsePrimary();
     var innerVal = ResolveExprValue(inner);
@@ -20497,7 +20501,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var awaitOp = new MaxonAwaitOp(promise, promise.InnerKind, promise.InnerStructTypeName) {
       AwaitLine = awaitToken.Line,
       AwaitColumn = awaitToken.Column,
-      PromiseVarName = promiseVarName,
+      PromiseGreenThreadId = awaited?.GreenThreadId,
+      PromiseVarName = awaited?.BindingName,
     };
     _currentBlock!.AddOp(awaitOp);
     InvalidateCachedSelfFields();
@@ -20509,19 +20514,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return new ExprResult.Direct(promise);
   }
 
-  /// The identity of the promise about to be awaited, for the linear-await check (E3099).
+  /// What an await site must remember for the linear-await check (E3100). It is TWO facts, and
+  /// neither derives from the other:
   ///
-  /// `await` is linear in the promise, and a promise's stable name is the VALUE its binding
-  /// holds — `info.Value.Id`. That id survives every read of the variable and changes only
-  /// when the variable is reassigned, which is exactly when the promise becomes a different
-  /// green thread. It covers both a promise still in the hand of its `async` (a MaxonPromise)
-  /// and one that came back out of storage (a Promise struct), because the question asked is
-  /// about the BINDING, not about what shape the value in it has.
+  ///   - GreenThreadId — WHICH THREAD is being awaited. This is what linearity is a property of,
+  ///     and it is what makes an ALIAS an alias: `let q = p` copies the promise VALUE, so `p` and
+  ///     `q` carry one green-thread id under two names. Keying on the NAME instead made them two
+  ///     unrelated keys and let `await p; await q` through — a silent double free.
+  ///   - BindingName — WHICH NAME it was read from, and therefore what RE-ARMS it. Assigning that
+  ///     name puts a different thread in it, which is what makes `for p in promises 'each' …
+  ///     await p … end` one await per promise instead of N awaits of one.
   ///
-  /// Null when the awaited expression is not a bare binding — `await async f()`, or an await
-  /// of a call result. Such a promise has no second occurrence to be awaited from, so there is
-  /// nothing for linearity to say about it.
-  private string? ResolveAwaitedPromiseVarName() {
+  /// Null when the awaited expression is not a bare binding — `await async f()`, an `await f()`,
+  /// or an await of a field like `h.pr`. An inline promise has no second occurrence to be awaited
+  /// from; a field does, but which thread sits in it is not a static fact (see CheckLinearAwait's
+  /// boundary note).
+  private readonly record struct AwaitedPromise(int GreenThreadId, string BindingName);
+
+  private AwaitedPromise? ResolveAwaitedPromiseIdentity() {
     if (!CheckIdentifierLike()) return null;
 
     // A bare name, not the head of a call or a field/method chain.
@@ -20529,8 +20539,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (next is TokenType.Dot or TokenType.LeftParen) return null;
 
     var name = Current().Value;
-    return _variables.TryGetValue(name, out _) ? name : null;
+    if (!_variables.TryGetValue(name, out var info)) return null;
+
+    return new AwaitedPromise(GreenThreadIdOf(info.Value), name);
   }
+
+  /// The green thread a binding's value names.
+  ///
+  /// A MaxonPromise knows its thread outright — it is carried from the `async` that spawned it,
+  /// through every cross-block re-tag and every alias. Anything else in a promise binding is a
+  /// BOXED promise (a `Promise with T` struct: a function parameter, or a value read back out of
+  /// storage), whose runtime handle names a thread the compiler cannot see. Its SSA id still
+  /// serves as the identity, because the binding is declared once: two `await pr` on one
+  /// parameter agree on it, which is what keeps a double await inside a callee caught. Two boxed
+  /// promises from DIFFERENT bindings never collide, because SSA ids are unique — so the check
+  /// stays silent across storage rather than guessing wrong in either direction.
+  private static int GreenThreadIdOf(MaxonValue value) =>
+    value is MaxonPromise promise ? promise.GreenThreadId : value.Id;
 
   /// Synthesize a MaxonPromise from a `Promise with T` / `Promise with (T, E)` struct value.
   /// The struct stores its green-thread handle in the single `inner` i64 field; we emit a
@@ -20543,6 +20568,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// error type, same answer to whether the error owns a heap payload. It used to come back
   /// throws=true-with-no-error-type — a shape that could not be true of any real function — and
   /// every promise path downstream had a special case for it.
+  ///
+  /// The one thing it CANNOT reconstruct is WHICH green thread this is. The box holds a runtime
+  /// handle; the thread that went into it is not a static fact. So the promise gets a FRESH
+  /// GreenThreadId (the default) rather than a guessed one — it is never spuriously EQUAL to
+  /// another thread's, so the linear-await check stays silent across storage instead of
+  /// mis-reporting in either direction. That silence is the documented boundary; see
+  /// SemanticCheckPass.CheckLinearAwait.
   private MaxonPromise ReconstructPromiseFromStruct(MaxonStruct structVal, IrStructType structType) {
     MaxonValueKind? innerKind = null;
     string? innerStructTypeName = null;

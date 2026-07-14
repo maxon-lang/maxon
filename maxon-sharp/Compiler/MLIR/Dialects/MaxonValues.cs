@@ -48,9 +48,26 @@ public sealed class MaxonPromise(
     int id,
     MaxonValueKind? innerKind,
     string? innerStructTypeName,
-    Core.IrType? errorType = null) : MaxonValue(id) {
+    Core.IrType? errorType = null,
+    int? greenThreadId = null) : MaxonValue(id) {
   public MaxonValueKind? InnerKind { get; } = innerKind;
   public string? InnerStructTypeName { get; } = innerStructTypeName;
+
+  /// The GREEN THREAD this promise names — the identity in which `await` is LINEAR (E3100).
+  ///
+  /// It is NOT `Id`. `Id` identifies the SSA VALUE, and one green thread is named by MANY
+  /// values: every cross-block read of a promise variable re-tags a fresh MaxonPromise around
+  /// the same thread, and `let q = p` binds a second name to it. Keying linearity on `Id` would
+  /// see those as unrelated promises and let a second await through — which is a DOUBLE FREE,
+  /// because the thunk hands its result over once and two awaits release it twice.
+  ///
+  /// A thread comes into existence at exactly one place — the `async` spawn — so a promise
+  /// minted there names itself, and every value derived from it CARRIES this id forward. The
+  /// one derivation that cannot is a promise reconstructed out of STORAGE (an array element, a
+  /// struct field): the box holds a runtime handle, and which thread it is is not a static fact.
+  /// Such a promise gets a fresh id, so it is never spuriously EQUAL to another — the check
+  /// stays silent there rather than guessing. See CheckLinearAwait for that boundary.
+  public int GreenThreadId { get; } = greenThreadId ?? id;
 
   /// The awaited thunk's declared `throws` type, or null if the thunk does not throw.
   ///

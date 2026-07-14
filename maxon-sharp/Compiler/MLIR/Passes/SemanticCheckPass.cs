@@ -290,20 +290,30 @@ public static class SemanticCheckPass {
   }
   /// The await ops, of both forms, reduced to what the linear-await check needs.
   /// `try await` is an await: it consumes the promise's result exactly as a plain one does.
-  private readonly record struct AwaitSite(string VarName, int? Line, int? Column);
+  ///
+  /// GreenThreadId is WHICH THREAD is consumed — the key linearity is a property of. VarName is
+  /// WHICH BINDING it was read from — what re-arms it. Two different facts; see MaxonTryAwaitOp.
+  private readonly record struct AwaitSite(int GreenThreadId, string VarName, int? Line, int? Column);
 
-  private static AwaitSite? AsAwaitSite(MaxonOp op) => op switch {
-    MaxonAwaitOp { PromiseVarName: { } name } a => new AwaitSite(name, a.AwaitLine, a.AwaitColumn),
-    MaxonTryAwaitOp { PromiseVarName: { } name } t => new AwaitSite(name, t.AwaitLine, t.AwaitColumn),
-    _ => null
-  };
+  /// Both await forms answer IMaxonAwaitOp, so this asks the INTERFACE rather than naming the two
+  /// op classes: a third await form, or a fifth fact, cannot be silently missed here.
+  private static AwaitSite? AsAwaitSite(MaxonOp op) =>
+    op is IMaxonAwaitOp { PromiseGreenThreadId: { } greenThreadId, PromiseVarName: { } varName } awaitOp
+      ? new AwaitSite(greenThreadId, varName, awaitOp.AwaitLine, awaitOp.AwaitColumn)
+      : null;
 
-  /// E3099: a promise awaited a SECOND time.
+  /// E3100: a green thread awaited a SECOND time.
   ///
   /// `await` is LINEAR. The thunk owns its result and hands it over at the await, so a second
   /// await takes a second reference to a payload the thunk only ever owned once: the two releases
   /// underflow the refcount and free it twice. Making the second await a compile error is what
   /// makes that double-free unrepresentable, rather than something the runtime survives.
+  ///
+  /// It keys on the GREEN THREAD, not on the identifier text. Keying on the name was a hole you
+  /// could drive an alias through — `let q = p` gives one thread two names, and `await p; await q`
+  /// compiled clean and double-freed at runtime. MaxonPromise.GreenThreadId is minted once at the
+  /// `async` spawn and carried through every alias and every cross-block re-tag, so the two names
+  /// resolve to one key.
   ///
   /// The check is FLOW-SENSITIVE, and it has to be, in both directions:
   ///
@@ -312,69 +322,116 @@ public static class SemanticCheckPass {
   ///   - ONE await, sitting in a loop, over a promise spawned OUTSIDE the loop, awaits the same
   ///     green thread on every iteration. A lexical check sees a single await and misses it.
   ///
-  /// So: from each await, walk the CFG forward and report any await of the same binding that is
-  /// REACHABLE from it — including itself, which is what catches the loop. The walk is KILLED at
-  /// any ASSIGNMENT to that binding, because assigning it puts a different green thread in it.
-  /// That is what makes the central idiom `for p in promises 'each' ... await p ... end` legal:
-  /// the loop assigns `p` the next element on every iteration, so its single `await` is one await
-  /// per promise, not N awaits of one. It is also what makes the name safe to key on across
-  /// scopes — a re-declaration of `p` in a later scope is itself an assignment, and kills.
+  /// So: from each await, walk the CFG forward and report any await of the same THREAD that is
+  /// REACHABLE from it — including itself, which is what catches the loop.
+  ///
+  /// The walk is KILLED when the thread has no name left to be awaited through: every binding
+  /// that awaits it has been REASSIGNED on this path, and a reassigned binding holds a different
+  /// thread. That is what keeps `for p in promises 'each' … await p … end` legal — the loop
+  /// re-arms `p` every iteration, so its single `await` is one await per promise rather than N
+  /// awaits of one — and it is why the kill tracks the whole set of awaiting names rather than
+  /// just the one this walk started from: with an alias in play, rebinding `p` does not end the
+  /// thread's life while `q` still names it, and `await q` afterwards is still a double free.
+  ///
+  /// ⚠ BOUNDARY — what this does NOT catch, deliberately. It sees awaits of BINDINGS inside ONE
+  /// function's CFG. A promise that ESCAPES that is beyond it, and awaiting such a promise twice
+  /// still double-frees at runtime:
+  ///
+  ///   - the same container SLOT twice (`await arr[0]; await arr[0]`), or a struct FIELD
+  ///     (`await h.pr`) — the box holds a runtime handle, and which thread is in it is not a
+  ///     static fact;
+  ///   - a promise passed as a CALL ARGUMENT to a callee that awaits it, and awaited in the
+  ///     caller too — the second await is in another frame, so no CFG path joins them.
+  ///
+  /// All of these need ownership tracked THROUGH storage and across frames, which the bootstrap
+  /// does not have; it is shv2's ownership milestone (P1.5). They are missed, never mis-reported:
+  /// a promise out of storage gets a fresh GreenThreadId, so it is never spuriously EQUAL to
+  /// another and the check stays silent rather than guessing. Do not "fix" that by widening the
+  /// key — an over-rejection here would break `for p in promises`, which is the central idiom.
   private static void CheckLinearAwait(IrModule<MaxonOp> module) {
     foreach (var func in module.Functions) {
-      // Cheap pre-pass: most functions contain no await at all.
-      bool hasAwait = false;
+      // Most functions contain no await at all; collecting the sites IS the pre-pass.
+      var sites = new List<(IrBlock<MaxonOp> Block, int Index, AwaitSite Site)>();
       foreach (var block in func.Body.Blocks) {
-        foreach (var op in block.Operations) {
-          if (AsAwaitSite(op) != null) { hasAwait = true; break; }
+        for (int i = 0; i < block.Operations.Count; i++) {
+          if (AsAwaitSite(block.Operations[i]) is { } site) sites.Add((block, i, site));
         }
-        if (hasAwait) break;
       }
-      if (!hasAwait) continue;
+      if (sites.Count == 0) continue;
 
       var blocksByName = func.Body.Blocks.ToDictionary(b => b.Name);
 
-      foreach (var block in func.Body.Blocks) {
-        for (int i = 0; i < block.Operations.Count; i++) {
-          if (AsAwaitSite(block.Operations[i]) is not { } first) continue;
-          if (FindReachableAwaitOf(first.VarName, block, i + 1, blocksByName) is not { } second) continue;
+      // Every binding through which a given thread is awaited. A binding that is never awaited
+      // cannot host a second await, so it cannot keep the thread alive for this check either.
+      var awaitingNames = new Dictionary<int, List<string>>();
+      foreach (var (_, _, site) in sites) {
+        var names = awaitingNames.TryGetValue(site.GreenThreadId, out var existing)
+          ? existing
+          : awaitingNames[site.GreenThreadId] = [];
+        if (!names.Contains(site.VarName)) names.Add(site.VarName);
+      }
 
-          throw new CompileError(ErrorCode.SemanticPromiseAlreadyAwaited,
-            "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice",
-            second.Line, second.Column) {
-            FilePath = func.SourceFilePath
-          };
-        }
+      foreach (var (block, index, first) in sites) {
+        var names = awaitingNames[first.GreenThreadId];
+        if (FindReachableAwaitOf(first.GreenThreadId, names, block, index + 1, blocksByName) is not { } second)
+          continue;
+
+        throw new CompileError(ErrorCode.SemanticPromiseAlreadyAwaited,
+          "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice",
+          second.Line, second.Column) {
+          FilePath = func.SourceFilePath
+        };
       }
     }
   }
 
-  /// Forward CFG search from (startBlock, startIdx) for another await of the binding `varName`,
-  /// killing any path that ASSIGNS it (a re-armed binding holds a new promise, not the awaited one).
-  private static AwaitSite? FindReachableAwaitOf(string varName, IrBlock<MaxonOp> startBlock, int startIdx,
-      Dictionary<string, IrBlock<MaxonOp>> blocksByName) {
-    var queue = new Queue<(IrBlock<MaxonOp> Block, int Index)>();
-    queue.Enqueue((startBlock, startIdx));
+  /// Forward CFG search from (startBlock, startIdx) for another await of green thread
+  /// `greenThreadId`. `awaitingNames` is every binding that awaits that thread anywhere in this
+  /// function; a path dies once ALL of them have been reassigned along it, because from there on
+  /// the thread has no name left through which a second await could reach it.
+  ///
+  /// The live set is carried in the search state, not just tracked per-block: the same block
+  /// reached with a different set of bindings still live is a different question, and answering
+  /// it once for both would either miss a double await or invent one.
+  private static AwaitSite? FindReachableAwaitOf(int greenThreadId, List<string> awaitingNames,
+      IrBlock<MaxonOp> startBlock, int startIdx, Dictionary<string, IrBlock<MaxonOp>> blocksByName) {
+    // Live names as an index set over `awaitingNames`, canonicalised to a string so the visited
+    // set can dedupe on it. It only ever SHRINKS along a path, which is what bounds the walk.
+    var allLive = Enumerable.Range(0, awaitingNames.Count).ToHashSet();
+
+    static string LiveKey(HashSet<int> live) => string.Join(',', live.Order());
+
+    var queue = new Queue<(IrBlock<MaxonOp> Block, int Index, HashSet<int> Live)>();
+    queue.Enqueue((startBlock, startIdx, allLive));
     // A block may legitimately be entered once from mid-block (the start) and once from its top
     // (around a loop), and the second entry can see ops the first scan started past — including
     // the assignment that kills the path, and the await that proves it double.
-    var visited = new HashSet<(string, int)> { (startBlock.Name, startIdx) };
+    var visited = new HashSet<(string, int, string)> { (startBlock.Name, startIdx, LiveKey(allLive)) };
 
     while (queue.Count > 0) {
-      var (block, start) = queue.Dequeue();
+      var (block, start, live) = queue.Dequeue();
       bool killed = false;
 
       for (int i = start; i < block.Operations.Count; i++) {
         var op = block.Operations[i];
 
-        if (AsAwaitSite(op) is { } site && site.VarName == varName) return site;
+        if (AsAwaitSite(op) is { } site && site.GreenThreadId == greenThreadId) return site;
 
-        if (op is MaxonAssignOp assign && assign.VarName == varName) { killed = true; break; }
+        if (op is MaxonAssignOp assign) {
+          int slot = awaitingNames.IndexOf(assign.VarName);
+          if (slot < 0) continue;
+
+          // Copy-on-write: sibling paths out of this block must not see this path's kill.
+          live = [.. live];
+          live.Remove(slot);
+          if (live.Count == 0) { killed = true; break; }
+        }
       }
       if (killed) continue;
 
       foreach (var successor in SuccessorNames(block)) {
         if (!blocksByName.TryGetValue(successor, out var next)) continue;
-        if (visited.Add((next.Name, 0))) queue.Enqueue((next, 0));
+        if (visited.Add((next.Name, 0, LiveKey(live)))) queue.Enqueue((next, 0, live));
       }
     }
     return null;

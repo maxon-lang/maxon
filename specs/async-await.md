@@ -48,6 +48,19 @@ flow-sensitive, so two awaits in mutually exclusive branches are fine (each is t
 its own path), while a single await sitting in a loop over a promise spawned *outside* the loop is
 not (it awaits the same green thread every iteration).
 
+Linearity is a property of the GREEN THREAD, not of the name. `let q = p` gives one thread two
+names, and awaiting through both is the same double free — E3100 catches it. Conversely, assigning
+a promise binding RE-ARMS it: it names a new thread, so awaiting it again is legal, which is
+exactly what makes `for p in promises 'each' … await p … end` one await per promise.
+
+**Known boundary.** The check sees awaits of BINDINGS within one function's control flow. A promise
+that ESCAPES that is not tracked, and awaiting it twice still double-frees at runtime: the same
+container slot (`await arr[0]` twice) or a struct field (`await h.pr`), whose box holds a runtime
+handle naming no statically-known thread; and a promise passed as a call ARGUMENT to a callee that
+awaits it, whose second await lives in another frame. These need ownership tracked through storage
+and across frames — shv2's ownership milestone. They are missed, never mis-reported: a promise out
+of storage is never spuriously equal to another, so the check stays silent rather than guessing.
+
 **Typed promises:**
 A promise is typed by BOTH what its thunk returns and what its thunk throws, because both come
 back across the same `await`:
@@ -815,6 +828,229 @@ end 'main'
 ```
 ```exitcode
 22
+```
+
+<!-- test: async-await.error.double-await-through-alias -->
+Linearity is a property of the GREEN THREAD, not of the identifier text. `let q = p` gives one
+green thread a second name; awaiting through both names awaits it twice, and the payload the
+thunk handed over once is released twice. This compiled clean and double-freed at runtime
+("mm_decref: refcount underflow") for as long as the check keyed on the NAME — one extra line
+defeated the whole thing.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello world"
+end 'makeText'
+
+function main() returns ExitCode
+		let p = async makeText()
+		let q = p
+		let a = await p
+		let b = await q
+		print(a)
+		print(b)
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await-through-alias.test:11:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-await.error.double-await-through-alias-in-branch -->
+The same alias, made in a DIFFERENT BLOCK from the `async` that spawned the thread. This is why
+the key cannot be the promise value's SSA id either: a cross-block read of a promise variable
+re-tags a fresh value around the same green thread, so `p` and `q` here hold two different SSA
+ids for one thread. The id that survives the re-tag — the thread's own — is the one linearity
+keys on.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello world"
+end 'makeText'
+
+function main() returns ExitCode
+		let p = async makeText()
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		if not flag 'branch'
+				let q = p
+				let a = await p
+				let b = await q
+				print(a)
+				print(b)
+		end 'branch'
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await-through-alias-in-branch.test:13:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-await.error.double-await-alias-outlives-rebind -->
+Re-arming `p` does NOT end the first thread's life while `q` still names it. The walk that proves
+linearity therefore cannot stop at "the binding I started from was reassigned" — it stops only
+when EVERY binding that awaits the thread has been reassigned. Here `q` still names the first
+thread when it is awaited, so that await is the second one, and it is refused.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello world"
+end 'makeText'
+
+function main() returns ExitCode
+		var p = async makeText()
+		let q = p
+		let a = await p
+		p = async makeText()
+		let b = await q
+		let c = await p
+		print(a)
+		print(b)
+		print(c)
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await-alias-outlives-rebind.test:12:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-await.linear.rearm-after-await -->
+Reassigning a promise binding RE-ARMS it: `p` now names a new green thread, so awaiting it again
+is the first await of that thread, not a second await of the old one. This must keep compiling —
+the linear check refuses a second await of one thread, not a second `await p` in the text.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello"
+end 'makeText'
+
+function main() returns ExitCode
+		var p = async makeText()
+		let a = await p
+		p = async makeText()
+		let b = await p
+		print(a)
+		print(b)
+		return 0
+end 'main'
+```
+```stdout
+hellohello
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.linear.await-aliased-loop-element -->
+The `for p in promises` idiom with an ALIAS inside the loop. Every iteration re-arms `p` — and
+therefore `q` — so the single `await q` is one await per promise, not N awaits of one. This is
+the case an over-eager linearity check breaks: the alias makes `p` and `q` one green thread, and
+a check that unified them without also honouring the re-arm would reject the central idiom for
+draining a pool of promises. Both halves are pinned here, and they must stay pinned together.
+```maxon
+typealias Idx = int(0 to 100)
+typealias StrPromise = Promise with String
+typealias StrPromiseArray = Array with StrPromise
+
+function makeText(i Idx) returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "t{i}"
+end 'makeText'
+
+function main() returns ExitCode
+		var promises = StrPromiseArray.create()
+		for i in 0 upto 3 'spawn'
+				promises.push(async makeText(i))
+		end 'spawn'
+		for p in promises 'await'
+				let q = p
+				let s = await q
+				print("{s} ")
+		end 'await'
+		return 0
+end 'main'
+```
+```stdout
+t0 t1 t2 
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.linear.await-in-ternary-arms -->
+The two arms of a ternary are MUTUALLY EXCLUSIVE — only the selected arm is evaluated — so an
+`await` in each is the only await on its own path, exactly as in an `if`/`else`. This is pinned
+because the ternary's arms are a *recent* pair of blocks: they used to be hoisted into the entry
+block with only the store made conditional, and a linearity check that ran against the hoisted
+shape would have seen two awaits in ONE block and rejected a valid program. It reads the arms as
+the branches they now are.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makeValue() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'makeValue'
+
+function main() returns ExitCode
+		let p = async makeValue()
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		let v = (await p) if flag else (await p)
+		return (v + 1) as ExitCode
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: async-await.linear.await-aliased-in-ternary-arms -->
+The same, through an ALIAS: `p` and `q` are one green thread under two names, and the two arms
+await it through different names. Linearity keys on the THREAD, so it sees one thread awaited in
+each of two exclusive arms — which is one await per path, and legal. This is the intersection of
+the two facts that must both hold: the alias must UNIFY (or `await p; await q` in sequence would
+double-free), and the arms must stay EXCLUSIVE (or unifying them would reject this).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makeValue() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'makeValue'
+
+function main() returns ExitCode
+		let p = async makeValue()
+		let q = p
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		let v = (await p) if flag else (await q)
+		return (v + 1) as ExitCode
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: async-await.error.double-await-after-ternary-arm -->
+The other side of the ternary boundary. An `await` in one arm does NOT make the promise spent on
+the path where that arm was not taken — but the await AFTER the ternary is reachable from the arm
+that was, so on that path the thread is awaited twice. Exclusivity buys the two arms nothing here:
+reachability is what decides, and the arm reaches the tail.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makeValue() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'makeValue'
+
+function main() returns ExitCode
+		let p = async makeValue()
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		let v = (await p) if flag else 0
+		let w = await p
+		return (v + w) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await-after-ternary-arm.test:13:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-await.error.await-without-try -->
