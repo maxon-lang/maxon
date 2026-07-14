@@ -30,7 +30,7 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=96
+    x64.prologue stack_size=80
     x64.call IntArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -49,19 +49,17 @@ module {
     x64.mov rsi, [rbp-8]
     x64.mov rdi, [rsi+0]
     x64.mov [rbp-24], rdi
-    x64.mov r8, [rbp-24]
-    x64.mov r9, [r8+8]
-    x64.mov [rbp-32], r9
-    x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.xor r8d, r8d
+    x64.mov [rbp-32], r8
     x64.jmp main.loop1_0.header
   loop1_0.header:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-32]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rcx
     x64.jge main.loop1_0.exit
   loop1_0:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-24]
     x64.mov rdx, [rcx+24]
     x64.mov rbx, [rbp-24]
@@ -69,51 +67,53 @@ module {
     x64.imul rax, rdx
     x64.add rsi, rax
     x64.mov rdi, [rsi+0]
-    x64.mov [rbp-48], rdi
-    x64.mov r8, [rbp-48]
+    x64.mov [rbp-40], rdi
+    x64.mov r8, [rbp-40]
     x64.mov r9, [rbp-16]
     x64.add r9, r8
     x64.mov [rbp-16], r9
-    x64.mov rax, [rbp-40]
+    x64.jmp main.loop1_0.incr
+  loop1_0.incr:
+    x64.mov rax, [rbp-32]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.jmp main.loop1_0.header
   loop1_0.exit:
     x64.xor eax, eax
-    x64.mov [rbp-56], rax
+    x64.mov [rbp-48], rax
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rcx+0]
-    x64.mov [rbp-64], rdx
-    x64.mov rbx, [rbp-64]
-    x64.mov rsi, [rbx+8]
-    x64.mov [rbp-72], rsi
-    x64.xor edi, edi
-    x64.mov [rbp-80], rdi
+    x64.mov [rbp-56], rdx
+    x64.xor ebx, ebx
+    x64.mov [rbp-64], rbx
     x64.jmp main.loop2_0.header
   loop2_0.header:
-    x64.mov rax, [rbp-80]
-    x64.mov rcx, [rbp-72]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-64]
+    x64.cmp rdx, rcx
     x64.jge main.loop2_0.exit
   loop2_0:
-    x64.mov rax, [rbp-80]
-    x64.mov rcx, [rbp-64]
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-56]
     x64.mov rdx, [rcx+24]
-    x64.mov rbx, [rbp-64]
+    x64.mov rbx, [rbp-56]
     x64.mov rsi, [rbx+0]
     x64.imul rax, rdx
     x64.add rsi, rax
     x64.mov rdi, [rsi+0]
-    x64.mov [rbp-88], rdi
-    x64.mov r8, [rbp-88]
-    x64.mov r9, [rbp-56]
+    x64.mov [rbp-72], rdi
+    x64.mov r8, [rbp-72]
+    x64.mov r9, [rbp-48]
     x64.add r9, r8
-    x64.mov [rbp-56], r9
-    x64.mov rax, [rbp-80]
+    x64.mov [rbp-48], r9
+    x64.jmp main.loop2_0.incr
+  loop2_0.incr:
+    x64.mov rax, [rbp-64]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-80], rax
+    x64.mov [rbp-64], rax
     x64.jmp main.loop2_0.header
   loop2_0.exit:
     x64.mov rax, 60
@@ -122,19 +122,19 @@ module {
     x64.sete rdx
     x64.movzx rdx, rdxb
     x64.xor ebx, ebx
-    x64.mov [rbp-89], rbx
+    x64.mov [rbp-73], rbx
     x64.test rdx, rdx
     x64.je main.shortAnd_0.merge
   shortAnd_0.rhs:
     x64.mov rax, 60
-    x64.mov rcx, [rbp-56]
+    x64.mov rcx, [rbp-48]
     x64.cmp rcx, rax
     x64.sete rdx
     x64.movzx rdx, rdxb
-    x64.mov [rbp-89], rdx
+    x64.mov [rbp-73], rdx
     x64.jmp main.shortAnd_0.merge
   shortAnd_0.merge:
-    x64.mov rax, [rbp-89]
+    x64.mov rax, [rbp-73]
     x64.test rax, rax
     x64.je main.check_0.after
   check_0:

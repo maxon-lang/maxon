@@ -2034,6 +2034,12 @@ public static class MonomorphizationPass {
 
     public bool TryGetValue(string key, out IrType value) => map.TryGetValue(key, out value!);
 
+    /// See TypeSubstitution.ResolveManagedElement — same rules, different substitution map.
+    public ManagedElementInfo ResolveManagedElement(MaxonManagedMemGetOp op) =>
+      ManagedElementInfo.ForSubstitutedOp(op,
+        op.TypeParamName != null && map.TryGetValue(op.TypeParamName, out var bound) ? bound : null,
+        SubstituteName);
+
     /// Check if the resolved "Element" type parameter (or named param) is bool.
     public bool IsBitPackedElement(string? typeParamName) {
       var paramName = typeParamName ?? "Element";
@@ -2385,6 +2391,18 @@ public static class MonomorphizationPass {
       }
       case MaxonFieldAssignOp fa:
         return new MaxonFieldAssignOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, mapValue(fa.NewValue));
+      case MaxonManagedMemGetOp mg: {
+        var mgInfo = sub.ResolveManagedElement(mg);
+        var clonedGet = new MaxonManagedMemGetOp(mapValue(mg.ManagedStruct), mapValue(mg.Index), mgInfo.Kind) {
+          IsStructElement = mgInfo.IsStructElement,
+          StructElementTypeName = mgInfo.StructElementTypeName,
+          TypeParamName = mg.TypeParamName,
+          IsBoundsCheckSafe = mg.IsBoundsCheckSafe,
+          ElementStorageType = mgInfo.ElementStorageType
+        };
+        valueMap[mg.Result.Id] = mgInfo.WrapResult(clonedGet.Result);
+        return clonedGet;
+      }
       case MaxonManagedMemClearOp memClear:
         return new MaxonManagedMemClearOp(mapValue(memClear.ManagedStruct)) {
           IsStructElement = memClear.IsStructElement,

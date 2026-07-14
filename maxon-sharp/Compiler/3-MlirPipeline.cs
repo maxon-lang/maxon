@@ -32,7 +32,6 @@ public class IrPipeline {
       sw.Restart(); SemanticCheckPass.Run(module);                        StageTimer.Record(timings, "semantic",   sw.ElapsedMilliseconds);
       sw.Restart(); MonomorphizationPass.Run(module);                     StageTimer.Record(timings, "monomorph",  sw.ElapsedMilliseconds);
       sw.Restart(); CloneSynthesisPass.Run(module);                       StageTimer.Record(timings, "cloneSynth", sw.ElapsedMilliseconds);
-      sw.Restart(); ForLoopIteratorElisionPass.Run(module);                StageTimer.Record(timings, "forElide",   sw.ElapsedMilliseconds);
       sw.Restart(); DeadFunctionElimination.Run(module);                  StageTimer.Record(timings, "dfe",        sw.ElapsedMilliseconds);
       sw.Restart(); ConstantArrayAnalysisPass.Run(module);                StageTimer.Record(timings, "constArr",   sw.ElapsedMilliseconds);
       sw.Restart(); ParameterMutationAnalysisPass.Run(module);            StageTimer.Record(timings, "paramMut",   sw.ElapsedMilliseconds);
@@ -46,7 +45,6 @@ public class IrPipeline {
       SemanticCheckPass.Run(module);
       MonomorphizationPass.Run(module);
       CloneSynthesisPass.Run(module);
-      ForLoopIteratorElisionPass.Run(module);
       DeadFunctionElimination.Run(module);
       ConstantArrayAnalysisPass.Run(module);
       ParameterMutationAnalysisPass.Run(module);

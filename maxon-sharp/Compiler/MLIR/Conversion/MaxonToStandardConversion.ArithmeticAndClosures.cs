@@ -542,7 +542,12 @@ public static partial class MaxonToStandardConversion {
       MaxonValueKind.Enum => IrType.I64,
       MaxonValueKind.Struct => IrType.I64, // struct references are pointers
       MaxonValueKind.Function => IrType.I64, // function pointers
-      MaxonValueKind.TypeParameter => IrType.I64, // unresolved type parameter, stored as i64
+      // A TypeParameter must never survive monomorphization. Defaulting it to i64 (as this
+      // did) silently reads 8 bytes out of whatever slot the element actually occupies — a
+      // Byte/Short/Bool/Float32 element would be miscompiled rather than rejected.
+      MaxonValueKind.TypeParameter => throw new InvalidOperationException(
+        $"{context}: element type parameter reached lowering unresolved — monomorphization "
+        + "failed to bind it (see TypeSubstitution.ResolveManagedElement)"),
       _ => throw new InvalidOperationException($"{context}: unsupported element kind '{kind}'")
     };
   }

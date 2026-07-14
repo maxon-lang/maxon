@@ -16,7 +16,7 @@ ExitCode: 3
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.xor eax, eax
     x64.mov rcx, 5
     x64.xor edx, edx
@@ -71,19 +71,17 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-32], rcx
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-40], rcx
     x64.xor eax, eax
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-40], rax
     x64.jmp main.loop_0.header
   loop_0.header:
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-40]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-40]
+    x64.cmp rdx, rcx
     x64.jge main.loop_0.exit
   loop_0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-32]
     x64.mov rdx, [rcx+0]
     x64.mov rbx, 3
@@ -103,8 +101,8 @@ module {
     x64.cmp r9, rax
     x64.setne rax
     x64.movzx rax, raxb
-    x64.mov [rbp-49], rax
-    x64.mov rax, [rbp-49]
+    x64.mov [rbp-41], rax
+    x64.mov rax, [rbp-41]
     x64.test rax, rax
     x64.je main.check_0.merge
   check_0:
@@ -114,10 +112,12 @@ module {
     x64.mov [rbp-24], rcx
     x64.jmp main.check_0.merge
   check_0.merge:
-    x64.mov rax, [rbp-48]
+    x64.jmp main.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-40], rax
     x64.jmp main.loop_0.header
   loop_0.exit:
     x64.mov rax, [rbp-24]

@@ -11750,6 +11750,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var headerLabel = $"{loopLabel}.header";
     var bodyLabel = loopLabel;
     var exitLabel = $"{loopLabel}.exit";
+    var incrLabel = $"{loopLabel}.incr";
+
+    // An Array's iterator is a heap object wrapping a heap cursor — two allocations to
+    // start the loop, plus an advance()/current() call pair per element. But an Array is
+    // contiguous and random-access, so the entire protocol collapses to an integer counter
+    // over the backing __ManagedMemory. Every other iterable (List, Map, Set, String, and
+    // any user type implementing Iterable) keeps the generic protocol.
+    var useIndexLoop = IsArrayBackedIterable(iterableTypeName);
+
+    // `continue` branches to the loop's designated back-edge. For the index loop that must
+    // be the increment block, NOT the header — otherwise the counter never advances and the
+    // loop spins forever. (The range for-loop below solves this the same way.)
+    var backEdgeLabel = useIndexLoop ? incrLabel : headerLabel;
 
     // If the iterable expression itself was a throwing call (e.g. arr.withIterator()
     // on an empty collection), short-circuit to exit now.
@@ -11764,108 +11777,187 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _currentBlock = afterBlock;
     }
 
-    // Create the iterator for the for-in loop.
-    var iterVarName = $"__for_iter_{_blockCounter}";
-    MaxonInteger? createErrorFlag = null;
-    if (createIteratorMethodName != "") {
-      // Call try createIterator() — throws IterationError.exhausted on empty collections.
-      var createIterTryOp = new MaxonTryCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
-      _currentBlock!.AddOp(createIterTryOp);
-      InvalidateCachedSelfFields();
-      createErrorFlag = createIterTryOp.ErrorFlag;
-      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterTryOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterTryOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
-    } else {
-      // Type is its own iterator (implements Iterator directly) — copy as the iter var.
-      // Already positioned at a valid element (caller constructed it), so no create error.
-      _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-      _variables.Declare(iterVarName, MaxonValueKind.Struct, true, iterableValue, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: iteratorTypeName);
-    }
-
-    // Physical layout for x86 codegen's cond_br convention (the "then" block must be
-    // physically next after the cond_br — x86 emits jcc-inverted-to-else + fallthrough):
-    //
-    //   entry → preamble → header → body → exit
-    //
-    // - entry: create iterator; if empty, cond_br [preamble, exit] (then=preamble, so
-    //   fallthrough to preamble works).
-    // - preamble: unconditional br body. Runs once per for-loop; avoids calling advance
-    //   before the first current().
-    // - header: advance; cond_br [body, exit] (body physically next, hot fallthrough).
-    // - body: current(); user code; br header.
-    // - exit: normal exit.
-    var preambleLabel = $"{loopLabel}.preamble";
-
-    if (createErrorFlag != null) {
-      var zeroCreate = new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(zeroCreate);
-      var cmpCreate = new MaxonBinOp(MaxonBinOperator.Eq, createErrorFlag, zeroCreate.Result, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(cmpCreate);
-      _currentBlock!.AddOp(new MaxonCondBrOp(cmpCreate.Result, preambleLabel, exitLabel));
-    } else {
-      _currentBlock!.AddOp(new MaxonBrOp(preambleLabel));
-    }
-
-    // Create blocks in physical order: preamble → header → body. Preamble unconditionally
-    // jumps to body (skipping the leading advance), and header falls through to body on
-    // success — both are physically laid out for the correct fallthrough.
-    var preambleBlock = _currentFunction!.Body.AddBlock(preambleLabel);
-    preambleBlock.AddOp(new MaxonBrOp(bodyLabel));
-    var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
-    var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
-
-    // Emit the header block's contents: advance() then branch to body or exit.
-    _currentBlock = headerBlock;
-
-    var iterRefHdr = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
-    headerBlock.AddOp(iterRefHdr);
-
-    MaxonInteger advanceErrorFlag;
-    if (advanceMethodName == "") {
-      // Deferred: monomorphization resolves the concrete advance() function
-      var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result]);
-      headerBlock.AddOp(iterAdvOp);
-      advanceErrorFlag = iterAdvOp.ErrorFlag;
-    } else {
-      // Direct: advance() is already resolved (Iterator-only types)
-      var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result], null, null);
-      headerBlock.AddOp(tryAdvance);
-      advanceErrorFlag = tryAdvance.ErrorFlag;
-    }
-
-    // Store error flag for cross-block access
-    var errorFlagVar = $"__try_error_{_blockCounter++}";
-    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, advanceErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, advanceErrorFlag, headerBlock);
-
-    // Check error flag: zero means success → body, non-zero → exit
-    var zeroOp = new MaxonLiteralOp(0L);
-    headerBlock.AddOp(zeroOp);
-    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, advanceErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
-    headerBlock.AddOp(cmpOp);
-    headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
-
-    // Body block: load current(), bind to loop variable, execute user body.
-    _currentBlock = bodyBlock;
-    var forInOuterScope = _variables.SnapshotKeys();
-    PushScope();
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
-      iterVarName, advanceMethodName, elementKind, elementStructTypeName, iteratorTypeName,
-      ForInResultVarName: null, IterableSourceTypeName: iterableTypeName));
-
-    // Emit current() call in the body.
-    var iterRefBody = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
-    bodyBlock.AddOp(iterRefBody);
+    IrBlock<MaxonOp> bodyBlock;
     MaxonValue? currentResult;
-    if (currentMethodName == "") {
-      // Deferred current() resolution
-      var iterCurOp = new MaxonIteratorCurrentOp(iterableTypeName, iteratorTypeName, [iterRefBody.Result], elementKind, elementStructTypeName);
-      bodyBlock.AddOp(iterCurOp);
-      currentResult = iterCurOp.Result;
+    HashSet<string> forInOuterScope;
+    string? indexVarName = null;
+
+    if (useIndexLoop) {
+      //   entry  → managed = arr.managed; idx = 0
+      //   header → idx < managed.length ? body : exit
+      //   body   → elem = managed[idx]; user code; br incr
+      //   incr   → idx = idx + 1; br header
+      var loopId = _blockCounter++;
+      var managedVarName = $"__for_mm_{loopId}";
+      indexVarName = $"__for_idx_{loopId}";
+      var elementInfo = ManagedElementInfo.FromElementType(elementIrType!);
+
+      // Hold the backing buffer in a local for the duration of the loop. The assign
+      // increfs it and the enclosing scope's end decrefs it, so the array cannot be
+      // freed out from under the loop even if the body drops the last other reference.
+      var managedAccess = new MaxonFieldAccessOp(iterableValue, iterableTypeName, ArrayManagedFieldName,
+        MaxonValueKind.Struct, ManagedMemoryTypeName);
+      _currentBlock!.AddOp(managedAccess);
+      _currentBlock!.AddOp(new MaxonAssignOp(managedVarName, managedAccess.Result,
+        isDeclaration: true, isMutable: false, MaxonValueKind.Struct));
+      _variables.Declare(managedVarName, MaxonValueKind.Struct, false, managedAccess.Result, _currentBlock!,
+        structTypeName: ManagedMemoryTypeName);
+
+      var zeroIdx = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroIdx);
+      _currentBlock!.AddOp(new MaxonAssignOp(indexVarName, zeroIdx.Result,
+        isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
+      _variables.Declare(indexVarName, MaxonValueKind.Integer, true, zeroIdx.Result, _currentBlock!);
+      _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+
+      var indexHeaderBlock = _currentFunction!.Body.AddBlock(headerLabel);
+      bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+
+      // Header: idx < managed.length. The length is RE-READ every iteration rather than
+      // snapshotted into a local. That keeps the guard honest if the body reaches the
+      // array through some other path, and — because it is a live comparison against the
+      // real length — it IS the bounds check, which is what lets the element load below
+      // skip its own. A stale snapshot here would let the load read off the end of the
+      // buffer and, for a managed element, incref whatever garbage it found there.
+      _currentBlock = indexHeaderBlock;
+      var mmRefHdr = new MaxonStructVarRefOp(managedVarName, ManagedMemoryTypeName);
+      indexHeaderBlock.AddOp(mmRefHdr);
+      var lengthAccess = new MaxonFieldAccessOp(mmRefHdr.Result, ManagedMemoryTypeName, ManagedLengthFieldName,
+        MaxonValueKind.Integer);
+      indexHeaderBlock.AddOp(lengthAccess);
+      var idxRefHdr = EmitVarRefOp(indexVarName, MaxonValueKind.Integer, null);
+      var boundsCmp = new MaxonBinOp(MaxonBinOperator.Lt, idxRefHdr, lengthAccess.Result, MaxonValueKind.Integer);
+      indexHeaderBlock.AddOp(boundsCmp);
+      indexHeaderBlock.AddOp(new MaxonCondBrOp(boundsCmp.Result, bodyLabel, exitLabel));
+
+      _currentBlock = bodyBlock;
+      forInOuterScope = _variables.SnapshotKeys();
+      PushScope();
+      _loopStack.Push(new LoopContext(loopSourceLabel, backEdgeLabel, exitLabel, forInOuterScope,
+        ElementKind: elementKind, ElementStructTypeName: elementStructTypeName,
+        IterableTypeName: iterableTypeName, ForInResultVarName: null,
+        IterableSourceTypeName: iterableTypeName));
+
+      var mmRefBody = new MaxonStructVarRefOp(managedVarName, ManagedMemoryTypeName);
+      bodyBlock.AddOp(mmRefBody);
+      var idxRefBody = EmitVarRefOp(indexVarName, MaxonValueKind.Integer, null);
+      // A generic `Array with T` still has an unbound Element here; monomorphization
+      // re-derives the element metadata once T is known (FunctionCloner.ResolveManagedElement).
+      // The op carries the STORAGE-aware kind — the same convention `arr.get(i)` uses — which
+      // is not always the element's source-level kind (a `int(0 to 100)` element is stored as
+      // a byte). The assign below keeps the source-level kind.
+      var getOp = new MaxonManagedMemGetOp(mmRefBody.Result, idxRefBody, elementInfo.Kind) {
+        IsBoundsCheckSafe = true,
+        IsStructElement = elementInfo.IsStructElement,
+        StructElementTypeName = elementInfo.StructElementTypeName,
+        ElementStorageType = elementInfo.ElementStorageType,
+        TypeParamName = elementKind == MaxonValueKind.TypeParameter ? elementStructTypeName : null,
+      };
+      bodyBlock.AddOp(getOp);
+      currentResult = getOp.Result;
     } else {
-      var currentCallOp = new MaxonCallOp(currentMethodName, [iterRefBody.Result], elementKind, elementStructTypeName);
-      bodyBlock.AddOp(currentCallOp);
-      currentResult = currentCallOp.Result;
+      // Create the iterator for the for-in loop.
+      var iterVarName = $"__for_iter_{_blockCounter}";
+      MaxonInteger? createErrorFlag = null;
+      if (createIteratorMethodName != "") {
+        // Call try createIterator() — throws IterationError.exhausted on empty collections.
+        var createIterTryOp = new MaxonTryCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
+        _currentBlock!.AddOp(createIterTryOp);
+        InvalidateCachedSelfFields();
+        createErrorFlag = createIterTryOp.ErrorFlag;
+        _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterTryOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+        _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterTryOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
+      } else {
+        // Type is its own iterator (implements Iterator directly) — copy as the iter var.
+        // Already positioned at a valid element (caller constructed it), so no create error.
+        _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+        _variables.Declare(iterVarName, MaxonValueKind.Struct, true, iterableValue, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: iteratorTypeName);
+      }
+
+      // Physical layout for x86 codegen's cond_br convention (the "then" block must be
+      // physically next after the cond_br — x86 emits jcc-inverted-to-else + fallthrough):
+      //
+      //   entry → preamble → header → body → exit
+      //
+      // - entry: create iterator; if empty, cond_br [preamble, exit] (then=preamble, so
+      //   fallthrough to preamble works).
+      // - preamble: unconditional br body. Runs once per for-loop; avoids calling advance
+      //   before the first current().
+      // - header: advance; cond_br [body, exit] (body physically next, hot fallthrough).
+      // - body: current(); user code; br header.
+      // - exit: normal exit.
+      var preambleLabel = $"{loopLabel}.preamble";
+
+      if (createErrorFlag != null) {
+        var zeroCreate = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(zeroCreate);
+        var cmpCreate = new MaxonBinOp(MaxonBinOperator.Eq, createErrorFlag, zeroCreate.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(cmpCreate);
+        _currentBlock!.AddOp(new MaxonCondBrOp(cmpCreate.Result, preambleLabel, exitLabel));
+      } else {
+        _currentBlock!.AddOp(new MaxonBrOp(preambleLabel));
+      }
+
+      // Create blocks in physical order: preamble → header → body. Preamble unconditionally
+      // jumps to body (skipping the leading advance), and header falls through to body on
+      // success — both are physically laid out for the correct fallthrough.
+      var preambleBlock = _currentFunction!.Body.AddBlock(preambleLabel);
+      preambleBlock.AddOp(new MaxonBrOp(bodyLabel));
+      var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
+      bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+
+      // Emit the header block's contents: advance() then branch to body or exit.
+      _currentBlock = headerBlock;
+
+      var iterRefHdr = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
+      headerBlock.AddOp(iterRefHdr);
+
+      MaxonInteger advanceErrorFlag;
+      if (advanceMethodName == "") {
+        // Deferred: monomorphization resolves the concrete advance() function
+        var iterAdvOp = new MaxonIteratorAdvanceOp(iterableTypeName, iteratorTypeName, [iterRefHdr.Result]);
+        headerBlock.AddOp(iterAdvOp);
+        advanceErrorFlag = iterAdvOp.ErrorFlag;
+      } else {
+        // Direct: advance() is already resolved (Iterator-only types)
+        var tryAdvance = new MaxonTryCallOp(advanceMethodName, [iterRefHdr.Result], null, null);
+        headerBlock.AddOp(tryAdvance);
+        advanceErrorFlag = tryAdvance.ErrorFlag;
+      }
+
+      // Store error flag for cross-block access
+      var errorFlagVar = $"__try_error_{_blockCounter++}";
+      headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, advanceErrorFlag, true, true, MaxonValueKind.Integer));
+      _variables.Declare(errorFlagVar, MaxonValueKind.Integer, true, advanceErrorFlag, headerBlock);
+
+      // Check error flag: zero means success → body, non-zero → exit
+      var zeroOp = new MaxonLiteralOp(0L);
+      headerBlock.AddOp(zeroOp);
+      var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, advanceErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
+      headerBlock.AddOp(cmpOp);
+      headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
+
+      // Body block: load current(), bind to loop variable, execute user body.
+      _currentBlock = bodyBlock;
+      forInOuterScope = _variables.SnapshotKeys();
+      PushScope();
+      _loopStack.Push(new LoopContext(loopSourceLabel, backEdgeLabel, exitLabel, forInOuterScope,
+        iterVarName, advanceMethodName, elementKind, elementStructTypeName, iteratorTypeName,
+        ForInResultVarName: null, IterableSourceTypeName: iterableTypeName));
+
+      // Emit current() call in the body.
+      var iterRefBody = new MaxonStructVarRefOp(iterVarName, iteratorTypeName);
+      bodyBlock.AddOp(iterRefBody);
+      if (currentMethodName == "") {
+        // Deferred current() resolution
+        var iterCurOp = new MaxonIteratorCurrentOp(iterableTypeName, iteratorTypeName, [iterRefBody.Result], elementKind, elementStructTypeName);
+        bodyBlock.AddOp(iterCurOp);
+        currentResult = iterCurOp.Result;
+      } else {
+        var currentCallOp = new MaxonCallOp(currentMethodName, [iterRefBody.Result], elementKind, elementStructTypeName);
+        bodyBlock.AddOp(currentCallOp);
+        currentResult = currentCallOp.Result;
+      }
     }
 
     string? resultVar = null;
@@ -11915,16 +12007,67 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
-    // Branch back to header (skip if all paths in the body terminated)
+    // Branch back to the loop's back-edge (skip if all paths in the body terminated).
+    // For the index loop that is the increment block; for the iterator loop it is the
+    // header, whose advance() does the stepping.
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
       var loopScopeVars = WithForInResultVar(loopCtx, forInInnerScope);
       _currentBlock.AddOp(new MaxonScopeEndOp(loopScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-      _currentBlock.AddOp(new MaxonBrOp(headerLabel));
+      _currentBlock.AddOp(new MaxonBrOp(backEdgeLabel));
+    }
+
+    if (useIndexLoop) {
+      // Every path that continues the loop — the body's tail and every `continue` — lands
+      // here, so the counter advances exactly once per iteration no matter how the body
+      // was left. This is the whole reason the increment gets its own block instead of
+      // being appended to the body.
+      var incrBlock = _currentFunction!.Body.AddBlock(incrLabel);
+      _currentBlock = incrBlock;
+      var idxRefIncr = EmitVarRefOp(indexVarName!, MaxonValueKind.Integer, null);
+      var oneLit = new MaxonLiteralOp(1L);
+      incrBlock.AddOp(oneLit);
+      var nextIdx = new MaxonBinOp(MaxonBinOperator.Add, idxRefIncr, oneLit.Result, MaxonValueKind.Integer);
+      incrBlock.AddOp(nextIdx);
+      incrBlock.AddOp(new MaxonAssignOp(indexVarName!, nextIdx.Result,
+        isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+      incrBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
     // Create exit block
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
     _currentBlock = exitBlock;
+  }
+
+  // Stdlib contract reached through by the for-in index lowering.
+  private const string ArrayTypeName = "Array";
+  private const string ArrayManagedFieldName = "managed";
+  private const string ManagedMemoryTypeName = "__ManagedMemory";
+  private const string ManagedLengthFieldName = "length";
+  private const int MaxTypeAliasHops = 8;
+
+  /// <summary>
+  /// True when `typeName` resolves, through its typealias chain, to the stdlib Array.
+  ///
+  /// Only Array earns the index-counter lowering: it is contiguous and random-access, so
+  /// element i is an address computation. This deliberately does NOT match String, which
+  /// is also Iterable and also carries a __ManagedMemory buffer — but whose elements are
+  /// Characters decoded from UTF-8, so indexing its buffer would hand back raw bytes. Nor
+  /// does it match List (a linked list) or Map/Set (hashed). Those keep the iterator.
+  /// </summary>
+  private bool IsArrayBackedIterable(string typeName) {
+    // _typeAliasSources is the parser's LIVE alias map, populated as each typealias is
+    // parsed. _currentModule.TypeAliasSources is only filled when the module is finalized,
+    // which is long after any function body has been parsed — reading it here would see an
+    // empty map and silently never match.
+    var cursor = typeName;
+    for (var hop = 0; hop < MaxTypeAliasHops; hop++) {
+      if (cursor == ArrayTypeName) return true;
+      if (!_typeAliasSources.TryGetValue(cursor, out var sourceTypeName)) return false;
+      if (sourceTypeName == cursor) return false;
+      cursor = sourceTypeName;
+    }
+    throw new InvalidOperationException(
+      $"Typealias chain for '{typeName}' exceeded {MaxTypeAliasHops} hops — cyclic alias?");
   }
 
   private static void ValidateRangeElementType(MaxonValueKind kind, MaxonValue value, Token forToken) {

@@ -1117,6 +1117,88 @@ public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, Maxo
 // Managed memory operations (for __ManagedMemory builtin intrinsics)
 // ============================================================================
 
+/// How an Array/__ManagedMemory element type is represented inside the backing buffer.
+///
+/// Three places must agree on this: the parser (which lowers `for x in arr` to an
+/// index loop), MonomorphizationPass (which re-derives it once a generic Element is
+/// bound), and MaxonToStandardConversion (which emits the load). They must share one
+/// implementation, because the disagreements are silent and severe: classify a struct
+/// element as a scalar and its heap pointer is loaded as an integer; classify a simple
+/// enum as a struct and its *ordinal* gets passed to mm_incref as if it were a pointer.
+public readonly record struct ManagedElementInfo(
+  MaxonValueKind Kind,
+  bool IsStructElement,
+  string? StructElementTypeName,
+  IrType? ElementStorageType) {
+
+  /// Unbound type parameter — nothing can be decided until monomorphization binds it.
+  /// Callers must carry TypeParamName on the op and re-derive after substitution.
+  public static readonly ManagedElementInfo Unresolved =
+    new(MaxonValueKind.TypeParameter, false, null, null);
+
+  /// Re-wrap a cloned managed_mem_get's result in the value class that NAMES the concrete
+  /// element type.
+  ///
+  /// MaxonManagedMemGetOp.Result is a bare MaxonInteger even for heap elements (the buffer
+  /// holds a pointer). Monomorphization's CloneAssignOp resolves a TypeParameter assign's kind
+  /// from the mapped value's CLASS — so handing it that bare integer makes a String element
+  /// come out as MaxonValueKind.Integer, and `item == element` silently degrades from
+  /// String.equals into a pointer comparison. Simple enums are genuinely raw ordinals and
+  /// correctly stay unwrapped.
+  public MaxonValue WrapResult(MaxonValue result) => (Kind, StructElementTypeName) switch {
+    (MaxonValueKind.Struct, not null) => new MaxonStruct(result.Id, StructElementTypeName),
+    (MaxonValueKind.Enum, not null) => new MaxonEnum(result.Id, StructElementTypeName),
+    _ => result
+  };
+
+  /// Re-derive the representation for a managed_mem_get being cloned by monomorphization.
+  /// `boundElement` is the concrete type the op's TypeParamName resolved to, or null when the
+  /// element was already concrete at parse time — in which case there is nothing to re-derive
+  /// and only the type's NAME can move under substitution.
+  ///
+  /// Both cloners route through here. They carry different substitution types, so this is the
+  /// only place the rules exist; letting them drift means a struct element gets loaded as a
+  /// raw integer in one path and as a heap pointer in the other.
+  public static ManagedElementInfo ForSubstitutedOp(
+    MaxonManagedMemGetOp op, IrType? boundElement, Func<string, string> substituteName) {
+    if (boundElement != null) return FromElementType(boundElement);
+
+    return new ManagedElementInfo(op.ResultKind, op.IsStructElement,
+      op.StructElementTypeName == null ? null : substituteName(op.StructElementTypeName),
+      op.ElementStorageType);
+  }
+
+  public static ManagedElementInfo FromElementType(IrType elementType) {
+    if (elementType is IrTypeParameterType) return Unresolved;
+
+    // Ranged primitives (e.g. `Score = int(0 to 100)`) are laid out at their OPTIMAL
+    // width, not their source-level base width — the buffer's element_size was computed
+    // from it. Loading such a slot as i64 would read across into the next element.
+    //
+    // Bare I8/I16 elements (byte-string literals emit Element = I8 to mean "unsigned
+    // byte buffer") promote to the unsigned variant so codegen zero-extends: without
+    // this a byte-string read sign-extends and turns 0xFF into -1.
+    var loadType = elementType switch {
+      IrRangedPrimitiveType rpt => rpt.OptimalType,
+      _ when elementType == IrType.I8 => IrType.U8,
+      _ when elementType == IrType.I16 => IrType.U16,
+      _ => elementType
+    };
+    var kind = loadType.ToValueKind();
+
+    // Unions (enums carrying associated values) are heap-allocated and refcounted.
+    // Simple enums are raw i64 ordinals and must NEVER be treated as pointers.
+    var isUnion = elementType is IrEnumType et && et.Cases.Any(c => c.AssociatedValues?.Count > 0);
+    var isStruct = kind == MaxonValueKind.Struct || isUnion;
+
+    // Only meaningful for scalars: preserves signedness that ToValueKind collapses
+    // (it maps both I8 and U8 to Byte), so codegen can pick movsx vs movzx.
+    var storageType = !isStruct && loadType is not IrEnumType ? loadType : null;
+
+    return new ManagedElementInfo(kind, isStruct, isStruct ? elementType.Name : null, storageType);
+  }
+}
+
 // Get element at index from managed buffer: managed.get(index)
 // Element size is read from the managed struct's element_size field at runtime.
 // When IsStructElement is true, the element data is stored inline in the buffer
@@ -1133,7 +1215,8 @@ public sealed class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue in
   /// When ResultKind is TypeParameter, this identifies which type param (e.g., "Key", "Value", "Element")
   public string? TypeParamName { get; init; }
   /// When true, the caller guarantees 0 <= index < length so lowering skips the bounds check.
-  /// Set by ForLoopIteratorElisionPass when rewriting a for-loop whose header already enforces i < length.
+  /// Set by the parser's for-in lowering, whose header re-reads length and tests i < length
+  /// on every iteration — that test IS the bounds check, so repeating it here is dead weight.
   public bool IsBoundsCheckSafe { get; init; }
   /// Optional precise element storage type for narrow ranged primitives — distinguishes
   /// signed (I8/I16) from unsigned (U8/U16) bytes/words so the codegen picks the right

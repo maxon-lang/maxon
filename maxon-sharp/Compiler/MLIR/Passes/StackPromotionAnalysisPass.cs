@@ -391,6 +391,10 @@ public static class StackPromotionAnalysisPass {
       case MaxonManagedListInsertRelativeValueOp insert:
         yield return insert.Value.Id;
         break;
+      case MaxonManagedMemGetOp memGet:
+        yield return memGet.ManagedStruct.Id;
+        yield return memGet.Index.Id;
+        break;
       case MaxonThrowOp throwOp:
         yield return throwOp.ErrorValue.Id;
         break;

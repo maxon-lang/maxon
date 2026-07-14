@@ -619,6 +619,16 @@ internal class TypeSubstitution {
   }
 
   /// <summary>
+  /// Re-derive a managed element's representation now that a generic Element is bound. The
+  /// parser's for-in index lowering emits managed_mem_get inside generic bodies, where Element
+  /// is still unbound and nothing about the element's shape can be decided.
+  /// </summary>
+  public ManagedElementInfo ResolveManagedElement(MaxonManagedMemGetOp op) =>
+    ManagedElementInfo.ForSubstitutedOp(op,
+      op.TypeParamName != null && _map.TryGetValue(op.TypeParamName, out var bound) ? bound : null,
+      SubstituteName);
+
+  /// <summary>
   /// Substitutes a callee name of the form "TypeName.MethodName" through the map.
   /// </summary>
   public string SubstituteCallee(string callee) {

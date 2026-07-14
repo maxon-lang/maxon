@@ -475,6 +475,18 @@ internal class FunctionCloner {
           IsBitPacked = memClear.IsBitPacked || _isBitPackedElement
         };
       }
+      case MaxonManagedMemGetOp mg: {
+        var mgInfo = _typeSubstitution.ResolveManagedElement(mg);
+        var c = new MaxonManagedMemGetOp(MapValue(mg.ManagedStruct), MapValue(mg.Index), mgInfo.Kind) {
+          IsStructElement = mgInfo.IsStructElement,
+          StructElementTypeName = mgInfo.StructElementTypeName,
+          TypeParamName = mg.TypeParamName,
+          IsBoundsCheckSafe = mg.IsBoundsCheckSafe,
+          ElementStorageType = mgInfo.ElementStorageType
+        };
+        RegisterResult(mg.Result, mgInfo.WrapResult(c.Result));
+        return c;
+      }
       case MaxonManagedMemAppendOp ma: {
         var isHeapPtrElem = ma.IsStructElement;
         if (ma.TypeParamName != null && _typeSubstitution.TryGetValue(ma.TypeParamName, out var appendElemType))

@@ -81,7 +81,7 @@ module {
   }
   func @api.Container.sum(__self_ptr: i64) -> i64 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.mov [rbp-16], rax
@@ -91,19 +91,17 @@ module {
     x64.mov rax, [rbp-24]
     x64.mov rdx, [rax+0]
     x64.mov [rbp-32], rdx
-    x64.mov rax, [rbp-32]
-    x64.mov rdx, [rax+8]
-    x64.mov [rbp-40], rdx
     x64.xor eax, eax
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-40], rax
     x64.jmp api.Container.sum.loop_0.header
   loop_0.header:
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-40]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-40]
+    x64.cmp rdx, rcx
     x64.jge api.Container.sum.loop_0.exit
   loop_0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-32]
     x64.mov rdx, [rcx+24]
     x64.mov rbx, [rbp-32]
@@ -111,15 +109,17 @@ module {
     x64.imul rax, rdx
     x64.add rsi, rax
     x64.mov rdi, [rsi+0]
-    x64.mov [rbp-56], rdi
-    x64.mov r8, [rbp-56]
+    x64.mov [rbp-48], rdi
+    x64.mov r8, [rbp-48]
     x64.mov r9, [rbp-16]
     x64.add r9, r8
     x64.mov [rbp-16], r9
-    x64.mov rax, [rbp-48]
+    x64.jmp api.Container.sum.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-40], rax
     x64.jmp api.Container.sum.loop_0.header
   loop_0.exit:
     x64.mov rax, [rbp-16]

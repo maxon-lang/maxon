@@ -253,18 +253,19 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-24], rcx
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-32], rcx
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
     x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.jmp main.copy_0.header
   copy_0.header:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-32]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rcx
     x64.jge main.copy_0.exit
   copy_0:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-24]
     x64.mov rdx, [rcx+24]
     x64.mov rbx, [rbp-24]
@@ -272,16 +273,18 @@ module {
     x64.imul rax, rdx
     x64.add rsi, rax
     x64.mov rdi, [rsi+0]
-    x64.mov [rbp-48], rdi
-    x64.mov r8, [rbp-48]
+    x64.mov [rbp-40], rdi
+    x64.mov r8, [rbp-40]
     x64.mov r9, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-48]
+    x64.mov rdx, [rbp-40]
     x64.call IntArray.push
-    x64.mov rax, [rbp-40]
+    x64.jmp main.copy_0.incr
+  copy_0.incr:
+    x64.mov rax, [rbp-32]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.jmp main.copy_0.header
   copy_0.exit:
     x64.lea_func rax, [ascending]
@@ -298,36 +301,36 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call IntArray.count
     x64.mov rdi, [rbp-16]
-    x64.mov [rbp-137], rax
+    x64.mov [rbp-129], rax
     x64.mov rcx, [rbp-16]
     x64.call IntArray.count
-    x64.mov r8, [rbp-137]
+    x64.mov r8, [rbp-129]
     x64.cmp r8, rax
     x64.sete r9
     x64.movzx r9, r9b
-    x64.mov [rbp-49], r9
+    x64.mov [rbp-41], r9
     x64.test r9, r9
     x64.je main.check_0.merge
   check_0:
     x64.xor eax, eax
     x64.mov rcx, [rbp-8]
     x64.call IntArray.count
-    x64.mov [rbp-57], rax
+    x64.mov [rbp-49], rax
     x64.xor edx, edx
-    x64.mov [rbp-65], rdx
+    x64.mov [rbp-57], rdx
     x64.jmp main.walk_0.header
   walk_0.header:
-    x64.mov rax, [rbp-65]
-    x64.mov rcx, [rbp-57]
+    x64.mov rax, [rbp-57]
+    x64.mov rcx, [rbp-49]
     x64.cmp rax, rcx
     x64.jge main.walk_0.exit
   walk_0:
-    x64.mov rax, [rbp-65]
-    x64.mov [rbp-73], rax
+    x64.mov rax, [rbp-57]
+    x64.mov [rbp-65], rax
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-73]
+    x64.mov rdx, [rbp-65]
     x64.call IntArray.get
-    x64.mov [rbp-81], rax
+    x64.mov [rbp-73], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
     x64.je main.otherwise_continue_0
@@ -343,57 +346,69 @@ module {
     x64.jz __nonnull_skip_1
     x64.call mm_decref
     x64.label __nonnull_skip_1
+    x64.mov rdx, [rbp-24]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
     x64.mov rax, 99
     x64.epilogue
     x64.ret
   otherwise_continue_0:
-    x64.mov rax, [rbp-81]
-    x64.mov [rbp-89], rax
-    x64.mov rcx, [rbp-73]
+    x64.mov rax, [rbp-73]
+    x64.mov [rbp-81], rax
+    x64.mov rcx, [rbp-65]
     x64.mov rdx, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-73]
+    x64.mov rdx, [rbp-65]
     x64.call IntArray.get
-    x64.mov [rbp-97], rax
+    x64.mov [rbp-89], rax
     x64.xor ebx, ebx
     x64.cmp rdx, rbx
     x64.je main.otherwise_continue_1
   otherwise_stmt_1:
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_3
     x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_4
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_4
+    x64.mov rdx, [rbp-24]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
     x64.mov rax, 99
     x64.epilogue
     x64.ret
   otherwise_continue_1:
-    x64.mov rax, [rbp-97]
-    x64.mov rcx, [rbp-89]
+    x64.mov rax, [rbp-89]
+    x64.mov rcx, [rbp-81]
     x64.cmp rcx, rax
     x64.je main.diff_0.merge
   diff_0:
     x64.xor eax, eax
-    x64.mov [rbp-49], rax
+    x64.mov [rbp-41], rax
     x64.jmp main.diff_0.merge
   diff_0.merge:
     x64.jmp main.walk_0.incr
   walk_0.incr:
     x64.mov rax, 1
-    x64.mov rcx, [rbp-65]
+    x64.mov rcx, [rbp-57]
     x64.add rcx, rax
-    x64.mov [rbp-65], rcx
+    x64.mov [rbp-57], rcx
     x64.jmp main.walk_0.header
   walk_0.exit:
     x64.jmp main.check_0.merge
   check_0.merge:
-    x64.mov rax, [rbp-49]
+    x64.mov rax, [rbp-41]
     x64.test rax, rax
     x64.je main.ne_0
   eq_0:
@@ -402,55 +417,55 @@ module {
     x64.mov rdx, 6
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-137], rcx
+    x64.mov [rbp-129], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
-    x64.mov r8, 5
+    x64.mov r8, 4
     x64.call mm_alloc
-    x64.mov [rbp-105], rax
+    x64.mov [rbp-97], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 6
+    x64.mov r8, 5
     x64.call mm_alloc
-    x64.mov [rbp-113], rax
+    x64.mov [rbp-105], rax
     x64.mov r9, -2
     x64.mov rax, 1
     x64.xor ecx, ecx
-    x64.mov rdx, [rbp-113]
-    x64.mov rbx, [rbp-137]
+    x64.mov rdx, [rbp-105]
+    x64.mov rbx, [rbp-129]
     x64.mov [rdx+0], rbx
-    x64.mov rdx, [rbp-113]
+    x64.mov rdx, [rbp-105]
     x64.mov rbx, 6
     x64.mov [rdx+8], rbx
-    x64.mov rdx, [rbp-113]
+    x64.mov rdx, [rbp-105]
     x64.mov [rdx+16], r9
-    x64.mov rdx, [rbp-113]
+    x64.mov rdx, [rbp-105]
     x64.mov [rdx+24], rax
-    x64.mov rax, [rbp-113]
+    x64.mov rax, [rbp-105]
     x64.mov [rax+32], rcx
-    x64.mov rax, [rbp-113]
-    x64.mov rcx, [rbp-105]
+    x64.mov rax, [rbp-105]
+    x64.mov rcx, [rbp-97]
     x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-113]
-    x64.mov rcx, [rbp-113]
+    x64.mov rax, [rbp-105]
+    x64.mov rcx, [rbp-105]
     x64.call mm_incref
     x64.mov rax, 1
-    x64.mov rcx, [rbp-105]
+    x64.mov rcx, [rbp-97]
     x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-105]
-    x64.mov rcx, [rbp-105]
+    x64.mov rax, [rbp-97]
+    x64.mov rcx, [rbp-97]
     x64.call mm_incref
-    x64.mov rax, [rbp-105]
-    x64.mov rcx, [rbp-105]
+    x64.mov rax, [rbp-97]
+    x64.mov rcx, [rbp-97]
     x64.call stdlib.print
-    x64.mov rax, [rbp-105]
+    x64.mov rax, [rbp-97]
     x64.test rax, rax
-    x64.jz __nonnull_skip_4
-    x64.mov rcx, [rbp-105]
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-97]
     x64.call mm_decref
-    x64.label __nonnull_skip_4
+    x64.label __nonnull_skip_6
     x64.jmp main.eq_0.merge
   ne_0:
     x64.lea_rdata rax, [__str_1]
@@ -458,68 +473,74 @@ module {
     x64.mov rdx, 9
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-137], rcx
+    x64.mov [rbp-129], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 16
-    x64.mov r8, 5
+    x64.mov r8, 4
     x64.call mm_alloc
-    x64.mov [rbp-121], rax
+    x64.mov [rbp-113], rax
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 6
+    x64.mov r8, 5
     x64.call mm_alloc
-    x64.mov [rbp-129], rax
+    x64.mov [rbp-121], rax
     x64.mov r9, -2
     x64.mov rax, 1
     x64.xor ecx, ecx
-    x64.mov rdx, [rbp-129]
-    x64.mov rbx, [rbp-137]
+    x64.mov rdx, [rbp-121]
+    x64.mov rbx, [rbp-129]
     x64.mov [rdx+0], rbx
-    x64.mov rdx, [rbp-129]
+    x64.mov rdx, [rbp-121]
     x64.mov rbx, 9
     x64.mov [rdx+8], rbx
-    x64.mov rdx, [rbp-129]
+    x64.mov rdx, [rbp-121]
     x64.mov [rdx+16], r9
-    x64.mov rdx, [rbp-129]
+    x64.mov rdx, [rbp-121]
     x64.mov [rdx+24], rax
-    x64.mov rax, [rbp-129]
+    x64.mov rax, [rbp-121]
     x64.mov [rax+32], rcx
-    x64.mov rax, [rbp-129]
-    x64.mov rcx, [rbp-121]
+    x64.mov rax, [rbp-121]
+    x64.mov rcx, [rbp-113]
     x64.mov [rcx+0], rax
-    x64.mov rax, [rbp-129]
-    x64.mov rcx, [rbp-129]
+    x64.mov rax, [rbp-121]
+    x64.mov rcx, [rbp-121]
     x64.call mm_incref
     x64.mov rax, 1
-    x64.mov rcx, [rbp-121]
+    x64.mov rcx, [rbp-113]
     x64.mov [rcx+8], rax
-    x64.mov rax, [rbp-121]
-    x64.mov rcx, [rbp-121]
+    x64.mov rax, [rbp-113]
+    x64.mov rcx, [rbp-113]
     x64.call mm_incref
-    x64.mov rax, [rbp-121]
-    x64.mov rcx, [rbp-121]
+    x64.mov rax, [rbp-113]
+    x64.mov rcx, [rbp-113]
     x64.call stdlib.print
-    x64.mov rax, [rbp-121]
+    x64.mov rax, [rbp-113]
     x64.test rax, rax
-    x64.jz __nonnull_skip_5
-    x64.mov rcx, [rbp-121]
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-113]
     x64.call mm_decref
-    x64.label __nonnull_skip_5
+    x64.label __nonnull_skip_7
     x64.jmp main.eq_0.merge
   eq_0.merge:
     x64.mov rax, [rbp-16]
     x64.test rax, rax
-    x64.jz __nonnull_skip_6
+    x64.jz __nonnull_skip_8
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
-    x64.label __nonnull_skip_6
+    x64.label __nonnull_skip_8
     x64.mov rcx, [rbp-8]
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_7
+    x64.jz __nonnull_skip_9
     x64.call mm_decref
-    x64.label __nonnull_skip_7
+    x64.label __nonnull_skip_9
+    x64.mov rdx, [rbp-24]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
     x64.xor eax, eax
     x64.epilogue
     x64.ret

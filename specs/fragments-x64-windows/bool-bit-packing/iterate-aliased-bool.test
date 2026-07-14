@@ -44,7 +44,7 @@ ExitCode: 62
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=64
     x64.call BoolArray.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -91,19 +91,17 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-40], rcx
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rax+8]
-    x64.mov [rbp-48], rcx
     x64.xor eax, eax
-    x64.mov [rbp-56], rax
+    x64.mov [rbp-48], rax
     x64.jmp main.scan_0.header
   scan_0.header:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, [rbp-48]
-    x64.cmp rax, rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-48]
+    x64.cmp rdx, rcx
     x64.jge main.scan_0.exit
   scan_0:
-    x64.mov rax, [rbp-56]
+    x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rcx+0]
     x64.mov rbx, 3
@@ -123,9 +121,9 @@ module {
     x64.cmp r9, rax
     x64.setne rax
     x64.movzx rax, raxb
-    x64.mov [rbp-57], rax
-    x64.mov rax, [rbp-57]
-    x64.mov [rbp-58], rax
+    x64.mov [rbp-49], rax
+    x64.mov rax, [rbp-49]
+    x64.mov [rbp-50], rax
     x64.test rax, rax
     x64.je main.hit_0.merge
   hit_0:
@@ -147,7 +145,7 @@ module {
   grow_0.merge:
     x64.jmp main.hit_0.merge
   hit_0.merge:
-    x64.mov rax, [rbp-58]
+    x64.mov rax, [rbp-50]
     x64.mov rcx, 1
     x64.xor rax, rcx
     x64.test rax, rax
@@ -157,10 +155,12 @@ module {
     x64.mov [rbp-24], rax
     x64.jmp main.miss_0.merge
   miss_0.merge:
-    x64.mov rax, [rbp-56]
+    x64.jmp main.scan_0.incr
+  scan_0.incr:
+    x64.mov rax, [rbp-48]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-56], rax
+    x64.mov [rbp-48], rax
     x64.jmp main.scan_0.header
   scan_0.exit:
     x64.mov rax, 10
@@ -181,13 +181,13 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rax, [rbp-8]
-    x64.mov [rbp-66], rcx
+    x64.mov [rbp-58], rcx
     x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-66]
+    x64.mov rax, [rbp-58]
     x64.epilogue
     x64.ret
   }

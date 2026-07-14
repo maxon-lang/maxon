@@ -1912,8 +1912,9 @@ public static partial class MaxonToStandardConversion {
 
   /// <summary>
   /// Re-derive the element metadata for a __ManagedMemory arg at lowering time from
-  /// the concrete managed struct type's "Element" type parameter. Mirrors the parser's
-  /// GetManagedMemElementKind but reads typeDefs instead of _typeRegistry.
+  /// the concrete managed struct type's "Element" type parameter. The representation
+  /// rules themselves live in ManagedElementInfo — shared with the parser's for-in
+  /// lowering and with monomorphization, which must reach the same answer.
   /// </summary>
   private static (MaxonValueKind kind, string? typeParamName, bool isBitPacked, bool isStructElem, string? structElemTypeName, IrType? elementStorageType) DeriveManagedElementInfo(
     MaxonValue managedArg,
@@ -1924,34 +1925,9 @@ public static partial class MaxonToStandardConversion {
     if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
       && typeInfo is IrStructType structType
       && structType.TypeParams.TryGetValue("Element", out var elemType)) {
-      // For ranged primitives (e.g. Score = int(0..100)), use the OPTIMAL storage type
-      // (the narrow type the buffer is laid out for, used to compute element_size at
-      // allocation), not the source-level BaseType. ToValueKind on a ranged primitive
-      // otherwise returns the base kind (e.g. Integer for int) and the lowering would
-      // emit i64 loads/stores against a u8-spaced buffer — corrupting adjacent slots.
-      //
-      // For non-ranged narrow types used directly as elements (e.g. byte-string literals
-      // emit Element = bare IrType.I8 to mean "unsigned byte buffer"), promote to the
-      // unsigned variant so codegen picks zero-extend on load. Without this, byte-string
-      // reads sign-extend and turn 0xFF into -1.
-      var loadType = elemType switch {
-        IrRangedPrimitiveType rpt => rpt.OptimalType,
-        _ when elemType == IrType.I8 => IrType.U8,
-        _ when elemType == IrType.I16 => IrType.U16,
-        _ => elemType
-      };
-      var kind = loadType.ToValueKind();
-      // Unions (enums with associated values) are heap-allocated structs and need refcount
-      // treatment. Simple enums (no associated values) are stored as raw i64 scalars.
-      bool isUnion = elemType is IrEnumType et && et.Cases.Any(c => c.AssociatedValues?.Count > 0);
-      bool isStruct = kind == MaxonValueKind.Struct || isUnion;
-      string? elemName = isStruct ? elemType.Name : null;
-      // Pass the precise narrow type through so codegen can pick movsx vs movzx for
-      // signed/unsigned bytes/words. ToValueKind collapses I8/U8 to MaxonValueKind.Byte,
-      // losing the signedness — without this hint, signed narrow ranges (e.g.
-      // int(-50..50)) would zero-extend on load and turn -7 into 249.
-      IrType? elemStorageType = !isStruct && loadType is not IrEnumType ? loadType : null;
-      return (kind, null, kind == MaxonValueKind.Bool, isStruct, elemName, elemStorageType);
+      var info = ManagedElementInfo.FromElementType(elemType);
+      return (info.Kind, null, info.Kind == MaxonValueKind.Bool,
+              info.IsStructElement, info.StructElementTypeName, info.ElementStorageType);
     }
     // Bare __ManagedMemory with no Element type param (raw byte buffer)
     return (MaxonValueKind.Integer, null, false, false, null, null);
