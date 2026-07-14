@@ -88,6 +88,10 @@ public class DebugStreamMonitor {
       RuntimeEmitter.DsSharedMemorySize - RuntimeEmitter.DsTagTableReserveSize);
     accessor.Write(RuntimeEmitter.DsOffTagTableCount, 0L);
     accessor.Write(RuntimeEmitter.DsOffPeakUsed, 0L);
+    // Seed the producer's announcement slot to "nobody has spoken". Only the producer writes it,
+    // and a producer too old to know it exists leaves it exactly here — which is what makes one
+    // detectable rather than merely broken. See CheckProducerSchema.
+    accessor.Write(RuntimeEmitter.DsOffProducerVersion, RuntimeEmitter.DsProducerVersionUnset);
 
     // Spawn target process with MAXON_DEBUGSTREAM env var
     var psi = new System.Diagnostics.ProcessStartInfo {
@@ -162,10 +166,30 @@ public class DebugStreamMonitor {
       long writeCursor = accessor.ReadInt64(RuntimeEmitter.DsOffWriteCursor);
 
       // Pairs with the producer's RELEASE store of write_cursor in __ds_reserve. Everything it
-      // wrote below this cursor — every entry HEADER — is therefore visible to the scan below.
-      // Without this, the scan could read a previous generation's bytes at a ring offset the
-      // cursor claims is live, and those bytes carry a stale commit bit and a stale entry_size.
+      // wrote below this cursor — every entry HEADER, and the schema version it announced before
+      // the first of them — is therefore visible to the checks below. Without this, the scan could
+      // read a previous generation's bytes at a ring offset the cursor claims is live, and those
+      // bytes carry a stale commit bit and a stale entry_size.
       Thread.MemoryBarrier();
+
+      // Before a single entry is decoded: does the target even speak our schema? A mismatch here
+      // is not a trace with a gap in it, it is a trace that is quietly and entirely fictional.
+      if (CheckProducerSchema(accessor, writeCursor) is { } mismatch) {
+        Console.Error.WriteLine(mismatch);
+        lock (stdoutLock) { stdout.Flush(); }
+
+        // Kill the target rather than leave it running blind into a ring nobody is draining.
+        if (!process.HasExited) {
+          try {
+            process.Kill(entireProcessTree: true);
+          } catch (InvalidOperationException) {
+            // It exited between the check and the kill — which is the state we were asking for.
+          }
+        }
+        process.WaitForExit();
+
+        return SchemaMismatchExit;
+      }
 
       long committedEnd = ScanCommittedPrefix(accessor, readCursor, writeCursor, bufferMask);
 
@@ -318,6 +342,56 @@ public class DebugStreamMonitor {
       _ => throw new InvalidOperationException(
         $"--filter '{filter}' reached the decode loop; it should have been rejected at parse time")
     };
+  }
+
+  /// The monitor's own exit code when it refuses to decode a ring it does not speak the schema of.
+  /// Distinct from the target's exit code, which is what a successful run returns.
+  private const int SchemaMismatchExit = 3;
+
+  /// <summary>
+  /// Does the target speak our wire schema? Returns the message to fail with, or null to proceed.
+  ///
+  /// The producer announces its version in `__debugstream_init`, before it can emit anything, and
+  /// `write_cursor` is RELEASE-stored after that announcement — so a monitor that can see any entry
+  /// at all can see the version that produced it. There is no window in which a current producer
+  /// looks like an old one.
+  ///
+  /// Which makes the three cases exhaustive:
+  ///   * the announced version is ours — decode.
+  ///   * NOTHING announced and the ring is empty — nothing ever attached. A binary built without
+  ///     `--debugstream` never opens the segment, and monitoring one is not an error; it simply has
+  ///     no events. Proceed, and print nothing.
+  ///   * anything else — a foreign schema. REFUSE, and say so.
+  ///
+  /// The last case is the one this exists for, because its silent form is so convincing: a v1
+  /// producer never sets the commit bit, so this monitor waits for a commit that will never come,
+  /// lets the ring fill until the producer is dropping ~98% of its events, and then steps over
+  /// every entry as "abandoned (producer died mid-entry)". Measured: 0 events decoded, 283221
+  /// dropped, 5290 abandoned — and the producer had exited cleanly. Every number in that summary is
+  /// a fiction, and it is the trace an old binary produces TODAY. An instrument that lies is worse
+  /// than no instrument; this is the check that makes it merely refuse.
+  /// </summary>
+  private static string? CheckProducerSchema(MemoryMappedViewAccessor accessor, long writeCursor) {
+    long announced = accessor.ReadInt64(RuntimeEmitter.DsOffProducerVersion);
+
+    if (announced == RuntimeEmitter.DsVersion) return null;
+
+    bool nothingAttached =
+      announced == RuntimeEmitter.DsProducerVersionUnset && writeCursor == 0;
+    if (nothingAttached) return null;
+
+    string speaks = announced == RuntimeEmitter.DsProducerVersionUnset
+      ? $"a schema older than v{RuntimeEmitter.DsVersion} (it wrote {writeCursor} bytes of entries "
+        + "without ever announcing a version)"
+      : $"schema v{announced}";
+
+    return $"[debugstream] SCHEMA MISMATCH — refusing to decode.\n"
+      + $"[debugstream]   this monitor speaks v{RuntimeEmitter.DsVersion}; the target speaks {speaks}.\n"
+      + "[debugstream]   The two disagree about the entry COMMIT BIT, so every event in this trace\n"
+      + "[debugstream]   would be wrong: payloads decoded before they were written, or — more\n"
+      + "[debugstream]   likely — nothing decoded at all and the loss blamed on a producer crash\n"
+      + "[debugstream]   that never happened.\n"
+      + "[debugstream]   Rebuild the target with this compiler and run it again.";
   }
 
   /// <summary>

@@ -87,7 +87,28 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   // DebugStream shared memory constants
   // =========================================================================
   public const long DsMagic = unchecked((long)0x4D58444253545200); // "MXDBSTR\0"
-  public const long DsVersion = 1;
+
+  /// The wire schema version — the one number the two ends of this format must agree on, and the
+  /// only thing standing between a mismatch and a trace that LIES.
+  ///
+  /// v2 introduced the entry COMMIT BIT (<see cref="DsEntryFlagCommitted"/>). That was not an
+  /// additive change: under v1 the flags byte was always zero and "below `write_cursor`" MEANT
+  /// readable, so the two schemas disagree about what an entry with flags == 0 IS — v1 says
+  /// "readable", v2 says "payload not written yet". Neither end can tell the other's schema by
+  /// looking at the ring, so each ANNOUNCES its version and refuses to speak across a mismatch:
+  ///
+  ///   * a v1 producer under a v2 monitor never sets the bit, so the monitor waits for a commit
+  ///     that is not coming, fills the ring (the producer then DROPS ~98% of its events), and
+  ///     finally steps over every entry as "abandoned (producer died mid-entry)" — an EMPTY trace,
+  ///     blamed on a producer that in fact exited cleanly. Measured, before this check existed:
+  ///     0 events decoded, 283221 dropped, 5290 abandoned, all of it a fiction.
+  ///   * a v2 producer under a v1 monitor has its uncommitted entries read as if they were
+  ///     readable — the exact torn payload the commit bit exists to close, silently.
+  ///
+  /// Bump this whenever the meaning of a byte on the wire changes, and the mismatch becomes a loud
+  /// refusal instead of a quiet lie.
+  public const long DsVersion = 2;
+
   public const int DsHeaderSize = 128;       // 0x80
   public const int DsDefaultBufferSize = 2 * 1024 * 1024; // 2 MB, must be power-of-two
 
@@ -118,6 +139,21 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int DsOffTagTableOffset = 0x50;
   public const int DsOffTagTableCount = 0x58;
   public const int DsOffPeakUsed = 0x60;
+
+  /// The PRODUCER's schema version, announced by `__debugstream_init` before the producer can emit
+  /// a single entry. `DsOffVersion` above is the MONITOR's, written when it creates the segment —
+  /// the two travel in opposite directions, and it takes both for each end to check the other.
+  ///
+  /// This is what makes a v1 producer DETECTABLE rather than merely broken: a v1 producer does not
+  /// know the slot exists and never writes it, so it stays at
+  /// <see cref="DsProducerVersionUnset"/> — and "wrote entries but never announced a version" is
+  /// precisely the signature of one.
+  public const int DsOffProducerVersion = 0x68;
+
+  /// No producer has announced a version: either none has attached (a binary built without
+  /// `--debugstream` never opens the ring), or the one that did predates the announcement — which
+  /// the monitor tells apart by whether the ring has any entries in it.
+  public const long DsProducerVersionUnset = 0;
 
   // Flags bits
   public const long DsFlagProducerAlive = 1;

@@ -8,6 +8,15 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 /// The target opens the pre-existing segment via the MAXON_DEBUGSTREAM env var,
 /// writes binary events into the ring buffer, and unmaps on shutdown.
 ///
+/// THE HANDSHAKE, first, because the rest of this is only true if both ends agree on it. The
+/// monitor writes ITS schema version into the segment header (`DsOffVersion`) when it creates it;
+/// `__debugstream_init` checks that against <see cref="RuntimeEmitter.DsVersion"/> and stays DARK
+/// if it differs, then announces its OWN version (`DsOffProducerVersion`) before it can emit a
+/// single entry. Two versions, travelling in opposite directions, because it takes both for each
+/// end to check the other — and a mismatch on this wire does not degrade the trace, it FABRICATES
+/// one (see DsVersion). A port of this protocol that skips the handshake works perfectly until the
+/// day the two binaries are built a commit apart.
+///
 /// THE RING PROTOCOL, in three moments — because two of them used to be one, and that was a race:
 ///
 ///   1. RESERVE (`__ds_reserve`, under the ticket lock). Claim the bytes, write the entry HEADER
@@ -117,6 +126,37 @@ public partial class RuntimeEmitter {
     _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
     _b.JumpIf(Condition.NotEqual, disabledLabel);
 
+    // ANNOUNCE the schema we speak — and do it BEFORE deciding whether to speak at all.
+    //
+    // The order is the point. A producer that refuses an incompatible monitor and says nothing is
+    // indistinguishable, to that monitor, from a binary built without `--debugstream` at all: both
+    // are an empty ring. Announcing FIRST means a reader of any version can always see what this
+    // binary speaks, whether or not this binary chose to emit — so the mismatch is loud from
+    // whichever side notices it, instead of only from ours.
+    //
+    // It is safe to write here and nowhere earlier: the magic check above is what established that
+    // this segment is a debugstream ring and not somebody else's shared memory.
+    //
+    // The store needs no barrier, which is worth saying because it looks like it should. It happens
+    // in init, before this process can emit its first entry, and an entry reaches the monitor only
+    // through `__ds_reserve`'s RELEASE store of `write_cursor`, which orders every store preceding
+    // it — this one included. A monitor that sees ANY entry therefore sees the version that made
+    // it, and "entries present, version unannounced" can only mean a producer too old to know the
+    // slot exists.
+    _b.MovRegImm(VReg.Scratch2, DsVersion);
+    _b.StoreIndirect(VReg.Scratch1, DsOffProducerVersion, VReg.Scratch2);
+
+    // The MONITOR's schema version must be the one we speak, or we do not speak at all.
+    //
+    // A reader that parses entries by different rules is not a ring we may write into: a v1 monitor
+    // treats "below write_cursor" as readable, so writing v2 entries into it hands it our
+    // UNCOMMITTED payloads — reintroducing, silently, the exact torn read the commit bit closes.
+    // Take the disabled path: an empty trace is a visibly missing instrument, and a wrong one is
+    // not. Having announced above, we are a SILENT producer, never an anonymous one.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DsOffVersion);
+    _b.CmpRegImm(VReg.Scratch2, DsVersion);
+    _b.JumpIf(Condition.NotEqual, disabledLabel);
+
     // Read buffer_size from header and cache in globals
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DsOffBufferSize);
     _b.StoreGlobal("__ds_buf_size", VReg.Scratch2);
@@ -125,7 +165,9 @@ public partial class RuntimeEmitter {
     _b.SubRegImm(VReg.Scratch3, 1);
     _b.StoreGlobal("__ds_buf_mask", VReg.Scratch3);
 
-    // Set flags.producer_alive = 1
+    // Set flags.producer_alive = 1. Shutdown clears this, but never the version announced above:
+    // the version is a fact about the BINARY, not about its liveness, and a monitor draining the
+    // ring of a producer that has already exited still needs to know how to parse what it left.
     _b.MovRegImm(VReg.Scratch2, DsFlagProducerAlive);
     _b.StoreIndirect(VReg.Scratch1, DsOffFlags, VReg.Scratch2);
 
