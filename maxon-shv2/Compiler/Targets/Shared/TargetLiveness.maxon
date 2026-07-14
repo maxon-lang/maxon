@@ -1,8 +1,8 @@
 // TargetLiveness — the pass that decides whether the register allocator is fast:
 // the per-function CFG (built ONCE), loop structure from back edges, and live-in/live-out by
 // SSA PATH EXPLORATION. Everything is dense (design §"Data representation"): `Array`-indexed
-// columns keyed by the dense function-local block index / value id, live-in/out as a
-// `blocks × words` BITSET matrix, u16 register masks — NO `Map` and NO hashing in the hot path.
+// columns keyed by the dense function-local block index / value id, live-in/out as one SPARSE,
+// editable value list per block, u16 register masks — NO `Map` and NO hashing in the hot path.
 //
 // **There is NO dataflow fixpoint.** In strict SSA a value's def dominates every use, so liveness
 // is exactly "the CFG paths running backward from each use up to the def" — walk them and stop.
@@ -261,10 +261,15 @@ export type FuncCfg
 	end 'maxLoopDepth'
 end 'FuncCfg'
 
-// The live-in / live-out sets of every block, SPARSE: `inList[inStart[b] .. inStart[b+1])` are the
-// value ids live on entry to block `b`, and likewise `outList`/`outStart` on exit. Compressed
-// sparse row — two flat columns per direction, never an array-of-arrays (one heap object per block)
-// and never a bitset.
+// One EDITABLE live list per block — `[b]` is block `b`'s. A block's list is SHORT: it is bounded by
+// the values SIMULTANEOUSLY LIVE at that block boundary (tens), never by the value space, which is
+// what makes a linear scan through one the right way to find or remove a member rather than a
+// compromise.
+export typealias PerBlockLiveSets = Array with ValueIdArray
+
+// The live-in / live-out sets of every block, SPARSE and EDITABLE: `inSets[b]` holds the value ids
+// live on entry to block `b`, `outSets[b]` those live on exit. One list per block per direction —
+// never a bitset.
 //
 // **Sparse is the point.** A dense `blocks × ceil(values/64)` bitset matrix is proportional to the
 // value space, not to the information: a function with 19,200 blocks and 12,800 values allocates
@@ -272,16 +277,100 @@ end 'FuncCfg'
 // scans 200 words per block to find the handful of live values in it. That was the last superlinear
 // term in register allocation. These lists are proportional to the liveness that actually exists —
 // which is what the SSA path exploration computes directly, so nothing is thrown away to build them.
+//
+// **EDITABLE is the other point, and it is why these are lists and not CSR.** Compressed sparse row
+// — one flat array per direction plus per-block offsets — is the cheaper thing to BUILD, but adding
+// or removing ONE value in ONE block shifts every later block's entries in the flat array: an
+// O(function) edit. A live-range split changes the liveness of only the few blocks it touches, so
+// paying O(function) per split is what forced the splitter to throw the whole result away and
+// recompute liveness from scratch after every split — an O(function × splits) quadratic. Per-block
+// lists make that same edit O(1) amortised. The price is one heap object per block, allocated ONCE
+// by the walk and then mutated in place, never per split.
 export type LiveSets
-	export var inStart as CsrColumn
-	export var inList as ValueIdArray
-	export var outStart as CsrColumn
-	export var outList as ValueIdArray
+	export var inSets as PerBlockLiveSets
+	export var outSets as PerBlockLiveSets
 
-	export static function create(inStart CsrColumn, inList ValueIdArray, outStart CsrColumn, outList ValueIdArray) returns LiveSets
-		return Self{inStart: inStart, inList: inList, outStart: outStart, outList: outList}
+	// Empty sets for a function of `numBlocks` blocks — the shape `solveLivenessSsa` fills in place.
+	export static function create(numBlocks CfgIndex) returns LiveSets
+		return Self{inSets: emptyPerBlockLists(numBlocks), outSets: emptyPerBlockLists(numBlocks)}
 	end 'create'
+
+	// The values live on ENTRY to `blockLocal`. THE LIST ITSELF, not a copy: a caller that only reads
+	// it (seeds a bitset from it, counts it) needs no copy, and one that must hold it across an edit
+	// copies it explicitly (`LivenessResult.liveInInto`).
+	export function liveIn(blockLocal CfgIndex) returns ValueIdArray
+		return try self.inSets.get(blockLocal) otherwise panic("LiveSets.liveIn: block {blockLocal} out of range")
+	end 'liveIn'
+
+	// The values live on EXIT from `blockLocal`. The list itself — see `liveIn`.
+	export function liveOut(blockLocal CfgIndex) returns ValueIdArray
+		return try self.outSets.get(blockLocal) otherwise panic("LiveSets.liveOut: block {blockLocal} out of range")
+	end 'liveOut'
+
+	// Add `v` to a block's live-in / live-out set, IDEMPOTENTLY: these are SETS, and a duplicate is
+	// not merely redundant — every consumer either seeds a bitset from a list (where it is harmless)
+	// or takes the list's COUNT as the block's register demand, where a second copy of a value
+	// invents a register that is not needed and can push a function to a false E5001.
+	export function addLiveIn(blockLocal CfgIndex, v ValueId)
+		var list = self.liveIn(blockLocal)
+		addToLiveList(list, v: v)
+	end 'addLiveIn'
+
+	export function addLiveOut(blockLocal CfgIndex, v ValueId)
+		var list = self.liveOut(blockLocal)
+		addToLiveList(list, v: v)
+	end 'addLiveOut'
+
+	// Remove `v` from a block's live-in / live-out set; a no-op if it is not in it.
+	export function removeLiveIn(blockLocal CfgIndex, v ValueId)
+		var list = self.liveIn(blockLocal)
+		removeFromLiveList(list, v: v)
+	end 'removeLiveIn'
+
+	export function removeLiveOut(blockLocal CfgIndex, v ValueId)
+		var list = self.liveOut(blockLocal)
+		removeFromLiveList(list, v: v)
+	end 'removeLiveOut'
 end 'LiveSets'
+
+// One empty list per block — allocated once per function by `LiveSets.create`.
+function emptyPerBlockLists(numBlocks CfgIndex) returns PerBlockLiveSets
+	var lists = PerBlockLiveSets.create()
+	for _ in 0 upto numBlocks 'eachBlock'
+		lists.push(ValueIdArray.create())
+	end 'eachBlock'
+	return lists
+end 'emptyPerBlockLists'
+
+// Add `v` to one block's live list unless it is already there. O(list), and a live list holds the
+// values live at ONE block boundary — tens of entries — so the membership scan is a constant beside
+// the path exploration that discovered the value in the first place.
+function addToLiveList(list ValueIdArray, v ValueId)
+	for u in list 'each'
+		if u == v 'alreadyPresent'
+			return
+		end 'alreadyPresent'
+	end 'each'
+	list.push(v)
+end 'addToLiveList'
+
+// Remove `v` from one block's live list; a no-op if it is not there. O(list), same bound as the add.
+function removeFromLiveList(list ValueIdArray, v ValueId)
+	for i in 0 upto list.count() 'each'
+		let u = try list.get(i) otherwise panic("removeFromLiveList: list.get({i}) OOB")
+		if u == v 'found'
+			_ = try list.remove(i) otherwise panic("removeFromLiveList: list.remove({i}) OOB")
+			return
+		end 'found'
+	end 'each'
+end 'removeFromLiveList'
+
+// Copy one block's live list into `out` (cleared first) — the O(live) read a consumer does into a
+// scratch buffer it reuses across blocks, for the cases that must not alias the stored list.
+function copyLiveList(src ValueIdArray, out ValueIdArray)
+	out.clear()
+	out.append(src)
+end 'copyLiveList'
 
 // The liveness result the colorer and the cold-spill splitter consume. `live` holds the sparse per-block
 // live-in/live-out sets; `forbidden` is the per-value register mask; `maxPressure` is the exact
@@ -324,12 +413,12 @@ export type LivenessResult
 	// the colorer's in-use mask is built from. `out` is meant to be a scratch buffer reused across
 	// blocks.
 	export function liveInInto(local CfgIndex, out ValueIdArray)
-		copyCsrRange(self.live.inStart, list: self.live.inList, node: local, out: out)
+		copyLiveList(self.live.liveIn(local), out: out)
 	end 'liveInInto'
 
 	// The values live on EXIT from `local`, into `out` (cleared first). O(live).
 	export function liveOutInto(local CfgIndex, out ValueIdArray)
-		copyCsrRange(self.live.outStart, list: self.live.outList, node: local, out: out)
+		copyLiveList(self.live.liveOut(local), out: out)
 	end 'liveOutInto'
 
 	// Seed a dense working ROW with `local`'s live-out set. One dense row (not a matrix) is the
@@ -363,16 +452,6 @@ export type LivenessResult
 		return try self.forbidden.get(v) otherwise panic("LivenessResult.forbiddenOf: value {v} out of range (valueCount={self.valueCount})")
 	end 'forbiddenOf'
 end 'LivenessResult'
-
-// Copy CSR node `node`'s range into `out` (cleared first).
-function copyCsrRange(start CsrColumn, list ValueIdArray, node CfgIndex, out ValueIdArray)
-	out.clear()
-	let lo = try start.get(node) otherwise panic("copyCsrRange: start.get({node}) out of range")
-	let hi = try start.get(node + 1) otherwise panic("copyCsrRange: start.get({node}+1) out of range")
-	for k in lo upto hi 'each'
-		out.push(try list.get(k) otherwise panic("copyCsrRange: list.get OOB"))
-	end 'each'
-end 'copyCsrRange'
 
 // The local index of a function-local `BlockId`, via the O(1) flat `FuncTopology` index —
 // NEVER `IrModule.getBlockByIdIn` (an O(blocks) scan, the O(B²) trap the design
@@ -1439,23 +1518,6 @@ function isFirstUseOfValueInOp(buf OperandList, upto OperandIndex, valueId Value
 	return true
 end 'isFirstUseOfValueInOp'
 
-// A (block, value) membership pair, accumulated flat during the walk and bucketed into CSR at the
-// end — the cheapest way to build a sparse set whose size is not known in advance. Two parallel
-// columns, never an array-of-arrays.
-type LivePairs
-	export var blocks as CfgIndexArray
-	export var values as ValueIdArray
-
-	static function create() returns LivePairs
-		return Self{blocks: CfgIndexArray.create(), values: ValueIdArray.create()}
-	end 'create'
-
-	export function add(blockLocal CfgIndex, v ValueId)
-		self.blocks.push(blockLocal)
-		self.values.push(v)
-	end 'add'
-end 'LivePairs'
-
 // The number of block-marking steps a walk took — the cost counter that replaces the fixpoint's
 // iteration count (there is no fixpoint). Returned alongside the sets.
 type LivenessWalk
@@ -1476,8 +1538,7 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 	// several blocks in which `v` is live would otherwise record `v` in its live-out set repeatedly.
 	var liveInStamp = zeroColumn(topo.numBlocks)
 	var liveOutStamp = zeroColumn(topo.numBlocks)
-	var inPairs = LivePairs.create()
-	var outPairs = LivePairs.create()
+	var live = LiveSets.create(topo.numBlocks)
 	var worklist = CfgIndexArray.create()
 	var markSteps = 0 as EventCount
 
@@ -1496,7 +1557,7 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 			match useIndex.useKindAt(record) 'kind'
 				// Read ON the edge, so it is live at the END of this predecessor — and the walk up
 				// starts HERE, not in the phi's block (the phi is a different value).
-				edge then markLiveOut(outPairs, stamp: liveOutStamp, blockLocal: useBlock, v: v)
+				edge then markLiveOut(live, stamp: liveOutStamp, blockLocal: useBlock, v: v)
 				op then break 'kind'
 			end 'kind'
 			worklist.push(useBlock)
@@ -1529,33 +1590,31 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 				continue
 			end 'alreadyMarked'
 			try liveInStamp.set(b, value: v + 1) otherwise panic("solveLivenessSsa: liveInStamp.set OOB")
-			inPairs.add(b, v: v)
+			live.addLiveIn(b, v: v)
 
 			let deg = topo.pred.degree(b)
 			for k in 0 upto deg 'eachPred'
 				let p = topo.pred.neighbour(b, k: k)
-				markLiveOut(outPairs, stamp: liveOutStamp, blockLocal: p, v: v)
+				markLiveOut(live, stamp: liveOutStamp, blockLocal: p, v: v)
 				worklist.push(p)
 			end 'eachPred'
 		end 'walkUp'
 	end 'eachValue'
 
-	// The walk discovers (block, value) memberships in walk order; `buildCsr`'s counting sort
-	// buckets each direction by block in O(pairs + blocks) — no comparison sort, no hashing, and no
-	// per-block heap object.
-	let liveInCsr = buildCsr(inPairs.blocks, to: inPairs.values, nodeCount: topo.numBlocks)
-	let liveOutCsr = buildCsr(outPairs.blocks, to: outPairs.values, nodeCount: topo.numBlocks)
-	return LivenessWalk.create(LiveSets.create(liveInCsr.start, inList: liveInCsr.list, outStart: liveOutCsr.start, outList: liveOutCsr.list), markSteps: markSteps)
+	return LivenessWalk.create(live, markSteps: markSteps)
 end 'solveLivenessSsa'
 
-// Record `v` as live-out of `blockLocal`, at most once (the version stamp dedupes).
-function markLiveOut(outPairs LivePairs, stamp VersionStampColumn, blockLocal CfgIndex, v ValueId)
+// Record `v` as live-out of `blockLocal`, at most once. `LiveSets.addLiveOut` is idempotent on its
+// own, but it pays a scan of the block's list to be — and a block that is a predecessor of several
+// blocks in which `v` is live is reached once per such successor, so the O(1) stamp is what keeps
+// the mark step O(1). The stamp holds `v + 1`, so it needs no clearing between values.
+function markLiveOut(live LiveSets, stamp VersionStampColumn, blockLocal CfgIndex, v ValueId)
 	let cur = try stamp.get(blockLocal) otherwise panic("markLiveOut: stamp.get OOB")
 	if cur == v + 1 'already'
 		return
 	end 'already'
 	try stamp.set(blockLocal, value: v + 1) otherwise panic("markLiveOut: stamp.set OOB")
-	outPairs.add(blockLocal, v: v)
+	live.addLiveOut(blockLocal, v: v)
 end 'markLiveOut'
 
 // ==========================================================================
@@ -1574,16 +1633,17 @@ function computePressureAndForbidden(module TargetModule, topo FuncTopology, liv
 	var maxPressure = 0 as RegCount
 	// Scratch reused across every block/op — otherwise one allocation per block.
 	var liveBuf = ValueIdArray.create()
-	var seedBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
-		copyCsrRange(live.outStart, list: live.outList, node: i, out: seedBuf)
-		for v in seedBuf 'seedLiveOut'
+		// The stored list itself, not a copy into a scratch buffer: this sweep only READS the live
+		// sets, so there is nothing to copy it away from.
+		let liveOutList = live.liveOut(i)
+		for v in liveOutList 'seedLiveOut'
 			bitsetAdd(liveRow, base: 0, bit: v)
 		end 'seedLiveOut'
-		var blockMax = seedBuf.count()
+		var blockMax = liveOutList.count()
 
 		ordered.clear()
 		collectBlockOps(block, out: ordered)
@@ -1617,8 +1677,7 @@ function computePressureAndForbidden(module TargetModule, topo FuncTopology, liv
 		// block's LIVE-IN set plus any of its own block-args the sweep re-added (a phi read by an op
 		// in the block), so removing exactly those two sets clears it. Clearing the whole row instead
 		// would be O(values/64) per block — the term the sparse sets exist to remove.
-		copyCsrRange(live.inStart, list: live.inList, node: i, out: seedBuf)
-		for v in seedBuf 'clearLiveIn'
+		for v in live.liveIn(i) 'clearLiveIn'
 			bitsetRemove(liveRow, base: 0, bit: v)
 		end 'clearLiveIn'
 		for arg in block.blockArgs 'clearPhis'
