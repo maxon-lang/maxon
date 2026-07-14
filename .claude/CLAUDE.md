@@ -80,9 +80,29 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 
 The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
 
-### Self-hosted compiler (maxon-selfhosted) — DEPRECATED
+### Self-hosted compiler (maxon-selfhosted) — DEPRECATED as a PRODUCT, not as a SOURCE
 
-Not driveable from the `maxon-dev` MCP any more. The source tree is still in the checkout and still builds, so drive it by hand when you need something only it has (notably the wasm backend, and the complete 4-digit `ErrorCode.maxon` registry that `lookup_error_code` reads):
+**⭐ READ AND PORT FROM IT.** It is **191,487 lines of working, debugged Maxon**, written against the
+same language and the **same `stdlib/`** shv2 uses. Every hard mechanism on the shv2 ladder — ownership,
+closures, generics + layout descriptors, witness tables, `async`/green threads, the emitted runtime —
+already exists there with its bugs paid for. **When implementing anything in shv2, find the v1 file that
+already does it, and reuse its code where it fits.** Justify divergences.
+*(One exception: the register allocator ports **lessons**, not code — shv2's is a deliberately different
+linear SSA-chordal design.)*
+
+⚠ **IT NO LONGER BUILDS** (verified 2026-07-13). It has bit-rotted against the current bootstrap:
+`error E3005: Cannot return 'TypeNameIdArray' from function declared to return 'RegIntArray'` in
+`Targets/X64/X64RegisterAlloc.maxon` and `Targets/Arm64/Arm64RegisterAlloc.maxon` — a consequence of
+`e4146cf8e` ("a generic's RANGED element type is part of its type"), which made two array typealiases
+over different ranges distinct types.
+
+**Reading and porting its source is unaffected.** But **running** it is not possible, which means the
+**wasm backend** and the complete 4-digit **`ErrorCode.maxon` registry** that `lookup_error_code` reads
+are **currently unreachable by any route**. Repairing the build is tracked work — it would also restore
+the only dictionary-passing + witness-table compiler in the tree, which is the only instrument that can
+settle whether shv2 needs a witness table for a `Hashable` constraint.
+
+Not driveable from the `maxon-dev` MCP. To attempt it by hand:
 
 - **Build:** `./bin/maxon.exe build maxon-selfhosted` (requires C# compiler already built)
 - **Spec tests:** `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`

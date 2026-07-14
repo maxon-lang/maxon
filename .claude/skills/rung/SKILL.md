@@ -59,6 +59,16 @@ cp -r bin ../maxon-<rung>/bin        # bin/ is GITIGNORED — a worktree has no 
 
 ## 4. Implement — `maxon-rung-implementer`
 
+> **⭐ PORT FROM `maxon-selfhosted` (v1). Do not re-derive what already exists.** It is **191,487 lines
+> of working, debugged Maxon**, written against the same language and the **same `stdlib/`**. It is
+> deprecated as a *product*, not as a *source* — **a lot of it is directly reusable, and lifting a
+> working implementation is the plan, not a shortcut.** Every hard mechanism on the ladder (ownership,
+> closures, generics + layout descriptors, witness tables, `async`/green threads, the emitted runtime)
+> already exists there, with its bugs paid for. **Find the v1 file first; justify every divergence.**
+> *(Exception: the register allocator ports LESSONS, not code — shv2's is a deliberately different,
+> linear, SSA-chordal design. And note v1 currently does not BUILD — reading and porting it is fine, you
+> just cannot run it to compare behaviour.)*
+
 Every brief MUST carry:
 - **(a) the specific v1 file to PORT**, with line numbers, and the **shv2 divergences to adapt to** —
   *except* where the design deliberately departs (the register allocator ports lessons, not code);

@@ -131,7 +131,7 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Iteration** | **Hardcode `for-in`** over Array/Range/String. No general `Iterable`/associated types. |
 | **Errors** | v1's design **verbatim**: dual-register `(value, errorFlag)`. No unwind tables. Already minimal. |
 | **Stdlib lowering** | **Reachability-seeded — lower only the stdlib bodies the program transitively reaches.** *Not an optimization: it is what makes Phase 1 a phase.* See §"The stdlib cone." |
-| **Stdlib fork** | `stdlib-shv2/stdlib/` — **un-deferred**, and re-justified: it is the backstop on Phase 1's boundary, not a ~1 s speedup. See §"The stdlib cone." |
+| **Stdlib fork** | `stdlib-shv2/stdlib/` — ❌ **NOT NEEDED. Re-deferred 2026-07-13 on measurement (P1.0c).** It was un-deferred as the backstop for `Map`, *"if reachability-seeded lowering proves insufficient."* **It proved sufficient** — `Map` is laid out and never codegen'd. The one edge it *could* have cut (`String.trim()` → `CharacterSet` → `Set`) we chose NOT to cut: do the hard things early ⇒ `Set` is in Phase 1 (P1.7b). **So the fork now gates nothing, and its original ~1 s justification is still dead.** Do not resurrect it without a NEW reason. |
 | **Targets** | x64-windows only through Phase 2. |
 
 ### PRINCIPLE — when may we rewrite shv2's own source?
@@ -246,43 +246,61 @@ lines in v1; defining it early costs almost nothing and buys the whole design-in
 
 ## Phase 1 — the measured boundary
 
-**Grep-verified against `maxon-shv2/Testing/` (704 lines: `SpecParser` 297 + `SpecTestRunner`
-407), not guessed.** The harness is *already* architecturally standalone:
-`runOneSpec(compilerExe FilePath, specDir, …)`
-([SpecTestRunner.maxon:130](maxon-shv2/Testing/SpecTestRunner.maxon#L130)) takes the compiler as
-a **parameter** and spawns it as a subprocess — deliberately, so "a compiler crash is isolated to
-the one test that triggered it." Extracting a standalone `spec-runner` program is nearly free.
+**MEASURED 2026-07-13 (P1.0c) against the UPGRADED, PARALLEL harness — NOT GREPPED, COMPILED.**
+`maxon-shv2/Testing/` (`SpecParser` 364 + `SpecTestRunner` 467 + `SpecWorkerPool` 1091 = **1,922
+lines**) plus the `Main` a standalone runner needs. A standalone `spec-runner` was extracted (the
+harness verbatim + `Compiler/Target.maxon` verbatim + a 2-symbol shim + `Main` minus the driver
+commands), built with `maxon.exe --emit-ir`, and its EMIT set read off **both** the emitted X86 module
+**and** the PE COFF symbol table (`llvm-nm`) — **146 stdlib functions, the two lists identical.** The
+extracted runner **runs**: it drives a real 2-worker green-thread pool.
 
-| The harness **USES** (⇒ Phase 1 must EMIT) | The harness does **NOT** use |
+| The harness **EMITs** (⇒ Phase 1 must CODEGEN) | The harness **DECLAREs only** (⇒ Phase 2) |
 |---|---|
-| structs · enums · **unions** · `match` | **`Map`** — **0** uses |
-| **`String`** + interpolation of **primitives/String only** (0 struct interpolation) | **`Set`** — **0** uses |
-| heap · ownership · drops | **witness-table dispatch** — 0 `implements`, 0 struct interpolation |
-| **owned `String` payloads in union cases** — `compilerError(text String)`, `fail(reason String)` | **conditional-conformance dispatch** — every `.contains` is `String.contains`, not `Array.contains` |
-| `throws` / `try` / `otherwise` — **36 sites** | **`extension`** — **0** uses *(the draft said 2)* |
-| **generics** — `Array with {SpecTest, SpecTestResult, FilePath}` ⇒ **managed elements** | the entire compiler cone — no IR, no allocator, no backend |
-| **`Array`** | |
-| `for-in` — **5** sites | |
-| **ranged typealiases** — `int(0 to u64.max)`, `int(i64.min to i64.max)` | |
-| stdlib: `File` · `FilePath` · `Directory` · `Subprocess` · `Clock` · `Process` · `Print` | |
-| ⚠ **`async` / `await` / Promises + closures** — **from the parallel worker pool** (below) | |
+| structs · enums · **unions** · `match` | ✅ **`Map`** — **0** instantiation, **0** bodies. Its `EnvMap` arms in `Subprocess.Environment` compile to a bare `mm_decref`: **laid out, never codegen'd.** ⇒ **Reachability-seeded lowering WORKS, and the pruned fork is NOT needed for `Map`** |
+| **`String`** + interpolation of primitives, `String`, **and one STRUCT** (`FilePath`, via `Stringable`) — `Main.maxon:233-236` | **conditional conformance** — `Array implements Hashable, Equatable where Element is …` (`Array.maxon:415`) is **NOT reached** |
+| heap · ownership · drops | **`extension`** — **0**. Not one of the 4 `Array` / 3 `Interfaces` / 3 `PrimitiveExtensions` blocks emits a method |
+| **owned `String` payloads in union cases** | **existentials / interface-typed storage** — 0 |
+| `throws` / `try` / `otherwise` — **80 `try`, 16 `throws`** | the entire compiler cone — no IR, no allocator, no backend |
+| **generics** — `Array with {SpecTest, SpecTestResult, FilePath, SpecJob, SpecPlan, …}` ⇒ managed elements | `Json` · `List` · `Math` · `Range` · `Sha256` · `Vector` · `Log` · `Clock` · `HttpClient` · `TcpClient` · `Ascii` · `Unicode` · `helpers/sort/*` |
+| **`Array`** · `for-in` — **18** sites | |
+| **ranged typealiases** — **8** | |
+| ⭐ **`Set` — EMITTED, and not by anything the harness wrote.** `CharSet = Set with Character` (`CharacterSet.maxon:19`) arrives via **`String.trim()` (13 sites)** → `CharacterSet.whitespacesAndNewlines()`. Emits `CharSet.{init,insert,contains,grow}` + `HashSlotArray`/`StateArray` | |
+| ⭐ **`Hashable` + `Equatable` — EMITTED**, as `Set`'s element constraints: `stdlib.Character.hash` / `.equals` (type-body conformances) | |
+| **`async` / `await` / `Promise`** — from the pool. **`Promise` has ZERO stdlib bodies** (a compiler-synthesised facade); the real surface is **runtime** — `__gt_spawn` · `__gt_try_await` · `__gt_is_complete` ⇒ **Workstream R3** | |
+| **async subprocess stdio** — `StreamingSubprocess` ×11 + `Stdin` ×7 (+23 fns — the pool's ENTIRE stdlib delta over the serial harness) | |
+| ⚠ **CLOSURES — 0.** *(The old table claimed the pool added them. It did not.)* `SpecWorkerPool.maxon:1000` is `async drainResultsThunk(handle.child)` — `async` on a **direct free-function call**, chosen deliberately to avoid capturing a struct. **The escape channel Phase 1 exercises is the async call's ARGUMENTS, not a closure env — two distinct channels, and only one is tested.** P1.5 must not mistake one for the other | |
 
-> **⚠ The table above is measured against the CURRENT 704-line harness, which is SERIAL — and
-> that is not Phase 1's target.** shv2's harness is serial by *deliberate omission*
-> ([SpecTestRunner.maxon:11](maxon-shv2/Testing/SpecTestRunner.maxon#L11): *"Trimmed HARD from
-> v1's SpecTestRunner: no fragment cache, no parallel worker pool"*). The Phase-1 goal is parity
-> with `maxon-selfhosted`, whose
-> [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) is a
-> **persistent worker-subprocess pool** driven by `async`/`await` + Promises over the
-> green-thread runtime (`try await drainPromise otherwise 'workerDied`). **So the harness must
-> first GROW that pool back (P1.0b), and the boundary is measured against the upgraded harness** —
-> which adds `async`, `await`, Promises, closures, and async subprocess stdio to the EMIT set, and
-> brings **Workstream R3** into Phase 1.
->
-> *(For calibration, not as a reason to skip it: the serial suite is currently **3.0 s for 126
-> tests**. Parallelism is not an iteration-speed emergency today — it is in Phase 1 because
-> `async` is a hard mechanism that must not be retrofitted, and because it is what the Phase-1
-> goal actually means.)*
+### ⇒ `Set` + `Hashable` + WITNESS TABLES are PHASE 1 (decided 2026-07-13)
+
+*"`Set` rides `Map`'s exact mechanism"* is now **false as sequencing**: **`Set` is reached and `Map` is
+not.** It cannot ride a mechanism that arrives after it.
+
+**`String.trim()` is about the most innocuous call in the stdlib, and it pulls in `Set` → `Hashable` →
+`Equatable`.** This is exactly the class of thing §"the stdlib cone" was written to catch — and it
+caught `Map` while missing `Set`.
+
+The option was to cut the `trim()` → `CharacterSet` → `Set` edge in the `stdlib-shv2/` fork (sanctioned:
+the PRINCIPLE binds shv2's own source, not the stdlib). **REJECTED, on this plan's governing principle:
+DO THE HARD THINGS EARLY.** So **`P2.1` interfaces+witness and `P2.3` `Set`** are **promoted into Phase 1**
+(as **P1.7a** / **P1.7b**), forced by a real program rather than a bespoke test. Phase 1 ≈ Phase 2 minus
+`Map`, `extension`, and conditional conformance.
+
+⚠ **One consequence is INFERRED, not measured, and it is the thing to watch.** The bootstrap
+**monomorphizes**, so it discharges `Element is Hashable` as a *static direct call* and emits **zero**
+witness tables (measured: zero indirect calls in the whole module). **shv2's locked design is the
+opposite** — dictionary-passing + witness tables — under which `element.hash()` on a *type parameter* has
+no route except a witness slot. The only architecture-matched compiler that could settle it is v1, and
+**v1 NO LONGER BUILDS** (see below).
+
+### ⚠ Two methodological corrections, both of which cost this plan a wrong answer
+
+1. **Measure the PROGRAM, not the DIRECTORY.** The old table was *"grep-verified against
+   `maxon-shv2/Testing/`"* — and `Testing/` really is clean (0 bare struct interpolations; all 13 of its
+   `.toString()` calls are explicit). But **the Phase-1 artifact is `Testing/` + a `Main`**, and
+   `Main.maxon:233-236`'s error reporter interpolates a bare `FilePath` — a **struct**, through
+   `Stringable`. Four sites. A grep of the wrong scope reported zero.
+2. **Compile it, don't grep it.** Every one of the four corrections here (`Set` used, `Map` unused,
+   closures 0, struct interpolation ≠ 0) was invisible to grep and obvious to the linker.
 
 ### ⚠ The stdlib cone — the EMIT/DECLARE split, and why it decides everything
 
@@ -313,19 +331,28 @@ the stdlib *declares* mechanisms the harness never dispatches through:
 > the `Hashable` constraint → that drags in **interfaces + witness tables**, and Phase 2's entire
 > generics tail collapses back into Phase 1.
 
-⇒ **The backstop, and why the pruned fork is UN-DEFERRED:** `stdlib-shv2/stdlib/` was deferred on
-2026-07-13 as "saves ~1 s of a 4.2 s build, gates nothing." **That justification is now false.**
-The fork is the lever that *bounds Phase 1's language surface* — if reachability-seeded lowering
-proves insufficient, pruning the `EnvMap` overload out of the fork is the fallback that keeps
-`Map` in Phase 2. Its value is a *boundary*, not a second.
-- **TRAP (unchanged, and fatal):** the stdlib dir's **LEAF NAME *is* the namespace**
+⇒ ~~**The backstop, and why the pruned fork is UN-DEFERRED**~~ ❌ **RESOLVED BY MEASUREMENT — the fork
+is NOT needed.** It was un-deferred as the lever that bounds Phase 1's surface, *"if reachability-seeded
+lowering proves insufficient"*, naming `EnvMap`/`Map` as the case.
+
+**P1.0c settled it with the machine code: reachability-seeded lowering IS sufficient for `Map`.** Zero
+`Map` instantiation, zero `Map` bodies, in a 401-function emitted module. `__destruct_Environment` *is*
+emitted — and its `EnvMap` arms compile to a bare **`x64.call mm_decref`**, a header-driven refcount drop
+that needs only the *resolve-time* fact that the payload is managed. **It never names `Map` and never
+needs a `Map` body.** That is the EMIT/DECLARE split, visible in the emitted code.
+
+The one edge the fork could still have cut — `String.trim()` → `CharacterSet` → `Set` — we chose **not**
+to cut (do the hard things early; `Set` is now P1.7b). **So the fork gates nothing. Do not resurrect it
+without a NEW reason.**
+- **TRAP (kept for the day someone does):** the stdlib dir's **LEAF NAME *is* the namespace**
   ([2-Parser.cs:804](maxon-sharp/Compiler/2-Parser.cs#L804)), and `"stdlib."` is hardcoded in
   [MonomorphizationPass.cs:754,522,619](maxon-sharp/Compiler/MLIR/Passes/MonomorphizationPass.cs#L754).
   A dir named `stdlib-shv2` ⇒ namespace `stdlib-shv2` ⇒ monomorphization **silently** misses every
   call site. **The path must be `stdlib-shv2/stdlib/`**, and `FindStdlibPath()` must hard-error if
   the leaf isn't `stdlib`.
 
-**FIRST TASK OF PHASE 1 (before P1.1): measure the cone.** Compile the harness with `maxon.exe`
+**✅ DONE (P1.0c, 2026-07-13) — see §"Phase 1 — the measured boundary" above for the result.** ~~FIRST
+TASK OF PHASE 1 (before P1.1): measure the cone.~~ Compile the harness with `maxon.exe`
 and list which stdlib functions actually get codegen'd. That list *is* Phase 1's true stdlib
 surface, and it settles the `Map` question with data instead of argument.
 
@@ -375,7 +402,9 @@ top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — 
 | **P1.5** | **closures + `async` + escape → `shared`** ⭐⭐ | **THE THREE ARE ONE MECHANISM, AND THEY CO-LAND — this is the plan's "do the hard things early" in its purest form.** Capture-into-heap **IS** escape: a closure captures into an env block; a green thread captures into a task frame. Escape analysis is needed for heap correctness regardless — so build all three together and `EscapeAnalysis` gets **both** capture channels *from birth*. Land escape single-threaded and add `async` later and you bolt a **second capture channel** onto it: v1's `sys.dropTypeParam` split-brain mistake, exactly. Minimal closure = int capture, 0-arg, heap env, uniform `(args, env)` ABI (v1 lifts at parse time). Minimal `async` = `async`/`await` + Promise + the worker pool's needs. Escape is the **only** place refcounts appear. **Track `% values promoted to shared`** — if it's 40%, static ownership bought nothing. **Runtime slice R3 lands here** (the GT scheduler + async subprocess stdio) |
 | **P1.6** | **generics + layout descriptors** ⭐ | declarations + instantiation. ⇒ `own.drop`'s descriptor arm goes **LIVE** here |
 | **P1.7** | **`Array`** | = P1.6 ∘ P1.2 — the first real integration proof (managed elements → element-destroy through the descriptor). ⇒ unlocks **`b"…"` byte-string literals** |
-| **P1.8** | `String` methods · `for-in` | real `String.equals` body (struct-`cmp` → `methodCall`); hardcoded `for-in` over Array/Range/String |
+| **P1.7a** | **interfaces + witness tables** ⭐ **(promoted from P2.1, 2026-07-13)** | Static conformance (`Hashable`, `Equatable`, `Stringable`). **No existentials** — shv2 stores nothing at interface type. **Forced into Phase 1 by MEASUREMENT (P1.0c):** `Set`'s element constraint needs `Character.hash`/`.equals` dispatched, and `Main.maxon:233-236` interpolates a bare `FilePath` **struct** through `Stringable`. Under dictionary-passing there is no route to `element.hash()` on a type parameter *except* a witness slot. ⇒ promotes the stdlib's interface decls DECLARE→EMIT, and unlocks `"{userStruct}"` |
+| **P1.7b** | **`Set` + `Hashable`/`Equatable`** ⭐ **(promoted from P2.3, 2026-07-13)** | **Forced into Phase 1 by MEASUREMENT (P1.0c), and by nothing the harness wrote:** `String.trim()` (13 sites) → `CharacterSet.whitespacesAndNewlines()` → `typealias CharSet = Set with Character` ([CharacterSet.maxon:19](stdlib/CharacterSet.maxon#L19)). *"`Set` rides `Map`'s exact mechanism"* is **false as sequencing** — **`Set` is reached and `Map` is NOT.** The `stdlib-shv2/` fork could have cut the `trim()`→`CharacterSet` edge; **REJECTED — do the hard things early.** `Map` stays in Phase 2 (multi-param generics; genuinely unreached) |
+| **P1.8** | `String` methods · `for-in` | real `String.equals` body (struct-`cmp` → `methodCall`); hardcoded `for-in` over Array/Range/String. ⚠ **`trim()` lands here and it is the thing that dragged `Set` in** — so P1.7a/P1.7b must precede it |
 | **P1.9** | **ranged typealiases** | *moved into Phase 1* — `ExpandCastRangeChecks` + `InsertRangeChecks`. Cheap here: the harness's ranges are wide (`0 to u64.max`), so the checks are near-vacuous — but the mechanism must exist |
 | 🚩 | **PHASE 1 GATE** | below |
 
@@ -538,9 +567,9 @@ against that source:
 
 | # | Mechanism | Forced by |
 |---|---|---|
-| **P2.1** | **interfaces + witness tables** | static conformance (`Hashable`, `Stringable`). **No** existentials — shv2 stores nothing at interface type. ⇒ promotes the stdlib's interface decls DECLARE→EMIT, and unlocks `"{userStruct}"` interpolation |
+| ~~**P2.1**~~ | ~~interfaces + witness tables~~ | ⬆ **PROMOTED TO PHASE 1 (P1.7a)** — P1.0c measured `Stringable` and `Hashable` dispatch inside the harness's own cone |
 | **P2.2** | **conditional conformance** | per-gid witness tables + synthesized thunks — one witness blob per `GenericInstanceId` (`Array<Byte>: Equatable`, …), each method slot pointing at a thunk with the interface-declared signature whose body forwards to the shared generic impl, materializing that instance's implicit layout/witness args (v1: `synthesizeWitnessThunks`). **The last big generics piece.** ⇒ **[GlobalDataTable.maxon:23](maxon-shv2/Compiler/Targets/Shared/GlobalDataTable.maxon#L23)** `Map with (ByteArray, String)` compiles — **its acceptance test, kept deliberately** |
-| **P2.3** | **`Map` + `Set`** | multi-param generics + `Hashable`. 12 Map typealiases in shv2; `Set` rides the identical mechanism — [StdDialect.maxon:333](maxon-shv2/Compiler/IR/Std/StdDialect.maxon#L333) `StdValueUseSet` is load-bearing in `ElimTrivialBlockArgs`, `FoldConstOperands`, `PruneDeadBlockArgs` |
+| **P2.3** | **`Map`** *(`Set` ⬆ PROMOTED to P1.7b)* | multi-param generics. **`Map` is genuinely unreached by the harness — P1.0c proved it with the machine code** (its `EnvMap` arms compile to a bare `mm_decref`), so reachability-seeded lowering holds and it stays here. 12 `Map` typealiases in shv2's own source. ⚠ **`Set` does NOT wait for it** — it was reached in Phase 1 by `String.trim()`, which is why *"`Set` rides `Map`'s exact mechanism"* was false as sequencing |
 | **P2.4** | **`extension`** | promotes the stdlib's extension blocks DECLARE→EMIT |
 | **P2.5** | **closure dogfood** | shv2's `LazyMessage` sites ([Logger.maxon:35](maxon-shv2/Compiler/Logger.maxon#L35)) compile — the acceptance test for P1.5 |
 | **P2.6** | **per-function fan-out** | the one carry-over from the scalar core (M5's original scope, never built). Both seams exist (`PassPipeline.classifyPass`; the parser is already a pure function of its file) — and **the runtime under it now exists, because P1.5 brought R3 forward**. Gate: **1-core-vs-N-core byte identity** |
