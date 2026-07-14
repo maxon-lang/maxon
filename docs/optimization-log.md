@@ -220,6 +220,40 @@ re-runs its tests individually, where each one's own leak check attributes it.
 
 ## What the profile says is left
 
+### The only superlinearity left is in the PARSER, and it is not where these tables kept pointing
+
+Three phases have carried a byte tail for months — `regalloc:splitting` (×2.38), `elimTrivialBlockArgs`
+(×2.31), `pruneDeadBlockArgs` (×2.25) — each with a **flat allocation count and rising bytes**, i.e. the
+average allocation growing with the program. **All three are one root cause, and it is in none of the
+three passes.** They are linear in the IR they are handed. The IR itself is quadratic.
+
+`parseWhileStatement` mints **one header phi per mutable var IN SCOPE**, whether or not the loop touches
+it. A function with `L` loops and `V` mutable vars in scope therefore builds Θ(L·V) phis out of Θ(L+V)
+of source; the `pressuredLoops` knob declares nine fresh function-scoped vars per loop, so `V` grows
+with `L` and the IR is **Θ(L²)**. Minted-and-then-deleted phis at 8 / 16 / 32 / 64 loops: **252 / 1,080 /
+4,464 / 18,144** — ×4 per doubling. The downstream passes' buffers are all Θ(block-arg id space), and
+that space is Θ(L²): at rung 5 the same code gives `pruneDeadBlockArgs` allocations **19× wider** (2,041
+bytes average against 108) while it makes *fewer* of them. That is the flat-allocs/rising-bytes
+signature, fully accounted for.
+
+Subtract that one knob from the corpus and every tail goes linear (`pruneDeadBlockArgs` ×2.04,
+`elimTrivialBlockArgs` ×2.08, `regalloc:splitting` ×2.01). Scope the corpus's vars to their loops and
+the same thing happens with the loop count unchanged (`parse` ×3.17 → ×1.94, `pruneDeadBlockArgs` ×3.73
+→ ×1.99, `regalloc:liveness` ×2.82 → ×1.97, dead phis 18,144 → 0).
+
+**So the incremental splitter driver (`49b160ce2`) genuinely works** — `regalloc:liveness` is ×1.97 on
+the scoped control — and `9cde0afb9`'s "LINEAR" claim was right in substance even though it quoted a
+×2.38 that is n^1.25. The tail that survived it was never the allocator; it was the parser's phis
+arriving through this knob.
+
+The fix is on-demand phi insertion in the front end (mint a phi when a variable is READ in a block whose
+predecessors are not yet known — Braun et al., *Simple and Efficient Construction of SSA Form*). It is a
+front-end rung, not a pass tweak: `pruneDeadBlockArgs` already deletes every one of these phis, so the
+emitted code is identical today and a fix leaves `specs-shv2/` byte-identical **by construction**. Pure
+cost, zero behaviour.
+
+### Constant factors
+
 From `scale-test --per-type`, which attributes every allocation to the TYPE allocated *and* the SCOPE
 that allocated it. **The scope column is the one that finds things** — a `String` row can never tell
 you that 150 of them came from `emitFixedToken`.
