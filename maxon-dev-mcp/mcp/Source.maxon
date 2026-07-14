@@ -117,18 +117,39 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 	throw SourceArgError.unknownKind
 end 'resolveFileSource'
 
+// The scratch directory both snippet materializers write into. It is GITIGNORED,
+// so it does not exist in a fresh clone — every writer must create it, not assume
+// it. Named once because it was previously spelled out at three sites, and one of
+// them forgot to create it.
+let SnippetScratchDir = "temp"
+let SnippetMainFile = "main.maxon"
+
+// `<repo>/temp`, CREATED. Both materializers go through this, so neither can
+// depend on the other having run first — which is exactly the bug this replaces:
+// `materializeSnippetProject` created its own subdirectory (and `Directory.create`
+// is mkdir -p, so it made `temp/` on the way), while `materializeSnippetFile`
+// wrote straight into `temp/` and assumed it was there. In a fresh clone or a new
+// worktree the fmt-snippet path therefore PANICKED on its first call and worked
+// forever after — invisible to anyone whose `temp/` already existed.
+function ensureSnippetScratchDir(repoRoot FilePath) returns FilePath
+	let scratch = childPath(repoRoot, segment: SnippetScratchDir)
+	if not Directory.create(scratch) 'mkErr'
+		panic("ensureSnippetScratchDir: Directory.create returned false for {scratch.path}")
+	end 'mkErr'
+	return scratch
+end 'ensureSnippetScratchDir'
+
 // Materialize a snippet as a directory containing `main.maxon`. The dir
 // is named `<repo>/temp/<prefix>-<stamp>/` so concurrent calls don't
 // collide. `prefix` should be a short tool identifier like "dump-ir".
 function materializeSnippetProject(code String, prefix String, repoRoot FilePath) returns ResolvedSource
 	let stamp = Clock.nowMs()
-	let projectDirStr = "{repoRoot.path}/temp/{prefix}-{stamp}"
-	let projectDir = try FilePath.from(projectDirStr) otherwise panic("materializeSnippetProject: derived dir '{projectDirStr}' is invalid")
-	let created = Directory.create(projectDir)
-	if not created 'mkErr'
+	let scratch = ensureSnippetScratchDir(repoRoot)
+	let projectDir = childPath(scratch, segment: "{prefix}-{stamp}")
+	if not Directory.create(projectDir) 'mkErr'
 		panic("materializeSnippetProject: Directory.create returned false for {projectDir.path}")
 	end 'mkErr'
-	let mainFile = childPath(projectDir, segment: "main.maxon")
+	let mainFile = childPath(projectDir, segment: SnippetMainFile)
 	try File.writeText(mainFile, content: code) otherwise 'writeErr'
 		panic("materializeSnippetProject: cannot write snippet to {mainFile.path}")
 	end 'writeErr'
@@ -140,14 +161,13 @@ end 'materializeSnippetProject'
 // directory.
 function materializeSnippetFile(code String, prefix String, repoRoot FilePath) returns ResolvedSource
 	let stamp = Clock.nowMs()
-	let filename = "temp/{prefix}-{stamp}.maxon"
-	let target = childPath(repoRoot, segment: filename)
+	let scratch = ensureSnippetScratchDir(repoRoot)
+	let target = childPath(scratch, segment: "{prefix}-{stamp}.maxon")
 	try File.writeText(target, content: code) otherwise 'writeErr'
 		panic("materializeSnippetFile: cannot write snippet to {target.path}")
 	end 'writeErr'
-	// projectDir is unused in file mode; carry the temp dir for symmetry.
-	let tempDir = childPath(repoRoot, segment: "temp")
-	return ResolvedSource.snippet(tempDir, mainFile: target)
+	// projectDir is unused in file mode; carry the scratch dir for symmetry.
+	return ResolvedSource.snippet(scratch, mainFile: target)
 end 'materializeSnippetFile'
 
 /// Clean up after a snippet-mode source. For `file`-mode sources this is
