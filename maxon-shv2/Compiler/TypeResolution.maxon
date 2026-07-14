@@ -17,10 +17,11 @@
 //      narrowing conversion into a ranged alias is checked at run time, which is a
 //      later milestone.
 //
-// A named type in neither is a user error (a typo, or a type this slice does not
-// have), NOT a compiler-invariant violation — but there is no diagnostic for it yet,
-// so it still panics. Giving it one needs a source span for the type REFERENCE, which
-// the parser does not record today (only ops and parameters carry spans).
+// A named type in neither is a USER error (a typo, or a type this slice does not have),
+// not a compiler-invariant violation, and it reports E3011 — unpositioned, because the
+// parser records no source span for a type REFERENCE (only ops and parameter NAMES carry
+// one). See `resolveNamedType` for why an unpositioned diagnostic is the right trade and
+// what positioning it would cost.
 //
 // The integer literal `42` is already typed `integer` (→ i64) by the parser, so it
 // needs no resolution.
@@ -93,6 +94,29 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.exitCode
 	end 'isExitCode'
 
-	let alias = try project.typeAliases.get(name) otherwise panic("resolveTypes: unknown named type '{String.from(name)}' — it is neither the ExitCode builtin nor a declared typealias (user-defined types arrive with structs)")
+	// A name in NEITHER source is a USER error — a typo (`Scor` for `Score`), a bare
+	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
+	// user-defined type this slice does not have. It panicked until now, which was a
+	// tolerable bargain only while `ExitCode` was the sole legal named type and no
+	// source file could plausibly write another. Ranged typealiases ended that: naming a
+	// type is now the most ordinary thing a Maxon file does, and a one-character slip in
+	// one must not take the compiler down.
+	//
+	// UNPOSITIONED, exactly like E3001/E3002 — nothing records a source span for a type
+	// REFERENCE yet (only ops and parameter NAMES carry one), so there is no line to
+	// point at. Positioning it means threading that span from `parseTypeReference`
+	// through `FuncSignature` into the registry this pass reads, which is its own piece
+	// of work; a bare diagnostic beats a panic until it lands.
+	let alias = try project.typeAliases.get(name) otherwise 'unknown'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: "Unknown type '{String.from(name)}'"))
+
+		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
+		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
+		// this pass returns. Nothing downstream ever reads it — it exists only to keep
+		// the module structurally well-formed for the instant in between, so that the
+		// rest of this pass can go on to report the OTHER unknown types in the file
+		// rather than stopping at the first.
+		return MaxonType.integer
+	end 'unknown'
 	return alias.underlying
 end 'resolveNamedType'

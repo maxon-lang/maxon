@@ -191,7 +191,7 @@ type StdToX64Lowering
 			param(resultId, index, _) then self.lowerParam(resultId, index: index, dstBlock: dstBlock)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
-			retVoid then self.emitRet(dstBlock, asTerminator: false)
+			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 		end 'lower'
@@ -202,7 +202,7 @@ type StdToX64Lowering
 	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
-			retVoid then self.emitRet(dstBlock, asTerminator: true)
+			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: true)
 			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
@@ -388,6 +388,26 @@ type StdToX64Lowering
 		self.emitRet(dstBlock, asTerminator: asTerminator)
 	end 'lowerReturn'
 
+	// Void return: nothing moves to the return register, because the caller reads
+	// nothing from it.
+	//
+	// The DECLARED return type must agree, and this is the guard that says so. A
+	// `retVoid` in a VALUE-returning function would emit the `ret` with R8 never
+	// written, handing the caller whatever the last op happened to leave there — the
+	// silent miscompile a bare `return` in a value-returning function used to produce,
+	// back when the parser chose the return op from the token after `return` instead of
+	// from the declared type. The parser now rejects that source (E3013), so a
+	// disagreement reaching here is a LOWERING bug, and it fails loudly. This is the
+	// exact mirror of `emitPrimaryReturnMove`'s guard: between them, neither direction
+	// of the value/void contract can be broken quietly.
+	function lowerVoidReturn(dstBlock IrBlock, returnType StdReturnType, asTerminator bool)
+		if not stdReturnTypeIsVoid(returnType) 'valueExpected'
+			panic("lowerStdToX64: a `retVoid` in a value-returning function — the return register would never be written, and the caller would read garbage")
+		end 'valueExpected'
+
+		self.emitRet(dstBlock, asTerminator: asTerminator)
+	end 'lowerVoidReturn'
+
 	// The bare `ret`, shared by the value and void returns — the ONE thing they have in
 	// common. Frame teardown (`epilogue`) is inserted separately by the prologue/epilogue
 	// pass. `asTerminator` toggles setTerminator (block-final) vs appendOp (the rare
@@ -405,9 +425,15 @@ type StdToX64Lowering
 	// land.
 	//
 	// A `void` StdReturnType reaching here means a VALUE return (`StdOp.ret`) inside a
-	// function declared void — the Maxon tier emits `retVoid` for a void function's
-	// return, so the two can no longer disagree. It is a lowering bug, not a user error,
-	// so it panics rather than silently dropping the value.
+	// function declared void. What ESTABLISHES that it cannot is the parser: a return
+	// statement's op is chosen from the function's DECLARED return type, and a `return
+	// <expr>` in a void function is rejected there as E3005 (Parser.parseReturnStatement)
+	// — it is not merely assumed to be absent. Before that check existed this panic was
+	// reachable from ordinary source (`function f(x int) return x end`), which is how a
+	// compiler crash gets shipped behind a comment asserting it cannot happen.
+	//
+	// So a `void` here is now a LOWERING bug, not a user error, and it panics rather than
+	// silently dropping the value. `lowerVoidReturn` guards the opposite direction.
 	function emitPrimaryReturnMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
 			panic("lowerStdToX64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")

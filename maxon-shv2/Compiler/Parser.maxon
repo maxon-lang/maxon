@@ -92,6 +92,15 @@ export union ParseError implements Error
 	// later pass, because the parser is what knows the block its last statement left
 	// control in — and whether that block ever got a terminator.
 	missingReturn(name String, line LineNumber, column ColumnNumber)
+	// A `return <expr>` inside a function that declares NO return type. Renders as
+	// E3005 (a type mismatch: the function's declared result is nothing, and `<expr>`
+	// is not nothing), positioned at the `return`.
+	returnValueFromVoid(name String, line LineNumber, column ColumnNumber)
+	// A BARE `return` inside a function that DOES declare a return type — a path that
+	// leaves the function with no value to return. Renders as E3013, the same code as
+	// falling off the end, because it is the same defect wearing a `return` keyword.
+	// Positioned at the `return`, which is where the missing value belongs.
+	returnWithoutValue(name String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // --- Ranged-typealias range bounds ---
@@ -637,7 +646,7 @@ export type Parser
 		// move forward (an `if` leaves subsequent statements in its continuation block),
 		// so the block it RETURNS — not `entry` — is the one control falls out of.
 		var bodyEnd = try self.parseStatements(func, block: entry)
-		try self.closeFunctionBody(bodyEnd, returnType: returnType, nameTok: nameTok)
+		try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
@@ -664,12 +673,17 @@ export type Parser
 	// return. The synthetic `retVoid` is anchored on the function's name for the same
 	// reason E3013 is: no source token spawned it, and the name is where a reader looks
 	// for "what does this function return?".
-	function closeFunctionBody(bodyEnd IrBlock, returnType MaxonReturnType, nameTok Token) throws ParseError
+	//
+	// Reads the return type off `func` rather than taking it as a parameter — the same
+	// place `parseReturnStatement` reads it (see there). `nameTok` still rides along: it
+	// is the SPAN the synthetic `retVoid` and the E3013 are anchored on, and a span is
+	// not something `IrFunction` carries.
+	function closeFunctionBody(func IrFunction, bodyEnd IrBlock, nameTok Token) throws ParseError
 		if bodyEnd.isTerminated() 'terminated'
 			return
 		end 'terminated'
 
-		if not maxonReturnTypeIsVoid(returnType) 'fallsOffEnd'
+		if not maxonReturnTypeIsVoid(func.maxonReturnType) 'fallsOffEnd'
 			throw ParseError.missingReturn(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'fallsOffEnd'
 
@@ -795,7 +809,7 @@ export type Parser
 	// added assignment, `while`, `break`, and `continue`.
 	function parseStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		if self.at(TokenKind.return) 'ret'
-			try self.parseReturnStatement(block)
+			try self.parseReturnStatement(func, block: block)
 			return block
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
 			try self.parseBinding(block, mutable: false)
@@ -918,15 +932,52 @@ export type Parser
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
 
-	// `return [<expr>]`. Sets the block's terminator directly. A bare `return`
-	// emits the distinct `retVoid` variant rather than a `ret` carrying some
-	// absent-value sentinel — see MaxonDialect's `retVoid`.
-	function parseReturnStatement(block IrBlock) throws ParseError
+	// `return [<expr>]`. Sets the block's terminator directly, emitting the distinct
+	// `retVoid` variant for a void return rather than a `ret` carrying some absent-value
+	// sentinel (see MaxonDialect's `retVoid`).
+	//
+	// WHICH variant is decided by `func`'s DECLARED return type — never by the token that
+	// follows `return`. The two are not interchangeable, and the token alone is the wrong
+	// question: it says what the source WROTE, not what the function PROMISED, and when
+	// they differ it is the promise the whole backend was built around. Deriving the
+	// answer from the token stream instead gave the compiler two sources of truth for
+	// "is this function void", with nothing to make them agree — and they disagreed on
+	// exactly two programs, each of which was a bug no later pass could catch:
+	//
+	//   • `return <expr>` in a VOID function reached the x64 tier as a value `ret`, where
+	//     `emitPrimaryReturnMove` has no return register to move the value into — a
+	//     compiler PANIC on a program the reference compiler accepts.
+	//   • a BARE `return` in a value-returning function reached it as `retVoid`, which
+	//     emits the `ret` without ever writing R8 — a SILENT MISCOMPILE handing the caller
+	//     whatever the last op happened to leave in the return register.
+	//
+	// `func.maxonReturnType` is not a copy of the contract kept beside it: it IS the
+	// field the rest of the pipeline reads — it flows to `funcReturnTypes`, through
+	// lowering, and becomes the backend's `StdReturnType`. Reading it here means the
+	// parser and the tier that must honour it cannot be looking at different answers.
+	//
+	// So the statement's shape is checked AGAINST the contract rather than used to infer
+	// it, and a `return` that cannot honour it is rejected here — where a source position
+	// still exists — instead of reaching a tier that can only panic or emit the wrong op.
+	function parseReturnStatement(func IrFunction, block IrBlock) throws ParseError
 		let retTok = try self.consume(TokenKind.return)
-		if self.at(TokenKind.newline) or self.at(TokenKind.end) or self.isEof() 'bareReturn'
+		let bare = self.at(TokenKind.newline) or self.at(TokenKind.end) or self.isEof()
+
+		if maxonReturnTypeIsVoid(func.maxonReturnType) 'voidFunction'
+			if not bare 'valueFromVoid'
+				throw ParseError.returnValueFromVoid(String.from(func.name), line: retTok.line, column: retTok.column)
+			end 'valueFromVoid'
+
 			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
-		end 'bareReturn'
+		end 'voidFunction'
+
+		// Value-returning: a bare `return` has nothing to return, and there is no value
+		// the compiler may invent for it.
+		if bare 'noValue'
+			throw ParseError.returnWithoutValue(String.from(func.name), line: retTok.line, column: retTok.column)
+		end 'noValue'
+
 		let retVal = try self.parseExpression(block)
 		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'

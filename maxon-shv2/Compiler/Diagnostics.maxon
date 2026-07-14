@@ -54,8 +54,23 @@ export enum ErrorCode
 	// the parser, which is where the fall-through is visible: the block its last
 	// statement left control in is un-terminated. The VOID twin of this case is not an
 	// error at all — the parser synthesizes the implicit `return` (see
-	// `Parser.closeFunctionBody`).
+	// `Parser.closeFunctionBody`). A BARE `return` in a value-returning function reports
+	// under this code too, positioned at the `return`: a path that leaves the function
+	// with no value is the same defect whether or not it spelled the keyword.
 	missingReturn = "E3013"
+	// A `return <expr>` in a function that declares no return type — its declared result
+	// is nothing, and a value is not nothing. `SemanticTypeMismatch` in both reference
+	// registries (`maxon-sharp` ErrorCode.cs:58, `maxon-selfhosted` ErrorCode.maxon),
+	// which is what this is: the returned value has no declared type to match.
+	typeMismatch = "E3005"
+	// A named type that resolves to neither the `ExitCode` builtin nor a declared ranged
+	// typealias — a typo (`Scor` for `Score`), a bare sized type (`u8` is not a type in
+	// Maxon; a ranged alias OVER it is), or a user-defined type this slice does not have.
+	// `SemanticUnknownType` in both reference registries. A USER error, and so a
+	// diagnostic: before typealiases existed the only legal named type was `ExitCode` and
+	// anything else panicked, which is a bargain that stops being acceptable the moment
+	// naming a type becomes the most common thing a source file does.
+	unknownType = "E3011"
 	// M5 call-argument codes. The two `E205x` codes are PARSE-time argument-label
 	// syntax errors (positioned at the offending token by the parser): a first
 	// argument cannot carry a `name:` label, and every argument after the first must.
