@@ -186,13 +186,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
   private readonly HashSet<string> _locallyDefinedTypes = [];
-  // SSA ids of function values that carry a capture ENVIRONMENT, and the local names bound
-  // to one. A struct field holds a code pointer alone, so storing such a value there drops
-  // the environment (see ErrorCode.SemanticCapturingClosureInField). Only a value produced
-  // by a MaxonClosureCreateOp is in here: a closure that captures nothing lowers to a plain
-  // MaxonFunctionRefOp and is perfectly safe in a field.
-  private readonly HashSet<int> _capturingClosureValues = [];
-  private readonly HashSet<string> _capturingClosureVars = [];
+  // Function values that carry a capture ENVIRONMENT, mapped to the name of the function
+  // frame that DEFINED them, and the local names bound to such a value (likewise mapped).
+  // See ErrorCode.SemanticCapturingClosureEscapes: captures are taken by reference to the
+  // defining frame, so such a value may not outlive that frame.
+  //
+  // The frame is what makes the rule exactly "may not escape ITS DEFINING frame" rather
+  // than the blunter "may not be returned". Returning a closure from the frame that built
+  // it dangles; returning one that an OUTER frame built does not, because the environment
+  // it points at belongs to that still-live outer frame. Only the former is refused.
+  //
+  // Membership is the whole test for "does this value carry an environment?": only a
+  // MaxonClosureCreateOp result is ever entered here, because a closure that captures
+  // nothing lowers to a plain MaxonFunctionRefOp and has no environment to lose.
+  private readonly Dictionary<int, string> _capturingClosureFrames = [];
+  private readonly Dictionary<string, string> _capturingClosureVarFrames = [];
   private string? _currentTypeName;
   // SSA result of the `self` MaxonStructParamOp for the currently-parsing instance
   // method. Used by InvalidateCachedSelfFields() to re-emit MaxonFieldAccessOps
@@ -6367,6 +6375,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _localVarLocations.Clear();
     _reassignedVars.Clear();
     _mutableVarNames.Clear();
+    // A variable NAME means nothing outside the function that declared it, so a stale entry
+    // would make an unrelated `op` in the next function look like it carries an environment
+    // — a FALSE rejection, the worse failure. (The SSA-id map needs no reset: ids are unique
+    // process-wide, so an id can never be mistaken for a different function's value.)
+    _capturingClosureVarFrames.Clear();
     _blockCounter = 0;
 
     return func;
@@ -7855,6 +7868,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var value = ResolveExprValue(expr);
       value = CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
+      RejectReturnOfCapturingClosure(value, returnToken.Line, returnToken.Column);
       // For heap-allocated returns (structs and associated-value enums),
       // incref the return value so it survives the caller.
       // Self-fields are children of the struct, not independently owned — don't incref them.
@@ -9396,9 +9410,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     if (resolved is ResolvedVar.Global(var globalInfo)) {
+      RejectEscapingCapturingClosure(newVal, $"store a closure that captures in global '{name}'",
+        nameToken.Line, nameToken.Column);
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
     } else {
       var varInfo = ((ResolvedVar.Local)resolved).Info;
+
+      // A payload binding LOOKS like a plain local but is an alias INTO the enum's heap box:
+      // assigning through it writes back (the MaxonEnumPayloadAssignOp below), so it is a
+      // heap store outliving the frame, not the frame-local assignment it resembles.
+      if (varInfo.PayloadBinding is not null)
+        RejectEscapingCapturingClosure(newVal,
+          $"store a closure that captures in payload binding '{name}'",
+          nameToken.Line, nameToken.Column);
+
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
       _reassignedVars.Add(name);
@@ -9431,6 +9456,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
       var newValue = ResolveExprValue(ParseExpression());
+      RejectEscapingCapturingClosure(newValue,
+        $"store a closure that captures in static '{qualifiedName}'",
+        typeToken.Line, typeToken.Column);
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(qualifiedName, newValue, globalInfo.Kind));
       return;
     }
@@ -16866,6 +16894,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         Current().Line, Current().Column);
     }
 
+    // The one place every container-literal element block is built — an array's elements and
+    // a map's keys AND values all arrive here — so it is the one place the escape has to be
+    // refused. The block is heap memory that outlives every frame.
+    foreach (var element in elements)
+      RejectEscapingCapturingClosure(element, "put a closure that captures in a container",
+        Current().Line, Current().Column);
+
     // Determine element type from first element (all elements must have same type)
     var elementKind = GetValueKind(elements[0]);
 
@@ -18833,44 +18868,83 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock!.AddOp(fnVarRefOp);
 
     // A cross-block load mints a fresh SSA id for the same function value, so carry the
-    // "has an environment" fact across with it — otherwise a closure bound in one block
-    // and stored into a field in another would slip past the field-store check.
-    if (_capturingClosureVars.Contains(varName)) _capturingClosureValues.Add(fnVarRefOp.Result.Id);
+    // "has an environment" fact — and the frame it points into — across with it, otherwise
+    // a closure bound in one block and escaping in another would slip past every check.
+    if (_capturingClosureVarFrames.TryGetValue(varName, out var definingFrame))
+      _capturingClosureFrames[fnVarRefOp.Result.Id] = definingFrame;
 
     return fnVarRefOp.Result;
   }
 
   /// <summary>
   /// Records that <paramref name="varName"/> is bound to a function value carrying a
-  /// capture environment, so a later store of that binding into a struct field is still
-  /// recognizable as the closure it came from. A rebinding to a plain function reference
-  /// clears the mark — the variable no longer holds an environment.
+  /// capture environment, so a later escape of that binding is still recognizable as the
+  /// closure it came from — and still knows which frame that closure's environment points
+  /// into. A rebinding to a plain function reference clears the mark: the variable no
+  /// longer holds an environment.
   /// </summary>
   private void TrackCapturingClosureBinding(string varName, MaxonValue value) {
-    if (_capturingClosureValues.Contains(value.Id))
-      _capturingClosureVars.Add(varName);
+    if (_capturingClosureFrames.TryGetValue(value.Id, out var definingFrame))
+      _capturingClosureVarFrames[varName] = definingFrame;
     else
-      _capturingClosureVars.Remove(varName);
+      _capturingClosureVarFrames.Remove(varName);
   }
 
   /// <summary>
-  /// Refuses a function value that carries a capture ENVIRONMENT being stored into a
-  /// function-typed struct field, where only the code pointer fits and the environment
-  /// would be silently dropped. See ErrorCode.SemanticCapturingClosureInField for the
-  /// mechanism, and for why the fix that would make it WORK is deliberately deferred.
+  /// Refuses a function value carrying a capture ENVIRONMENT that would ESCAPE the frame
+  /// its captures point into. <paramref name="destination"/> names the escape route and
+  /// completes the sentence "cannot ...". See ErrorCode.SemanticCapturingClosureEscapes
+  /// for the mechanism, and for why the fix that would make it WORK is deliberately deferred.
   ///
-  /// A closure that captures nothing is a plain function reference by the time it gets
-  /// here and passes, which is what keeps a table of handlers or passes buildable.
+  /// Every caller is a store the parser can see WITHOUT interprocedural analysis. The route
+  /// it deliberately does NOT close is a capturing closure passed as a CALL ARGUMENT to a
+  /// callee that then stores it (`Handler.create(function(n) gives n + bump)`): at that
+  /// store the value is a *parameter*, and whether it carries an environment is a fact about
+  /// the CALLER, so deciding it needs a per-parameter escape summary propagated over the
+  /// call graph — escape analysis proper, which is scoped OUT of the bootstrap. A call's
+  /// RETURN value is out for the same reason and is the same boundary. Both stay a runtime
+  /// nil-deref here; shv2 closes them at P1.5, where capture-into-heap IS escape.
+  ///
+  /// A closure that captures nothing is a plain function reference by the time it gets here
+  /// and passes, which is what keeps a table of handlers or passes buildable.
+  /// </summary>
+  private void RejectEscapingCapturingClosure(MaxonValue value, string destination, int line, int column) {
+    if (!_capturingClosureFrames.ContainsKey(value.Id)) return;
+
+    throw new CompileError(ErrorCode.SemanticCapturingClosureEscapes,
+      $"cannot {destination}: captures are taken by reference to the enclosing function's "
+      + "frame, so a closure that captures cannot outlive that frame. Use a function reference, "
+      + "or a closure that captures nothing",
+      line, column);
+  }
+
+  /// <summary>
+  /// A struct field, a global, a container element and a union payload are all HEAP stores:
+  /// they outlive every frame, so any capturing closure reaching one escapes and the
+  /// defining frame does not need consulting.
   /// </summary>
   private void RejectCapturingClosureStoredInField(
       IrStructField field, MaxonValue value, string typeName, int line, int column) {
-    if (field.Type is not IrFunctionType || !_capturingClosureValues.Contains(value.Id)) return;
+    if (field.Type is not IrFunctionType) return;
 
-    throw new CompileError(ErrorCode.SemanticCapturingClosureInField,
-      $"cannot store a closure that captures in field '{field.Name}' of '{typeName}': "
-      + "captures are taken by reference to the enclosing function's frame, so the closure "
-      + "cannot outlive it by being stored. Store a function reference, or a closure that captures nothing",
-      line, column);
+    RejectEscapingCapturingClosure(value,
+      $"store a closure that captures in field '{field.Name}' of '{typeName}'", line, column);
+  }
+
+  /// <summary>
+  /// Refuses RETURNING a capturing closure out of the very frame that built it — the
+  /// upward-funarg case, and the one people actually write (`makeAdder`).
+  ///
+  /// Only a closure defined by THIS frame is refused. One an enclosing frame built may be
+  /// returned freely: its environment points into that outer frame, which is still alive
+  /// (if it were not, the closure carrying it would itself have had to escape, and that is
+  /// refused at its own site). Over-rejection here would be the worse failure.
+  /// </summary>
+  private void RejectReturnOfCapturingClosure(MaxonValue value, int line, int column) {
+    if (!_capturingClosureFrames.TryGetValue(value.Id, out var definingFrame)
+        || definingFrame != _currentFunction!.Name) return;
+
+    RejectEscapingCapturingClosure(value, "return a closure that captures", line, column);
   }
 
   /// <summary>
@@ -19306,7 +19380,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Skips the check for type parameters (checked after monomorphization).
   /// </summary>
   private void TypeCheckEnumArg(IrEnumCase enumCase, int index, MaxonValue argVal) {
-    var expectedType = enumCase.AssociatedValues![index].Type;
+    var associatedValue = enumCase.AssociatedValues![index];
+
+    // Every payload argument — positional and named alike — is funnelled through here, so
+    // this is the one place a union's heap-boxed payload can be closed to an escaping
+    // closure. An associated-value payload is one slot and holds the code pointer alone, so
+    // the store drops the environment exactly as a struct field does.
+    RejectEscapingCapturingClosure(argVal,
+      $"store a closure that captures in payload '{associatedValue.Name}' of case "
+      + $"'{enumCase.Name}'", Current().Line, Current().Column);
+
+    var expectedType = associatedValue.Type;
     if (expectedType is not IrTypeParameterType) {
       var actualKind = DetermineValueKind(argVal);
       var expectedKind = expectedType.ToValueKind();
@@ -20889,7 +20973,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// is set to enable struct literal parsing in the body.
   /// </summary>
   private ExprResult.Direct ParseClosure(IrFunctionType? inferredFnType = null) {
-    Expect(TokenType.Function); // consume 'function'
+    var closureToken = Expect(TokenType.Function); // consume 'function'
     Expect(TokenType.LeftParen);
 
     // Parse closure parameters
@@ -21009,6 +21093,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var bodyExpr = ParseExpression();
     var bodyValue = ResolveExprValue(bodyExpr);
 
+    // A closure's body is its own frame, so a closure built INSIDE this one and handed back
+    // as the body value escapes exactly as `return f` does. _currentFunction is still this
+    // closure's lifted function here — the enclosing one is not restored until below.
+    RejectReturnOfCapturingClosure(bodyValue, closureToken.Line, closureToken.Column);
+
     // Emit return — compute keepVars to protect returned managed values from scope cleanup
     HashSet<string>? keepVars = null;
     var returnVarName = _lastExprVarName;
@@ -21102,7 +21191,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var closureCreateOp = new MaxonClosureCreateOp(closureName, fnType,
         capturedValues, capturedNames, capturedKinds, capturedStructTypes);
       _currentBlock!.AddOp(closureCreateOp);
-      _capturingClosureValues.Add(closureCreateOp.Result.Id);
+      // Parser state was restored above, so _currentFunction is once again the ENCLOSING
+      // function — the frame whose stack slots this environment holds the addresses of.
+      _capturingClosureFrames[closureCreateOp.Result.Id] = _currentFunction!.Name;
 
       return new ExprResult.Direct(closureCreateOp.Result);
     } else {

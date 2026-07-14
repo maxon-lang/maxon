@@ -1,0 +1,112 @@
+// Test: first-class-function.non-capturing-closure-in-union-payload
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+union Action
+	run(op UnaryOp)
+	idle
+end 'Action'
+
+function make() returns Action
+	return Action.run(function(n Integer) gives n + 1)
+end 'make'
+
+function main() returns ExitCode
+	let a = make()
+	match a 'go'
+		run then return 42
+		idle then return 1
+	end 'go'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @make() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea_func rax, [_$closure_7]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call make
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rdx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-32]
+    x64.mov [rbp-24], rcx
+    x64.jmp main.go_0.cmp0
+  go_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne main.go_0.cmp1
+  go_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  go_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.go_0.merge
+  go_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  go_0.merge:
+  }
+  func @__destruct_Action(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Action.done
+  done:
+    x64.ret
+  }
+}
+---

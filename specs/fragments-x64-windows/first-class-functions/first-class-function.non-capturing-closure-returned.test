@@ -1,30 +1,40 @@
-// Test: docs-example-4
-typealias Score = int(i64.min to i64.max)
+// Test: first-class-function.non-capturing-closure-returned
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function pick() returns UnaryOp
+	return function(n Integer) gives n * 2
+end 'pick'
 
 function main() returns ExitCode
-	let f = function(x Score) gives x * 2
-	return f(21)  // returns 42
+	let f = pick()
+	return f(21)
 end 'main'
-
 ---
 ExitCode: 42
 ---
 // CompiledIR
 module {
+  func @pick() -> fn(Integer) returns Integer {
+  entry:
+    x64.lea_func rax, [_$closure_6]
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.lea_func rax, [_$closure_8]
+    x64.call pick
     x64.mov rcx, 21
     x64.xor edx, edx
     x64.mov [rbp-8], rax
     x64.mov r10, rax
     x64.call r10
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rax, rsi
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
     x64.jg main.__range_panic_0
-    x64.cmp rax, rbx
+    x64.cmp rax, rcx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:

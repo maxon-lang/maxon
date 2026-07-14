@@ -159,35 +159,54 @@ public enum ErrorCode {
   //
   // The fix a diagnostic can name is the point: it says which two-parameter type to write.
   SemanticPromiseErrorTypeMismatch = 3098,
-  // A closure that CAPTURES, stored into a function-typed struct field.
+  // A closure that CAPTURES, ESCAPING the frame its captures point into.
+  //
+  // THE RULE: a closure that captures may not escape its defining frame.
   //
   // A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
   // fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
   // through a capture see later mutations of the captured variable. The environment is
-  // therefore only meaningful while that frame is alive.
+  // therefore only meaningful while that frame is alive. Let the closure outlive the
+  // frame and every captured read dereferences a dead frame — the classic upward-funarg
+  // problem. It compiles clean and dies at runtime, so it is refused where the mistake
+  // is still legible rather than left to fault inside emitted code the author never wrote.
   //
-  // A function VALUE is consequently two words — the code pointer and that environment
-  // pointer — carried in two parallel slots (a parameter's `__env_<name>`, a local's env
-  // temp). A struct FIELD is one 8-byte slot and holds the code pointer alone, so a store
-  // into one drops the environment. The call then passes env=0 and the first captured
-  // read dereferences null. Refuse the store instead: it is the only place the mistake is
-  // still legible, and the fault it produces otherwise lands inside emitted code the
-  // author never wrote.
+  // The routes refused are every store the parser can see WITHOUT interprocedural
+  // analysis:
+  //   - RETURNING one out of the frame that built it (`makeAdder` — the common idiom, and
+  //     the reason this exists). Returning a closure an OUTER frame built is fine and is
+  //     allowed: that environment points into a frame that is still alive.
+  //   - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
+  //     element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
+  //     looks like a plain local but is an alias INTO the enum's heap box, so assigning
+  //     through it writes back). Each is one 8-byte slot holding the code pointer alone,
+  //     and each is heap memory outliving every frame, so the store drops the environment;
+  //     the call then passes env=0 and the first captured read dereferences null.
+  //
+  // DELIBERATELY NOT REFUSED — the interprocedural route: a capturing closure passed as a
+  // CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
+  // bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
+  // that store the value is a *parameter*, and whether it carries an environment is a fact
+  // about the CALLER — deciding it needs a per-parameter escape summary propagated over
+  // the call graph, i.e. escape analysis proper. That is scoped OUT of the bootstrap and
+  // stays a runtime nil-deref. Passing a capturing closure DOWN to a callee that only
+  // CALLS it is perfectly safe and must keep working.
   //
   // A NON-capturing closure is unaffected and must keep working — it lowers to a plain
-  // MaxonFunctionRefOp, has no environment to lose, and is what a table of handlers or
-  // passes keyed by a struct field is built from.
+  // MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
+  // CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
+  // or passes keyed by a struct field is built from.
   //
-  // What would MAKE this work is escape analysis plus by-value (or boxed) capture, so a
-  // closure's environment outlives the frame that built it. That is a real language
-  // mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
+  // What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
+  // capture, so a closure's environment outlives the frame that built it. That is a real
+  // language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
   // by-reference capture semantics the closure specs currently pin. shv2 schedules it at
   // P1.5, where it co-lands with `async` — a green-thread capture IS an escape.
-  SemanticCapturingClosureInField = 3099,
+  SemanticCapturingClosureEscapes = 3099,
 
   // A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
   //
-  // 3100 rather than 3099: E3099 is SemanticCapturingClosureInField, which landed on main while
+  // 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
   // this was in review. Both of us picked "the next code free" and both of us were right, because
   // the registry is written down TWICE — here and in maxon-selfhosted/Compiler/ErrorCode.maxon —
   // and neither copy sees the other's pending codes. Same disease as the promise's two bits, one

@@ -231,17 +231,28 @@ export enum ErrorCode
 	// B's tags. The diagnostic names the two-parameter type that keeps E.
 	// Mirrors the C# bootstrap's `SemanticPromiseErrorTypeMismatch`.
 	semanticPromiseErrorTypeMismatch = 3098
-	// E3099: a closure that CAPTURES, stored into a function-typed struct
-	// field. A closure captures BY REFERENCE — its environment holds the
-	// ADDRESSES of the enclosing frame's stack slots — so a function VALUE is
-	// two words (code pointer + environment pointer). A struct FIELD is one
-	// 8-byte slot and holds the code pointer alone, so the store drops the
-	// environment, the call passes env=0, and the first captured read
-	// dereferences null. A NON-capturing closure is unaffected. Making this
-	// work needs escape analysis plus by-value capture, deferred to shv2 P1.5
-	// where it co-lands with `async` (a green-thread capture IS an escape).
-	// Mirrors the C# bootstrap's `SemanticCapturingClosureInField`.
-	semanticCapturingClosureInField = 3099
+	// E3099: a closure that CAPTURES, ESCAPING the frame its captures point
+	// into. THE RULE: a closure that captures may not escape its defining
+	// frame. A closure captures BY REFERENCE — its environment holds the
+	// ADDRESSES of the enclosing frame's stack slots — so it is meaningful only
+	// while that frame is alive; outliving it dereferences a dead frame (the
+	// classic upward-funarg problem), which compiles clean and dies at runtime.
+	// Refused on every route the parser sees without interprocedural analysis:
+	// RETURNING one out of the frame that built it, and storing one in a struct
+	// FIELD, a GLOBAL/static, a CONTAINER element, a union's associated-value
+	// PAYLOAD, or through a PAYLOAD BINDING (an alias into the enum's heap box,
+	// so assigning through it writes back). Each is one slot holding the code
+	// pointer alone, and each is heap memory outliving every frame, so the store
+	// drops the environment and the call passes env=0.
+	// NOT refused — scoped out — is the interprocedural
+	// route: a capturing closure passed as a CALL ARGUMENT to a callee that
+	// stores it, since at that store the value is a parameter and whether it
+	// carries an environment is a fact about the CALLER. A NON-capturing closure
+	// is unaffected and passes by construction. Making the refused routes work
+	// needs escape analysis plus by-value capture, deferred to shv2 P1.5 where it
+	// co-lands with `async` (a green-thread capture IS an escape).
+	// Mirrors the C# bootstrap's `SemanticCapturingClosureEscapes`.
+	semanticCapturingClosureEscapes = 3099
 	// E3100: a promise awaited a SECOND time. `await` is LINEAR — a promise is
 	// awaited exactly once. The thunk owns its result and HANDS IT OVER at the
 	// await, so a second await takes a second reference to a payload the thunk

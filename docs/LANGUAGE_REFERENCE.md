@@ -2495,6 +2495,26 @@ function main() returns ExitCode
 end 'main'
 ```
 
+**A closure that captures may not escape its defining frame.** Capture-by-reference is what
+forces this: the environment holds the ADDRESSES of the enclosing frame's stack slots, so it is
+meaningful only while that frame is alive. Letting the closure outlive the frame would leave every
+captured read dereferencing a dead frame. So a closure that captures cannot be **returned** out of
+the frame that built it, nor stored in a **struct field**, a **global**, a **container**, or a
+union's **associated-value payload** — each of those is heap storage that outlives every frame.
+All are rejected with **E3099**.
+
+A closure that captures **nothing** is unaffected: it lowers to a plain function reference, has no
+environment to lose, and may be returned and stored freely. And a capturing closure passed *down*
+to a callee that only **calls** it is fine — the defining frame is alive for the whole of that
+call.
+
+```maxon
+function makeAdder(bump Integer) returns UnaryOp
+		let f = function(n Integer) gives n + bump
+		return f          // E3099: cannot return a closure that captures
+end 'makeAdder'
+```
+
 **Notes:**
 - Closure parameters may optionally omit the type annotation when the type can be inferred from context.
 - Closures can only appear where a function-type value is expected.
