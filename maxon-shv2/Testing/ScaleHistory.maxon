@@ -12,6 +12,12 @@
 // a log nobody reads and nobody can trust. `--note` is the moment a human says "this run is a
 // datapoint worth keeping, and here is what changed".
 //
+// AND WHEN IT IS GIVEN, THE ROW IS WRITTEN — even if not one allocation moved. The operator asked
+// for the datapoint; declining it because the instrument could not see what was interesting about it
+// is the tool overruling the only party who knows. A change that halves a phase's TIME without moving
+// a byte is most of what optimizing a compiler looks like, and the exponents table exists to carry
+// exactly that. The report still says plainly that the memory did not move.
+//
 // AND THE NOTE IS THE POINT, not a formality. The instrument can see precisely WHAT moved and can
 // never see WHY. Six months from now "allocations fell 8% at rung 5" is worth almost nothing without
 // the sentence naming the change that did it — and that sentence exists only in the head of whoever
@@ -412,13 +418,19 @@ end 'parseGroupedCount'
 // Writing the log
 // ===========================================================================================
 
-// Is this run a datapoint the log does not already have?
+// Did this run's EXACT numbers move against the last logged row?
+//
+// This is a READING, and nothing branches on it any more: a `--note` records the run whether it moved
+// or not, because a note is an instruction from the operator (see `recordRun`). It decides one
+// sentence of prose — whether the run is told that its allocations and bytes are unchanged — and a
+// change that moves only the clock, which is most of what optimizing a compiler looks like, is a
+// perfectly good datapoint that this function will call unmoved.
 //
 // ONLY ALLOCATIONS AND BYTES ARE ASKED. They are bit-for-bit reproducible: the same compiler on the
 // same corpus produces the same digits, so a difference in them is a REAL difference in what the
 // compiler does, every time. The exponents are not asked, and must not be — the time exponent
-// reproduces only to ~1%, so a run that changed nothing at all would still "move" one, and a
-// movement test that always says yes is not a test.
+// reproduces only to ~1%, so a run that changed nothing at all would still "move" one, and a question
+// whose answer is always yes is not worth asking.
 export function anyMemoryMoved(trend ScaleTrend, results RungResultArray) returns bool
 	return match trend.memory 'm'
 		absent gives true

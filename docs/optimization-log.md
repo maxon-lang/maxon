@@ -20,7 +20,13 @@ maxon-shv2 scale-test --note="<what changed, and why the numbers moved>"
 
 records this run as a new dated row in all three tables. **A run without `--note` records nothing** —
 scale-test is run dozens of times a day against dirty trees and abandoned experiments, and a log of
-all of them would be a log nobody reads. If nothing actually moved, it says so and still logs nothing.
+all of them would be a log nobody reads.
+
+**`--note` is an instruction, not a request: if you pass one, the row is written.** Even if the
+allocations and bytes are identical to the row above it — a change that halves a phase's *time*
+without moving a byte is most of what optimizing a compiler looks like, and the exponents table is
+here to carry precisely that. The run will tell you plainly that the memory did not move, and then
+record it anyway, because you are the one who knows whether it is a datapoint.
 
 The `--note` is not a formality. The instrument can see exactly *what* moved and can never see *why*,
 and six months from now a number with no reason attached is worth almost nothing. So the reason is

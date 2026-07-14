@@ -249,13 +249,26 @@ function brokenRun(what String, detail String) returns ExitCode
 	return 1
 end 'brokenRun'
 
-// Record this run in the trend log, if it is a datapoint the log does not already have.
+// Record this run in the trend log.
+//
+// `--note` IS AN INSTRUCTION, NOT A REQUEST. If it was given, the row is written — full stop.
+//
+// This used to decline when allocations and bytes both matched the last logged row, on the theory
+// that a row about nothing is noise. It is the wrong theory, and it fails SILENTLY, which is the
+// worse half: a change that made a phase twice as fast without moving a single allocation — which is
+// most of what optimizing a compiler looks like — is EXACTLY the datapoint this instrument's exponent
+// table exists to carry, and the operator who typed `--note` asking for it got a line of prose and no
+// row. A tool that second-guesses an explicit instruction from its operator, and then leaves the
+// history it was told to write simply absent, is worse than one that logs a dull row.
+//
+// The REPORT stays honest — an unmoved run is told it did not move — but the row is written.
+//
+// (Every guard that protects the log's INTEGRITY still refuses: a note carrying a `|` or a forged
+// marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
+// Those reject BAD INPUT, which is a different thing entirely from overruling a valid one.)
 function recordRun(trend ScaleTrend, results RungResultArray, curves ScaleCurveArray, note String) returns ExitCode
 	if not anyMemoryMoved(trend, results: results) 'unchanged'
-		// Nothing to record, and saying so is the right answer rather than writing a row. A log row per
-		// run that changed nothing is a log that is mostly rows about nothing.
-		print("\nscale-test: every rung's allocations and bytes match the last logged run — nothing moved, so nothing was logged.\n")
-		return 0
+		print("\nscale-test: no change in allocations or bytes since the last logged run — recording anyway, because --note was given.\n")
 	end 'unchanged'
 
 	try recordScaleRun(results, curves: curves, note: note) otherwise (error) 'writeFailed'
