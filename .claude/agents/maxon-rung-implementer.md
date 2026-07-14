@@ -61,6 +61,22 @@ From your worktree root. `bin/` is gitignored, so it is copied in for you.
 tree in place. Multiple agents have destroyed unrelated files this way and had to revert. Format via
 the `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.
 
+⚠ **`bin/maxon.exe` IS A BUILD OUTPUT, NOT A FIXTURE.** It is gitignored, so a worktree starts without
+one and it gets copied in — but a *copied* `maxon.exe` is frozen at whatever commit built it. **The
+bootstrap compiles shv2, so a stale `bin/maxon.exe` silently reverts every bootstrap change in your
+branch.** Two ways this has already bitten:
+- A bootstrap-level *codegen* change (e.g. one that removes an allocation from the code it emits) will
+  appear to have vanished, and `scale-test` will read the difference as **your** regression. One such
+  change made a rung look like a 25% allocation regression that did not exist.
+- A bootstrap change that adds a *builtin* makes `stdlib/` fail to compile against the old binary.
+
+⇒ **If your branch touches `maxon-sharp/` — or you rebased onto anything that did — run
+`dotnet build maxon-sharp` IN YOUR WORKTREE before building shv2.** Never trust a copied `bin/`.
+
+⚠ **A FAILED BUILD LEAVES THE OLD BINARY IN PLACE.** `spec-test` will then happily run the *previous*
+compiler and report a green suite. **Always check the build's exit code before believing a test result.**
+This has produced a false green in this project more than once.
+
 ## The gate battery — run every one that applies, and paste the REAL output
 
 1. Build (bootstrap and/or shv2) → exit 0, **zero warnings**.
