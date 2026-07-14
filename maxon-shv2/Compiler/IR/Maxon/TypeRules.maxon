@@ -159,8 +159,21 @@ end 'wordOperator'
 //     parameter
 //   • otherwise ⇒ `integer`               — the BITWISE reading
 //
-// The operands have already been checked to AGREE by the time this runs (`checkBinOpOperands`),
-// so "either operand is a bool" and "both operands are bools" name the same case here.
+// ⚠ THE FIRST ARM IS AN OPTIMISTIC GUESS, NOT A THEOREM, AND THE ORDER OF THE TWO ARMS IS THE
+// GUESS. The operands have been checked to AGREE by the time this runs (`checkBinOpOperands`) —
+// but agreement is satisfied by DEFERRAL, so `(boolean, unresolved)` reaches here, and "either
+// operand is a bool" does NOT imply "both operands are bools". The bool-first order therefore
+// answers `boolean` for a pair whose right operand may be an int, and that tag is then believed
+// by every rule downstream. It is reachable only across FILES (a single file pins every callee's
+// return type — `Parser.scanFunctionSignatures`), and it is one half of the cross-file gap
+// recorded on `Parser.calleeResultType`; the whole-program signature query named there closes
+// this arm too, by making `unresolved` unreachable for a declared callee.
+//
+// Deferring here instead — checking `unresolved` FIRST — would make the tag honest, and is
+// DELIBERATELY NOT DONE: it would type `flag and crossFileBool()` as unknown, and `not` refuses
+// an unknown operand (see `notOperatorFor`), so `if not (ready and enabled())` — a CORRECT
+// program — would stop compiling. Trading a wrong answer in a corner for a rejected correct
+// program is the wrong trade; the signature query fixes both and rejects neither.
 export function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
 	if tagIsBool(left) or tagIsBool(right) 'logical'
 		return ValueTypeTag.boolean

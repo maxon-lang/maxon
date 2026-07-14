@@ -2144,10 +2144,24 @@ export type Parser
 		// The SHORT-CIRCUIT half of the same rule `emitBinOp` enforces — ASKED, not restated
 		// (see `requireBinOpOperands`). The left operand is already known to be a bool: that is
 		// what brought control here.
-		try requireBinOpOperands(infixMaxonOp(opTok.kind), left: ValueTypeTag.boolean, right: self.tagOf(rhsValue), opTok: opTok)
+		let op = infixMaxonOp(opTok.kind)
+		let rhsTag = self.tagOf(rhsValue)
+		try requireBinOpOperands(op, left: ValueTypeTag.boolean, right: rhsTag, opTok: opTok)
+
+		// The merge phi IS the operator's result, so its TAG is the operator's result type — and
+		// it is ASKED of the same `binOpResultTag` the `binOp` path asks, not restated as a
+		// literal `boolean` here. Restating it left a word operator's result type with TWO
+		// deciders, one per path, and nothing making them agree: they answer the same thing today
+		// only because a bool left operand makes `wordOpResultTag`'s first arm fire for every rhs
+		// that survives the check above. The day that rule changes — deferring on an `unresolved`
+		// rhs, say (see TypeRules' `wordOpResultTag`, and the cross-file gap in
+		// `calleeResultType`) — the `binOp` path would move and this one would go on ASSERTING
+		// `boolean` about a value it cannot type. A wrong tag is not a compile error; it is a
+		// wrong answer at whatever reads the tag next, which is every rule this rung added.
+		let resultTag = binOpResultTag(op, left: ValueTypeTag.boolean, right: rhsTag)
 
 		var merge = self.newBlock(func, label: b"scmerge", line: opTok.line)
-		let result = self.mintPhi(merge, tag: ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		let result = self.mintPhi(merge, tag: resultTag, nameId: UnnamedTypeId)
 
 		self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
 		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: singletonArgs(rhsValue))
@@ -2477,14 +2491,33 @@ export type Parser
 
 	// The source-level type a call to `callee` yields.
 	//
-	// A callee this file does not declare — a cross-FILE call — is `unresolved`, and that is
-	// the honest answer rather than a guess: whether the call yields a bool decides whether an
-	// enclosing `and`/`or` short-circuits, and the parser cannot see another file's
-	// declarations. `wordOpResultTag` and the short-circuit gate both treat `unresolved`
-	// conservatively (no short-circuit; defer the result type), so a cross-file bool `and`
-	// evaluates both operands and still computes the right ANSWER — v1's behaviour exactly
-	// (specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees` case
-	// documents that fallback as the language's own).
+	// A callee this file does not declare — a cross-FILE call — is `unresolved`: the parser
+	// cannot see another file's declarations. The `and`/`or` fallback that follows from it is
+	// benign — the short-circuit gate declines to short-circuit and takes the bitwise reading,
+	// which on the 0/1 bool domain is the same ANSWER with an extra evaluation, v1's behaviour
+	// exactly (specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees`
+	// case documents that fallback as the language's own).
+	//
+	// ⚠ BUT THE DEFERRAL IS NOT BENIGN EVERYWHERE, AND IN ARITHMETIC IT IS A WRONG ANSWER.
+	// `TypeClass.unknown` agrees with EVERYTHING (TypeRules), so a cross-file callee's result is
+	// admitted by every rule this rung added. Two files:
+	//
+	//     a.maxon: export function isReady() returns bool ... end 'isReady'
+	//     b.maxon: let x = isReady()
+	//              return x + 41        // compiles. Returns 42. The bool's 1 payload, added.
+	//
+	// The C# bootstrap rejects it (`E2004: Cannot operate on bool and int`). Same defect the same
+	// program has when both halves live in ONE file — where this rung now rejects it — so the
+	// deferral is not a second bug, it is the SAME bug surviving where the parser cannot see.
+	// (Its twin: `flag and crossFileInt()` mints a `boolean` merge phi over an int — see
+	// TypeRules' `wordOpResultTag`.) DEFERRING IS STILL THE RIGHT MOVE HERE: refusing an
+	// unresolved operand instead would reject `crossFileInt() + 1`, a correct program, and
+	// over-rejection is the worse failure. The fix is upward, not here — a WHOLE-PROGRAM
+	// signature query, so that `unresolved` is never the answer for a callee some file declares.
+	// That means a signature table built from every file's tokens and re-keying the per-file
+	// parse memo on it (today `parseCacheValid` keys on the file's OWN content hash alone), so
+	// it is a rung with the query spine as its blast radius and `verify-warm-rebuild` as its
+	// gate — not a ride-along on a type rule. Recorded here, beside its sibling below.
 	//
 	// ⚠ A VOID callee is `unresolved` TOO, and that is a SENTINEL DOING DOUBLE DUTY — a known
 	// hole, not a design. `unresolved` means "the parser could not pin this type" (defer, and
