@@ -417,11 +417,12 @@ public sealed class MaxonIndirectCallOp : MaxonOp {
     Args = args;
     ResultKind = resultKind;
     ResultStructTypeName = resultStructTypeName;
-    if (resultKind != null) {
-      Result = resultKind == MaxonValueKind.Struct
-        ? new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!)
-        : resultKind.Value.CreateValue();
-    }
+    // The SAME result-construction a direct call uses. This used to be a second,
+    // hand-rolled copy that named only the Struct case, so an indirect call whose
+    // return type was an enum or a union produced a bare MaxonInteger with the type
+    // name dropped: `report(handler(x))` was rejected as "expected 'Outcome', got
+    // 'int'", and a `match` on the result died with "Expected pattern value".
+    Result = MaxonCallOp.CreateResult(resultKind, resultStructTypeName);
   }
 }
 
@@ -543,7 +544,10 @@ public class MaxonCallOp : MaxonOp {
     Result = existingResult;
   }
 
-  protected static MaxonValue? CreateResult(MaxonValueKind? resultKind, string? resultStructTypeName) {
+  // Shared by every call op — direct, try, and indirect. A call's result value must
+  // carry the NAME of the struct/enum/union it returns, not just its kind: that name
+  // is what the argument checker and the `match` patterns downstream key off.
+  internal static MaxonValue? CreateResult(MaxonValueKind? resultKind, string? resultStructTypeName) {
     if (resultKind == MaxonValueKind.Struct)
       return new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!);
     if (resultKind == MaxonValueKind.Enum)

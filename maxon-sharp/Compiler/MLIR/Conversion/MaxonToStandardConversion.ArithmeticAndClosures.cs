@@ -492,14 +492,31 @@ public static partial class MaxonToStandardConversion {
       newArgs.Add(zeroConst.Result);
     }
 
+    // Which returns come back as an OWNED heap pointer, and so must land in a registered
+    // temp slot — without one, scope-end cleanup has nothing to decref. A direct call
+    // gets this right for both shapes (LowerCallCore's `calleeRetStructType` and
+    // `calleeRetAssocEnum` branches); this path used to name only the struct one, so a
+    // union with a payload, returned through a function value, leaked its box on EVERY
+    // call. `MaxonValueKind.Enum` alone is NOT the test: a payload-free enum is a bare
+    // ordinal, with nothing to release.
+    var retEnumType = indirectCallOp.CalleeType.ReturnType as IrEnumType;
+    var managedRetTypeName = indirectCallOp.ResultKind switch {
+      MaxonValueKind.Struct when indirectCallOp.ResultStructTypeName != null
+        && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef)
+        && retTypeDef is IrStructType => indirectCallOp.ResultStructTypeName,
+      MaxonValueKind.Enum when retEnumType is { HasAssociatedValues: true } => retEnumType.Name,
+      _ => null
+    };
+
     StdValue? resultValue = null;
     string? sretVarName = null;
-    if (indirectCallOp.ResultKind == MaxonValueKind.Struct && indirectCallOp.ResultStructTypeName != null
-      && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is IrStructType) {
-      // Struct return: result is a heap pointer (i64)
+    if (managedRetTypeName != null) {
+      // Managed return: the result is a heap pointer (i64). CallReturn marks it a MOVE —
+      // the callee already handed over its reference, so an assignment from this temp must
+      // not incref it, exactly as for a direct call.
       resultValue = new StdI64(IrContext.Current.NextStdId());
       var icallretId = IrContext.Current.NextId();
-      sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.Orphan);
+      sretVarName = temps.CreateTemp("icallret", icallretId, managedRetTypeName, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(IrContext.Current.NextStdId()),
@@ -519,9 +536,9 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(callOp);
 
     if (sretVarName != null && indirectCallOp.Result != null && callOp.Result != null) {
-      // Struct return: store heap pointer in named variable
+      // Managed return: store the heap pointer in the temp slot that owns it.
       EmitStore(block, callOp.Result, sretVarName, varTypes);
-      valueMap[indirectCallOp.Result] = new StdHeapPtr(callOp.Result!.Id, indirectCallOp.ResultStructTypeName ?? "unknown", sretVarName);
+      valueMap[indirectCallOp.Result] = new StdHeapPtr(callOp.Result!.Id, managedRetTypeName!, sretVarName);
     } else if (indirectCallOp.Result != null && callOp.Result != null) {
       valueMap[indirectCallOp.Result] = callOp.Result;
     }
