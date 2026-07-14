@@ -49,6 +49,13 @@ public enum ErrorCode {
   ParserOtherwiseBlockMissingBinding = 2050,
   ParserReservedIdentifier = 2051,
   ParserFirstArgCannotBeNamed = 2052,
+  // E2054: a `shl`/`shr` whose count is a LITERAL outside 0..63 (`a shl -1`, `a shl 64`).
+  // An `int` is 64 bits, so no other distance names a distinct shift, and the hardware
+  // silently MASKS the count into that range — which turned `a shl -1`, read by a human as
+  // "shift the other way", into the maximum LEFT shift. A shift by a runtime value is
+  // unaffected and still legal. (2053 is taken by maxon-shv2's arg-missing-label check,
+  // which the bootstrap reports through ParserUnexpectedToken.)
+  ParserShiftCountOutOfRange = 2054,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

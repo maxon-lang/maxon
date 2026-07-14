@@ -89,7 +89,7 @@ Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` s
 `==` on struct types requires the type to implement `Equatable` (error E3069 if not).
 `==`/`!=` on Equatable types — including generic collections like `Array`/`ByteArray` — compare by content (dispatch to `equals()`); two distinct arrays with equal elements are `==`.
 `is`, `is not` compare reference identity (same heap object) for struct types.
-`shl`, `shr` work on integers only.
+`shl`, `shr` work on integers only. A shift-count **literal** outside `0`–`63` is an error (E2054) — an `int` is 64 bits, and the hardware would silently mask any other count into that range. A shift by a runtime value is unaffected.
 
 ## Conditional Expression
 

@@ -4996,7 +4996,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var lhs = EvalConstAddSub(decls, evaluated, evaluating);
     while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
       var op = Advance().Type;
+      // The same shift-count rule the runtime expression parser enforces, asked here too:
+      // `let MASK = 1 shl 100` is a compile-time shift whose count C#'s own `<<` masks to
+      // its low 6 bits, so it silently evaluated to `1 shl 36`. One rule, both parse sites.
+      var rhsStart = _pos;
       var rhs = EvalConstAddSub(decls, evaluated, evaluating);
+      RequireShiftCountInRange(rhsStart, _pos);
       if (lhs is long ll && rhs is long rl) {
         lhs = op == TokenType.Shl ? ll << (int)rl : ll >> (int)rl;
       } else {
@@ -14699,7 +14704,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       }
 
+      // The right operand's token span, remembered BEFORE it is parsed and read back after:
+      // the shift-count check needs to know what the count was WRITTEN as, not merely what it
+      // evaluates to. See RequireShiftCountInRange.
+      var rhsStart = _pos;
       var rhs = ParseExpression(entry.Precedence + 1);
+      if (entry.Op is MaxonBinOperator.Shl or MaxonBinOperator.Shr)
+        RequireShiftCountInRange(rhsStart, _pos);
 
       // Type parameter operands require where-clause constraints for comparison operators
       ValidateTypeParameterConstraints(lhs, rhs, entry.Op, opToken);
@@ -20657,6 +20668,70 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         $"Integer literal '-{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
         token.Line, token.Column);
     }
+  }
+
+  /// ⭐ THE SHIFT-COUNT DOMAIN — the canonical statement of `0..63` in this compiler, and the
+  /// only one. Both parse sites that can meet a shift (the runtime expression parser's binary
+  /// loop, and <see cref="EvalConstShift"/>) read these; nothing restates them.
+  ///
+  /// The bound is not an encoding accident. A Maxon `int` is 64 BITS, so 0..63 is the whole set
+  /// of distances a shift can distinguish, and every other count is silently MASKED into that
+  /// range — by x64 (which masks a 64-bit shift's count to its low 6 bits), by arm64, and by
+  /// C#'s own `<<` in the const evaluator. That masking is what turned `a shl -1` — which reads
+  /// to a human as "shift the other way" — into the MAXIMUM LEFT SHIFT, and `a shl 64` into no
+  /// shift at all. (maxon-shv2 declares the same domain in TypeRules.maxon and enforces the
+  /// same rule under the same code and the same message text; the specs gate stderr
+  /// byte-for-byte, so the two must not drift.)
+  private const long MinShiftCount = 0;
+  private const long MaxShiftCount = 63;
+
+  /// Reject a shift count written as a LITERAL outside the shift-count domain (E2054).
+  /// `tokenStart`..`tokenEnd` is the half-open token span the shift's right operand consumed.
+  ///
+  /// The operand is identified from the TOKENS IT CONSUMED rather than by looking ahead before
+  /// it is parsed, and that is what makes the test exact: the precedence climber has already
+  /// decided how far the operand reaches, so `a shl 1 + 2` (whose count is `1 + 2`, because
+  /// additive binds TIGHTER than a shift) is correctly NOT a literal — worked out without a
+  /// second copy of the precedence ladder here to drift from the real one.
+  ///
+  /// Anything that is not a bare literal — a variable, a call, `1 + 2` — is LEFT ALONE and stays
+  /// legal: it goes through `cl`, the hardware masks it, and both lowerings agree on what that
+  /// means. There was no fact for the compiler to discard. The literal is the case where it held
+  /// every fact it needed and threw the answer away.
+  private void RequireShiftCountInRange(int tokenStart, int tokenEnd) {
+    var lo = tokenStart;
+    var hi = tokenEnd;
+
+    // Redundant parentheses do not turn a literal into a runtime value: `a shl (100)` discards
+    // exactly the same fact as `a shl 100`. A span that merely STARTS with `(` and ENDS with `)`
+    // without being wrapped in one survives this loop as something the shape check below then
+    // refuses to call a literal, so stripping can only widen what is CAUGHT — never what is
+    // mistaken for a literal.
+    while (hi - lo >= 2 && _tokens[lo].Type == TokenType.LeftParen && _tokens[hi - 1].Type == TokenType.RightParen) {
+      lo++;
+      hi--;
+    }
+
+    bool negated = _tokens[lo].Type == TokenType.Minus;
+    var litIdx = negated ? lo + 1 : lo;
+    if (hi != litIdx + 1 || _tokens[litIdx].Type != TokenType.IntegerLiteral)
+      return;
+
+    // The SAME readers every other literal comes through, so a hex or underscore-separated count
+    // (`a shl 0x40`) is read here exactly as it would be anywhere else — and the negated form
+    // routes to ParseNegatedIntegerLiteral rather than negating afterwards, so `i64.min`'s
+    // magnitude does not overflow on its way to being rejected.
+    var literal = _tokens[litIdx];
+    long count = negated ? ParseNegatedIntegerLiteral(literal) : ParseIntegerLiteral(literal);
+    if (count >= MinShiftCount && count <= MaxShiftCount)
+      return;
+
+    // Anchored at `lo`, not at the digits: `-1` is what the programmer wrote and what the
+    // message names, so the `-` is where the error belongs.
+    var anchor = _tokens[lo];
+    throw new CompileError(ErrorCode.ParserShiftCountOutOfRange,
+      $"Shift count {count} is outside the range {MinShiftCount} to {MaxShiftCount}: an int is 64 bits, so any other count is silently masked into that range",
+      anchor.Line, anchor.Column) { FilePath = _sourceFilePath };
   }
 
   private static long ParseIntegerLiteral(Token token) {

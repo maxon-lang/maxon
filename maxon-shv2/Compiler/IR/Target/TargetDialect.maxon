@@ -90,12 +90,16 @@ export typealias SpillSlot = int(0 to u64.max)
 
 export typealias SpillSlotArray = Array with SpillSlot
 
-// The immediate shift count of an `shl`/`sar` by a constant. x64 masks a 64-bit shift's
-// count to its low 6 bits, so 0..63 is the whole domain the instruction distinguishes —
-// and it is exactly the range `foldConstOperands` will fold into an immediate (a wider
-// count keeps its register operand and goes through `cl`, where the HARDWARE masks it).
-// Typed this narrowly on purpose: the cast at the lowering boundary then PROVES the
-// fold's range promise rather than silently truncating a count that broke it.
+// The immediate shift count of an `shl`/`sar` by a constant. Typed this narrowly on purpose:
+// the cast at the lowering boundary then PROVES the fold's range promise (see
+// `constFitsBinOpImmediate`) rather than silently truncating a count that broke it.
+//
+// ⚠ THE `0 to 63` HERE IS THE ONE FORCED RESTATEMENT of the shift-count domain, whose CANONICAL
+// declaration is TypeRules' `MinShiftCount`/`MaxShiftCount` — read that for why the bound is what
+// it is. It is spelled out again only because a ranged typealias's bounds must be literals or
+// builtin sized-type bounds: the language has no way to write `int(MinShiftCount to
+// MaxShiftCount)`. Nothing else in the compiler may restate it, and these two numbers must move
+// with the ones over there.
 export typealias ShiftCount = int(0 to 63)
 
 // Per-variant static metadata backing for TargetOp (read via `op.rawValue`),

@@ -2682,6 +2682,14 @@ Shift operators work on integers only.
 | `shl` | Shift left | `1 shl 4` (result: 16) |
 | `shr` | Shift right | `256 shr 4` (result: 16) |
 
+An `int` is 64 bits, so the only shift distances that name distinct results are `0` through
+`63`. A shift count written as a **literal** outside that range is rejected with **E2054** —
+the hardware would otherwise mask it into range and hand back a plausible wrong answer
+(`a shl -1` reads as "shift the other way" and would silently compute `a shl 63`, the *maximum
+left shift*; `a shl 64` would silently leave `a` unchanged). A shift by a **runtime value** is
+unaffected: the count goes through `cl`, the hardware masks it, and the compiler has no fact
+to check.
+
 ### Unary Operators
 
 | Operator | Description | Example |

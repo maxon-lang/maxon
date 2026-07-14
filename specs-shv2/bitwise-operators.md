@@ -68,6 +68,30 @@ var a = 16
 var b = a shr 2  // 0100 = 4
 ```
 
+### Shift Count Range
+
+An `int` is 64 bits, so the only shift distances that name distinct results are `0` through
+`63`. A shift count written as a **literal** outside that range is a compile error (**E2054**):
+
+```maxon
+var a = 1
+var b = a shl -1   // E2054: shift count -1 is outside the range 0 to 63
+var c = a shl 64   // E2054
+```
+
+The rule exists because the hardware does not reject an out-of-range count — it **masks** it
+into range, and the result is a plausible-looking wrong answer. `a shl -1` reads to a human as
+"shift the other way", and would silently compute `a shl 63` — the *maximum left shift*, with
+the opposite sign. `a shl 64` would silently compute `a shl 0`, leaving `a` unchanged.
+
+A shift by a **runtime value** is unaffected and stays legal. The count is passed in `cl`,
+where the hardware masks it, and the compiler has no fact to check:
+
+```maxon
+let count = 64
+var d = a shl count  // legal: 64 masks to 0, so this is `a shl 0`
+```
+
 ## Tests
 
 <!-- test: bitwise-and -->
@@ -161,6 +185,88 @@ end 'main'
 ```
 ```exitcode
 11
+```
+
+<!-- test: shl-count-negative -->
+A negative shift count reads as "shift the other way" and is not that at all: the hardware
+masks it, so `shl -1` would silently become `shl 63` — the MAXIMUM left shift, a wrong answer
+with the opposite sign. The compiler is holding the count, so it rejects it.
+```maxon
+function main() returns ExitCode
+	let a = 1
+	return a shl -1
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shl-count-negative.test:4:15: Shift count -1 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```
+
+<!-- test: shr-count-negative -->
+The same rule, asked of `shr`.
+```maxon
+function main() returns ExitCode
+	let a = 128
+	return a shr -1
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shr-count-negative.test:4:15: Shift count -1 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```
+
+<!-- test: shl-count-64 -->
+64 is one past the last distance a 64-bit shift distinguishes. Masked, it becomes `shl 0` —
+which leaves the value UNCHANGED, the least likely thing the author meant.
+```maxon
+function main() returns ExitCode
+	let a = 1
+	return a shl 64
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shl-count-64.test:4:15: Shift count 64 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```
+
+<!-- test: shl-count-100 -->
+```maxon
+function main() returns ExitCode
+	let a = 1
+	return a shl 100
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shl-count-100.test:4:15: Shift count 100 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```
+
+<!-- test: shift-by-variable-count -->
+⚠ THE GUARD AGAINST OVER-REJECTING. Only a LITERAL count is checked. A count that arrives as a
+VALUE is still legal and still MASKS: it goes through `cl`, which reads only the low 6 bits. 64
+masks to 0, so this is `7 shl 0` — 7, and not a compile error. Tightening E2054 to cover this
+would break the shift-by-a-computed-distance idiom the language has always had.
+```maxon
+function main() returns ExitCode
+	let a = 7
+	let count = 64
+	return a shl count
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: shift-by-parameter-count -->
+The same, with a count no pass can see at all: a parameter. 65 masks to 1, so `7 shl 65` is
+`7 shl 1` = 14.
+```maxon
+function shiftLeft(value ExitCode, count ExitCode) returns ExitCode
+	return value shl count
+end 'shiftLeft'
+
+function main() returns ExitCode
+	return shiftLeft(7, count: 65)
+end 'main'
+```
+```exitcode
+14
 ```
 
 <!-- test: shift-vs-comparison -->

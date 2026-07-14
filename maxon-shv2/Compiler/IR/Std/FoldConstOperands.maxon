@@ -77,11 +77,6 @@ type ConstValueMap
 	end 'constantOf'
 end 'ConstValueMap'
 
-// The largest shift count an x64 64-bit shift distinguishes: it masks the count to its
-// low 6 bits, so every count is taken modulo 64. Named because it is the bound BOTH
-// shift lowerings agree on (see `constFitsBinOpImmediate`), not an encoding accident.
-let MaxShiftCount = 63 as ParsedInt
-
 // The result of attempting to fold one op: either unchanged, or a replacement op
 // to write back at the same index (never a sentinel op).
 union FoldResult
@@ -237,19 +232,20 @@ end 'foldableCmpImm'
 //       whole Imm32 domain folds.
 //   sub — lowers to `lea [base - imm]`, a NEGATED displacement, and -(i32.min) overflows a
 //       signed 32-bit field. i32.min alone is excluded.
-//   shl / shr — the immediate is an imm8 SHIFT COUNT, and x64 masks a 64-bit shift's count
-//       to its low 6 bits. Folding is restricted to 0..63 — the counts on which the imm8
-//       form and the `cl` form provably agree. Any other count keeps its register operand
-//       and goes through `cl`, where the HARDWARE does the masking, so the two lowerings
-//       can never disagree about what `a shl 100` means, and no compile-time truncation
-//       has to be justified.
+//   shl / shr — the immediate is an imm8 SHIFT COUNT, so folding is restricted to the shift-count
+//       domain (TypeRules' `shiftCountInRange` — the canonical `0..63`, ASKED here rather than
+//       restated). Those are the counts on which the imm8 form and the `cl` form provably agree.
+//       A count OUTSIDE it still reaches this pass — the parser rejects an out-of-range LITERAL
+//       (E2054), but a RUNTIME count it cannot see is legal — and it keeps its register operand
+//       and goes through `cl`, where the HARDWARE does the masking. So the two lowerings can
+//       never disagree, and no compile-time truncation has to be justified.
 function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add gives fitsImm32(v)
 		mul gives fitsImm32(v)
 		sub gives fitsImm32(v) and v != i32.min
 		bitAnd to bitXor gives fitsImm32(v)
-		shl to shr gives v >= 0 and v <= MaxShiftCount
+		shl to shr gives shiftCountInRange(v)
 	end 'o'
 end 'constFitsBinOpImmediate'
 

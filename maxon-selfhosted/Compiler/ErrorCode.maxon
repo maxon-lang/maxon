@@ -46,6 +46,24 @@ export enum ErrorCode
 	// The first argument is positional-only; only the second and subsequent
 	// arguments may be labeled.
 	parserFirstArgCannotBeNamed = 2052
+	// E2054: a `shl`/`shr` whose count is a LITERAL outside 0..63 (`a shl -1`,
+	// `a shl 64`, `a shl 100`). An `int` is 64 bits, so no other distance names a
+	// distinct shift, and the hardware silently MASKS the count into that range —
+	// which turned `a shl -1`, read by a human as "shift the other way", into the
+	// MAXIMUM LEFT shift. A shift by a RUNTIME value is untouched and still legal:
+	// the compiler cannot see the count, and both lowerings agree on what the
+	// hardware will do with it.
+	//
+	// Enforced by the C# bootstrap (2-Parser.cs `RequireShiftCountInRange`, at both
+	// its parse sites) and by maxon-shv2 (`Parser.requireShiftCount`), under this
+	// code and one shared message text — the specs gate stderr byte-for-byte. This
+	// compiler is DEPRECATED and does not implement the check; the code is
+	// registered here because this file is the tree's error-code registry (it is
+	// what `lookup_error_code` reads), so an unregistered code would be an
+	// unfindable one.
+	// 2053 is maxon-shv2's arg-missing-label check, which this compiler and the
+	// bootstrap both report through parserUnexpectedToken.
+	parserShiftCountOutOfRange = 2054
 	semanticNoMain = 3001
 	semanticMainWrongReturnType = 3002
 	semanticUndefinedVariable = 3003

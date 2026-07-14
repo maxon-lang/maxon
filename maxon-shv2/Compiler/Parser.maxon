@@ -119,6 +119,17 @@ export union ParseError implements Error
 	// lowering and dies with an internal error (E9001 `Unsupported binop: Sub on Bool`), which
 	// is a bootstrap BUG, not a spec.
 	nonNumericNegation(operand String, line LineNumber, column ColumnNumber)
+	// A `shl`/`shr` whose count is a LITERAL outside the shift-count domain (TypeRules'
+	// `shiftCountInRange`) — `a shl -1`, `a shl 64`, `a shl 100`. Renders as E2054, positioned
+	// at the literal as written (at the `-` when there is one). The count rides along because
+	// the message names it.
+	//
+	// Only the LITERAL case: a shift by a RUNTIME value stays legal, and must, because the
+	// compiler cannot see it and both lowerings agree on what the hardware will do with it. The
+	// literal is the case where the compiler held every fact it needed and threw the answer
+	// away — `a shl -1` reads as "shift the other way" and silently became the MAXIMUM left
+	// shift, a wrong answer with the opposite sign.
+	shiftCountOutOfRange(count ParsedInt, line LineNumber, column ColumnNumber)
 	// A comparison whose operands are in different type classes (`4 < flag`). Renders as
 	// E3005 with the bootstrap's exact text — `type mismatch: 'cannot compare int with bool'`
 	// (2-Parser.cs:17777) — positioned at the comparison operator. A comparison over two
@@ -2274,6 +2285,10 @@ export type Parser
 			end 'shortCircuit'
 
 			self.advance()
+			// The right operand's token span, remembered BEFORE it is parsed and read back
+			// after — the shift-count check needs to know what the operand was WRITTEN as, not
+			// just what it evaluates to. See `requireShiftCount`.
+			let rhsStart = self.pos
 			let right = try self.parseBinary(func, minPrec: prec + 1)
 
 			if comparisonOperator(opTok.kind) 'comparison'
@@ -2281,11 +2296,71 @@ export type Parser
 				continue
 			end 'comparison'
 
-			left = try self.emitBinOp(left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
+			let op = infixMaxonOp(opTok.kind)
+			try self.requireShiftCount(op, rhsStart: rhsStart)
+			left = try self.emitBinOp(left, rhs: right, op: op, opTok: opTok)
 		end 'climb'
 
 		return left
 	end 'parseBinary'
+
+	// The SHIFT-COUNT rule, RAISED (E2054): a `shl`/`shr` whose count is written as a LITERAL
+	// must name a shift a 64-bit shift actually performs — TypeRules' `shiftCountInRange`, which
+	// is the one place the `0..63` domain is declared.
+	//
+	// The operand is identified from the TOKENS IT CONSUMED — `[rhsStart, self.pos)` — rather
+	// than by looking ahead before it is parsed. That is what makes the test exact: the climber
+	// has already decided how far the operand reaches, so `a shl 1 + 2` (whose count is `1 + 2`,
+	// because additive binds TIGHTER than a shift) is correctly NOT a literal, and no second copy
+	// of the precedence ladder is needed here to work that out. A second copy of that ladder is
+	// precisely the kind of thing that drifts.
+	//
+	// Anything that is not a bare literal — a variable, a call, `1 + 2` — is LEFT ALONE and stays
+	// legal. It keeps its register operand, goes through `cl`, and the hardware masks it; both
+	// lowerings agree on what that means, and there was no fact for the compiler to discard.
+	function requireShiftCount(op MaxonBinOp, rhsStart TokenIndex) throws ParseError
+		if not shiftOperator(op) 'notAShift'
+			return
+		end 'notAShift'
+
+		var lo = rhsStart
+		var hi = self.pos
+
+		// Redundant parentheses do not turn a literal into a runtime value: `a shl (100)` is the
+		// same discarded fact as `a shl 100`, so strip matched enclosing pairs before reading the
+		// span's shape. A span that merely STARTS with `(` and ENDS with `)` without being wrapped
+		// in one — `(a + b)` vs `(a) + (b)` shows the shape — survives the loop as something the
+		// two-token check below then refuses to call a literal. So stripping can only ever widen
+		// what is CAUGHT, never what is mistaken for a literal.
+		while lo + 2 <= hi and self.kindAt(lo) == TokenKind.leftParen and self.kindAt(hi - 1) == TokenKind.rightParen 'stripParens'
+			lo = lo + 1
+			hi = hi - 1
+		end 'stripParens'
+
+		let negated = self.kindAt(lo) == TokenKind.minus
+		var litIdx = lo
+		if negated 'skipSign'
+			litIdx = lo + 1
+		end 'skipSign'
+
+		if hi != litIdx + 1 or self.kindAt(litIdx) != TokenKind.intLiteral 'notALiteral'
+			return
+		end 'notALiteral'
+
+		// The SAME reader every other literal comes through (`intLiteralValue`), so a hex or
+		// underscore-separated count (`a shl 0x40`) is read here exactly as it would be anywhere
+		// else — and `negated` routes to `parseNegatedInt` rather than negating afterwards, so
+		// `i64.min`'s magnitude does not overflow on the way to being rejected.
+		let count = try self.intLiteralValue(self.tokenAt(litIdx), negated: negated)
+		if shiftCountInRange(count) 'legal'
+			return
+		end 'legal'
+
+		// Anchored at `lo`, not at the digits: `-1` is what the programmer wrote and what the
+		// message names, so the `-` is where the error belongs.
+		let anchor = self.tokenAt(lo)
+		throw ParseError.shiftCountOutOfRange(count, line: anchor.line, column: anchor.column)
+	end 'requireShiftCount'
 
 	// Lower a BOOL `and`/`or` to SHORT-CIRCUIT control flow — the point of this rung. `a and
 	// b` must not evaluate `b` when `a` is false, so it is not an operator at all: it is a

@@ -266,16 +266,29 @@ survives only because every op the allocator can insert there — spill, reload,
 rematerialized `const` — is `mov`-class and flag-neutral. **Add a flag-writing one and the fusion becomes
 a silent miscompile the Std tier cannot see coming.**
 
-### 7b. `a shl -1` silently becomes `a shl 63` — ⏳ IN PROGRESS
-The hardware masks CL to its low 6 bits. **Verified on BOTH compilers.** Defensible for a *runtime* value
-(the compiler cannot see it, and both lowerings agree). **Not** for a literal the compiler can see: a
-negative count reads as "shift the other way" and silently becomes the *maximum left shift*.
-⇒ Being tightened to: **a shift-count LITERAL outside `0..63` is a compile error**, which also catches
-`shl 64` (≡ `shl 0`, i.e. a no-op) and `shl 100` (≡ `shl 36`). **It is free** — a tree-wide grep finds
-**zero** out-of-range shift literals in any real code. One of the three hits is corroboration:
-`maxon-selfhosted/.../ConstantArrayLiteralRdata.maxon:157` is a *comment* saying `(1 shl 64) - 1`
-"overflows i64 left-shift, so a full-width target is left unmasked" — a developer already hit this and
-worked around it in prose.
+### ~~7b. `a shl -1` silently becomes `a shl 63`~~ ✅ FIXED — **E2054**, in BOTH compilers
+The hardware masks CL to its low 6 bits. Defensible for a *runtime* value (the compiler cannot see it,
+and both lowerings agree). **Not** for a literal it can see: a negative count reads as "shift the other
+way" and silently became the *maximum left shift*.
+⇒ **A shift-count LITERAL outside `0..63` is now a compile error (E2054)**, positioned at the literal.
+Also catches `shl 64` (≡ `shl 0`, a no-op) and `shl 100` (≡ `shl 36`). A shift by a **runtime** value is
+UNCHANGED and still masks — pinned by two passing spec cases, so the rule cannot later be "fixed" into an
+over-rejection. It was free, as predicted: **zero** out-of-range shift literals existed in any real code,
+and **no golden moved** in either suite.
+
+⚠ **The bug UNDERNEATH it was #12 wearing different clothes: the `0..63` bound was WRITTEN DOWN TWICE**
+(shv2's `FoldConstOperands.MaxShiftCount` *and* `TargetDialect.ShiftCount`) **and the front end enforced
+neither copy.** So the fix does not add a third: shv2 now has ONE declaration — TypeRules'
+`MinShiftCount`/`MaxShiftCount` + `shiftCountInRange` — which the parser and `foldConstOperands` both ASK.
+`TargetDialect.ShiftCount`'s `int(0 to 63)` is the **one forced restatement**, and says so in a comment:
+a ranged typealias's bounds must be literals, so the language cannot express
+`int(MinShiftCount to MaxShiftCount)`. *(A real gap, if a small one: a ranged typealias cannot be bounded
+by a named constant, and `Alias.min`/`Alias.max` do not exist either — only builtin sized types have
+those. It is the only reason this fact is still written twice.)*
+
+The bootstrap check runs at **both** parse sites that can meet a shift — the expression parser *and*
+`EvalConstShift`, where `let MASK = 1 shl 100` was silently evaluating to `1 shl 36` through C#'s own
+`<<`. That second site was not in the original report and is the same defect one tier up.
 
 ### 12. ⚠ NEW — the ERROR-CODE REGISTRY is written down TWICE, and two agents collided on E3099
 `maxon-sharp/Compiler/ErrorCode.cs` and `maxon-selfhosted/Compiler/ErrorCode.maxon` are **two registries
