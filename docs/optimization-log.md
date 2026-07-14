@@ -51,6 +51,24 @@ beside every phase; these tables carry the raw counts it is taken from.
 These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
 peak resident memory, which nothing currently measures.
 
+> ### ⚠ Since 2026-07-14, **×2.00 is no longer the byte column's linear reading. ×2.1 is.**
+>
+> `Array` grows by Go's `nextslicecap` — double below 256 elements, then ease toward 1.25× — and that
+> ratio is a **function of the buffer's size**. So the bytes a buffer allocates over its life are no
+> longer a flat multiple of its final size (2.0 under doubling) but a **rising** one: ×2.0 at the
+> threshold, ×2.5 at 1,232 elements, ×3.7 at 5,334, approaching ×5 as the ratio approaches 1.25.
+>
+> The ladder doubles the program every rung, so buffers get bigger every rung, so that multiple climbs
+> every rung — **and a phase whose bytes are perfectly LINEAR in the program reads above ×2.00 while it
+> climbs.** Measured on phases the policy did not touch a line of: `phase:sugarGate` went from a
+> dead-flat ×1.99 to ×2.11, `regalloc:blockOrder` from ×1.99 to ×2.13. Nothing about them got slower.
+>
+> It saturates — the multiple stops at 5 — so it is a **transient bend, not a superlinearity**. But the
+> six rungs sit inside the transition, so: **a byte reading around ×2.1 is this policy and not a new
+> quadratic. A reading well past it still is one.** The allocation column is unaffected (the extra
+> reallocation is +0.04%); it is only the bytes each one carries that moved. See `grownCapacity` in
+> `stdlib/Array.maxon`, which states the same warning at the source.
+
 Frees are measured and reported but not tabulated here: they track allocations almost exactly, so a
 third table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who
 wants them.

@@ -19,15 +19,30 @@ typealias ElementIndex = int(0 to u64.max)
 // dominant term in the process's peak footprint. A flat 1.25× is wrong the other way — it re-copies a
 // small buffer to death on the way up from four elements. Go takes both: DOUBLE below
 // `GrowthThreshold` elements, then EASE toward 1.25× above it. The easing formula is continuous rather
-// than a cliff — at exactly the threshold it still doubles, at 4× the threshold it is 1.30×, and by
-// 64K elements it is 1.253×.
+// than a cliff: the ratio at capacity c is exactly `1.25 + 0.75·GrowthThreshold/c`, so it still DOUBLES
+// at the threshold, is 1.4375× at 4× it, 1.30× at 15× it, and 1.253× by 64K elements.
 //
 // THE TRADE, stated plainly, because it IS a trade: a buffer grown to N elements by ratio r allocates
 // N·r/(r−1) elements over its life and holds at most r·N of them at any one instant. That is 2N
 // allocated / 100% slack held at 2×, against 5N allocated / 25% slack held at 1.25×. This policy
 // therefore allocates MORE bytes in total and keeps FEWER of them live — churn traded for footprint.
-// A cumulative-allocation number that rises after this change (the compiler's scale-test measures
-// exactly that column) is the price being paid, not a regression to hunt.
+//
+// ⚠ AND THE CHURN IS NOT A CONSTANT — IT RISES WITH BUFFER SIZE, WHICH BENDS THE SCALE-TEST'S BYTE
+// COLUMN. Read that column knowing this, because the column is the compiler's quadratic detector and
+// this policy puts a bend in it that is NOT a quadratic.
+//
+// Under doubling, `r` is 2 at every size, so the bytes a buffer allocates over its life are a FLAT 2·N
+// — the same multiple whatever N is. Here `r` is a function of the capacity, so that multiple RISES
+// with the final size: ×2.0 at the threshold, ×2.5 at 1,232 elements, ×3.7 at 5,334, approaching ×5 as
+// the ratio approaches 1.25. The scale ladder DOUBLES the program every rung, so buffers get bigger
+// every rung, so the multiple climbs every rung — and a phase whose bytes are perfectly LINEAR in the
+// program reads ABOVE ×2.00 per doubling while it climbs. Measured on phases this policy did not touch
+// a line of: `phase:sugarGate` went from a dead-flat ×1.99 to ×2.11, `regalloc:blockOrder` ×1.99 to
+// ×2.13. Nothing about them got slower. It saturates (the multiple stops at 5), so it is a TRANSIENT
+// bend and not a superlinearity — but the ladder's six rungs sit inside the transition, so a reading of
+// ×2.1 on a linear phase is the expected cost of this policy and NOT a new quadratic to hunt. A reading
+// well past that still is.
+let GrowthThreshold = 256 as ElementCount
 let GrowthThreshold = 256 as ElementCount
 
 // The floor a growing buffer starts from, so that a few-element accumulation does not bounce its way
@@ -42,6 +57,16 @@ function grownCapacity(current ElementCount, required ElementCount) returns Elem
 
 	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
 	// taken at face value. Geometric slack heaped on top of an already-large ask is pure waste.
+	//
+	// It hands back ZERO slack, though, where the old doubling policy always landed on `capacity·2ᵏ`
+	// and so gave an oversized ask up to a full double of headroom. A buffer that is `append`ed to and
+	// then PUSHED to therefore re-grows immediately, and that costs real bytes (measured at +2% of the
+	// whole compile; `phase:writeExe`, which is almost all appends, more than doubled its byte volume).
+	// Go has this same branch and does not pay for it, because `mallocgc` rounds the allocation up to a
+	// SIZE CLASS and the slice takes the rounded capacity. Our slab rounds too — the block handed back
+	// is already bigger than this — but `__ManagedMemory` records the capacity ASKED FOR rather than the
+	// one GRANTED, so that headroom is bought and then thrown away. Recovering it means having the
+	// allocator report its granted size; until then this branch is honest about being a little wasteful.
 	if required > doubled 'takeTheAskAsGiven'
 		return atLeastMinimum(required)
 	end 'takeTheAskAsGiven'
