@@ -51,23 +51,21 @@ beside every phase; these tables carry the raw counts it is taken from.
 These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
 peak resident memory, which nothing currently measures.
 
-> ### ⚠ Since 2026-07-14, **×2.00 is no longer the byte column's linear reading. ×2.1 is.**
+> ### ⚠ TWO READING RULES SINCE 2026-07-14, both from the Go-growth / raw-counter change:
 >
-> `Array` grows by Go's `nextslicecap` — double below 256 elements, then ease toward 1.25× — and that
-> ratio is a **function of the buffer's size**. So the bytes a buffer allocates over its life are no
-> longer a flat multiple of its final size (2.0 under doubling) but a **rising** one: ×2.0 at the
-> threshold, ×2.5 at 1,232 elements, ×3.7 at 5,334, approaching ×5 as the ratio approaches 1.25.
+> **1. ×2.1 — not ×2.00 — is the byte column's LINEAR reading.** `Array` grows by Go's `nextslicecap`
+> (double below 256 elements, then ease toward 1.25×), and that ratio is a *function of the buffer's
+> size*, so the bytes a buffer allocates over its life are a *rising* multiple of its final size (2.0 at
+> the threshold, up to 5.0 as the ratio approaches 1.25). The ladder doubles the program each rung, so
+> that multiple climbs each rung, and **a phase whose bytes are perfectly linear reads above ×2.00 while
+> it climbs.** It saturates at ×5 — a transient bend, not a superlinearity. So a byte reading around
+> ×2.1 is this policy; well past it is still a quadratic. See `grownCapacity` in `stdlib/Array.maxon`.
 >
-> The ladder doubles the program every rung, so buffers get bigger every rung, so that multiple climbs
-> every rung — **and a phase whose bytes are perfectly LINEAR in the program reads above ×2.00 while it
-> climbs.** Measured on phases the policy did not touch a line of: `phase:sugarGate` went from a
-> dead-flat ×1.99 to ×2.11, `regalloc:blockOrder` from ×1.99 to ×2.13. Nothing about them got slower.
->
-> It saturates — the multiple stops at 5 — so it is a **transient bend, not a superlinearity**. But the
-> six rungs sit inside the transition, so: **a byte reading around ×2.1 is this policy and not a new
-> quadratic. A reading well past it still is one.** The allocation column is unaffected (the extra
-> reallocation is +0.04%); it is only the bytes each one carries that moved. See `grownCapacity` in
-> `stdlib/Array.maxon`, which states the same warning at the source.
+> **2. The `allocs` column counts the RAW allocator layer, and older rows do not.** Every row on or below
+> the "three changes rebased onto…" row counts raw+tracked allocations; every row above counts only
+> tracked (structs, handles, Strings), so array/string *buffers* were invisible to it. The two are not
+> comparable — the one-time step up (~1.06M at rung 5) is the instrument gaining sight of allocations
+> that were always there, not the compiler doing more.
 
 Frees are measured and reported but not tabulated here: they track allocations almost exactly, so a
 third table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who
@@ -219,40 +217,6 @@ process-global and cannot say *which* test leaked, a non-zero batch exit invalid
 re-runs its tests individually, where each one's own leak check attributes it.
 
 ## What the profile says is left
-
-### The only superlinearity left is in the PARSER, and it is not where these tables kept pointing
-
-Three phases have carried a byte tail for months — `regalloc:splitting` (×2.38), `elimTrivialBlockArgs`
-(×2.31), `pruneDeadBlockArgs` (×2.25) — each with a **flat allocation count and rising bytes**, i.e. the
-average allocation growing with the program. **All three are one root cause, and it is in none of the
-three passes.** They are linear in the IR they are handed. The IR itself is quadratic.
-
-`parseWhileStatement` mints **one header phi per mutable var IN SCOPE**, whether or not the loop touches
-it. A function with `L` loops and `V` mutable vars in scope therefore builds Θ(L·V) phis out of Θ(L+V)
-of source; the `pressuredLoops` knob declares nine fresh function-scoped vars per loop, so `V` grows
-with `L` and the IR is **Θ(L²)**. Minted-and-then-deleted phis at 8 / 16 / 32 / 64 loops: **252 / 1,080 /
-4,464 / 18,144** — ×4 per doubling. The downstream passes' buffers are all Θ(block-arg id space), and
-that space is Θ(L²): at rung 5 the same code gives `pruneDeadBlockArgs` allocations **19× wider** (2,041
-bytes average against 108) while it makes *fewer* of them. That is the flat-allocs/rising-bytes
-signature, fully accounted for.
-
-Subtract that one knob from the corpus and every tail goes linear (`pruneDeadBlockArgs` ×2.04,
-`elimTrivialBlockArgs` ×2.08, `regalloc:splitting` ×2.01). Scope the corpus's vars to their loops and
-the same thing happens with the loop count unchanged (`parse` ×3.17 → ×1.94, `pruneDeadBlockArgs` ×3.73
-→ ×1.99, `regalloc:liveness` ×2.82 → ×1.97, dead phis 18,144 → 0).
-
-**So the incremental splitter driver (`49b160ce2`) genuinely works** — `regalloc:liveness` is ×1.97 on
-the scoped control — and `9cde0afb9`'s "LINEAR" claim was right in substance even though it quoted a
-×2.38 that is n^1.25. The tail that survived it was never the allocator; it was the parser's phis
-arriving through this knob.
-
-The fix is on-demand phi insertion in the front end (mint a phi when a variable is READ in a block whose
-predecessors are not yet known — Braun et al., *Simple and Efficient Construction of SSA Form*). It is a
-front-end rung, not a pass tweak: `pruneDeadBlockArgs` already deletes every one of these phis, so the
-emitted code is identical today and a fix leaves `specs-shv2/` byte-identical **by construction**. Pure
-cost, zero behaviour.
-
-### Constant factors
 
 From `scale-test --per-type`, which attributes every allocation to the TYPE allocated *and* the SCOPE
 that allocated it. **The scope column is the one that finds things** — a `String` row can never tell

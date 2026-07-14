@@ -159,33 +159,27 @@ let DeepBlocksBase = 200 as KnobSize
 // spill bracket knob, not merely a call-depth knob.
 let CallChainBase = 8 as KnobSize
 
-// ONE function, N pressured loops. Its base is the smallest of the six because its cost overtakes
-// everything else as the ladder climbs.
+// ONE function, N pressured loops. Its base is the smallest of the six because its cost used to
+// overtake everything else as the ladder climbed — TWICE, from two different sources, both now fixed.
 //
-// ⚠ THIS IS THE ONLY SUPERLINEAR KNOB OF THE SIX, AND WHAT IT MEASURES IS THE PARSER — not the
-// register allocator, whatever the rest of this comment used to say. It read "KNOWN SUPERLINEAR: the
-// splitter's driver recomputes liveness from scratch after every split… `regalloc:liveness` grows
-// x3.69 per doubling", and that was true until `49b160ce2` made the driver incremental. It is not true
-// now: on a control corpus with the same loops, the same eight-values-live-across-a-call pressure and
-// the same source doubling — differing ONLY in that the accumulators are scoped to their loop —
-// `regalloc:liveness` reads x1.97 and `regalloc:splitting` x2.16. Both linear. The allocator is fine.
+// THIS KNOB IS LINEAR NOW, and the history is worth keeping because the comment here was WRONG in two
+// successive ways, each naming a real bug that was then fixed elsewhere:
 //
-// WHAT ACTUALLY BENDS, and it bends every phase downstream of it: the parser mints ONE HEADER PHI PER
-// MUTABLE VAR IN SCOPE at every `while` (`Parser.maxon`, `parseWhileStatement`), whether or not the
-// loop touches the var. This function declares `PressuredValuesPerLoop + 1` fresh vars per loop and
-// never scopes them, so the vars in scope GROW WITH THE LOOP COUNT and loop k mints phis for all of
-// them: Σ 9k ≈ 9L²/2 phis for Θ(L) of source. Measured, minted-and-then-deleted phis at 8/16/32/64
-// loops: 252 / 1,080 / 4,464 / 18,144 — x4 per doubling, a clean quadratic. `pruneDeadBlockArgs`
-// deletes every one of them, so the emitted code is correct and identical; the cost is the IR they
-// exist in on the way there, which is why `pruneDeadBlockArgs`, `elimTrivialBlockArgs` and
-// `regalloc:splitting` ALL read superlinear on the full corpus and ALL read linear once this knob is
-// subtracted. Their buffers are Θ(block-arg id space), and that space is Θ(L²).
+//   1. It read "KNOWN SUPERLINEAR: the splitter's driver recomputes liveness from scratch after every
+//      split… regalloc:liveness grows x3.69 per doubling." True until `49b160ce2` made that driver
+//      INCREMENTAL. `regalloc:liveness` reads x1.99 now.
+//   2. Then the real bend was the PARSER: `parseWhileStatement` minted one header phi per mutable var
+//      IN SCOPE, so a function whose `var`s accumulate paid Σk ≈ L²/2 phis — minted, carried through
+//      four passes inflating every dense column sized by the block-arg id space, and then deleted by
+//      `pruneDeadBlockArgs`. Fixed by `11b9bbcba`: a loop now carries a phi only for the vars its
+//      extent ASSIGNS. `pruneDeadBlockArgs` reads x1.99, `elimTrivialBlockArgs` x1.97, and
+//      `phase:parse` x1.99 — the tail is gone at the source, not subtracted from the reading.
 //
-// THE KNOB IS RIGHT TO STAY AS IT IS. It is a faithful shape — a function with many loops and many
-// mutable vars in scope is ordinary code, not a pathology — and it is the only thing in the ladder
-// holding the front end honest. The fix belongs in the parser (on-demand phi insertion: mint a phi
-// when a variable is READ in a block whose predecessors are not yet known, à la Braun et al.), and
-// until that lands, this knob's bend is the parser's and must not be attributed to anything else.
+// THE KNOB IS RIGHT TO STAY AS IT IS. A function with many loops and many mutable vars in scope is
+// ordinary code, and this knob held the front end honest until the front end earned it: it is what
+// made the O(V×B) SSA-construction cost visible, and it is what will catch the next thing that inflates
+// the block-arg id space. What it must NOT carry is a claim about which pass is slow — twice that claim
+// outlived the bug it named. If this knob bends again, MEASURE which phase, do not read this comment.
 let PressuredLoopsBase = 2 as KnobSize
 
 // ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
