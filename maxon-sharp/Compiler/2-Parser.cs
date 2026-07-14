@@ -7397,6 +7397,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // self-hosted compiler anchors the same diagnostic (its methodCall op's
         // SourceRange starts at the statement). Same code, same message, same
         // position — so one spec golden covers both compilers.
+
+        // `local.member(...)` where `member` is a function-typed FIELD rather than a
+        // method: a normal indirect call through the value the field holds. Reached only
+        // after every method reading has failed, so a method of the same name still wins —
+        // the same precedence the expression form applies.
+        if (ResolveFunctionTypedField(structTypeName, _tokens[_pos + 2].Value) is { } fnField) {
+          var receiverValue = resolved switch {
+            ResolvedVar.Local(var info) => ResolveExprValue(new ExprResult.VarRef(nameToken.Value, info)),
+            ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
+            _ => throw new InvalidOperationException($"Unhandled receiver kind for '{nameToken.Value}'")
+          };
+          Advance(); // consume receiver name
+          Advance(); // consume '.'
+          var fnFieldToken = Advance(); // consume field name
+          EmitFieldFunctionCallStatement(receiverValue, structTypeName!, fnFieldToken, fnField);
+          return;
+        }
+
         if (structTypeName != null) {
           var missingMethodToken = _tokens[_pos + 2];
           throw new CompileError(ErrorCode.IrInvalidFieldAccess,
@@ -7611,6 +7629,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             fieldToken.Line, fieldToken.Column);
         }
 
+        // The chain ends at a function-typed FIELD rather than a method: `a.b.op(x)`.
+        if (ResolveMethodName($"{currentStructTypeName}.{fieldToken.Value}") == null
+            && ResolveFunctionTypedField(currentStructTypeName, fieldToken.Value) is { } nestedFnField) {
+          EmitFieldFunctionCallStatement(currentValue, currentStructTypeName, fieldToken, nestedFnField);
+          return;
+        }
+
         // This is the method call at the end of the chain
         var methodName = $"{currentStructTypeName}.{fieldToken.Value}";
         var resolvedName = ResolveMethodName(methodName)
@@ -7681,6 +7706,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           fieldToken.Line, fieldToken.Column);
       }
       var methodName = $"{selfInfo.StructTypeName}.{fieldToken.Value}";
+
+      // `self.op(x)` where `op` is a function-typed FIELD, not a method: an indirect call
+      // through the value the field holds — the shape a type that dispatches through a
+      // stored handler uses on itself.
+      if (ResolveMethodName(methodName) == null
+          && ResolveFunctionTypedField(selfInfo.StructTypeName, fieldToken.Value) is { } selfFnField) {
+        var selfReceiver = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+        EmitFieldFunctionCallStatement(selfReceiver, selfInfo.StructTypeName!, fieldToken, selfFnField);
+        return;
+      }
+
       var resolvedName = ResolveMethodName(methodName)
         ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined method '{fieldToken.Value}' on type '{selfInfo.StructTypeName}'", fieldToken.Line, fieldToken.Column);
       Advance(); // consume '('
@@ -7720,8 +7756,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               nextFieldToken.Line, nextFieldToken.Column);
           }
 
-          // Terminal method call
+          // The chain ends at a function-typed FIELD rather than a method: `self.a.op(x)`.
           var methodName = $"{currentStructTypeName}.{nextFieldToken.Value}";
+          if (ResolveMethodName(methodName) == null
+              && ResolveFunctionTypedField(currentStructTypeName, nextFieldToken.Value) is { } chainFnField) {
+            EmitFieldFunctionCallStatement(currentValue, currentStructTypeName, nextFieldToken, chainFnField);
+            return;
+          }
+
+          // Terminal method call
           var resolvedName = ResolveMethodName(methodName)
             ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Undefined method '{nextFieldToken.Value}' on type '{currentStructTypeName}'",
@@ -9289,8 +9332,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // `let f = someEnum.rawValue` on a function-backed enum: the rawValue op
       // carries the shared signature recorded at parse time.
       MaxonEnumFunctionRawValueOp efrv => efrv.Signature,
+      // `let f = spec.handler`: a function-typed FIELD. The op records only the field's
+      // KIND, so recover the signature the way the field was declared — from the type.
+      MaxonFieldAccessOp fieldAccess => ResolveFieldAccessFnType(fieldAccess),
+      // `let f = h.pick()` / `let f = g(x)` where the callee RETURNS a function: the
+      // signature is the callee's return type.
+      MaxonIndirectCallOp indirectCall when indirectCall.CalleeType.ReturnType is IrFunctionType retFnType
+        => retFnType,
       _ => throw new InvalidOperationException($"Cannot determine function type from {lastOp?.GetType().Name}")
     };
+  }
+
+  /// <summary>
+  /// Recovers the declared signature of the function-typed field a MaxonFieldAccessOp read.
+  /// The op carries the owning type and the field name, which is enough to look the field
+  /// back up — the alternative, widening the op with a signature, would write the same fact
+  /// down twice.
+  /// </summary>
+  private IrFunctionType ResolveFieldAccessFnType(MaxonFieldAccessOp fieldAccess) {
+    if (!_typeRegistry.TryGetValue(fieldAccess.TypeName, out var owningType) || owningType is not IrStructType structType)
+      throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+        $"Unknown type '{fieldAccess.TypeName}' reading function-typed field '{fieldAccess.FieldName}'",
+        Current().Line, Current().Column);
+
+    if (structType.GetField(fieldAccess.FieldName)?.Type is not IrFunctionType fieldFnType)
+      throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+        $"Field '{fieldAccess.FieldName}' on type '{fieldAccess.TypeName}' is not a function",
+        Current().Line, Current().Column);
+
+    return fieldFnType;
   }
 
   private void ParseAssignment() {
@@ -9516,6 +9586,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var siblingCall = TrySiblingMethodCall(token);
     if (siblingCall != null) {
       MarkDiscardedResult(siblingCall, token);
+      return;
+    }
+
+    // A call through a function-typed parameter or local: `f(x)`. Checked after the
+    // sibling-method lookup, exactly as the expression form orders them, so a name means
+    // the same thing in both positions. Statement position discards the result, so a
+    // signature returning nothing — the common shape for a callback — is legal here.
+    if (ResolveVariable(token.Value) is ResolvedVar.Local(var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
+      var fnType = fnVarInfo.FnType
+        ?? throw new CompileError(ErrorCode.IrUnsupportedExpression,
+          $"internal: function-typed variable '{token.Value}' was declared without a function type, so its call cannot be checked",
+          token.Line, token.Column);
+
+      EmitIndirectCall(() => LoadFunctionVarValue(token.Value, fnVarInfo, fnType), fnType, token);
       return;
     }
 
@@ -15345,7 +15429,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var (args, callee) = ParseCallArgs(qualifiedFuncToken, isStaticCall: true);
           var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
           if (callOp.Result != null)
-            return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token);
+            return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token, callOp.ResultFnType);
           if (_inTryContext)
             return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{assembled}' does not return a value", token.Line, token.Column);
@@ -15569,7 +15653,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
             OverrideCalleeForTypeAlias(callOp, token.Value, qualifiedName);
             if (callOp.Result != null)
-              return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), methodToken);
+              return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), methodToken, callOp.ResultFnType);
             if (_inTryContext)
               return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
             throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{resolvedQualified}' does not return a value", methodToken.Line, methodToken.Column);
@@ -15601,7 +15685,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var siblingCallOp = TrySiblingMethodCall(token);
         if (siblingCallOp != null) {
           if (siblingCallOp.Result != null)
-            return ParseFieldAccessChain(new ExprResult.Direct(siblingCallOp.Result), token);
+            return ParseFieldAccessChain(new ExprResult.Direct(siblingCallOp.Result), token, siblingCallOp.ResultFnType);
           if (_inTryContext)
             return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Method '{token.Value}' does not return a value", token.Line, token.Column);
@@ -15620,39 +15704,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               token.Line, token.Column);
           }
           var fnType = fnVarInfo.FnType;
-          Advance(); // consume '('
-          var indirectArgs = ParseIndirectCallArgs(token, fnType);
+          var indirectCallOp = EmitIndirectCall(() => LoadFunctionVarValue(token.Value, fnVarInfo, fnType), fnType, token);
 
-          // Get the function pointer value
-          MaxonValue calleeValue;
-          if (fnVarInfo.DefinedInBlock == _currentBlock) {
-            calleeValue = fnVarInfo.Value;
-          } else {
-            var fnVarRefOp = new MaxonFunctionVarRefOp(token.Value, fnType);
-            _currentBlock!.AddOp(fnVarRefOp);
-            calleeValue = fnVarRefOp.Result;
-          }
-
-          // Determine result kind from function type
-          MaxonValueKind? resultKind = null;
-          string? resultStructTypeName = null;
-          if (fnType.ReturnType != null) {
-            if (fnType.ReturnType is IrStructType retStructType) {
-              resultKind = MaxonValueKind.Struct;
-              resultStructTypeName = retStructType.Name;
-            } else if (fnType.ReturnType is IrEnumType retEnumType) {
-              resultKind = MaxonValueKind.Enum;
-              resultStructTypeName = retEnumType.Name;
-            } else {
-              resultKind = fnType.ReturnType.ToValueKind();
-            }
-          }
-
-          var indirectCallOp = new MaxonIndirectCallOp(calleeValue, fnType, indirectArgs, resultKind, resultStructTypeName);
-          _currentBlock!.AddOp(indirectCallOp);
-          InvalidateCachedSelfFields();
+          // Chain the result so `f(x).field` reads a returned struct's field and
+          // `f(x)(y)` calls a returned function — both are just postfix suffixes on
+          // the value this call produced.
           if (indirectCallOp.Result != null)
-            return new ExprResult.Direct(indirectCallOp.Result);
+            return ParseFieldAccessChain(new ExprResult.Direct(indirectCallOp.Result), token,
+              fnType.ReturnType as IrFunctionType);
           if (_inTryContext)
             return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function variable '{token.Value}' does not return a value", token.Line, token.Column);
@@ -15662,7 +15721,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var (args, callee) = ParseCallArgs(token);
         var callOp = CreateFunctionCall(token, args, callee);
         if (callOp.Result != null)
-          return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token);
+          return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token, callOp.ResultFnType);
         if (_inTryContext)
           return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
         throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
@@ -15747,7 +15806,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return new IrFunctionType(paramTypes, func.ReturnType);
   }
 
-  private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
+  /// <param name="valueFnType">
+  /// The function type of <paramref name="result"/> when the caller already knows it —
+  /// a call whose return type is a function. Without it a '(' suffix on that value has
+  /// no signature to check against and cannot be lowered.
+  /// </param>
+  private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken, IrFunctionType? valueFnType = null) {
     // Track root variable mutability for immutability enforcement on method calls.
     // Only valid for direct method calls (var.method()), not for chained access (var.field.method()).
     // For VarRef, use the variable info directly. For Direct (e.g., global loads),
@@ -15758,8 +15822,61 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Only track immutable root for direct variable references, not for function call results
     _lastExprFromImmutableRoot = result is ExprResult.VarRef { Info.Mutable: false, VarName: not "self" };
 
-    while (Check(TokenType.Dot)) {
+    // The signature of the value currently in `result`, when it is callable. Refreshed at
+    // every step that can produce a function value, and cleared by every step that cannot.
+    var resultFnType = ResolveCallableFnType(result, valueFnType);
+
+    while (true) {
+      // Call suffix on a function VALUE: `h.op(x)`, `self.op(x)`, `pick()(x)`. Only a
+      // value already known to be a function consumes the '(' — anything else must leave
+      // it for the caller, or an ordinary parenthesized expression would be eaten here.
+      if (resultFnType != null && Check(TokenType.LeftParen)) {
+        // A function-typed VARIABLE needs the function-specific load, which is what
+        // re-associates the callee with its `__env_<name>` slot; every other producer of a
+        // function value (a field access, a call result) is already an emitted value.
+        var calleeFnType = resultFnType;
+        var chainResult = result;
+        var indirectCall = EmitIndirectCall(
+          () => chainResult is ExprResult.VarRef { Info.Kind: MaxonValueKind.Function } fnVarRef
+            ? LoadFunctionVarValue(fnVarRef.VarName, fnVarRef.Info, calleeFnType)
+            : ResolveExprValue(chainResult),
+          calleeFnType, originToken);
+
+        // A call result is a fresh temporary, not a place: it has no root variable, and
+        // it is never an immutable root.
+        rootVarName = null;
+        rootVarMutable = true;
+        isFirstChainStep = false;
+        _lastExprFromImmutableRoot = false;
+
+        if (indirectCall.Result == null) {
+          // A signature returning nothing ends the chain — there is no value to take a
+          // field of, or to call again. Statement position never reaches here (it emits
+          // the call itself, precisely so that void is legal there).
+          if (!_inTryContext)
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"call through function-typed '{originToken.Value}' returns no value, so it cannot be used as an expression",
+              originToken.Line, originToken.Column);
+
+          result = new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
+          resultFnType = null;
+          break;
+        }
+
+        result = new ExprResult.Direct(indirectCall.Result);
+        resultFnType = resultFnType.ReturnType as IrFunctionType;
+        continue;
+      }
+
+      if (!Check(TokenType.Dot)) break;
+
       Advance(); // consume '.'
+
+      // A '.' step consumes the current value as a RECEIVER, so whatever signature it
+      // carried is spent. Each arm below re-establishes one only if the value it
+      // produces is itself callable; anything it forgets to set stays correctly null.
+      resultFnType = null;
+
       Token fieldToken;
       string fieldName;
       if (Check(TokenType.IntegerLiteral)) {
@@ -15818,6 +15935,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var (allArgs, callee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, selfVal);
             var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, callee);
             result = new ExprResult.Direct(callOp.Result ?? selfVal);
+            resultFnType = callOp.ResultFnType;
             continue;
           }
         }
@@ -15858,6 +15976,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var fnRawOp = new MaxonEnumFunctionRawValueOp(enumVal, userTypeName, fbt.Signature);
             _currentBlock!.AddOp(fnRawOp);
             result = new ExprResult.Direct(fnRawOp.Result);
+            // A function-backed enum's rawValue IS a function, so `e.rawValue(x)` calls it.
+            resultFnType = fbt.Signature;
             continue;
           }
           if (enumType.BackingType is IrStructBackingType sbt) {
@@ -15983,6 +16103,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             var (allArgs, primCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, primVal);
             var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, primCallee);
             result = new ExprResult.Direct(callOp.Result ?? primVal);
+            resultFnType = callOp.ResultFnType;
             continue;
           }
         }
@@ -16030,6 +16151,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var (allArgs, structCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, methodStructVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, structCallee);
           result = new ExprResult.Direct(callOp.Result ?? methodStructVal);
+          resultFnType = callOp.ResultFnType;
           continue;
         }
 
@@ -16052,6 +16174,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
       result = new ExprResult.Direct(accessOp.Result);
+
+      // A function-typed field holds a callable value. Publishing its signature is what
+      // lets the loop's call-suffix arm lower `h.op(x)` on the next turn, and what lets
+      // `let f = h.op` recover a signature for the binding.
+      resultFnType = field.Type as IrFunctionType;
     }
 
     // Preserve mutability and variable name from root variable so field values
@@ -18627,6 +18754,119 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     return args;
+  }
+
+  /// <summary>
+  /// Derives the result kind of a call through a function value from the signature's
+  /// return type. A struct or enum return additionally carries its type name, which the
+  /// value must keep so a later field access or `match` can find the type.
+  /// </summary>
+  private static (MaxonValueKind? Kind, string? StructTypeName) ResolveIndirectCallResultKind(IrFunctionType fnType) {
+    return fnType.ReturnType switch {
+      null => (null, null),
+      IrStructType retStructType => (MaxonValueKind.Struct, retStructType.Name),
+      IrEnumType retEnumType => (MaxonValueKind.Enum, retEnumType.Name),
+      var ret => (ret.ToValueKind(), null)
+    };
+  }
+
+  /// <summary>
+  /// Emits a call through a function VALUE — the sole lowering for `f(x)` where `f` is
+  /// not the name of a declared function. Every producer of a function value routes here:
+  /// a function-typed parameter or local, a function-typed struct FIELD, and a call whose
+  /// return type is itself a function.
+  ///
+  /// The caller must have established that the current token is '('; this consumes it.
+  /// </summary>
+  /// <param name="materializeCallee">
+  /// Produces the function-pointer value, and is invoked AFTER the arguments are parsed so
+  /// that a load of the callee lands adjacent to the call rather than across the argument
+  /// setup — which is one fewer register the argument values have to survive. A callee that
+  /// is already an emitted value (a field access) just hands it back.
+  /// </param>
+  private MaxonIndirectCallOp EmitIndirectCall(
+      Func<MaxonValue> materializeCallee, IrFunctionType fnType, Token siteToken) {
+    Advance(); // consume '('
+    var args = ParseIndirectCallArgs(siteToken, fnType);
+    var callee = materializeCallee();
+    var (resultKind, resultStructTypeName) = ResolveIndirectCallResultKind(fnType);
+
+    var indirectCallOp = new MaxonIndirectCallOp(callee, fnType, args, resultKind, resultStructTypeName);
+    _currentBlock!.AddOp(indirectCallOp);
+    InvalidateCachedSelfFields();
+
+    return indirectCallOp;
+  }
+
+  /// <summary>
+  /// The function type carried by a value that a completed expression produced, or null
+  /// when the value is not callable. This is what licenses a '(' suffix on something
+  /// other than a function's NAME, so it must know every shape a function value arrives
+  /// in: a function-typed parameter or local (VarRef), and — via the caller-supplied
+  /// <paramref name="directFnType"/> — a call result or a function-typed field.
+  /// </summary>
+  private static IrFunctionType? ResolveCallableFnType(ExprResult expr, IrFunctionType? directFnType) {
+    if (directFnType != null) return directFnType;
+
+    return expr is ExprResult.VarRef { Info.Kind: MaxonValueKind.Function } fnVar ? fnVar.Info.FnType : null;
+  }
+
+  /// <summary>
+  /// Loads the function pointer held by a function-typed variable. A same-block binding
+  /// can reuse the SSA value directly; a cross-block one needs a MaxonFunctionVarRefOp,
+  /// which is also what re-associates the callee with its `__env_&lt;name&gt;` slot during
+  /// lowering — so a closure called across a block boundary still finds its environment.
+  /// </summary>
+  private MaxonValue LoadFunctionVarValue(string varName, VarInfo info, IrFunctionType fnType) {
+    if (info.DefinedInBlock == _currentBlock) return info.Value;
+
+    var fnVarRefOp = new MaxonFunctionVarRefOp(varName, fnType);
+    _currentBlock!.AddOp(fnVarRefOp);
+
+    return fnVarRefOp.Result;
+  }
+
+  /// <summary>
+  /// The function-typed field <paramref name="fieldName"/> names, or null when it names
+  /// anything else. Lets a STATEMENT tell `h.op(x)` — a call through a field — apart from
+  /// `h.method(x)` BEFORE it commits to either reading, which matters because the two
+  /// consume different tokens and only the latter has a callee the compiler can name.
+  ///
+  /// Returns the field rather than just its signature so the emit step does not have to
+  /// look the same field up a second time to check its visibility.
+  /// </summary>
+  private IrStructField? ResolveFunctionTypedField(string? structTypeName, string fieldName) {
+    if (structTypeName == null || !_typeRegistry.TryGetValue(structTypeName, out var regType)
+        || regType is not IrStructType structType)
+      return null;
+
+    var field = structType.GetField(fieldName);
+
+    return field?.Type is IrFunctionType ? field : null;
+  }
+
+  /// <summary>
+  /// Emits a statement-position call through a function-typed FIELD — `h.op(x)`,
+  /// `self.op(x)`, `a.b.op(x)`. The caller must have consumed through the field name, so
+  /// '(' is the current token, and must have found <paramref name="field"/> via
+  /// <see cref="ResolveFunctionTypedField"/>.
+  ///
+  /// A statement discards the result, so unlike the expression form this accepts a
+  /// signature that returns nothing — which is the shape a table of handlers or passes
+  /// keyed by a struct field almost always has. The callee is a value, not a name, so
+  /// there is no purity to check and nothing to mark as discarded.
+  /// </summary>
+  private void EmitFieldFunctionCallStatement(
+      MaxonValue receiver, string structTypeName, Token fieldToken, IrStructField field) {
+    if (_currentTypeName != structTypeName
+        && !IsFieldVisibleHere((IrStructType)_typeRegistry[structTypeName], field))
+      throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
+        $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structTypeName}'",
+        fieldToken.Line, fieldToken.Column);
+
+    var accessOp = new MaxonFieldAccessOp(receiver, structTypeName, fieldToken.Value, MaxonValueKind.Function);
+    _currentBlock!.AddOp(accessOp);
+    EmitIndirectCall(() => accessOp.Result, (IrFunctionType)field.Type, fieldToken);
   }
 
   private List<MaxonValue> FillDefaultArgs(Token functionNameToken, IrFunction<MaxonOp> callee, MaxonValue?[] args) {

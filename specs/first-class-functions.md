@@ -128,6 +128,40 @@ end 'triple'
 30
 ```
 
+## Function-Typed Fields
+
+A struct field may hold a function. The field is declared with a function-type alias
+like any other field, and the value it holds is called through the field directly —
+a normal indirect call:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+
+	function run(x Integer) returns Integer
+		return self.op(x)      // call the field from inside a method
+	end 'run'
+end 'Handler'
+```
+
+A function-typed field is an ordinary value, so every position a function value is
+legal in accepts one: call it (`h.op(x)`), bind it (`let f = h.op`), pass it
+(`apply(h.op, x: 1)`), and return it (`return h.op`). A field whose signature returns
+nothing is called as a statement — which is the shape a table of handlers or
+compiler passes keyed by a struct field takes.
+
+A field holds the function POINTER only. A closure that CAPTURES cannot be stored in
+one: captures are taken by reference, so the environment is bound to the frame that
+built the closure and cannot outlive it. Store a function reference, or a closure that
+captures nothing.
+
 ## Closures
 
 Closures are inline anonymous functions written with the `function` keyword:
@@ -506,3 +540,282 @@ end 'main'
 ```
 
 
+
+<!-- test: first-class-function.field-call -->
+A function stored in a struct field is called through the field. The field holds a
+function pointer, so this is an indirect call — the same lowering a function-typed
+parameter gets, reached from a different producer.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	return h.op(21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-bind -->
+Binding a function-typed field to a local recovers the field's declared signature, so
+the local is callable.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let f = h.op
+	return f(21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-pass-and-return -->
+A function-typed field is an ordinary value: it can be passed as an argument and
+returned from a function.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function pick(h Handler) returns UnaryOp
+	return h.op
+end 'pick'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let viaArg = apply(h.op, x: 10)
+	let returned = pick(h)
+	return viaArg + returned(11)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-self-dispatch -->
+A method dispatches through its own function-typed field with `self.op(...)`.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+
+	function run(x Integer) returns Integer
+		return self.op(x)
+	end 'run'
+end 'Handler'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	let h = Handler.create(triple)
+	return h.run(14)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-nested-receiver -->
+The receiver of a field call may itself be reached through a field chain.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+type Outer
+	export var inner as Handler
+
+	static function create(inner Handler) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	let o = Outer.create(Handler.create(double))
+	return o.inner.op(21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-void-statement -->
+A field whose signature returns nothing is called as a statement, with no result to
+bind. This is the shape a table of handlers or compiler passes keyed by a struct field
+takes: each entry stores a function, and driving the table calls it for its effect.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Pass = function(Integer)
+
+type PassEntry
+	export var run as Pass
+
+	static function create(run Pass) returns Self
+		return Self{run: run}
+	end 'create'
+end 'PassEntry'
+
+typealias PassArray = Array with PassEntry
+
+function widen(x Integer)
+	print("widen {x}\n")
+end 'widen'
+
+function narrow(x Integer)
+	print("narrow {x}\n")
+end 'narrow'
+
+function main() returns ExitCode
+	var passes = PassArray.create()
+	passes.push(PassEntry.create(widen))
+	passes.push(PassEntry.create(narrow))
+
+	for p in passes 'drive'
+		p.run(7)
+	end 'drive'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+widen 7
+narrow 7
+```
+
+<!-- test: first-class-function.call-returned-function -->
+A call whose return type is a function is itself callable, so the result can be called
+without binding it first.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function pick() returns UnaryOp
+	return double
+end 'pick'
+
+function main() returns ExitCode
+	return pick()(21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-cross-file -->
+A function-typed field declared in another file is called the same way: the field's
+signature travels with the type, not with the file that reads it.
+```maxon
+// --- file: handler.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias UnaryOp = function(Integer) returns Integer
+
+export type Handler
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+
+	export function run(x Integer) returns Integer
+		return self.op(x)
+	end 'run'
+end 'Handler'
+
+// --- file: main.maxon
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function pick(h Handler) returns UnaryOp
+	return h.op
+end 'pick'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let viaField = h.op(10)
+	let viaSelf = h.run(5)
+	let f = pick(h)
+	return viaField + viaSelf + f(1)
+end 'main'
+```
+```exitcode
+32
+```

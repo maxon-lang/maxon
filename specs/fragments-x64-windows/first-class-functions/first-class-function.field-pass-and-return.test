@@ -1,0 +1,140 @@
+// Test: first-class-function.field-pass-and-return
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function pick(h Handler) returns UnaryOp
+	return h.op
+end 'pick'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let viaArg = apply(h.op, x: 10)
+	let returned = pick(h)
+	return viaArg + returned(11)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Handler.create(op: i64, __env_op: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @double(x: i64) -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov r10, rcx
+    x64.mov rcx, r8
+    x64.call r10
+    x64.epilogue
+    x64.ret
+  }
+  func @pick(h: i64) -> fn(Integer) returns Integer {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.lea_func rax, [double]
+    x64.mov rcx, rax
+    x64.xor edx, edx
+    x64.call Handler.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call apply
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.call pick
+    x64.mov rsi, 11
+    x64.xor edi, edi
+    x64.mov [rbp-24], rax
+    x64.mov r10, rax
+    x64.mov rcx, rsi
+    x64.mov rdx, rdi
+    x64.call r10
+    x64.mov r8, [rbp-16]
+    x64.add r8, rax
+    x64.xor r9d, r9d
+    x64.mov eax, 4294967295
+    x64.cmp r8, rax
+    x64.jg main.__range_panic_0
+    x64.cmp r8, r9
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], r8
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Handler(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Handler.done
+  done:
+    x64.ret
+  }
+}
+---
