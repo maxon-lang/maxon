@@ -64,7 +64,7 @@ export function readRpcRequest(stdin Stdin) returns RpcReadResult
 
 	let root = doc.root
 	let rootNode = doc.get(root)
-	if not isObjectKind(rootNode.kind) 'notObj'
+	if rootNode.kind != JsonKind.jsonObject 'notObj'
 		return RpcReadResult.protocolError("request must be a JSON object, got {rootNode.kind.name}")
 	end 'notObj'
 
@@ -99,17 +99,6 @@ export function readRpcRequest(stdin Stdin) returns RpcReadResult
 
 	return RpcReadResult.request(RpcRequest.create(doc, idNodeId: idNodeId, method: method, paramsNodeId: paramsNodeId, paramsPresent: paramsPresent))
 end 'readRpcRequest'
-
-function isObjectKind(kind JsonKind) returns bool
-	return match kind 'k'
-		jsonObject gives true
-		jsonNull gives false
-		jsonBool gives false
-		jsonNumber gives false
-		jsonString gives false
-		jsonArray gives false
-	end 'k'
-end 'isObjectKind'
 
 // Returns the child node id for `key`, or throws `NotFound` if the field is
 // absent. Callers distinguish "absent" from "present but typed wrong" by
@@ -152,11 +141,21 @@ export function writeRpcResult(requestDoc JsonDoc, idNodeId JsonNodeId, resultDo
 	print("{Json.stringify(envelope)}\n")
 end 'writeRpcResult'
 
-/// Write `{"jsonrpc":"2.0","id":<id>,"error":{"code":code,"message":msg}}`.
-export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcErrorCode, message String)
+/// Write `{"jsonrpc":"2.0","id":<id>,"error":{"code":code,"message":msg,"data":{"repoRoot":…}}}`.
+///
+/// `repoRootEcho` is the tree a TOOL acted on before it failed. A failure has to
+/// name its tree for the same reason a success does: without it the caller cannot
+/// tell whether the tool ever looked at their worktree — and "it failed" on the
+/// wrong tree is exactly as misleading as "it succeeded" on the wrong tree.
+///
+/// Pass "" for a PROTOCOL-level error — a malformed request, an unknown method, a
+/// `repoRoot` that was itself refused. Those touched no tree, and naming one would
+/// be a lie. Tool failures always know theirs: the root is resolved before the
+/// handler runs.
+export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcErrorCode, message String, repoRootEcho String)
 	var envelope = JsonDoc.create()
 	let echoedId = copyNode(requestDoc, srcId: idNodeId, dst: envelope)
-	writeErrorEnvelope(envelope, idNode: echoedId, code: code, message: message)
+	writeErrorEnvelope(envelope, idNode: echoedId, code: code, message: message, repoRootEcho: repoRootEcho)
 end 'writeRpcError'
 
 /// Special-case error writer for the case where parsing the request itself
@@ -164,13 +163,13 @@ end 'writeRpcError'
 export function writeRpcParseError(message String)
 	var envelope = JsonDoc.create()
 	let nullIdId = envelope.add(JsonNode.nullNode())
-	writeErrorEnvelope(envelope, idNode: nullIdId, code: RpcStandardErrorCode.parseError.rawValue, message: message)
+	writeErrorEnvelope(envelope, idNode: nullIdId, code: RpcStandardErrorCode.parseError.rawValue, message: message, repoRootEcho: "")
 end 'writeRpcParseError'
 
 // Shared envelope-assembly path for both error writers. Builds the JSON-RPC
 // envelope from a caller-supplied id node, stamps the response error object,
 // and writes one line to stdout.
-function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCode, message String)
+function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCode, message String, repoRootEcho String)
 	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
 	let codeId = envelope.add(JsonNode.numberNode(code))
 	let msgId = envelope.add(JsonNode.stringNode(message))
@@ -181,6 +180,10 @@ function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCo
 	errChildren.push(codeId)
 	errKeys.push("message")
 	errChildren.push(msgId)
+	if not repoRootEcho.isEmpty() 'haveTree'
+		errKeys.push("data")
+		errChildren.push(repoRootDataObject(envelope, repoRoot: repoRootEcho))
+	end 'haveTree'
 	let errId = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
 
 	var keys = StringArray.create()
@@ -195,6 +198,18 @@ function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCo
 
 	print("{Json.stringify(envelope)}\n")
 end 'writeErrorEnvelope'
+
+// JSON-RPC 2.0 leaves `error.data` free-form. The only thing this server ever puts
+// there is the tree the failing tool drove, under the same key a successful result
+// carries it under — so a caller reads the answer to "which tree?" from one key
+// name whichever way the call went.
+function repoRootDataObject(envelope JsonDoc, repoRoot String) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push(RepoRootArgKey)
+	children.push(envelope.add(JsonNode.stringNode(repoRoot)))
+	return envelope.add(JsonNode.objectNode(keys, children: children))
+end 'repoRootDataObject'
 
 // Deep-copy a node (and all descendants) from one JsonDoc arena into another.
 // Returns the id of the new copy in `dst`. Used to splice request `id`s and

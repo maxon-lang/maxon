@@ -16,17 +16,15 @@ typealias ByteArray = Array with Byte
 typealias CodeNumber = int(1000 to 9999)
 typealias LineCount = int(0 to u64.max)
 
-/// Entry point called by Server.maxon's dispatch table.
-export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// `ErrorCode.maxon` and `specs/` are read — resolved and validated by the dispatcher.
+export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let code = try resolveCode(argsDoc, argsId: argsId) otherwise (err) 'bad'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {errorReason(err)}")
 	end 'bad'
 
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("lookup_error_code")
-	end 'noRoot'
-	let entry = try lookupInErrorCodeFile(repoRoot, code: code) otherwise 'notInSrc'
-		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: code E{code} not found in maxon-selfhosted/Compiler/ErrorCode.maxon")
+	let entry = try lookupInErrorCodeFile(repoRoot, code: code) otherwise (err) 'notInSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {registryErrorReason(err, code: code)}")
 	end 'notInSrc'
 
 	let specFiles = collectSpecFilesReferencing(repoRoot, code: code)
@@ -116,10 +114,32 @@ type ErrorEntry
 	end 'create'
 end 'ErrorEntry'
 
-function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns ErrorEntry throws NotFound
-	let path = childPath(repoRoot, segment: "maxon-selfhosted/Compiler/ErrorCode.maxon")
+// Why a code lookup came back empty. The registry being UNREADABLE and the code
+// being ABSENT from it are different facts and get different messages: the first
+// says nothing about the code, and reporting it as "no such code" would be a wrong
+// answer, not merely an unhelpful one.
+enum RegistryLookupError implements Error
+	registryUnreadable
+	codeAbsent
+end 'RegistryLookupError'
+
+let ErrorCodeRegistryPath = "maxon-selfhosted/Compiler/ErrorCode.maxon"
+
+function registryErrorReason(err RegistryLookupError, code CodeNumber) returns String
+	return match err 'r'
+		registryUnreadable gives "cannot read `{ErrorCodeRegistryPath}` in the tree being used. The 4-digit registry lives in the (deprecated, still-checked-out) v1 tree; a checkout without it cannot answer this."
+		codeAbsent gives "code E{code} not found in `{ErrorCodeRegistryPath}`"
+	end 'r'
+end 'registryErrorReason'
+
+// Reads the registry out of the CALLER'S tree, which is why the unreadable case is
+// an error and not a panic: `repoRoot` now comes from the wire, and a panic here
+// would tear down the stdio connection for every subsequent request on behalf of one
+// bad lookup.
+function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns ErrorEntry throws RegistryLookupError
+	let path = childPath(repoRoot, segment: ErrorCodeRegistryPath)
 	let content = try File.readText(path) otherwise 'readErr'
-		panic("lookupInErrorCodeFile: cannot read {path.path}; the file should always be present in a Maxon checkout")
+		throw RegistryLookupError.registryUnreadable
 	end 'readErr'
 	let lines = content.split("\n")
 	let total = lines.count()
@@ -139,7 +159,7 @@ function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns Error
 		let docComment = collectDocComment(lines, before: i)
 		return ErrorEntry.create(parsed.name, stage: stageFor(code), docComment: docComment)
 	end 'scan'
-	throw NotFound.notFound
+	throw RegistryLookupError.codeAbsent
 end 'lookupInErrorCodeFile'
 
 type VariantParse

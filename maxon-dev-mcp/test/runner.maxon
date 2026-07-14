@@ -44,7 +44,7 @@ function main() returns ExitCode
 	var failed = 0
 	for i in 0 upto total 'each'
 		let fixture = try fixtures.get(i) otherwise panic("main: fixtures.get OOB — i bounded by total")
-		let ok = runFixture(fixture, binary: binary)
+		let ok = runFixture(fixture, binary: binary, repoRoot: repoRoot)
 		if ok 'pass'
 			passed = passed + 1
 		end 'pass' else 'fail'
@@ -75,13 +75,20 @@ function exeSuffix() returns String
 end 'exeSuffix'
 
 // The runner binary lives at `<repo>/maxon-dev-mcp/test/.maxon/maxon-dev-mcp-test`
-// (`.exe` on Windows). Walk up until we find a `bin/maxon` sibling — the repo root.
+// (`.exe` on Windows). Walk up until we find a checkout — the repo root.
+//
+// The markers mirror `isMaxonCheckout` in mcp/Util.maxon, which is the canonical
+// definition. They cannot literally be shared: `mcp/` and `test/` are separate Maxon
+// projects, so this binary cannot link that one's code. They must not DIVERGE either,
+// and they agree on the point that matters — a checkout is a checkout because of what
+// was checked out into it, never because of what has been BUILT in it. This probe used
+// to look for `bin/maxon`, a gitignored build artifact, which made a freshly-created
+// worktree look like "not a repo".
 function resolveRepoRoot() returns FilePath
 	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
 	var dir = parentDir(exe)
 	for _ in 0 upto 16 'walk'
-		let candidate = joinPath(dir, segment: "bin/maxon{exeSuffix()}")
-		if File.exists(candidate) 'found'
+		if isMaxonCheckout(dir) 'found'
 			return dir
 		end 'found'
 		let parent = parentDir(dir)
@@ -90,8 +97,16 @@ function resolveRepoRoot() returns FilePath
 		end 'atFs'
 		dir = parent
 	end 'walk'
-	panic("resolveRepoRoot: could not locate repo root from {exe.path}")
+	panic("resolveRepoRoot: could not locate a Maxon checkout above {exe.path}")
 end 'resolveRepoRoot'
+
+function isMaxonCheckout(dir FilePath) returns bool
+	if not Directory.exists(joinPath(dir, segment: "stdlib")) 'noStdlib'
+		return false
+	end 'noStdlib'
+
+	return Directory.exists(joinPath(dir, segment: "maxon-sharp"))
+end 'isMaxonCheckout'
 
 function locateBinary(repoRoot FilePath) returns FilePath
 	// Allow argv[1] to override the binary path. Useful when the canonical
@@ -218,12 +233,29 @@ typealias ByteArray = Array with Byte
 // Per-fixture execution
 // =============================================================================
 
-function runFixture(fixture Fixture, binary FilePath) returns bool
+// Fixtures are static JSON, but some of them must name an ABSOLUTE path — a
+// `repoRoot` argument to send, or the root a response is expected to echo back — and
+// the absolute path of the checkout is not knowable when the fixture is written. So
+// `<REPO_ROOT>` is substituted, in the request AND in the assertion, with the root
+// this runner resolved.
+let RepoRootPlaceholder = "<REPO_ROOT>"
+
+// The substituted value is JSON-string-escaped. On Windows the path is `C:\Users\…`,
+// and a lone backslash inside a JSON string is the start of an escape sequence — so
+// pasting the path in raw would produce a fixture that either fails to parse or,
+// worse, parses into a DIFFERENT path than the one intended.
+function expandFixturePlaceholders(text String, repoRoot FilePath) returns String
+	let escaped = repoRoot.path.replace("\\", with: "\\\\").replace("\"", with: "\\\"")
+	return text.replace(RepoRootPlaceholder, with: escaped)
+end 'expandFixturePlaceholders'
+
+function runFixture(fixture Fixture, binary FilePath, repoRoot FilePath) returns bool
 	print("[mcp-test] {fixture.name}: ")
-	let input = try File.readText(fixture.inputPath) otherwise 'readErr'
+	let rawInput = try File.readText(fixture.inputPath) otherwise 'readErr'
 		print("FAIL — cannot read {fixture.inputPath.path}\n")
 		return false
 	end 'readErr'
+	let input = expandFixturePlaceholders(rawInput, repoRoot: repoRoot)
 
 	var c = Configuration.create(Executable.path(binary))
 	c.standardInput = InputSource.bytes(input)
@@ -236,10 +268,11 @@ function runFixture(fixture Fixture, binary FilePath) returns bool
 		return false
 	end 'runErr'
 
-	let assertText = try File.readText(fixture.assertPath) otherwise 'aErr'
+	let rawAssert = try File.readText(fixture.assertPath) otherwise 'aErr'
 		print("FAIL — cannot read {fixture.assertPath.path}\n")
 		return false
 	end 'aErr'
+	let assertText = expandFixturePlaceholders(rawAssert, repoRoot: repoRoot)
 	let assertDoc = try Json.parse(assertText) otherwise (err) 'parseAErr'
 		print("FAIL — assert.json parse: {err.name}\n")
 		return false

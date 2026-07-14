@@ -24,8 +24,9 @@ let rawTailMaxBytes = 4096
 // can re-run with a smaller workload if they need the full text.
 let outputMaxBytes = 65536
 
-/// Entry point called by Server.maxon's dispatch table.
-export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// compiler builds the program — resolved and validated by the dispatcher.
+export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	// `compiler` is required: the two compilers disagree — that is the whole
 	// reason to have more than one — so the caller must say which one they mean
 	// rather than getting a silent default.
@@ -33,9 +34,6 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {compilerArgErrorReason(err)}")
 	end 'badCompiler'
 
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("run_program")
-	end 'noRoot'
 	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "run-program", repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {sourceArgErrorReason(err)}")
 	end 'badSrc'

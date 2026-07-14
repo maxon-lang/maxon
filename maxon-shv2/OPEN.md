@@ -312,23 +312,25 @@ Fails **loudly** (a compile error, not a miscompile), which is the only reason i
 
 ## 📋 Environment / process notes that cost real time
 
-- 🔴 **THE `maxon-dev` MCP TOOLS ALWAYS DRIVE THE *MAIN REPO*, NEVER YOUR WORKTREE — AND THEY REPORT
-  SUCCESS WHILE DOING IT.** `repoRootPath()` ([`maxon-dev-mcp/mcp/Util.maxon:149`](../maxon-dev-mcp/mcp/Util.maxon#L149))
-  resolves the root from **`Process.executablePath()` — the MCP *server's* own binary**, which lives in the
-  main repo. **It never looks at the caller's working directory, and it cannot: one server process is
-  shared by every agent.** So in a worktree, `build` returns `success: true` on a tree containing **none**
-  of your changes; `run_spec_test` runs the **main** binary against the **main** specs; **`updateRequired`
-  REWRITES THE MAIN TREE'S COMMITTED GOLDENS**; `run_scale_test` measures the **main** shv2 and `note:`
-  writes a row into the **main** optimization log; and `fmt` — which reformats the entire tree in place
-  when given arguments — runs with the **main repo** as its cwd.
-  **Only `lookup_error_code` and `mm_trace_analyze` are worktree-safe.** In a worktree, drive
-  `./bin/maxon.exe` and `./maxon-shv2/.maxon/maxon-shv2.exe` **by hand**.
-  ⚠ **`.claude/CLAUDE.md` said "PREFER THE MCP TOOLS" while the rung workflow said "work in a worktree",
-  and the two silently contradicted each other.** Caught 2026-07-14 with **five agents running against
-  it** — by an agent whose `build` succeeded on a tree with none of its work in it. **The project's own
-  signature bug — one fact written down twice — at the TOOLING level.** Documented in CLAUDE.md
-  (`13855215b`); the real fix (a `repoRoot` param, and every result **echoing the root it actually
-  used**, so a false green is *visible* rather than silent) is still to do.
+- 🟡 **IN A WORKTREE, PASS `repoRoot` TO EVERY `maxon-dev` MCP TOOL — otherwise it drives the MAIN REPO.**
+  The tools default to the checkout holding the **MCP server's own binary** (resolved from
+  `Process.executablePath()`), because they cannot do otherwise: **one stdio server process is shared by
+  every agent in every worktree, and its cwd is the MCP host's, not yours.** All nine tools now take
+  `repoRoot` — the **absolute** path of your worktree's root — and that is the whole fix.
+  **Two things now make a mistake VISIBLE instead of silent:** every result **echoes the root it actually
+  used** (successes in `repoRoot`, failures in `error.data.repoRoot`) — *read it back*; and a `repoRoot`
+  that is not a checkout is **refused** (`invalidParams`), never quietly swapped for the main repo.
+  A checkout is any tree with `stdlib/` and `maxon-sharp/`, so **a brand-new worktree qualifies before
+  anything is built in it** — `build target=csharp repoRoot=<your worktree>` is the correct first call.
+  ⚠ Still true, and still worth fearing, about **whatever tree you point them at**: `updateRequired`
+  rewrites *that* tree's committed goldens, `run_scale_test note:` writes a row into *that* tree's
+  optimization log, and `fmt` rewrites *that* tree's files in place. They do not merely report — they
+  **edit**.
+  *(Caught 2026-07-14 with **five agents running against it**, by an agent whose `build` succeeded on a
+  tree with none of its work in it. `.claude/CLAUDE.md` said "PREFER THE MCP TOOLS" while the rung
+  workflow said "work in a worktree", and the two silently contradicted each other — **the project's own
+  signature bug, one fact written down twice, at the TOOLING level.** Documented `13855215b`, fixed the
+  same day: `repoRoot` is that fact, written down once, by the only party who knows it.)*
 - **A FAILED BUILD LEAVES THE OLD BINARY.** `spec-test` then runs the *previous* compiler and reports a
   green suite. **Check the build's exit code before believing a test result.** Three false greens this
   session.

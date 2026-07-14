@@ -53,12 +53,10 @@ let scaleResultRelativePath = ".scale-tmp/scale-result.json"
 // same numbers.
 let scaleRawTailMaxBytes = 4096
 
-/// Entry point called by Server.maxon's dispatch table.
-export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("scale-test")
-	end 'noRoot'
-
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// shv2 is measured, and — when `note` is given — whose `docs/optimization-log.md`
+/// gains a row. Resolved and validated by the dispatcher.
+export function scaleTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let binary = try compilerBinary(repoRoot, compiler: Compiler.shv2) otherwise 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "scale-test: the shv2 compiler has not been built. Build it first via the `build` tool (target: \"shv2\").")
 	end 'noBin'

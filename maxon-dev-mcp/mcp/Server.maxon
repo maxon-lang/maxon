@@ -13,16 +13,6 @@ export union ToolOutcome
 	error(code RpcErrorCode, message String)
 end 'ToolOutcome'
 
-// Graceful JSON-RPC error returned when a tool can't locate the Maxon repo
-// root (no `bin/maxon` above the server binary — the C# bootstrap hasn't been
-// built, or the server was launched from outside a checkout). Centralised so
-// every handler reports it identically. Previously `repoRootPath` panicked
-// here, which crashed the server process and closed the stdio connection,
-// surfacing to clients as an opaque "Connection closed" on every tool call.
-export function repoRootErrorOutcome(tool String) returns ToolOutcome
-	return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "{tool}: could not locate the Maxon repo root — no `bin/maxon{exeSuffix()}` found above the server binary. Build the C# bootstrap first (run `dotnet build` in maxon-sharp).")
-end 'repoRootErrorOutcome'
-
 // =============================================================================
 // What a tool IS
 // =============================================================================
@@ -34,9 +24,18 @@ end 'repoRootErrorOutcome'
 // tool a second time: it never sees the object it will be wrapped in.
 typealias SchemaFieldsBuilder = function(JsonDoc) returns SchemaFieldArray
 
-// Runs one tool: (the doc holding `arguments`, the `arguments` node) -> outcome.
-// Every handler in BuildTool.maxon, SpecTestTool.maxon, ... has this shape.
-typealias ToolHandler = function(JsonDoc, JsonNodeId) returns ToolOutcome
+// Runs one tool: (the doc holding `arguments`, the `arguments` node, THE TREE TO
+// ACT ON) -> outcome. Every handler in BuildTool.maxon, SpecTestTool.maxon, ... has
+// this shape.
+//
+// The repo root ARRIVES; a handler never goes and gets one. It used to: nine
+// handlers each opened with `try repoRootPath() otherwise …`, nine copies of a
+// resolution that consulted the server's own binary and could not consult the
+// caller. Nine copies of one fact is how the fact got to be wrong everywhere at
+// once. Now `dispatchToolCall` resolves it exactly once, refuses a bad one before
+// any handler runs, and passes the answer down — so a handler cannot pick a
+// different tree than the one the response will claim it used.
+typealias ToolHandler = function(JsonDoc, JsonNodeId, FilePath) returns ToolOutcome
 
 // One tool: its name, its ONE description, its arguments, and the code that runs
 // it. `tools/list` and `tools/call` both walk the same rows, so a tool cannot be
@@ -70,7 +69,9 @@ export function runServer()
 end 'runServer'
 
 function handleRequest(req RpcRequest, tools ToolSpecArray)
-	let idIsNull = isJsonNull(req.doc, id: req.idNodeId)
+	// A notification carries no `id` (the reader synthesizes a JSON null for one), and
+	// gets no response at all.
+	let idIsNull = req.doc.get(req.idNodeId).kind == JsonKind.jsonNull
 
 	if req.method.equals("initialize") 'init'
 		let resultDoc = buildInitializeResult()
@@ -96,20 +97,8 @@ function handleRequest(req RpcRequest, tools ToolSpecArray)
 	if idIsNull 'ignoreNotif'
 		return
 	end 'ignoreNotif'
-	writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "method not found: {req.method}")
+	writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "method not found: {req.method}", repoRootEcho: "")
 end 'handleRequest'
-
-function isJsonNull(doc JsonDoc, id JsonNodeId) returns bool
-	let node = doc.get(id)
-	return match node.kind 'k'
-		jsonNull gives true
-		jsonBool gives false
-		jsonNumber gives false
-		jsonString gives false
-		jsonArray gives false
-		jsonObject gives false
-	end 'k'
-end 'isJsonNull'
 
 // =============================================================================
 // initialize
@@ -178,6 +167,23 @@ function buildToolsListResult(tools ToolSpecArray) returns JsonDoc
 	return doc
 end 'buildToolsListResult'
 
+// EVERY tool in this server acts on a TREE, and every one of them is therefore
+// given the `repoRoot` argument and this warning — attached HERE, to all nine at
+// once, rather than written into nine descriptions and nine schema builders.
+//
+// The warning is what actually changes behaviour, so it goes FIRST, ahead of the
+// tool's own description: the description is what a model reads INSTEAD of the
+// source, and a caveat parked at the bottom of a paragraph about scale-test rungs
+// is a caveat nobody reads. It is deliberately blunt. Five agents in one afternoon
+// built and gated in a worktree through these tools, were told `success: true`, and
+// none of them had any way to see that the tree measured was not the tree they had
+// edited.
+let RepoRootWarning = "WORKTREE WARNING - READ BEFORE CALLING: this tool acts on the MAIN checkout by default (the one holding the MCP server's own binary), NOT on your working directory. It cannot see where you are: one server process is shared by every agent in every worktree. IF YOU ARE WORKING IN A GIT WORKTREE YOU MUST PASS `repoRoot` (the absolute path of your worktree's root), OR THIS TOOL WILL BUILD, TEST AND WRITE IN THE WRONG TREE AND REPORT SUCCESS. Every result — success or failure — echoes the `repoRoot` it actually used: read it back and check it is yours."
+
+// The `repoRoot` argument's own description. One tool cannot describe it differently
+// from another, because only this string is ever emitted.
+let RepoRootArgDescription = "Absolute path of the Maxon checkout to act on — the root directory, the one holding `stdlib/` and `maxon-sharp/`. REQUIRED IF YOU ARE IN A GIT WORKTREE; without it the tool acts on the main checkout that hosts the server binary, which does not contain your changes. A path that is not a Maxon checkout is refused (invalidParams) — it is never quietly swapped for the main one. Relative paths are refused too: they would resolve against the server's working directory, not yours."
+
 // Tool descriptor: name + human description + JSON Schema describing the shape
 // of `arguments` for tools/call. Clients (Claude Code, MCP Inspector) use the
 // schema to populate completion and validate arguments before they hit our
@@ -194,9 +200,13 @@ end 'buildToolsListResult'
 // value, arriving as a PARAMETER, calls fine — which is the idiom the language
 // reference itself uses (`function apply(f UnaryOp, x Integer)`).
 function buildToolDescriptor(doc JsonDoc, name String, description String, schemaFields SchemaFieldsBuilder) returns JsonNodeId
+	let fullDescription = "{RepoRootWarning}\n\n{description}"
 	let nameId = doc.add(JsonNode.stringNode(name))
-	let descriptionId = doc.add(JsonNode.stringNode(description))
-	let schemaId = schemaObject(doc, fields: schemaFields(doc), description: description)
+	let descriptionId = doc.add(JsonNode.stringNode(fullDescription))
+
+	var fields = schemaFields(doc)
+	fields.push(SchemaField.create(RepoRootArgKey, schemaId: schemaString(doc, description: RepoRootArgDescription), required: false))
+	let schemaId = schemaObject(doc, fields: fields, description: fullDescription)
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
@@ -394,17 +404,17 @@ end 'schemaFieldsForScaleTest'
 
 function dispatchToolCall(req RpcRequest, tools ToolSpecArray)
 	if not req.paramsPresent 'noPar'
-		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call requires `params`")
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call requires `params`", repoRootEcho: "")
 		return
 	end 'noPar'
 
 	let toolName = try req.doc.getString(req.paramsNodeId, key: "name") otherwise 'noName'
-		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call params missing `name`")
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call params missing `name`", repoRootEcho: "")
 		return
 	end 'noName'
 
 	let spec = try findTool(tools, name: toolName) otherwise 'unknown'
-		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "unknown tool: {toolName}")
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "unknown tool: {toolName}", repoRootEcho: "")
 		return
 	end 'unknown'
 
@@ -412,7 +422,19 @@ function dispatchToolCall(req RpcRequest, tools ToolSpecArray)
 	// null finds every one of its keys missing, which is exactly what a call
 	// with no arguments means.
 	let argsId = try req.doc.getChild(req.paramsNodeId, key: "arguments") otherwise req.doc.add(JsonNode.nullNode())
-	invokeAndEmit(spec.handler, req: req, argsId: argsId)
+
+	// The tree is settled HERE, before the tool runs — the one gate every tool call
+	// passes through. A `repoRoot` that names no checkout dies right here, with the
+	// tool's name on it and nothing executed. It is emphatically NOT swapped for the
+	// server's own tree: that fallback is the original bug wearing a caller's
+	// intention as a mask, and it would be worse than the bug, because the caller
+	// would have every reason to believe they had been heard.
+	let repoRoot = try resolveRepoRoot(req.doc, argsId: argsId) otherwise (err) 'badRoot'
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: repoRootErrorCode(err), message: "{toolName}: {repoRootErrorReason(err)}", repoRootEcho: "")
+		return
+	end 'badRoot'
+
+	invokeAndEmit(spec.handler, req: req, argsId: argsId, repoRoot: repoRoot)
 end 'dispatchToolCall'
 
 function findTool(tools ToolSpecArray, name String) returns ToolSpec throws NotFound
@@ -431,21 +453,64 @@ end 'findTool'
 // Run the tool and write whatever it produced. The handler arrives as a PARAMETER
 // rather than being reached through `spec.handler(...)` for the reason spelled out
 // on `buildToolDescriptor`: the bootstrap cannot call a function-typed field.
-function invokeAndEmit(handler ToolHandler, req RpcRequest, argsId JsonNodeId)
-	let outcome = handler(req.doc, argsId)
+//
+// BOTH outcomes are stamped with the tree. Neither the handler nor its author gets
+// a say in that — an instrument that can be built without saying what it measured
+// eventually ships without saying it.
+function invokeAndEmit(handler ToolHandler, req RpcRequest, argsId JsonNodeId, repoRoot FilePath)
+	let outcome = handler(req.doc, argsId, repoRoot)
 	match outcome 'o'
-		success(doc, root) then emitToolSuccess(doc, root: root, req: req)
-		error(code, message) then writeRpcError(req.doc, idNodeId: req.idNodeId, code: code, message: message)
+		success(doc, root) then emitToolSuccess(doc, root: root, req: req, repoRoot: repoRoot)
+		error(code, message) then writeRpcError(req.doc, idNodeId: req.idNodeId, code: code, message: message, repoRootEcho: repoRoot.path)
 	end 'o'
 end 'invokeAndEmit'
+
+// Copy a tool's result object into `dst`, with `repoRoot` as its FIRST key.
+//
+// THIS IS THE HALF OF THE FIX THAT MATTERS. Naming the tree in the request only
+// helps a caller who already suspected; echoing it in the response is what makes a
+// tool call that drove the wrong tree VISIBLE TO SOMEONE WHO DID NOT SUSPECT — a
+// `build` reporting `"repoRoot": "C:/Users/Eric/dev/maxon"` to a caller sitting in
+// `.claude/worktrees/agent-xyz/` is a bug you can SEE, and the failure that cost
+// five agents an afternoon was invisible precisely because nothing in the response
+// said which tree it had touched. An instrument states what it measured.
+//
+// Stamped here, on the way out, so that adding a tool cannot mean forgetting to say
+// what it ran against. It copies into a doc this function owns rather than appending
+// to the tool's own: a handler's result arrives from a `match` binding and is
+// therefore immutable (E3019), and it should be — the value a tool computed is not
+// the response writer's to edit.
+function withRepoRootEcho(src JsonDoc, root JsonNodeId, dst JsonDoc, repoRoot FilePath) returns JsonNodeId
+	let node = src.get(root)
+	if node.kind != JsonKind.jsonObject 'notAnObject'
+		panic("withRepoRootEcho: a tool's result must be a JSON object to carry `{RepoRootArgKey}`, got {node.kind.name}")
+	end 'notAnObject'
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push(RepoRootArgKey)
+	children.push(dst.add(JsonNode.stringNode(repoRoot.path)))
+
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let key = try node.keys.get(i) otherwise panic("withRepoRootEcho: keys.get OOB — i bounded by n")
+		let childId = try node.children.get(i) otherwise panic("withRepoRootEcho: children.get OOB — parallel arrays out of sync")
+		keys.push(key)
+		children.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'withRepoRootEcho'
 
 // MCP's `tools/call` response shape is `{ content: [{type, text}], isError? }`,
 // not the bare structured result a JSON-RPC envelope would otherwise carry.
 // We wrap the tool's result doc by stringifying it and shipping it as one
 // `type: "text"` content block — that's how MCP clients render structured
 // JSON output today.
-function emitToolSuccess(resultDoc JsonDoc, root JsonNodeId, req RpcRequest)
-	let payload = Json.stringifyPrettyNode(resultDoc, root: root)
+function emitToolSuccess(resultDoc JsonDoc, root JsonNodeId, req RpcRequest, repoRoot FilePath)
+	var stamped = JsonDoc.create()
+	stamped.root = withRepoRootEcho(resultDoc, root: root, dst: stamped, repoRoot: repoRoot)
+	let payload = Json.stringifyPrettyNode(stamped, root: stamped.root)
 	var envelope = JsonDoc.create()
 	let textId = envelope.add(JsonNode.stringNode(payload))
 	let typeId = envelope.add(JsonNode.stringNode("text"))

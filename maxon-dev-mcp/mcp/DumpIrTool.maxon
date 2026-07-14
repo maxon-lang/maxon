@@ -31,8 +31,9 @@ let dumpIrTimeoutMs = 30000
 /// Entry point called by Server.maxon's dispatch table. The caller picks the
 /// compiler (`compiler` is required) and may set `dumpStages`: resolve the source,
 /// locate that compiler's binary, run `build --emit-ir` (with `--dump-stages` when
-/// asked), and package the produced .ir artifact(s).
-export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// asked), and package the produced .ir artifact(s). `repoRoot` is the tree whose
+/// compiler is used — resolved and validated by the dispatcher.
+export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let compiler = try requiredCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {compilerArgErrorReason(err)}")
 	end 'badCompiler'
@@ -42,9 +43,6 @@ export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOu
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {unsupportedFlagReason(flag, compiler: compiler)}")
 	end 'unsupported'
 
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("dump_ir")
-	end 'noRoot'
 	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "dump-ir", repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {sourceArgErrorReason(err)}")
 	end 'badSrc'

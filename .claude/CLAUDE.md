@@ -4,42 +4,49 @@ Do not use "cmd /c" to run commands
 
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
-## maxon-dev MCP tools (PREFER THESE — **BUT NOT IN A WORKTREE. SEE THE BOX.**)
+## maxon-dev MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`. SEE THE BOX.**)
 
-> ## 🔴 THE MCP TOOLS ALWAYS DRIVE THE **MAIN REPO**, NEVER YOUR WORKTREE
+> ## 🟡 IN A WORKTREE, EVERY MCP TOOL NEEDS `repoRoot` — OR IT DRIVES THE **MAIN REPO**
 >
-> **If you are working in a git worktree — which every rung/agent workflow does — DO NOT USE THE MCP
-> TOOLS TO BUILD OR GATE. They will hand you a confident FALSE GREEN.**
+> **The tools default to the main checkout, and they cannot do otherwise: ONE stdio server process is
+> shared by every agent in every worktree, and its working directory is the MCP host's, not yours.**
+> The default root is derived from `Process.executablePath()` — the SERVER's own binary — which lives
+> in the main repo. **So if you are in a worktree and you do not say which tree you mean, you will be
+> told `success: true` about a tree containing none of your work.**
 >
-> `repoRootPath()` ([maxon-dev-mcp/mcp/Util.maxon:149](maxon-dev-mcp/mcp/Util.maxon#L149)) resolves the
-> repo root from **`Process.executablePath()` — the MCP SERVER's own binary**, which lives in the main
-> repo — and walks up to find `bin/maxon.exe`. **It never looks at the caller's working directory, and
-> it cannot: one server process is shared by every agent.** So:
+> ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree's root — to EVERY tool call.**
+> All nine take it. That is the whole fix; there is nothing else to remember.
 >
-> - **`build`** builds the **main tree's** compiler. Your worktree's changes are not in it. It returns
->   `success: true` on a tree containing none of your work.
-> - **`run_spec_test`** runs the **main tree's** binary against the **main tree's** specs. It says
->   nothing about your change. ⚠ **`updateRequired: true` REWRITES THE MAIN TREE'S COMMITTED GOLDENS.**
-> - **`run_scale_test`** measures the **main tree's** shv2, and `note:` writes a row into the **main
->   tree's** `docs/optimization-log.md`.
-> - **`run_program` / `dump_ir` / `fmt`** compile with the **main tree's** compiler. (Reproducing a bug
->   this way is still valid — that IS the unfixed compiler, the correct BEFORE case. Confirming a FIX
->   this way is not.)
-> - ⚠ **`fmt` runs with the MAIN REPO as its working directory**, and `maxon fmt` with arguments
->   reformats the entire tree in place. It can destroy files outside your worktree.
+> ```
+> build(target: "csharp", repoRoot: "C:/Users/Eric/dev/maxon/.claude/worktrees/agent-xyz")
+> ```
 >
-> **Only `lookup_error_code` (parses a source file) and `mm_trace_analyze` (parses stderr text you
-> produce yourself) are worktree-safe.**
+> **Two things make a mistake here VISIBLE rather than silent, which is what it was before:**
 >
-> ⇒ **In a worktree, drive the binaries by hand** — `dotnet build` from `maxon-sharp/`, then
-> `./bin/maxon.exe …` and `./maxon-shv2/.maxon/maxon-shv2.exe …`, **all in your worktree**. See
-> *Building and Testing*.
+> - **Every result echoes the `repoRoot` it actually used** — successes in `repoRoot`, failures in
+>   `error.data.repoRoot`. **READ IT BACK.** A `build` that answers
+>   `"repoRoot": "C:\Users\Eric\dev\maxon"` when you are in `.claude/worktrees/agent-xyz/` has just
+>   built the wrong tree, and now says so. An instrument states what it measured.
+> - **A `repoRoot` that is not a Maxon checkout is REFUSED** (`invalidParams`, naming what was missing).
+>   It is never quietly swapped for the main repo — that fallback would be the original bug wearing
+>   your intention as a mask. Relative paths are refused for the same reason: they would resolve
+>   against the *server's* working directory, not yours. A checkout is any tree holding `stdlib/` and
+>   `maxon-sharp/` — **a brand-new worktree qualifies, before anything has been built in it**, so
+>   `build target=csharp repoRoot=<your worktree>` is the correct first call.
 >
-> *(Found 2026-07-14, after this file's "PREFER THESE" and the worktree-based rung workflow had been
-> silently contradicting each other for some time. It is the project's own signature bug — one fact
-> written down twice — at the tooling level.)*
+> ⚠ Still worth knowing what these do to the tree they are pointed at: **`run_spec_test` with
+> `updateRequired: true` REWRITES that tree's committed goldens**; **`run_scale_test` with `note:`
+> writes a row into that tree's `docs/optimization-log.md`**; and **`fmt` rewrites files in place,
+> relative to that tree**. Point them at the wrong one and they do not merely report the wrong answer —
+> they *edit*. Which is exactly why the root is now yours to state and theirs to echo.
+>
+> *(Found 2026-07-14, when an agent's `build` "succeeded" on a tree with none of its work in it. It
+> burned five agents at once: this file said "PREFER THE MCP TOOLS" while the rung workflow said "work
+> in an isolated worktree", and the two had been silently contradicting each other for some time. It is
+> the project's own signature bug — ONE FACT WRITTEN DOWN TWICE — at the tooling level. Fixed the same
+> day: `repoRoot` is that fact, written down once, by the only party who knows it.)*
 
-When working in the **main tree**, prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` should only be used when no MCP tool covers the case.
+Prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries. They are faster (no shell startup), return structured results, and are the canonical way to drive builds, tests, and one-off snippets in this project. Bash invocation of `./bin/maxon.exe` should only be used when no MCP tool covers the case. **In a worktree, pass `repoRoot` (see the box).**
 
 Two compilers are driveable, and every tool that drives one takes a `compiler`
 (or `target`) naming which: `"csharp"` (the C# bootstrap) or `"shv2"` (the
@@ -62,6 +69,8 @@ must (see Building and Testing below).
 | Debug memory-management issues | `mcp__maxon-dev__mm_trace_analyze` |
 
 `build` takes ONE compiler per call — the old `both` / `all` chains sequenced the bootstrap ahead of the retired self-hosted compiler and are gone.
+
+**Every tool in that table takes `repoRoot`** — the tree it acts on. Omit it and you get the main checkout (the one hosting the server binary); in a worktree that is a false green. See the box.
 
 Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test` or use `spec_test_outcome` for per-test detail. `target` cross-compiles to what the CHOSEN compiler can emit — the bootstrap has x64 and arm64 emitters (`"x64-windows"`, `"arm64-macos"`), and shv2 rejects the flag outright. **The wasm backend was only ever in `maxon-selfhosted`, so `target: "wasm32-wasi"` is no longer reachable through the MCP** — run it by hand against that compiler's binary if you need it.
 

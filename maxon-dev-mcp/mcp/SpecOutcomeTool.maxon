@@ -30,8 +30,9 @@ let specOutcomeTimeoutMs = 600000
 let rawTailMaxBytes = 4096
 let memoryLeakExitCode = 101
 
-/// Entry point called by Server.maxon's dispatch table.
-export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// binary is run against whose specs — resolved and validated by the dispatcher.
+export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let filter = try argsDoc.getString(argsId, key: "filter") otherwise 'noFilter'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: missing required `filter` argument (a pattern matching test names)")
 	end 'noFilter'
@@ -44,9 +45,6 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: {unsupportedFlagReason(flag, compiler: compiler)}")
 	end 'unsupported'
 
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("spec_test_outcome {compiler.name}")
-	end 'noRoot'
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler.name}: required binary missing. Build it first via the `build` tool (target: \"{compiler.name}\").")
 	end 'noBin'

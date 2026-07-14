@@ -22,8 +22,9 @@ let defaultBuildTimeoutMs = 300000
 // the MCP response. ~4 KiB.
 let rawTailMaxBytes = 4096
 
-/// Entry point called by Server.maxon's dispatch table.
-export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree to
+/// build IN — resolved and validated by the dispatcher, never by this tool.
+export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let target = try argsDoc.getString(argsId, key: "target") otherwise 'noTarget'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of {compilerChoiceList()})")
 	end 'noTarget'
@@ -31,10 +32,6 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Too
 	let compiler = try compilerFromToken(target) otherwise 'unknownTarget'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: unknown target `{target}` (expected {compilerChoiceList()})")
 	end 'unknownTarget'
-
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("build")
-	end 'noRoot'
 
 	return match compiler 'pick'
 		csharp gives runCsharpBuild(repoRoot)

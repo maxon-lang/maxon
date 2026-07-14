@@ -36,8 +36,9 @@ let rawTailMaxBytes = 4096
 // number.
 let memoryLeakExitCode = 101
 
-/// Entry point called by Server.maxon's dispatch table.
-export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// binary is run against whose specs — resolved and validated by the dispatcher.
+export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let compiler = try optionalCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {compilerArgErrorReason(err)}")
 	end 'badCompiler'
@@ -48,9 +49,6 @@ export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Tool
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_spec_test: {unsupportedFlagReason(flag, compiler: compiler)}")
 	end 'unsupported'
 
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("spec-test {compiler.name}")
-	end 'noRoot'
 	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler.name}: required binary missing. Build it first via the `build` tool (target: \"{compiler.name}\").")
 	end 'noBin'

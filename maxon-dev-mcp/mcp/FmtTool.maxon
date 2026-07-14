@@ -15,11 +15,12 @@
 let fmtTimeoutMs = 30000
 let fmtRawTailMaxBytes = 4096
 
-/// Entry point called by Server.maxon's dispatch table.
-export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	let repoRoot = try repoRootPath() otherwise 'noRoot'
-		return repoRootErrorOutcome("fmt")
-	end 'noRoot'
+/// Entry point called by Server.maxon's dispatch table. `repoRoot` is the tree whose
+/// `bin/maxon` formats, and the working directory it formats FROM — resolved and
+/// validated by the dispatcher. That second part is load-bearing: `maxon fmt` rewrites
+/// files in place, relative to its working directory, so a wrong root here does not
+/// merely report the wrong answer — it edits the wrong files.
+export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath) returns ToolOutcome
 	let resolved = try resolveFileSource(argsDoc, argsId: argsId, snippetPrefix: "fmt", repoRoot: repoRoot) otherwise (err) 'badSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "fmt: {sourceArgErrorReason(err)}")
 	end 'badSrc'

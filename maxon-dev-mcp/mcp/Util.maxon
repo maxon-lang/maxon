@@ -131,31 +131,99 @@ export function withExeSuffix(base FilePath) returns FilePath
 end 'withExeSuffix'
 
 // =============================================================================
-// Repo root discovery
+// Repo root resolution — THE ONE PLACE THAT ANSWERS "WHICH TREE?"
 // =============================================================================
+//
+// Every tool in this server shells out to a compiler, or reads a file, IN SOME
+// TREE. Which one is the single most consequential fact about a tool call, and
+// for a long time nothing in the wire protocol said it: the root was derived
+// from `Process.executablePath()` — the SERVER's own binary — and the server
+// lives in the main checkout, so every call drove the main checkout. A caller in
+// a git worktree got a `build` that "succeeded" against a tree holding none of
+// their work, a spec suite that never saw their change, and (with
+// `updateRequired`) a rewrite of the MAIN tree's committed goldens.
+//
+// It could not have worked any other way: ONE stdio server process is shared by
+// every agent in every worktree, and its working directory belongs to the MCP
+// host, not to the caller. The server cannot GUESS the tree. So the caller names
+// it — `repoRoot` — and when they don't, the server-derived root is the
+// (correct, unchanged) default for main-checkout use.
+//
+// Both halves ask `isMaxonCheckout` what a repo root IS, so a directory can
+// never be a root for one and not the other.
 
-/// Resolve the Maxon repo root from the running server's executable path.
-/// Walks up from the executable's directory looking for a `bin/maxon`
-/// (`bin/maxon.exe` on Windows) sibling — that's the repo root. Handles both
-/// the canonical `<repo>/maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp` layout and any
-/// side-built location (e.g. during development when the binary lives under
-/// `temp/`).
+/// The JSON key every tool accepts to name the tree it must act on. Spelled once:
+/// the schema builder, the parser and the echo all read it from here.
+export let RepoRootArgKey = "repoRoot"
+
+/// Why a repo root could not be established for a tool call. Each case names what
+/// is wrong precisely enough that the caller can fix it without reading this file.
+export union RepoRootError
+	/// No `repoRoot` was given, and the walk up from the server's own binary found
+	/// no checkout — the server is running from outside one.
+	undiscoverable
+	/// `repoRoot` was present but not a string. The caller MEANT to name a tree, so
+	/// this is refused rather than treated as an omission.
+	notAString(kind String)
+	/// `repoRoot` is a string that is not a usable filesystem path.
+	malformed(raw String)
+	/// `repoRoot` is a RELATIVE path. It cannot be honoured: a relative path would
+	/// resolve against the SERVER's working directory, which belongs to the MCP host
+	/// and has nothing to do with the caller's — the exact confusion `repoRoot` exists
+	/// to end.
+	relative(raw String)
+	/// `repoRoot` is an absolute path that is not a Maxon checkout.
+	notACheckout(path String)
+end 'RepoRootError'
+
+// The two directories every Maxon checkout has at its root, and that no directory
+// on the path from the server's binary up to that root has: the standard library
+// both compilers compile against, and the bootstrap's own source.
+//
+// Both are COMMITTED, and that is the whole point — see `isMaxonCheckout`.
+let StdlibMarkerDir = "stdlib"
+let BootstrapMarkerDir = "maxon-sharp"
+
+/// Is `dir` the root of a Maxon checkout? The ONE answer to that question, asked
+/// by the walk up from the server's binary and by the validation of a
+/// caller-supplied `repoRoot` alike.
 ///
-/// Throws `NotFound` when no repo root turns up within `maxDepth` levels (or
-/// the executable path is unavailable). Callers translate that into a graceful
-/// per-request JSON-RPC error — see `repoRootErrorOutcome` — rather than
-/// panicking, which would tear down the whole stdio connection for every
-/// subsequent request.
+/// The markers are SOURCE directories, not build output. The obvious probe —
+/// `bin/maxon`, which is what the walk originally looked for — is the wrong one:
+/// `/bin/` is GITIGNORED, so a freshly-created worktree does not have it. Judging
+/// a checkout by it would refuse a brand-new worktree as "not a Maxon repo", and
+/// the call it would refuse first is `build target=csharp`, the one call that
+/// CREATES `bin/maxon`. A tree is a checkout because of what was checked out into
+/// it, never because of what has been built in it.
+export function isMaxonCheckout(dir FilePath) returns bool
+	if not Directory.exists(childPath(dir, segment: StdlibMarkerDir)) 'noStdlib'
+		return false
+	end 'noStdlib'
+
+	return Directory.exists(childPath(dir, segment: BootstrapMarkerDir))
+end 'isMaxonCheckout'
+
+/// What `isMaxonCheckout` looks for, rendered for prose. A refusal quotes it, so a
+/// rejected `repoRoot` says what was missing instead of merely saying no.
+export function repoRootMarkerList() returns String
+	return "`{StdlibMarkerDir}/` and `{BootstrapMarkerDir}/`"
+end 'repoRootMarkerList'
+
+/// The default tree: the checkout containing the RUNNING SERVER's own binary,
+/// found by walking up from it. Correct — and only correct — for a caller working
+/// in that same checkout.
+///
+/// Throws `NotFound` when no checkout turns up within `MaxRepoRootWalkDepth`
+/// levels (or the executable path is unavailable). Callers translate that into a
+/// graceful per-request JSON-RPC error rather than panicking, which would tear
+/// down the whole stdio connection for every subsequent request.
 export function repoRootPath() returns FilePath throws NotFound
 	let exe = try Process.executablePath() otherwise 'noExe'
 		throw NotFound.notFound
 	end 'noExe'
-	let marker = "bin/maxon{exeSuffix()}"
 	var dir = parentDir(exe)
-	let maxDepth = 16
-	for _ in 0 upto maxDepth 'walk'
-		let candidate = childPath(dir, segment: marker)
-		if File.exists(candidate) 'found'
+	for _ in 0 upto MaxRepoRootWalkDepth 'walk'
+		if isMaxonCheckout(dir) 'found'
 			return dir
 		end 'found'
 		let parent = parentDir(dir)
@@ -166,6 +234,66 @@ export function repoRootPath() returns FilePath throws NotFound
 	end 'walk'
 	throw NotFound.notFound
 end 'repoRootPath'
+
+// Deep enough for any plausible `<repo>/…/.maxon/<binary>` layout (the canonical
+// one is 3 levels) plus a side-built copy under `temp/`, and shallow enough that a
+// server started outside a checkout fails fast instead of walking to the filesystem
+// root of a deeply-nested directory.
+let MaxRepoRootWalkDepth = 16
+
+/// Resolve the tree THIS tool call must act on. Every tool goes through here, and
+/// there is no other way to obtain a repo root — which is the point: a second way
+/// is how the first one came to be wrong in silence.
+///
+/// An explicit `repoRoot` that is not a checkout is REFUSED. Falling back to the
+/// server's own tree there would rebuild the exact failure this argument exists to
+/// end — a tool acting on a tree the caller never named, and reporting success —
+/// only now wearing the disguise of a caller who thought they had said otherwise.
+export function resolveRepoRoot(argsDoc JsonDoc, argsId JsonNodeId) returns FilePath throws RepoRootError
+	let node = try argsDoc.getChild(argsId, key: RepoRootArgKey) otherwise 'absent'
+		return try repoRootPath() otherwise throw RepoRootError.undiscoverable
+	end 'absent'
+
+	let raw = try argsDoc.getString(argsId, key: RepoRootArgKey) otherwise 'notAString'
+		throw RepoRootError.notAString(argsDoc.get(node).kind.name)
+	end 'notAString'
+
+	let candidate = try FilePath.from(raw) otherwise throw RepoRootError.malformed(raw)
+	if not candidate.isAbsolute() 'relative'
+		throw RepoRootError.relative(raw)
+	end 'relative'
+
+	if not isMaxonCheckout(candidate) 'notACheckout'
+		throw RepoRootError.notACheckout(candidate.path)
+	end 'notACheckout'
+
+	return candidate
+end 'resolveRepoRoot'
+
+/// Human-readable reason for a `RepoRootError`, returned verbatim to the caller.
+export function repoRootErrorReason(err RepoRootError) returns String
+	return match err 'e'
+		undiscoverable gives "could not locate a Maxon checkout above the server's own binary — no directory with {repoRootMarkerList()} was found. Either the server was launched from outside a checkout, or its binary was moved. Pass `{RepoRootArgKey}` with the absolute path of the tree to act on."
+		notAString(kind) gives "`{RepoRootArgKey}` must be a string holding the absolute path of a Maxon checkout, got {kind}."
+		malformed(raw) gives "`{RepoRootArgKey}` \"{raw}\" is not a usable filesystem path."
+		relative(raw) gives "`{RepoRootArgKey}` \"{raw}\" is relative. It must be ABSOLUTE: a relative path would be resolved against the SERVER's working directory — the MCP host's, not yours — which is the confusion `{RepoRootArgKey}` exists to end."
+		notACheckout(path) gives "`{RepoRootArgKey}` \"{path}\" is not a Maxon checkout — it has no {repoRootMarkerList()}. Pass the absolute path of your worktree's ROOT (the directory holding those), not a subdirectory of it."
+	end 'e'
+end 'repoRootErrorReason'
+
+/// The JSON-RPC code a `RepoRootError` is reported under. A `repoRoot` the caller
+/// GAVE and got wrong is an argument error (`invalidParams`); a server that can
+/// find no checkout at all was asked to do something it is not positioned to do at
+/// all (`invalidRequest`).
+export function repoRootErrorCode(err RepoRootError) returns RpcErrorCode
+	return match err 'e'
+		undiscoverable gives RpcStandardErrorCode.invalidRequest.rawValue
+		notAString gives RpcStandardErrorCode.invalidParams.rawValue
+		malformed gives RpcStandardErrorCode.invalidParams.rawValue
+		relative gives RpcStandardErrorCode.invalidParams.rawValue
+		notACheckout gives RpcStandardErrorCode.invalidParams.rawValue
+	end 'e'
+end 'repoRootErrorCode'
 
 /// Return the parent directory of `path` (everything up to the last `/` or
 /// `\`). When `path` contains no separators, returns `.` so callers can keep
